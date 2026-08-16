@@ -146,6 +146,12 @@ __all__ = [
 ]
 
 EVENT_SCHEMA_VERSION = 1
+# `routing` (#411) is the seventh and answers the same shape of question as the
+# six before it: can this Orchestrator report the **Routed pair** one unit of
+# work runs on? It is per-distribution rather than run-scoped because a Run that
+# pins `--model` does not go silent — its Pickups publish the resolution with a
+# `defaulted_explicit_override` source — so the answer is a constant of the
+# binary, and two Runs of one binary cannot differ on it.
 INSIGHT_CAPABILITY_NAMES: tuple[str, ...] = (
     "agent_output",
     "structured_agent_events",
@@ -153,6 +159,7 @@ INSIGHT_CAPABILITY_NAMES: tuple[str, ...] = (
     "context_window",
     "skill_consultation",
     "cost",
+    "routing",
 )
 PYTHON_INSIGHT_CAPABILITIES: dict[str, bool] = {
     "agent_output": True,
@@ -161,6 +168,7 @@ PYTHON_INSIGHT_CAPABILITIES: dict[str, bool] = {
     "context_window": True,
     "skill_consultation": True,
     "cost": True,
+    "routing": True,
 }
 
 # Insight capabilities whose answer is a fact about **this Run** rather than

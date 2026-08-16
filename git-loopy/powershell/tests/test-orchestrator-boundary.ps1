@@ -972,6 +972,7 @@ exit 97
         context_window = $false
         skill_consultation = $false
         cost = $false
+        routing = $false
         rate_card = $false
     }
     foreach ($Name in $ExpectedInsightCapabilities.Keys) {

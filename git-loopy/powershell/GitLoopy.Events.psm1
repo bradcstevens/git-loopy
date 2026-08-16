@@ -81,9 +81,14 @@ $script:InsightCapabilities = [ordered]@{
     context_window = $false
     skill_consultation = $false
     cost = $false
+    # `routing` (#411) is declared false rather than omitted: this port resolves
+    # no **Routed pair**, and a **Dashboard** that could not tell "this
+    # Orchestrator never routes" from "no Pickup has resolved a pair yet" would
+    # leave a Route column reading as pending forever.
+    routing = $false
 }
 # What *this Run* obtained, as opposed to what this distribution can observe.
-# The six above are fixed per binary; a run-scoped capability can differ between
+# The seven above are fixed per binary; a run-scoped capability can differ between
 # two Runs of one binary, so it is composed onto the wire manifest rather than
 # frozen beside them (#334, ADR-0026, Wrapper contract 12).
 #
@@ -172,7 +177,7 @@ function Get-GitLoopyRunInsightCapabilities {
 
     # The Run-start Insight manifest as it goes on the wire: the frozen
     # per-distribution capabilities, then this Run's own run-scoped answers. The
-    # run-scoped keys come last so the six a **Dashboard** must find keep the
+    # run-scoped keys come last so the seven a **Dashboard** must find keep the
     # order the family contract lists them in.
     $Manifest = Get-GitLoopyInsightCapabilities
     foreach ($Name in $script:RunScopedInsightCapabilities.Keys) {

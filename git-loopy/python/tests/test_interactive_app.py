@@ -258,6 +258,7 @@ async def test_dashboard_queue_uses_canonical_contribution_columns() -> None:
             "Active",
             "Closed",
             "Iters",
+            "Route",
             "Tokens in",
             "Tokens out",
             "Credits",
@@ -322,6 +323,7 @@ async def test_dashboard_queue_localizes_normalized_closure_and_accounting() -> 
         "0:00:04",
         "6:00:05 PM",
         "1",
+        "—",
         "100",
         "50",
         "—",
@@ -360,18 +362,21 @@ async def test_dashboard_queue_shows_per_issue_consumption_columns() -> None:
     )
     async with app.run_test():
         table = app.query_one("#queue", DataTable)
-        # Columns: Issue | Status | Started | Active | Closed | Iters |
+        # Columns: Issue | Status | Started | Active | Closed | Iters | Route |
         # Tokens in | out | Credits | Premium.
         active_row = table.get_row_at(0)
         assert active_row[0] == "#26"
-        assert active_row[6] == "1,000"
-        assert active_row[7] == "200"
+        # No Pickup record reached this Run, so nothing priced the issue and
+        # the Route cell is the unknown em dash rather than the run default.
+        assert active_row[6] == "—"
+        assert active_row[7] == "1,000"
+        assert active_row[8] == "200"
         # No billing telemetry rode the sample, so Cost is the em dash — and
         # since #330 there is no token-derived estimate beside it to fill in a
         # figure git-loopy invented from a price table it wrote itself.
-        assert active_row[8] == "—"
         assert active_row[9] == "—"
-        assert len(active_row) == 10
+        assert active_row[10] == "—"
+        assert len(active_row) == 11
         # The still-queued #27 has no observed token sample or known cost.
         queued_row = table.get_row_at(1)
         assert queued_row[0] == "#27"
@@ -433,7 +438,7 @@ async def test_revisited_active_issue_does_not_show_stale_finalized_cost() -> No
     async with app.run_test():
         row = app.query_one("#queue", DataTable).get_row_at(0)
 
-    assert row[6:9] == ["1,100", "220", "—"]
+    assert row[7:10] == ["1,100", "220", "—"]
 
 
 async def test_summary_band_renders_rollup() -> None:
@@ -672,6 +677,7 @@ async def test_drill_in_shows_contribution_breakdown_before_retained_log() -> No
         "Duration",
         "Status",
         "Active",
+        "Route",
         "Tokens in",
         "Tokens out",
         "Cache read",
@@ -686,6 +692,7 @@ async def test_drill_in_shows_contribution_breakdown_before_retained_log() -> No
         "0:00:06",
         "closed",
         "0:00:04",
+        "—",
         "100",
         "50",
         "—",
@@ -1150,8 +1157,9 @@ async def test_drill_in_breakdown_renders_unavailable_consumption_as_em_dash() -
         "—",
         "—",
         "—",
+        "—",
     ]
-    assert queue.get_row_at(0)[6:10] == ["—", "—", "—", "—"]
+    assert queue.get_row_at(0)[7:11] == ["—", "—", "—", "—"]
 
 
 async def test_band_order_matches_the_language_neutral_semantic_contract() -> None:
@@ -1257,8 +1265,8 @@ async def test_dashboard_queue_shows_billed_credits_and_premium_requests() -> No
     assert active_row[0] == "#26"
     # 3.33385 + 0.33858 = 3.67243, summed as Decimal so the replay's own digits
     # survive rather than a binary float's expansion.
-    assert active_row[8] == "3.6724"
-    assert active_row[9] == "2"
+    assert active_row[9] == "3.6724"
+    assert active_row[10] == "2"
     assert queued_row[0] == "#27"
-    assert queued_row[8] == "—"
     assert queued_row[9] == "—"
+    assert queued_row[10] == "—"

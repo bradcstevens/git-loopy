@@ -1,6 +1,6 @@
 {
-  "fixture_schema_version": "1.3",
-  "wrapper_contract_version": "1.24",
+  "fixture_schema_version": "1.4",
+  "wrapper_contract_version": "1.25",
   "event_schema_version": "1.1",
   "semantic_contract": {
     "dashboard_band_order": [
@@ -61,6 +61,14 @@
         "scope": "issue_contributions",
         "fields": [
           "iteration_count"
+        ]
+      },
+      {
+        "key": "route",
+        "label": "Route",
+        "scope": "issue_latest_routing_resolution",
+        "fields": [
+          "route"
         ]
       },
       {
@@ -140,6 +148,14 @@
         ]
       },
       {
+        "key": "route",
+        "label": "Route",
+        "scope": "issue_routing_resolution_in_contribution",
+        "fields": [
+          "route"
+        ]
+      },
+      {
         "key": "tokens_in",
         "label": "Tokens in",
         "scope": "issue_in_contribution",
@@ -209,7 +225,8 @@
         "active_seconds",
         "context_fill",
         "cost",
-        "rate_card"
+        "rate_card",
+        "routing"
       ],
       "context_fill": [
         "availability",
@@ -229,6 +246,7 @@
         "active_seconds",
         "closed_at",
         "iteration_count",
+        "route",
         "tokens_in",
         "tokens_out",
         "credits",
@@ -281,6 +299,7 @@
         "duration_seconds",
         "status",
         "active_seconds",
+        "route",
         "consumption",
         "credits",
         "premium_requests",
@@ -292,6 +311,11 @@
         "tokens_out",
         "cache_read",
         "cache_write"
+      ],
+      "route": [
+        "model",
+        "effort",
+        "source"
       ]
     },
     "binding_sources": {
@@ -321,7 +345,8 @@
       "summary_row": "iteration_or_lane_contribution",
       "iteration_breakdown": "issue_contributions",
       "activity": "current_active_issue",
-      "log": "issue_across_contributions"
+      "log": "issue_across_contributions",
+      "route": "issue_latest_routing_resolution"
     },
     "presentation_exclusions": [
       "glyphs",
@@ -356,7 +381,8 @@
             "token_usage": true,
             "context_window": true,
             "skill_consultation": true,
-            "cost": true
+            "cost": true,
+            "routing": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -491,6 +517,9 @@
                 },
                 "rate_card": {
                   "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -501,6 +530,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -514,6 +544,7 @@
                     "active_seconds": 2.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -592,6 +623,9 @@
                 },
                 "rate_card": {
                   "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -602,6 +636,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -615,6 +650,7 @@
                     "active_seconds": 4.0,
                     "closed_at": "2026-05-15T18:00:05-06:00",
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": 100,
                     "tokens_out": 50,
                     "credits": null,
@@ -677,6 +713,7 @@
                     "duration_seconds": 4.0,
                     "status": "closed",
                     "active_seconds": 4.0,
+                    "route": null,
                     "consumption": {
                       "model": "gpt-5.6-sol",
                       "tokens_in": 100,
@@ -734,7 +771,8 @@
             "context_window": false,
             "skill_consultation": false,
             "cost": false,
-            "rate_card": false
+            "rate_card": false,
+            "routing": false
           },
           "parallel_capabilities": {
             "parallel_mode": false,
@@ -918,6 +956,9 @@
                 },
                 "rate_card": {
                   "availability": "unavailable"
+                },
+                "routing": {
+                  "availability": "unavailable"
                 }
               },
               "queue": {
@@ -928,6 +969,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -941,6 +983,7 @@
                     "active_seconds": 1.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -953,6 +996,7 @@
                     "active_seconds": 0.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -1032,6 +1076,9 @@
                 },
                 "rate_card": {
                   "availability": "unavailable"
+                },
+                "routing": {
+                  "availability": "unavailable"
                 }
               },
               "queue": {
@@ -1042,6 +1089,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -1055,6 +1103,7 @@
                     "active_seconds": 0.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -1067,6 +1116,7 @@
                     "active_seconds": 48.0,
                     "closed_at": "2026-05-16T05:30:50+05:30",
                     "iteration_count": 2,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -1145,6 +1195,7 @@
                     "duration_seconds": 29.0,
                     "status": "advanced",
                     "active_seconds": 29.0,
+                    "route": null,
                     "consumption": {
                       "model": null,
                       "tokens_in": null,
@@ -1164,6 +1215,7 @@
                     "duration_seconds": 19.0,
                     "status": "closed",
                     "active_seconds": 19.0,
+                    "route": null,
                     "consumption": {
                       "model": null,
                       "tokens_in": null,
@@ -1262,7 +1314,8 @@
             "token_usage": true,
             "context_window": true,
             "skill_consultation": true,
-            "cost": true
+            "cost": true,
+            "routing": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -1444,6 +1497,9 @@
                 },
                 "rate_card": {
                   "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -1454,6 +1510,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -1467,6 +1524,7 @@
                     "active_seconds": 5.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": null,
                     "tokens_in": 13512,
                     "tokens_out": 150,
                     "credits": 0.849545,
@@ -1479,6 +1537,7 @@
                     "active_seconds": 0.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -1577,6 +1636,9 @@
                 },
                 "rate_card": {
                   "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -1587,6 +1649,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -1600,6 +1663,7 @@
                     "active_seconds": 0.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -1612,6 +1676,7 @@
                     "active_seconds": 15.0,
                     "closed_at": "2026-05-17T09:00:20+00:00",
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": 13512,
                     "tokens_out": 150,
                     "credits": 0.849545,
@@ -1674,6 +1739,7 @@
                     "duration_seconds": 19.0,
                     "status": "closed",
                     "active_seconds": 15.0,
+                    "route": null,
                     "consumption": {
                       "model": "gpt-5.4-mini",
                       "tokens_in": 13512,
@@ -1741,7 +1807,8 @@
             "context_window": true,
             "skill_consultation": true,
             "cost": true,
-            "rate_card": true
+            "rate_card": true,
+            "routing": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -2172,6 +2239,9 @@
                 },
                 "rate_card": {
                   "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -2182,6 +2252,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -2195,6 +2266,7 @@
                     "active_seconds": 6.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": null,
                     "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
@@ -2207,6 +2279,7 @@
                     "active_seconds": 5.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -2284,6 +2357,9 @@
                 },
                 "rate_card": {
                   "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -2294,6 +2370,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -2307,6 +2384,7 @@
                     "active_seconds": 28.0,
                     "closed_at": null,
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
@@ -2319,6 +2397,7 @@
                     "active_seconds": 27.0,
                     "closed_at": null,
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -2376,6 +2455,7 @@
                     "duration_seconds": 29.0,
                     "status": "advanced",
                     "active_seconds": 28.0,
+                    "route": null,
                     "consumption": {
                       "model": "claude-sonnet-4.6",
                       "tokens_in": 13512,
@@ -2438,6 +2518,9 @@
                 },
                 "rate_card": {
                   "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -2448,6 +2531,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -2461,6 +2545,7 @@
                     "active_seconds": 28.0,
                     "closed_at": null,
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
@@ -2473,6 +2558,7 @@
                     "active_seconds": 27.0,
                     "closed_at": null,
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -2485,6 +2571,7 @@
                     "active_seconds": 18.0,
                     "closed_at": null,
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -2563,6 +2650,7 @@
                     "duration_seconds": 29.0,
                     "status": "advanced",
                     "active_seconds": 28.0,
+                    "route": null,
                     "consumption": {
                       "model": "claude-sonnet-4.6",
                       "tokens_in": 13512,
@@ -2625,6 +2713,9 @@
                 },
                 "rate_card": {
                   "availability": "available"
+                },
+                "routing": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -2635,6 +2726,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -2648,6 +2740,7 @@
                     "active_seconds": 28.0,
                     "closed_at": null,
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
@@ -2660,6 +2753,7 @@
                     "active_seconds": 27.0,
                     "closed_at": null,
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -2672,6 +2766,7 @@
                     "active_seconds": 18.0,
                     "closed_at": null,
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -2684,6 +2779,7 @@
                     "active_seconds": 19.0,
                     "closed_at": null,
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -2696,6 +2792,7 @@
                     "active_seconds": 3.0,
                     "closed_at": "2026-05-18T09:01:14-07:00",
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -2816,6 +2913,7 @@
                     "duration_seconds": 29.0,
                     "status": "advanced",
                     "active_seconds": 28.0,
+                    "route": null,
                     "consumption": {
                       "model": "claude-sonnet-4.6",
                       "tokens_in": 13512,
@@ -2874,7 +2972,8 @@
             "context_window": false,
             "skill_consultation": false,
             "cost": false,
-            "rate_card": false
+            "rate_card": false,
+            "routing": false
           },
           "parallel_capabilities": {
             "parallel_mode": false,
@@ -3040,6 +3139,9 @@
                 },
                 "rate_card": {
                   "availability": "unavailable"
+                },
+                "routing": {
+                  "availability": "unavailable"
                 }
               },
               "queue": {
@@ -3050,6 +3152,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -3063,6 +3166,7 @@
                     "active_seconds": 9.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -3152,6 +3256,9 @@
                 },
                 "rate_card": {
                   "availability": "unavailable"
+                },
+                "routing": {
+                  "availability": "unavailable"
                 }
               },
               "queue": {
@@ -3162,6 +3269,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -3175,6 +3283,7 @@
                     "active_seconds": 19.0,
                     "closed_at": null,
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -3232,6 +3341,7 @@
                     "duration_seconds": 19.0,
                     "status": "gone",
                     "active_seconds": 19.0,
+                    "route": null,
                     "consumption": {
                       "model": null,
                       "tokens_in": null,
@@ -3289,7 +3399,8 @@
             "context_window": true,
             "skill_consultation": true,
             "cost": true,
-            "rate_card": false
+            "rate_card": false,
+            "routing": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -3487,6 +3598,9 @@
                 },
                 "rate_card": {
                   "availability": "unavailable"
+                },
+                "routing": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -3497,6 +3611,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -3510,6 +3625,7 @@
                     "active_seconds": 5.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": null,
                     "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": 1.5,
@@ -3522,6 +3638,7 @@
                     "active_seconds": 5.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": null,
                     "tokens_in": 9004,
                     "tokens_out": 180,
                     "credits": null,
@@ -3594,6 +3711,9 @@
                 },
                 "rate_card": {
                   "availability": "unavailable"
+                },
+                "routing": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -3604,6 +3724,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -3617,6 +3738,7 @@
                     "active_seconds": 27.0,
                     "closed_at": null,
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": 1.5,
@@ -3629,6 +3751,7 @@
                     "active_seconds": 27.0,
                     "closed_at": null,
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": 9004,
                     "tokens_out": 180,
                     "credits": null,
@@ -3686,6 +3809,7 @@
                     "duration_seconds": 28.0,
                     "status": "advanced",
                     "active_seconds": 27.0,
+                    "route": null,
                     "consumption": {
                       "model": "claude-opus-4.8",
                       "tokens_in": 13512,
@@ -3742,7 +3866,8 @@
             "token_usage": true,
             "context_window": true,
             "skill_consultation": true,
-            "cost": true
+            "cost": true,
+            "routing": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -3877,6 +4002,9 @@
                 },
                 "rate_card": {
                   "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -3887,6 +4015,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -3900,6 +4029,7 @@
                     "active_seconds": 2.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -3978,6 +4108,9 @@
                 },
                 "rate_card": {
                   "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -3988,6 +4121,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -4001,6 +4135,7 @@
                     "active_seconds": 4.0,
                     "closed_at": "2026-05-15T18:00:05-06:00",
                     "iteration_count": 1,
+                    "route": null,
                     "tokens_in": 100,
                     "tokens_out": 50,
                     "credits": null,
@@ -4063,6 +4198,7 @@
                     "duration_seconds": 4.0,
                     "status": "closed",
                     "active_seconds": 4.0,
+                    "route": null,
                     "consumption": {
                       "model": "gpt-5.6-sol",
                       "tokens_in": 100,
@@ -4119,7 +4255,8 @@
             "token_usage": true,
             "context_window": true,
             "skill_consultation": true,
-            "cost": true
+            "cost": true,
+            "routing": true
           },
           "parallel_capabilities": {
             "parallel_mode": true,
@@ -4164,7 +4301,14 @@
           "issue": 42,
           "reason": "order",
           "position": 2,
-          "considered": 2
+          "considered": 2,
+          "model": "gpt-5.6-sol",
+          "effort": "high",
+          "context_tier": "default",
+          "routing_source": "defaulted_no_task_type_label",
+          "task_type_keys": [],
+          "gate_warnings": [],
+          "lifecycle_position": "fresh"
         },
         {
           "ts": "2026-05-16T00:00:01.000Z",
@@ -4275,6 +4419,9 @@
                 },
                 "rate_card": {
                   "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -4285,6 +4432,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -4298,6 +4446,11 @@
                     "active_seconds": 2.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": {
+                      "model": "gpt-5.6-sol",
+                      "effort": "high",
+                      "source": "defaulted_no_task_type_label"
+                    },
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -4310,6 +4463,7 @@
                     "active_seconds": 0.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -4393,6 +4547,9 @@
                 },
                 "rate_card": {
                   "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
                 }
               },
               "queue": {
@@ -4403,6 +4560,7 @@
                   "active_seconds",
                   "closed_at",
                   "iteration_count",
+                  "route",
                   "tokens_in",
                   "tokens_out",
                   "credits",
@@ -4416,6 +4574,7 @@
                     "active_seconds": 0.0,
                     "closed_at": null,
                     "iteration_count": 0,
+                    "route": null,
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
@@ -4428,6 +4587,11 @@
                     "active_seconds": 4.0,
                     "closed_at": "2026-05-15T18:00:05-06:00",
                     "iteration_count": 1,
+                    "route": {
+                      "model": "gpt-5.6-sol",
+                      "effort": "high",
+                      "source": "defaulted_no_task_type_label"
+                    },
                     "tokens_in": 100,
                     "tokens_out": 50,
                     "credits": null,
@@ -4490,6 +4654,1390 @@
                     "at": "2026-05-15T18:00:01-06:00",
                     "kind": "event",
                     "text": "Pickup: skipped #46 at position 1 of 2 (routing refused: unsupported task-type label)"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "escalation-reprices-a-stalled-issue-between-contributions",
+      "inputs": {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high",
+        "max_strikes": 3,
+        "local_utc_offset_minutes": -360,
+        "drill_in_issue": 88
+      },
+      "events": [
+        {
+          "ts": "2026-05-16T00:00:00.000Z",
+          "run_id": "01HXR0000000000000000000RT",
+          "iter": null,
+          "type": "wrapper.run.start",
+          "release_version": "0.9.0-dev.0",
+          "schema_version": 1,
+          "insight_capabilities": {
+            "agent_output": true,
+            "structured_agent_events": true,
+            "token_usage": true,
+            "context_window": true,
+            "skill_consultation": true,
+            "cost": true,
+            "routing": true
+          },
+          "parallel_capabilities": {
+            "parallel_mode": true,
+            "rolling_dispatch": true,
+            "integration_backlog": true,
+            "adaptive_lane_limit": true,
+            "contribution_events": true
+          },
+          "max_nmt_strikes": 3
+        },
+        {
+          "ts": "2026-05-16T00:00:00.500Z",
+          "run_id": "01HXR0000000000000000000RT",
+          "iter": 1,
+          "type": "wrapper.iteration.start"
+        },
+        {
+          "ts": "2026-05-16T00:00:00.600Z",
+          "run_id": "01HXR0000000000000000000RT",
+          "iter": 1,
+          "type": "wrapper.afk_ready.collected",
+          "issues": [
+            88
+          ]
+        },
+        {
+          "ts": "2026-05-16T00:00:01.000Z",
+          "run_id": "01HXR0000000000000000000RT",
+          "iter": 1,
+          "type": "wrapper.pickup.bound",
+          "issue": 88,
+          "reason": "order",
+          "position": 1,
+          "considered": 1,
+          "model": "gpt-5.4-mini",
+          "effort": "low",
+          "context_tier": "default",
+          "routing_source": "routed",
+          "task_type_keys": [
+            "bugfix"
+          ],
+          "gate_warnings": [],
+          "lifecycle_position": "fresh"
+        },
+        {
+          "ts": "2026-05-16T00:00:01.000Z",
+          "run_id": "01HXR0000000000000000000RT",
+          "iter": 1,
+          "type": "wrapper.issue.activated",
+          "issue": 88,
+          "activated_at": "2026-05-16T00:00:01.000Z",
+          "binding_source": "serial_pickup"
+        },
+        {
+          "ts": "2026-05-16T00:00:02.000Z",
+          "run_id": "01HXR0000000000000000000RT",
+          "iter": 1,
+          "type": "agent.output",
+          "text": "Reading the failing test",
+          "kind": "unclassified"
+        },
+        {
+          "ts": "2026-05-16T00:00:04.900Z",
+          "run_id": "01HXR0000000000000000000RT",
+          "iter": 1,
+          "type": "wrapper.strike",
+          "strikes": 1,
+          "max_strikes": 3
+        },
+        {
+          "ts": "2026-05-16T00:00:05.000Z",
+          "run_id": "01HXR0000000000000000000RT",
+          "iter": 1,
+          "type": "wrapper.iteration.end",
+          "outcome": "no-progress",
+          "duration_seconds": 4.0,
+          "summary": {
+            "model": "gpt-5.4-mini",
+            "tokens_in": 400,
+            "tokens_out": 120,
+            "observed_tokens": 520,
+            "tool_count": 2,
+            "skill_call_count": 0,
+            "skills_consulted": [],
+            "commits": 0,
+            "auto_closures": 0,
+            "pr_advances": 0,
+            "strikes": 1,
+            "peak_context_window": null
+          },
+          "issues": [
+            {
+              "issue": 88,
+              "status": "no-progress",
+              "first_started_at": "2026-05-16T00:00:01.000Z",
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 4.0,
+              "cumulative_active_seconds": 4.0,
+              "consumption": {
+                "model": "gpt-5.4-mini",
+                "tokens_in": 400,
+                "tokens_out": 120
+              },
+              "peak_context_window": null
+            }
+          ]
+        },
+        {
+          "ts": "2026-05-16T00:00:05.500Z",
+          "run_id": "01HXR0000000000000000000RT",
+          "iter": 2,
+          "type": "wrapper.iteration.start"
+        },
+        {
+          "ts": "2026-05-16T00:00:05.600Z",
+          "run_id": "01HXR0000000000000000000RT",
+          "iter": 2,
+          "type": "wrapper.afk_ready.collected",
+          "issues": [
+            88
+          ]
+        },
+        {
+          "ts": "2026-05-16T00:00:06.000Z",
+          "run_id": "01HXR0000000000000000000RT",
+          "iter": 2,
+          "type": "wrapper.pickup.bound",
+          "issue": 88,
+          "reason": "order",
+          "position": 1,
+          "considered": 1,
+          "model": "claude-opus-5",
+          "effort": "max",
+          "context_tier": "default",
+          "routing_source": "escalated",
+          "task_type_keys": [
+            "bugfix"
+          ],
+          "gate_warnings": [],
+          "lifecycle_position": "retrying"
+        },
+        {
+          "ts": "2026-05-16T00:00:06.000Z",
+          "run_id": "01HXR0000000000000000000RT",
+          "iter": 2,
+          "type": "wrapper.issue.activated",
+          "issue": 88,
+          "activated_at": "2026-05-16T00:00:06.000Z",
+          "binding_source": "serial_pickup"
+        },
+        {
+          "ts": "2026-05-16T00:00:07.000Z",
+          "run_id": "01HXR0000000000000000000RT",
+          "iter": 2,
+          "type": "agent.output",
+          "text": "Found it: the guard was inverted",
+          "kind": "unclassified"
+        },
+        {
+          "ts": "2026-05-16T00:00:10.000Z",
+          "run_id": "01HXR0000000000000000000RT",
+          "iter": 2,
+          "type": "wrapper.iteration.end",
+          "outcome": "closed",
+          "duration_seconds": 4.5,
+          "summary": {
+            "model": "claude-opus-5",
+            "tokens_in": 900,
+            "tokens_out": 300,
+            "observed_tokens": 1200,
+            "tool_count": 5,
+            "skill_call_count": 0,
+            "skills_consulted": [],
+            "commits": 1,
+            "auto_closures": 1,
+            "pr_advances": 0,
+            "strikes": 1,
+            "peak_context_window": null
+          },
+          "issues": [
+            {
+              "issue": 88,
+              "status": "closed",
+              "first_started_at": "2026-05-16T00:00:01.000Z",
+              "closed_at": "2026-05-16T00:00:10.000Z",
+              "issue_elapsed_seconds": 9.0,
+              "active_seconds": 4.0,
+              "cumulative_active_seconds": 8.0,
+              "consumption": {
+                "model": "claude-opus-5",
+                "tokens_in": 900,
+                "tokens_out": 300
+              },
+              "peak_context_window": null
+            }
+          ]
+        }
+      ],
+      "snapshots": [
+        {
+          "after_event_count": 6,
+          "render_at_utc": "2026-05-16T00:00:03.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000RT",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 3.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": 88,
+                "active_seconds": 2.0,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 88,
+                    "status": "active",
+                    "started_at": "2026-05-15T18:00:01-06:00",
+                    "active_seconds": 2.0,
+                    "closed_at": null,
+                    "iteration_count": 0,
+                    "route": {
+                      "model": "gpt-5.4-mini",
+                      "effort": "low",
+                      "source": "routed"
+                    },
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": 88,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:01-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #88 (order, position 1 of 1)"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:02-06:00",
+                    "kind": "unclassified",
+                    "text": "Reading the failing test"
+                  }
+                ]
+              },
+              "summary": {
+                "rows": []
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 88,
+                "status": "active",
+                "started_at": "2026-05-15T18:00:01-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 2.0,
+                "iteration_count": 0
+              },
+              "iteration_breakdown": {
+                "rows": []
+              },
+              "log": {
+                "issue": 88,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:01-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #88 (order, position 1 of 1)"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:02-06:00",
+                    "kind": "unclassified",
+                    "text": "Reading the failing test"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 8,
+          "render_at_utc": "2026-05-16T00:00:05.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000RT",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 5.0,
+                "status": "running",
+                "strikes": {
+                  "current": 1,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 88,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:01-06:00",
+                    "active_seconds": 4.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": {
+                      "model": "gpt-5.4-mini",
+                      "effort": "low",
+                      "source": "routed"
+                    },
+                    "tokens_in": 400,
+                    "tokens_out": 120,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": []
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "no-progress",
+                    "duration_seconds": 4.0,
+                    "model": "gpt-5.4-mini",
+                    "tokens_in": 400,
+                    "tokens_out": 120,
+                    "observed_tokens": 520,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 2,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 1,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 88,
+                "status": "no-progress",
+                "started_at": "2026-05-15T18:00:01-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 4.0,
+                "iteration_count": 1
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "no-progress",
+                    "duration_seconds": 4.0,
+                    "status": "no-progress",
+                    "active_seconds": 4.0,
+                    "route": {
+                      "model": "gpt-5.4-mini",
+                      "effort": "low",
+                      "source": "routed"
+                    },
+                    "consumption": {
+                      "model": "gpt-5.4-mini",
+                      "tokens_in": 400,
+                      "tokens_out": 120,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 88,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:01-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #88 (order, position 1 of 1)"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:02-06:00",
+                    "kind": "unclassified",
+                    "text": "Reading the failing test"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 11,
+          "render_at_utc": "2026-05-16T00:00:06.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000RT",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 6.0,
+                "status": "running",
+                "strikes": {
+                  "current": 1,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 88,
+                    "status": "no-progress",
+                    "started_at": "2026-05-15T18:00:01-06:00",
+                    "active_seconds": 4.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": {
+                      "model": "claude-opus-5",
+                      "effort": "max",
+                      "source": "escalated"
+                    },
+                    "tokens_in": 400,
+                    "tokens_out": 120,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": []
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "no-progress",
+                    "duration_seconds": 4.0,
+                    "model": "gpt-5.4-mini",
+                    "tokens_in": 400,
+                    "tokens_out": 120,
+                    "observed_tokens": 520,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 2,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 1,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 88,
+                "status": "no-progress",
+                "started_at": "2026-05-15T18:00:01-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 4.0,
+                "iteration_count": 1
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "no-progress",
+                    "duration_seconds": 4.0,
+                    "status": "no-progress",
+                    "active_seconds": 4.0,
+                    "route": {
+                      "model": "gpt-5.4-mini",
+                      "effort": "low",
+                      "source": "routed"
+                    },
+                    "consumption": {
+                      "model": "gpt-5.4-mini",
+                      "tokens_in": 400,
+                      "tokens_out": 120,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 88,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:01-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #88 (order, position 1 of 1)"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:02-06:00",
+                    "kind": "unclassified",
+                    "text": "Reading the failing test"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:06-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #88 (order, position 1 of 1)"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 14,
+          "render_at_utc": "2026-05-16T00:00:10.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000RT",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 10.0,
+                "status": "running",
+                "strikes": {
+                  "current": 1,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 88,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:01-06:00",
+                    "active_seconds": 8.0,
+                    "closed_at": "2026-05-15T18:00:10-06:00",
+                    "iteration_count": 2,
+                    "route": {
+                      "model": "claude-opus-5",
+                      "effort": "max",
+                      "source": "escalated"
+                    },
+                    "tokens_in": 1300,
+                    "tokens_out": 420,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": []
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "no-progress",
+                    "duration_seconds": 4.0,
+                    "model": "gpt-5.4-mini",
+                    "tokens_in": 400,
+                    "tokens_out": 120,
+                    "observed_tokens": 520,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 2,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 1,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "iteration",
+                    "iteration": 2,
+                    "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 4.5,
+                    "model": "claude-opus-5",
+                    "tokens_in": 900,
+                    "tokens_out": 300,
+                    "observed_tokens": 1200,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 5,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 1,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 88,
+                "status": "closed",
+                "started_at": "2026-05-15T18:00:01-06:00",
+                "closed_at": "2026-05-15T18:00:10-06:00",
+                "issue_elapsed_seconds": 9.0,
+                "active_seconds": 8.0,
+                "iteration_count": 2
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "no-progress",
+                    "duration_seconds": 4.0,
+                    "status": "no-progress",
+                    "active_seconds": 4.0,
+                    "route": {
+                      "model": "gpt-5.4-mini",
+                      "effort": "low",
+                      "source": "routed"
+                    },
+                    "consumption": {
+                      "model": "gpt-5.4-mini",
+                      "tokens_in": 400,
+                      "tokens_out": 120,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "iteration",
+                    "iteration": 2,
+                    "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 4.5,
+                    "status": "closed",
+                    "active_seconds": 4.0,
+                    "route": {
+                      "model": "claude-opus-5",
+                      "effort": "max",
+                      "source": "escalated"
+                    },
+                    "consumption": {
+                      "model": "claude-opus-5",
+                      "tokens_in": 900,
+                      "tokens_out": 300,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 88,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:01-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #88 (order, position 1 of 1)"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:02-06:00",
+                    "kind": "unclassified",
+                    "text": "Reading the failing test"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:06-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #88 (order, position 1 of 1)"
+                  },
+                  {
+                    "at": "2026-05-15T18:00:07-06:00",
+                    "kind": "unclassified",
+                    "text": "Found it: the guard was inverted"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "a-contribution-without-a-pickup-inherits-no-route",
+      "inputs": {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high",
+        "max_strikes": 3,
+        "local_utc_offset_minutes": -360,
+        "drill_in_issue": 51
+      },
+      "events": [
+        {
+          "ts": "2026-05-16T00:00:00.000Z",
+          "run_id": "01HXR0000000000000000000RI",
+          "iter": null,
+          "type": "wrapper.run.start",
+          "release_version": "0.9.0-dev.0",
+          "schema_version": 1,
+          "insight_capabilities": {
+            "agent_output": true,
+            "structured_agent_events": true,
+            "token_usage": true,
+            "context_window": true,
+            "skill_consultation": true,
+            "cost": true,
+            "routing": true
+          },
+          "parallel_capabilities": {
+            "parallel_mode": true,
+            "rolling_dispatch": true,
+            "integration_backlog": true,
+            "adaptive_lane_limit": true,
+            "contribution_events": true
+          },
+          "max_nmt_strikes": 3
+        },
+        {
+          "ts": "2026-05-16T00:00:00.500Z",
+          "run_id": "01HXR0000000000000000000RI",
+          "iter": 1,
+          "type": "wrapper.iteration.start"
+        },
+        {
+          "ts": "2026-05-16T00:00:01.000Z",
+          "run_id": "01HXR0000000000000000000RI",
+          "iter": 1,
+          "type": "wrapper.pickup.bound",
+          "issue": 51,
+          "reason": "order",
+          "position": 1,
+          "considered": 1,
+          "model": "gpt-5.4-mini",
+          "effort": "low",
+          "context_tier": "default",
+          "routing_source": "routed",
+          "task_type_keys": [
+            "docs"
+          ],
+          "gate_warnings": [],
+          "lifecycle_position": "fresh"
+        },
+        {
+          "ts": "2026-05-16T00:00:01.000Z",
+          "run_id": "01HXR0000000000000000000RI",
+          "iter": 1,
+          "type": "wrapper.issue.activated",
+          "issue": 51,
+          "activated_at": "2026-05-16T00:00:01.000Z",
+          "binding_source": "serial_pickup"
+        },
+        {
+          "ts": "2026-05-16T00:00:03.000Z",
+          "run_id": "01HXR0000000000000000000RI",
+          "iter": 1,
+          "type": "wrapper.iteration.end",
+          "outcome": "advanced",
+          "duration_seconds": 2.5,
+          "summary": {
+            "model": "gpt-5.4-mini",
+            "tokens_in": 200,
+            "tokens_out": 60,
+            "observed_tokens": 260,
+            "tool_count": 1,
+            "skill_call_count": 0,
+            "skills_consulted": [],
+            "commits": 1,
+            "auto_closures": 0,
+            "pr_advances": 0,
+            "strikes": 0,
+            "peak_context_window": null
+          },
+          "issues": [
+            {
+              "issue": 51,
+              "status": "advanced",
+              "first_started_at": "2026-05-16T00:00:01.000Z",
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 2.0,
+              "cumulative_active_seconds": 2.0,
+              "consumption": {
+                "model": "gpt-5.4-mini",
+                "tokens_in": 200,
+                "tokens_out": 60
+              },
+              "peak_context_window": null
+            }
+          ]
+        },
+        {
+          "ts": "2026-05-16T00:00:03.500Z",
+          "run_id": "01HXR0000000000000000000RI",
+          "iter": 2,
+          "type": "wrapper.iteration.start"
+        },
+        {
+          "ts": "2026-05-16T00:00:04.000Z",
+          "run_id": "01HXR0000000000000000000RI",
+          "iter": 2,
+          "type": "wrapper.issue.activated",
+          "issue": 51,
+          "activated_at": "2026-05-16T00:00:04.000Z",
+          "binding_source": "working_marker"
+        },
+        {
+          "ts": "2026-05-16T00:00:07.000Z",
+          "run_id": "01HXR0000000000000000000RI",
+          "iter": 2,
+          "type": "wrapper.iteration.end",
+          "outcome": "closed",
+          "duration_seconds": 3.5,
+          "summary": {
+            "model": "gpt-5.4-mini",
+            "tokens_in": 300,
+            "tokens_out": 90,
+            "observed_tokens": 390,
+            "tool_count": 2,
+            "skill_call_count": 0,
+            "skills_consulted": [],
+            "commits": 1,
+            "auto_closures": 1,
+            "pr_advances": 0,
+            "strikes": 0,
+            "peak_context_window": null
+          },
+          "issues": [
+            {
+              "issue": 51,
+              "status": "closed",
+              "first_started_at": "2026-05-16T00:00:01.000Z",
+              "closed_at": "2026-05-16T00:00:07.000Z",
+              "issue_elapsed_seconds": 6.0,
+              "active_seconds": 3.0,
+              "cumulative_active_seconds": 5.0,
+              "consumption": {
+                "model": "gpt-5.4-mini",
+                "tokens_in": 300,
+                "tokens_out": 90
+              },
+              "peak_context_window": null
+            }
+          ]
+        }
+      ],
+      "snapshots": [
+        {
+          "after_event_count": 5,
+          "render_at_utc": "2026-05-16T00:00:03.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000RI",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 3.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 51,
+                    "status": "advanced",
+                    "started_at": "2026-05-15T18:00:01-06:00",
+                    "active_seconds": 2.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": {
+                      "model": "gpt-5.4-mini",
+                      "effort": "low",
+                      "source": "routed"
+                    },
+                    "tokens_in": 200,
+                    "tokens_out": 60,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": []
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "advanced",
+                    "duration_seconds": 2.5,
+                    "model": "gpt-5.4-mini",
+                    "tokens_in": 200,
+                    "tokens_out": 60,
+                    "observed_tokens": 260,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 1,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 51,
+                "status": "advanced",
+                "started_at": "2026-05-15T18:00:01-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 2.0,
+                "iteration_count": 1
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "advanced",
+                    "duration_seconds": 2.5,
+                    "status": "advanced",
+                    "active_seconds": 2.0,
+                    "route": {
+                      "model": "gpt-5.4-mini",
+                      "effort": "low",
+                      "source": "routed"
+                    },
+                    "consumption": {
+                      "model": "gpt-5.4-mini",
+                      "tokens_in": 200,
+                      "tokens_out": 60,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 51,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:01-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #51 (order, position 1 of 1)"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 8,
+          "render_at_utc": "2026-05-16T00:00:07.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000RI",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-15T18:00:00-06:00",
+                "elapsed_seconds": 7.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 51,
+                    "status": "closed",
+                    "started_at": "2026-05-15T18:00:01-06:00",
+                    "active_seconds": 5.0,
+                    "closed_at": "2026-05-15T18:00:07-06:00",
+                    "iteration_count": 2,
+                    "route": {
+                      "model": "gpt-5.4-mini",
+                      "effort": "low",
+                      "source": "routed"
+                    },
+                    "tokens_in": 500,
+                    "tokens_out": 150,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": []
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "advanced",
+                    "duration_seconds": 2.5,
+                    "model": "gpt-5.4-mini",
+                    "tokens_in": 200,
+                    "tokens_out": 60,
+                    "observed_tokens": 260,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 1,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "iteration",
+                    "iteration": 2,
+                    "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 3.5,
+                    "model": "gpt-5.4-mini",
+                    "tokens_in": 300,
+                    "tokens_out": 90,
+                    "observed_tokens": 390,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 2,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 51,
+                "status": "closed",
+                "started_at": "2026-05-15T18:00:01-06:00",
+                "closed_at": "2026-05-15T18:00:07-06:00",
+                "issue_elapsed_seconds": 6.0,
+                "active_seconds": 5.0,
+                "iteration_count": 2
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "advanced",
+                    "duration_seconds": 2.5,
+                    "status": "advanced",
+                    "active_seconds": 2.0,
+                    "route": {
+                      "model": "gpt-5.4-mini",
+                      "effort": "low",
+                      "source": "routed"
+                    },
+                    "consumption": {
+                      "model": "gpt-5.4-mini",
+                      "tokens_in": 200,
+                      "tokens_out": 60,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "iteration",
+                    "iteration": 2,
+                    "lane": null,
+                    "outcome": "closed",
+                    "duration_seconds": 3.5,
+                    "status": "closed",
+                    "active_seconds": 3.0,
+                    "route": null,
+                    "consumption": {
+                      "model": "gpt-5.4-mini",
+                      "tokens_in": 300,
+                      "tokens_out": 90,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 51,
+                "lines": [
+                  {
+                    "at": "2026-05-15T18:00:01-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #51 (order, position 1 of 1)"
                   }
                 ]
               }

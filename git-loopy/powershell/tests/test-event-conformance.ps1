@@ -398,8 +398,9 @@ function Get-GovernedMeasurement {
     # asserted below to equal the production manifest's keys exactly, so a new
     # capability cannot arrive uncovered and a typo cannot quietly govern
     # nothing. `agent_output` governs the `agent.output` Event rather than a
-    # rollup field, so its list is deliberately empty — stating that explicitly
-    # is what makes the key equality meaningful.
+    # rollup field, and `routing` governs the Routing resolution on
+    # `wrapper.pickup.bound`, so both lists are deliberately empty — stating
+    # that explicitly is what makes the key equality meaningful.
     #
     # Built through an explicit list rather than array literals so a null is
     # recorded as a governed measurement instead of vanishing: a dropped null
@@ -413,7 +414,8 @@ function Get-GovernedMeasurement {
             "token_usage",
             "context_window",
             "skill_consultation",
-            "cost"
+            "cost",
+            "routing"
         )
     ) {
         $Governed[$Name] = [Collections.Generic.List[object]]::new()

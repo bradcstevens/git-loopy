@@ -90,3 +90,17 @@ them here would make the routing answer harder to find on the line that exists t
   that adopts routing produces the same bytes, arrays and nulls included.
 - The **Dashboard** queue column and the Run-start routing block are *not* here. They are separate
   surfaces on the same record, and this ADR is what makes the record worth reading.
+
+**Amendment ([#411](https://github.com/bradcstevens/git-loopy/issues/411)):** the Dashboard half
+now ships, in both reducers, and reading the record twice is what it took. The **Queue** row
+carries the issue's *newest* resolution — what the issue costs now — while a contribution row in
+the **Iteration breakdown** carries the one resolved while *it* was open, so an **Escalation
+rung** renders as a change between two rows rather than as a value that silently rewrites the
+history above it. A contribution no Pickup record reached claims no pair at all rather than
+inheriting the issue's, which is the only rendering that stays true when a **Working marker**
+binds an issue no Pickup published a resolution for. The pair is the whole cell; the **Routing
+source** travels in the projection and is spelled nowhere, because `defaulted_no_task_type_label`
+on every row of an unlabelled corpus is noise, not provenance. A `routing` **Insight capability**
+(contract **1.25**) is what separates a cell that will never fill from one that has not filled
+yet — the same distinction `cost` and `rate_card` already draw, and the reason this is a
+declaration rather than an inference from a populated column.

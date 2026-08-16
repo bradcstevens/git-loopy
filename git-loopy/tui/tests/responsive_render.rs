@@ -86,13 +86,14 @@ fn cells(row: &str) -> Vec<String> {
 }
 
 /// The locked Queue headings, in the locked order.
-const QUEUE_HEADINGS: [&str; 10] = [
+const QUEUE_HEADINGS: [&str; 11] = [
     "Issue",
     "Status",
     "Started",
     "Active",
     "Closed",
     "Iters",
+    "Route",
     "Tokens in",
     "Tokens out",
     "Credits",
@@ -244,7 +245,7 @@ fn a_narrow_header_gives_up_facts_rather_than_truncating_one() {
          and an operator watching one Run already knows which: {identity}"
     );
     assert!(
-        identity.contains("model gpt-5.6-sol (high)") && identity.contains("elapsed 0:00:05"),
+        identity.contains("default gpt-5.6-sol (high)") && identity.contains("elapsed 0:00:05"),
         "what survives is whole: a half-written measurement reads as a \
          different measurement: {identity}"
     );

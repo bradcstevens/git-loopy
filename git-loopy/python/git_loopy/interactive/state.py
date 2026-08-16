@@ -277,6 +277,10 @@ class IssueLedgerEntry:
     closed_wall: datetime | None = None
     issue_elapsed_seconds: float | None = None
     contributions: list[IssueContribution] = field(default_factory=list)
+    #: The most recent pair any **Pickup** resolved for this issue, latched:
+    #: the Queue answers what the issue is costing *now*, which outlives the
+    #: Iteration that resolved it.
+    route: ResolvedRoute | None = None
 
     def active_seconds(self, now: float) -> float:
         """Total active time, live-ticking against ``now`` while active."""
@@ -323,6 +327,23 @@ class ContextWindowSnapshot:
 
 
 @dataclass(frozen=True)
+class ResolvedRoute:
+    """The **Routing resolution** one **Pickup** reached (contract 1.21).
+
+    ``model`` and ``effort`` are nullable *values* rather than absences — a
+    resolution that named neither left the choice to the backend — which is why
+    the record as a whole is optional and its halves are not. ``None`` in place
+    of the record is the only absence, and it means this Runner resolved
+    nothing; the header's ``routing`` declaration is what tells that apart from
+    an issue nothing has picked up yet.
+    """
+
+    model: str | None
+    effort: str | None
+    source: str | None
+
+
+@dataclass(frozen=True)
 class IssueContribution:
     """One finalized Iteration or Lane contribution for an Active issue."""
 
@@ -333,6 +354,10 @@ class IssueContribution:
     duration_seconds: float | None
     status: str
     active_seconds: float
+    #: The pair *this* contribution's own Pickup resolved, never a later one:
+    #: an escalated issue reads as a change between two rows, which a row that
+    #: inherited the issue's newest pair would erase.
+    route: ResolvedRoute | None
     usage: UsageTally
     usage_observed: bool
     peak_context_window: ContextWindowSnapshot | None
@@ -415,6 +440,11 @@ class LiveRunState:
         #: producer, and a Run that has seen no manifest has been told nothing.
         self.cost_available: bool | None = None
         self.rate_card_available: bool | None = None
+        #: Whether this Orchestrator resolves a **Routed pair** per issue
+        #: (contract 1.25). Per-distribution rather than Run-scoped: a Runner
+        #: that routes publishes a resolution on every bound Pickup, including
+        #: the one an explicit ``--model`` pinned.
+        self.routing_available: bool | None = None
         self.context_window: ContextWindowSnapshot | None = None
         self.peak_context_window: ContextWindowSnapshot | None = None
 
@@ -466,6 +496,12 @@ class LiveRunState:
         #: in :attr:`_logs`, accumulate across iterations and are *not* reset).
         self._lane_streams: dict[int | str, _StreamState] = {}
         self._iter_lane_refs: set[int | str] = set()
+        #: The pair each issue's **Pickup** resolved *within the open
+        #: Iteration*, cleared at every Iteration start so a re-picked issue
+        #: whose second Pickup carried no resolution stamps no contribution
+        #: with the first one's pair. Distinct from the ledger entry's latched
+        #: :attr:`IssueLedgerEntry.route`, which is what the issue costs *now*.
+        self._iter_routes: dict[int | str, ResolvedRoute] = {}
         #: Per-Lane commit tally for the current Wave (issue #66): a Lane's
         #: ``commit.recorded`` count, kept apart from the serial
         #: :attr:`_iter_commits` so a Lane's advanced/no-progress reconciliation
@@ -576,6 +612,9 @@ class LiveRunState:
                 declared_card = capabilities.get("rate_card")
                 if isinstance(declared_card, bool):
                     self.rate_card_available = declared_card
+                declared_routing = capabilities.get("routing")
+                if isinstance(declared_routing, bool):
+                    self.routing_available = declared_routing
             max_strikes = event.get("max_nmt_strikes")
             if max_strikes is not None:
                 self.max_strikes = _coerce_int(max_strikes, self.max_strikes)
@@ -590,6 +629,7 @@ class LiveRunState:
             self._record_pickup_line(
                 event.get("issue"), _log_pickup_bound_text(event), now
             )
+            self._record_route(event.get("issue"), _pickup_route(event))
         elif etype == _PICKUP_SKIPPED:
             self._record_pickup_line(
                 event.get("issue"), _log_pickup_skipped_text(event), now
@@ -1247,6 +1287,7 @@ class LiveRunState:
         self._lane_streams = {}
         self._lane_commits = {}
         self._iter_lane_refs = set()
+        self._iter_routes = {}
 
     def _record_pickup_line(self, ref: Any, text: str, now: float) -> None:
         """Attribute one **Pickup** record to the issue it names (#397).
@@ -1273,6 +1314,29 @@ class LiveRunState:
         self._emit_event_line(
             self._lane_stream_state(key), self._lane_provider(key), text
         )
+
+    def _record_route(self, ref: Any, route: ResolvedRoute | None) -> None:
+        """Latch a **Routing resolution** onto the issue and the Iteration.
+
+        Two homes because they answer two questions: the ledger entry is what
+        the issue is priced at *now* (the Queue), and the per-Iteration map is
+        what the contribution about to be finalized ran on (the breakdown). A
+        Pickup carrying no resolution clears neither — "this Runner does not
+        route" must never read as "the pair was withdrawn".
+
+        Called immediately after :meth:`_record_pickup_line`, which is what put
+        the issue in the ledger; a route never *creates* a Queue row, because an
+        issue exists on the Dashboard because something bound or considered it,
+        never because a pricing field arrived for it.
+        """
+        if ref is None or route is None:
+            return
+        key = self._normalize_ref(ref)
+        entry = self.ledger.get(key)
+        if entry is None:
+            return
+        entry.route = route
+        self._iter_routes[key] = route
 
     def _begin_contribution(self, key: int | str, now: float) -> None:
         """Open one **Lane contribution**'s scope on the Dashboard (#310).
@@ -1579,6 +1643,7 @@ class LiveRunState:
                 if lane_keys is not None
                 else key in self._iter_lane_refs
             )
+            route = self._iter_routes.get(key)
             contribution = IssueContribution(
                 kind="lane" if is_lane else "iteration",
                 iteration=None if is_lane else iter_num,
@@ -1589,6 +1654,7 @@ class LiveRunState:
                 active_seconds=max(
                     0.0, _coerce_float(payload.get("active_seconds"), 0.0)
                 ),
+                route=route,
                 usage=usage,
                 usage_observed=usage_observed,
                 peak_context_window=_context_window_snapshot(
@@ -1800,6 +1866,28 @@ def _pickup_order_phrase(event: Mapping[str, Any]) -> str:
     return f"position {position}"
 
 
+def _pickup_route(event: Mapping[str, Any]) -> ResolvedRoute | None:
+    """The **Routing resolution** a bound Pickup carried, or ``None``.
+
+    Every routing field is optional-when-present (contract 1.21), so a Runner
+    that resolves no pair emits the binding exactly as it always did and must
+    not be read as having routed to a null one. A field present as ``null`` is
+    a value — the backend chooses — and is what makes the *presence* test, not
+    the truthiness of the halves, the one that decides.
+    """
+    keys = ("model", "effort", "routing_source")
+    if not any(key in event for key in keys):
+        return None
+    model = event.get("model")
+    effort = event.get("effort")
+    source = event.get("routing_source")
+    return ResolvedRoute(
+        model=model if isinstance(model, str) else None,
+        effort=effort if isinstance(effort, str) else None,
+        source=source if isinstance(source, str) else None,
+    )
+
+
 def _pickup_issue_label(event: Mapping[str, Any]) -> str:
     issue = event.get("issue")
     return f"#{issue}" if isinstance(issue, int) else str(issue)
@@ -1921,8 +2009,17 @@ def format_header(state: LiveRunState, *, now: float | None = None) -> str:
 
     Pure and Textual-free so the header's *content* is unit-testable without a
     TTY; the app simply drops the returned string into a widget. The fields
-    mirror issue #23's header contract: run id, model + reasoning effort,
-    run-start clock, live-ticking elapsed, iteration number, status, strikes.
+    mirror issue #23's header contract: run id, the **Default pair** (model +
+    reasoning effort), run-start clock, live-ticking elapsed, iteration number,
+    status, strikes.
+
+    The pair is labelled ``default`` rather than ``model`` because it is no
+    longer the pair the work runs on: a **Routed pair** is resolved per issue
+    and shown in the Queue's Route column, and this is what an issue falls back
+    to. The ``routing`` **Insight capability** is *not* stated here, unlike in
+    the standalone helper: this header renders the Python Orchestrator's own
+    Run, which always routes, and a segment that can only ever say one thing is
+    noise on every line it appears on.
     """
     run_id = state.run_id or "—"
 
@@ -1931,7 +2028,10 @@ def format_header(state: LiveRunState, *, now: float | None = None) -> str:
         if state.reasoning_effort:
             model = f"{model} ({state.reasoning_effort})"
     else:
-        model = "default"
+        # The label is already "default", so a second "default" here would say
+        # nothing twice; "(backend)" is the phrase a Route cell uses for a half
+        # the backend picks, and this is the run-wide instance of that fact.
+        model = "(backend)"
 
     started = format_wall_clock(state.started_wall)
     elapsed = _format_elapsed(state.elapsed_seconds(now))
@@ -1961,7 +2061,7 @@ def format_header(state: LiveRunState, *, now: float | None = None) -> str:
 
     return (
         f"git-loopy  run {run_id}"
-        f"  •  model {model}"
+        f"  •  default {model}"
         f"  •  start {started}  elapsed {elapsed}"
         f"  •  iter {state.iteration}"
         f"  •  active {active}"
@@ -2014,9 +2114,10 @@ class QueueRow:
 
     A pure, Textual-free snapshot (mirrors :func:`format_header`) so the live
     Queue's content and ordering are unit-testable without a TTY. The canonical
-    columns are **Issue | Status | Started | Active | Closed | Iters | Tokens in |
-    Tokens out | Cost**. ``Closed`` and Issue elapsed exist only for authoritative
-    source closure, and ``Iters`` is the exact number of finalized Iteration or
+    columns are **Issue | Status | Started | Active | Closed | Iters | Route |
+    Tokens in | Tokens out | Cost**. ``Closed`` and Issue elapsed exist only for
+    authoritative source closure, and ``Iters`` is the exact number of finalized
+    Iteration or
     Lane contribution rows retained for the drill-in. Live timers and Consumption
     remain responsive before finalization; normalized Iteration-end issue rows
     become the authority once present.
@@ -2031,6 +2132,9 @@ class QueueRow:
     usage_observed: bool
     closed_wall: datetime | None
     iteration_count: int
+    #: The pair the issue's most recent **Pickup** resolved, or ``None`` when
+    #: nothing has resolved one for it.
+    route: ResolvedRoute | None = None
 
     @property
     def label(self) -> str:
@@ -2074,6 +2178,7 @@ def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRo
                 usage_observed=entry.usage_observed,
                 closed_wall=entry.closed_wall,
                 iteration_count=len(entry.contributions),
+                route=entry.route,
             )
         )
     rows.sort(key=lambda r: _QUEUE_GROUP_RANK.get(r.status, _QUEUE_GROUP_HISTORY))

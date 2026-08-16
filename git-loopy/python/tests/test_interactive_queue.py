@@ -385,6 +385,7 @@ def test_normalized_iteration_end_projects_closed_issue_contribution() -> None:
             duration_seconds=4.0,
             status="closed",
             active_seconds=4.0,
+            route=None,
             usage=UsageTally(model="claude-opus-4.8", tokens_in=100, tokens_out=50),
             usage_observed=True,
             peak_context_window=state_module.ContextWindowSnapshot(

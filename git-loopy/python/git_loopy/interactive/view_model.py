@@ -11,6 +11,7 @@ from git_loopy.interactive.state import (
     IssueContribution,
     LogLine,
     QueueRow,
+    ResolvedRoute,
     issue_detail,
     queue_rows,
 )
@@ -31,6 +32,7 @@ _QUEUE_COLUMNS = [
     "active_seconds",
     "closed_at",
     "iteration_count",
+    "route",
     "tokens_in",
     "tokens_out",
     "credits",
@@ -119,6 +121,12 @@ def _header(state: LiveRunState) -> dict[str, Any]:
         # *no rate card* is provenance, never a third kind of unknown Cost.
         "cost": _declaration(state.cost_available),
         "rate_card": _declaration(state.rate_card_available),
+        # Whether this Orchestrator resolves a **Routed pair** per issue
+        # (contract 1.25). Declared beside the other two and read the same way:
+        # an empty Route column means "nothing has resolved one yet" on a
+        # Runner that routes, and "this Runner prices every issue the same" on
+        # one that does not, and only the Run-start manifest tells them apart.
+        "routing": _declaration(state.routing_available),
     }
 
 
@@ -136,6 +144,21 @@ def _declaration(declared: bool | None) -> dict[str, Any]:
             if declared
             else "unavailable"
         )
+    }
+
+
+def _route(route: ResolvedRoute | None) -> dict[str, Any] | None:
+    """One **Routing resolution**, or ``None`` when nothing resolved one.
+
+    A ``null`` half is a *value* — the backend chooses — so the absence that
+    means "no route" is the absence of the whole record, never an empty pair.
+    """
+    if route is None:
+        return None
+    return {
+        "model": route.model,
+        "effort": route.effort,
+        "source": route.source,
     }
 
 
@@ -176,6 +199,7 @@ def _queue_row(row: QueueRow, *, denomination: CostDenomination) -> dict[str, An
         "active_seconds": row.active_seconds,
         "closed_at": _timestamp(row.closed_wall),
         "iteration_count": row.iteration_count,
+        "route": _route(row.route),
         "tokens_in": row.usage.tokens_in if row.usage_observed else None,
         "tokens_out": row.usage.tokens_out if row.usage_observed else None,
         "credits": _decimal_float(denomination.cost(row.usage)),
@@ -256,6 +280,7 @@ def _contribution_row(
         "duration_seconds": contribution.duration_seconds,
         "status": contribution.status,
         "active_seconds": contribution.active_seconds,
+        "route": _route(contribution.route),
         "consumption": {
             "model": contribution.usage.model if contribution.usage_observed else None,
             "tokens_in": (

@@ -56,6 +56,7 @@ fn a_run_projects_the_canonical_band_inventory_before_any_event() {
             "active_seconds",
             "closed_at",
             "iteration_count",
+            "route",
             "tokens_in",
             "tokens_out",
             "credits",

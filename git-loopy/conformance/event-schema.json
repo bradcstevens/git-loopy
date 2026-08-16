@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.24",
+  "contract_version": "1.25",
   "event_schema_version": "1.1",
   "insight_capabilities": {
     "names": [
@@ -9,8 +9,10 @@
       "token_usage",
       "context_window",
       "skill_consultation",
-      "cost"
+      "cost",
+      "routing"
     ],
+    "routing_note": "Contract 1.25. `routing` (#411) answers the same shape of question the six before it answer -- can this Orchestrator report the **Routed pair** one unit of work runs on? -- so it is per-distribution rather than run-scoped: a Run that pins `--model` does not go silent, its Pickups publish the resolution with a `defaulted_explicit_override` source, and two Runs of one binary therefore cannot differ. A port that resolves no pair declares it `false` rather than omitting it, because a Dashboard that cannot tell `this Orchestrator never routes` from `no Pickup has resolved a pair yet` shows a Route column that reads as pending forever.",
     "run_scoped": {
       "names": ["rate_card"],
       "declared_by": ["python", "shell", "powershell"],
@@ -42,7 +44,8 @@
         "token_usage": true,
         "context_window": true,
         "skill_consultation": true,
-        "cost": true
+        "cost": true,
+        "routing": true
       },
       "shell": {
         "agent_output": true,
@@ -50,7 +53,8 @@
         "token_usage": false,
         "context_window": false,
         "skill_consultation": false,
-        "cost": false
+        "cost": false,
+        "routing": false
       },
       "powershell": {
         "agent_output": true,
@@ -58,7 +62,8 @@
         "token_usage": false,
         "context_window": false,
         "skill_consultation": false,
-        "cost": false
+        "cost": false,
+        "routing": false
       }
     }
   },
@@ -1805,7 +1810,8 @@
           "token_usage": false,
           "context_window": false,
           "skill_consultation": false,
-          "cost": false
+          "cost": false,
+          "routing": false
         },
         "parallel_capabilities": {
           "parallel_mode": false,
@@ -1815,7 +1821,7 @@
           "contribution_events": false
         }
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": false, \"structured_agent_events\": false, \"token_usage\": false, \"context_window\": false, \"skill_consultation\": false, \"cost\": false}, \"parallel_capabilities\": {\"parallel_mode\": false, \"rolling_dispatch\": false, \"integration_backlog\": false, \"adaptive_lane_limit\": false, \"contribution_events\": false}, \"release_version\": \"0.9.0-dev.0\", \"schema_version\": 1}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": false, \"structured_agent_events\": false, \"token_usage\": false, \"context_window\": false, \"skill_consultation\": false, \"cost\": false, \"routing\": false}, \"parallel_capabilities\": {\"parallel_mode\": false, \"rolling_dispatch\": false, \"integration_backlog\": false, \"adaptive_lane_limit\": false, \"contribution_events\": false}, \"release_version\": \"0.9.0-dev.0\", \"schema_version\": 1}\n"
     },
     {
       "id": "run-start-resolved-rate-card",
@@ -1834,6 +1840,7 @@
           "context_window": true,
           "skill_consultation": true,
           "cost": true,
+          "routing": true,
           "rate_card": true
         },
         "parallel_capabilities": {
@@ -1867,7 +1874,7 @@
           }
         }
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"rate_card\": true}, \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": false}, \"rate_card\": {\"models\": {\"claude-haiku-4.5\": {\"multiplier\": 0.33, \"discount_percent\": null, \"prices\": {\"batch_size\": 1000000, \"input_price\": 0.1, \"output_price\": 0.4, \"cache_read_price\": 0.01, \"cache_write_price\": 0.125, \"max_prompt_tokens\": 128000, \"long_context\": {\"input_price\": 0.2, \"output_price\": 0.8, \"cache_read_price\": 0.02, \"cache_write_price\": 0.25, \"max_prompt_tokens\": 1000000}}}}}, \"release_version\": \"0.9.0-dev.0\", \"schema_version\": 1}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"routing\": true, \"rate_card\": true}, \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": false}, \"rate_card\": {\"models\": {\"claude-haiku-4.5\": {\"multiplier\": 0.33, \"discount_percent\": null, \"prices\": {\"batch_size\": 1000000, \"input_price\": 0.1, \"output_price\": 0.4, \"cache_read_price\": 0.01, \"cache_write_price\": 0.125, \"max_prompt_tokens\": 128000, \"long_context\": {\"input_price\": 0.2, \"output_price\": 0.8, \"cache_read_price\": 0.02, \"cache_write_price\": 0.25, \"max_prompt_tokens\": 1000000}}}}}, \"release_version\": \"0.9.0-dev.0\", \"schema_version\": 1}\n"
     },
     {
       "id": "run-start-absent-rate-card",
@@ -1886,6 +1893,7 @@
           "context_window": true,
           "skill_consultation": true,
           "cost": true,
+          "routing": true,
           "rate_card": false
         },
         "parallel_capabilities": {
@@ -1897,7 +1905,7 @@
         },
         "rate_card": null
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000EE\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"rate_card\": false}, \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": false}, \"rate_card\": null, \"release_version\": \"0.9.0-dev.0\", \"schema_version\": 1}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000EE\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"routing\": true, \"rate_card\": false}, \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": false}, \"rate_card\": null, \"release_version\": \"0.9.0-dev.0\", \"schema_version\": 1}\n"
     },
     {
       "id": "run-start-routing-readback",
@@ -1915,7 +1923,8 @@
           "token_usage": true,
           "context_window": true,
           "skill_consultation": true,
-          "cost": true
+          "cost": true,
+          "routing": true
         },
         "parallel_capabilities": {
           "parallel_mode": true,
@@ -1963,7 +1972,7 @@
         "roster_cli_version": "1.0.75",
         "roster_diverged": true
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000FF\", \"iter\": null, \"type\": \"wrapper.run.start\", \"context_tier\": \"long_context\", \"effort\": \"max\", \"escalation_rung\": {\"model\": \"claude-opus-5\", \"effort\": \"max\", \"configured_effort\": \"max\", \"gate_warnings\": []}, \"harness_version\": \"1.0.67\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true}, \"model\": \"claude-opus-4.8\", \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": true}, \"release_version\": \"0.9.0-dev.0\", \"roster_cli_version\": \"1.0.75\", \"roster_diverged\": true, \"routes\": [{\"key\": \"docs\", \"model\": \"gpt-5-mini\", \"effort\": \"medium\", \"configured_effort\": \"medium\", \"gate_warnings\": []}, {\"key\": \"chore\", \"model\": \"claude-haiku-4.5\", \"effort\": null, \"configured_effort\": \"high\", \"gate_warnings\": [\"incapable_model\"]}], \"routing_suppressed\": false, \"schema_version\": 1, \"unconfigured_task_type_keys\": [\"planning\", \"review\", \"implementation\", \"test\", \"bugfix\"]}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000FF\", \"iter\": null, \"type\": \"wrapper.run.start\", \"context_tier\": \"long_context\", \"effort\": \"max\", \"escalation_rung\": {\"model\": \"claude-opus-5\", \"effort\": \"max\", \"configured_effort\": \"max\", \"gate_warnings\": []}, \"harness_version\": \"1.0.67\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"routing\": true}, \"model\": \"claude-opus-4.8\", \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": true}, \"release_version\": \"0.9.0-dev.0\", \"roster_cli_version\": \"1.0.75\", \"roster_diverged\": true, \"routes\": [{\"key\": \"docs\", \"model\": \"gpt-5-mini\", \"effort\": \"medium\", \"configured_effort\": \"medium\", \"gate_warnings\": []}, {\"key\": \"chore\", \"model\": \"claude-haiku-4.5\", \"effort\": null, \"configured_effort\": \"high\", \"gate_warnings\": [\"incapable_model\"]}], \"routing_suppressed\": false, \"schema_version\": 1, \"unconfigured_task_type_keys\": [\"planning\", \"review\", \"implementation\", \"test\", \"bugfix\"]}\n"
     },
     {
       "id": "authoritative-issue-activation",

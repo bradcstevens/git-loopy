@@ -241,10 +241,10 @@ def test_format_header_contains_all_fields() -> None:
     assert "strikes 1/3" in header
 
 
-def test_format_header_without_model_says_default() -> None:
+def test_format_header_without_model_says_the_backend_chose() -> None:
     state = _make_state(model=None)
     header = format_header(state)
-    assert "model default" in header
+    assert "default (backend)" in header
 
 
 def test_format_header_now_override_is_used_for_elapsed() -> None:

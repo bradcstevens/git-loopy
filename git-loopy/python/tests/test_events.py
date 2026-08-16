@@ -123,6 +123,7 @@ def test_dashboard_insight_vocabulary_is_additive_schema_version_one() -> None:
         "context_window",
         "skill_consultation",
         "cost",
+        "routing",
     )
     assert events_module.WRAPPER_ISSUE_ACTIVATED == "wrapper.issue.activated"
     assert events_module.AGENT_OUTPUT == "agent.output"

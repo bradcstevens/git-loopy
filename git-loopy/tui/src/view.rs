@@ -15,19 +15,20 @@ use serde::Serialize;
 
 use crate::event::{ContextWindowSample, IssueRef, IterationSummary};
 use crate::state::{
-    DashboardState, IssueContribution, IssueLedgerEntry, IterationRow, LogLine, STATUS_ACTIVE,
-    STATUS_GONE, STATUS_QUEUED,
+    DashboardState, IssueContribution, IssueLedgerEntry, IterationRow, LogLine, ResolvedRoute,
+    STATUS_ACTIVE, STATUS_GONE, STATUS_QUEUED,
 };
 use crate::timestamp::{Timestamp, Zone};
 
 /// The canonical Queue columns, in order.
-const QUEUE_COLUMNS: [&str; 10] = [
+const QUEUE_COLUMNS: [&str; 11] = [
     "issue",
     "status",
     "started_at",
     "active_seconds",
     "closed_at",
     "iteration_count",
+    "route",
     "tokens_in",
     "tokens_out",
     "credits",
@@ -119,6 +120,7 @@ pub struct Header {
     pub context_fill: ContextFill,
     pub cost: Declaration,
     pub rate_card: Declaration,
+    pub routing: Declaration,
 }
 
 /// One Run-scoped **Insight capability**, projected as its own declaration.
@@ -181,10 +183,34 @@ pub struct QueueRow {
     pub active_seconds: f64,
     pub closed_at: Option<String>,
     pub iteration_count: usize,
+    pub route: Option<RouteView>,
     pub tokens_in: Option<i64>,
     pub tokens_out: Option<i64>,
     pub credits: Option<f64>,
     pub premium_requests: Option<f64>,
+}
+
+/// One issue's **Routed pair** and the **Routing source** that chose it.
+///
+/// A `null` half is a *value*: the backend chooses. The record itself is
+/// optional, and its absence is the only "nothing is known here" — an issue no
+/// Pickup has resolved yet, or a Runner that resolves nothing at all, which the
+/// header's `routing` declaration is what tells apart.
+#[derive(Clone, Debug, Serialize)]
+pub struct RouteView {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub source: Option<String>,
+}
+
+impl RouteView {
+    fn project(route: &ResolvedRoute) -> Self {
+        Self {
+            model: route.model.clone(),
+            effort: route.effort.clone(),
+            source: route.source.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -261,6 +287,7 @@ pub struct ContributionRow {
     pub duration_seconds: Option<f64>,
     pub status: String,
     pub active_seconds: f64,
+    pub route: Option<RouteView>,
     pub consumption: ConsumptionView,
     pub credits: Option<f64>,
     pub premium_requests: Option<f64>,
@@ -334,6 +361,7 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
         context_fill: context_fill(state),
         cost: Declaration::from_capability(state.capabilities.cost),
         rate_card: Declaration::from_capability(state.capabilities.rate_card),
+        routing: Declaration::from_capability(state.capabilities.routing),
     }
 }
 
@@ -382,6 +410,7 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
                         .active_seconds(state.monotonic_at(context.now, context.now_monotonic)),
                     closed_at: entry.closed_at.map(|at| at.to_zoned_iso(context.zone)),
                     iteration_count: entry.contributions.len(),
+                    route: entry.route.as_ref().map(RouteView::project),
                     tokens_in: entry.usage_observed.then_some(entry.tokens_in),
                     tokens_out: entry.usage_observed.then_some(entry.tokens_out),
                     credits: entry.credits.value(),
@@ -507,6 +536,7 @@ fn contribution_row(contribution: &IssueContribution) -> ContributionRow {
         duration_seconds: contribution.duration_seconds,
         status: contribution.status.clone(),
         active_seconds: contribution.active_seconds,
+        route: contribution.route.as_ref().map(RouteView::project),
         consumption: ConsumptionView {
             model: contribution
                 .usage_observed

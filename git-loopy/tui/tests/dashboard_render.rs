@@ -150,13 +150,15 @@ fn the_header_band_states_the_run_at_a_glance() {
     assert_eq!(
         band(&lines, "git-loopy"),
         vec![
-            "run 01HXR0000000000000000000DD  •  model gpt-5.6-sol (high)  \
+            "run 01HXR0000000000000000000DD  •  default gpt-5.6-sol (high)  \
              •  start 6:00:00 PM  elapsed 0:00:05",
-            "active —  •  context —  •  running  •  strikes 0/3",
+            "active —  •  context —  •  running  •  strikes 0/3  \
+             •  routes per issue",
         ],
-        "the Header carries Run identity, configured model and effort, local \
-         start, live elapsed, the Active issue and its timer, Context fill, \
-         status, and Strikes"
+        "the Header carries Run identity, the *default* pair the Run resolves \
+         a per-issue Route against, local start, live elapsed, the Active \
+         issue and its timer, Context fill, status, Strikes, and whether this \
+         Orchestrator routes at all"
     );
 }
 
@@ -175,6 +177,7 @@ fn the_queue_band_lists_every_issue_in_the_locked_columns() {
             "Active",
             "Closed",
             "Iters",
+            "Route",
             "Tokens in",
             "Tokens out",
             "Credits",
@@ -191,6 +194,7 @@ fn the_queue_band_lists_every_issue_in_the_locked_columns() {
             "0:00:04",
             "6:00:05 PM",
             "1",
+            "—",
             "100",
             "50",
             "—",
@@ -209,9 +213,9 @@ fn a_queue_row_shows_the_unknown_placeholder_for_every_unmeasured_cell() {
     // queued, so it precedes the closed #7 even though #7 was seen first.
     assert_eq!(
         cells(&queue[1]),
-        ["#9", "queued", "—", "0:00:00", "—", "0", "—", "—", "n/a", "n/a"],
+        ["#9", "queued", "—", "0:00:00", "—", "0", "n/a", "—", "—", "n/a", "n/a",],
         "an Orchestrator that cannot measure Consumption never renders a zero, \
-         and the Cost cells say which kind of unknown they are"
+         and the Cost and Route cells say which kind of unknown they are"
     );
     assert_eq!(
         cells(&queue[2]),
@@ -222,6 +226,7 @@ fn a_queue_row_shows_the_unknown_placeholder_for_every_unmeasured_cell() {
             "0:00:48",
             "5:30:50 AM",
             "2",
+            "n/a",
             "—",
             "—",
             "n/a",
@@ -440,7 +445,8 @@ fn the_header_shows_context_fill_with_its_smart_zone_cues_when_measured() {
     assert_eq!(
         band(&lines, "git-loopy")[1],
         "active #42 0:00:02  •  context 12,000/32,000 38% [███░░░░░░░] \
-         target 20,000 ceiling 28,000  •  running  •  strikes 0/3",
+         target 20,000 ceiling 28,000  •  running  •  strikes 0/3  \
+         •  routes per issue",
         "the Context-fill slot shows count/count, percentage, a compact bar, \
          and the Smart-Zone target and ceiling cues"
     );
@@ -460,7 +466,8 @@ fn an_ascii_only_terminal_gets_ascii_glyphs_and_the_same_facts() {
     assert_eq!(
         band(&lines, "git-loopy")[1],
         "active #42 0:00:02  |  context 12,000/32,000 38% [###-------] \
-         target 20,000 ceiling 28,000  |  running  |  strikes 0/3",
+         target 20,000 ceiling 28,000  |  running  |  strikes 0/3  \
+         |  routes per issue",
         "capabilities change glyphs only — never a value, a label, or an order"
     );
     assert!(
@@ -477,10 +484,10 @@ fn an_unmeasurable_context_window_still_shows_its_slot() {
     assert_eq!(
         band(&lines, "git-loopy")[1],
         "active #7 0:00:01  •  context —  •  running  •  strikes 0/3  \
-         •  rate card unavailable",
+         •  routes n/a  •  rate card unavailable",
         "an Orchestrator that cannot measure Context fill keeps the slot \
-         visible with the unknown placeholder, and one that resolved no \
-         Rate card says that beside it"
+         visible with the unknown placeholder, and one that routes nothing \
+         and resolved no Rate card says both beside it"
     );
 }
 
@@ -587,6 +594,7 @@ fn end_of_input_draws_a_final_frame_and_hands_the_terminal_back() {
             "0:00:04",
             "6:00:05 PM",
             "1",
+            "—",
             "100",
             "50",
             "—",
@@ -675,7 +683,7 @@ fn an_unknown_cost_says_which_kind_of_unknown_it_is() {
     let queue = band(&lines, "Queue");
     let row = cells(&queue[1]);
     assert_eq!(
-        &row[8..],
+        &row[9..],
         ["n/a", "n/a"],
         "an Orchestrator that cannot report Cost says so in the cell"
     );
@@ -689,7 +697,7 @@ fn an_unknown_cost_says_which_kind_of_unknown_it_is() {
     let queue = band(&lines, "Queue");
     let row = cells(&queue[1]);
     assert_eq!(
-        &row[8..],
+        &row[9..],
         ["—", "—"],
         "an unreported bill keeps the unknown placeholder, never a zero"
     );

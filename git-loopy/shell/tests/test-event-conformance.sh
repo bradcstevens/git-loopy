@@ -254,10 +254,14 @@ while IFS= read -r case_json; do
     '
       # Every normalized measurement each Insight capability governs. Keys are
       # asserted below to equal the manifest keys exactly, so a new capability
-      # cannot arrive uncovered and a typo cannot quietly govern nothing.
+      # cannot arrive uncovered and a typo cannot quietly govern nothing. Two
+      # of them govern no rollup field at all -- `agent_output` rides the
+      # `agent.output` Event and `routing` rides `wrapper.pickup.bound` -- and
+      # their empty lists are what makes that key equality meaningful.
       def governed:
         {
           agent_output: [],
+          routing: [],
           structured_agent_events: [$rollup.summary.tool_count],
           token_usage: (
             [

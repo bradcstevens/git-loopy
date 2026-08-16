@@ -516,6 +516,7 @@ jq -se --arg release_version "$expected_release_version" '
     context_window: false,
     skill_consultation: false,
     cost: false,
+    routing: false,
     rate_card: false
   }
   # #334: this port reads no model listing, so the run-scoped Rate-card

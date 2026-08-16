@@ -167,6 +167,16 @@ pub struct InsightCapabilities {
     /// prices, not what it can display.
     #[serde(default)]
     pub rate_card: Option<bool>,
+    /// Whether this Orchestrator resolves a **Routed pair** per issue.
+    ///
+    /// Per-distribution rather than Run-scoped (contract 1.25): a Runner that
+    /// routes publishes a **Routing resolution** on every bound **Pickup**,
+    /// including the one an explicit `--model` pinned, so the answer is a
+    /// property of the binary and not of the Run. It is the difference between
+    /// an empty Route column meaning "nothing has been picked up yet" and it
+    /// meaning "this Orchestrator prices every issue the same".
+    #[serde(default)]
+    pub routing: Option<bool>,
 }
 
 /// The AFK-ready Pool collected for one Iteration.
@@ -217,6 +227,22 @@ pub struct Pickup {
     /// How long that order was.
     #[serde(default)]
     pub considered: Option<i64>,
+    /// The model the **Routed pair** resolved to, gated. `Some(None)` is a
+    /// resolution that named no model and left the choice to the backend;
+    /// `None` is a Runner that resolved nothing at all.
+    #[serde(default, deserialize_with = "reported")]
+    pub model: Option<Option<String>>,
+    /// The reasoning effort of that pair, gated. `Some(None)` is the backend's
+    /// own default — either because nobody asked, or because the gate dropped
+    /// an effort the model refuses.
+    #[serde(default, deserialize_with = "reported")]
+    pub effort: Option<Option<String>>,
+    /// Which **Routing source** chose the pair (`routed`, one of the
+    /// `defaulted_*` fallbacks, or `escalated`). Spelled in full on the wire
+    /// because this record's own `reason` already answers "why" about the
+    /// binding.
+    #[serde(default)]
+    pub routing_source: Option<String>,
 }
 
 /// One timestamped, unclassified line of agent output.

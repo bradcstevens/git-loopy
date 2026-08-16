@@ -26,7 +26,7 @@ use crate::navigation::Screen;
 use crate::session::{DashboardFrame, Diagnostics};
 use crate::view::{
     Activity, ContextFill, ContributionRow, DetailHeader, DrillIn, Header, LogLineView,
-    PeakContext, QueueRow, SummaryRow, TerminalCapabilities,
+    PeakContext, QueueRow, RouteView, SummaryRow, TerminalCapabilities,
 };
 
 /// The placeholder for a value the Run has not measured.
@@ -80,18 +80,32 @@ const fn filling(heading: &'static str, width: u16, rank: u8) -> Column {
 /// Identity comes first and is never given up. Then lifecycle, then the
 /// accounting an operator steers by, and last the wide Consumption counters —
 /// the numbers worth a second look rather than a glance.
-const QUEUE_COLUMNS: [Column; 10] = [
+///
+/// The Route reads *with* that accounting but is given up before the second
+/// token counter, because it is the widest column here and a reduction gives up
+/// whatever does not fit next: ranked any higher, an 80-column terminal would
+/// buy the pair by surrendering every Consumption figure it has.
+const QUEUE_COLUMNS: [Column; 11] = [
     fixed("Issue", 10, 0),
     fixed("Status", 12, 1),
     fixed("Started", 12, 4),
     fixed("Active", 9, 2),
-    fixed("Closed", 12, 8),
+    fixed("Closed", 12, 9),
     fixed("Iters", 6, 3),
+    fixed("Route", ROUTE_WIDTH, 7),
     fixed("Tokens in", 11, 6),
-    fixed("Tokens out", 11, 7),
-    fixed("Credits", 11, 9),
-    fixed("Premium", 9, 10),
+    fixed("Tokens out", 11, 8),
+    fixed("Credits", 11, 10),
+    fixed("Premium", 9, 11),
 ];
+
+/// The width the Route cell is laid out in.
+///
+/// Wide enough for the pairs the family actually routes to — `claude-opus-5 @
+/// max` is the longest thing the built-in **Escalation rung** and the shipped
+/// `[routing]` table can produce — and no wider, because every column after it
+/// is one a narrower terminal gives up to pay for it.
+const ROUTE_WIDTH: u16 = 19;
 
 /// The locked Summary columns, in the locked order.
 ///
@@ -196,6 +210,7 @@ pub fn draw_dashboard(frame: &mut Frame, dashboard: &DashboardFrame) {
         bands.queue,
         &view.dashboard.queue.rows,
         cost_placeholder(&view.dashboard.header, &glyphs),
+        routing_placeholder(&view.dashboard.header, &glyphs),
         &glyphs,
     );
     draw_activity(frame, bands.activity, &view.dashboard.activity, &glyphs);
@@ -451,9 +466,12 @@ fn draw_header(
     let model = match (&header.model, &header.reasoning_effort) {
         (Some(model), Some(effort)) => format!("{model} ({effort})"),
         (Some(model), None) => model.clone(),
-        // "default" rather than the unknown placeholder: an unconfigured model
-        // is a choice the Run made, not a measurement it failed to take.
-        (None, _) => "default".to_string(),
+        // "(backend)" rather than the unknown placeholder: an unconfigured
+        // model is a choice the Run made, not a measurement it failed to take,
+        // and it is the same phrase a Route cell uses for a half the backend
+        // picks. The label is already "default", so repeating the word here
+        // would say nothing twice.
+        (None, _) => "(backend)".to_string(),
     };
     let identity = fitted_line(
         vec![
@@ -467,7 +485,7 @@ fn draw_header(
                         .unwrap_or_else(|| glyphs.unknown.into())
                 ),
             ),
-            (1, format!("model {model}")),
+            (1, format!("default {model}")),
             (
                 0,
                 format!(
@@ -495,7 +513,8 @@ fn draw_header(
             ),
         ),
     ];
-    segments.extend(rate_card_segment(header).map(|note| (5, note)));
+    segments.extend(routing_segment(header).map(|note| (5, note)));
+    segments.extend(rate_card_segment(header).map(|note| (6, note)));
     segments.extend(diagnostic_segment(diagnostics).map(|note| (0, note)));
     let progress = fitted_line(segments, area, glyphs);
 
@@ -509,7 +528,14 @@ fn draw_header(
     );
 }
 
-fn draw_queue(frame: &mut Frame, area: Rect, rows: &[QueueRow], cost: &str, glyphs: &Glyphs) {
+fn draw_queue(
+    frame: &mut Frame,
+    area: Rect,
+    rows: &[QueueRow],
+    cost: &str,
+    routing: &str,
+    glyphs: &Glyphs,
+) {
     draw_table(
         frame,
         area,
@@ -522,6 +548,7 @@ fn draw_queue(frame: &mut Frame, area: Rect, rows: &[QueueRow], cost: &str, glyp
                 duration(row.active_seconds),
                 wall_clock(row.closed_at.as_deref(), glyphs),
                 row.iteration_count.to_string(),
+                route(row.route.as_ref(), routing),
                 tokens(row.tokens_in, glyphs),
                 tokens(row.tokens_out, glyphs),
                 credits(row.credits, cost),
@@ -565,6 +592,43 @@ fn cost_placeholder<'a>(header: &Header, glyphs: &'a Glyphs) -> &'a str {
     }
 }
 
+/// One issue's **Routed pair**, as a cell: the pair, never the provenance.
+///
+/// `model @ effort` is the family's one spelling of a pair — the same one the
+/// `[routing]` table an operator writes uses, and the same one the line printer
+/// prints — so a Queue cell and a stdout line name one thing one way. The
+/// **Routing source** travels in the projection beside it and is deliberately
+/// not spelled here: `defaulted_no_task_type_label` is the overwhelmingly
+/// common answer while a corpus is unlabelled, and a column repeating it on
+/// every row would cost width to say nothing.
+///
+/// A null half is the backend choosing, which is a fact rather than a gap, so
+/// it renders as `(backend)` rather than as the unknown placeholder.
+fn route(route: Option<&RouteView>, unknown: &str) -> String {
+    let Some(route) = route else {
+        return unknown.to_string();
+    };
+    format!(
+        "{} @ {}",
+        route.model.clone().unwrap_or_else(|| "(backend)".into()),
+        route.effort.clone().unwrap_or_else(|| "(backend)".into()),
+    )
+}
+
+/// What an empty Route cell says on this Run.
+///
+/// The same shape as [`cost_placeholder`] and for the same reason: an
+/// Orchestrator that declared it resolves no route will never fill this cell,
+/// while an issue nothing has picked up yet still might, and an operator who
+/// cannot tell them apart waits for a pair that is not coming.
+fn routing_placeholder<'a>(header: &Header, glyphs: &'a Glyphs) -> &'a str {
+    if header.routing.availability == "unavailable" {
+        UNAVAILABLE
+    } else {
+        glyphs.unknown
+    }
+}
+
 /// What this Run knows about its own prices, when it declared anything.
 ///
 /// The **Rate card** gates no figure — its prices are denominated in the same
@@ -575,6 +639,20 @@ fn cost_placeholder<'a>(header: &Header, glyphs: &'a Glyphs) -> &'a str {
 /// third kind of unknown Cost. A run-scoped capability is required of no
 /// producer, so an undeclared card states nothing rather than claiming a
 /// refusal nobody made.
+/// Whether this Run prices each issue for itself, when it declared anything.
+///
+/// The header's pair is the Run's *default*, and an operator reading a Queue
+/// with an empty Route column cannot tell "nothing has been picked up yet" from
+/// "this Orchestrator prices every issue the same". Only the Run-start manifest
+/// carries that, so it is stated once here rather than guessed per row.
+fn routing_segment(header: &Header) -> Option<String> {
+    match header.routing.availability {
+        "available" => Some("routes per issue".to_string()),
+        "unavailable" => Some("routes n/a".to_string()),
+        _ => None,
+    }
+}
+
 fn rate_card_segment(header: &Header) -> Option<String> {
     match header.rate_card.availability {
         "available" => Some("rate card recorded".to_string()),
@@ -689,19 +767,26 @@ fn draw_activity(frame: &mut Frame, area: Rect, activity: &Activity, glyphs: &Gl
 /// `cache_read` and `cache_write` are components of `tokens_in`, not figures
 /// beside it — and is given up first on a narrow terminal: it is the detail an
 /// operator drills in for once the totals have already raised the question.
-const BREAKDOWN_COLUMNS: [Column; 12] = [
+///
+/// The Route is ranked here exactly as it is in the Queue, so one operator
+/// reading two tables gives up the same fact at the same width. This band is
+/// where an **Escalation rung** becomes visible at all: the pair is per
+/// contribution, so a stalled issue re-picked at a dearer pair reads as a
+/// change between two rows rather than as one value that quietly moved.
+const BREAKDOWN_COLUMNS: [Column; 13] = [
     fixed("Contribution", 14, 0),
     fixed("Outcome", 10, 2),
     fixed("Duration", 9, 4),
     fixed("Status", 12, 1),
     fixed("Active", 9, 3),
+    fixed("Route", ROUTE_WIDTH, 7),
     fixed("Tokens in", 11, 6),
-    fixed("Tokens out", 11, 7),
-    fixed("Cache read", 10, 11),
-    fixed("Cache write", 11, 12),
-    fixed("Credits", 11, 9),
-    fixed("Premium", 9, 10),
-    filling("Peak Context fill", 19, 8),
+    fixed("Tokens out", 11, 8),
+    fixed("Cache read", 10, 12),
+    fixed("Cache write", 11, 13),
+    fixed("Credits", 11, 10),
+    fixed("Premium", 9, 11),
+    filling("Peak Context fill", 19, 9),
 ];
 
 /// Draw one issue's whole drill-in into `frame`.
@@ -735,6 +820,7 @@ pub fn draw_drill_in(frame: &mut Frame, dashboard: &DashboardFrame) {
         breakdown,
         &view.drill_in.iteration_breakdown.rows,
         cost_placeholder(&view.dashboard.header, &glyphs),
+        routing_placeholder(&view.dashboard.header, &glyphs),
         &glyphs,
     );
     draw_issue_log(frame, log, &view.drill_in, &glyphs);
@@ -819,6 +905,7 @@ fn draw_breakdown(
     area: Rect,
     rows: &[ContributionRow],
     cost: &str,
+    routing: &str,
     glyphs: &Glyphs,
 ) {
     draw_table(
@@ -833,6 +920,7 @@ fn draw_breakdown(
                     .map_or_else(|| glyphs.unknown.to_string(), duration),
                 row.status.clone(),
                 duration(row.active_seconds),
+                route(row.route.as_ref(), routing),
                 tokens(row.consumption.tokens_in, glyphs),
                 tokens(row.consumption.tokens_out, glyphs),
                 tokens(row.consumption.cache_read, glyphs),

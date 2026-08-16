@@ -619,7 +619,9 @@ _Avoid_: lock, claim, assignment, selection, priority.
 **Queue**:
 The per-run ledger of every issue seen in any pool during the run, each carrying a
 status; the selectable list shown in the live interface. Distinct from the pool,
-which is a single iteration's input.
+which is a single iteration's input. Each row also carries the **Routed pair** the
+issue is currently priced at — the newest **Routing resolution** anyone reached for it,
+which is what an issue costs *now* rather than what any one attempt spent.
 _Avoid_: backlog, list.
 
 **Status**:
@@ -796,9 +798,12 @@ _Avoid_: context used, context utilisation, context fill.
 
 **Iteration breakdown**:
 The per-issue drill-in band that itemizes each **Iteration**'s contribution to that
-issue, including its **Consumption**, Cost, and available peak **Context fill**. In
-**Parallel mode**, the row is the issue's **Lane contribution** — attributed to the
-issue that produced it, never to whichever issue its **Lane** slot went on to work.
+issue, including its **Consumption**, Cost, available peak **Context fill**, and the
+**Routed pair** *that* contribution ran on — never the issue's newest one, so an
+**Escalation rung** reads as a change between two rows and a contribution no **Pickup**
+record reached claims no pair at all. In **Parallel mode**, the row is the issue's
+**Lane contribution** — attributed to the issue that produced it, never to whichever
+issue its **Lane** slot went on to work.
 _Avoid_: session breakdown, history table.
 
 **ModelSelectionMode**:
@@ -905,7 +910,8 @@ gating them; a **Routing source**; and the attempt's lifecycle position. Every s
 what a Pickup chose reads this record rather than recomputing it. Its source and lifecycle
 position are distinct axes so an escalated pair and a same-pair retry stay tellable apart. It is
 published on the **Pickup**'s own Event and as one line on stdout, so which model worked an issue
-is answerable live and after the fact from the same record (ADR-0039).
+is answerable live and after the fact from the same record (ADR-0039) — and the **Dashboard**
+reads that same record twice, onto the **Queue** row and onto the contribution.
 _Avoid_: routed pair (only the model and effort values), routing decision (ambiguous).
 
 **Routing source**:
@@ -1113,6 +1119,9 @@ _Avoid_: log format, event stream (as the name), telemetry.
 An **Orchestrator**'s declaration that its runtime can truthfully supply a particular
 **Dashboard** signal. An unavailable signal remains unknown rather than being
 estimated; zero and an empty set mean the signal was observed and nothing occurred.
+A declaration is what tells an empty cell that will never fill from one that has not
+filled yet — an operator who cannot tell them apart waits for a figure that is not
+coming.
 _Avoid_: renderer feature, best-effort metric.
 
 **Wrapper contract**:

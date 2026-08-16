@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.24",
+  "contract_version": "1.25",
   "task_type_taxonomy": [
     "planning",
     "review",

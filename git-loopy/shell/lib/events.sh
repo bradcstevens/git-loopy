@@ -84,16 +84,21 @@ declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [MODEL_CALL_FAILURE]="model.call_failure"
 )
 declare -r GIT_LOOPY_EVENT_SCHEMA_VERSION=1
+# `routing` (#411) is declared false rather than omitted: this port resolves no
+# **Routed pair**, and a **Dashboard** that could not tell "this Orchestrator
+# never routes" from "no Pickup has resolved a pair yet" would leave a Route
+# column reading as pending forever.
 declare -r GIT_LOOPY_INSIGHT_CAPABILITIES_JSON='{
   "agent_output": true,
   "structured_agent_events": false,
   "token_usage": false,
   "context_window": false,
   "skill_consultation": false,
-  "cost": false
+  "cost": false,
+  "routing": false
 }'
 # What *this Run* obtained, as opposed to what this distribution can observe.
-# The six above are fixed per binary; a run-scoped capability can differ between
+# The seven above are fixed per binary; a run-scoped capability can differ between
 # two Runs of one binary, so it is composed onto the wire manifest rather than
 # frozen beside them (#334, ADR-0026, Wrapper contract 12).
 #
@@ -125,7 +130,7 @@ declare -r GIT_LOOPY_PARALLEL_CAPABILITIES_JSON='{
 
 # The Run-start Insight manifest as it goes on the wire: the frozen
 # per-distribution capabilities, then this Run's own run-scoped answers. The
-# run-scoped keys come last so the six a **Dashboard** must find keep the order
+# run-scoped keys come last so the seven a **Dashboard** must find keep the order
 # the family contract lists them in.
 git_loopy_run_insight_capabilities_json() {
   jq -cn \

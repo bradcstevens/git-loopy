@@ -808,10 +808,19 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     the Rust ``RunStart`` is not ``deny_unknown_fields``, and a port that
     routes nothing emits the record byte-identically, so a 1.1 consumer is
     again unaffected.
+
+    1.25 is the *third* shape, and the first since 1.19 to add a **required**
+    key: ``insight_capabilities.routing`` (#411), which every port must declare
+    because the two records above are optional-when-present and silence is the
+    one thing a **Dashboard** cannot read on its own. It still leaves
+    ``event_schema_version`` where it is — a key that appears on an object whose
+    contract has always been "at least these keys" changes nothing an existing
+    consumer reads, and a consumer that has never heard of ``routing`` ignores
+    it exactly as §12 already requires.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.24"
+    assert _EVENT_SCHEMA["contract_version"] == "1.25"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
@@ -1546,9 +1555,10 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.3 adds the header's two capability declarations: a consumer pinned to
-    # 1.2 projects a header this fixture no longer matches.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.3"
+    # 1.4 adds the Routing resolution: a third header declaration and a `route`
+    # on every Queue row and every contribution row, so a consumer pinned to 1.3
+    # projects rows this fixture no longer matches.
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.4"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -1577,6 +1587,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "Active",
         "Closed",
         "Iters",
+        "Route",
         "Tokens in",
         "Tokens out",
         "Credits",
@@ -1589,6 +1600,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "active_seconds",
         "closed_at",
         "iteration_count",
+        "route",
         "tokens_in",
         "tokens_out",
         "credits",
@@ -1600,6 +1612,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "Duration",
         "Status",
         "Active",
+        "Route",
         "Tokens in",
         "Tokens out",
         "Cache read",
@@ -1620,6 +1633,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "iteration_breakdown": "issue_contributions",
         "activity": "current_active_issue",
         "log": "issue_across_contributions",
+        "route": "issue_latest_routing_resolution",
     }
     assert contract["presentation_exclusions"] == [
         "glyphs",
@@ -1669,6 +1683,7 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "active_seconds": 2.0,
         "closed_at": None,
         "iteration_count": 0,
+        "route": None,
         "tokens_in": None,
         "tokens_out": None,
         "credits": None,
@@ -1816,6 +1831,7 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     checked_breakdown_rows = 0
     checked_summary_rows = 0
     checked_log_lines = 0
+    checked_routes = 0
     for case in _DASHBOARD_INSIGHTS["cases"]:
         for snapshot in case["snapshots"]:
             where = f"{case['id']} @ {snapshot['after_event_count']}"
@@ -1840,12 +1856,21 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
             for row in expected["dashboard"]["queue"]["rows"]:
                 assert list(row) == fields["queue_row"], where
                 checked_queue_rows += 1
+                # A route is nullable where a consumption is not: the record's
+                # absence is what "nothing has priced this issue yet" looks
+                # like, so its keys are only asserted where one was resolved.
+                if row["route"] is not None:
+                    assert list(row["route"]) == fields["route"], where
+                    checked_routes += 1
             for row in expected["dashboard"]["summary"]["rows"]:
                 assert list(row) == fields["summary_row"], where
                 checked_summary_rows += 1
             for row in expected["drill_in"]["iteration_breakdown"]["rows"]:
                 assert list(row) == fields["iteration_breakdown_row"], where
                 assert list(row["consumption"]) == fields["consumption"], where
+                if row["route"] is not None:
+                    assert list(row["route"]) == fields["route"], where
+                    checked_routes += 1
                 checked_breakdown_rows += 1
             for line in (
                 expected["dashboard"]["activity"]["lines"]
@@ -1859,6 +1884,10 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     assert checked_breakdown_rows > 0
     assert checked_summary_rows > 0
     assert checked_log_lines > 0
+    # ... and so would a case set where every row's route were null, which is
+    # exactly what a fixture updated for the column but not for the payload
+    # would look like.
+    assert checked_routes > 0
 
     sample_queue = _dashboard_case("baseline-closed-iteration")["snapshots"][-1][
         "expected"
@@ -2005,6 +2034,46 @@ def test_dashboard_fixture_covers_every_family_semantic_dimension() -> None:
     assert any(
         _dashboard_wall_clock_steps_backwards(case) for case in cases
     ), "no case exercises a wall clock that moves backwards mid-Iteration"
+
+    # Routing (#411) has three corners a second renderer could get wrong, and
+    # all three are about *which* route a row claims rather than about parsing
+    # one. A fixture that only ever showed a single constant pair would pin the
+    # column while leaving every one of them free.
+    declarations = {
+        snapshot["expected"]["dashboard"]["header"]["routing"]["availability"]
+        for case in cases
+        for snapshot in case["snapshots"]
+    }
+    assert declarations == {"available", "unavailable"}, declarations
+    escalated = [
+        case
+        for case in cases
+        if len(
+            {
+                json.dumps(row["route"], sort_keys=True)
+                for snapshot in case["snapshots"]
+                for row in snapshot["expected"]["drill_in"]["iteration_breakdown"][
+                    "rows"
+                ]
+                if row["route"] is not None
+            }
+        )
+        > 1
+    ]
+    assert escalated, "no case reprices one issue between two contributions"
+    # ...and the other direction: a contribution no Pickup record reached
+    # claims no route at all, while the issue's Queue row keeps the last pair
+    # anyone resolved for it. A reducer that stamped contributions from the
+    # ledger would render this case's second row with the first row's pair.
+    assert any(
+        rows[-1]["route"] is None
+        and any(row["route"] is not None for row in rows[:-1])
+        and snapshot["expected"]["dashboard"]["queue"]["rows"][0]["route"] is not None
+        for case in cases
+        for snapshot in case["snapshots"]
+        for rows in [snapshot["expected"]["drill_in"]["iteration_breakdown"]["rows"]]
+        if len(rows) > 1
+    ), "no case pins a contribution that inherits no route"
 
 
 def _dashboard_wall_clock_steps_backwards(case: dict[str, Any]) -> bool:

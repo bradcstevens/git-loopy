@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.24 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.25 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -541,7 +541,8 @@ Every `wrapper.run.start` MUST carry the exact distribution `release_version`, n
   "token_usage": true,
   "context_window": true,
   "skill_consultation": true,
-  "cost": true
+  "cost": true,
+  "routing": true
 }
 ```
 
@@ -551,12 +552,22 @@ when that Orchestrator emits the signal truthfully. `false` means unavailable. `
 yet is still unknown. Unknown scalar values are JSON `null`; an observed count of none is `0`, and
 an observed collection with no members is `[]`.
 
+`routing` is the contract-1.25 addition (#411) and declares whether this Orchestrator reports the
+**Routed pair** a unit of work runs on — the **Routing resolution** §14 obliges on a Pickup, and the
+**Run readback** on Run start. It is per-distribution rather than run-scoped because a Run that pins
+`--model` does not go silent: its Pickups still publish a resolution, sourced
+`defaulted_explicit_override`, so two Runs of one binary cannot differ on the answer. A port that
+resolves no pair MUST declare it `false` rather than omit it, for the reason a port that reads no
+model listing declares `rate_card: false`: an omitted key leaves a **Dashboard** unable to tell
+*this Orchestrator never routes* from *no Pickup has resolved a pair yet*, and a Route column that
+cannot tell them apart reads as pending forever.
+
 ### Run-scoped Insight capabilities
 
-The six keys above are **per-distribution**: they answer "can this Orchestrator observe it at all?",
-so they are the same for every Run of one binary and every port MUST declare all six. A **run-scoped**
-capability answers a different question — "did *this* Run obtain it?" — and two Runs of one binary
-can differ. Run-scoped keys are declared in the same object, are **accepted from any producer and
+The seven keys above are **per-distribution**: they answer "can this Orchestrator observe it at
+all?", so they are the same for every Run of one binary and every port MUST declare all seven. A
+**run-scoped** capability answers a different question — "did *this* Run obtain it?" — and two Runs
+of one binary can differ. Run-scoped keys are declared in the same object, are **accepted from any producer and
 required of none**, and are listed under `insight_capabilities.run_scoped` in
 `conformance/event-schema.json`.
 
@@ -831,11 +842,17 @@ expected toolkit-neutral Dashboard and per-issue drill-in model.
 
 The Dashboard inventory is `Header -> Queue -> Activity -> Summary`. The per-issue drill-in is
 `detail header -> Iteration breakdown -> Log`. Queue columns are ordered `Issue | Status | Started
-| Active | Closed | Iters | Tokens in | Tokens out | Credits | Premium`. Iteration-breakdown
-columns are ordered `Contribution | Outcome | Duration | Status | Active | Tokens in | Tokens out
-| Cache read | Cache write | Credits | Premium | Peak Context fill`, where `Outcome` and `Duration`
-are the owning Iteration's own disposition and monotonic duration while `Status` and `Active`
-remain scoped to the issue within that contribution. `Cache read` and `Cache write` are components
+| Active | Closed | Iters | Route | Tokens in | Tokens out | Credits | Premium`.
+Iteration-breakdown columns are ordered `Contribution | Outcome | Duration | Status | Active |
+Route | Tokens in | Tokens out | Cache read | Cache write | Credits | Premium | Peak Context fill`,
+where `Outcome` and `Duration` are the owning Iteration's own disposition and monotonic duration
+while `Status` and `Active` remain scoped to the issue within that contribution. `Route` is the
+**Routing resolution** the issue's Pickup reached — model, effort and source — and it is the one
+column whose two tables answer different questions: the Queue row carries the newest resolution
+the issue has (what it costs now), while a contribution row carries the one resolved while that
+contribution was open and `null` where none was, so an escalated issue reads as a change between
+rows and no pair is ever back-dated onto a contribution that did not run on it. `Cache read` and
+`Cache write` are components
 of `Tokens in` rather than figures beside it, so no total sums them in; they are drill-in detail
 and reach no Queue or Summary column. Context
 fill is current-Iteration scoped; Queue accounting and the Log aggregate one issue across
@@ -1037,6 +1054,15 @@ run-wide default:
   validator that cannot exist. An Orchestrator that publishes it on the wire carries it on that
   Run's own `wrapper.run.start` (§12), on the same optional-when-present terms as the Pickup's
   resolution above.
+- **Declare that it routes (contract 1.25).** Every Orchestrator MUST declare
+  `insight_capabilities.routing` on `wrapper.run.start` (§12) — `true` when it resolves a Routing
+  resolution per Pickup, `false` when it resolves none. The two records above are
+  optional-when-present precisely so a port that does not route stays conforming by staying
+  silent, and silence is the one thing a **Dashboard** cannot interpret on its own: an empty Route
+  column is *this Runner never routes* under one port and *no Pickup has happened yet* under
+  another. The declaration is what separates them, and it is per-distribution — a Run that pins
+  `--model` still publishes a resolution, sourced `defaulted_explicit_override`, so suppressing
+  routing MUST NOT flip this key to `false`.
 
 Contract 1.12 gave the serial loop a structural pickup seam of its own (§3.3), and contract 1.20
 applies what that seam resolves. In between, the scope deliberately did **not** move with it: a

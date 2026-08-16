@@ -155,6 +155,19 @@ def _format_optional_tokens(value: int | None) -> str:
     return f"{value:,}" if value is not None else "—"
 
 
+def _format_route(model: str | None, effort: str | None) -> str:
+    """Render one **Routing resolution** as the pair it priced the work at.
+
+    ``(backend)`` for a half nobody stated: a null model or effort is a value
+    the harness chose, not one the reducer failed to read, and the em dash is
+    reserved for the record being absent altogether. The **Routing source**
+    travels in the projection but is deliberately not spelled in the cell —
+    ``defaulted_no_task_type_label`` on every row of an unlabelled corpus would
+    be noise, and the pair is the part that differs.
+    """
+    return f"{model or '(backend)'} @ {effort or '(backend)'}"
+
+
 class _Dashboard(Vertical):
     """Level 1: the header band, the live Queue, and the Summary rollup band."""
 
@@ -172,6 +185,7 @@ class _Dashboard(Vertical):
         table.add_column("Active", key="active")
         table.add_column("Closed", key="closed")
         table.add_column("Iters", key="iters")
+        table.add_column("Route", key="route")
         table.add_column("Tokens in", key="tokens_in")
         table.add_column("Tokens out", key="tokens_out")
         table.add_column("Credits", key="credits")
@@ -641,6 +655,7 @@ class _IterationBreakdown(DataTable):
         self.add_column("Duration", key="duration")
         self.add_column("Status", key="status")
         self.add_column("Active", key="active")
+        self.add_column("Route", key="route")
         self.add_column("Tokens in", key="tokens_in")
         self.add_column("Tokens out", key="tokens_out")
         self.add_column("Cache read", key="cache_read")
@@ -994,6 +1009,11 @@ class GitLoopyApp(App[None]):
                     format_duration(row.active_seconds),
                     format_wall_clock(row.closed_wall),
                     str(row.iteration_count),
+                    (
+                        _format_route(row.route.model, row.route.effort)
+                        if row.route is not None
+                        else "—"
+                    ),
                     f"{row.usage.tokens_in:,}" if row.usage_observed else "—",
                     f"{row.usage.tokens_out:,}" if row.usage_observed else "—",
                     _format_queue_credits(row.usage, denomination),
@@ -1011,6 +1031,15 @@ class GitLoopyApp(App[None]):
                 table.update_cell(key, "active", format_duration(row.active_seconds))
                 table.update_cell(key, "closed", format_wall_clock(row.closed_wall))
                 table.update_cell(key, "iters", str(row.iteration_count))
+                table.update_cell(
+                    key,
+                    "route",
+                    (
+                        _format_route(row.route.model, row.route.effort)
+                        if row.route is not None
+                        else "—"
+                    ),
+                )
                 table.update_cell(
                     key,
                     "tokens_in",
@@ -1081,6 +1110,14 @@ class GitLoopyApp(App[None]):
                 ),
                 contribution["status"],
                 format_duration(contribution["active_seconds"]),
+                (
+                    _format_route(
+                        contribution["route"]["model"],
+                        contribution["route"]["effort"],
+                    )
+                    if contribution["route"] is not None
+                    else "—"
+                ),
                 _format_optional_tokens(contribution["consumption"]["tokens_in"]),
                 _format_optional_tokens(contribution["consumption"]["tokens_out"]),
                 _format_optional_tokens(contribution["consumption"]["cache_read"]),

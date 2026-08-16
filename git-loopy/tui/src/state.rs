@@ -112,6 +112,38 @@ impl BilledTotal {
     }
 }
 
+/// The **Routing resolution** one **Pickup** reached, as the Dashboard reads
+/// it: the gated pair and the **Routing source** that chose it.
+///
+/// `model` and `effort` are nullable *values* rather than absences — a
+/// resolution that named neither is the backend being left to choose — which is
+/// why the whole record is optional and its halves are not: `None` here is
+/// "this Runner resolved nothing", and that is the only absence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResolvedRoute {
+    pub(crate) model: Option<String>,
+    pub(crate) effort: Option<String>,
+    pub(crate) source: Option<String>,
+}
+
+impl ResolvedRoute {
+    /// Read a resolution off a bound **Pickup**, or `None` if it carried none.
+    ///
+    /// Every routing field is optional-when-present (contract 1.21), so a
+    /// Runner that routes nothing emits the binding exactly as it always did
+    /// and must not be read as having routed to a null pair.
+    fn from_pickup(pickup: &Pickup) -> Option<Self> {
+        if pickup.model.is_none() && pickup.effort.is_none() && pickup.routing_source.is_none() {
+            return None;
+        }
+        Some(Self {
+            model: pickup.model.clone().flatten(),
+            effort: pickup.effort.clone().flatten(),
+            source: pickup.routing_source.clone(),
+        })
+    }
+}
+
 /// One finalized Iteration or Lane contribution for an issue.
 #[derive(Clone, Debug)]
 pub(crate) struct IssueContribution {
@@ -122,6 +154,10 @@ pub(crate) struct IssueContribution {
     pub(crate) duration_seconds: Option<f64>,
     pub(crate) status: String,
     pub(crate) active_seconds: f64,
+    /// The pair this contribution's own Pickup resolved, never a later one:
+    /// an escalated issue is a *change between rows*, so a row that inherited
+    /// the issue's newest pair would erase the change it exists to show.
+    pub(crate) route: Option<ResolvedRoute>,
     pub(crate) model: Option<String>,
     pub(crate) tokens_in: i64,
     pub(crate) tokens_out: i64,
@@ -152,6 +188,10 @@ pub(crate) struct IssueLedgerEntry {
     pub(crate) credits: BilledTotal,
     /// Premium requests accrued across this issue's work, latched likewise.
     pub(crate) premium_requests: BilledTotal,
+    /// The most recent pair any **Pickup** resolved for this issue, latched:
+    /// the Queue answers "what is this issue costing *now*", which outlives
+    /// the Iteration that resolved it.
+    pub(crate) route: Option<ResolvedRoute>,
     pub(crate) log: Vec<LogLine>,
 }
 
@@ -170,6 +210,7 @@ impl IssueLedgerEntry {
             tokens_out: 0,
             credits: BilledTotal::default(),
             premium_requests: BilledTotal::default(),
+            route: None,
             log: Vec::new(),
         }
     }
@@ -234,6 +275,10 @@ pub struct DashboardState {
     pending_credits: BilledTotal,
     /// Premium requests observed before the Active marker, latched likewise.
     pending_premium_requests: BilledTotal,
+    /// The pair each issue's Pickup resolved *within the open Iteration*,
+    /// cleared at every Iteration start so a re-picked issue whose second
+    /// Pickup carried no resolution stamps no contribution with the first.
+    iteration_routes: BTreeMap<IssueRef, ResolvedRoute>,
     /// The issues this Iteration worked as Lanes (issue #66, ADR-0008).
     iteration_lane_refs: BTreeSet<IssueRef>,
     /// Whether the open Iteration has an authoritative activation binding.
@@ -270,6 +315,7 @@ impl DashboardState {
             pending_usage_observed: false,
             pending_credits: BilledTotal::default(),
             pending_premium_requests: BilledTotal::default(),
+            iteration_routes: BTreeMap::new(),
             iteration_lane_refs: BTreeSet::new(),
             authoritative_binding: false,
             iteration_open: false,
@@ -356,7 +402,8 @@ impl DashboardState {
                 }
             }
             EventPayload::PickupBound(pickup) => {
-                self.append_lane_log(&pickup.issue, LOG_EVENT, &pickup_bound_text(pickup), now)
+                self.append_lane_log(&pickup.issue, LOG_EVENT, &pickup_bound_text(pickup), now);
+                self.record_route(&pickup.issue, ResolvedRoute::from_pickup(pickup));
             }
             EventPayload::PickupSkipped(pickup) => {
                 self.append_lane_log(&pickup.issue, LOG_EVENT, &pickup_skipped_text(pickup), now)
@@ -493,10 +540,30 @@ impl DashboardState {
         self.pending_usage_observed = false;
         self.pending_credits = BilledTotal::default();
         self.pending_premium_requests = BilledTotal::default();
+        self.iteration_routes.clear();
         self.iteration_lane_refs.clear();
         self.authoritative_binding = false;
         self.context_window = None;
         self.iteration_open = true;
+    }
+
+    /// Latch a **Routing resolution** onto the issue and onto the open
+    /// Iteration.
+    ///
+    /// Two homes because they answer two questions: the ledger's entry is what
+    /// the issue is priced at *now* (the Queue), and the Iteration's map is
+    /// what the contribution about to be finalized ran on (the breakdown).
+    /// A Pickup carrying no resolution clears neither, because "this Runner
+    /// does not route" must not read as "the pair was withdrawn".
+    fn record_route(&mut self, issue: &IssueRef, route: Option<ResolvedRoute>) {
+        let Some(route) = route else {
+            return;
+        };
+        self.insert_entry(issue.clone());
+        if let Some(entry) = self.ledger.get_mut(issue) {
+            entry.route = Some(route.clone());
+        }
+        self.iteration_routes.insert(issue.clone(), route);
     }
 
     fn record_pool(&mut self, issues: &[IssueRef]) {
@@ -653,7 +720,8 @@ impl DashboardState {
         for row in &rollup.issues {
             self.insert_entry(row.issue.clone());
             let is_lane = self.iteration_lane_refs.contains(&row.issue);
-            let contribution = contribution_from(iteration, rollup, row, is_lane);
+            let route = self.iteration_routes.get(&row.issue).cloned();
+            let contribution = contribution_from(iteration, rollup, row, is_lane, route);
             let entry = self
                 .ledger
                 .get_mut(&row.issue)
@@ -879,6 +947,7 @@ fn contribution_from(
     rollup: &IterationEnd,
     row: &IterationIssue,
     is_lane: bool,
+    route: Option<ResolvedRoute>,
 ) -> IssueContribution {
     // An Orchestrator without token telemetry sends a `consumption` record
     // whose counters are null. The Wrapper contract forbids re-reporting that
@@ -899,6 +968,7 @@ fn contribution_from(
             .clone()
             .unwrap_or_else(|| STATUS_NO_PROGRESS.to_string()),
         active_seconds: row.active_seconds.unwrap_or(0.0).max(0.0),
+        route,
         model: usage_observed
             .then(|| consumption.model.clone())
             .flatten()

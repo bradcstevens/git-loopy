@@ -188,7 +188,10 @@ fn the_detail_header_states_the_issues_whole_lifecycle() {
 #[test]
 fn the_iteration_breakdown_carries_the_locked_columns() {
     let frame = drill_in_frame("baseline-closed-iteration", "42");
-    let lines = render_lines(&frame, 160, 40);
+    // Wide enough to carry the whole inventory: the Route made the breakdown
+    // one column wider than 160 can hold, and *which* columns a narrower
+    // terminal gives up is `responsive_render.rs`'s question, not this one's.
+    let lines = render_lines(&frame, 184, 40);
     let breakdown = band(&lines, "Iteration breakdown");
 
     let expected_labels: Vec<String> = fixture()["semantic_contract"]
@@ -219,6 +222,7 @@ fn the_iteration_breakdown_carries_the_locked_columns() {
             "0:00:04",
             "closed",
             "0:00:04",
+            "—",
             "100",
             "50",
             "—",
@@ -241,7 +245,7 @@ fn the_iteration_breakdown_carries_the_locked_columns() {
 #[test]
 fn the_breakdown_separates_cache_reads_from_cache_writes() {
     let frame = drill_in_frame("parallel-lanes-and-non-closure-outcomes", "310");
-    let lines = render_lines(&frame, 160, 40);
+    let lines = render_lines(&frame, 184, 40);
     let breakdown = band(&lines, "Iteration breakdown");
 
     let row = &expected_drill_in("parallel-lanes-and-non-closure-outcomes")["iteration_breakdown"]
@@ -268,7 +272,7 @@ fn the_breakdown_separates_cache_reads_from_cache_writes() {
 #[test]
 fn a_contribution_declares_every_measurement_its_orchestrator_cannot_take() {
     let frame = drill_in_frame("native-orchestrator-unavailable-capabilities", "7");
-    let lines = render_lines(&frame, 160, 40);
+    let lines = render_lines(&frame, 184, 40);
     let breakdown = band(&lines, "Iteration breakdown");
 
     let rows = expected_drill_in("native-orchestrator-unavailable-capabilities")
@@ -287,10 +291,11 @@ fn a_contribution_declares_every_measurement_its_orchestrator_cannot_take() {
         let drawn = cells(row);
         assert_eq!(
             &drawn[5..],
-            ["—", "—", "—", "—", "n/a", "n/a", "—"],
+            ["n/a", "—", "—", "—", "—", "n/a", "n/a", "—"],
             "an unavailable measurement never renders as an observed zero, and \
-             an Orchestrator that cannot report Cost at all says so in the two \
-             Cost cells rather than sharing the unknown placeholder"
+             an Orchestrator that resolves no Route and can report no Cost at \
+             all says so in those three cells rather than sharing the unknown \
+             placeholder with the measurements that merely have not arrived"
         );
     }
 }
