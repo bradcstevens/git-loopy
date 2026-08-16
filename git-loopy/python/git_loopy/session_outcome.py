@@ -25,6 +25,7 @@ possible place to answer them.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -303,8 +304,22 @@ def _text(value: Any) -> str | None:
     return None
 
 
+#: The Agent's declaration that its issue is unworkable end to end, as read back
+#: (#405). The angle-bracket marker this family already uses to lift a
+#: machine-readable value out of prose, alongside ``<working issue=N>`` and
+#: ``<task-type>``. Tolerant of case and of the whitespace a model puts inside
+#: its own tags, because both are the model paraphrasing an instruction it
+#: followed — but never of a paraphrase of the *words*: prose about having
+#: nothing to do is not the declaration, and a detector that accepted it would
+#: end sessions on an Agent thinking out loud.
+_NO_MORE_TASKS_RE = re.compile(
+    r"<\s*promise\s*>\s*NO\s+MORE\s+TASKS\s*<\s*/\s*promise\s*>",
+    re.IGNORECASE,
+)
+
+
 class SessionOutcomeWatch:
-    """Folds one session's Event stream down to the failures it reported.
+    """Folds one session's Event stream down to what its ending is made of.
 
     An :class:`~git_loopy.session.EventObserver`, joined to the Run's existing
     observers rather than substituted for them. It exists because the loop's own
@@ -313,23 +328,71 @@ class SessionOutcomeWatch:
     ends politely with nothing done is indistinguishable from one that spent the
     whole Iteration being told no — unless something reads the stream.
 
+    Three folds, one per thing the stream alone can witness (#403, #405):
+
+    * the **Session error** identities the harness reported;
+    * whether any API call in the turn was refused by a content filter;
+    * whether the Agent declared it had nothing left to do.
+
     It decides nothing. It never ends a session, never reacts to what it sees,
-    and never touches the Run: it accumulates identities and answers when asked.
+    and never touches the Run: it accumulates observations and answers when
+    asked. In particular it does not resolve the ending — two of these three are
+    only half of one, because the other half is what the Iteration produced, and
+    that is not known here.
     """
 
     def __init__(self) -> None:
         self._errors: list[SessionError] = []
+        self._content_filtered = False
+        self._no_more_tasks = False
 
     def observe(self, event: Mapping[str, Any]) -> None:
-        """Fold one raw Event, keeping the failure identities and nothing else."""
+        """Fold one raw Event, keeping what an ending is made of and nothing else."""
         error = SessionError.from_event(event)
         if error is not None:
             self._errors.append(error)
+        event_type = event.get("type")
+        if event_type == events.USAGE_TOKENS and event.get("content_filtered"):
+            self._content_filtered = True
+        elif event_type == events.ASSISTANT_MESSAGE and not self._no_more_tasks:
+            content = event.get("content")
+            if isinstance(content, str) and _NO_MORE_TASKS_RE.search(content):
+                self._no_more_tasks = True
 
     @property
     def errors(self) -> tuple[SessionError, ...]:
         """Every failure identity observed, in the order the harness reported it."""
         return tuple(self._errors)
+
+    @property
+    def content_filtered(self) -> bool:
+        """Whether **any** API call in this turn was refused by a content filter.
+
+        Aggregated rather than latest-wins because the harness reports the
+        verdict per API call and one Iteration is dozens of them: a fold that
+        remembered only the last call would describe the turn by whichever call
+        happened to finish it.
+
+        Not an ending on its own. A turn with a refused call that went on to
+        commit recovered from it, and :func:`resolve_session_outcome` is where
+        that is decided — this answers only what the stream saw.
+        """
+        return self._content_filtered
+
+    @property
+    def no_more_tasks(self) -> bool:
+        """Whether the Agent declared, in its own words, that nothing remains.
+
+        The declaration and not an inference from it: a session that produced
+        nothing has said nothing, and only the sentinel is the Agent saying its
+        issue is unworkable end to end.
+
+        Latching, like the filter fold and for the same reason: the sentinel is
+        the last thing an obedient Agent emits, but nothing stops a message
+        following it, and a declaration that could be un-said by a trailing
+        "thanks" would be no declaration at all.
+        """
+        return self._no_more_tasks
 
     @property
     def error(self) -> SessionError | None:

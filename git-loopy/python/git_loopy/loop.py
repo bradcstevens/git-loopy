@@ -811,16 +811,22 @@ def _integration_worktree_path(
 
 @dataclass(frozen=True)
 class _LaneSessionSignals:
-    """The half of a Lane's ending only its session can see (#403).
+    """The half of a Lane's ending only its session can see (#403, #405).
 
     A Lane's ending needs two facts and they are known in two places: how the
     wait on the session came back, and whether the Lane's branch ended up
     carrying anything. This carries the first back to the caller that learns the
     second, so neither has to guess the other.
+
+    The stream's two detections ride here for the same reason: a filtered call
+    and a declared end of work are both observed inside the session and mean
+    nothing until the branch has been accounted.
     """
 
     termination: session_outcome_module.SessionTermination
     error: session_outcome_module.SessionError | None
+    content_filtered: bool = False
+    no_more_tasks: bool = False
 
 
 def _report_session_outcome(
@@ -1549,12 +1555,20 @@ class _Loop:
             # predicate rather than a second notion of progress invented beside
             # it — a Run that scores an Iteration as productive must not describe
             # the same Iteration as having got nowhere.
+            #
+            # The watch's two detections (#405) are what make the remaining two
+            # endings reachable: a turn with a filtered call, and an Agent that
+            # declared its issue unworkable. Both are recorded and neither is
+            # acted on — the Strike above is already ticked, from progress alone,
+            # exactly as before.
             session_ending = session_outcome_module.resolve_session_outcome(
                 termination=termination,
                 progressed=made_progress,
                 error=session_outcome_module.strongest_error(
                     session_watch.error, raised
                 ),
+                content_filtered=session_watch.content_filtered,
+                no_more_tasks=session_watch.no_more_tasks,
             )
             self._record_session_outcome(active.ref, session_ending)
             if outcome == "aborted" or not made_progress:
@@ -3172,6 +3186,8 @@ class _ParallelLoop:
                 termination=signals.termination,
                 progressed=changed,
                 error=signals.error,
+                content_filtered=signals.content_filtered,
+                no_more_tasks=signals.no_more_tasks,
             ),
         )
 
@@ -3327,6 +3343,8 @@ class _ParallelLoop:
         return _LaneSessionSignals(
             termination=termination,
             error=session_outcome_module.strongest_error(watch.error, raised),
+            content_filtered=watch.content_filtered,
+            no_more_tasks=watch.no_more_tasks,
         )
 
     def _account_lane(

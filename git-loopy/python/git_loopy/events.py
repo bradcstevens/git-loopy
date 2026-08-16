@@ -898,6 +898,7 @@ def map_sdk_event(sdk_event: SessionEvent) -> dict[str, Any] | None:
             "output": int(data.output_tokens) if data.output_tokens is not None else 0,
         }
         usage_payload.update(_billed_usage(data))
+        usage_payload.update(_call_verdict(data))
         return usage_payload
     if et is SessionEventType.SESSION_USAGE_INFO:
         raw_limit = data.token_limit
@@ -1015,6 +1016,32 @@ def _billed_usage(data: Any) -> dict[str, Any]:
     if cache_write is not None:
         billed["cache_write"] = int(cache_write)
     return billed
+
+
+def _call_verdict(data: Any) -> dict[str, Any]:
+    """Project how one ``ASSISTANT_USAGE`` call ended — filtered, and why (#405).
+
+    The harness already reports both on the record the mapper reads for tokens,
+    and the mapper dropped both, so the **Content-filtered** ending had nothing
+    to be detected from.
+
+    ``content_filtered`` is the whole of the detection: it is a verdict the
+    harness reached, not a category it forwards, because the category never
+    survives the path — the kit can know *that* a call was filtered and never
+    who filtered it or what for. ``finish_reason`` is the harness's own word for
+    how the call ended, carried verbatim and unparsed beside it: useful to an
+    operator reading a replay, never consulted by a detector, so a harness that
+    renames its reasons cannot silently change what git-loopy recognises.
+
+    Additive by omission like :func:`_billed_usage`: a harness that reported
+    neither adds no key, so a missing verdict reads as unknown rather than as a
+    call it affirmatively cleared.
+    """
+    triggered = getattr(data, "content_filter_triggered", None)
+    return _present(
+        content_filtered=None if triggered is None else bool(triggered),
+        finish_reason=getattr(data, "finish_reason", None),
+    )
 
 
 def _format_ts(dt: datetime) -> str:

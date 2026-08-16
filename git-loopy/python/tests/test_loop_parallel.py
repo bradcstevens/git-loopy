@@ -4616,6 +4616,78 @@ def test_parallel_lane_records_its_session_ending_and_error_identity(
     assert "no_progress" in diagnostics
 
 
+class _FilteredLaneSession(_ParallelFakeSession):
+    """A Lane whose calls a content filter refused: a usage record, no commit.
+
+    The refusal never raises and never reaches ``session.error`` — the harness
+    reports it as a verdict on the per-call usage record and lets the session
+    finish politely, which is exactly why the ending needed a detector (#405).
+    """
+
+    async def send_and_wait(
+        self, prompt: str, *, timeout: float = 60.0, **_extra: Any
+    ) -> SessionEvent | None:
+        self.send_and_wait_calls.append((prompt, timeout))
+        filtered = SessionEvent(
+            data=AssistantUsageData(
+                model="claude-haiku-4.5",
+                input_tokens=1200.0,
+                output_tokens=0.0,
+                content_filter_triggered=True,
+                finish_reason="content_filter",
+            ),
+            id=uuid4(),
+            timestamp=datetime(2026, 5, 16, tzinfo=timezone.utc),
+            type=SessionEventType.ASSISTANT_USAGE,
+        )
+        if self._on_event is not None:
+            self._on_event(filtered)
+        return filtered
+
+
+class _FilteredLaneClient(_ParallelFakeClient):
+    _session_cls = _FilteredLaneSession
+
+
+def test_parallel_lane_ending_is_content_filtered_when_its_calls_were(
+    tmp_path, monkeypatch
+) -> None:
+    """A Lane reads the same two detectors the serial Iteration does (#405).
+
+    Nothing about content filtering is serial-only, so a Lane that spent its
+    whole contribution being refused must not be recorded as one whose Agent
+    read the issue and shrugged. The Lane's own progress answer — an agent
+    commit or a Checkpoint on its branch — is still what decides whether the
+    refusal was an ending or something the contribution recovered from.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _FilteredLaneClient(fake_git=fake_git, scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+    asyncio.run(loop_module.run(cfg))
+
+    diagnostics = next(
+        iter((tmp_path / ".git-loopy" / "logs").glob("*.log"))
+    ).read_text(encoding="utf-8")
+    assert "session for #42 ended content_filtered" in diagnostics
+
+
 def _dashboard_projection(state: Any) -> dict[str, Any]:
     """The issue-centric Dashboard facts a reader must be able to rebuild."""
     from git_loopy.interactive.state import issue_detail, queue_rows

@@ -27,7 +27,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 
@@ -801,7 +801,7 @@ def test_scrub_is_idempotent() -> None:
         tool_call_id="t1",
         tool_name="bash",
         arguments={
-            "command": f'gh issue close 42 --comment "this is a long comment"',
+            "command": 'gh issue close 42 --comment "this is a long comment"',
             "stdin": long_value,
         },
     )
@@ -1138,6 +1138,32 @@ def test_reported_input_tokens_already_include_the_cache_split() -> None:
     assert out["input"] == 13512
 
 
+def test_map_sdk_event_assistant_usage_carries_the_content_filter_verdict() -> None:
+    """The two fields a filtered call arrives on, kept instead of dropped (#405).
+
+    The harness already tells the runner that a call was refused by a content
+    filter — ``contentFilterTriggered`` beside the finish reason on the very
+    usage record the mapper reads for tokens — and the mapper dropped both, so
+    the **Content-filtered** ending had nothing to be detected from. Detection
+    is the boolean; the finish reason rides beside it as the harness's own word
+    for how that call ended, unparsed.
+    """
+    sdk = _wrap_sdk(
+        SessionEventType.ASSISTANT_USAGE,
+        AssistantUsageData(
+            model="claude-haiku-4.5",
+            input_tokens=1200.0,
+            output_tokens=0.0,
+            content_filter_triggered=True,
+            finish_reason="content_filter",
+        ),
+    )
+    out = map_sdk_event(sdk)
+    assert out is not None
+    assert out["content_filtered"] is True
+    assert out["finish_reason"] == "content_filter"
+
+
 def test_map_sdk_event_assistant_usage_omits_billing_the_harness_withheld() -> None:
     """A harness that reports no billing adds no key — additive, never zero.
 
@@ -1155,6 +1181,47 @@ def test_map_sdk_event_assistant_usage_omits_billing_the_harness_withheld() -> N
     assert "premium_requests" not in out
     assert "cache_read" not in out
     assert "cache_write" not in out
+
+
+def test_map_sdk_event_assistant_usage_omits_a_verdict_the_harness_withheld() -> None:
+    """Silence about filtering is unknown, never an affirmative clearance (#405).
+
+    Additive by omission, the same rule the billing fields follow: a call the
+    harness said nothing about contributes no key, so a Run whose harness never
+    reports the verdict looks like a Run with no information rather than one
+    where every call was checked and cleared.
+    """
+    sdk = _wrap_sdk(
+        SessionEventType.ASSISTANT_USAGE,
+        AssistantUsageData(model="m", input_tokens=1.0, output_tokens=2.0),
+    )
+    out = map_sdk_event(sdk)
+    assert out is not None
+    assert "content_filtered" not in out
+    assert "finish_reason" not in out
+
+
+def test_map_sdk_event_assistant_usage_records_a_call_the_harness_cleared() -> None:
+    """A reported ``False`` is a fact and survives as one.
+
+    The harness saying a call was *not* filtered is different from its saying
+    nothing, so the key is present and false rather than dropped along with the
+    figures it never sent.
+    """
+    sdk = _wrap_sdk(
+        SessionEventType.ASSISTANT_USAGE,
+        AssistantUsageData(
+            model="m",
+            input_tokens=1.0,
+            output_tokens=2.0,
+            content_filter_triggered=False,
+            finish_reason="stop",
+        ),
+    )
+    out = map_sdk_event(sdk)
+    assert out is not None
+    assert out["content_filtered"] is False
+    assert out["finish_reason"] == "stop"
 
 
 def test_map_sdk_usage_info_returns_live_context_window_snapshot() -> None:

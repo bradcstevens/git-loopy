@@ -10,8 +10,18 @@ own error records into one.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from uuid import uuid4
+
 import pytest
 
+from copilot.generated.session_events import (
+    AssistantUsageData,
+    SessionEvent,
+    SessionEventType,
+)
+
+from git_loopy.events import map_sdk_event
 from git_loopy.session_outcome import (
     SessionError,
     SessionErrorKind,
@@ -156,6 +166,135 @@ def test_the_watch_folds_the_failures_out_of_the_event_stream() -> None:
         SessionErrorKind.SERVER_ERROR,
         SessionErrorKind.QUOTA_EXHAUSTED,
     ]
+
+
+def test_the_watch_folds_one_filtered_call_out_of_a_whole_turn() -> None:
+    """Detection is the boolean, aggregated — a turn is many calls (#405).
+
+    ``content_filtered`` rides the per-API-call usage record, and one Iteration
+    is dozens of them. A watch that only remembered the last call would report
+    the ending of whichever call happened to finish the turn, so the fold is
+    "any call in this turn was refused" and it survives every ordinary call that
+    follows.
+
+    The finish reason rides along for a human reading the replay and is
+    deliberately not consulted here: a harness free to rename its reasons must
+    not be able to change what git-loopy recognises.
+    """
+    watch = SessionOutcomeWatch()
+    assert watch.content_filtered is False
+
+    watch.observe({"type": "usage.tokens", "model": "m", "input": 10, "output": 3})
+    assert watch.content_filtered is False
+
+    watch.observe(
+        {
+            "type": "usage.tokens",
+            "model": "m",
+            "input": 1200,
+            "output": 0,
+            "content_filtered": True,
+            "finish_reason": "content_filter",
+        }
+    )
+    watch.observe(
+        {
+            "type": "usage.tokens",
+            "model": "m",
+            "input": 40,
+            "output": 9,
+            "content_filtered": False,
+            "finish_reason": "stop",
+        }
+    )
+
+    assert watch.content_filtered is True
+
+
+def test_a_filtered_call_reaches_the_ending_from_the_mapper_it_came_off() -> None:
+    """The detector reads what the mapper writes — end to end, both verdicts (#405).
+
+    The two halves are worthless apart: a mapper that emits a key no detector
+    reads, or a detector watching for a key no mapper emits, is a
+    **Content-filtered** ending that can never fire, and neither half's own test
+    could tell. So this drives a real harness usage record through the mapper
+    the session uses, the watch the Run joins to its session, and the resolver
+    the ending comes from.
+
+    Both verdicts, because the second is the one a naive detector gets wrong:
+    the refused call is the same in each, and only the Iteration that also
+    committed nothing ended in a refusal.
+    """
+    refused = map_sdk_event(
+        SessionEvent(
+            type=SessionEventType.ASSISTANT_USAGE,
+            data=AssistantUsageData(
+                model="claude-haiku-4.5",
+                input_tokens=1200.0,
+                output_tokens=0.0,
+                content_filter_triggered=True,
+                finish_reason="content_filter",
+            ),
+            id=uuid4(),
+            timestamp=datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc),
+        )
+    )
+    assert refused is not None
+
+    watch = SessionOutcomeWatch()
+    watch.observe(refused)
+    assert watch.content_filtered is True
+
+    stalled = resolve_session_outcome(
+        termination=SessionTermination.COMPLETED,
+        progressed=False,
+        content_filtered=watch.content_filtered,
+    )
+    recovered = resolve_session_outcome(
+        termination=SessionTermination.COMPLETED,
+        progressed=True,
+        content_filtered=watch.content_filtered,
+    )
+
+    assert stalled.outcome is SessionOutcome.CONTENT_FILTERED
+    assert recovered.outcome is None
+
+
+def test_the_watch_believes_an_agent_that_says_it_has_nothing_left() -> None:
+    """The sentinel gains the detector it never had (#405).
+
+    ``<promise>NO MORE TASKS</promise>`` was threaded through the Strike machine
+    and the progress predicate as a parameter both discarded unread, and no
+    production call site ever passed it — so an Agent that told the Run its
+    issue was unworkable was recorded as one that silently produced nothing.
+    The declaration is on the stream like everything else about a session, so
+    the watch is what reads it.
+
+    Read off the Agent's own message and nowhere else: the Run's prompt names
+    the sentinel too, and a detector that read the prompt back would declare
+    every session over before it began.
+    """
+    watch = SessionOutcomeWatch()
+    watch.observe({"type": "assistant.message", "content": "Exploring the repo."})
+    assert watch.no_more_tasks is False
+
+    watch.observe(
+        {
+            "type": "assistant.message",
+            "content": (
+                "#405 is already implemented on main; I commented and stopped.\n"
+                "<promise>NO MORE TASKS</promise>"
+            ),
+        }
+    )
+    assert watch.no_more_tasks is True
+
+    declared = resolve_session_outcome(
+        termination=SessionTermination.COMPLETED,
+        progressed=False,
+        no_more_tasks=watch.no_more_tasks,
+    )
+    assert declared.outcome is SessionOutcome.NO_MORE_TASKS
 
 
 def test_a_session_that_advanced_its_issue_reached_no_ending_at_all() -> None:

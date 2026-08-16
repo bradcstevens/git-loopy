@@ -537,10 +537,12 @@ _Avoid_: exit code, session status, failure reason.
 The structured identity of a failure the harness reported during a session — its error
 type, its message, the service status code where one was reached, and where in the
 session it arose — classified into a closed set of kinds: quota exhaustion, rate
-limiting, authentication, content filtering, transport, service fault, and unknown. It
+limiting, authentication, bad request, transport, service fault, and unknown. It
 is what lets an exhausted account be told from a session that merely produced nothing,
 which a flattened string never could. Recording one implies no reaction: the ending is
-still attributed to the issue that happened to be in hand.
+still attributed to the issue that happened to be in hand. Content filtering is not one
+of these kinds: the harness reports it as a verdict on a call it completed rather than
+as a failure, so it is an ending a session reached, never an identity a failure carries.
 _Avoid_: error message, failure string, exception.
 
 **Checkpoint**:

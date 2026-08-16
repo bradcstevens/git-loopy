@@ -2761,6 +2761,103 @@ def test_the_retained_fallback_still_binds_when_pickup_did_not(
     assert loop_obj._infer_active_binding(pool, [], []) is None
 
 
+def test_a_refused_iteration_ends_content_filtered_not_merely_silent(
+    tmp_path, monkeypatch
+) -> None:
+    """The **Content-filtered** ending, from the stream to the record (#405).
+
+    The harness reports the refusal on the per-call usage record and lets the
+    session finish politely, so a whole Iteration spent being filtered reached
+    the Run as "no progress" — the same ending as an Agent that read the issue
+    and did nothing. The detector is what tells them apart, and this pins the
+    whole path: the mapped Event carries the harness's verdict, and the
+    Iteration's diagnostic names the ending it produced.
+    """
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
+
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42)],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    filtered = _sdk_event(
+        SessionEventType.ASSISTANT_USAGE,
+        AssistantUsageData(
+            model="claude-haiku-4.5",
+            input_tokens=1200.0,
+            output_tokens=0.0,
+            content_filter_triggered=True,
+            finish_reason="content_filter",
+        ),
+    )
+    fake_client = FakeCopilotClient(scripted_events=[filtered])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    cfg = RunConfig(issue_source="github", max_iterations=1)
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    logs = tmp_path / ".git-loopy" / "logs"
+    jsonl = next(iter(logs.glob("*.jsonl")))
+    usage = [
+        json.loads(line)
+        for line in jsonl.read_text(encoding="utf-8").splitlines()
+        if json.loads(line)["type"] == events_module.USAGE_TOKENS
+    ]
+    assert usage and usage[0]["content_filtered"] is True
+    assert usage[0]["finish_reason"] == "content_filter"
+
+    diagnostics = next(iter(logs.glob("*.log"))).read_text(encoding="utf-8")
+    assert "ended content_filtered" in diagnostics
+
+
+def test_an_agent_that_declares_no_more_tasks_is_believed(
+    tmp_path, monkeypatch
+) -> None:
+    """The sentinel's detector, at the Run seam (#405).
+
+    ``<promise>NO MORE TASKS</promise>`` had been a parameter two functions
+    accepted and discarded, passed by no production call site, so an Agent
+    reporting an unworkable issue was recorded as one that silently produced
+    nothing. The declaration now reaches the **Session outcome** — and only the
+    outcome: no Strike, abort or refill decision is taken from it here.
+    """
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
+
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42)],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    declaration = _sdk_event(
+        SessionEventType.ASSISTANT_MESSAGE,
+        AssistantMessageData(
+            content=(
+                "#42 is already done on main; I commented and stopped.\n"
+                "<promise>NO MORE TASKS</promise>"
+            ),
+            message_id="m1",
+        ),
+    )
+    fake_client = FakeCopilotClient(scripted_events=[declaration])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    cfg = RunConfig(issue_source="github", max_iterations=1)
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    diagnostics = next(
+        iter((tmp_path / ".git-loopy" / "logs").glob("*.log"))
+    ).read_text(encoding="utf-8")
+    assert "ended no_more_tasks" in diagnostics
+
+
 def test_loop_records_the_session_ending_and_its_error_identity(
     tmp_path, monkeypatch
 ) -> None:
