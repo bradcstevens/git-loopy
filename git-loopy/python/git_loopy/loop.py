@@ -198,6 +198,13 @@ from git_loopy.skill_run_preflight import (
     RunSkillPreflight,
     resolve_run_skill_preflight,
 )
+from git_loopy.task_type_classifier import ClassifierPair
+from git_loopy.task_type_pickup import (
+    PickupClassifier,
+    resolve_pickup_classifier_pair,
+)
+from git_loopy.task_type_session import SessionTaskTypeProposer
+from git_loopy.task_type_writer import TaskTypeLabelClient
 from git_loopy.telemetry import otel as telemetry
 from git_loopy.ui import Renderer, RunSummary, get_console
 from git_loopy.wrapper import (
@@ -288,6 +295,20 @@ def _make_github_client() -> gh_module.SubprocessGitHubClient:
     ``prds`` backend has no GitHub dependency.
     """
     return gh_module.SubprocessGitHubClient()
+
+
+def _make_task_type_label_client() -> gh_module.SubprocessTaskTypeLabelClient:
+    """Construct the per-invocation **Task-type classifier** label writer (#409).
+
+    Its own factory rather than a reuse of :func:`_make_github_client`, for the
+    reason :class:`~git_loopy.gh.SubprocessTaskTypeLabelClient` exists at all:
+    the loop *reads* issues through the GitHub client, and every Pool-collecting
+    fake in the suite is asserted against that seam. Widening it would make an
+    irreversible tracker write a requirement of reading one. Monkeypatchable on
+    the same terms as its neighbours, so a test that drives a whole **Run** can
+    watch the one write the classifier makes without a tracker.
+    """
+    return gh_module.SubprocessTaskTypeLabelClient()
 
 
 def _resolve_continuation_authority(
@@ -956,6 +977,8 @@ class _Loop:
         continuation: ContinuationReporter | None = None,
         frontier_plan: continuation_frontier.FrontierPlan | None = None,
         rate_card: RateCard | None = None,
+        classifier_pair: ClassifierPair | None = None,
+        task_type_client: TaskTypeLabelClient | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -1025,6 +1048,43 @@ class _Loop:
         # an explicit model pin suppressed it, so *"does this Run escalate?"* is
         # answered once here rather than at each Pickup.
         self._escalation = EscalationLedger(rung=config.escalation_rung)
+        # The **Task-type classifier**, as this Run's Pickups call it (#409,
+        # ADR-0029). Assembled here rather than injected whole because the one
+        # thing it must not get wrong is where its **Consumption** goes: the
+        # classifying session takes `self._session_observer` as its cost meter,
+        # so its credits reach the Run's total exactly as an Iteration's do —
+        # ADR-0026 forbids an unknown cost rendering as zero, and a per-issue
+        # call billed to nobody is that failure. The observer only exists once
+        # this constructor has run, which is why the caller supplies the *pair*
+        # and the *tracker seam* and this class supplies the wiring.
+        #
+        # A `None` pair makes the whole object inert, so neither Pickup carries
+        # a second copy of "does this Run classify?".
+        self._classifier = PickupClassifier(
+            pair=classifier_pair,
+            propose=SessionTaskTypeProposer(
+                client=self._client,
+                config=self._config,
+                event_log=self._writers.event_log,
+                sinks=self._sinks,
+                run_id=self._writers.run_id,
+                # The repository root, in both modes. A Lane classifies *before*
+                # its worktree exists — the Task type is what decides the pair
+                # the Lane is then created for — so there is no Lane path to
+                # read, and reading the issue's own content needs none.
+                working_directory=None,
+                send_timeout_seconds=config.send_timeout_seconds,
+                skill_exposure=self._skill_exposure,
+                cost_meter=self._session_observer,
+                warn=self._diag.warning,
+            ),
+            client=(
+                task_type_client
+                if task_type_client is not None
+                else _make_task_type_label_client()
+            ),
+            diag=self._diag,
+        )
         # The one scrub-and-fan-out seam (issue #43): compose -> scrub once ->
         # write the replay JSONL + fan out to the sinks. Built here so ``_emit``
         # is a one-line delegator and the sinks receive the *scrubbed* envelope
@@ -1354,7 +1414,7 @@ class _Loop:
             #     the agent to self-select, so list position was a rendering
             #     hint competing with an instruction to ignore it — an issue
             #     could be passed over indefinitely and nothing noticed.
-            pickup = self._pick_active_issue(pool, iter_num=iter_num)
+            pickup = await self._pick_active_issue(pool, iter_num=iter_num)
             if pickup.item is None:
                 # Not the empty-Pool outcome, and it must not be reported as
                 # one: there *was* work and none of it could be taken, which is
@@ -1737,7 +1797,73 @@ class _Loop:
         )
         return escalated
 
-    def _pick_active_issue(
+    async def _classify_at_pickup(
+        self, item: AfkReadyItem, *, routed: RoutingResolution
+    ) -> tuple[AfkReadyItem, RoutingResolution]:
+        """Read ``item``'s **Task type** off its own content, then re-route on it.
+
+        The **Task-type classifier**'s one production call site (#409, ADR-0029),
+        shared by both Pickups for the reason :meth:`_resolve_route` is: an issue
+        admitted after the last hand-labelling pass carries no ``task-type:``
+        label in *either* mode, and a classifier wired to one of them would leave
+        the other permanently on the **Default pair**.
+
+        It runs **after** the candidate is bound, never over the Pool. Admission
+        is what decides *which* issue is worked and it decides that from what the
+        tracker says; classification only ever changes what the issue *costs*, so
+        classifying a candidate the walk then passed over would spend an **AI
+        Credit** on an issue this Iteration does not work. That ordering costs a
+        second call to the pure resolver on the one issue that gained a label,
+        and buys the guarantee that the Run pays for exactly the classifications
+        it uses.
+
+        The re-resolution goes through :meth:`_resolve_route` rather than
+        patching the pair onto ``routed``, so an inferred label and a
+        hand-written one are gated, escalated and provenanced by identical code —
+        which is the whole of what "indistinguishable in effect" means once the
+        label exists.
+
+        Args:
+            item: The bound candidate.
+            routed: What :meth:`_resolve_route` already resolved for ``item`` as
+                the tracker had it. Kept as the answer wherever classification
+                changes nothing, so an inert or already-labelled Pickup is
+                byte-for-byte what it was before this seam existed.
+
+        Returns:
+            The item to work and the **Routing resolution** to work it on. Never
+            raises: a classification is not an **Iteration**, and no way of
+            failing to acquire a label may cost the issue its Iteration or its
+            **Strike** count.
+        """
+        labelled = await self._classifier.labelled(item)
+        if labelled is item:
+            return item, routed
+        try:
+            resolution = self._resolve_route(labelled, warn=lambda _message: None)
+        except TaskTypeError as exc:
+            # Unreachable while the classifier writes only closed-taxonomy keys,
+            # and handled anyway: by this point the issue is *bound*, so the
+            # refusal that would have been a skip at admission has nowhere to go
+            # but the Iteration. Keeping the admitted pair loses the inference
+            # and nothing else.
+            self._diag.warning(
+                "issue #%s: inferred task type did not re-route (%s); keeping "
+                "the pair its Pickup admitted it on",
+                item.ref,
+                exc,
+            )
+            return item, routed
+        self._diag.info(
+            "issue #%s classified as %s; routed to %s @ %s",
+            labelled.ref,
+            ", ".join(resolution.task_type_keys) or "nothing",
+            resolution.model,
+            resolution.reasoning_effort,
+        )
+        return labelled, resolution
+
+    async def _pick_active_issue(
         self, pool: list[AfkReadyItem], *, iter_num: int
     ) -> SerialPickup:
         """Bind one **Active issue** out of the ordered **Pool** (#394).
@@ -1771,6 +1897,14 @@ class _Loop:
         :func:`~git_loopy.routing_scope.routing_in_force` is still where that is
         decided, and it now answers ``True`` in both — see that module for the
         reversal and why the reason it replaced had already been falsified.
+
+        **Classification sits between the walk and the record** (#409). The
+        walk admits from the labels the tracker has; :meth:`_classify_at_pickup`
+        may then give the *bound* candidate the ``task-type:`` label it was
+        missing, which re-resolves its pair. The Pickup Event is emitted after
+        that, so the pair it publishes is the pair the session below is built
+        with — a record written before the classification would name a model
+        that never ran.
         """
         self._routes = {}
 
@@ -1806,13 +1940,18 @@ class _Loop:
             )
         if pickup.item is not None:
             assert pickup.position is not None and pickup.reason is not None
+            bound, resolution = await self._classify_at_pickup(
+                pickup.item, routed=self._routes[pickup.item.ref]
+            )
+            self._routes[bound.ref] = resolution
+            pickup = dataclass_replace(pickup, item=bound)
             self._emit_pickup_bound(
                 iter_num=iter_num,
-                issue=pickup.item.ref,
+                issue=bound.ref,
                 reason=pickup.reason,
                 position=pickup.position,
                 considered=considered,
-                resolution=self._routes.get(pickup.item.ref),
+                resolution=resolution,
             )
         return pickup
 
@@ -2507,6 +2646,8 @@ class _ParallelLoop:
         include_prs: bool = False,
         continuation: ContinuationReporter | None = None,
         rate_card: RateCard | None = None,
+        classifier_pair: ClassifierPair | None = None,
+        task_type_client: TaskTypeLabelClient | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -2635,6 +2776,8 @@ class _ParallelLoop:
             include_prs=include_prs,
             usage_observer=self._cost_meter,
             continuation=continuation,
+            classifier_pair=classifier_pair,
+            task_type_client=task_type_client,
         )
 
     def _alloc_iter_num(self) -> int:
@@ -3220,6 +3363,15 @@ class _ParallelLoop:
             passed_over(f"routing refused: {exc}")
             scheduler.release(reservation)
             raise
+
+        # The **Task-type classifier**'s second call site (#409, ADR-0029),
+        # through the same shared seam. Deliberately *after* the refusal above:
+        # a candidate whose human labelling is already broken is passed over,
+        # not spent on. It runs before the worktree exists because what it
+        # decides is the pair this Lane is created for.
+        item, resolution = await self._serial._classify_at_pickup(
+            item, routed=resolution
+        )
 
         model = resolution.model
         reasoning_effort = resolution.reasoning_effort
@@ -4561,6 +4713,17 @@ async def run(
     # runner-side Integration gate (#60); serial (the default, parallel == 1)
     # drives the existing loop byte-for-byte unchanged. Both expose the same
     # ``drive()`` contract.
+    #
+    # The **Task-type classifier**'s pair (#409, ADR-0029) is resolved once here,
+    # from the same staircase **Demotion** steps, and handed to whichever
+    # orchestrator is built: an issue's Task type is a fact about the issue, so
+    # the two modes must not be able to infer it on different models. Absent —
+    # no roster, no **Rate card**, no configured pair — leaves the classifier
+    # inert and every issue exactly where it was before this slice.
+    classifier_pair = resolve_pickup_classifier_pair(
+        config, staircase, warn=lambda message: diag.warning("%s", message)
+    )
+    task_type_client = _make_task_type_label_client()
     loop: _Loop | _ParallelLoop
     if config.parallel > 1:
         loop = _ParallelLoop(
@@ -4581,6 +4744,8 @@ async def run(
             include_prs=include_prs,
             continuation=continuation_reporter,
             rate_card=rate_card,
+            classifier_pair=classifier_pair,
+            task_type_client=task_type_client,
         )
     else:
         loop = _Loop(
@@ -4600,6 +4765,8 @@ async def run(
             continuation=continuation_reporter,
             frontier_plan=frontier_plan,
             rate_card=rate_card,
+            classifier_pair=classifier_pair,
+            task_type_client=task_type_client,
         )
 
     exit_code = 1

@@ -715,7 +715,11 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     ``contract_version`` moved again to 1.22 with the **Escalation rung** (§14,
     #408) — an obligation about *which pair a Pickup resolves*, adding no Event,
     no literal and no payload field, which is the cleanest demonstration that
-    the two axes are independent in both directions.
+    the two axes are independent in both directions. 1.23 is the same shape
+    again: §14.2 gained the four producer obligations on a **Task-type
+    classifier** that runs at **Pickup** (#409, ADR-0029), and the label it
+    writes reaches routing as a label — indistinguishable on the wire from the
+    one a human wrote, which is precisely why no Event had to change.
 
     ``event_schema_version`` deliberately did not move at any of them, and 1.21
     is the one that sharpens *why*. Up to 1.19 nothing touched an existing
@@ -726,12 +730,12 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     not one that **appears**. §12 already requires an unknown payload field to
     be ignored, no existing key changed name, type or meaning, and every added
     one is optional-when-present. A consumer pinned to 1.1 therefore reads a
-    1.21 stream exactly as it read a 1.19 one — and a 1.22 one, which adds
-    nothing to the wire at all, identically again.
+    1.21 stream exactly as it read a 1.19 one — and a 1.22 or 1.23 one, which
+    add nothing to the wire at all, identically again.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.22"
+    assert _EVENT_SCHEMA["contract_version"] == "1.23"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:

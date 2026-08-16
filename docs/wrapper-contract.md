@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.22 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.23 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -1117,6 +1117,34 @@ writes it back to the tracker.
 An Orchestrator MUST NOT depend on a label's origin. A human-set and a classifier-written
 `task-type:` label are the same string on the same issue, the tracker records no difference, and
 routing MUST resolve both identically.
+
+Classifying is optional; classifying *carelessly* is not. An Orchestrator that runs the
+classifier MUST satisfy all four of the following (contract 1.23):
+
+- **On a named pair, never the run-wide default.** The classifier's own `(model, effort)` MUST
+  come from a source an operator can point at — its own Config key, else the cheapest rung of a
+  measured price staircase (§14.1). Borrowing the run-wide default would let one unmeasured prior
+  decide every issue's **Task type**, and so every **Routed pair**, while appearing nowhere as a
+  routing input. Where neither source yields a pair, the Orchestrator MUST NOT classify at all:
+  an issue routes as it would have without the classifier, which is a known state, whereas a
+  hardcoded fallback is a guess made in exactly the condition where nobody can check it.
+- **Nothing spent on an issue that is already labelled.** Inference is a one-off that ends when
+  the label exists, not a toll every Run pays to re-derive what the tracker already says.
+- **The closed taxonomy at the write.** A proposal outside §14's seven keys MUST be refused
+  rather than written, because attaching a `task-type:` label to an issue creates that label in
+  the tracker: an invented key is not a bad routing decision that expires with the Run, it is a
+  permanent addition to the vocabulary §14 closed.
+- **No classification failure may cost the Iteration or tick a Strike.** Every way of not
+  producing a Task type — a refused proposal, an unreadable answer, a failed session, a rejected
+  tracker write — MUST leave the issue on the **Default pair** and leave the **Iteration**
+  exactly as it would have been. Failing real work over a label inverts the priority, and a
+  classifier that could strike out would let an unattended Run end without ever having attempted
+  the work.
+
+Where the Orchestrator classifies, it does so at the **Pickup** — after the issue is bound and
+before the Routing resolution is resolved — and it MUST route on what it inferred even where the
+tracker refused the write. The write is what saves the *next* Run the inference; losing it must
+not also lose the decision it recorded.
 
 ## 15. Native Continuation boundary (Continuation rollout, MUST)
 

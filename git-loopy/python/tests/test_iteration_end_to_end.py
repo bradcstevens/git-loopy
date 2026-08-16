@@ -79,6 +79,7 @@ from git_loopy.persist import WritersBundle, create_writers
 from git_loopy.session import SKILL_TOOL_NAME
 from git_loopy.sinks import SinkFanout
 from git_loopy.skill_catalog import build_skill_catalog
+from git_loopy.staircase import Candidate, PriceStaircase
 from git_loopy.ui import RunSummary
 from git_loopy.wrapper import is_checkpoint_message
 from tests.fakes import FakeGitClient, FakeGitHubClient
@@ -3243,3 +3244,326 @@ def test_escalation_ticks_no_strike_of_its_own(tmp_path, monkeypatch) -> None:
         path.mkdir()
 
     assert strikes_for(("claude-opus-5", "max"), escalating) == strikes_for(None, flat)
+
+
+# ---------------------------------------------------------------------------
+# The Task-type classifier at Pickup (#409, ADR-0029)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingTaskTypeLabelClient:
+    """The tracker seam the classifier writes through, without a tracker."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.applied: list[tuple[int, str]] = []
+        self.reads: list[int] = []
+        self._fail = fail
+
+    def read_issue_labels(self, number: int) -> list[str]:
+        self.reads.append(number)
+        return ["ready-for-agent"]
+
+    def apply_issue_label(self, number: int, spec: Any) -> None:
+        if self._fail:
+            raise RuntimeError("gh: issue edit failed")
+        self.applied.append((number, spec.name))
+
+
+class _ClassifyingCopilotClient(FakeCopilotClient):
+    """A harness that answers the classifier's prompt and stays quiet otherwise.
+
+    Branching on ``model`` rather than on call order is the point: the
+    classifying session is the one created on the **classifier pair**, so a test
+    that gets its answer has already proved the pair reached the SDK.
+    """
+
+    def __init__(self, *, answer: str, classifier_model: str) -> None:
+        super().__init__(scripted_events=[])
+        self._answer = answer
+        self._classifier_model = classifier_model
+        self.models: list[str | None] = []
+
+    async def create_session(self, **kwargs: Any) -> FakeCopilotSession:
+        model = kwargs.get("model")
+        self.models.append(model)
+        self._scripted_events = (
+            [
+                _sdk_event(
+                    SessionEventType.ASSISTANT_MESSAGE,
+                    AssistantMessageData(content=self._answer, message_id="c1"),
+                )
+            ]
+            if model == self._classifier_model
+            else []
+        )
+        return await super().create_session(**kwargs)
+
+
+def _wire_classifier_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    answer: str = "<task-type>bugfix</task-type>",
+    classifier_model: str = "gpt-5-mini",
+    labels: list[str] | None = None,
+    label_client: _RecordingTaskTypeLabelClient | None = None,
+) -> tuple[_ClassifyingCopilotClient, _RecordingTaskTypeLabelClient]:
+    """One unlabelled issue, one scriptable harness, one watchable tracker write."""
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
+    monkeypatch.setattr(
+        loop_module, "_make_git_client", lambda: FakeGitClient(tmp_path)
+    )
+    monkeypatch.setattr(
+        loop_module,
+        "_make_github_client",
+        lambda: FakeGitHubClient(
+            repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+            issues=[_dated(7, "2026-01-01T00:00:00Z", labels=labels)],
+        ),
+    )
+    fake_client = _ClassifyingCopilotClient(
+        answer=answer, classifier_model=classifier_model
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    tracker = label_client if label_client is not None else _RecordingTaskTypeLabelClient()
+    monkeypatch.setattr(
+        loop_module, "_make_task_type_label_client", lambda: tracker
+    )
+    return fake_client, tracker
+
+
+def _cheap_staircase(model: str = "gpt-5-mini") -> PriceStaircase:
+    """A staircase whose cheapest rung is ``model`` and whose next one is dear."""
+    return PriceStaircase(
+        candidates=(
+            Candidate(model=model, effort=None, multiplier=0.33),
+            Candidate(model="claude-opus-5", effort="max", multiplier=10.0),
+        )
+    )
+
+
+def _classifier_config(**overrides: Any) -> RunConfig:
+    settings: dict[str, Any] = {
+        "issue_source": "github",
+        "max_iterations": 1,
+        "model": "claude-sonnet-5",
+        "reasoning_effort": "low",
+        "routing": {"bugfix": ("claude-opus-4.7", "high")},
+    }
+    settings.update(overrides)
+    return RunConfig(**settings)
+
+
+def test_an_unlabelled_issue_is_classified_and_labelled_at_pickup(
+    tmp_path, monkeypatch
+) -> None:
+    """The whole ticket (#409): no human labelled #7, and it routes as a bugfix."""
+    fake_client, tracker = _wire_classifier_run(tmp_path, monkeypatch)
+
+    exit_code = asyncio.run(
+        loop_module.run(_classifier_config(), staircase=_cheap_staircase())
+    )
+
+    assert exit_code == 0
+    assert tracker.applied == [(7, "task-type:bugfix")]
+    assert [
+        (e["task_type_keys"], e["model"], e["effort"], e["routing_source"])
+        for e in _bound_pickups(tmp_path)
+    ] == [(["bugfix"], "claude-opus-4.7", "high", "routed")]
+
+
+def test_the_iteration_runs_on_the_pair_the_inferred_type_routed_to(
+    tmp_path, monkeypatch
+) -> None:
+    """A Task type that changed no session is a Task type that changed nothing."""
+    fake_client, _ = _wire_classifier_run(tmp_path, monkeypatch)
+
+    asyncio.run(loop_module.run(_classifier_config(), staircase=_cheap_staircase()))
+
+    # The classifying session first, on the cheapest rung; then the work, on the
+    # pair `[routing]` names for `bugfix` — never the run-wide `claude-sonnet-5`.
+    assert fake_client.models == ["gpt-5-mini", "claude-opus-4.7"]
+
+
+def test_the_classifier_never_borrows_the_run_wide_default(
+    tmp_path, monkeypatch
+) -> None:
+    """ADR-0029's central refusal, asserted where it would actually be broken."""
+    fake_client, tracker = _wire_classifier_run(
+        tmp_path, monkeypatch, classifier_model="claude-sonnet-5"
+    )
+
+    # No staircase and no configured classifier pair: there is no measured
+    # cheapest rung, so nothing is classified. The run-wide default is *right
+    # there* and is not reached for.
+    asyncio.run(loop_module.run(_classifier_config()))
+
+    assert tracker.applied == []
+    assert fake_client.models == ["claude-sonnet-5"]
+    assert [e["routing_source"] for e in _bound_pickups(tmp_path)] == [
+        "defaulted_no_task_type_label"
+    ]
+
+
+def test_an_already_labelled_issue_spends_nothing_at_pickup(
+    tmp_path, monkeypatch
+) -> None:
+    """Inference is a one-off because the label persists, not because of a cache."""
+    fake_client, tracker = _wire_classifier_run(
+        tmp_path, monkeypatch, labels=["ready-for-agent", "task-type:bugfix"]
+    )
+
+    asyncio.run(loop_module.run(_classifier_config(), staircase=_cheap_staircase()))
+
+    assert fake_client.models == ["claude-opus-4.7"]
+    assert tracker.applied == []
+    assert tracker.reads == []
+
+
+def test_a_refused_tracker_write_still_routes_this_iteration(
+    tmp_path, monkeypatch
+) -> None:
+    """The write saves the *next* Run the inference; losing it loses nothing else."""
+    fake_client, _ = _wire_classifier_run(
+        tmp_path,
+        monkeypatch,
+        label_client=_RecordingTaskTypeLabelClient(fail=True),
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(_classifier_config(), staircase=_cheap_staircase())
+    )
+
+    assert exit_code == 0
+    assert fake_client.models == ["gpt-5-mini", "claude-opus-4.7"]
+
+
+def test_a_classifier_written_label_is_indistinguishable_from_a_hand_written_one(
+    tmp_path, monkeypatch
+) -> None:
+    """ADR-0029 spent label provenance; this is the property it bought.
+
+    The two Runs differ only in *who* put ``task-type:bugfix`` on #7 — a human
+    before the Run, or the classifier during its Pickup. Everything the Pickup
+    publishes about the pair is identical, because by the time routing reads the
+    label there is nothing left that could tell them apart.
+    """
+
+    def pickup_for(at: Path, *, prelabelled: bool) -> dict[str, Any]:
+        at.mkdir()
+        _wire_classifier_run(
+            at,
+            monkeypatch,
+            labels=["ready-for-agent", "task-type:bugfix"] if prelabelled else None,
+        )
+        asyncio.run(
+            loop_module.run(_classifier_config(), staircase=_cheap_staircase())
+        )
+        bound = _bound_pickups(at)[0]
+        return {
+            key: value
+            for key, value in bound.items()
+            if key not in ("ts", "run_id")
+        }
+
+    assert pickup_for(tmp_path / "human", prelabelled=True) == pickup_for(
+        tmp_path / "inferred", prelabelled=False
+    )
+
+
+def test_a_proposal_outside_the_taxonomy_is_refused_and_costs_the_iteration_nothing(
+    tmp_path, monkeypatch
+) -> None:
+    """An unattended writer plus ``gh label create`` makes an invented key permanent."""
+    fake_client, tracker = _wire_classifier_run(
+        tmp_path, monkeypatch, answer="<task-type>refactor</task-type>"
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(_classifier_config(), staircase=_cheap_staircase())
+    )
+
+    assert exit_code == 0
+    assert tracker.applied == []
+    assert [e["routing_source"] for e in _bound_pickups(tmp_path)] == [
+        "defaulted_no_task_type_label"
+    ]
+
+
+def test_a_classifier_that_answers_nothing_leaves_the_run_where_it_was(
+    tmp_path, monkeypatch
+) -> None:
+    fake_client, tracker = _wire_classifier_run(
+        tmp_path, monkeypatch, answer="I had a look and I am not sure."
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(_classifier_config(), staircase=_cheap_staircase())
+    )
+
+    assert exit_code == 0
+    assert tracker.applied == []
+    assert [e["model"] for e in _bound_pickups(tmp_path)] == ["claude-sonnet-5"]
+
+
+def test_classification_ticks_no_strike_of_its_own(tmp_path, monkeypatch) -> None:
+    """A classification is not an **Iteration**, so it allocates none and strikes none.
+
+    Two Runs over the same two unproductive Iterations, one classifying and one
+    inert: the Strike ledger is identical. A classifier that could strike out
+    would end an unattended overnight Run without doing any work.
+    """
+
+    def strikes_for(at: Path, *, staircase: PriceStaircase | None) -> list[int]:
+        at.mkdir()
+        _wire_classifier_run(at, monkeypatch)
+        asyncio.run(
+            loop_module.run(
+                _classifier_config(max_iterations=2, max_nmt_strikes=9),
+                staircase=staircase,
+            )
+        )
+        return [
+            json.loads(raw)["strikes"]
+            for raw in _log_lines(at)
+            if json.loads(raw)["type"] == "wrapper.strike"
+        ]
+
+    assert strikes_for(tmp_path / "classifying", staircase=_cheap_staircase()) == (
+        strikes_for(tmp_path / "inert", staircase=None)
+    )
+
+
+def test_the_classifying_session_occupies_no_iteration_row(
+    tmp_path, monkeypatch
+) -> None:
+    """One Iteration is one summary row, whatever the Run spent alongside it."""
+    _wire_classifier_run(tmp_path, monkeypatch)
+
+    asyncio.run(loop_module.run(_classifier_config(), staircase=_cheap_staircase()))
+
+    summary = json.loads(
+        next((tmp_path / ".git-loopy" / "runs").glob("*.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert len(summary["iterations"]) == 1
+
+
+def test_a_configured_classifier_pair_needs_no_staircase(tmp_path, monkeypatch) -> None:
+    """The operator's own knob, which is what makes the prior overridable."""
+    fake_client, tracker = _wire_classifier_run(
+        tmp_path, monkeypatch, classifier_model="gemini-3.5-flash"
+    )
+
+    asyncio.run(
+        loop_module.run(
+            _classifier_config(
+                classifier_model="gemini-3.5-flash", classifier_effort="low"
+            )
+        )
+    )
+
+    assert tracker.applied == [(7, "task-type:bugfix")]
+    assert fake_client.models == ["gemini-3.5-flash", "claude-opus-4.7"]

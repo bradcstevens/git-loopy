@@ -1,6 +1,13 @@
 # Agents infer the Task type, and the taxonomy closes to pay for it
 
-**Status:** proposed
+**Status:** accepted
+
+Accepted at [#409](https://github.com/bradcstevens/git-loopy/issues/409), under the per-issue
+routing spec [#400](https://github.com/bradcstevens/git-loopy/issues/400), which is also where
+the classifier reached its first production call site. Two amendments were made on acceptance
+and both are recorded below: the **serial-mode question this entry left open is answered**, and
+the classifier's default pair gained a stated behaviour for the case where no cheapest rung is
+measurable.
 
 [ADR-0027](0027-routing-is-calibrated-by-measurement.md) needs a **Proving set** stratified by
 **Task type**, and **zero of 334 closed issues carry a `task-type:` label**. It refused to let
@@ -89,6 +96,48 @@ The alternative was keeping them inside the artifact. Writing to the tracker mak
 inspectable, reusable by the next refresh, and visible to humans who can correct it. The
 mechanism already exists and is proven by Continuation's discovery-index label.
 
+### The classifier runs in every mode (amended on acceptance)
+
+This entry originally left the question open — *"Whether it should still run in serial purely to
+accumulate labels for a future Proving set is not decided here"* — and it left it open for a
+reason that has since expired. The deferral inherited ADR-0027's **Parallel-only** scope, under
+which a serial Iteration folded the whole **Pool** into one prompt: there was no single Active
+issue to classify, and a label written in serial could only ever be an investment in a future
+Parallel Run.
+
+[ADR-0032](0032-the-runner-picks-the-oldest-eligible-issue.md) gave a serial Iteration a
+**Pickup** that binds exactly one issue, and
+[ADR-0037](0037-routing-takes-effect-in-every-mode.md) made the pair that Pickup resolves the
+pair the session runs on. Both halves of the premise are gone, so the question resolves
+without needing a new judgement: **the classifier runs wherever a Pickup binds an issue.** A
+serial Iteration is no longer paying for a label somebody else might use — it is paying for its
+own **Routed pair**, which is the same trade a Lane makes.
+
+The mechanism is one shared seam rather than one per mode, for the reason the **Escalation
+rung**'s ledger is shared ([ADR-0035](0035-the-locked-routing-table.md)'s neighbourhood): a
+Task type is a fact about the *issue*, and two call sites free to infer it differently would let
+the same issue be a `bugfix` in serial and a `chore` in a Lane, on two different models, in one
+Run.
+
+**It classifies the bound candidate, never the Pool.** Admission decides *which* issue is
+worked, and it decides that from the labels the tracker already has; classification only ever
+changes what the issue *costs*. Classifying a candidate the walk then passed over would spend an
+**AI Credit** on work this Iteration does not do — so the classifier runs after the binding, and
+the pair is re-resolved from the item as it then stands.
+
+### An unmeasurable staircase leaves the classifier inert (amended on acceptance)
+
+*"The cheapest pair on the live roster"* presumes a **price staircase**, and a staircase is
+refused outright wherever its ordering would have to be invented — no roster, no **Rate card**,
+an unpriced model. This entry did not say what the classifier does then, and the two available
+answers are not equally safe: falling back to a hardcoded cheap model, or to the run-wide
+default, re-admits precisely the unmeasured prior the staircase exists to keep out, and does it
+in the one condition where nobody can check it.
+
+So: **no measurable rung and no configured `classifier_model` means no classification at all.**
+The Run spends nothing, writes nothing, and every issue routes exactly as it did before this
+decision — which is a known state, unlike a guess.
+
 ## Considered options
 
 - **Human backfill of 35 issues** — rejected as the cost that keeps the feature unbuilt. It is
@@ -126,7 +175,16 @@ mechanism already exists and is proven by Continuation's discovery-index label.
   the *"open and operator-extensible"* clause are rewritten by this entry, so for the duration
   of implementation the glossary describes the decided model rather than the shipped one. This
   deviates from the discipline ADR-0019 set and is recorded here so it is not mistaken for an
-  oversight.
+  oversight. **Discharged at acceptance:** the classifier now has a production call site, so the
+  glossary and the code describe the same system again.
 - **The classifier is inert in serial mode**, like everything else routing touches — see
   ADR-0027's scope note. Whether it should still run in serial purely to accumulate labels for
-  a future Proving set is **not decided here**.
+  a future Proving set is **not decided here**. **Reversed at acceptance** by *The classifier
+  runs in every mode* above: ADR-0037 withdrew the Parallel-only scope this sentence inherited,
+  so the classifier runs at every **Pickup** a Run makes.
+- **A classifier failure is silent by design, and that is a real cost.** Every way of not
+  producing a Task type leaves the issue on the **Default pair** with nothing but a diagnostics
+  line to say so — an unattended Run in which the classifier is uniformly broken looks exactly
+  like one whose backlog is genuinely unlabelled. The alternative was letting a label failure
+  cost an **Iteration**, which is worse: failing real work over a label is the one outcome this
+  decision refuses outright.

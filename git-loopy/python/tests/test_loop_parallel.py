@@ -104,6 +104,7 @@ from uuid import uuid4
 
 import pytest
 from copilot.generated.session_events import (
+    AssistantMessageData,
     AssistantUsageData,
     SessionErrorData,
     SessionEvent,
@@ -124,6 +125,7 @@ from git_loopy.interactive.driver import (
 from git_loopy.interactive.state import LiveRunState
 from git_loopy.interactive.terminal import TerminalOwner
 from git_loopy.skill_catalog import build_skill_catalog
+from git_loopy.staircase import Candidate, PriceStaircase
 from git_loopy.worktree import SetupResult
 from tests.fakes import FakeGateRunner, FakeGitClient, FakeGitHubClient
 from tests.test_interactive_terminal import FakeTerminal
@@ -5088,4 +5090,125 @@ def test_a_lane_that_stalled_escalates_at_its_next_pickup(
     assert [(e["issue"], e["model"], e["routing_source"]) for e in bound] == [
         (42, "claude-sonnet-5", "defaulted_no_task_type_label"),
         (42, "claude-opus-5", "escalated"),
+    ]
+
+
+class _ClassifyingLaneSession(_ParallelFakeSession):
+    """The classifying session: one marker, no commit, no worktree.
+
+    Deliberately *not* :class:`_ParallelFakeSession` with an empty script — that
+    one models an agent and commits — because the whole claim under test is that
+    a classification is not an **Iteration** and leaves nothing behind.
+    """
+
+    async def send_and_wait(
+        self, prompt: str, *, timeout: float = 60.0, **_extra: Any
+    ) -> SessionEvent | None:
+        self.send_and_wait_calls.append((prompt, timeout))
+        event = SessionEvent(
+            data=AssistantMessageData(
+                content="<task-type>bugfix</task-type>", message_id="c1"
+            ),
+            id=uuid4(),
+            timestamp=datetime(2026, 5, 16, tzinfo=timezone.utc),
+            type=SessionEventType.ASSISTANT_MESSAGE,
+        )
+        if self._on_event is not None:
+            self._on_event(event)
+        return event
+
+
+class _ClassifyingLaneClient(_ParallelFakeClient):
+    """A harness that answers the classifier's prompt and works otherwise."""
+
+    def __init__(self, *, classifier_model: str, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._classifier_model = classifier_model
+
+    async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+        classifying = kwargs.get("model") == self._classifier_model
+        previous = type(self)._session_cls
+        self._session_cls = (  # type: ignore[misc]
+            _ClassifyingLaneSession if classifying else previous
+        )
+        try:
+            return await super().create_session(**kwargs)
+        finally:
+            self._session_cls = previous  # type: ignore[misc]
+
+
+class _RecordingTaskTypeLabelClient:
+    """The classifier's tracker seam, without a tracker."""
+
+    def __init__(self) -> None:
+        self.applied: list[tuple[int, str]] = []
+
+    def read_issue_labels(self, number: int) -> list[str]:
+        return ["ready-for-agent", "parallel-safe"]
+
+    def apply_issue_label(self, number: int, spec: Any) -> None:
+        self.applied.append((number, spec.name))
+
+
+def test_a_lane_classifies_its_unlabelled_issue_before_it_routes(
+    tmp_path, monkeypatch
+) -> None:
+    """The **Task-type classifier** is per issue, not per mode (#409, ADR-0029).
+
+    ADR-0029 left "does the classifier run in serial?" undecided while routing
+    was Parallel-only; ADR-0037 settled the premise, so the answer is *both*, and
+    the seam is shared with the serial **Pickup** rather than copied. Here is the
+    Lane half: a ``parallel-safe`` issue nobody labelled acquires its **Task
+    type** before the worktree exists, because what the Task type decides is the
+    pair the Lane is created for.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_github_client",
+        lambda: FakeGitHubClient(
+            repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+            issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+        ),
+    )
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ClassifyingLaneClient(
+            classifier_model="gpt-5-mini",
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.7")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    tracker = _RecordingTaskTypeLabelClient()
+    monkeypatch.setattr(loop_module, "_make_task_type_label_client", lambda: tracker)
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-sonnet-5",
+                reasoning_effort="low",
+                issue_source="github",
+                parallel=2,
+                max_iterations=1,
+                max_nmt_strikes=3,
+                routing={"bugfix": ("claude-opus-4.7", "high")},
+            ),
+            staircase=PriceStaircase(
+                candidates=(
+                    Candidate(model="gpt-5-mini", effort=None, multiplier=0.33),
+                    Candidate(model="claude-opus-5", effort="max", multiplier=10.0),
+                )
+            ),
+        )
+    ) == 0
+
+    assert tracker.applied == [(42, "task-type:bugfix")]
+    bound = [
+        e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pickup.bound"
+    ]
+    assert [(e["issue"], e["model"], e["routing_source"]) for e in bound] == [
+        (42, "claude-opus-4.7", "routed")
     ]

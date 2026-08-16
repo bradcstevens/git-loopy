@@ -572,8 +572,9 @@ reassignment.
 
 **Pickup**:
 The instant the runner binds one issue to a unit of work, before that unit's agent
-session begins. Because the issue is known first, pickup is where its **Routed pair**
-resolves and where its **Lease** is taken. Every unit of work has a pickup — a serial
+session begins. Because the issue is known first, pickup is where an unlabelled issue's
+**Task type** is inferred, where its **Routed pair** resolves and where its **Lease** is
+taken. Every unit of work has a pickup — a serial
 **Iteration** as much as a **Lane** — and every pickup is carried as a
 `wrapper.pickup.bound` **Event** naming which issue, why, where it sat in the order, and
 the **Routing resolution** it reached. The resolution rides on that one record rather than
@@ -880,8 +881,11 @@ _Avoid_: category, priority, issue kind.
 
 **Task-type classifier**:
 The agent call that reads an unlabelled issue's own content and proposes its **Task type**.
-Runs on its own configured pair — defaulting to the cheapest pair on the live roster, never
-the run-wide default, so the prior it introduces is named rather than implicit. Its spend is
+Runs at every **Pickup**, serial and **Lane** alike, on the issue that Pickup bound and on no
+other, so the spend buys the pair this **Iteration** runs on. Runs on its own configured pair —
+defaulting to the cheapest pair on the live roster, never the run-wide default, so the prior it
+introduces is named rather than implicit; where no cheapest rung is measurable it is inert
+rather than guessing. It spends nothing on an issue that already carries a label, its spend is
 folded into the run's cost like any other session, and it never ticks a **Strike**.
 _Avoid_: triage, categoriser, router (that is **Routing**).
 
