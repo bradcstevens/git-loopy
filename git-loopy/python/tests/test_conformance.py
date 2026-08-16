@@ -808,9 +808,16 @@ def test_a_pinned_stream_binds_every_lane_before_its_contribution() -> None:
 
 
 #: Exported strings that are deliberately not event types. The redaction
-#: placeholder is a scrubber output, and the **Calibration** prefix (#371) names
-#: the *family* a consumer filters by rather than any record something emits.
-_NOT_EVENT_TYPES = frozenset({"REDACTED_SECRET", "CALIBRATION_EVENT_PREFIX"})
+#: placeholder is a scrubber output, the **Calibration** prefix (#371) names
+#: the *family* a consumer filters by rather than any record something emits,
+#: and the degrade reason (#414) is one member of a closed payload vocabulary.
+_NOT_EVENT_TYPES = frozenset(
+    {
+        "REDACTED_SECRET",
+        "CALIBRATION_EVENT_PREFIX",
+        "PARALLEL_DEGRADE_SOURCE_NOT_ROLLING",
+    }
+)
 
 
 def test_event_type_fixture_pins_every_exported_literal() -> None:
@@ -870,10 +877,16 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     contract has always been "at least these keys" changes nothing an existing
     consumer reads, and a consumer that has never heard of ``routing`` ignores
     it exactly as §12 already requires.
+
+    1.28 is 1.19's shape again — one additive literal,
+    ``wrapper.parallel.degraded`` (#414), reserved within compatibility schema
+    1 and modelled by nothing that exists. A consumer pinned to 1.1 skips an
+    unmodelled type exactly as it always has, so the wire axis does not move
+    while the obligation axis does.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.27"
+    assert _EVENT_SCHEMA["contract_version"] == "1.28"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
@@ -1241,6 +1254,43 @@ def test_event_fixture_pins_the_serial_latch_contract() -> None:
     )
 
 
+def test_event_fixture_pins_the_parallel_degrade_contract() -> None:
+    """#414: the third closed reason vocabulary on this axis, pinned the same way.
+
+    A **Parallel mode** Run whose **issue source** can never offer **Lane**
+    work degrades entirely to the serial path, and the degrade is right — the
+    fallback works the same issues to the same outcome and strands nothing. The
+    report is what was missing, so what the fixture has to pin is that the
+    report cannot become unreadable: the operator's line is rendered from
+    ``reason``, and a value nothing has heard of renders as an unexplained
+    degrade in every Orchestrator that replays the log.
+
+    Run-scoped for a sharper reason than its two siblings: those name work that
+    never became a **Lane contribution**, while this one names a Run in which
+    nothing could ever have been a candidate for one, so it carries no issue
+    either.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_PARALLEL_DEGRADED
+    ]
+    assert contract["required_when_present"] == ["reason", "lane_cap", "issue_source"]
+    assert tuple(contract["reason_values"]) == events_module.PARALLEL_DEGRADE_REASONS
+    assert events_module.WRAPPER_PARALLEL_DEGRADED in (
+        _EVENT_SCHEMA["contribution_identity"]["scheduler_scoped_types"]
+    )
+    assert events_module.WRAPPER_PARALLEL_DEGRADED not in (
+        events_module.CONTRIBUTION_SCOPED_EVENT_TYPES
+    )
+    # Neither of the two records it sits between: a **Serial fallback** is one
+    # Iteration of a Lane-capable Run and recurs, and a **refusal** never
+    # reaches a Run at all.
+    assert "issue" not in contract["required_when_present"]
+    fallback = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_PARALLEL_SERIAL_FALLBACK
+    ]
+    assert not set(contract["reason_values"]) & set(fallback["reason_values"])
+
+
 def _parallel_capability_producers() -> dict[str, bool]:
     """Which rolling capabilities this distribution *actually* has a producer for.
 
@@ -1322,7 +1372,12 @@ _ROLLING_SCHEDULER_SCOPED = tuple(
     for literal in _EVENT_SCHEMA["contribution_identity"]["scheduler_scoped_types"]
     # `wrapper.pool.excluded` is Run-scoped for every mode, not a rolling
     # addition, so it is not part of the rolling stream this pins.
-    if literal != "wrapper.pool.excluded"
+    # `wrapper.parallel.degraded` (#414) is excluded for the opposite reason and
+    # a stronger one: it reports a Run in which Rolling dispatch never ran, so a
+    # stream carrying both it and a rolling record is a stream that cannot
+    # exist. Its shape is pinned by `payload_contracts` and its bytes by a
+    # serialization case, which is all a record that stands alone can be.
+    if literal not in {"wrapper.pool.excluded", "wrapper.parallel.degraded"}
 )
 
 

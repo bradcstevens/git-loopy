@@ -2956,6 +2956,7 @@ class _ParallelLoop:
                 else None
             ),
         )
+        self._report_parallel_degraded()
 
         # Same reasoning as `_Loop.drive` (#398): an interrupt bypasses the
         # `except Exception` below and reports whatever this name holds, so it
@@ -2995,6 +2996,43 @@ class _ParallelLoop:
             except Exception as exc:  # pragma: no cover - defensive
                 self._diag.warning("wrapper.run.end emit failed: %s", exc)
         return exit_code
+
+    def _report_parallel_degraded(self) -> None:
+        """Say that Parallel mode degraded entirely to the serial path (#414).
+
+        The banner emitted immediately above this is three truthful claims
+        about the **distribution** — ``parallel_mode``, the **Lane cap**, and
+        the ``parallel_capabilities`` manifest — and under a source that cannot
+        supply Lane work all three stand unqualified over a Run that is
+        byte-identical to a serial one. That is the collapse
+        ``parallel_capabilities`` exists to prevent (§12), reached through a
+        **source** fact rather than a distribution one: the manifest is
+        *correct*, so refusing the cap would be wrong (#348 §5 — the fallback
+        reaches the same outcome and strands nothing). Only the report was
+        missing.
+
+        Emitted here rather than inside :meth:`_drive_serial_only` because the
+        degrade is one fact about the Run, settled before any round: reporting
+        it where the rounds are would repeat it, and repetition would read as
+        something the Run kept re-deciding. Adjacent to the banner it qualifies
+        for the same reason :meth:`_report_serial_fallback` sits immediately
+        before the Iteration it explains — a claim and its correction separated
+        by a Run's worth of output is not a correction.
+
+        Silent on a Rolling-capable source whose **Pool** carries no
+        ``parallel-safe`` issue: that is #304's **Serial fallback**, already
+        reported per serial **Iteration** with a counted reason, and the
+        operator's move there is triage. No move fixes this one.
+        """
+        if self._rolling_capable:
+            return
+        self._serial._emit(
+            events_module.WRAPPER_PARALLEL_DEGRADED,
+            iter_num=None,
+            reason=events_module.PARALLEL_DEGRADE_SOURCE_NOT_ROLLING,
+            lane_cap=self._config.parallel,
+            issue_source=self._config.issue_source,
+        )
 
     async def _drive_serial_only(self) -> tuple[str, int, int]:
         """Drive every round as a serial Iteration (source not Rolling-capable).

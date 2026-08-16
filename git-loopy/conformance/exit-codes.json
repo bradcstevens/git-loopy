@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.27",
+  "contract_version": "1.28",
   "cases": [
     {
       "id": "empty-pool-is-clean",

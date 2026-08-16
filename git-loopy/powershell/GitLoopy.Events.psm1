@@ -47,6 +47,10 @@ $script:EventTypes = [ordered]@{
     WRAPPER_PIPELINE_QUIESCENT = "wrapper.pipeline.quiescent"
     WRAPPER_ROLLING_REFILL_TURN = "wrapper.rolling.refill_turn"
     WRAPPER_PARALLEL_SERIAL_FALLBACK = "wrapper.parallel.serial_fallback"
+    # Contract 1.28. Inert here for the reason the whole rolling block is: this
+    # Orchestrator schedules no Lane, so it never degrades from one. Declared so
+    # the table stays the whole event vocabulary and its replay reads.
+    WRAPPER_PARALLEL_DEGRADED = "wrapper.parallel.degraded"
     # Calibration records (contract 1.16). Declared so this table stays the
     # whole event vocabulary; never emitted here, because Calibration and the
     # measured tier it serves are Python-only (contract 14.1).

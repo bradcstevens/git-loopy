@@ -2808,6 +2808,105 @@ def test_serial_run_start_carries_no_parallel_mode_report(
     ] == []
 
 
+def test_parallel_over_a_non_rolling_source_reports_the_degrade(
+    tmp_path, monkeypatch
+) -> None:
+    """A source that can never offer Lane work says so, once, at Run start (#414).
+
+    The PRDs backend does not implement
+    :class:`~git_loopy.sources.RollingIssueSource` — it has no ``parallel-safe``
+    label concept — so **Parallel mode** degrades entirely to the serial path.
+    The degrade is correct and strands nothing (#348 §5); until this Event it
+    was also invisible, leaving the Run-start banner's **Lane cap** as the
+    operator's only signal and a Run byte-identical to a serial one underneath
+    it.
+
+    Asserted on the Event log rather than the rendered line, and with an empty
+    Pool, because the degrade is a fact about *dispatch* — it holds before any
+    candidate is read.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(fake_git=fake_git, scripted_events=[]),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="prds",
+        parallel=4,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    events = _logged_events(tmp_path)
+    degrades = [e for e in events if e["type"] == "wrapper.parallel.degraded"]
+    assert len(degrades) == 1
+    assert degrades[0]["reason"] == "source_not_rolling_capable"
+    assert degrades[0]["lane_cap"] == 4
+    assert degrades[0]["issue_source"] == "prds"
+    assert degrades[0]["iter"] is None
+    # Immediately after the banner it qualifies, and before any Iteration.
+    types = [e["type"] for e in events]
+    assert types.index("wrapper.run.start") < types.index(
+        "wrapper.parallel.degraded"
+    )
+
+
+def test_parallel_over_a_rolling_source_reports_no_degrade(
+    tmp_path, monkeypatch
+) -> None:
+    """A Rolling-capable source never reports a degrade, even with nothing eligible.
+
+    #414's third criterion: a **Pool** carrying no ``parallel-safe`` issue is
+    #304's **Serial fallback**, already reported per serial **Iteration** with
+    its own counted reason. Reporting it as a degrade too would tell the
+    operator the source cannot do Lanes when the answer is triage.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+            serial_closes=True,
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=4,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    asyncio.run(loop_module.run(cfg))
+
+    events = _logged_events(tmp_path)
+    assert [e for e in events if e["type"] == "wrapper.parallel.degraded"] == []
+    assert [
+        e for e in events if e["type"] == "wrapper.parallel.serial_fallback"
+    ] != []
+
+
 def test_parallel_reports_serial_fallback_when_nothing_carries_parallel_safe(
     tmp_path, monkeypatch
 ) -> None:

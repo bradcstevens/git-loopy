@@ -107,6 +107,9 @@ __all__ = [
     "WRAPPER_PIPELINE_QUIESCENT",
     "WRAPPER_ROLLING_REFILL_TURN",
     "WRAPPER_PARALLEL_SERIAL_FALLBACK",
+    "WRAPPER_PARALLEL_DEGRADED",
+    "PARALLEL_DEGRADE_SOURCE_NOT_ROLLING",
+    "PARALLEL_DEGRADE_REASONS",
     # Rolling-dispatch contribution identity
     "CONTRIBUTION_IDENTITY_KEYS",
     "CONTRIBUTION_SCOPED_EVENT_TYPES",
@@ -313,6 +316,25 @@ WRAPPER_ROLLING_REFILL_TURN = "wrapper.rolling.refill_turn"
 # names work that never became a Lane contribution, and the absence of Lane
 # work is a fact about the Run. A serial Run never emits it.
 WRAPPER_PARALLEL_SERIAL_FALLBACK = "wrapper.parallel.serial_fallback"
+# Emitted once per Run, immediately after the ``wrapper.run.start`` banner it
+# qualifies, when **Parallel mode** degrades entirely to the serial path
+# because the Run's **issue source** can never offer **Lane** work (#414). Not
+# a **Serial fallback**: that is one **Iteration** a Rolling-capable Run works
+# because the **Pool** happens to hold no eligible **Parallel-safe** candidate,
+# it is reported per Iteration with its own counted reason, and triage fixes
+# it. Nothing fixes this one inside the Run — no label, no triage and no
+# refill will produce a Lane — so it is stated once, up front, and never again.
+WRAPPER_PARALLEL_DEGRADED = "wrapper.parallel.degraded"
+
+# Why **Parallel mode** degraded entirely to the serial path. Closed, for the
+# reason the two rolling reason vocabularies are closed: the operator's line is
+# rendered from ``reason``, so a value the Conformance fixture has never heard
+# of renders as an unexplained degrade in every Orchestrator that replays the
+# log. One member today — a source either implements the Rolling **Pool**
+# operations or it does not, and a distribution that cannot schedule Lanes at
+# all **refuses** the Lane cap at preflight rather than degrading (§12).
+PARALLEL_DEGRADE_SOURCE_NOT_ROLLING = "source_not_rolling_capable"
+PARALLEL_DEGRADE_REASONS: tuple[str, ...] = (PARALLEL_DEGRADE_SOURCE_NOT_ROLLING,)
 
 # The identity a Lane contribution carries on every event of its own: the
 # stable contribution, the issue it owns, and the reusable Lane it *started*

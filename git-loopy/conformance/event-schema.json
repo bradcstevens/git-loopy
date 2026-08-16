@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.27",
+  "contract_version": "1.28",
   "event_schema_version": "1.1",
   "insight_capabilities": {
     "names": [
@@ -374,6 +374,16 @@
       "scope": "Run-scoped, not contribution-scoped. It names the absence of Lane work, so it carries no contribution identity.",
       "reported": "The reason MUST reach the operator's own output, not only the Event stream: the operator is the only one who can apply parallel-safe.",
       "eligible": "Always 0 when emitted. Carried explicitly because 'it found zero eligible Parallel-safe issues' is the report."
+    },
+    "wrapper.parallel.degraded": {
+      "required_when_present": ["reason", "lane_cap", "issue_source"],
+      "reason_values": ["source_not_rolling_capable"],
+      "emitted": "Exactly once per Run, immediately after the wrapper.run.start banner it qualifies, when Parallel mode degrades entirely to the serial path for the whole Run. Never emitted by a Run that fills, or could fill, a single Lane.",
+      "scope": "Run-scoped. It names a property of the Run's issue source, so it carries no contribution identity and no issue.",
+      "not_a_fallback": "Distinct from wrapper.parallel.serial_fallback, which reports one Iteration a Rolling-capable Run works because the Pool happens to hold no eligible Parallel-safe candidate. That one is per Iteration, is fixed by triage, and is counted; this one is per Run, is fixed by nothing inside the Run, and counts nothing.",
+      "not_a_refusal": "A distribution that cannot schedule Lanes at all MUST refuse a Lane cap above 1 at preflight. This is the other case: the manifest is truthful and the fallback works the same issues to the same outcome, stranding nothing.",
+      "reported": "The reason MUST reach the operator's own output, not only the Event stream: a degraded Run is byte-identical to a serial Run under a banner naming a Lane cap.",
+      "capabilities": "parallel_capabilities.parallel_mode stays true. The declaration is about the distribution; this record is about the Run."
     }
   },
   "contribution_identity": {
@@ -411,7 +421,8 @@
       "wrapper.serial.requested",
       "wrapper.pipeline.quiescent",
       "wrapper.rolling.refill_turn",
-      "wrapper.parallel.serial_fallback"
+      "wrapper.parallel.serial_fallback",
+      "wrapper.parallel.degraded"
     ],
     "forbidden_types": ["wrapper.iteration.start", "wrapper.iteration.end"],
     "lane_id": "The reusable Lane the contribution started in. It never changes, even after that Lane is refilled, so replay never needs a mutable Lane-to-issue lookup.",
@@ -498,6 +509,7 @@
     "WRAPPER_PIPELINE_QUIESCENT": "wrapper.pipeline.quiescent",
     "WRAPPER_ROLLING_REFILL_TURN": "wrapper.rolling.refill_turn",
     "WRAPPER_PARALLEL_SERIAL_FALLBACK": "wrapper.parallel.serial_fallback",
+    "WRAPPER_PARALLEL_DEGRADED": "wrapper.parallel.degraded",
     "SESSION_CREATED": "session.created",
     "SESSION_IDLE": "session.idle",
     "SESSION_DELETED": "session.deleted",
@@ -2193,6 +2205,20 @@
         "lifecycle_position": "fresh"
       },
       "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000AA\", \"iter\": 3, \"type\": \"wrapper.pickup.bound\", \"considered\": 2, \"context_tier\": \"default\", \"effort\": null, \"gate_warnings\": [\"dropped_effort\"], \"issue\": 42, \"lifecycle_position\": \"fresh\", \"model\": \"gpt-5-mini\", \"position\": 1, \"reason\": \"order\", \"routing_source\": \"routed\", \"task_type_keys\": [\"docs\"]}\n"
+    },
+    {
+      "id": "parallel-degraded-to-serial-for-the-whole-run",
+      "note": "A Parallel-mode Run whose issue source can never offer Lane work. Run-scoped: no contribution identity and no issue, because nothing was ever a candidate for a Lane. Members that schedule no Lane never produce this record and MUST still read and write these bytes.",
+      "event": {
+        "ts": "2026-05-16T00:00:26.000Z",
+        "run_id": "01HXR0000000000000000000DE",
+        "iter": null,
+        "type": "wrapper.parallel.degraded",
+        "reason": "source_not_rolling_capable",
+        "lane_cap": 4,
+        "issue_source": "prds"
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:26.000Z\", \"run_id\": \"01HXR0000000000000000000DE\", \"iter\": null, \"type\": \"wrapper.parallel.degraded\", \"issue_source\": \"prds\", \"lane_cap\": 4, \"reason\": \"source_not_rolling_capable\"}\n"
     }
   ]
 }

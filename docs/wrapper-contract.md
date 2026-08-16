@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.27 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.28 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -683,6 +683,22 @@ with the preflight-failure code (§10). Accepting the cap and running serially i
 silently serial Run is byte-identical to a Parallel Run whose tracker carries no `parallel-safe`
 issue, so the operator cannot tell an unimplemented feature from an unlabelled backlog.
 
+**A truthful `parallel_mode: true` can still yield a wholly serial Run, and it MUST say so
+(contract 1.28).** The rule above is about the *distribution*; an Orchestrator that declares
+Parallel mode truthfully may still meet a Run whose **issue source** has no **Parallel-safe**
+concept and can therefore never offer **Lane** work at all. Refusing the Lane cap there would be
+wrong — the serial fallback works the same issues to the same outcome and strands nothing — but
+staying silent reaches the same collapse by the other road, since the Run is again byte-identical
+to a serial one under a banner naming a Lane cap. Such a Run MUST emit exactly one Run-scoped
+`wrapper.parallel.degraded` carrying `reason`, `lane_cap` and `issue_source`, immediately after the
+`wrapper.run.start` it qualifies, and MUST reach the operator's own output with it. `reason` comes
+from a closed vocabulary — `source_not_rolling_capable` today — and the record is **not**
+`wrapper.parallel.serial_fallback`: that one reports a single **Iteration** a Lane-capable Run
+worked because the **Pool** happened to hold no eligible candidate, it is fixed by triage, and it
+recurs; this one is a property of the Run, is fixed by nothing inside it, and is stated once.
+`parallel_capabilities.parallel_mode` stays `true` throughout: the manifest describes the
+distribution, this record describes the Run.
+
 The following additive Insight payload shapes are reserved by schema 1. Existing Phase 1 traces,
 including payload-free `wrapper.iteration.end` records, remain valid. When an Orchestrator begins
 emitting or enriching one of these records, it MUST use the pinned shape; the downstream
@@ -760,8 +776,8 @@ literals are reserved within compatibility schema 1. Contribution lifecycle:
 `wrapper.integration.branch_observed`, `wrapper.integration.recovery_started`,
 `wrapper.integration.published`, and `wrapper.contribution.end`. Scheduler-scoped:
 `wrapper.pool.refreshed`, `wrapper.concurrency.changed`, `wrapper.serial.requested`,
-`wrapper.pipeline.quiescent`, `wrapper.rolling.refill_turn`, and
-`wrapper.parallel.serial_fallback`.
+`wrapper.pipeline.quiescent`, `wrapper.rolling.refill_turn`,
+`wrapper.parallel.serial_fallback`, and `wrapper.parallel.degraded`.
 
 - **Identity, not Lane.** Every contribution-scoped record MUST carry `contribution_id`, `issue`,
   and `lane_id`, and its envelope `iter` MUST be `null`. `lane_id` is the reusable **Lane** the
@@ -817,7 +833,10 @@ literals are reserved within compatibility schema 1. Contribution lifecycle:
   reason MUST reach the operator's own output and not only the Event stream; otherwise a Run whose
   tracker carries no `parallel-safe` issue is byte-identical to a serial Run and reads as a broken
   flag. A serial turn granted while eligible Lane work remains is interleaving, not a fallback, and
-  emits nothing. A Run that did not request Parallel mode emits none of these.
+  emits nothing. A Run that did not request Parallel mode emits none of these. A Run that
+  requested Parallel mode and could never fill a **Lane** at all additionally emits
+  `wrapper.parallel.degraded` exactly once — see the `parallel_capabilities` rules above, which is
+  where refusing and degrading are told apart.
 
 The `contribution_identity` and `payload_contracts` sections of
 [`event-schema.json`](../git-loopy/conformance/event-schema.json) pin this vocabulary, its

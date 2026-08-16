@@ -62,6 +62,7 @@ from git_loopy.events import (
     WRAPPER_CONTRIBUTION_START,
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
+    WRAPPER_PARALLEL_DEGRADED,
     WRAPPER_PARALLEL_SERIAL_FALLBACK,
     WRAPPER_PICKUP_BOUND,
     WRAPPER_POOL_EXCLUDED,
@@ -255,6 +256,14 @@ class Renderer:
         and read as a claim about the **Pool**, which is the opposite of
         ADR-0008's drain-everything promise: a Parallel Run works the rest of
         the Pool serially in the same Run.
+
+        A null effective limit is **unknown** and is reported as nothing (§12's
+        rule for an unobserved scalar). It used to be read here as "this issue
+        source supplies no Lane work", which was right about the Python
+        Orchestrator's own stream by coincidence — its limit is null exactly
+        when it has no scheduler — and a fabrication about any other producer's.
+        The Run that genuinely has no Lanes says so itself now, in
+        :meth:`_on_parallel_degraded`.
         """
         if not event.get("parallel_mode"):
             return
@@ -263,24 +272,48 @@ class Renderer:
         text = Text()
         text.append("⇉ ", style=STYLES["meta"])
         text.append("Parallel mode", style=STYLES["panel_title"])
-        if effective is None:
-            # Only a source with a `parallel-safe` label concept can supply
-            # Lane work; anything else degrades entirely to the serial path,
-            # which is the one case where the flag genuinely does nothing.
-            text.append(
-                "  (this issue source supplies no Lane work — running serially)",
-                style=STYLES["meta"],
-            )
-            self.console.print(text)
-            return
         text.append(f"  Lane cap {lane_cap}", style=STYLES["meta"])
-        if effective != lane_cap:
+        if effective is not None and effective != lane_cap:
             text.append(f", starting at {effective}", style=STYLES["meta"])
         text.append(
             "  •  issues labelled parallel-safe take a Lane; the rest are "
             "worked serially in this same run",
             style=STYLES["meta"],
         )
+        self.console.print(text)
+
+    def _on_parallel_degraded(self, event: dict[str, Any]) -> None:
+        """Correct the Lane cap the banner just announced (#414).
+
+        A **Parallel mode** Run whose **issue source** can never offer **Lane**
+        work degrades entirely to the serial path — correctly, since the
+        fallback works the same issues to the same outcome and strands nothing
+        (#348 §5). Correct and, until this line, indistinguishable from a
+        Parallel Run whose tracker simply carries no ``parallel-safe`` issue:
+        both produce serial output under a banner naming a Lane cap, and the
+        operator's next move differs completely. There is triage to do in one
+        and nothing to do in the other.
+
+        So the line says the cap will go unused, and why, in the operator's own
+        terms. It costs a second line beneath a banner it contradicts, which is
+        the same shape the latch report takes (:meth:`_on_serial_requested`):
+        a Run states what it was asked for and then what it can honour.
+        """
+        lane_cap = event.get("lane_cap")
+        source = event.get("issue_source")
+        reason = str(event.get("reason", ""))
+        named = f"the {source} issue source" if source else "this issue source"
+        explanation = {
+            "source_not_rolling_capable": f"{named} has no parallel-safe concept",
+        }.get(reason, reason.replace("_", " "))
+        text = Text()
+        text.append("⇉ ", style=STYLES["meta"])
+        text.append("Parallel mode degraded to serial", style=STYLES["meta"])
+        detail = f"  ({explanation} — no Lane work exists"
+        if lane_cap is not None:
+            detail += f", so the Lane cap of {lane_cap} goes unused"
+        detail += "; every issue is worked as a serial iteration)"
+        text.append(detail, style=STYLES["meta"])
         self.console.print(text)
 
     def _on_parallel_serial_fallback(self, event: dict[str, Any]) -> None:
@@ -1086,6 +1119,7 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_PICKUP_BOUND: Renderer._on_pickup_bound,
     WRAPPER_POOL_EXCLUDED: Renderer._on_pool_excluded,
     WRAPPER_PARALLEL_SERIAL_FALLBACK: Renderer._on_parallel_serial_fallback,
+    WRAPPER_PARALLEL_DEGRADED: Renderer._on_parallel_degraded,
     WRAPPER_SERIAL_REQUESTED: Renderer._on_serial_requested,
     WRAPPER_CHECKPOINT_RECORDED: Renderer._on_checkpoint_recorded,
     WRAPPER_COMMIT_RECORDED: Renderer._on_commit_recorded,

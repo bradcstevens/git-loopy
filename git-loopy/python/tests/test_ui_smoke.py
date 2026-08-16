@@ -51,6 +51,7 @@ from git_loopy.events import (
     WRAPPER_CONCURRENCY_CHANGED,
     WRAPPER_ITERATION_END,
     WRAPPER_ITERATION_START,
+    WRAPPER_PARALLEL_DEGRADED,
     WRAPPER_PUSH_RECORDED,
     WRAPPER_RUN_END,
     WRAPPER_RUN_START,
@@ -1915,12 +1916,14 @@ def test_run_start_of_a_serial_run_says_nothing_about_parallel_mode() -> None:
     assert "Parallel" not in buf.getvalue()
 
 
-def test_run_start_reports_a_source_that_cannot_supply_lane_work() -> None:
-    """A null effective limit means the issue source has no Parallel-safe concept.
+def test_run_start_never_infers_a_degrade_from_an_unknown_effective_limit() -> None:
+    """A null effective limit is unknown, and unknown claims nothing (#414).
 
-    Parallel mode degrades entirely to the serial path there, which is the one
-    case where the operator's flag genuinely does nothing — so it must not read
-    as an active Parallel-mode Run.
+    This line used to read a null as "this issue source supplies no Lane work".
+    That was right about the Python Orchestrator's own stream by coincidence —
+    its limit is null exactly when it has no scheduler — and a fabrication
+    about any other producer's, where §12 says an unobserved scalar is null.
+    The Run that genuinely has no Lanes now says so on its own record.
     """
     renderer, _summary, buf = _make_renderer()
     renderer.render(
@@ -1934,7 +1937,35 @@ def test_run_start_reports_a_source_that_cannot_supply_lane_work() -> None:
     )
     out = buf.getvalue()
     assert "Parallel mode" in out
-    assert "no Lane work" in out
+    assert "Lane cap 4" in out
+    assert "None" not in out
+    assert "no Lane work" not in out
+
+
+def test_parallel_degrade_tells_the_operator_the_lane_cap_goes_unused() -> None:
+    """The Run-start Lane cap must not stand as the only signal (#414).
+
+    A Parallel-mode Run over a source that can never offer **Lane** work is
+    byte-identical to a serial Run underneath a banner naming a cap. The
+    operator's next move differs completely from #304's **Serial fallback** —
+    there is triage to do there and nothing to do here — so the line names the
+    cause rather than only the effect.
+    """
+    renderer, _summary, buf = _make_renderer()
+    renderer.render(
+        {
+            "type": WRAPPER_PARALLEL_DEGRADED,
+            "run_id": "01HXR0000000000000000000A5",
+            "reason": "source_not_rolling_capable",
+            "lane_cap": 4,
+            "issue_source": "prds",
+        }
+    )
+    out = buf.getvalue()
+    assert "prds" in out
+    assert "parallel-safe" in out
+    assert "4" in out
+    assert "serial" in out.lower()
 
 
 @pytest.mark.parametrize(

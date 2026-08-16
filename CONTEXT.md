@@ -1306,7 +1306,20 @@ as a `wrapper.parallel.serial_fallback` **Event** with the eligible count and a 
 that separates "nothing carries `parallel-safe`", "this Run already worked them all",
 and "the ones there are could not be read". A serial Iteration running *alongside*
 remaining eligible Lane work is interleaving, not a fallback.
-_Avoid_: degraded mode, serial mode.
+_Avoid_: degraded mode, serial mode, **Parallel degrade** (that is the whole-Run one).
+
+**Parallel degrade**:
+A **Parallel mode** Run whose **issue source** has no **Parallel-safe** concept at all,
+so no **Lane** can ever be filled and every issue is worked as a serial **Iteration** for
+the whole Run. It is correct behaviour and not a **refusal** — the fallback works the same
+issues to the same outcome and strands nothing, which is the rule that separates the two:
+refuse when the missing thing is a property of the *distribution*, degrade only when the
+fallback reaches the same outcome. But a degraded Run is byte-identical to a serial Run
+underneath a banner announcing a **Lane cap**, so it says so once, immediately after that
+banner, as a `wrapper.parallel.degraded` **Event** naming the source and the unused cap.
+Distinct from a **Serial fallback**, which is one Iteration of a Run that *could* fill a
+Lane: triage fixes that one and nothing inside the Run fixes this one.
+_Avoid_: serial fallback, degraded mode, silently serial.
 
 **Wave** _(historical)_:
 The retired barrier round of the original **Parallel mode** design (ADR-0008): a fixed

@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "contract_version": "1.27",
+  "contract_version": "1.28",
   "note": "Fixture schema 2 adds the per-case `distributions` selector and the step-level `issues_skipped` count. An adapter runs only the cases naming its distribution, and a case that names none is family-wide. The fork exists because #413 re-based the **Strike** on the **Attempt lifecycle**: a Runner with a **Pickup** charges one Strike per *skipped issue* and none for an unproductive Iteration, while the shell and PowerShell Orchestrators have no Pickup and therefore no lifecycle to charge from, so they keep counting consecutive no-progress Iterations. The now-false cases are retained rather than deleted precisely so those two members stay pinned to the accounting they actually implement. `issues_skipped` is deliberately a sibling of `signals` and not a member of it: `signals` are §6's progress inputs, which is the other half this same fixture drives through the progress predicate, and a lifecycle fact is not one of them.",
   "distributions": ["python", "shell", "powershell"],
   "cases": [
