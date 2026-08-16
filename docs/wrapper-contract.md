@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.26 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.27 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -369,11 +369,29 @@ An Iteration "made progress" **iff** it produced at least one **agent** commit *
 wrapper closure. (PR mode: a PR head-SHA advance also counts as progress.)
 
 - A runner-authored **Checkpoint** (§7) MUST NOT count as progress.
-- An Iteration that made no progress records a **Strike**.
-- `GIT_LOOPY_MAX_NMT_STRIKES` (default `3`) **consecutive** no-progress Iterations end the Run
-  with exit `1` (§10). Progress resets the consecutive-strike counter.
-- The legacy `<promise>NO MORE TASKS</promise>` sentinel is **informational only**: counted as a
-  Strike if the Iteration made no progress, otherwise ignored.
+- The legacy `<promise>NO MORE TASKS</promise>` sentinel is **informational only** and MUST NOT
+  be a Strike input in its own right.
+
+What a **Strike** counts depends on whether the Runner has a **Pickup** (§14.3), because only a
+Runner that binds one issue per Iteration can have an **Attempt lifecycle** to charge from:
+
+- **A Runner with a Pickup** (contract 1.27) MUST charge exactly **one Strike per issue this Run
+  has given up on** — the issue's transition into the lifecycle's terminal `skipped` position
+  (§14.3), charged once, at the ending that defeats it. An Iteration that made no progress MUST
+  NOT record a Strike of its own, and progress MUST NOT reset the counter: the lifecycle is
+  monotonic, so an issue an advance rescued was never given up on and an issue that was is not
+  un-given-up-on by another issue's advance. `GIT_LOOPY_MAX_NMT_STRIKES` (default `3`) is
+  therefore *how many issues this Run may abandon before it stops*, and reaching it ends the Run
+  with exit `1` (§10, `stuck`).
+- **A Runner without a Pickup** MUST keep the original accounting: an Iteration that made no
+  progress records a Strike, `GIT_LOOPY_MAX_NMT_STRIKES` (default `3`) **consecutive**
+  no-progress Iterations end the Run with exit `1` (§10, `stuck`), and progress resets the
+  consecutive-strike counter.
+
+`conformance/progress-strikes.json` forks along exactly that line: from fixture schema `2` a case
+MAY carry a `distributions` selector naming the members whose accounting it describes, and a case
+carrying none is family-wide. An adapter MUST run the cases naming its own distribution and MUST
+NOT run the others.
 
 ## 7. Checkpoint (phase 1, MUST)
 
@@ -406,9 +424,20 @@ error (exit `2`).
 | ---- | -------------------- | -------------------------------------------------------------------- |
 | `0`  | Clean — queue empty  | An Iteration's collection (§2) finds the Pool empty.                 |
 | `0`  | Clean — cap reached  | The optional iteration cap `N` (§9) is reached.                      |
-| `1`  | Aborted — stuck      | `GIT_LOOPY_MAX_NMT_STRIKES` consecutive no-progress Iterations (§6). |
+| `1`  | Aborted — stuck      | The `GIT_LOOPY_MAX_NMT_STRIKES` Strike ceiling is spent (§6).        |
+| `1`  | Aborted — all skipped | A Pickup found the Pool non-empty and could bind none of it (§14.3). |
 | `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1).      |
 | `2`  | Usage error          | Malformed invocation (e.g. non-numeric iteration cap, §9).           |
+
+A Runner with a **Pickup** (§14.3) MUST distinguish the two exit-`1` aborts by reason, and MUST
+NOT report either as the exit-`0` empty queue: "there is nothing to do" and "I could not take any
+of what there is" are different facts about the repository, and only the first is a finished Run.
+The `all_skipped` reason is required from contract 1.27 because a Runner whose Strike counts
+skipped issues no longer charges anything for an Iteration that binds nothing — so without a
+terminal reason of its own, a Run every one of whose candidates is defeated would re-walk the
+same Pool for as long as its Iteration cap allowed. A Runner without a Pickup never reaches this
+reason and is not required to name it beyond mapping it (§10 is the family-wide termination
+matrix that `conformance/exit-codes.json` pins for every member).
 
 ## 11. Environment-variable surface (MUST honour the phase-1 core)
 
@@ -1053,6 +1082,17 @@ run-wide default:
   afterwards. The lifecycle is what a resolution's **lifecycle position** reports (`fresh` is
   `fresh`; everything past it is `retrying`), which is how a same-pair crash retry reads as a
   retry at all.
+  **The lifecycle is what the Strike counts (contract 1.27).** An Orchestrator with a Pickup MUST
+  charge exactly one **Strike** per issue that reaches `skipped`, at the ending that puts it
+  there, and MUST charge nothing for an unproductive Iteration or an unpublished contribution
+  (§6) — an issue the Run is still willing to retry has not been given up on, and an Iteration is
+  not a thing the Run can give up on at all. Because the lifecycle is a property of the issue and
+  not of the seam that observed it, the Strike MUST be charged where the ending is observed, which
+  is the one seam every pickup mode already shares. And an Iteration whose Pickup finds the Pool
+  non-empty but can bind none of it MUST end the Run under the `all_skipped` reason (§10) rather
+  than record anything: with no-progress no longer charging the ceiling, that Iteration spends no
+  session and charges nothing, so it would otherwise re-walk the same Pool and skip the same
+  candidates until the Iteration cap.
 - **Publish what it resolved (contract 1.21).** An Orchestrator that resolves a Routing resolution
   MUST carry it on that Pickup's own `wrapper.pickup.bound` (§12) — the pair, the tier, the raw
   keys, the gate warnings, the source and the lifecycle position — and MUST NOT mint a second

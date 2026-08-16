@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.0",
+  "contract_version": "1.27",
   "cases": [
     {
       "id": "empty-pool-is-clean",
@@ -15,6 +15,11 @@
     {
       "id": "stuck-run-is-aborted",
       "reason": "stuck",
+      "exit_code": 1
+    },
+    {
+      "id": "all-skipped-run-is-aborted",
+      "reason": "all_skipped",
       "exit_code": 1
     },
     {

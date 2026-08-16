@@ -1069,7 +1069,7 @@ git_loopy_exit_code_for() {
     empty_pool | iteration_cap)
       printf '0\n'
       ;;
-    stuck | preflight_failed)
+    stuck | all_skipped | preflight_failed)
       printf '1\n'
       ;;
     usage_error)

@@ -1153,6 +1153,7 @@ function Get-GitLoopyExitCode {
         "empty_pool" { return 0 }
         "iteration_cap" { return 0 }
         "stuck" { return 1 }
+        "all_skipped" { return 1 }
         "preflight_failed" { return 1 }
         "usage_error" { return 2 }
         default { throw "Unknown Run exit reason: $Reason" }

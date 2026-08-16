@@ -1404,6 +1404,10 @@ def test_loop_send_and_wait_exception_is_no_progress(tmp_path, monkeypatch) -> N
     The post-iteration accounting (commits_between, auto-close backstop,
     strike tick, iteration.end emit, counters persist) still runs — the
     SDK failure is contained to "no progress" semantics.
+
+    Since contract 1.27 a **Strike** is charged per issue the Run gives up
+    on, not per unproductive Iteration, so a first crash spends the issue's
+    first attempt and charges nothing.
     """
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
@@ -1437,16 +1441,21 @@ def test_loop_send_and_wait_exception_is_no_progress(tmp_path, monkeypatch) -> N
     # strike threshold).
     assert exit_code == 0
     # Post-iteration accounting still ran -> JSONL still includes
-    # iteration.start, iteration.end, strike, run.end.
+    # iteration.start, iteration.end, run.end.
     log_files = list((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
     assert len(log_files) == 1
-    types_seen = {
-        json.loads(line)["type"]
+    events = [
+        json.loads(line)
         for line in log_files[0].read_text(encoding="utf-8").splitlines()
-    }
+    ]
+    types_seen = {event["type"] for event in events}
     assert "wrapper.iteration.end" in types_seen
-    assert "wrapper.strike" in types_seen
     assert "wrapper.run.end" in types_seen
+    # ...and the crash spent the issue's first attempt without defeating it,
+    # so nothing was given up on and no Strike was charged.
+    assert "wrapper.strike" not in types_seen
+    iteration_end = next(e for e in events if e["type"] == "wrapper.iteration.end")
+    assert iteration_end["summary"]["strikes"] == 0
 
 
 def test_loop_auto_close_failure_does_not_abort_iteration(tmp_path, monkeypatch) -> None:
@@ -2485,10 +2494,16 @@ def test_a_candidate_whose_routing_is_refused_is_skipped_not_fatal(
     assert "serial Pickup skipped #7 at position 1 of 2" in diagnostics
 
 
-def test_a_pool_whose_every_candidate_is_skipped_strikes_rather_than_exits(
+def test_a_pool_whose_every_candidate_is_skipped_ends_the_run_all_skipped(
     tmp_path, monkeypatch
 ) -> None:
-    """"I could not take any of it" must not be reported as "there is no work"."""
+    """"I could not take any of it" must not be reported as "there is no work".
+
+    Since contract 1.27 the Iteration that binds nothing is terminal under its
+    own reason rather than charging a **Strike** and coming round again: with
+    no-progress no longer charging the ceiling, an Iteration that spends no
+    session could otherwise spin until the Iteration cap.
+    """
     _wire_multi_issue_github(
         tmp_path,
         monkeypatch,
@@ -2501,17 +2516,22 @@ def test_a_pool_whose_every_candidate_is_skipped_strikes_rather_than_exits(
         ],
     )
 
-    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=0))
+    )
 
+    assert exit_code == 1
     types_seen = _logged_types(tmp_path)
-    assert "wrapper.strike" in types_seen
     assert "wrapper.issue.activated" not in types_seen
+    # Nothing was *given up on* -- a refused route never reached a session, so
+    # no attempt was spent and the Strike ledger stayed empty.
+    assert "wrapper.strike" not in types_seen
     run_end = next(
         json.loads(raw)
         for raw in _log_lines(tmp_path)
         if json.loads(raw)["type"] == "wrapper.run.end"
     )
-    assert run_end["outcome"] != "empty_pool"
+    assert run_end["outcome"] == "all_skipped"
 
 
 def _pickup_events(tmp_path: Path) -> list[dict[str, Any]]:
@@ -3480,6 +3500,179 @@ def test_a_same_pair_crash_retry_says_it_is_a_retry(tmp_path, monkeypatch) -> No
         (7, "claude-sonnet-5", "defaulted_no_task_type_label", "fresh"),
         (7, "claude-sonnet-5", "defaulted_no_task_type_label", "retrying"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# The Strike counts issues given up on (#413, ADR-0041)
+# ---------------------------------------------------------------------------
+
+
+def _strikes(tmp_path: Path) -> list[dict[str, Any]]:
+    """Every ``wrapper.strike`` this Run charged, in order."""
+    return [
+        json.loads(raw)
+        for raw in _log_lines(tmp_path)
+        if json.loads(raw)["type"] == "wrapper.strike"
+    ]
+
+
+def test_a_no_progress_iteration_charges_no_strike(tmp_path, monkeypatch) -> None:
+    """An Iteration is not a thing a Run can give up on (#413, contract §6).
+
+    The issue's first silent stall spends its first attempt and leaves it
+    **retrying** — still work the Run is willing to take — so the ceiling is
+    untouched. Under the old accounting this Iteration was a Strike on its own.
+    """
+    _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+
+    assert (
+        asyncio.run(
+            loop_module.run(
+                RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
+            )
+        )
+        == 0
+    )
+
+    assert _strikes(tmp_path) == []
+    assert [
+        (e["issue"], e["lifecycle_position"]) for e in _bound_pickups(tmp_path)
+    ] == [(7, "fresh")]
+
+
+def test_one_strike_is_charged_per_issue_given_up_on(tmp_path, monkeypatch) -> None:
+    """Exactly one, at the ending that skips the issue — never one per Iteration.
+
+    Two silent stalls defeat #7 (**fresh** → **retrying** → **skipped**), and the
+    Strike lands on the second. Every later Iteration passes over the same issue
+    as a **Pickup skip** and charges nothing more, because a skipped issue is
+    given up on once and stays given up on.
+    """
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [_dated(7, "2026-01-01T00:00:00Z"), _dated(31, "2026-05-01T00:00:00Z")],
+    )
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(issue_source="github", max_iterations=4, max_nmt_strikes=9)
+        )
+    )
+
+    charged = _strikes(tmp_path)
+    assert [(s["strikes"], s["outcome"]) for s in charged] == [
+        (1, "warn"),
+        (2, "warn"),
+    ], f"expected one Strike per defeated issue, got {charged}"
+    # ...and the Pickups that earned them: each issue worked twice, then skipped.
+    assert [
+        (e["issue"], e["lifecycle_position"]) for e in _bound_pickups(tmp_path)
+    ] == [(7, "fresh"), (7, "retrying"), (31, "fresh"), (31, "retrying")]
+
+
+def test_a_run_that_gives_up_on_enough_issues_is_stuck(tmp_path, monkeypatch) -> None:
+    """`max_nmt_strikes` is how many issues this Run may abandon (#413).
+
+    Two issues, a ceiling of two, and an Agent that declares the **NMT
+    sentinel** — an ending taken at its word, so each issue is defeated on its
+    first attempt. The second defeat spends the ceiling and the Run ends
+    ``stuck`` with the third issue's Iteration never run.
+    """
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(7, "2026-01-01T00:00:00Z"),
+            _dated(31, "2026-05-01T00:00:00Z"),
+            _dated(44, "2026-06-01T00:00:00Z"),
+        ],
+    )
+    fake_client = loop_module._make_client()
+    fake_client._scripted_events = [
+        _sdk_event(
+            SessionEventType.ASSISTANT_MESSAGE,
+            AssistantMessageData(
+                content="nothing workable.\n<promise>NO MORE TASKS</promise>",
+                message_id="m1",
+            ),
+        )
+    ]
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            RunConfig(issue_source="github", max_iterations=0, max_nmt_strikes=2)
+        )
+    )
+
+    assert exit_code == loop_module.exit_code_for("stuck")
+    assert [(s["strikes"], s["outcome"]) for s in _strikes(tmp_path)] == [
+        (1, "warn"),
+        (2, "abort"),
+    ]
+    assert [e["issue"] for e in _bound_pickups(tmp_path)] == [7, 31]
+    run_end = next(
+        json.loads(raw)
+        for raw in _log_lines(tmp_path)
+        if json.loads(raw)["type"] == "wrapper.run.end"
+    )
+    assert run_end["outcome"] == "stuck"
+
+
+def test_a_run_whose_every_issue_is_defeated_ends_all_skipped(
+    tmp_path, monkeypatch
+) -> None:
+    """The livelock this outcome exists to end (#413, ADR-0041).
+
+    One issue, an unbounded Iteration cap and a ceiling it never reaches. The
+    issue stalls twice and is **skipped**; the very next Iteration walks a Pool
+    that still holds it, binds nothing, and — charging nothing, since #413 —
+    would re-walk the same Pool forever. It ends the Run instead, under a reason
+    that is neither the empty Pool (which would be exit ``0`` and a lie) nor the
+    spent ceiling.
+    """
+    _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            RunConfig(issue_source="github", max_iterations=0, max_nmt_strikes=9)
+        )
+    )
+
+    assert exit_code == 1
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "all_skipped"
+    # Three Iterations: two that worked #7, and the one that could take nothing.
+    assert len([e for e in events if e["type"] == "wrapper.iteration.start"]) == 3
+    assert [e["issue"] for e in _bound_pickups(tmp_path)] == [7, 7]
+    assert [(s["strikes"], s["outcome"]) for s in _strikes(tmp_path)] == [(1, "warn")]
+
+
+def test_an_empty_pool_still_ends_clean(tmp_path, monkeypatch) -> None:
+    """"There is nothing to do" keeps its own exit (#413, contract §10).
+
+    The companion to the case above: ``all_skipped`` must not swallow the
+    empty-Pool exit, because a Run that finished the queue succeeded and a
+    supervising script reads that off exit ``0``.
+    """
+    _wire_multi_issue_github(tmp_path, monkeypatch, [])
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=0))
+    )
+
+    assert exit_code == 0
+    run_end = next(
+        json.loads(raw)
+        for raw in _log_lines(tmp_path)
+        if json.loads(raw)["type"] == "wrapper.run.end"
+    )
+    assert run_end["outcome"] == "empty_pool"
 
 
 # ---------------------------------------------------------------------------

@@ -264,6 +264,20 @@ done < <(jq -c '.cases[]' "$conformance_dir/close-references.json")
     "pool-actionable-close-refs: empty Pool yields nothing"
 )
 
+# Fixture schema 2 (#413) forks `progress-strikes.json` by distribution: a case
+# names the members whose accounting it describes, and a case naming none is
+# family-wide. The shell Orchestrator has no **Pickup**, so it has no **Attempt
+# lifecycle** to charge a **Strike** from and keeps counting consecutive
+# no-progress **Iterations** — which is exactly the half of the fork it selects.
+# The count is asserted first so a selector typo (or a fixture that quietly
+# stopped describing this member) fails loudly rather than running nothing.
+shell_strike_cases="$(
+  jq -c '[.cases[] | select((.distributions // ["shell"]) | index("shell"))]' \
+    "$conformance_dir/progress-strikes.json"
+)"
+[ "$(jq -r 'length' <<<"$shell_strike_cases")" -gt 0 ] ||
+  fail "progress-strikes fixture retains no case for the shell distribution"
+
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"
   max_strikes="$(jq -r '.max_strikes' <<<"$case_json")"
@@ -301,7 +315,7 @@ while IFS= read -r case_json; do
       "$outcome" \
       "progress-strikes fixture: $case_id step $step_index (outcome)"
   done < <(jq -c '.steps[]' <<<"$case_json")
-done < <(jq -c '.cases[]' "$conformance_dir/progress-strikes.json")
+done < <(jq -c '.[]' <<<"$shell_strike_cases")
 
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"

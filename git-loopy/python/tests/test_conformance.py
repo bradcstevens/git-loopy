@@ -409,9 +409,29 @@ def test_close_reference_fixture(case: dict[str, Any]) -> None:
 _PROGRESS_STRIKES = _load_fixture("progress-strikes.json")
 
 
+def _cases_for(fixture: dict[str, Any], distribution: str) -> list[dict[str, Any]]:
+    """The fixture cases this distribution runs (fixture schema 2).
+
+    A case naming no ``distributions`` is family-wide; one that names some runs
+    only for the members it names. #413 forked ``progress-strikes.json`` this
+    way because the **Strike** stopped counting unproductive **Iterations** and
+    started counting **Skip**s — true of a Runner with a **Pickup** and false of
+    the two Orchestrators that have none, so the retained cases keep pinning
+    them to what they implement rather than being deleted.
+    """
+    return [
+        case
+        for case in fixture["cases"]
+        if distribution in case.get("distributions", fixture["distributions"])
+    ]
+
+
+_PYTHON_PROGRESS_STRIKES = _cases_for(_PROGRESS_STRIKES, "python")
+
+
 @pytest.mark.parametrize(
     "case",
-    _PROGRESS_STRIKES["cases"],
+    _PYTHON_PROGRESS_STRIKES,
     ids=lambda case: case["id"],
 )
 def test_progress_and_strike_fixture(case: dict[str, Any]) -> None:
@@ -421,8 +441,38 @@ def test_progress_and_strike_fixture(case: dict[str, Any]) -> None:
         signals = step["signals"]
         expected = step["expected"]
         assert did_iteration_make_progress(**signals) is expected["progress"]
-        assert state.tick(**signals) == expected["outcome"]
+        assert (
+            state.tick(
+                **signals, issues_skipped_in_iter=step.get("issues_skipped", 0)
+            )
+            == expected["outcome"]
+        )
         assert state.strikes == expected["strikes"]
+
+
+def test_the_progress_strike_fork_leaves_every_member_something_to_run() -> None:
+    """A selector that narrowed a case to nobody would be a silently dead case.
+
+    The fork is only honest if all three members still drive the fixture, and if
+    the two accountings it separates are both *actually* pinned: a Run with a
+    **Pickup** charges nothing for an unproductive Iteration and one Strike per
+    skipped issue, and a Run without one still charges the Iteration.
+    """
+    for distribution in _PROGRESS_STRIKES["distributions"]:
+        assert _cases_for(_PROGRESS_STRIKES, distribution), distribution
+
+    def strike_totals(distribution: str) -> set[int]:
+        return {
+            step["expected"]["strikes"]
+            for case in _cases_for(_PROGRESS_STRIKES, distribution)
+            for step in case["steps"]
+            if step["expected"]["progress"] is False
+            and step.get("issues_skipped", 0) == 0
+        }
+
+    assert strike_totals("python") == {0}
+    assert 0 not in strike_totals("shell")
+    assert 0 not in strike_totals("powershell")
 
 
 _CHECKPOINT_MESSAGES = _load_fixture("checkpoint-messages.json")
@@ -823,7 +873,7 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.26"
+    assert _EVENT_SCHEMA["contract_version"] == "1.27"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:

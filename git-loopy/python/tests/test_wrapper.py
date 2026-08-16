@@ -221,57 +221,83 @@ def test_strike_machine_default_max_strikes_is_three() -> None:
     assert sm.max_strikes == 3
 
 
-def test_strike_machine_no_progress_increments_strikes() -> None:
+def test_strike_machine_no_progress_alone_charges_nothing() -> None:
+    """#413: an unproductive Iteration is not by itself something to charge.
+
+    Before the **Attempt lifecycle** an Iteration was the only unit the Run
+    could count, so a no-progress one had to be the Strike. Now the Run knows
+    which *issue* it gave up on, and that is what the ceiling is spent against.
+    """
     sm = NMTStrikeStateMachine(max_strikes=3)
     sm.tick(commits_in_iter=0, auto_closures_in_iter=0)
+    assert sm.strikes == 0
+    assert sm.outcome == "running"
+
+
+def test_strike_machine_charges_one_strike_per_skipped_issue() -> None:
+    sm = NMTStrikeStateMachine(max_strikes=3)
+    sm.tick(commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=1)
     assert sm.strikes == 1
     assert sm.outcome == "running"
 
 
-def test_strike_machine_progress_resets_strikes() -> None:
+def test_strike_machine_charges_every_issue_skipped_in_one_iteration() -> None:
+    """Two Lanes defeated in one accounting scope are two issues, not one."""
     sm = NMTStrikeStateMachine(max_strikes=3)
-    sm.tick(commits_in_iter=0, auto_closures_in_iter=0)
-    sm.tick(commits_in_iter=0, auto_closures_in_iter=0)
+    sm.tick(commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=2)
     assert sm.strikes == 2
+    assert sm.outcome == "running"
+
+
+def test_strike_machine_progress_refunds_no_skipped_issue() -> None:
+    """A **Skip** is monotonic, so the Strike that recorded one must be too.
+
+    Resetting here would make the ceiling defeasible by exactly the Runs it
+    exists for: an issue that lands one commit between two defeats is the
+    ordinary shape of a Run grinding, not evidence the Run recovered
+    (ADR-0040).
+    """
+    sm = NMTStrikeStateMachine(max_strikes=3)
+    sm.tick(commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=1)
+    assert sm.strikes == 1
     sm.tick(commits_in_iter=1, auto_closures_in_iter=0)
-    assert sm.strikes == 0
+    assert sm.strikes == 1
     assert sm.outcome == "running"
 
 
 def test_strike_machine_aborts_at_max_strikes() -> None:
     sm = NMTStrikeStateMachine(max_strikes=3)
     for _ in range(2):
-        outcome = sm.tick(commits_in_iter=0, auto_closures_in_iter=0)
+        outcome = sm.tick(
+            commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=1
+        )
         assert outcome == "running"
-    outcome = sm.tick(commits_in_iter=0, auto_closures_in_iter=0)
+    outcome = sm.tick(
+        commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=1
+    )
     assert outcome == "aborted"
     assert sm.outcome == "aborted"
     assert sm.strikes == 3
 
 
-def test_strike_machine_ignores_nmt_sentinel_when_progress_was_made() -> None:
-    """The NMT sentinel is informational only — it never affects outcome.
+def test_strike_machine_aborts_the_moment_one_tick_crosses_the_ceiling() -> None:
+    """A scope that defeats several issues at once cannot overshoot silently."""
+    sm = NMTStrikeStateMachine(max_strikes=2)
+    outcome = sm.tick(
+        commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=3
+    )
+    assert outcome == "aborted"
+    assert sm.strikes == 3
 
-    If the iteration produced work, the sentinel is ignored and strikes reset.
-    """
+
+def test_strike_machine_ignores_nmt_sentinel_whatever_the_iteration_did() -> None:
+    """The NMT sentinel is informational only — it never affects outcome."""
     sm = NMTStrikeStateMachine(max_strikes=3)
     sm.tick(commits_in_iter=0, auto_closures_in_iter=0, saw_nmt_sentinel=True)
-    assert sm.strikes == 1
+    assert sm.strikes == 0
     sm.tick(commits_in_iter=1, auto_closures_in_iter=0, saw_nmt_sentinel=True)
     assert sm.strikes == 0
     assert sm.outcome == "running"
-
-
-def test_strike_machine_counts_no_progress_iteration_even_without_sentinel() -> None:
-    """A silent no-progress iteration also counts as a strike — the sentinel
-    is not required.
-    """
-    sm = NMTStrikeStateMachine(max_strikes=2)
-    sm.tick(commits_in_iter=0, auto_closures_in_iter=0, saw_nmt_sentinel=False)
-    outcome = sm.tick(
-        commits_in_iter=0, auto_closures_in_iter=0, saw_nmt_sentinel=False
-    )
-    assert outcome == "aborted"
 
 
 def test_strike_machine_is_terminal_after_abort() -> None:
@@ -282,8 +308,10 @@ def test_strike_machine_is_terminal_after_abort() -> None:
     progress tick or keep counting strikes past the abort threshold.
     """
     sm = NMTStrikeStateMachine(max_strikes=2)
-    sm.tick(commits_in_iter=0, auto_closures_in_iter=0)
-    outcome = sm.tick(commits_in_iter=0, auto_closures_in_iter=0)
+    sm.tick(commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=1)
+    outcome = sm.tick(
+        commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=1
+    )
     assert outcome == "aborted"
     assert sm.strikes == 2
 
@@ -291,7 +319,9 @@ def test_strike_machine_is_terminal_after_abort() -> None:
     assert outcome == "aborted"
     assert sm.strikes == 2
 
-    outcome = sm.tick(commits_in_iter=0, auto_closures_in_iter=0)
+    outcome = sm.tick(
+        commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=1
+    )
     assert outcome == "aborted"
     assert sm.strikes == 2
 

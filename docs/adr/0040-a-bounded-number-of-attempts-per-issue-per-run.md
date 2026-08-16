@@ -115,6 +115,12 @@ expensive ones. Whether a no-progress Iteration should be charged differently is
 [#413](https://github.com/bradcstevens/git-loopy/issues/413)'s question and this decision
 deliberately does not anticipate it.
 
+**Amendment ([#413](https://github.com/bradcstevens/git-loopy/issues/413)):** it did, and the
+answer is [ADR-0041](0041-the-strike-counts-issues-given-up-on.md) — the ceiling now counts the
+issues this lifecycle **skipped**, charged at the ending that skips them, and an unworked
+Iteration charges nothing at all. The paragraph above described the accounting this decision
+shipped against and is retained as that record; the sentence it ends on is the one that expired.
+
 It is also blind to *"produced garbage"*, inheriting the rung's own recorded limitation:
 progress is commit-shaped and not quality-shaped, so an issue whose sessions commit confidently
 bad work stays `fresh` forever. The quality half belongs to the gate.

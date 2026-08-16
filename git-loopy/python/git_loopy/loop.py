@@ -49,8 +49,8 @@ Per-iteration sequence:
     close-keyword-free ``wrapper.checkpoint.recorded`` commit attributed to
     the Active issue. Deliberately ordered *after* the agent-commit
     accounting (step 8) and *before* strike accounting (step 12), so the
-    Checkpoint is excluded from both the Summary commit tally and the Strike
-    machine. Non-fatal: a failure warns and the loop carries on.
+    Checkpoint is excluded from both the Summary commit tally and the §6
+    progress predicate. Non-fatal: a failure warns and the loop carries on.
 11. **Auto-push** (ADR-0004) via :meth:`_maybe_push`: whenever the iteration
     produced new commits — agent commits (step 8) and/or the Checkpoint from
     step 10 — the current branch is pushed to its upstream
@@ -58,9 +58,14 @@ Per-iteration sequence:
     Non-fatal: a missing remote/upstream, an auth failure, or a
     non-fast-forward warns and the loop carries on, so a local-only repo
     completes normally.
-12. NMT strike accounting: progress (``commits>0`` or ``auto_closures>0``)
-    resets strikes; no-progress increments, possibly tripping the
-    abort threshold. Checkpoints and pushes are *not* progress.
+12. **Strike accounting** (#413, ADR-0041): the **Strike** ceiling counts the
+    issues this Run has *given up on*, so nothing is charged here. One Strike
+    is charged per issue, at the ending that moves it into the **Attempt
+    lifecycle**'s ``skipped`` position (:meth:`_Loop._observe_session_ending`
+    in step 10's neighbourhood, the one seam a serial Iteration and a **Lane**
+    share). An Iteration that made no progress charges nothing and progress
+    resets nothing; Checkpoints and pushes are still *not* progress, which is
+    what the §6 predicate reports on the Summary row.
 13. Emit ``wrapper.iteration.end`` (renderer closes snapshot panel) and
     persist :class:`~git_loopy.persist.IterationCounters` from the
     closed snapshot.
@@ -140,7 +145,7 @@ from git_loopy.staircase import PriceStaircase, StaircaseRefusal
 from git_loopy import rollup as rollup_module
 from git_loopy import worktree as worktree_module
 from git_loopy.active_issue import ActiveIssueBinding
-from git_loopy.attempt_lifecycle import AttemptLedger
+from git_loopy.attempt_lifecycle import AttemptLedger, AttemptState
 from git_loopy.config import (
     RoutingResolution,
     RunConfig,
@@ -1643,12 +1648,6 @@ class _Loop:
                 checkpoints_in_iter=checkpoints_in_iter,
                 pr_advances_in_iter=pr_advances,
             )
-            outcome = self._strike_machine.tick(
-                commits_in_iter=commits_in_iter,
-                auto_closures_in_iter=auto_closures,
-                checkpoints_in_iter=checkpoints_in_iter,
-                pr_advances_in_iter=pr_advances,
-            )
             # The **Session outcome** (#403), resolved here because the ending is
             # a joint fact: how the session came back, and whether the Run
             # observed anything durable from it. `made_progress` is §6's own
@@ -1658,9 +1657,7 @@ class _Loop:
             #
             # The watch's two detections (#405) are what make the remaining two
             # endings reachable: a turn with a filtered call, and an Agent that
-            # declared its issue unworkable. Both are recorded and neither is
-            # acted on — the Strike above is already ticked, from progress alone,
-            # exactly as before.
+            # declared its issue unworkable.
             session_ending = session_outcome_module.resolve_session_outcome(
                 termination=termination,
                 progressed=made_progress,
@@ -1670,18 +1667,19 @@ class _Loop:
                 content_filtered=session_watch.content_filtered,
                 no_more_tasks=session_watch.no_more_tasks,
             )
-            self._record_session_outcome(active.ref, session_ending)
-            if outcome == "aborted" or not made_progress:
-                # Either we just hit the strike threshold OR this iteration
-                # had no progress (a single strike). Either way emit the
-                # wrapper.strike event so the renderer + persist see it.
-                self._emit(
-                    events_module.WRAPPER_STRIKE,
-                    iter_num=iter_num,
-                    strikes=self._strike_machine.strikes,
-                    max_strikes=self._config.max_nmt_strikes,
-                    outcome=("abort" if outcome == "aborted" else "warn"),
-                )
+            # Recorded *before* the Strike is read rather than after (#413): the
+            # ending is now what charges the ceiling — through the **Attempt
+            # lifecycle** it feeds — so a machine read first would report the
+            # count as it stood before this Iteration's own defeat.
+            self._record_session_outcome(
+                active.ref, session_ending, iter_num=iter_num
+            )
+            outcome = self._strike_machine.tick(
+                commits_in_iter=commits_in_iter,
+                auto_closures_in_iter=auto_closures,
+                checkpoints_in_iter=checkpoints_in_iter,
+                pr_advances_in_iter=pr_advances,
+            )
 
             # 11) Close the iteration snapshot, persist counters.
             self._finish_iteration(
@@ -1984,33 +1982,27 @@ class _Loop:
         return pickup
 
     def _finish_unworked_iteration(self, iter_num: int) -> tuple[str, int, int]:
-        """Close an Iteration whose **Pickup** bound nothing, as a **Strike**.
+        """End the Run on an Iteration whose **Pickup** bound nothing (#413).
 
         Reached only when a non-empty Pool's every candidate was skipped. It is
         deliberately not the ``empty_pool`` outcome: that one exits the Run 0
         because there is no work, and reporting "I could not take any of it" the
-        same way would end a Run cleanly over a repairable tracker state. A
-        Strike is the right instrument — an Iteration that worked no issue is
-        exactly what the strike machine exists to notice, and the ceiling stops
-        a Run that can never make progress instead of spinning on it.
+        same way would end a Run cleanly over a repairable tracker state. So it
+        has its own **Run outcome** and its own non-zero exit reason,
+        ``all_skipped``.
+
+        Terminating here rather than recording a **Strike** and carrying on is
+        what stops the livelock #413 opened. Once the ceiling counts *skipped
+        issues* instead of unproductive Iterations, an Iteration that binds
+        nothing charges nothing — every candidate that could charge was charged
+        at the ending that defeated it — so a Run whose Pool is entirely
+        defeated would re-collect the same Pool, skip the same candidates and
+        spin until the iteration cap or the operator stopped it. Nothing about
+        the next Iteration could differ: the lifecycle is monotonic and the Pool
+        is re-read from a tracker no session is touching.
         """
-        outcome = self._strike_machine.tick(
-            commits_in_iter=0,
-            auto_closures_in_iter=0,
-            checkpoints_in_iter=0,
-            pr_advances_in_iter=0,
-        )
-        self._emit(
-            events_module.WRAPPER_STRIKE,
-            iter_num=iter_num,
-            strikes=self._strike_machine.strikes,
-            max_strikes=self._config.max_nmt_strikes,
-            outcome=("abort" if outcome == "aborted" else "warn"),
-        )
-        self._finish_iteration(
-            iter_num, outcome="aborted" if outcome == "aborted" else "no_progress"
-        )
-        return ("aborted" if outcome == "aborted" else "continue", 0, 0)
+        self._finish_iteration(iter_num, outcome="all_skipped")
+        return ("all_skipped", 0, 0)
 
     def _infer_active_binding(
         self,
@@ -2117,6 +2109,8 @@ class _Loop:
         self,
         ref: int | str,
         record: session_outcome_module.SessionOutcomeRecord,
+        *,
+        iter_num: int | None = None,
     ) -> None:
         """Keep this Iteration's **Session outcome**, and say it once (#403).
 
@@ -2127,15 +2121,17 @@ class _Loop:
         it for real.
         """
         self._last_session_outcome = record
-        self._observe_session_ending(ref, record)
+        self._observe_session_ending(ref, record, iter_num=iter_num)
         _report_session_outcome(self._diag, ref=ref, record=record)
 
     def _observe_session_ending(
         self,
         ref: int | str,
         record: session_outcome_module.SessionOutcomeRecord,
+        *,
+        iter_num: int | None = None,
     ) -> None:
-        """Offer one ending to the two ledgers that read one (#408, #412).
+        """Offer one ending to the two ledgers that read one (#408, #412, #413).
 
         Called from a serial **Iteration** and from a **Lane** alike, because
         both ledgers are per issue rather than per mode: neither the pair a
@@ -2146,9 +2142,51 @@ class _Loop:
         here: escalation triggers on silent no-progress alone, the **Attempt
         lifecycle** disposes of all five endings, and a condition restated at
         this call site could disagree with the ones that matter.
+
+        **This is also where the Run's one Strike is charged** (#413). The
+        ceiling counts the issues a Run has given up on, and the moment an issue
+        is given up on is the moment its lifecycle reaches **skipped** — so the
+        transition is the charge, and "exactly one Strike per skipped issue"
+        falls out of the lifecycle's own monotonicity rather than out of anyone
+        counting carefully. Charging at an Iteration boundary instead would have
+        had to answer *which* boundary in **Parallel mode**, where a Lane's
+        ending and the accounting scope that finalizes it are different moments.
         """
         self._escalation.observe(ref, record.outcome)
-        self._attempts.observe(ref, record.outcome)
+        before = self._attempts.state(ref)
+        after = self._attempts.observe(ref, record.outcome)
+        if after is AttemptState.SKIPPED and before is not AttemptState.SKIPPED:
+            self._charge_skip_strike(ref, iter_num=iter_num)
+
+    def _charge_skip_strike(
+        self, ref: int | str, *, iter_num: int | None = None
+    ) -> None:
+        """Spend one **Strike** on the issue this Run has just given up on.
+
+        The Event goes out from here rather than from the Iteration boundary
+        because a ``wrapper.strike`` announces that a Strike was *recorded*: an
+        unproductive Iteration that defeated nobody now records none, and a
+        record emitted anyway would show an operator a warning with an unchanged
+        count beside it.
+        """
+        outcome = self._strike_machine.tick(
+            commits_in_iter=0,
+            auto_closures_in_iter=0,
+            issues_skipped_in_iter=1,
+        )
+        self._diag.warning(
+            "issue #%s is out of attempts this Run; strike %d of %d",
+            ref,
+            self._strike_machine.strikes,
+            self._config.max_nmt_strikes,
+        )
+        self._emit(
+            events_module.WRAPPER_STRIKE,
+            iter_num=iter_num,
+            strikes=self._strike_machine.strikes,
+            max_strikes=self._config.max_nmt_strikes,
+            outcome=("abort" if outcome == "aborted" else "warn"),
+        )
 
     def _finish_iteration(
         self,
@@ -2476,6 +2514,16 @@ class _Loop:
                     if outcome == "empty_pool":
                         outcome_label = "empty_pool"
                         exit_code = exit_code_for("empty_pool")
+                        break
+                    if outcome == "all_skipped":
+                        # #413: there *was* work and none of it could be taken.
+                        # Distinct from `empty_pool` (which exits 0) because a
+                        # Run that gave up is not a Run that finished, and
+                        # distinct from `stuck` because the ceiling was never
+                        # reached — a single defeated issue ends a Run whose
+                        # Pool held only that one.
+                        outcome_label = "all_skipped"
+                        exit_code = exit_code_for("all_skipped")
                         break
                     if outcome == "aborted":
                         outcome_label = "stuck"
@@ -2974,6 +3022,8 @@ class _ParallelLoop:
             )
             if outcome == "empty_pool":
                 return "empty_pool", exit_code_for("empty_pool"), iter_num
+            if outcome == "all_skipped":
+                return "all_skipped", exit_code_for("all_skipped"), iter_num
             if outcome == "aborted":
                 return "stuck", exit_code_for("stuck"), iter_num
 
@@ -3074,6 +3124,21 @@ class _ParallelLoop:
                         # let a Parallel-mode Run emit the abort Event and then
                         # grant itself serial Iterations forever.
                         scheduler.strike_limit_reached()
+                    if outcome == "all_skipped":
+                        # #413, and terminal *here* rather than latched for the
+                        # idle-check, because the scheduler grants a serial turn
+                        # only once every Lane has drained (`quiescent`): a
+                        # serial Pickup that binds nothing at that moment has
+                        # walked the whole Pool — both halves — with nothing in
+                        # flight behind it. Continuing would re-latch the same
+                        # serial demand, run the same Iteration and skip the same
+                        # candidates for as long as the Run has units, which is
+                        # the livelock this outcome exists to end.
+                        return (
+                            "all_skipped",
+                            exit_code_for("all_skipped"),
+                            scheduler._units_spent,
+                        )
                     # An `empty_pool` outcome is deliberately NOT terminal here:
                     # it is one Iteration's view of the Pool, and #219 §2.14
                     # ends a Run only on the final authoritative refresh the
@@ -3971,34 +4036,25 @@ class _ParallelLoop:
     def _apply_strike_reaction(
         self, contribution: rolling_scheduler.Contribution
     ) -> None:
-        """Tick the shared Strike machine once per finalized contribution.
+        """Latch the scheduler's abort if the shared **Strike** ceiling is spent.
 
-        #219 §7.4, §7.6: the scheduler records ``STRIKE_RESET`` /
-        ``STRIKE_ADD`` on the finalized row rather than ticking the machine
-        itself — it belongs to the composed serial ``self._serial`` because a
-        serial Iteration ticks the identical one. This replaces the retired
-        Wave's once-per-round ``_tick_round``: under Rolling dispatch there
-        is no round, so the reaction is applied the instant EACH contribution
-        finalizes, whether that is a ``TERMINAL`` disposition straight out of
-        :meth:`~git_loopy.rolling_scheduler.RollingScheduler.finish_work` or a
-        post-Integration
-        :meth:`~git_loopy.rolling_scheduler.RollingScheduler.finalize`.
+        #219 §7.4, §7.6 had this *tick* the shared machine once per finalized
+        contribution, because a contribution that terminated unpublished was
+        itself a Strike. Since #413 the ceiling counts the issues the Run has
+        **skipped**, and those are charged where they happen — at the ending
+        that defeats the issue (:meth:`_Loop._observe_session_ending`), which a
+        Lane reaches as surely as a serial Iteration does. So nothing is charged
+        here and nothing is announced here; what is left is §7.7's
+        drain-confirmed abort, which still belongs at contribution finalization
+        because that is the moment the scheduler can act on it.
+
+        Reading the machine rather than a return value is deliberate: the Lane
+        whose ending crossed the ceiling and the contribution that finalizes it
+        are different moments, and a latch keyed to a value passed between them
+        would go missing whenever they were not the same one.
         """
         assert self._scheduler is not None
-        reset = contribution.strike_reaction == rolling_scheduler.STRIKE_RESET
-        outcome = self._serial._strike_machine.tick(
-            commits_in_iter=1 if reset else 0,
-            auto_closures_in_iter=0,
-        )
-        if outcome == "aborted" or not reset:
-            self._serial._emit(
-                events_module.WRAPPER_STRIKE,
-                iter_num=None,
-                strikes=self._serial._strike_machine.strikes,
-                max_strikes=self._config.max_nmt_strikes,
-                outcome=("abort" if outcome == "aborted" else "warn"),
-            )
-        if outcome == "aborted":
+        if self._serial._strike_machine.outcome == "aborted":
             self._scheduler.strike_limit_reached()
 
     async def _integrate_lane(

@@ -301,6 +301,29 @@ _AFK_BODY = (
 )
 
 
+def _no_more_tasks_event() -> SessionEvent:
+    """An Agent turn carrying the **NMT sentinel**.
+
+    The one **Session outcome** that defeats an issue on its *first* attempt
+    (ADR-0040: an explicit "there is nothing to do here" is taken at its word
+    and never retried), which is how a Parallel Run reaches the **Strike**
+    ceiling at all now that the ceiling counts skipped issues — a Lane-held
+    ``parallel-safe`` issue gets one Lane per Run, so a retryable ending would
+    leave it stalled rather than defeated.
+    """
+    return SessionEvent(
+        data=AssistantMessageData(
+            content=(
+                "nothing here is workable.\n<promise>NO MORE TASKS</promise>"
+            ),
+            message_id="nmt",
+        ),
+        id=uuid4(),
+        timestamp=datetime(2026, 5, 16, tzinfo=timezone.utc),
+        type=SessionEventType.ASSISTANT_MESSAGE,
+    )
+
+
 @pytest.fixture(autouse=True)
 def _stub_run_skill_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
     async def discover(_client: object, **kwargs: object):
@@ -1620,9 +1643,11 @@ def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions
     docstring's documented gap), so this asserts the equivalent *observable*
     distinction directly: exactly one close is attempted (for #42, and it
     fails so #42 stays open), #43 is never attempted and also stays open, and
-    Strike sees exactly one no-progress tick (#42's advance resets Strike,
-    #43's no-op ticks it) — both consuming their ``max_iterations`` unit at
-    pickup, with no extra serial-fallback round sneaking past the cap.
+    the two contributions finalize with different ``published`` verdicts (#42's
+    merge advanced base; #43's no-op did not) — both consuming their
+    ``max_iterations`` unit at pickup, with no extra serial-fallback round
+    sneaking past the cap. Since contract 1.27 neither charges a **Strike**:
+    unpublished is not the same claim as *given up on*.
     """
     fake_git = _wire_repo(tmp_path)
     merge = fake_git.merge
@@ -1680,8 +1705,13 @@ def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions
     assert fake_gh.issue_view(43).state == "OPEN"
 
     events = _logged_events(tmp_path)
-    strikes = [e for e in events if e["type"] == "wrapper.strike"]
-    assert [s["strikes"] for s in strikes] == [1]
+    assert [e for e in events if e["type"] == "wrapper.strike"] == []
+    published = {
+        e["issue"]: e["published"]
+        for e in events
+        if e["type"] == "wrapper.contribution.end"
+    }
+    assert published == {42: True, 43: False}
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert run_end["outcome"] == "iteration_cap"
     # Exactly the two Lane sessions' units are spent -- no extra
@@ -1690,7 +1720,7 @@ def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions
     assert run_end["iterations_run"] == 2
 
 
-def test_parallel_integration_red_gate_keeps_branch_and_records_strike(
+def test_parallel_integration_red_gate_keeps_branch_and_publishes_nothing(
     tmp_path, monkeypatch
 ) -> None:
     """Red-throughout Integration: base is never touched, falls back to serial.
@@ -1703,13 +1733,15 @@ def test_parallel_integration_red_gate_keeps_branch_and_records_strike(
     branch **kept** (only the throwaway Integration branch is deleted). Because
     nothing unverified is ever published, base is not merged and there is no
     revert to make — which is precisely what ADR-0020 supersedes ADR-0009's
-    publish-then-revert for. Nothing lands, so each no-progress contribution's
-    ``finalize`` records its own warn strike (#219 §7.9: the scheduler records
-    the reaction per-contribution, not once per round) — two Lanes, two strikes.
-    Both Lanes already spent their ``max_iterations`` unit at pickup, so — even
-    though each fallback latches a serial request — the cap is already exhausted
-    and the run ends via ``iteration_cap`` without a further serial Iteration
-    ever running. Assertions are on observable effects only.
+    publish-then-revert for. Nothing lands, so each contribution finalizes
+    **unpublished** (#219 §7.9: the scheduler records the reaction
+    per-contribution, not once per round) — two Lanes, two unpublished rows.
+    Since contract 1.27 neither charges a **Strike**: the ceiling counts the
+    issues the Run has given up on, and a red gate is not an ending that defeats
+    one. Both Lanes already spent their ``max_iterations`` unit at pickup, so —
+    even though each fallback latches a serial request — the cap is already
+    exhausted and the run ends via ``iteration_cap`` without a further serial
+    Iteration ever running. Assertions are on observable effects only.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -1770,13 +1802,16 @@ def test_parallel_integration_red_gate_keeps_branch_and_records_strike(
     # the comment resolves nothing (both issues stay OPEN, asserted above).
     assert sorted(n for n, _ in fake_gh.issue_comment_calls) == [42, 43]
 
-    # Each no-progress contribution finalizes its own warn strike -- two
-    # Lanes, two ticks -- and Integration closed nothing.
+    # Each no-progress contribution finalizes unpublished -- two Lanes, two
+    # unpublished rows -- and Integration closed nothing. Since contract 1.27 an
+    # unpublished contribution charges no **Strike** of its own: the ceiling
+    # counts the issues the Run has *given up on*, and both of these are still
+    # on their first attempt.
     events = _logged_events(tmp_path)
-    strikes = [e for e in events if e["type"] == "wrapper.strike"]
-    assert len(strikes) == 2
-    assert [s["outcome"] for s in strikes] == ["warn", "warn"]
-    assert [s["strikes"] for s in strikes] == [1, 2]
+    assert [e for e in events if e["type"] == "wrapper.strike"] == []
+    contributions = [e for e in events if e["type"] == "wrapper.contribution.end"]
+    assert [c["published"] for c in contributions] == [False, False]
+    assert sorted(c["issue"] for c in contributions) == [42, 43]
     assert [e for e in events if e["type"] == "wrapper.auto_close"] == []
     # No serial Iteration ever ran: both Lane sessions already spent the
     # `max_iterations=2` budget, so the run ends via `iteration_cap` before
@@ -3325,9 +3360,11 @@ def test_parallel_serial_iteration_strike_abort_stops_the_run_stuck(
     Iterations forever.
 
     The Pool here is one serial-required issue and an agent that never commits
-    or closes, with ``max_nmt_strikes=2``. The Run must reach its limit and stop
-    on the Wrapper contract's ``stuck`` exit rather than the ``empty_pool``
-    exit or no exit at all.
+    or closes, with ``max_nmt_strikes=1``. Since contract 1.27 the ceiling counts
+    the issues the Run has given up on, so the issue's first no-progress
+    **Iteration** spends its first attempt (**retrying**, no Strike) and its
+    second defeats it — one Strike, the ceiling, and the Wrapper contract's
+    ``stuck`` exit rather than the ``empty_pool`` exit or no exit at all.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -3352,7 +3389,7 @@ def test_parallel_serial_iteration_strike_abort_stops_the_run_stuck(
         issue_source="github",
         parallel=2,
         max_iterations=0,  # unbounded: only the Strike limit can stop this Run
-        max_nmt_strikes=2,
+        max_nmt_strikes=1,
         verbosity=0,
         render_reasoning=False,
     )
@@ -3364,8 +3401,8 @@ def test_parallel_serial_iteration_strike_abort_stops_the_run_stuck(
 
     events = _logged_events(tmp_path)
     strikes = [e for e in events if e["type"] == "wrapper.strike"]
-    assert [s["outcome"] for s in strikes] == ["warn", "abort"], (
-        f"expected one warn then the abort, got {strikes}"
+    assert [s["outcome"] for s in strikes] == ["abort"], (
+        f"expected the issue's defeat to be the abort, got {strikes}"
     )
 
     # --- The abort ends the Run, and no further serial Iteration is granted
@@ -3376,6 +3413,70 @@ def test_parallel_serial_iteration_strike_abort_stops_the_run_stuck(
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert run_end["outcome"] == "stuck"
     assert exit_code == loop_module.exit_code_for("stuck")
+
+
+def test_parallel_serial_iteration_that_binds_nothing_ends_the_run_all_skipped(
+    tmp_path, monkeypatch
+) -> None:
+    """Rolling dispatch's own livelock, ended on the spot (#413, ADR-0041).
+
+    The sibling of
+    :func:`test_parallel_serial_iteration_strike_abort_stops_the_run_stuck`:
+    there the ceiling stops the Run, here it never gets near one. A single
+    serial-required issue is defeated by two no-progress Iterations, and the
+    third serial turn walks a Pool that still holds it and binds nothing —
+    charging nothing, since #413, so it would be granted again and again for as
+    long as the Run had units.
+
+    Terminal *here* rather than latched for the idle-check is safe for a reason
+    the serial-only driver does not need: the scheduler grants a serial turn only
+    once every **Lane** has drained, so a serial **Pickup** that binds nothing at
+    that moment has walked the whole Pool — both halves — with nothing in flight
+    behind it.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(44, labels=["ready-for-agent"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _NoProgressFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=0,  # unbounded: only the all-skipped outcome can stop this
+        max_nmt_strikes=9,  # deliberately out of reach
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def _bounded() -> int:
+        return await asyncio.wait_for(loop_module.run(cfg), timeout=60)
+
+    exit_code = asyncio.run(_bounded())
+
+    assert exit_code == loop_module.exit_code_for("all_skipped")
+    events = _logged_events(tmp_path)
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "all_skipped"
+    starts = [e for e in events if e["type"] == "wrapper.iteration.start"]
+    assert len(starts) == 3, (
+        f"expected two worked Iterations then the one that took nothing, "
+        f"got {len(starts)}"
+    )
+    assert [s["strikes"] for s in events if s["type"] == "wrapper.strike"] == [1]
 
 
 # ---------------------------------------------------------------------------
@@ -4348,8 +4449,9 @@ def test_parallel_dashboard_fault_never_masks_a_stuck_run(
 
     Both issues are ``parallel-safe`` and their **Lanes** are held mid-session
     when the Dashboard raises, so this is a genuine mid-**Run** swap over live
-    Lanes — and their agent commits nothing, so the shared **Strike** machine
-    reaches its limit and the Run ends ``stuck`` with its Lanes drained.
+    Lanes — and each declares the **NMT sentinel**, so both are **skipped** on
+    that first attempt, the shared **Strike** machine reaches its limit and the
+    Run ends ``stuck`` with its Lanes drained.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -4367,7 +4469,7 @@ def test_parallel_dashboard_fault_never_masks_a_stuck_run(
     opened: list[int] = []
 
     class _StuckGatedClient(_gated_client_cls(holds)):  # type: ignore[misc]
-        """Held Lanes whose agent commits nothing — the Strike machine's input."""
+        """Held Lanes whose agent declares NMT — the Strike machine's input."""
 
         _session_cls = _NoProgressFakeSession
 
@@ -4384,7 +4486,10 @@ def test_parallel_dashboard_fault_never_masks_a_stuck_run(
 
     fake_client = _StuckGatedClient(
         fake_git=fake_git,
-        scripted_events=[_usage_event("claude-opus-4.8-max")],
+        scripted_events=[
+            _usage_event("claude-opus-4.8-max"),
+            _no_more_tasks_event(),
+        ],
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())

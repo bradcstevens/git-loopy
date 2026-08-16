@@ -516,12 +516,20 @@ source could not *read* is not an exclusion — it was never discriminated again
 _Avoid_: skipped, filtered, invalid issue.
 
 **Strike**:
-A recorded no-progress result: a serial **Iteration** made no meaningful progress, or
-a parallel **Lane contribution** terminated unpublished. A fixed number of consecutive
-strikes ends the run. Both kinds of work tick one shared count, so in **Parallel mode**
-reaching the limit stops refill and grants no further serial Iteration, then ends the run
-once started work has drained. A runner **Checkpoint** does not count as progress.
-_Avoid_: failure, miss.
+One issue this **Run** has given up on. The count is the **Attempt lifecycle**'s terminal
+position made billable: an issue charges exactly one Strike at the ending that **Skip**s it, and
+a fixed number of them ends the run. Nothing else charges — an **Iteration** that made no
+progress and a **Lane contribution** that terminated unpublished each spend an attempt without
+necessarily defeating anything, and an Iteration is not a thing a Run can give up on. Progress
+resets nothing, because the lifecycle it counts is monotonic: an issue an advance rescued was
+never given up on, and one that was is not un-given-up-on by another issue's advance. So
+`--max-nmt-strikes` reads as *how many issues this Run may abandon before it stops*. Both modes
+tick one shared count, so in **Parallel mode** reaching the limit stops refill and grants no
+further serial Iteration, then ends the run once started work has drained. A **Runner** with no
+**Pickup** has no lifecycle to charge from and keeps the original accounting — a Strike per
+no-progress Iteration, consecutive, reset by progress — which is the line
+`conformance/progress-strikes.json` forks along.
+_Avoid_: failure, miss, no-progress count.
 
 **Session outcome**:
 How one **Agent**'s session ended, as data the loop keeps rather than a sentence it
@@ -983,8 +991,20 @@ reading the one lifecycle: a serial pickup declines the candidate it had chosen 
 silently would be the indefinite passing-over that record exists to make visible. A **Lane**
 pickup, whose only decline hands the candidate straight back to the list it came from, narrows
 that list instead — one skip record per turn forever is not more visible than one, and the seam
-that defeated the issue already wrote the one.
+that defeated the issue already wrote the one. A Skip is also what charges a **Strike**: exactly
+one, at the ending that reaches this disposition, which is why the ceiling counts issues
+abandoned rather than Iterations wasted.
 _Avoid_: blacklist, ban, exclusion (that is a **Pool exclusion**, decided at collection).
+
+**All-skipped Run**:
+How a **Run** ends when a **Pickup** finds the **Pool** non-empty and can bind none of it: exit
+`1` under its own reason, `all_skipped`. It is not an empty Pool — "there is nothing to do" and
+"I could not take any of what there is" are different facts about the repository, and only the
+first is a finished Run — and it is not a **Strike**, because that **Iteration** spends no
+session and gives up on nothing new. It is terminal on the spot rather than counted, since an
+Iteration that charges nothing and binds nothing would otherwise re-walk the same Pool and skip
+the same candidates for as long as the Run has **Iteration** budget.
+_Avoid_: empty pool, stuck, no work.
 
 **Run readback**:
 The block a **Run** prints at start and publishes on its own start Event, stating **Config** as

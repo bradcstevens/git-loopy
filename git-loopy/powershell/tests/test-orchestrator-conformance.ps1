@@ -343,7 +343,23 @@ $ProgressStrikes = Get-Content `
     -LiteralPath (Join-Path $ConformanceDir "progress-strikes.json") `
     -Raw |
     ConvertFrom-Json -AsHashtable
-foreach ($Case in $ProgressStrikes["cases"]) {
+# Fixture schema 2 (#413) forks `progress-strikes.json` by distribution: a case
+# names the members whose accounting it describes, and a case naming none is
+# family-wide. The PowerShell Orchestrator has no **Pickup**, so it has no
+# **Attempt lifecycle** to charge a **Strike** from and keeps counting consecutive
+# no-progress **Iterations** — which is exactly the half of the fork it selects.
+# The count is asserted first so a selector typo (or a fixture that quietly
+# stopped describing this member) fails loudly rather than running nothing.
+$StrikeCases = @(
+    $ProgressStrikes["cases"] | Where-Object {
+        $Selector = $_["distributions"]
+        if ($null -eq $Selector) { $true } else { @($Selector) -contains "powershell" }
+    }
+)
+if ($StrikeCases.Count -lt 1) {
+    throw "progress-strikes fixture retains no case for the powershell distribution"
+}
+foreach ($Case in $StrikeCases) {
     [int]$Strikes = 0
     $Outcome = "running"
     $StepIndex = 0
