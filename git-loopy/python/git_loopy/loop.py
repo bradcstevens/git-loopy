@@ -111,7 +111,7 @@ import os
 import re
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
@@ -141,6 +141,7 @@ from git_loopy import rollup as rollup_module
 from git_loopy import worktree as worktree_module
 from git_loopy.active_issue import ActiveIssueBinding
 from git_loopy.config import (
+    RoutingLifecyclePosition,
     RoutingResolution,
     RunConfig,
     TaskTypeError,
@@ -153,6 +154,7 @@ from git_loopy import continuation_frontier
 from git_loopy.continuation_report import ContinuationReporter
 from git_loopy.copilot_client import make_copilot_client
 from git_loopy.emit import EventEmitter
+from git_loopy.escalation import EscalationLedger
 from git_loopy.persist import (
     IterationCounters,
     WritersBundle,
@@ -1015,6 +1017,14 @@ class _Loop:
         # and provenance recomputed at the emit site is provenance that can
         # disagree with the pair the session was built with.
         self._routes: dict[int | str, RoutingResolution] = {}
+        # Which issues this Run owes the **Escalation rung** (#408). Run-scoped
+        # and in memory: nothing about an issue that stalled tonight is written
+        # to the tracker or to a persisted artifact, so a fresh Run re-tests the
+        # cheap pair on purpose — the repository has moved. Constructed from the
+        # rung the Config resolved, which is ``None`` when escalation is off or
+        # an explicit model pin suppressed it, so *"does this Run escalate?"* is
+        # answered once here rather than at each Pickup.
+        self._escalation = EscalationLedger(rung=config.escalation_rung)
         # The one scrub-and-fan-out seam (issue #43): compose -> scrub once ->
         # write the replay JSONL + fan out to the sinks. Built here so ``_emit``
         # is a one-line delegator and the sinks receive the *scrubbed* envelope
@@ -1670,6 +1680,63 @@ class _Loop:
 
     # -- serial Pickup -----------------------------------------------------
 
+    def _resolve_route(
+        self, item: AfkReadyItem, *, warn: Callable[[str], None]
+    ) -> RoutingResolution:
+        """The **Routing resolution** one **Pickup** binds this candidate with.
+
+        The single seam both Pickups — a serial **Iteration**'s and a **Lane**'s
+        — resolve through, so an escalated issue is escalated wherever it is
+        next picked up rather than only in the mode that stalled it. A silent
+        no-progress **Lane** is never auto-resolved and its issue is only ever
+        re-taken by a later serial round, so a per-mode rule would put the
+        escalation on the side of the boundary that cannot act on it.
+
+        Escalation is **one rung and one lookup** on top of ordinary routing,
+        deliberately: the rung is resolved by re-running the same pure resolver
+        with the ledger's pair, so a routed, a default and an escalated pair are
+        gated by identical code (§14) instead of the escalated one taking a path
+        of its own. The ordinary resolution runs first and keeps ``warn``, so an
+        escalated Pickup still says its issue carries conflicting ``task-type:``
+        labels; the escalated re-resolve takes no sink because a supplied rung
+        skips label selection entirely and has no advisory to raise.
+
+        **The no-op rule.** When the rung gates to the pair this issue would
+        have run on anyway — ``planning`` already routes to the rung by design
+        (ADR-0035) — nothing escalated, and the record says so: the **Routing
+        source** stays the one that chose the pair. The comparison is between
+        *gated* pairs rather than authored ones, because an effort the model
+        rejects is dropped and two different authored pairs can arrive at one
+        real pair. What still changes is the **lifecycle position**: this is the
+        issue's second attempt whether or not there was anywhere to escalate
+        to, and source and position are separate axes precisely so that a
+        same-pair retry stays tellable from an escalated one.
+        """
+        routed = resolve_iteration_model(self._config, item.labels, warn=warn)
+        rung = self._escalation.owed(item.ref)
+        if rung is None:
+            return routed
+        escalated = resolve_iteration_model(
+            self._config,
+            item.labels,
+            lifecycle_position=RoutingLifecyclePosition.RETRYING,
+            escalated_pair=rung,
+        )
+        if (escalated.model, escalated.reasoning_effort) == (
+            routed.model,
+            routed.reasoning_effort,
+        ):
+            return dataclass_replace(
+                routed, lifecycle_position=RoutingLifecyclePosition.RETRYING
+            )
+        self._diag.info(
+            "issue #%s escalated to %s @ %s after a no-progress session",
+            item.ref,
+            escalated.model,
+            escalated.reasoning_effort,
+        )
+        return escalated
+
     def _pick_active_issue(
         self, pool: list[AfkReadyItem], *, iter_num: int
     ) -> SerialPickup:
@@ -1709,9 +1776,8 @@ class _Loop:
 
         def admit(item: AfkReadyItem) -> str | None:
             try:
-                resolution = resolve_iteration_model(
-                    self._config,
-                    item.labels,
+                resolution = self._resolve_route(
+                    item,
                     warn=lambda message, _ref=item.ref: self._diag.warning(
                         "issue #%s routing: %s", _ref, message
                     ),
@@ -1890,10 +1956,29 @@ class _Loop:
         Kept as the record rather than as the sentence it prints: the attempt
         lifecycle is keyed off the ending, and a lifecycle that had to parse a
         log line back into a decision would be reading the Run's diagnostics as
-        an API.
+        an API. :meth:`_observe_session_ending` is the first reader that keys off
+        it for real.
         """
         self._last_session_outcome = record
+        self._observe_session_ending(ref, record)
         _report_session_outcome(self._diag, ref=ref, record=record)
+
+    def _observe_session_ending(
+        self,
+        ref: int | str,
+        record: session_outcome_module.SessionOutcomeRecord,
+    ) -> None:
+        """Offer one ending to the **Escalation rung**'s ledger (#408).
+
+        Called from a serial **Iteration** and from a **Lane** alike, because
+        the ledger is per issue rather than per mode: the pair a stalled issue
+        is next picked up on must not depend on which mode stalled it.
+
+        Whether the ending buys an escalation is the ledger's decision and not
+        this call site's — the trigger is silent no-progress only, and a
+        condition duplicated here could disagree with the one that matters.
+        """
+        self._escalation.observe(ref, record.outcome)
 
     def _finish_iteration(
         self,
@@ -3117,10 +3202,15 @@ class _ParallelLoop:
         # (or routing-off) yields the gated global default. `start_session`
         # binds the pair onto the Contribution, reused for this Lane's work AND
         # its later auto-resolution sessions.
+        #
+        # Routed *through the serial Pickup's own seam* (#408) so a Lane reads
+        # the same **Escalation rung** ledger a serial Iteration does: the
+        # ledger is keyed by issue, not by mode, so an issue that stalled
+        # silently on either path is retried at the rung on whichever path
+        # takes it next.
         try:
-            resolution = resolve_iteration_model(
-                self._config,
-                item.labels,
+            resolution = self._serial._resolve_route(
+                item,
                 warn=lambda message, _ref=ref: self._diag.warning(
                     "lane #%s routing: %s", _ref, message
                 ),
@@ -3204,16 +3294,19 @@ class _ParallelLoop:
         # progress answer -- an agent commit or a Checkpoint on the Lane branch
         # -- so the ending agrees with what the scheduler was told about the
         # same contribution.
+        lane_outcome = session_outcome_module.resolve_session_outcome(
+            termination=signals.termination,
+            progressed=changed,
+            error=signals.error,
+            content_filtered=signals.content_filtered,
+            no_more_tasks=signals.no_more_tasks,
+        )
+        # Offered to the **Escalation rung**'s ledger before it is said out
+        # loud (#408): a Lane that stalled silently is evidence about the
+        # *issue*, and the Pickup that acts on it may well be a serial one.
+        self._serial._observe_session_ending(lane_work.item.ref, lane_outcome)
         _report_session_outcome(
-            self._diag,
-            ref=lane_work.item.ref,
-            record=session_outcome_module.resolve_session_outcome(
-                termination=signals.termination,
-                progressed=changed,
-                error=signals.error,
-                content_filtered=signals.content_filtered,
-                no_more_tasks=signals.no_more_tasks,
-            ),
+            self._diag, ref=lane_work.item.ref, record=lane_outcome
         )
 
         if checkpoint_ok:

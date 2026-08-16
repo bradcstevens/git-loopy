@@ -5033,3 +5033,59 @@ def test_a_lane_binding_publishes_the_same_routing_record_serial_does(
     assert bound["routing_source"] == "routed"
     assert bound["task_type_keys"] == ["docs"]
     assert bound["lifecycle_position"] == "fresh"
+
+
+def test_a_lane_that_stalled_escalates_at_its_next_pickup(
+    tmp_path, monkeypatch
+) -> None:
+    """The **Escalation rung** is per issue, not per mode (#408).
+
+    A silent no-progress **Lane** is never auto-resolved: its merge is
+    already-up-to-date, the issue is barred from being re-Laned, and only a
+    later serial round takes it again. So a ledger that only listened to serial
+    **Iterations** would put the evidence on the side of the mode boundary that
+    cannot act on it — the Lane learns the pair was too cheap and the Pickup
+    that could do something about it never hears.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _NoProgressFakeClient(
+            fake_git=fake_git, scripted_events=[_usage_event("claude-sonnet-5")]
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-sonnet-5",
+                reasoning_effort="low",
+                issue_source="github",
+                parallel=2,
+                max_iterations=2,
+                max_nmt_strikes=9,
+                verbosity=0,
+                render_reasoning=False,
+                escalation_rung=("claude-opus-5", "max"),
+            )
+        )
+    )
+
+    bound = [
+        e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pickup.bound"
+    ]
+    assert [(e["issue"], e["model"], e["routing_source"]) for e in bound] == [
+        (42, "claude-sonnet-5", "defaulted_no_task_type_label"),
+        (42, "claude-opus-5", "escalated"),
+    ]

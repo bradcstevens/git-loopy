@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.21 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.22 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -974,6 +974,23 @@ run-wide default:
   feeds its own single session the same way; a pair is never resolved and then dropped.
 - **Resolve once.** Resolve **once** per issue at pickup; the Orchestrator MUST NOT switch model
   or effort mid-session.
+- **Escalate a stall once (contract 1.22).** An Orchestrator that routes MUST retry an issue whose
+  session ended in **silent no-progress** at a single configured **escalation rung**, resolved at
+  that issue's *next* pickup and reported with source `escalated`. The rung is one `(model,
+  effort)` pair, a **config-file-only** tier like `[routing]` itself, on by default; an explicit
+  `--model` / `--reasoning-effort` (flag or env) suppresses escalation exactly as it suppresses
+  routing, because a deliberate pin means what it says. Four properties are load-bearing and MUST
+  hold: escalation is triggered by **silent no-progress alone** (a timeout answered with a slower,
+  higher-reasoning pair near-guarantees a second timeout; a crash is evidence about the harness;
+  an explicit no-more-tasks is the Agent stating there is nothing to do); it is **once** — one
+  rung, never a ladder — and **sticky** for the rest of the Run, so the issue never falls back to
+  the pair that already stalled on it; it is a **no-op** where the routed pair already equals the
+  rung, and MUST then keep the source it routed with rather than claim a change that did not
+  happen; and it MUST tick no **Strike**, because the mechanism that aborts a stuck Run must not
+  punish trying harder. It is a property of the *issue*, not of the mode that stalled it: an
+  Orchestrator with more than one pickup seam MUST feed and read one ledger from all of them.
+  A mid-session switch is still forbidden — escalation is a **second pickup**, which is why it is
+  stated here and not in the bullet above.
 - **Publish what it resolved (contract 1.21).** An Orchestrator that resolves a Routing resolution
   MUST carry it on that Pickup's own `wrapper.pickup.bound` (§12) — the pair, the tier, the raw
   keys, the gate warnings, the source and the lifecycle position — and MUST NOT mint a second

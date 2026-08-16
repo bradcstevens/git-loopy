@@ -36,7 +36,7 @@ import stat
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping, Sequence, cast
+from typing import Mapping, NamedTuple, Sequence, cast
 
 __all__ = [
     "SettingsError",
@@ -59,6 +59,8 @@ __all__ = [
     "table_str_list",
     "table_optional_str_list",
     "table_routing",
+    "table_escalation",
+    "EscalationSettings",
 ]
 
 #: The persisted-Config filename in both scopes.
@@ -543,3 +545,89 @@ def table_routing(
             raise _type_error(scope, f"{label}.effort", "a string", effort)
         result[key] = (model, effort)
     return result
+
+
+class EscalationSettings(NamedTuple):
+    """One scope's ``[escalation]`` block, read but not yet decided over.
+
+    Both halves are **presence-aware** (``None`` = the scope said nothing), so
+    the merge one layer up in :mod:`git_loopy.cli` can tell an operator who
+    turned escalation off from one who never mentioned it. Whether an absent
+    switch means on, and which rung an absent pair falls back to, are decisions
+    that belong to that merge and not to a file reader.
+
+    Attributes:
+        enabled: The scope's ``enabled`` value, or ``None`` when unset.
+        pair: The scope's ``(model, effort)`` rung, or ``None`` when unset.
+    """
+
+    enabled: bool | None
+    pair: tuple[str, str] | None
+
+
+#: The keys an ``[escalation]`` block may carry. ``model`` and ``effort`` are
+#: **both or neither** (:data:`_ROUTING_ENTRY_KEYS`' rule, decision #108): half a
+#: rung would have to borrow its other half from some other decision — the
+#: run-wide default, or the built-in rung — while still wearing the operator's
+#: authorship.
+_ESCALATION_PAIR_KEYS = frozenset({"model", "effort"})
+_ESCALATION_KEYS = _ESCALATION_PAIR_KEYS | {"enabled"}
+
+
+def table_escalation(
+    table: Mapping[str, object], *, scope: str
+) -> EscalationSettings:
+    """Read the ``[escalation]`` block: the **Escalation rung** and its switch.
+
+    Issue #408. The rung is the single ``(model, effort)`` pair an issue whose
+    session ended in silent no-progress is retried at, once, for the rest of the
+    Run. Like ``[routing]`` it is a **config-file-only** tier — there is
+    deliberately no flag and no environment variable, because the precedence
+    spine (§11, §14) fixes that a model decision an operator states run-wide
+    *suppresses* the per-issue machinery rather than parameterising it.
+
+    Returns ``EscalationSettings(None, None)`` when the scope has no
+    ``[escalation]`` block (the ordinary case). A malformed shape raises
+    :exc:`SettingsError` **loudly and early**, naming the scope, so a
+    hand-edited ``config.toml`` fails at load rather than at the first stalled
+    issue — which is the one moment an operator is least able to read a new
+    diagnostic.
+
+    The pair is returned as authored: the effort gate
+    (:func:`git_loopy.config.gate_reasoning_effort`) runs later, per issue, at
+    resolution, where a routed, a default and an escalated pair are all gated
+    identically.
+    """
+    if "escalation" not in table:
+        return EscalationSettings(None, None)
+    raw = table["escalation"]
+    if not isinstance(raw, dict):
+        raise _type_error(
+            scope, "escalation", "a table with keys { enabled, model, effort }", raw
+        )
+    block = cast("Mapping[str, object]", raw)
+    unknown = sorted(set(block) - _ESCALATION_KEYS)
+    if unknown:
+        raise SettingsError(
+            f"{scope} config: 'escalation' accepts only "
+            f"{sorted(_ESCALATION_KEYS)}, got unknown key(s) {unknown}"
+        )
+    enabled = block.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise _type_error(scope, "escalation.enabled", "a boolean", enabled)
+    present = set(block) & _ESCALATION_PAIR_KEYS
+    if present and present != _ESCALATION_PAIR_KEYS:
+        raise SettingsError(
+            f"{scope} config: 'escalation' names {sorted(present)} without "
+            f"{sorted(_ESCALATION_PAIR_KEYS - present)}; the rung is one pair, "
+            f"so give both keys or neither"
+        )
+    if not present:
+        return EscalationSettings(enabled, None)
+    model = block["model"]
+    effort = block["effort"]
+    if not isinstance(model, str):
+        raise _type_error(scope, "escalation.model", "a string", model)
+    if not isinstance(effort, str):
+        raise _type_error(scope, "escalation.effort", "a string", effort)
+    return EscalationSettings(enabled, (model, effort))

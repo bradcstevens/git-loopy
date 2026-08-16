@@ -928,6 +928,23 @@ to (ADR-0036). Identical in every member of the **Runner family**, and an indepe
 it resembles one seeded **Routed pair** by rationale, never by derivation.
 _Avoid_: global default (ambiguous — **Config** has global scope), fallback model.
 
+**Escalation rung**:
+The one model and reasoning effort a silently stalled unit of work is retried at. A **Session
+outcome** of silent no-progress — and only that one, because a timeout answered with a slower
+pair near-guarantees a second timeout, a crash is evidence about the harness, and a no-more-tasks
+declaration is the **Agent** saying there is nothing to do — makes the next **Pickup** of that
+issue resolve to the rung instead of its **Routed pair**, reporting the escalated **Routing
+source** so a retry at a dearer pair is never mistaken for a routed one. Escalation is **once**
+(a single rung, not a ladder), **sticky** for the rest of the **Run** so the issue does not fall
+back to the pair that already stalled on it, **strike-free** because trying harder must not be
+punished by the mechanism that aborts a **Run**, a **no-op** where the routed pair already equals
+the rung, and per issue rather than per mode — a **Lane** and a serial **Iteration** read and feed
+one ledger. It is configurable from the **Config** file only and on by default at
+`claude-opus-5 @ max`, and an explicit model pin suppresses it exactly as it suppresses
+**Routing**. It is blind to work that ran expensively and produced nothing usable, because
+progress is commit-shaped and not quality-shaped.
+_Avoid_: retry model, fallback pair (that is the **Default pair**), escalation ladder.
+
 **Measured routing**:
 The **Calibration**-authored precedence tier — one rung between global **Config** and the
 built-in default, so it supplies a **Routed pair** only where the operator is silent and a

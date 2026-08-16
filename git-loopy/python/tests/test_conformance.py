@@ -712,6 +712,11 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     as the **Calibration records** were at 1.16 and the rolling-dispatch family
     before them.
 
+    ``contract_version`` moved again to 1.22 with the **Escalation rung** (§14,
+    #408) — an obligation about *which pair a Pickup resolves*, adding no Event,
+    no literal and no payload field, which is the cleanest demonstration that
+    the two axes are independent in both directions.
+
     ``event_schema_version`` deliberately did not move at any of them, and 1.21
     is the one that sharpens *why*. Up to 1.19 nothing touched an existing
     record at all, so the easy formulation held: an unmodelled type is the
@@ -721,11 +726,12 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     not one that **appears**. §12 already requires an unknown payload field to
     be ignored, no existing key changed name, type or meaning, and every added
     one is optional-when-present. A consumer pinned to 1.1 therefore reads a
-    1.21 stream exactly as it read a 1.19 one.
+    1.21 stream exactly as it read a 1.19 one — and a 1.22 one, which adds
+    nothing to the wire at all, identically again.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.21"
+    assert _EVENT_SCHEMA["contract_version"] == "1.22"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:

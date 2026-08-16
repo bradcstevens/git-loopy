@@ -720,6 +720,19 @@ class RunConfig:
             is the only place that knows it.
         classifier_effort: The reasoning effort resolved alongside
             :attr:`classifier_model`, on the same terms.
+        escalation_rung: The **Escalation rung** (#408) — the single
+            ``(model, effort)`` pair an issue whose session ended in silent
+            no-progress is retried at, once, for the rest of the Run — or
+            ``None`` when escalation is not in force. ``None`` covers both
+            ``[escalation] enabled = false`` and an explicit ``--model`` /
+            ``--reasoning-effort`` pin, which suppresses escalation for the same
+            reason it suppresses :attr:`routing`: an operator who named a model
+            has taken that choice away from the runner. A **config-file-only**
+            tier with no env var of its own, resolved by :mod:`git_loopy.cli`
+            from the ``[escalation]`` block over its built-in
+            ``_DEFAULT_ESCALATION_RUNG``. The pair is
+            carried as authored; it is gated at resolution like a routed and a
+            default pair, never before.
     """
 
     model: str | None = None
@@ -744,6 +757,7 @@ class RunConfig:
     classifier_model: str | None = None
     classifier_effort: str | None = None
     issue_pin: int | None = None
+    escalation_rung: tuple[str, str] | None = None
 
     def __post_init__(self) -> None:
         if self.issue_source not in ("github", "prds"):

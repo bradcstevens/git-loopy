@@ -549,3 +549,77 @@ def test_load_configs_surfaces_a_malformed_artifact(tmp_path: Path) -> None:
 
     with pytest.raises(settings.SettingsError, match="schema_version 9"):
         settings.load_configs(tmp_path, {"XDG_CONFIG_HOME": str(tmp_path / "xdg")})
+
+
+# ---------------------------------------------------------------------------
+# [escalation] typed reader (#408): the **Escalation rung**, one pair plus its
+# on/off switch. Absent -> both halves absent; malformed shapes raise
+# SettingsError naming the scope, exactly as [routing] does.
+# ---------------------------------------------------------------------------
+
+
+def test_table_escalation_absent_says_absent_rather_than_disabled() -> None:
+    """No ``[escalation]`` block is silence, not an answer.
+
+    The built-in rung and the default-on decision live one layer up, in the
+    config resolver — a reader that returned ``enabled=True`` here would put
+    half of that decision in a place nobody would look for it.
+    """
+    assert settings.table_escalation({}, scope="project") == (None, None)
+
+
+def test_table_escalation_reads_the_rung_and_the_switch() -> None:
+    table = {
+        "escalation": {
+            "enabled": True,
+            "model": "claude-opus-5",
+            "effort": "max",
+        }
+    }
+    assert settings.table_escalation(table, scope="global") == (
+        True,
+        ("claude-opus-5", "max"),
+    )
+
+
+def test_table_escalation_reads_the_switch_without_a_rung() -> None:
+    """Turning escalation off names no pair: there is nothing to escalate to."""
+    assert settings.table_escalation({"escalation": {"enabled": False}}, scope="project") == (
+        False,
+        None,
+    )
+
+
+def test_table_escalation_rejects_a_non_table_block() -> None:
+    with pytest.raises(settings.SettingsError) as excinfo:
+        settings.table_escalation({"escalation": "claude-opus-5"}, scope="project")
+    msg = str(excinfo.value)
+    assert "project" in msg and "escalation" in msg
+
+
+@pytest.mark.parametrize("entry", [{"model": "claude-opus-5"}, {"effort": "max"}])
+def test_table_escalation_rejects_half_a_pair(entry: dict) -> None:
+    """Both keys or neither — ``[routing]``'s no-partial-inheritance rule.
+
+    Half a rung would have to borrow the other half from somewhere, and every
+    candidate donor (the run-wide default, the built-in rung) is a different
+    decision wearing the operator's authorship.
+    """
+    with pytest.raises(settings.SettingsError) as excinfo:
+        settings.table_escalation({"escalation": entry}, scope="global")
+    msg = str(excinfo.value)
+    assert "global" in msg and "escalation" in msg
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"model": 123, "effort": "max"},
+        {"model": "claude-opus-5", "effort": 5},
+        {"enabled": "yes"},
+    ],
+)
+def test_table_escalation_rejects_wrongly_typed_values(entry: dict) -> None:
+    with pytest.raises(settings.SettingsError) as excinfo:
+        settings.table_escalation({"escalation": entry}, scope="project")
+    assert "project" in str(excinfo.value)

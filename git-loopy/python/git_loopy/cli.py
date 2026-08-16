@@ -152,6 +152,16 @@ _DEFAULT_MODEL = "claude-opus-5"
 # which is the whole corpus while nothing produces ``task-type:`` labels — with
 # a second attempt at the identical pair. The default **reserves** the ceiling.
 _DEFAULT_REASONING_EFFORT = "xhigh"
+#: The built-in **Escalation rung**: the pair an issue whose session ended in
+#: silent no-progress is retried at when no ``[escalation]`` block names another
+#: (#408). Same model as the **Default pair**, one effort rung above it — the
+#: default reserves ``max`` for exactly this (ADR-0036), and each issue gets
+#: exactly one escalation, so there is no further rung to keep headroom for and
+#: the ceiling is spent here rather than saved. It lives beside the default it
+#: is defined against rather than in :mod:`git_loopy.escalation`, which imports
+#: the harness SDK transitively and so must stay off the subcommand-dispatch
+#: path this module is on.
+_DEFAULT_ESCALATION_RUNG: tuple[str, str] = (_DEFAULT_MODEL, "max")
 
 
 def resolve_repo_root(start: Path | None = None) -> Path:
@@ -1696,6 +1706,58 @@ def routing_suppressed_by(
     return None
 
 
+def _resolve_escalation(
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> tuple[str, str] | None:
+    """Resolve the **Escalation rung** in force for this Run (#408).
+
+    The one pair an issue whose session ended in silent no-progress is retried
+    at, or ``None`` when escalation is not in force. It inherits §14's
+    precedence discipline from ``[routing]`` exactly, because it answers the
+    same kind of question:
+
+    * **Config-file-only.** Project ``[escalation]`` over global, over the
+      built-in :data:`_DEFAULT_ESCALATION_RUNG`. There is
+      deliberately no flag and no environment variable — a second way for the
+      environment to name a model, beside the one that already suppresses the
+      per-issue machinery outright, is two answers to one question.
+    * **Suppressed by an explicit pin.** An explicit ``--model`` /
+      ``--reasoning-effort`` (flag or env) turns escalation off for the whole
+      Run, on the rule that already silences routing: an operator who named a
+      model has taken the model choice away from the runner, and escalating past
+      it would override an explicit human instruction.
+    * **Default-on.** Absent config escalates at the built-in rung. Off is
+      rejected as a default because the locked routing table (ADR-0035) adopted
+      a two-rung-cheaper ``implementation`` pair *on the strength of this
+      backstop existing*; an opt-in backstop would leave that table leaning on
+      mechanism that, for everyone who did not opt in, is not there.
+    * **Independent of ``[routing]``.** Escalating off a bare run-wide default
+      is still meaningful, so an empty routing table is no reason to withhold a
+      rung.
+
+    Malformed ``[escalation]`` shapes raise from
+    :func:`git_loopy.settings.table_escalation` **even under suppression**, for
+    the reason an unknown ``task-type:`` key is still refused there: a config
+    file that would fail the moment the pin came off is not a working config
+    file, and the pin is per invocation.
+    """
+    scopes = (
+        settings.table_escalation(project, scope="project"),
+        settings.table_escalation(global_, scope="global"),
+    )
+    if _explicit_model_or_effort_override(args, env):
+        return None
+    enabled = next((s.enabled for s in scopes if s.enabled is not None), True)
+    if not enabled:
+        return None
+    return next(
+        (s.pair for s in scopes if s.pair is not None), _DEFAULT_ESCALATION_RUNG
+    )
+
+
 def _resolve_routing(
     args: argparse.Namespace,
     env: Mapping[str, str],
@@ -2063,6 +2125,7 @@ def resolve_config(
         classifier_model=classifier_model,
         classifier_effort=classifier_effort,
         issue_pin=_resolve_issue_pin(args),
+        escalation_rung=_resolve_escalation(args, env, project, global_),
     )
     interactive = _resolve_interactive_intent(args, env, project, global_)
     return ResolvedConfig(

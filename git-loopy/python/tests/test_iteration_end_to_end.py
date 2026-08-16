@@ -2989,3 +2989,257 @@ def test_an_unlabelled_binding_says_the_fallback_rather_than_staying_silent(
     (bound,) = _pickup_events(tmp_path)
     assert bound["routing_source"] == "defaulted_no_task_type_label"
     assert bound["task_type_keys"] == []
+
+
+# ---------------------------------------------------------------------------
+# The **Escalation rung** (#408): a stalled issue is retried once, immediately,
+# on one higher pair — and every other ending leaves the pair alone.
+# ---------------------------------------------------------------------------
+
+
+def _bound_pickups(tmp_path: Path) -> list[dict[str, Any]]:
+    """Every binding this Run made, in order."""
+    return [e for e in _pickup_events(tmp_path) if e["type"] == "wrapper.pickup.bound"]
+
+
+def test_a_stalled_issue_is_re_picked_at_the_rung(tmp_path, monkeypatch) -> None:
+    """The whole ticket (#408), through the record an operator reads.
+
+    The first Iteration ends in silent no-progress — the session ran to the end,
+    claimed no failure, and left no commit — which is exactly how a pair too
+    cheap for the work fails. The second **Pickup** takes *the same issue*,
+    immediately rather than after the rest of the Pool, at the configured rung,
+    and says so: the pair changed, and the **Routing source** is ``escalated``
+    rather than the fallback it resolved with the first time.
+    """
+    _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=2,
+                model="claude-sonnet-5",
+                reasoning_effort="low",
+                escalation_rung=("claude-opus-5", "max"),
+            )
+        )
+    )
+
+    assert [
+        (e["issue"], e["model"], e["effort"], e["routing_source"])
+        for e in _bound_pickups(tmp_path)
+    ] == [
+        (7, "claude-sonnet-5", "low", "defaulted_no_task_type_label"),
+        (7, "claude-opus-5", "max", "escalated"),
+    ]
+
+
+def test_the_escalated_session_runs_on_the_escalated_pair(
+    tmp_path, monkeypatch
+) -> None:
+    """A rung the Pickup resolved and the session did not use is no rung at all.
+
+    ADR-0037's rule, applied to escalation: the pair a **Pickup** resolves is
+    the pair its session runs on, in serial exactly as in a **Lane**.
+    """
+    fake_client, _ = _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=2,
+                model="claude-sonnet-5",
+                reasoning_effort="low",
+                escalation_rung=("claude-opus-5", "max"),
+            )
+        )
+    )
+
+    assert [
+        (call["model"], call["reasoning_effort"]) for call in fake_client.create_calls
+    ] == [("claude-sonnet-5", "low"), ("claude-opus-5", "max")]
+
+
+def test_the_rung_is_sticky_for_the_rest_of_the_run(tmp_path, monkeypatch) -> None:
+    """Escalation happens once, and never drops back down.
+
+    Re-testing the cheap pair on an issue the last Iteration just proved it
+    cannot work pays to relearn what was already learned, and the oscillation it
+    admits spends half its sessions at the ceiling without ever tripping a
+    **Strike**. One rung means one escalation: the third attempt is the second's
+    pair, not a further one.
+    """
+    _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=3,
+                max_nmt_strikes=9,
+                model="claude-sonnet-5",
+                reasoning_effort="low",
+                escalation_rung=("claude-opus-5", "max"),
+            )
+        )
+    )
+
+    assert [(e["model"], e["routing_source"]) for e in _bound_pickups(tmp_path)] == [
+        ("claude-sonnet-5", "defaulted_no_task_type_label"),
+        ("claude-opus-5", "escalated"),
+        ("claude-opus-5", "escalated"),
+    ]
+
+
+def test_escalation_is_a_no_op_when_the_routed_pair_is_already_the_rung(
+    tmp_path, monkeypatch
+) -> None:
+    """There is nowhere to escalate to, so nothing is claimed to have happened.
+
+    ``planning`` routes to the rung by design (ADR-0035), so it gets one shot
+    and the retry is the same pair. Reporting that as ``escalated`` would state
+    a change that did not occur — the source stays the one that chose the pair,
+    while the **lifecycle position** records that this is a second attempt.
+    """
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                labels=["ready-for-agent", "task-type:planning"],
+            )
+        ],
+    )
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=2,
+                routing={"planning": ("claude-opus-5", "max")},
+                escalation_rung=("claude-opus-5", "max"),
+            )
+        )
+    )
+
+    assert [
+        (e["model"], e["effort"], e["routing_source"], e["lifecycle_position"])
+        for e in _bound_pickups(tmp_path)
+    ] == [
+        ("claude-opus-5", "max", "routed", "fresh"),
+        ("claude-opus-5", "max", "routed", "retrying"),
+    ]
+
+
+def test_a_run_with_no_rung_re_picks_the_same_issue_on_the_same_pair(
+    tmp_path, monkeypatch
+) -> None:
+    """Escalation off is the pre-#408 behaviour, unchanged and still available."""
+    _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=2,
+                model="claude-sonnet-5",
+                reasoning_effort="low",
+                escalation_rung=None,
+            )
+        )
+    )
+
+    assert [(e["model"], e["routing_source"]) for e in _bound_pickups(tmp_path)] == [
+        ("claude-sonnet-5", "defaulted_no_task_type_label"),
+        ("claude-sonnet-5", "defaulted_no_task_type_label"),
+    ]
+
+
+def test_an_agent_that_declares_no_more_tasks_does_not_escalate(
+    tmp_path, monkeypatch
+) -> None:
+    """The Agent's own stated conclusion is not evidence the pair was too cheap.
+
+    The declaration is the one ending most easily said by accident, and
+    answering it with the ceiling would spend the Run's most expensive pair on
+    an issue whose worker said there was nothing to do.
+    """
+    _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+    fake_client = loop_module._make_client()
+    fake_client._scripted_events = [
+        _sdk_event(
+            SessionEventType.ASSISTANT_MESSAGE,
+            AssistantMessageData(
+                content="nothing to do here.\n<promise>NO MORE TASKS</promise>",
+                message_id="m1",
+            ),
+        )
+    ]
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=2,
+                model="claude-sonnet-5",
+                reasoning_effort="low",
+                escalation_rung=("claude-opus-5", "max"),
+            )
+        )
+    )
+
+    assert [e["routing_source"] for e in _bound_pickups(tmp_path)] == [
+        "defaulted_no_task_type_label",
+        "defaulted_no_task_type_label",
+    ]
+
+
+def test_escalation_ticks_no_strike_of_its_own(tmp_path, monkeypatch) -> None:
+    """Trying harder is never punished by the mechanism that aborts the Run.
+
+    Escalation adds no **Strike** and clears none: an escalating Run charges
+    exactly what the same two unproductive Iterations charge without a rung. The
+    re-definition of what a Strike *counts* is a separate change (#413) to a
+    phase-1 contract section every Runner implements; this one must not
+    anticipate it, in either direction.
+    """
+    def strikes_for(rung: tuple[str, str] | None, at: Path) -> list[int]:
+        _wire_multi_issue_github(at, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")])
+        asyncio.run(
+            loop_module.run(
+                RunConfig(
+                    issue_source="github",
+                    max_iterations=2,
+                    max_nmt_strikes=9,
+                    model="claude-sonnet-5",
+                    reasoning_effort="low",
+                    escalation_rung=rung,
+                )
+            )
+        )
+        return [
+            json.loads(raw)["strikes"]
+            for raw in _log_lines(at)
+            if json.loads(raw)["type"] == "wrapper.strike"
+        ]
+
+    escalating = tmp_path / "escalating"
+    flat = tmp_path / "flat"
+    for path in (escalating, flat):
+        path.mkdir()
+
+    assert strikes_for(("claude-opus-5", "max"), escalating) == strikes_for(None, flat)

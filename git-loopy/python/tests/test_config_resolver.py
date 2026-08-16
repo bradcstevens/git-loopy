@@ -1054,3 +1054,111 @@ def test_a_sub_one_demotion_threshold_aborts_rather_than_degrading() -> None:
     """
     with pytest.raises(SystemExit, match="demotion_threshold"):
         _resolve(project={"demotion_threshold": 0})
+
+
+# ---------------------------------------------------------------------------
+# The **Escalation rung** (#408): config-file-only, default-on, suppressed by an
+# explicit model pin — ``[routing]``'s precedence discipline, exactly.
+# ---------------------------------------------------------------------------
+
+
+def test_escalation_is_on_by_default_at_the_built_in_rung() -> None:
+    """A Run that says nothing about escalation still escalates.
+
+    Default-on is forced by the locked routing table (ADR-0035): it adopted a
+    two-rung-cheaper ``implementation`` pair *on the strength of this backstop
+    existing*. A backstop that shipped off would leave that table leaning on
+    mechanism which, for every operator who did not opt in, is not there.
+    """
+    assert _resolve().run.escalation_rung == cli._DEFAULT_ESCALATION_RUNG
+
+
+def test_the_built_in_rung_sits_one_rung_above_the_default_pair() -> None:
+    """ADR-0036's whole point: the default reserves the ceiling for this.
+
+    A rung equal to the **Default pair** would make escalation a no-op for every
+    unlabelled issue — which is most of them — so the two constants are pinned
+    against each other rather than each against a literal.
+    """
+    resolved = _resolve().run
+
+    assert resolved.escalation_rung is not None
+    assert resolved.escalation_rung[0] == resolved.model
+    assert resolved.escalation_rung[1] != resolved.reasoning_effort
+
+
+def test_a_config_file_names_the_rung() -> None:
+    assert _resolve(
+        project={"escalation": {"model": "gpt-5.6-sol", "effort": "high"}}
+    ).run.escalation_rung == ("gpt-5.6-sol", "high")
+
+
+def test_project_scope_beats_global_scope_for_the_rung() -> None:
+    assert _resolve(
+        project={"escalation": {"model": "gpt-5.6-sol", "effort": "high"}},
+        global_={"escalation": {"model": "claude-opus-4.8", "effort": "max"}},
+    ).run.escalation_rung == ("gpt-5.6-sol", "high")
+
+
+def test_escalation_can_be_turned_off() -> None:
+    """``enabled = false`` is the whole opt-out, and it reads as no rung.
+
+    Absent rather than "present but ignored", so no call site can escalate a Run
+    that disabled escalation by consulting the pair without the switch.
+    """
+    assert _resolve(project={"escalation": {"enabled": False}}).run.escalation_rung is None
+
+
+def test_disabling_in_project_scope_overrides_a_global_rung() -> None:
+    assert (
+        _resolve(
+            project={"escalation": {"enabled": False}},
+            global_={"escalation": {"model": "gpt-5.6-sol", "effort": "high"}},
+        ).run.escalation_rung
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "argv, env",
+    [
+        (["--model", "claude-opus-4.8"], {}),
+        (["--reasoning-effort", "low"], {}),
+        ([], {"GIT_LOOPY_MODEL": "claude-opus-4.8"}),
+        ([], {"GIT_LOOPY_REASONING_EFFORT": "low"}),
+    ],
+)
+def test_an_explicit_pin_suppresses_escalation_as_well_as_routing(
+    argv: list[str], env: dict[str, str]
+) -> None:
+    """Pinning a model means what it says.
+
+    An operator who named a model has taken the model choice away from the
+    runner; escalating past it would override an explicit human instruction —
+    the same reason the pin already silences **Routing**.
+    """
+    resolved = _resolve(
+        argv,
+        env=env,
+        project={"escalation": {"model": "gpt-5.6-sol", "effort": "high"}},
+    )
+
+    assert resolved.run.escalation_rung is None
+    assert resolved.run.routing_suppressed is True
+
+
+def test_the_rung_is_config_file_only_and_reads_no_environment_variable() -> None:
+    """No env tier, on purpose — that is the spine §14 fixed for routing.
+
+    A ``GIT_LOOPY_ESCALATION_*`` would be a *second* way for the environment to
+    speak about models, beside the one that already suppresses the machinery
+    outright, and the two would disagree about the same Run.
+    """
+    resolved = _resolve(
+        env={
+            "GIT_LOOPY_ESCALATION_MODEL": "gpt-5.6-sol",
+            "GIT_LOOPY_ESCALATION_EFFORT": "high",
+        }
+    )
+
+    assert resolved.run.escalation_rung == cli._DEFAULT_ESCALATION_RUNG
