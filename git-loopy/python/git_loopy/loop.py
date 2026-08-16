@@ -175,6 +175,7 @@ from git_loopy.skill_install import (
 )
 from git_loopy.rolling_pool import RollingPool
 from git_loopy.rollup import IterationRollupAccumulator
+from git_loopy.run_readback import run_start_payload
 from git_loopy.serial_pickup import (
     SerialPickup,
     pick_serial,
@@ -2337,6 +2338,10 @@ class _Loop:
             parallel_capabilities=dict(events_module.PYTHON_PARALLEL_CAPABILITIES),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
+            # #410: what this Run parsed, gate-checked. Carried on the Event
+            # every drive path already emits rather than on one of its own —
+            # the readback describes the Run, and the Run has exactly one start.
+            **run_start_payload(self._config),
         )
         outcome_label = "empty_pool"
         exit_code = 1
@@ -2412,6 +2417,8 @@ class _Loop:
             parallel_capabilities=dict(events_module.PYTHON_PARALLEL_CAPABILITIES),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
+            # #410: what this Run parsed, gate-checked.
+            **run_start_payload(self._config),
         )
 
         exit_code = exit_code_for("iteration_cap")
@@ -2822,6 +2829,8 @@ class _ParallelLoop:
             parallel_capabilities=dict(events_module.PYTHON_PARALLEL_CAPABILITIES),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
+            # #410: what this Run parsed, gate-checked.
+            **run_start_payload(self._config),
             # #304: only a Parallel-mode Run carries these, so a serial Run's
             # `wrapper.run.start` is byte-identical to what it always was.
             parallel_mode=True,

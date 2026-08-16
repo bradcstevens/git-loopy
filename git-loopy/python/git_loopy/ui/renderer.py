@@ -215,7 +215,32 @@ class Renderer:
         if run_id:
             text.append(f"  (run_id: {run_id})", style=STYLES["meta"])
         self.console.print(text)
+        self._print_run_readback(event)
         self._print_parallel_mode(event)
+
+    def _print_run_readback(self, event: dict[str, Any]) -> None:
+        """Read back what this Run parsed, and what the gate makes of it (#410).
+
+        No validator for the ``[routing]`` table can exist — its keys are the
+        operator's vocabulary and its pairs are the vendor's — so the operator
+        reading back what the kit parsed is the only validation available
+        anywhere. That is why the block echoes the **keys themselves** and never
+        a count of them, and why it prints on every Run rather than only on one
+        that configured something: the Run that puzzles an operator is usually
+        the one where nothing they wrote appeared to take effect.
+
+        The *producer* is unconditional; these fields are optional-when-present
+        on the wire (§14), so a Runner that resolves no routing emits none of
+        them and gets no block. Synthesising one from absent fields would
+        describe a Config that Runner never had.
+        """
+        if not _RUN_READBACK_KEYS & set(event):
+            return
+        for label, value, style in _run_readback_lines(event):
+            line = Text()
+            line.append(f"  {label:<17}", style=STYLES["meta"])
+            line.append(value, style=style)
+            self.console.print(line)
 
     def _print_parallel_mode(self, event: dict[str, Any]) -> None:
         """Say that Parallel mode is on and what Lane cap resolved (#304).
@@ -880,6 +905,167 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str)]
+
+
+# ---------------------------------------------------------------------------
+# The Run readback block — what this Run parsed, and what the gate says (#410)
+# ---------------------------------------------------------------------------
+
+
+#: Any one of these on a ``wrapper.run.start`` means the emitting Runner routes
+#: and has read its Config back. Membership rather than a version check, because
+#: the fields are optional-when-present (§14) and a port that resolves nothing
+#: is conforming rather than behind.
+_RUN_READBACK_KEYS: frozenset[str] = frozenset(
+    {"routes", "escalation_rung", "roster_cli_version"}
+)
+
+#: What each gate warning means *to an operator reading their own Config back*.
+#: Phrased as the consequence rather than as the signal's name: the readback's
+#: reader is deciding whether to go and edit a file, and "dropped_effort" does
+#: not say that the effort they wrote will not happen.
+_GATE_WARNING_PHRASES: dict[str, str] = {
+    "dropped_effort": "effort dropped — the model does not accept it",
+    "incapable_model": "effort dropped — the model accepts no reasoning effort",
+    "unknown_model": "model is not in the kit's roster",
+    "unsupported_context_tier": "context tier downgraded — the model does not offer it",
+}
+
+
+def _readback_pair_phrase(pair: Any) -> str:
+    """``model @ effort`` for one configured pair, as **authored**.
+
+    Deliberately not the gated effort. This is a readback: the operator has to
+    recognise the line as the thing they wrote, and the gate's verdict rides
+    beside it as a warning rather than by quietly rewriting the value. A line
+    showing only the gated effort would report the outcome and lose the request,
+    which is the half that can be corrected.
+    """
+    if not isinstance(pair, dict):
+        return ""
+    model = pair.get("model")
+    rendered = str(model) if isinstance(model, str) and model else "(backend default)"
+    effort = pair.get("configured_effort", pair.get("effort"))
+    if isinstance(effort, str) and effort:
+        return f"{rendered} @ {effort}"
+    return f"{rendered} @ (backend default)"
+
+
+def _gate_verdict_phrase(pair: Any) -> str:
+    """Every gate warning on one configured pair, in the order the gate raised them.
+
+    An unrecognised warning renders verbatim rather than as nothing: a Runner
+    ahead of this reader is better read approximately than silently cleared,
+    and a readback that dropped a verdict would be reporting a pair as sound
+    because it did not understand the objection.
+    """
+    warnings = _string_list(pair.get("gate_warnings")) if isinstance(pair, dict) else []
+    if not warnings:
+        return ""
+    return "  ⚠ " + "; ".join(
+        _GATE_WARNING_PHRASES.get(warning, warning.replace("_", " "))
+        for warning in warnings
+    )
+
+
+def _roster_phrase(event: dict[str, Any]) -> str:
+    """The spawned harness beside the roster every gate verdict was reached against.
+
+    Reasoning-effort capability is a table hardcoded in the Copilot CLI's own
+    bundle, so the roster is a function of CLI version (ADR-0019) — and a Run
+    that gates against one version while spawning another has been checking its
+    pairs against a description of some other binary. Agreement prints too:
+    silence would leave "checked and fine" indistinguishable from "not checked".
+    """
+    harness = event.get("harness_version")
+    roster = event.get("roster_cli_version")
+    spawned = harness if isinstance(harness, str) and harness else "unknown"
+    phrase = f"CLI {spawned}" if spawned != "unknown" else "CLI version unknown"
+    if isinstance(roster, str) and roster:
+        phrase += f"  •  roster captured against CLI {roster}"
+    diverged = event.get("roster_diverged")
+    if diverged is True:
+        phrase += " (diverged)"
+    return phrase
+
+
+def _routing_status_phrase(event: dict[str, Any]) -> str:
+    """Whether the table that follows is in force, and if not, why not.
+
+    A suppressed table and an absent table are opposite facts about a Config —
+    an operator who pinned a model on purpose, and an operator who configured no
+    routes at all — and rendering either as silence would let it be read as the
+    other.
+    """
+    if event.get("routing_suppressed") is True:
+        return "suppressed run-wide by an explicit model pin"
+    if not _string_list([route.get("key") for route in _routes(event)]):
+        return "no table configured — every issue runs on the default pair"
+    return "in force"
+
+
+def _routes(event: dict[str, Any]) -> list[dict[str, Any]]:
+    """The route objects on a readback payload, ignoring anything else."""
+    raw = event.get("routes")
+    if not isinstance(raw, list):
+        return []
+    return [route for route in raw if isinstance(route, dict)]
+
+
+def _run_readback_lines(event: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """The block's ``(label, value, style)`` lines, in reading order.
+
+    Every line carries its own label rather than continuing an earlier one, so
+    the block stays greppable and no line's meaning depends on the line above
+    it — which is what a readback an operator scans for one wrong value needs.
+    """
+    warning_style = STYLES["warning"]
+    plain = STYLES["meta"]
+    lines: list[tuple[str, str, str]] = [
+        (
+            "default pair",
+            _readback_pair_phrase(
+                {
+                    "model": event.get("model"),
+                    "configured_effort": event.get("effort"),
+                }
+            ),
+            plain,
+        )
+    ]
+    tier = event.get("context_tier")
+    if isinstance(tier, str) and tier and tier != "default":
+        lines.append(("context tier", tier, plain))
+    rung = event.get("escalation_rung")
+    if isinstance(rung, dict):
+        verdict = _gate_verdict_phrase(rung)
+        lines.append(
+            (
+                "escalation rung",
+                _readback_pair_phrase(rung) + verdict,
+                warning_style if verdict else plain,
+            )
+        )
+    else:
+        lines.append(("escalation rung", "off — a stalled issue is not retried", plain))
+    lines.append(("routing", _routing_status_phrase(event), plain))
+    for route in _routes(event):
+        key = route.get("key")
+        if not isinstance(key, str) or not key:
+            continue
+        verdict = _gate_verdict_phrase(route)
+        lines.append(
+            (
+                "route",
+                f"task-type:{key}  {_readback_pair_phrase(route)}{verdict}",
+                warning_style if verdict else plain,
+            )
+        )
+    unconfigured = _string_list(event.get("unconfigured_task_type_keys"))
+    if unconfigured:
+        lines.append(("unrouted", ", ".join(unconfigured), plain))
+    lines.append(("harness", _roster_phrase(event), plain))
+    return lines
 
 
 # ---------------------------------------------------------------------------

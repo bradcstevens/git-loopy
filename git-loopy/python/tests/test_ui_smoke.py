@@ -2554,3 +2554,215 @@ def test_a_pickup_carrying_no_routing_still_renders_its_issue() -> None:
     )
 
     assert "#7" in buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# The Run readback block (#410) — the only validation ``[routing]`` can have
+# ---------------------------------------------------------------------------
+
+
+def _readback_event(**overrides: Any) -> dict[str, Any]:
+    """A ``wrapper.run.start`` carrying a Run readback, as the loop emits one."""
+    payload: dict[str, Any] = {
+        "type": WRAPPER_RUN_START,
+        "run_id": "01HXR0000000000000000000B1",
+        "model": "claude-opus-5",
+        "effort": "xhigh",
+        "context_tier": "default",
+        "escalation_rung": {
+            "model": "claude-opus-5",
+            "effort": "max",
+            "configured_effort": "max",
+            "gate_warnings": [],
+        },
+        "routes": [],
+        "unconfigured_task_type_keys": [],
+        "routing_suppressed": False,
+        "harness_version": "1.0.67",
+        "roster_cli_version": "1.0.75",
+        "roster_diverged": True,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_run_start_prints_the_readback_block_for_a_run_that_configured_nothing() -> None:
+    """Unconditional, so the invocation that puzzles an operator is described too.
+
+    A block that appeared only when something was configured would be silent in
+    exactly the case where somebody is asking why their Run "did nothing
+    different".
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_readback_event())
+
+    out = buf.getvalue()
+    assert "default pair" in out
+    assert "claude-opus-5 @ xhigh" in out
+    assert "escalation rung" in out
+    assert "claude-opus-5 @ max" in out
+
+
+def test_the_block_echoes_the_routing_keys_and_never_a_count_of_them() -> None:
+    """A count cannot reveal that a seven-key taxonomy has a two-key table."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _readback_event(
+            routes=[
+                {
+                    "key": "planning",
+                    "model": "claude-opus-5",
+                    "effort": "max",
+                    "configured_effort": "max",
+                    "gate_warnings": [],
+                },
+                {
+                    "key": "chore",
+                    "model": "gpt-5.6-luna",
+                    "effort": "none",
+                    "configured_effort": "none",
+                    "gate_warnings": [],
+                },
+            ],
+            unconfigured_task_type_keys=["review", "implementation"],
+        )
+    )
+
+    out = buf.getvalue()
+    assert "task-type:planning" in out
+    assert "task-type:chore" in out
+    assert "2 routes" not in out
+    assert "review, implementation" in out
+
+
+def test_a_dropped_effort_warns_on_the_route_that_configured_it() -> None:
+    """An operator who wrote ``max`` learns ``max`` did not happen (#410).
+
+    The configured effort is printed beside the verdict: a line reporting only
+    "the backend picks" names the outcome and not the request, and the request
+    is the half the operator can correct.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _readback_event(
+            routes=[
+                {
+                    "key": "test",
+                    "model": "gpt-5-mini",
+                    "effort": None,
+                    "configured_effort": "max",
+                    "gate_warnings": ["dropped_effort"],
+                }
+            ]
+        )
+    )
+
+    out = buf.getvalue()
+    assert "gpt-5-mini @ max" in out
+    assert "effort dropped" in out
+
+
+def test_a_reasoning_incapable_rung_warns_rather_than_reading_as_a_harder_pair() -> None:
+    """The rung's whole purpose is being *harder*; a silently dropped effort ends it."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _readback_event(
+            escalation_rung={
+                "model": "claude-haiku-4.5",
+                "effort": None,
+                "configured_effort": "max",
+                "gate_warnings": ["incapable_model"],
+            }
+        )
+    )
+
+    out = buf.getvalue()
+    assert "claude-haiku-4.5 @ max" in out
+    assert "no reasoning effort" in out
+
+
+def test_the_block_names_the_spawned_harness_and_the_roster_it_gated_against() -> None:
+    """ADR-0019's missing fact, and the divergence it makes readable."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_readback_event())
+
+    out = buf.getvalue()
+    assert "1.0.67" in out
+    assert "1.0.75" in out
+    assert "diverged" in out
+
+
+def test_an_agreeing_roster_says_so_rather_than_going_quiet() -> None:
+    """Silence would leave "checked and fine" indistinguishable from "not checked"."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _readback_event(
+            harness_version="1.0.75", roster_cli_version="1.0.75", roster_diverged=False
+        )
+    )
+
+    out = buf.getvalue()
+    assert "diverged" not in out
+    assert "1.0.75" in out
+
+
+def test_an_unreadable_harness_version_is_not_reported_as_agreement() -> None:
+    """Three-valued on the wire, three-valued on stdout."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _readback_event(harness_version=None, roster_diverged=None)
+    )
+
+    out = buf.getvalue()
+    assert "unknown" in out
+    assert "diverged" not in out
+
+
+def test_a_suppressed_table_is_read_back_as_suppressed_not_as_absent() -> None:
+    """Two opposite facts wear the same silence, so neither may be rendered as it."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _readback_event(
+            routing_suppressed=True,
+            escalation_rung=None,
+            routes=[
+                {
+                    "key": "planning",
+                    "model": "claude-opus-5",
+                    "effort": "max",
+                    "configured_effort": "max",
+                    "gate_warnings": [],
+                }
+            ],
+        )
+    )
+
+    out = buf.getvalue()
+    assert "suppressed" in out
+    assert "task-type:planning" in out
+
+
+def test_a_run_start_carrying_no_readback_prints_no_block() -> None:
+    """A Runner that resolves nothing says nothing, and stays conforming (§14).
+
+    The fields are optional-when-present on the wire; only the *producer* is
+    unconditional. A block synthesised from absent fields would describe a
+    Config the emitting Runner never had.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        {"type": WRAPPER_RUN_START, "run_id": "01HXR0000000000000000000B2"}
+    )
+
+    out = buf.getvalue()
+    assert "default pair" not in out
+    assert "harness" not in out

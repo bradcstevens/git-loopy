@@ -3567,3 +3567,137 @@ def test_a_configured_classifier_pair_needs_no_staircase(tmp_path, monkeypatch) 
 
     assert tracker.applied == [(7, "task-type:bugfix")]
     assert fake_client.models == ["gemini-3.5-flash", "claude-opus-4.7"]
+
+
+# ---------------------------------------------------------------------------
+# The Run readback (#410) — driven through a real Run, not a new seam
+# ---------------------------------------------------------------------------
+
+
+def _run_start_event(tmp_path: Path) -> dict[str, Any]:
+    """The one ``wrapper.run.start`` record this Run wrote."""
+    (start,) = [
+        event
+        for raw in _log_lines(tmp_path)
+        if (event := json.loads(raw))["type"] == "wrapper.run.start"
+    ]
+    return start
+
+
+def test_run_start_reads_back_the_routing_table_this_run_parsed(
+    tmp_path, monkeypatch
+) -> None:
+    """No validator for ``[routing]`` can exist, so the readback is the validation.
+
+    The keys travel themselves, never a count of them: a count cannot reveal
+    that a table an operator believes covers seven **Task types** covers two.
+    """
+    _wire_multi_issue_github(tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")])
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=1,
+                routing={
+                    "planning": ("claude-opus-5", "max"),
+                    "test": ("gpt-5-mini", "max"),
+                },
+            )
+        )
+    )
+
+    start = _run_start_event(tmp_path)
+    assert [route["key"] for route in start["routes"]] == ["planning", "test"]
+    assert start["unconfigured_task_type_keys"] == [
+        "review",
+        "implementation",
+        "docs",
+        "chore",
+        "bugfix",
+    ]
+
+
+def test_run_start_gate_checks_a_route_the_run_never_exercises(
+    tmp_path, monkeypatch
+) -> None:
+    """The point of gating at Run start: this Run works one unlabelled issue.
+
+    ``task-type:test`` is never picked up, so nothing else in the Run ever
+    resolves that route — and ``gpt-5-mini`` accepting no ``max`` would stay
+    unknown until the first issue that carried the label.
+    """
+    _wire_multi_issue_github(tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")])
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=1,
+                routing={"test": ("gpt-5-mini", "max")},
+            )
+        )
+    )
+
+    (route,) = _run_start_event(tmp_path)["routes"]
+    assert route["configured_effort"] == "max"
+    assert route["effort"] is None
+    assert route["gate_warnings"] == ["dropped_effort"]
+
+
+def test_run_start_names_the_escalation_rung_and_gate_checks_it(
+    tmp_path, monkeypatch
+) -> None:
+    """The rung is otherwise first gated at a stalled issue's next Pickup."""
+    _wire_multi_issue_github(tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")])
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=1,
+                escalation_rung=("claude-haiku-4.5", "max"),
+            )
+        )
+    )
+
+    rung = _run_start_event(tmp_path)["escalation_rung"]
+    assert rung["model"] == "claude-haiku-4.5"
+    assert rung["configured_effort"] == "max"
+    assert rung["gate_warnings"] == ["incapable_model"]
+
+
+def test_run_start_names_the_harness_the_roster_describes(
+    tmp_path, monkeypatch
+) -> None:
+    """ADR-0019: the divergence is reported at Run start, or it is reported nowhere."""
+    from git_loopy.config import MODEL_ROSTER_CLI_VERSION
+    from git_loopy.run_readback import spawned_harness_version
+
+    _wire_multi_issue_github(tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")])
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    start = _run_start_event(tmp_path)
+    assert start["harness_version"] == spawned_harness_version()
+    assert start["roster_cli_version"] == MODEL_ROSTER_CLI_VERSION
+
+
+def test_a_run_that_configured_nothing_still_reads_its_defaults_back(
+    tmp_path, monkeypatch
+) -> None:
+    """The block is unconditional, so the ordinary invocation is described too.
+
+    An operator whose Run "did nothing different" has to be able to see the
+    triple it ran on; a block that appeared only when something was configured
+    would be silent in exactly the case that puzzles them.
+    """
+    _wire_multi_issue_github(tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")])
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    start = _run_start_event(tmp_path)
+    assert start["routes"] == []
+    assert start["escalation_rung"] is None
+    assert start["context_tier"] == "default"
+    assert start["routing_suppressed"] is False

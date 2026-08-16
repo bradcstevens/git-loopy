@@ -34,6 +34,7 @@ from git_loopy.config import (
     CONTEXT_TIERS,
     MODEL_CONTEXT_TIERS,
     MODEL_REASONING_EFFORTS,
+    EffortGateWarning,
     RoutingLifecyclePosition,
     RoutingSource,
     TASK_TYPE_KEYS,
@@ -45,6 +46,7 @@ from git_loopy.config import (
     resolve_iteration_model,
 )
 from git_loopy.interactive.state import RETROACTIVE_BINDING_SOURCES, LiveRunState
+from git_loopy.run_readback import run_start_payload
 from git_loopy.gh import (
     LIST_MAX_LIMIT,
     LIST_PAGE_LIMIT,
@@ -620,6 +622,72 @@ def test_the_production_resolver_projects_the_pinned_pickup_payload() -> None:
     assert payload["lifecycle_position"] in contract["lifecycle_position_values"]
 
 
+def test_the_production_readback_projects_the_pinned_run_start_payload() -> None:
+    """The readback is the *only* validation the ``[routing]`` table can have,
+    so the fixture stating its shape has to be the shape production emits.
+
+    Driven through ``run_start_payload`` — the composer all three drive paths
+    spread into their Run start Event — rather than through the record, so a
+    field added to ``RunReadback`` and never wired into the emit is caught
+    here. Both nested projections are checked as well: a route is a pair plus
+    the key it was configured under, and nothing else.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"]["wrapper.run.start"]
+    payload = run_start_payload(
+        RunConfig(
+            model="claude-opus-4.8",
+            reasoning_effort="max",
+            routing={"docs": ("gpt-5-mini", "medium")},
+            escalation_rung=("claude-opus-5", "max"),
+        )
+    )
+
+    assert list(payload) == contract["readback_optional"]
+    assert list(payload["routes"][0]) == contract["readback_route_keys"]
+    assert list(payload["escalation_rung"]) == contract["readback_pair_keys"]
+
+    # The keys themselves, never a count of them — a count reveals neither a
+    # misspelling nor the six taxonomy members the table left unconfigured.
+    assert payload["routes"][0]["key"] == "docs"
+    assert set(payload["unconfigured_task_type_keys"]) == set(
+        TASK_TYPE_KEYS
+    ) - {"docs"}
+
+    # Optional beside `required`, never in it.
+    assert not set(contract["readback_optional"]) & set(contract["required"])
+
+
+def test_a_pinned_stream_carries_a_run_start_that_reads_its_routing_back() -> None:
+    """The shape is stated above; this is the sample that makes a native
+    port's serializer produce the bytes — the nested route list, the null
+    effort a gate dropped, and the warning array beside it included.
+
+    Deliberately a *failing* route: a case where every pair passed would pin
+    the readback's easy half and leave the half an operator actually needs
+    unexercised.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"]["wrapper.run.start"]
+    case = next(
+        case
+        for case in _EVENT_SCHEMA["serialization_cases"]
+        if case["id"] == "run-start-routing-readback"
+    )
+    event = case["event"]
+
+    assert set(contract["required"]) <= set(event)
+    for route in event["routes"]:
+        assert list(route) == contract["readback_route_keys"]
+        assert route["key"] in TASK_TYPE_KEYS
+    assert list(event["escalation_rung"]) == contract["readback_pair_keys"]
+
+    refused = next(route for route in event["routes"] if route["gate_warnings"])
+    assert refused["effort"] is None
+    assert refused["configured_effort"] is not None
+    assert set(refused["gate_warnings"]) <= {
+        warning.value for warning in EffortGateWarning
+    }
+
+
 def test_a_pinned_stream_carries_a_pickup_that_says_what_it_routed_to() -> None:
     """A vocabulary nothing exercises is a vocabulary no port has to read.
 
@@ -732,10 +800,18 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     one is optional-when-present. A consumer pinned to 1.1 therefore reads a
     1.21 stream exactly as it read a 1.19 one — and a 1.22 or 1.23 one, which
     add nothing to the wire at all, identically again.
+
+    1.24 is 1.21's shape a second time and settles that it was a rule rather
+    than one indulgence: §14 gained the **Run readback** (#410), so ten
+    optional fields appear on ``wrapper.run.start`` — the record every port
+    already emits and every consumer already parses. No existing key changed,
+    the Rust ``RunStart`` is not ``deny_unknown_fields``, and a port that
+    routes nothing emits the record byte-identically, so a 1.1 consumer is
+    again unaffected.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "1.23"
+    assert _EVENT_SCHEMA["contract_version"] == "1.24"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
@@ -800,6 +876,78 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "insight_capabilities",
                 "parallel_capabilities",
             ],
+            # #410: the **Run readback**. Optional beside `required`, never in
+            # it: a port that routes nothing has no Config to read back, and
+            # obliging it to publish one would make it fabricate a table.
+            "readback_optional": [
+                "model",
+                "effort",
+                "context_tier",
+                "escalation_rung",
+                "routes",
+                "unconfigured_task_type_keys",
+                "routing_suppressed",
+                "harness_version",
+                "roster_cli_version",
+                "roster_diverged",
+            ],
+            "readback_pair_keys": [
+                "model",
+                "effort",
+                "configured_effort",
+                "gate_warnings",
+            ],
+            "readback_route_keys": [
+                "key",
+                "model",
+                "effort",
+                "configured_effort",
+                "gate_warnings",
+            ],
+            "readback_note": (
+                "Contract 1.24. The Run readback section 14 obliges of an "
+                "Orchestrator that routes, published on the Run's own start "
+                "record rather than on an Event of its own. Every field is "
+                "optional-when-present: a port that routes nothing emits Run "
+                "start exactly as before and stays conforming, and a consumer "
+                "reads their absence as 'this Runner does not route'. The "
+                "PRODUCER is unconditional -- a Run that configured nothing "
+                "publishes the readback describing exactly that, because the "
+                "Run that puzzles an operator is the one where nothing they "
+                "wrote appeared to take effect."
+            ),
+            "readback_keys_not_a_count": (
+                "routes carries the keys THEMSELVES, never a count of them. "
+                "No validator for the [routing] table can exist -- its keys "
+                "are the operator's vocabulary and its pairs are the "
+                "vendor's -- so reading back what the kit parsed is the only "
+                "validation available anywhere, and a count reveals neither a "
+                "misspelling nor a half-filled table. "
+                "unconfigured_task_type_keys is the other half: the taxonomy "
+                "members no entry names, which route to the Default pair and "
+                "say so nowhere else until a Pickup has already happened."
+            ),
+            "readback_two_efforts": (
+                "effort is the GATED effort -- what would actually be sent -- "
+                "and configured_effort is what Config supplied. Both travel "
+                "because a readback carrying only the gated value reports the "
+                "outcome and loses the request, and the request is the half "
+                "an operator can correct. gate_warnings is the verdict, drawn "
+                "from the same vocabulary wrapper.pickup.bound's "
+                "gate_warnings carries, and rides every configured pair "
+                "including the escalation rung, which nothing else gates "
+                "until an issue has already stalled."
+            ),
+            "readback_roster_divergence": (
+                "roster_diverged is THREE-valued: true, false, or null for an "
+                "unreadable harness_version. Reasoning-effort capability is a "
+                "table hardcoded in the Copilot CLI's own bundle, so the "
+                "roster is a function of CLI version (ADR-0019) and a Run "
+                "gating against one version while spawning another has been "
+                "checking its pairs against a description of some other "
+                "binary. null is 'nobody knows' and a consumer MUST NOT read "
+                "it as agreement."
+            ),
         },
         "wrapper.issue.activated": {
             "required_when_present": ["issue", "activated_at", "binding_source"],
@@ -2696,6 +2844,23 @@ def test_the_model_roster_fixture_names_the_harness_it_describes() -> None:
     ADR-0019 requires to be one atomic change and which is owned elsewhere.
     """
     assert _MODEL_ROSTER["cli_version"] == "1.0.75"
+
+
+def test_the_in_language_roster_stamp_tracks_the_fixture_it_restates() -> None:
+    """The **Run readback** reads the stamp; the fixture is not packaged (#410).
+
+    ``conformance/`` ships with the repository, not with an installed
+    distribution, so a Run that reported the stamp by loading the fixture would
+    report nothing wherever the kit is actually installed —
+    ``MODEL_ROSTER_CLI_VERSION`` restates it in-language for the same reason
+    ``MODEL_REASONING_EFFORTS`` restates the roster itself.
+
+    Restating is duplicating, and this is the assertion that makes the
+    duplicate safe: the stamp is the version every gate verdict in a Run was
+    reached against, so one moved without the other would make the readback
+    report the divergence of some third binary that exists nowhere.
+    """
+    assert config_module.MODEL_ROSTER_CLI_VERSION == _MODEL_ROSTER["cli_version"]
 
 
 def test_the_roster_stamp_is_a_version_the_gemini_rows_actually_agree_with() -> None:

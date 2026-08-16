@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.23 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 1.24 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -514,6 +514,22 @@ no routing emits the binding exactly as before and stays conforming; `null` is a
 backend chooses) and not an absence. `event_schema_version` does not move: the seven are additive
 payload fields, which every schema-1 consumer already ignores when unknown.
 
+Contract-1.24 addition within compatibility schema 1, and an extension of an existing record for
+the same reason: `wrapper.run.start` carries the **Run readback** (§14) as `model`, `effort`,
+`context_tier`, `escalation_rung`, `routes`, `unconfigured_task_type_keys`, `routing_suppressed`,
+`harness_version`, `roster_cli_version` and `roster_diverged`. `escalation_rung` is an object —
+`model`, `effort`, `configured_effort`, `gate_warnings` — or `null` where escalation is not in
+force, and each entry of `routes` is that object plus the `key` it was configured under, spelled
+exactly as Config spelled it. Two efforts travel on every pair: `effort` is the **gated** value,
+what would actually be sent, and `configured_effort` is what Config supplied, because a readback
+carrying only the gated one reports the outcome and loses the request an operator can correct.
+`roster_diverged` is three-valued — `true`, `false`, or `null` for an unreadable
+`harness_version` — and a consumer MUST NOT read `null` as agreement. All ten are
+optional-when-present: an Orchestrator that routes nothing emits Run start byte-identically and
+stays conforming, and their absence means *this Runner does not route*, never a Config it failed
+to report. `event_schema_version` does not move, for the reason it did not move at 1.21: a field
+that **appears** breaks no pinned consumer, only one that **changes** does.
+
 Every `wrapper.run.start` MUST carry the exact distribution `release_version`, numeric
 `schema_version: 1`, and an
 `insight_capabilities` object with at least these boolean keys:
@@ -1001,6 +1017,26 @@ run-wide default:
   route" rather than as a route it failed to report. A `null` `model` or `effort` is *present*
   and means the backend chooses — for `effort`, the accompanying gate warning is what separates
   an operator who asked for nothing from one whose effort was dropped.
+- **Read back what it parsed (contract 1.24).** An Orchestrator that routes MUST print, at **Run
+  start** and **unconditionally**, a labelled readback of the model settings it parsed: the
+  run-wide **Default pair**'s model, effort and context tier; the **Escalation rung**; whether an
+  explicit pin suppressed routing run-wide; every `[routing]` entry; and the CLI version it
+  spawns beside the CLI version its roster was captured against
+  ([ADR-0019](adr/0019-roster-derived-from-the-pinned-harness.md)). Three properties are
+  load-bearing. It MUST echo the routing **keys themselves**, never a count of them: no validator
+  for the table can exist — its keys are the operator's vocabulary and its pairs are the vendor's
+  — so the operator reading back what the kit parsed is the only validation available anywhere,
+  and a count can reveal neither a half-filled table nor a key spelled differently from the label
+  it was meant to match. It MUST gate-check **each configured pair**, non-fatally, because a route
+  no issue exercises is otherwise never resolved and its model id and effort never checked at all,
+  and because a rung is otherwise first gated at a stalled issue's *next* pickup — the one moment
+  the Run is already going badly. And the block MUST print on a Run that configured **nothing**,
+  because the Run that puzzles an operator is the one where nothing they wrote appeared to take
+  effect, and a block that appeared only when something was configured would be silent exactly
+  there. The readback decides nothing and MUST NOT stop a Run: a readback that could would be the
+  validator that cannot exist. An Orchestrator that publishes it on the wire carries it on that
+  Run's own `wrapper.run.start` (§12), on the same optional-when-present terms as the Pickup's
+  resolution above.
 
 Contract 1.12 gave the serial loop a structural pickup seam of its own (§3.3), and contract 1.20
 applies what that seam resolves. In between, the scope deliberately did **not** move with it: a

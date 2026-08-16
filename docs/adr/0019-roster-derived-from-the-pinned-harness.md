@@ -82,6 +82,17 @@ version-correct answer and was overruled.
   Every catalogue change would otherwise warn, and a warning that fires on routine vendor
   churn trains operators to ignore it.
 
+**Amendment ([#410](https://github.com/bradcstevens/git-loopy/issues/410)):** the version half
+of that report now ships, and it ships *unconditionally*. The **Run readback** prints the
+spawned CLI version beside the version `model-roster.json` was stamped against, and flags them
+as diverged when they differ — an offline comparison of two constants, which is why it can be
+unconditional where the live-roster comparison cannot: reading the live catalogue needs the
+network, so a Run that could not reach it would otherwise print nothing at all about the fact
+this entry exists to surface. The two reports are complementary rather than redundant. This one
+answers *is the roster even about the binary this Run spawns*, which is the question whose
+absence produced this investigation; the live comparison answers *and is its content still
+right*, and keeps its warn-only-when-it-would-change-a-decision rule.
+
 ### The kit's two enforcement branches are named, because they are not symmetric
 
 Probing the pinned harness established behaviour that four tickets had assumed rather than

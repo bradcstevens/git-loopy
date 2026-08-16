@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from git_loopy import events, loop as loop_module
+from git_loopy.config import RunConfig
 
 
 class _NoPreflight:
@@ -42,6 +43,12 @@ def _bare_loop(*, max_iterations: int) -> Any:
     Copilot client and the Strike machine are all reached from *inside* an
     iteration, and this suite replaces the iteration wholesale. A harness that
     stood them up would be testing the harness.
+
+    ``_config`` is the *real* ``RunConfig`` rather than a namespace, because
+    ``drive()`` reads whole slices of it — the **Run readback** reads the
+    ``[routing]`` table, the **Escalation rung** and the context tier — and a
+    double that enumerated today's fields would break every time one is added
+    without ever catching a bug.
     """
     bare = object.__new__(loop_module._Loop)
     bare._diag = logging.getLogger("test.loop.run_envelope")
@@ -52,7 +59,7 @@ def _bare_loop(*, max_iterations: int) -> Any:
     bare._source = _NoPreflight()
     bare._frontier_plan = None
     bare._include_prs = False
-    bare._config = SimpleNamespace(
+    bare._config = RunConfig(
         issue_source="github",
         max_iterations=max_iterations,
         max_nmt_strikes=3,

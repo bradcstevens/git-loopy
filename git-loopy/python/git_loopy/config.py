@@ -41,6 +41,7 @@ __all__ = [
     "REASONING_EFFORT_ORDER",
     "REASONING_EFFORTS",
     "MODEL_REASONING_EFFORTS",
+    "MODEL_ROSTER_CLI_VERSION",
     "SUPPORTED_MODELS",
     "DEFAULT_SEND_TIMEOUT_SECONDS",
     "TASK_TYPE_LABEL_PREFIX",
@@ -112,6 +113,20 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
     ),
     "mai-code-1-flash-picker": frozenset({"low", "medium", "high"}),
 }
+
+#: The Copilot CLI version :data:`MODEL_REASONING_EFFORTS` and
+#: :data:`MODEL_CONTEXT_TIERS` were captured against — the stamp
+#: ``conformance/model-roster.json`` already carries, restated in-language so a
+#: **Run** can read it without reaching for a fixture that is not packaged
+#: (#410). The Conformance suite holds the two in lockstep.
+#:
+#: The roster is a **function of CLI version** (ADR-0019): ``models.list``
+#: discards the vendor's advertised reasoning-effort array and substitutes a
+#: table hardcoded in the CLI's own bundle. So this is not decoration — where it
+#: differs from the CLI the SDK actually spawns, every gate verdict in the Run
+#: was reached against a description of some *other* binary, and the divergence
+#: is what the **Run readback** reports at Run start.
+MODEL_ROSTER_CLI_VERSION = "1.0.75"
 
 #: The model ids the kit officially supports (the keys of
 #: :data:`MODEL_REASONING_EFFORTS`). :mod:`git_loopy.cli` uses this to

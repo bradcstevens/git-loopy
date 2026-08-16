@@ -5212,3 +5212,71 @@ def test_a_lane_classifies_its_unlabelled_issue_before_it_routes(
     assert [(e["issue"], e["model"], e["routing_source"]) for e in bound] == [
         (42, "claude-opus-4.7", "routed")
     ]
+
+
+# ---------------------------------------------------------------------------
+# Run readback (#410): a Lane's Run start reads back the same Config a serial
+# Run's does, because the table it validates is one table.
+# ---------------------------------------------------------------------------
+
+
+def test_a_parallel_run_start_reads_back_the_routing_it_parsed(
+    tmp_path, monkeypatch
+) -> None:
+    """The readback is a fact about **Config**, not about the mode reading it.
+
+    A Lane resolves its **Routed pair** through the same seam a serial
+    **Iteration** does, so an operator who mistyped a key has to see it in
+    either mode. Asserted through a real Parallel-mode Run rather than through
+    the composer, because the failure this guards against is an emit site that
+    was never wired — which a test of the composer cannot see.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42, labels=["ready-for-agent", "parallel-safe", "task-type:docs"]
+            )
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("gpt-5-mini")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                parallel=2,
+                max_iterations=1,
+                max_nmt_strikes=3,
+                routing={
+                    "docs": ("gpt-5-mini", "medium"),
+                    "chore": ("claude-haiku-4.5", "high"),
+                },
+                escalation_rung=("claude-opus-5", "max"),
+            )
+        )
+    )
+
+    run_start = next(
+        e for e in _logged_events(tmp_path) if e["type"] == "wrapper.run.start"
+    )
+    assert [route["key"] for route in run_start["routes"]] == ["docs", "chore"]
+    assert run_start["escalation_rung"]["model"] == "claude-opus-5"
+
+    # `chore` is never picked up by this Run, and is gate-checked anyway.
+    refused = next(r for r in run_start["routes"] if r["key"] == "chore")
+    assert refused["configured_effort"] == "high"
+    assert refused["effort"] is None
+    assert refused["gate_warnings"] == ["incapable_model"]

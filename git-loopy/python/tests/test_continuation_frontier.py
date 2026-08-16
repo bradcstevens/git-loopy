@@ -1541,7 +1541,7 @@ def _runner_loop(
     )
     bare._source = source
     bare._frontier_plan = plan
-    bare._config = SimpleNamespace(
+    bare._config = config.RunConfig(
         issue_source="github", max_iterations=12, max_nmt_strikes=3, parallel=1
     )
     bare._release_version = "0.0.0-test"

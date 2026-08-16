@@ -949,6 +949,21 @@ one ledger. It is configurable from the **Config** file only and on by default a
 progress is commit-shaped and not quality-shaped.
 _Avoid_: retry model, fallback pair (that is the **Default pair**), escalation ladder.
 
+**Run readback**:
+The block a **Run** prints at start and publishes on its own start Event, stating **Config** as
+the kit parsed it: the **Default pair** and context tier, the **Escalation rung**, whether an
+explicit pin suppressed **Routing**, every `[routing]` entry with the `task-type` key spelled
+exactly as the table spelled it, the taxonomy keys no entry configures, and the spawned harness
+version beside the CLI version the model roster was captured against. It exists because no
+validator for the `[routing]` table can exist — its keys are the operator's vocabulary and its
+pairs are the vendor's — so an operator reading back what the kit understood is the only
+validation available anywhere. It therefore carries the **keys themselves and never a count of
+them**, and gate-checks every configured pair **non-fatally**, so a route this Run never
+exercises still has its model id and effort checked and a dropped effort warns before it costs
+an **Iteration** rather than after. Unconditional: a Run that configured nothing prints the
+readback saying so.
+_Avoid_: config dump, banner, routing validation (nothing is refused here — the readback reports).
+
 **Measured routing**:
 The **Calibration**-authored precedence tier — one rung between global **Config** and the
 built-in default, so it supplies a **Routed pair** only where the operator is silent and a

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.23",
+  "contract_version": "1.24",
   "event_schema_version": "1.1",
   "insight_capabilities": {
     "names": [
@@ -111,7 +111,14 @@
       "required_when_present": ["gate_loops", "oracle_loops"]
     },
     "wrapper.run.start": {
-      "required": ["release_version", "schema_version", "insight_capabilities", "parallel_capabilities"]
+      "required": ["release_version", "schema_version", "insight_capabilities", "parallel_capabilities"],
+      "readback_optional": ["model", "effort", "context_tier", "escalation_rung", "routes", "unconfigured_task_type_keys", "routing_suppressed", "harness_version", "roster_cli_version", "roster_diverged"],
+      "readback_pair_keys": ["model", "effort", "configured_effort", "gate_warnings"],
+      "readback_route_keys": ["key", "model", "effort", "configured_effort", "gate_warnings"],
+      "readback_note": "Contract 1.24. The Run readback section 14 obliges of an Orchestrator that routes, published on the Run's own start record rather than on an Event of its own. Every field is optional-when-present: a port that routes nothing emits Run start exactly as before and stays conforming, and a consumer reads their absence as 'this Runner does not route'. The PRODUCER is unconditional -- a Run that configured nothing publishes the readback describing exactly that, because the Run that puzzles an operator is the one where nothing they wrote appeared to take effect.",
+      "readback_keys_not_a_count": "routes carries the keys THEMSELVES, never a count of them. No validator for the [routing] table can exist -- its keys are the operator's vocabulary and its pairs are the vendor's -- so reading back what the kit parsed is the only validation available anywhere, and a count reveals neither a misspelling nor a half-filled table. unconfigured_task_type_keys is the other half: the taxonomy members no entry names, which route to the Default pair and say so nowhere else until a Pickup has already happened.",
+      "readback_two_efforts": "effort is the GATED effort -- what would actually be sent -- and configured_effort is what Config supplied. Both travel because a readback carrying only the gated value reports the outcome and loses the request, and the request is the half an operator can correct. gate_warnings is the verdict, drawn from the same vocabulary wrapper.pickup.bound's gate_warnings carries, and rides every configured pair including the escalation rung, which nothing else gates until an issue has already stalled.",
+      "readback_roster_divergence": "roster_diverged is THREE-valued: true, false, or null for an unreadable harness_version. Reasoning-effort capability is a table hardcoded in the Copilot CLI's own bundle, so the roster is a function of CLI version (ADR-0019) and a Run gating against one version while spawning another has been checking its pairs against a description of some other binary. null is 'nobody knows' and a consumer MUST NOT read it as agreement."
     },
     "wrapper.issue.activated": {
       "required_when_present": ["issue", "activated_at", "binding_source"]
@@ -1891,6 +1898,72 @@
         "rate_card": null
       },
       "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000EE\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"rate_card\": false}, \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": false}, \"rate_card\": null, \"release_version\": \"0.9.0-dev.0\", \"schema_version\": 1}\n"
+    },
+    {
+      "id": "run-start-routing-readback",
+      "note": "A Run reading back the routing it parsed (#410). Every value here is Config as the kit understood it, not as the operator wrote it: `chore` was configured `claude-haiku-4.5 @ high` and is published with `effort: null` and the gate's `incapable_model` beside the `configured_effort` that was refused -- a route this Run may never exercise, checked anyway. `unconfigured_task_type_keys` names the five taxonomy members the table omits, because a count of two routes would say nothing about the five that fall to the Default pair. `roster_diverged` is `true` because the spawned CLI is not the one the roster was captured against, which makes every verdict above it advisory.",
+      "event": {
+        "ts": "2026-05-16T00:00:00.000Z",
+        "run_id": "01HXR0000000000000000000FF",
+        "iter": null,
+        "type": "wrapper.run.start",
+        "release_version": "0.9.0-dev.0",
+        "schema_version": 1,
+        "insight_capabilities": {
+          "agent_output": true,
+          "structured_agent_events": true,
+          "token_usage": true,
+          "context_window": true,
+          "skill_consultation": true,
+          "cost": true
+        },
+        "parallel_capabilities": {
+          "parallel_mode": true,
+          "rolling_dispatch": true,
+          "integration_backlog": true,
+          "adaptive_lane_limit": true,
+          "contribution_events": true
+        },
+        "model": "claude-opus-4.8",
+        "effort": "max",
+        "context_tier": "long_context",
+        "escalation_rung": {
+          "model": "claude-opus-5",
+          "effort": "max",
+          "configured_effort": "max",
+          "gate_warnings": []
+        },
+        "routes": [
+          {
+            "key": "docs",
+            "model": "gpt-5-mini",
+            "effort": "medium",
+            "configured_effort": "medium",
+            "gate_warnings": []
+          },
+          {
+            "key": "chore",
+            "model": "claude-haiku-4.5",
+            "effort": null,
+            "configured_effort": "high",
+            "gate_warnings": [
+              "incapable_model"
+            ]
+          }
+        ],
+        "unconfigured_task_type_keys": [
+          "planning",
+          "review",
+          "implementation",
+          "test",
+          "bugfix"
+        ],
+        "routing_suppressed": false,
+        "harness_version": "1.0.67",
+        "roster_cli_version": "1.0.75",
+        "roster_diverged": true
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000FF\", \"iter\": null, \"type\": \"wrapper.run.start\", \"context_tier\": \"long_context\", \"effort\": \"max\", \"escalation_rung\": {\"model\": \"claude-opus-5\", \"effort\": \"max\", \"configured_effort\": \"max\", \"gate_warnings\": []}, \"harness_version\": \"1.0.67\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true}, \"model\": \"claude-opus-4.8\", \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": true}, \"release_version\": \"0.9.0-dev.0\", \"roster_cli_version\": \"1.0.75\", \"roster_diverged\": true, \"routes\": [{\"key\": \"docs\", \"model\": \"gpt-5-mini\", \"effort\": \"medium\", \"configured_effort\": \"medium\", \"gate_warnings\": []}, {\"key\": \"chore\", \"model\": \"claude-haiku-4.5\", \"effort\": null, \"configured_effort\": \"high\", \"gate_warnings\": [\"incapable_model\"]}], \"routing_suppressed\": false, \"schema_version\": 1, \"unconfigured_task_type_keys\": [\"planning\", \"review\", \"implementation\", \"test\", \"bugfix\"]}\n"
     },
     {
       "id": "authoritative-issue-activation",
