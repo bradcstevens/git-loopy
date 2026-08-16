@@ -515,6 +515,16 @@ and carried as a `wrapper.pool.excluded` **Event** with its reason. A candidate 
 source could not *read* is not an exclusion — it was never discriminated against.
 _Avoid_: skipped, filtered, invalid issue.
 
+**Membership read**:
+A shallow, non-authoritative read of candidate work taken *during* a unit of work rather
+than at its boundary, so the **Queue** reflects work that appeared after the **Pool** was
+collected. It is discriminated and ordered exactly as a Pool is, but it is never authority
+for anything: no **Pickup** reads it, it cannot make an issue **gone**, and it cannot
+establish that the Pool is empty. It may only add rows. Its cadence is a floor, not a
+period — an Orchestrator takes it on a tick it already owns, never from a second writer
+([ADR-0042](docs/adr/0042-a-membership-read-keeps-the-queue-live.md)).
+_Avoid_: poll, refresh, shallow pool, live pool.
+
 **Strike**:
 One issue this **Run** has given up on. The count is the **Attempt lifecycle**'s terminal
 position made billable: an issue charges exactly one Strike at the ending that **Skip**s it, and
@@ -626,9 +636,9 @@ concurrent run at the same issue.
 _Avoid_: lock, claim, assignment, selection, priority.
 
 **Queue**:
-The per-run ledger of every issue seen in any pool during the run, each carrying a
-status; the selectable list shown in the live interface. Distinct from the pool,
-which is a single iteration's input. Each row also carries the **Routed pair** the
+The per-run ledger of every issue seen in any pool or **Membership read** during the run,
+each carrying a status; the selectable list shown in the live interface. Distinct from the
+pool, which is a single iteration's input. Each row also carries the **Routed pair** the
 issue is currently priced at — the newest **Routing resolution** anyone reached for it,
 which is what an issue costs *now* rather than what any one attempt spent.
 _Avoid_: backlog, list.
@@ -637,8 +647,9 @@ _Avoid_: backlog, list.
 An issue's lifecycle within a run: **queued** (seen, not yet worked), **active**
 (being worked now — several at once in **Parallel mode**, one per **Lane**), **closed**
 (finished and closed via a commit close-keyword), **advanced** (progressed but not
-closed), **no-progress** (worked without meaningful change), **gone** (left the pool
-without resolution).
+closed), **no-progress** (worked without meaningful change), **gone** (left the Run's view
+without resolution — it was seen in a pool or a **Membership read**, and a later
+authoritative pool no longer lists it).
 
 **Closed**:
 The successful terminal **Status** in which the source issue has actually been
