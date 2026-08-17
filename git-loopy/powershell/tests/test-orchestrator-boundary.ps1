@@ -1856,7 +1856,7 @@ Read outside the worktree.
     Assert-Equal 1 $Status "missing issue-tracker configuration exit"
     Assert-Contains (
         [IO.File]::ReadAllText($MissingStderr)
-    ) "/setup-agent-skills" "missing setup guidance"
+    ) "/setup-git-loopy-skills" "missing setup guidance"
     Assert-Equal 0 (
         [IO.File]::ReadAllText($MissingStdout).Length
     ) "preflight failure emitted Iteration work"

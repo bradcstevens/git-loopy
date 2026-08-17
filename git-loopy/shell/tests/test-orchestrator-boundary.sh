@@ -1402,7 +1402,7 @@ set -e
 assert_equal "1" "$status" "missing issue-tracker configuration exit"
 assert_contains \
   "$(<"$temp_dir/missing-tracker.stderr")" \
-  "/setup-agent-skills" \
+  "/setup-git-loopy-skills" \
   "missing setup guidance"
 [[ ! -s "$temp_dir/missing-tracker.stdout" ]] ||
   fail "preflight failure emitted Iteration work"

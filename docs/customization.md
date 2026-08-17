@@ -2,7 +2,7 @@
 
 > Tailor git-loopy to a repository: domain context, agent guidance, feedback
 > loops, Config, prompt overrides, and the per-repo skill configuration written
-> by `/setup-agent-skills`.
+> by `/setup-git-loopy-skills`.
 
 ## Repo structure reference
 
@@ -35,7 +35,7 @@
 ├── CONTEXT.md                      # Your project's domain glossary.
 ├── docs/
 │   ├── adr/                        # Architecture decision records (created lazily by /grill-with-docs).
-│   └── agents/                     # Per-repo skill config — written by /setup-agent-skills.
+│   └── agents/                     # Per-repo skill config — written by /setup-git-loopy-skills.
 │       ├── issue-tracker.md        #   Where issues live (GitHub / GitLab / local markdown / other).
 │       ├── triage-labels.md        #   Label vocabulary used by /triage.
 │       └── domain.md               #   Single- vs multi-context layout for CONTEXT.md / ADRs.
@@ -46,7 +46,7 @@
 
 ## The two files you almost always edit
 
-- **`AGENTS.md`** — fill in **Tech stack** and the **Feedback loops** table (see [Stack-agnostic defaults](#stack-agnostic-defaults) for the exact structure). The loop reads the **Feedback loops** table to know what commands to run before committing. If lint / type-check / test / build commands are wrong here, the agent guesses and CI catches the difference. The trailing **Agent skills** block is owned by `/setup-agent-skills`; don't hand-edit it the first time around.
+- **`AGENTS.md`** — fill in **Tech stack** and the **Feedback loops** table (see [Stack-agnostic defaults](#stack-agnostic-defaults) for the exact structure). The loop reads the **Feedback loops** table to know what commands to run before committing. If lint / type-check / test / build commands are wrong here, the agent guesses and CI catches the difference. The trailing **Agent skills** block is owned by `/setup-git-loopy-skills`; don't hand-edit it the first time around.
 - **[`git-loopy/PROMPT.md`](../git-loopy/PROMPT.md)** — usually leave defaults; only change if you want different skill routing or different commit-message conventions. If you change the commit-message convention, also update the `CLOSE_KEYWORD_RE` regex used by `extract_close_refs` in [`git-loopy/python/git_loopy/wrapper.py`](../git-loopy/python/git_loopy/wrapper.py) so the auto-close backstop still matches what the agent emits.
 
 Replace the repository's [`CONTEXT.md`](../CONTEXT.md) with the adopting
@@ -55,7 +55,7 @@ project's language as `/grill-with-docs` resolves real terms. For the
 [Stack-agnostic defaults](#stack-agnostic-defaults); for the planning path from
 domain context to spec and tickets, see [`docs/workflow.md`](workflow.md).
 
-## `/setup-agent-skills` — the entry-point skill
+## `/setup-git-loopy-skills` — the entry-point skill
 
 This skill is the first thing to run in Copilot CLI for any new project, **before** any of the other planning or implementation skills. It does two things:
 
@@ -74,11 +74,11 @@ The skill walks you through three decisions one at a time:
 
 If `/wayfinder`, `/to-spec`, `/to-tickets`, `/triage`, `/diagnosing-bugs`,
 `/tdd`, or `/codebase-design` lacks tracker, label, or domain context, run
-`/setup-agent-skills`.
+`/setup-git-loopy-skills`.
 
 ### Re-running it
 
-`/setup-agent-skills` is idempotent. Re-run it whenever you want to:
+`/setup-git-loopy-skills` is idempotent. Re-run it whenever you want to:
 
 - Switch issue trackers (GitHub → GitLab → local markdown → other).
 - Rename triage labels (e.g., to match a label scheme your repo already has).
@@ -89,14 +89,14 @@ It edits the existing `## Agent skills` block in place and rewrites `docs/agents
 ### Auto-bootstrap behavior
 
 git-loopy provides a **two-layer auto-bootstrap** so a forgotten
-`/setup-agent-skills` does not lead to silent guessing:
+`/setup-git-loopy-skills` does not lead to silent guessing:
 
 | Layer | Where | What it does |
 | --- | --- | --- |
-| **Interactive sessions** | The "First-run bootstrap" directive at the top of `AGENTS.md` (loaded into every Copilot CLI invocation — [add it yourself](#first-run-bootstrap-directive) to enable this layer) | If `docs/agents/issue-tracker.md` does not exist, the agent invokes `/setup-agent-skills` as its first action — **before** acting on the user's request — then returns to the original ask. |
-| **Autonomous Run** | Preflight check in [`git-loopy/python/`](../git-loopy/python/) | If `docs/agents/issue-tracker.md` does not exist, the Orchestrator exits non-zero **before** the first Iteration with a stderr message pointing the loop engineer at `/setup-agent-skills`. The skill is interactive and cannot safely run inside the autonomous agent session. |
+| **Interactive sessions** | The "First-run bootstrap" directive at the top of `AGENTS.md` (loaded into every Copilot CLI invocation — [add it yourself](#first-run-bootstrap-directive) to enable this layer) | If `docs/agents/issue-tracker.md` does not exist, the agent invokes `/setup-git-loopy-skills` as its first action — **before** acting on the user's request — then returns to the original ask. |
+| **Autonomous Run** | Preflight check in [`git-loopy/python/`](../git-loopy/python/) | If `docs/agents/issue-tracker.md` does not exist, the Orchestrator exits non-zero **before** the first Iteration with a stderr message pointing the loop engineer at `/setup-git-loopy-skills`. The skill is interactive and cannot safely run inside the autonomous agent session. |
 
-The two layers compose: a human starts a fresh repo, runs `uv run --project git-loopy/python git-loopy`, gets a clear error, opens `copilot` interactively, and — if the [First-run bootstrap directive](#first-run-bootstrap-directive) is in their `AGENTS.md` — sees it auto-trigger `/setup-agent-skills`, answers the three questions, then re-runs the loop. Detection uses the existence of `docs/agents/issue-tracker.md` as the signal that the skill has run.
+The two layers compose: a human starts a fresh repo, runs `uv run --project git-loopy/python git-loopy`, gets a clear error, opens `copilot` interactively, and — if the [First-run bootstrap directive](#first-run-bootstrap-directive) is in their `AGENTS.md` — sees it auto-trigger `/setup-git-loopy-skills`, answers the three questions, then re-runs the loop. Detection uses the existence of `docs/agents/issue-tracker.md` as the signal that the skill has run.
 
 ### First-run bootstrap directive
 
@@ -105,7 +105,7 @@ The interactive layer is opt-in: add this directive to the top of your
 preflight works without it; this directive adds the interactive auto-trigger.
 
 ```markdown
-> **First-run bootstrap (read on every invocation).** If `docs/agents/issue-tracker.md` does **NOT** exist at the repo root, your very first action this session is to invoke `/setup-agent-skills` - **before any other work**, including the user's stated request. After it completes, return to whatever the user originally asked. If `docs/agents/issue-tracker.md` already exists, this bootstrap is satisfied; ignore this paragraph and proceed normally. The autonomous git-loopy Orchestrator (`git-loopy/python/`) refuses to start without this file, so if you are reading this directive from inside a `copilot --yolo -p` invocation, surface the inconsistency and stop.
+> **First-run bootstrap (read on every invocation).** If `docs/agents/issue-tracker.md` does **NOT** exist at the repo root, your very first action this session is to invoke `/setup-git-loopy-skills` - **before any other work**, including the user's stated request. After it completes, return to whatever the user originally asked. If `docs/agents/issue-tracker.md` already exists, this bootstrap is satisfied; ignore this paragraph and proceed normally. The autonomous git-loopy Orchestrator (`git-loopy/python/`) refuses to start without this file, so if you are reading this directive from inside a `copilot --yolo -p` invocation, surface the inconsistency and stop.
 ```
 
 ## Skills reference

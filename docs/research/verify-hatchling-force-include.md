@@ -17,7 +17,7 @@ Single-source packaging of the skill catalog from repo-root `.copilot/skills/` �
 
 ## Empirical proof (built here, not predicted)
 
-Scratch copy preserving the `../../` layout (`.copilot/skills/` two levels above the pyproject), vendored `git_loopy/skills/setup-agent-skills/` deleted, `force-include` added for `grilling`, `wayfinder`, `setup-agent-skills` (and `microsoft-foundry` present in source but **not** listed):
+Scratch copy preserving the `../../` layout (`.copilot/skills/` two levels above the pyproject), vendored `git_loopy/skills/setup-git-loopy-skills/` deleted, `force-include` added for `grilling`, `wayfinder`, `setup-agent-skills` (and `microsoft-foundry` present in source but **not** listed):
 
 ```
 $ uv build --wheel
@@ -26,7 +26,7 @@ Successfully built dist/git_loopy-0.0.1-py3-none-any.whl
 $ python -c "import zipfile,glob; print([n for n in zipfile.ZipFile(glob.glob('dist/*.whl')[0]).namelist() if 'skills/' in n])"
   PRESENT  git_loopy/skills/grilling/SKILL.md
   PRESENT  git_loopy/skills/wayfinder/SKILL.md
-  PRESENT  git_loopy/skills/setup-agent-skills/SKILL.md
+  PRESENT  git_loopy/skills/setup-git-loopy-skills/SKILL.md
   EXCLUDED git_loopy/skills/microsoft-foundry/   (present in source, unlisted → absent from wheel)
 ```
 
@@ -57,7 +57,7 @@ packages = ["git_loopy"]
 "../../.copilot/skills/prototype"                     = "git_loopy/skills/prototype"
 "../../.copilot/skills/research"                      = "git_loopy/skills/research"
 "../../.copilot/skills/resolving-merge-conflicts"     = "git_loopy/skills/resolving-merge-conflicts"
-"../../.copilot/skills/setup-agent-skills"            = "git_loopy/skills/setup-agent-skills"
+"../../.copilot/skills/setup-git-loopy-skills"            = "git_loopy/skills/setup-git-loopy-skills"
 "../../.copilot/skills/skill-creator"                 = "git_loopy/skills/skill-creator"
 "../../.copilot/skills/tdd"                           = "git_loopy/skills/tdd"
 "../../.copilot/skills/teach"                         = "git_loopy/skills/teach"
@@ -73,7 +73,7 @@ A single `"../../.copilot/skills" = "git_loopy/skills"` mapping would ship **all
 
 ## Hard prerequisite
 
-Delete the vendored `git_loopy/skills/setup-agent-skills/` (and any future vendored skills) from the source tree first. Otherwise `packages=["git_loopy"]` writes `git_loopy/skills/setup-agent-skills/SKILL.md` **and** `force-include` writes it again → `_WheelZipFile.open` raises *"A second file is being added to the wheel archive at the same path"*. The `packages` and `force-include` pipelines are independent and don't conflict once the on-disk duplicate is gone.
+Delete the vendored `git_loopy/skills/setup-git-loopy-skills/` (and any future vendored skills) from the source tree first. Otherwise `packages=["git_loopy"]` writes `git_loopy/skills/setup-git-loopy-skills/SKILL.md` **and** `force-include` writes it again → `_WheelZipFile.open` raises *"A second file is being added to the wheel archive at the same path"*. The `packages` and `force-include` pipelines are independent and don't conflict once the on-disk duplicate is gone.
 
 ## Gotchas (inputs to the #101 packaging decision)
 

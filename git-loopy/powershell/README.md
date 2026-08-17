@@ -68,7 +68,7 @@ the one-time setup from [`docs/skills-setup.md`](../../docs/skills-setup.md):
    that copy is the **Python Runner's** Skill source: this port reports
    `enabled_skills` as an unsupported Config surface and passes no Skill
    directory to `copilot`.
-3. **Configure this repo** by running `/setup-agent-skills` inside `copilot`,
+3. **Configure this repo** by running `/setup-git-loopy-skills` inside `copilot`,
    which writes `docs/agents/issue-tracker.md`.
 
 That file is the Orchestrator's **preflight signal** — without it the Run exits

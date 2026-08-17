@@ -17,7 +17,7 @@ Design:
   desynchronise it from what ``init`` writes. A second constant table would be a
   mirror, and mirrors drift (ADR-0019). When the doc is absent or its table is
   unreadable the canonical defaults stand in — those defaults are what
-  ``/setup-agent-skills`` would have written anyway.
+  ``/setup-git-loopy-skills`` would have written anyway.
 * **``parallel-safe`` is not one of the five roles.** The documented mapping says
   so itself: it is an opt-in eligibility label applied *alongside*
   ``ready-for-agent``, and the runner reads it directly from
@@ -77,7 +77,7 @@ __all__ = [
 ]
 
 #: Where the documented triage-label mapping lives, relative to the repo root.
-#: This is the file ``/setup-agent-skills`` writes and ``/triage`` reads.
+#: This is the file ``/setup-git-loopy-skills`` writes and ``/triage`` reads.
 MAPPING_DOC_RELPATH: str = "docs/agents/triage-labels.md"
 
 
@@ -235,7 +235,7 @@ def _read_mapping(repo_root: Path | None) -> dict[str, str]:
 
     An absent, unreadable, or table-less doc yields an empty mapping, which leaves
     every canonical default in place — the same vocabulary
-    ``/setup-agent-skills`` writes when the operator keeps the defaults.
+    ``/setup-git-loopy-skills`` writes when the operator keeps the defaults.
     """
     if repo_root is None:
         return {}

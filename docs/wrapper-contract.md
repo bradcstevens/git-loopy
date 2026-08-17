@@ -33,9 +33,9 @@ diagnostic; an Orchestrator MUST NOT substitute an `unknown` or compatibility ve
 Before the first **Iteration**, an Orchestrator MUST verify its preconditions and, on failure,
 exit `1` **before** doing any work:
 
-- `docs/agents/issue-tracker.md` exists (the signal that `/setup-agent-skills` has run). If
-  absent, exit `1` with a stderr message pointing the operator at `/setup-agent-skills`. The loop
-  MUST NOT invoke `/setup-agent-skills` itself (it is interactive and unsafe under
+- `docs/agents/issue-tracker.md` exists (the signal that `/setup-git-loopy-skills` has run). If
+  absent, exit `1` with a stderr message pointing the operator at `/setup-git-loopy-skills`. The loop
+  MUST NOT invoke `/setup-git-loopy-skills` itself (it is interactive and unsafe under
   `copilot --yolo -p`).
 - `gh` is authenticated, and `git`, `copilot` are on `PATH`. The shell port additionally requires
   `jq`.

@@ -135,7 +135,7 @@ contract, same Dashboard.
 ## The skills and their purpose
 
 These skills are small, composable disciplines rather than one monolithic
-process. Use only the skills the work needs; run `/setup-agent-skills` once
+process. Use only the skills the work needs; run `/setup-git-loopy-skills` once
 before the rest.
 
 The catalog's source of record is
@@ -187,7 +187,7 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 
 | Skill | Purpose |
 | --- | --- |
-| [`/setup-agent-skills`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/setup-agent-skills) | Configure the repository's issue tracker, triage labels, and domain-document layout. |
+| [`/setup-git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/setup-git-loopy-skills) | Configure the repository's issue tracker, triage labels, and domain-document layout. |
 | [`/wizard`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/wizard) | Generate an interactive bash wizard for a manual procedure only a human can carry out. |
 | [`/next`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/next) | Route to the one action to take now, from the live state of the work. |
 | [`/continuation`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/continuation) | Present the guidance a Run published, reconciled from the durable Continuation records. |

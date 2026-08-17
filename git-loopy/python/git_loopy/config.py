@@ -645,7 +645,7 @@ class RunConfig:
             (default) means "no explicit override" — the loop auto-detects
             the PR surface from ``docs/agents/issue-tracker.md`` (the
             ``PRs as a request surface: yes/no`` flag that
-            ``/setup-agent-skills`` writes and ``/triage`` reads). ``True`` /
+            ``/setup-git-loopy-skills`` writes and ``/triage`` reads). ``True`` /
             ``False`` force the behaviour regardless of that file. Only
             meaningful for ``issue_source == "github"``.
         max_iterations: Cap on iterations. ``0`` (the default) means

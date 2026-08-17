@@ -1324,7 +1324,7 @@ git_loopy_preflight() {
 
   if [[ ! -f "$repo_root/docs/agents/issue-tracker.md" ]]; then
     printf '%s\n' \
-      'git-loopy: issue tracking is not configured. Run /setup-agent-skills interactively, then retry.' \
+      'git-loopy: issue tracking is not configured. Run /setup-git-loopy-skills interactively, then retry.' \
       >&2
     return 1
   fi

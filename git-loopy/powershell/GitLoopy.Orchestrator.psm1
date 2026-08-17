@@ -1648,7 +1648,7 @@ function Invoke-GitLoopyPreflight {
     if (-not [IO.File]::Exists($TrackerPath)) {
         [Console]::Error.WriteLine(
             "git-loopy: issue tracking is not configured. " +
-            "Run /setup-agent-skills interactively, then retry."
+            "Run /setup-git-loopy-skills interactively, then retry."
         )
         return $null
     }

@@ -63,7 +63,7 @@ Many skills in the installed catalog exist for **human-driven sessions or upstre
 
 - `/handoff` — pointless here because each iteration is a fresh one-shot invocation; persistence happens via commits and (sparingly) issue comments, not handoff docs.
 - `/implement` — a human-driven "implement this spec end-to-end" orchestrator; this loop already *is* that orchestration (it picks one task, drives `/tdd`, and commits), so invoking it would just nest a second driver.
-- `/setup-agent-skills`, `/writing-great-skills` — install or author skills, not loop work.
+- `/setup-git-loopy-skills`, `/writing-great-skills` — install or author skills, not loop work.
 
 The guidance the excluded and now-removed skills used to carry still holds and is already inlined above: favour reviewable output over token compression while running unattended, go up a layer to map an unfamiliar area before drilling in, stress-test plans against the domain docs, and reach for deep-module design via `/codebase-design`.
 

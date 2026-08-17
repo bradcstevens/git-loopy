@@ -700,7 +700,7 @@ def _make_issue_source(
     )
 
 
-# Matches the PR-surface flag ``/setup-agent-skills`` writes into
+# Matches the PR-surface flag ``/setup-git-loopy-skills`` writes into
 # ``docs/agents/issue-tracker.md`` — e.g. ``**PRs as a request surface: yes.**``.
 _RE_PR_SURFACE: re.Pattern[str] = re.compile(
     r"PRs as a request surface:\s*(yes|no)", re.IGNORECASE
@@ -716,7 +716,7 @@ def _resolve_include_prs(config: RunConfig, repo_root: Path) -> bool:
        env override resolved by the CLI.
     2. Otherwise auto-detect from ``docs/agents/issue-tracker.md``: PRs are
        included only when it carries ``PRs as a request surface: yes`` (the
-       exact flag ``/setup-agent-skills`` writes and ``/triage`` reads).
+       exact flag ``/setup-git-loopy-skills`` writes and ``/triage`` reads).
     3. ``False`` when the file is missing or the flag is absent / ``no`` — so
        PR support stays off unless a repo has explicitly opted in.
 

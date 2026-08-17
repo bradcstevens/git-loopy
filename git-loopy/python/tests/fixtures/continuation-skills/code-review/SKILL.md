@@ -10,7 +10,7 @@ Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
 
 Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
 
-The issue tracker should have been provided to you — run `/setup-agent-skills` if `docs/agents/issue-tracker.md` is missing.
+The issue tracker should have been provided to you — run `/setup-git-loopy-skills` if `docs/agents/issue-tracker.md` is missing.
 
 If the code refers to any Microsoft technologies, run the `/microsoft-code-reference` and `/microsoft-docs` to assist you.
 

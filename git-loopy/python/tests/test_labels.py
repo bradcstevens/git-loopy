@@ -218,7 +218,7 @@ def test_parallel_safe_description_names_it_a_human_assertion(tmp_path: Path) ->
 def test_this_repository_s_own_documented_mapping_parses() -> None:
     """Pin the parser against the real table, not only a synthesised one.
 
-    ``docs/agents/triage-labels.md`` is the shape ``/setup-agent-skills`` writes.
+    ``docs/agents/triage-labels.md`` is the shape ``/setup-git-loopy-skills`` writes.
     If that template's table changes shape, the derivation silently falls back to
     the canonical defaults — which is exactly the desynchronisation this seam
     exists to prevent — so the real file is read here.
@@ -534,7 +534,7 @@ def _pinned_skill_file(skill: str, name: str) -> Path:
 
 
 def test_the_template_setup_writes_into_a_consumer_repo_parses(tmp_path: Path) -> None:
-    """A repo set up by ``/setup-agent-skills`` gets *that* template, not ours.
+    """A repo set up by ``/setup-git-loopy-skills`` gets *that* template, not ours.
 
     Its table header differs from this repo's, so parsing has to key off the
     backticked cells rather than the header — otherwise every consumer repo would

@@ -215,7 +215,7 @@ hand-edited. See
 | Clean — Pool empty    | `0`  | Start of an Iteration finds the ready-for-agent Pool empty.                            |
 | Clean — iteration cap | `0`  | Optional positional arg `N` reached without natural termination.                       |
 | **Aborted — stuck**   | `1`  | `GIT_LOOPY_MAX_NMT_STRIKES` (default 3) consecutive iterations made no progress.                 |
-| **Aborted — preflight** | `1`  | A required precondition failed before the first iteration: missing [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (i.e. `/setup-agent-skills` hasn't run), `gh` not authed. |
+| **Aborted — preflight** | `1`  | A required precondition failed before the first iteration: missing [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (i.e. `/setup-git-loopy-skills` hasn't run), `gh` not authed. |
 
 The legacy `<promise>NO MORE TASKS</promise>` sentinel is now **informational only**: the wrapper counts it as a strike if the iteration made no progress, otherwise ignores it. The next iteration's collection is always the source of truth on whether work remains.
 
@@ -232,7 +232,7 @@ The auto-close backstop relies on commit messages following the GitHub closing-k
 
 By default the loop only works **issues**. A repo can opt into also advancing **pull requests** — useful when `/triage` labels an external or in-flight PR `ready-for-agent` with an `## Agent Brief` for the loop to push forward.
 
-- **Enabling.** Set `PRs as a request surface: yes` in [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (written by `/setup-agent-skills`), or override one Run with `GIT_LOOPY_INCLUDE_PRS=1`. `GIT_LOOPY_INCLUDE_PRS=0` force-disables the surface even if the file says yes. With neither present, PR support is **off**.
+- **Enabling.** Set `PRs as a request surface: yes` in [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (written by `/setup-git-loopy-skills`), or override one Run with `GIT_LOOPY_INCLUDE_PRS=1`. `GIT_LOOPY_INCLUDE_PRS=0` force-disables the surface even if the file says yes. With neither present, PR support is **off**.
 - **Collection.** When on, each iteration also lists open `ready-for-agent` PRs and keeps those carrying an `## Agent Brief` (in the PR body or any comment) — the PR analogue of the issue body discriminator.
 - **Per-iteration PR flow.** The agent runs `gh pr checkout <N>`, implements the brief on the PR branch, commits, and pushes. The wrapper registers progress when the PR's **head SHA advances**; at the start of the next iteration it restores the base branch. The agent is instructed never to merge or close the PR — a human merges in QA.
 - **Safety.** The auto-close backstop is restricted to issue numbers, so a PR can never be `gh issue close`d by a `Closes #N` in a commit. PRs are advanced, never closed, by the wrapper.
@@ -249,7 +249,7 @@ By default the loop only works **issues**. A repo can opt into also advancing **
 A few related skills are **human-only** (`disable-model-invocation: true`), so the loop can't invoke them; `PROMPT.md` inlines the part the agent needs instead of calling them — plan stress-testing against the domain docs (was `/grill-with-docs`), going up a layer to map an unfamiliar area (was `/zoom-out`), and the deep-module design vocabulary now covered by `/codebase-design` (was `/improve-codebase-architecture`).
 
 The autonomous loop **will not invoke** the human-led planning and session
-skills: `/setup-agent-skills`, `/intake`, `/grill-me`, `/grill-with-docs`,
+skills: `/setup-git-loopy-skills`, `/intake`, `/grill-me`, `/grill-with-docs`,
 `/wayfinder`, `/to-spec`, `/to-tickets`, `/triage`, `/implement`, and
 `/handoff`. Those skills shape, approve, or preserve work before execution; the
 Run consumes their durable output. `PROMPT.md` keeps the reusable execution
