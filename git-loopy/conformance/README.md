@@ -16,7 +16,6 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `exit-codes.json` | Clean, aborted, and usage-error process exits — including the `all_skipped` abort (§10, #413) a Pickup owes when the Pool is non-empty and it could bind none of it |
 | `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, exact Run-start Release identity, per-Orchestrator Insight and **Parallel mode** capability manifests, production-seam normalized rollup cases, payload contracts, the rolling-dispatch **Lane contribution** identity and lifecycle vocabulary, whole ordered rolling Event streams every member serializes through its own seam, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
 | `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.2): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, per-band projection field inventory and per-column field mapping, Queue and Iteration-breakdown columns and scopes, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, the activation `binding_source` vocabulary, and expected semantic view models consumed by Python and the Rust Dashboard core |
-| `continuation-scenarios.json` | Continuation 1.0 native command framing, complete Action/interaction/condition schemas, canonical bounds, exact native publish results, trusted immutable-revision and index-repair cases, literal per-distribution capability scenarios, fail-closed operations, and scripted GitHub publish-to-reconcile workflows, and the fixed-frontier Automation vocabulary, safety case, eligibility, stop, and Dispatch-evidence scenarios |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
 | `skill-policy.json` | Closed-world **Skill policy** (§17): base-scope selection, explicit empty policy, exact environment replacement, Run overlays with disable-wins, deprecated legacy subtraction, Minimal fallback and its reason, the four validation failures, startup classification, and the redacted `wrapper.skill_policy.resolved` projection |
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set, stamped with the `cli_version` the content was captured against because effort capability is a function of Copilot CLI version (§14, ADR-0019), plus `context_tiers` — the tier half of the same roster (ADR-0017), which carries a row only for a model whose tiers were captured for that stamp and is empty until they are |
@@ -31,9 +30,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `windows-channels.json` | The **winget and Scoop channels**: the package identity and committed paths each writes, the one published target a Windows package manager runs and the six it excludes *by name*, the claims neither format can carry recorded *by name and reason*, the stable-only publication decisions, the trust-receipt defects that keep an unsigned or unattributable artifact out of both channels, and the version, identifier, URL, host, digest, publisher, and version-probe drift committed metadata is refused for |
 
 Legacy decision fixtures carry `schema_version` and the Wrapper
-`contract_version` they pin. The Continuation harness names every independent
-version axis explicitly: fixture schema, Continuation contract, record format,
-Wrapper contract, and Event schema. Fixture content is data only: do not add
+`contract_version` they pin. Fixture content is data only: do not add
 host-language expressions, executable hooks, or implementation-specific
 expected-value generation.
 
@@ -157,12 +154,6 @@ label as authority, and must reproduce the same shared Reconciliation result
 once the extra pages carry only unindexed carriers and ordinary discussion.
 
 Fixture schema 1.4 adds the prospective-projection vocabulary. `revision_protocol.diagnostic_codes`
-pins the family's complete `reconcile` diagnostic vocabulary — the union across every distribution,
-not one member's subset — so emitting an unregistered code is a fixture change rather than a silent
-addition. Scenarios may pin the `retirements`, `outcomes`, `delta`, and `handoff_reference` result
-fields and the exact Continuation view order. Ordering scenarios name every distribution because the
-ordering rule is ungated; scenarios exercising the gated request fields name only distributions
-advertising `prospective_projection`.
 
 Every `reconcile` result pins `retirements`, because the key is always emitted and its absence
 therefore never carries meaning. A distribution without `prospective_projection` pins it empty. For
@@ -514,7 +505,7 @@ ADR-0038's own state-machine table is the contract instead, and both renderers' 
 written from it. The amendment on that ADR records the prerequisite that would change the
 answer.
 
-`release-version.json` is independent of the Wrapper, Event, and Continuation
+`release-version.json` is independent of the Wrapper and Event
 compatibility versions. `expected_release_version` mirrors the repository-root
 `VERSION` authority for family adapters; `expected_python_distribution_version`
 records only the normalized Python packaging representation of that same value.
@@ -522,7 +513,7 @@ The Python repository validator reads the authority plus the source, packaged
 runtime, and package metadata copies without importing the Orchestrator. The
 Python runtime copy and the shell and PowerShell distributions' root authority
 are the fail-closed inputs for each Orchestrator's `git-loopy --version`,
-Run-start Events, and native Continuation capability manifest:
+and Run-start Events:
 
 ```bash
 uv run --project git-loopy/python --all-extras \
@@ -586,12 +577,6 @@ and
 Each family adapter drives its native normalized Iteration-rollup seam from its
 orchestrator-scoped shared cases and from the `dashboard-insights.json`
 producer rollups.
-The native Continuation adapters invoke each real public entrypoint from
-[`python/tests/test_continuation_scenarios.py`](../python/tests/test_continuation_scenarios.py),
-[`shell/tests/test-continuation-conformance.sh`](../shell/tests/test-continuation-conformance.sh),
-and
-[`powershell/tests/test-continuation-conformance.ps1`](../powershell/tests/test-continuation-conformance.ps1).
-
 The Python reference adapter additionally pins the phase-3 per-issue routing
 decisions (Wrapper contract §14): it drives `routing-resolution.json` and
 `effort-gate.json` through the production `resolve_iteration_model` and
@@ -638,7 +623,7 @@ The source-release verifier
 [`python/git_loopy/source_release.py`](../python/git_loopy/source_release.py)
 uses the same fixture to reject lightweight or mismatched tags, missing explicit
 Release-version bumps, missing edited notes, metadata drift, and drift in any
-real Orchestrator `--version` or Continuation capability output. It generates
+real Orchestrator `--version` output. It generates
 and verifies the tagged source archive before
 [`source-release.yml`](../../.github/workflows/source-release.yml) creates a
 stable or prerelease GitHub Release. Publication has no custom artifact or
@@ -648,7 +633,6 @@ Run them from the repository root:
 
 ```bash
 uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_conformance.py
-uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_continuation_scenarios.py
 uv run --project git-loopy/python pytest -q git-loopy/python/tests/test_release_version.py
 uv run --project git-loopy/python --all-extras \
   pytest -q git-loopy/python/tests/test_source_release.py \
@@ -657,11 +641,9 @@ uv run --project git-loopy/python --all-extras \
   pytest -q git-loopy/python/tests/test_release_identity_conformance.py
 bash git-loopy/shell/tests/test-event-conformance.sh
 bash git-loopy/shell/tests/test-orchestrator-conformance.sh
-bash git-loopy/shell/tests/test-continuation-conformance.sh
 bash git-loopy/shell/tests/test-tui-install.sh
 pwsh -NoLogo -NoProfile -File git-loopy/powershell/tests/test-event-conformance.ps1
 pwsh -NoLogo -NoProfile -File git-loopy/powershell/tests/test-orchestrator-conformance.ps1
-pwsh -NoLogo -NoProfile -File git-loopy/powershell/tests/test-continuation-conformance.ps1
 ```
 
 To change the Wrapper contract, update the written contract and its version,
