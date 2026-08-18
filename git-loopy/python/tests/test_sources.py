@@ -1253,7 +1253,7 @@ class TestModuleStructure:
         assert isinstance(IssueSource, _ProtocolMeta)
 
     def test_imports_are_constrained(self) -> None:
-        """sources.py may only import stdlib + git_loopy.{gh,git,issue_order,issue_pin,wrapper}.
+        """sources.py may only import stdlib + git_loopy.{gh,git,issue_order,issue_pin,readiness,wrapper}.
 
         Forbidden: copilot SDK, rich, git_loopy.{loop,cli,config,session,
         ui,persist,events,pricing,telemetry} — keeps the Protocol seam
@@ -1272,6 +1272,13 @@ class TestModuleStructure:
         reason: refusing an ineligible ``--issue N`` is one decision three
         Orchestrators share, and a source that decided it inline would be a
         second copy of it. It is held to the same purity guard.
+
+        ``readiness`` joined it with #438 for the same reason again: whether a
+        candidate is admissible at **Pickup** is a Wrapper-contract decision
+        (§3.3.1) pinned by ``issue-readiness.json``, so
+        :class:`~git_loopy.sources.GitHubIssueSource` calls the pure seam
+        rather than re-deciding readiness inline. It carries no I/O of its own
+        and costs the Protocol nothing.
         """
         import ast
 
@@ -1283,6 +1290,7 @@ class TestModuleStructure:
             "git",
             "issue_order",
             "issue_pin",
+            "readiness",
             "wrapper",
         }
 

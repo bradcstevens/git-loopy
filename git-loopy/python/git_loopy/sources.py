@@ -58,6 +58,7 @@ from git_loopy.issue_order import (
     promote_pinned,
 )
 from git_loopy.issue_pin import PinnedIssue, refuse_pin
+from git_loopy.readiness import BlockedByRead, Readiness, decide_readiness
 from git_loopy.wrapper import (
     actionable_close_refs,
     exit_code_for,
@@ -580,6 +581,16 @@ class IssueSource(Protocol):
         """
         ...
 
+    def readiness(self, ref: int | str) -> Readiness:
+        """This candidate's **Readiness** verdict (#438, ADR-0047, §3.3.1).
+
+        Asked at **Pickup**, per candidate the runner reaches — never at
+        collection. A source with no native dependency graph (the PRDs
+        backend) has nothing to be blocked by and reports every candidate
+        ready.
+        """
+        ...
+
 
 # --------------------------------------------------------------------------- #
 # GitHub backend                                                              #
@@ -696,8 +707,41 @@ class GitHubIssueSource:
                 exc,
             )
             return exit_code_for("preflight_failed")
+        readiness_rc = self._preflight_readiness()
+        if readiness_rc is not None:
+            return readiness_rc
         self._diag.info("preflight ok: %s", repo.nwo)
         return self._preflight_pin()
+
+    def _preflight_readiness(self) -> int | None:
+        """Fail loud, before any **Pickup**, if ``gh`` cannot read Readiness.
+
+        Issue #438 (ADR-0047, Wrapper contract §3.3.1): a ``gh`` too old to
+        report ``blockedBy`` must never fail *inside* the shallow list or a
+        per-candidate read, because today's error path there reads a failure
+        as an empty **Pool** — an unattended Run would quietly conclude there
+        is no work and exit clean. Checking the capability once here, at
+        preflight, turns that into a loud failure naming the missing
+        capability and the remedy, before a single candidate is walked.
+        """
+        try:
+            version = self._gh.gh_version()
+        except gh_module.GhError as exc:
+            self._diag.error(
+                "gh --version failed: %s. Install `gh` from "
+                "https://cli.github.com/.",
+                exc,
+            )
+            return exit_code_for("preflight_failed")
+        except gh_module.GhCapabilityError as exc:
+            self._diag.error("gh preflight failed: %s", exc)
+            return exit_code_for("preflight_failed")
+        try:
+            gh_module.verify_readiness_capability(version)
+        except gh_module.GhCapabilityError as exc:
+            self._diag.error("gh preflight failed: %s", exc)
+            return exit_code_for("preflight_failed")
+        return None
 
     def _preflight_pin(self) -> int | None:
         """Refuse the invocation when ``--issue N`` names an unworkable issue.
@@ -1059,6 +1103,33 @@ class GitHubIssueSource:
                 ref,
                 exc,
             )
+
+    def readiness(self, ref: int | str) -> Readiness:
+        """This candidate's **Readiness**, via the client's GraphQL ``blocked_by``.
+
+        A non-``int`` ref (defensive only — the GitHub backend never produces
+        one) has no dependency graph to read and is reported ready, mirroring
+        :class:`PrdsIssueSource`'s own answer.
+
+        A read failure (:exc:`~git_loopy.gh.GhError`) is reported
+        ``readiness_unprovable``: the connection could not be read at all,
+        which is exactly what that reason means, and a transient failure here
+        must not silently admit a candidate whose blockers were never checked.
+        """
+        if not isinstance(ref, int):
+            return Readiness(
+                verdict="ready", admissible=True, skip_reason=None, blockers=()
+            )
+        try:
+            read = self._gh.blocked_by(ref)
+        except gh_module.GhError as exc:
+            self._diag.warning(
+                "gh blockedBy read for #%s failed: %s; treating as unprovable",
+                ref,
+                exc,
+            )
+            read = BlockedByRead(total_count=1, nodes=())
+        return decide_readiness(read)
 
     def _detect_pr_advances(
         self, pool: list[AfkReadyItem]
@@ -1429,3 +1500,11 @@ class PrdsIssueSource:
         """
         _ = ref
         _ = body
+
+    def readiness(self, ref: int | str) -> Readiness:
+        """Always ready — local markdown carries no native dependency graph."""
+        _ = ref
+        return Readiness(
+            verdict="ready", admissible=True, skip_reason=None, blockers=()
+        )
+

@@ -16,6 +16,7 @@ from typing import Iterable, Mapping, NoReturn, Sequence
 
 from git_loopy.gate import GateResult, LoopFailure
 from git_loopy.gh import (
+    MIN_GH_VERSION_FOR_READINESS,
     GhError,
     Issue,
     IssueListPage,
@@ -24,6 +25,7 @@ from git_loopy.gh import (
     Repo,
 )
 from git_loopy.git import Commit, GitError
+from git_loopy.readiness import BlockedByRead
 
 
 class FakeGitClient:
@@ -530,8 +532,16 @@ class FakeGitHubClient:
         issue_close_errors: Mapping[int, GhError] | None = None,
         issue_comment_errors: Mapping[int, GhError] | None = None,
         pr_view_errors: Mapping[int, GhError] | None = None,
+        blocked_by: Mapping[int, BlockedByRead] | None = None,
+        gh_version: tuple[int, int, int] = MIN_GH_VERSION_FOR_READINESS,
     ) -> None:
         self.authed = authed
+        # Per-number **Readiness** reads (#438). A number with no entry is
+        # ready — an empty connection, the common path
+        # (``issue-readiness.json``'s ``no-blockers-is-ready``).
+        self._blocked_by: dict[int, BlockedByRead] = dict(blocked_by or {})
+        self.blocked_by_calls: list[int] = []
+        self.gh_version_value = gh_version
         self.repo = (
             repo if repo is not None else Repo(owner="octo", name="kit", default_branch="main")
         )
@@ -569,6 +579,13 @@ class FakeGitHubClient:
     def rate_limited_reads(self) -> int:
         """How many injected failures were GitHub throttling this Run."""
         return self._rate_limited()
+
+    def gh_version(self) -> tuple[int, int, int]:
+        return self.gh_version_value
+
+    def blocked_by(self, number: int) -> BlockedByRead:
+        self.blocked_by_calls.append(number)
+        return self._blocked_by.get(number, BlockedByRead(total_count=0, nodes=()))
 
     def seed_issue(self, issue: Issue) -> None:
         """Add or replace one issue in the store, as a mid-Run filing would.

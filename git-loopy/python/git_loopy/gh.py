@@ -73,6 +73,7 @@ Design notes:
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
@@ -84,6 +85,8 @@ from typing import (
     Sequence,
     runtime_checkable,
 )
+
+from git_loopy.readiness import BlockedByRead, BlockerNode
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; see SubprocessLabelClient
     from git_loopy.labels import LabelSpec, TrackerLabel
@@ -99,6 +102,10 @@ __all__ = [
     "SubprocessGitHubClient",
     "SubprocessLabelClient",
     "SubprocessTaskTypeLabelClient",
+    "MIN_GH_VERSION_FOR_READINESS",
+    "GhCapabilityError",
+    "parse_gh_version",
+    "verify_readiness_capability",
 ]
 
 _GH_BIN: Final[str] = "gh"
@@ -228,6 +235,144 @@ _RATE_LIMIT_MARKERS: Final[tuple[str, ...]] = (
     "too many requests",
     "abuse detection",
 )
+
+# --------------------------------------------------------------------------- #
+# Readiness (#438, ADR-0047, Wrapper contract §3.3.1)                         #
+# --------------------------------------------------------------------------- #
+
+#: The oldest ``gh`` release this reads the ``blockedBy`` connection against.
+#: The GraphQL read itself has no client-side field allowlist to fail on the
+#: way ``gh issue list --json`` does, so there is no wire-level signal that
+#: distinguishes "this gh is too old" from an ordinary network hiccup once the
+#: call is actually made. Gating on ``gh``'s own reported version, *before* any
+#: **Pickup** is attempted, is what keeps that ambiguity from ever reaching a
+#: candidate walk: a `gh` this old fails once, loudly, at preflight, naming the
+#: remedy — never silently inside a per-candidate read that a caller could
+#: mistake for "no blockers".
+MIN_GH_VERSION_FOR_READINESS: Final[tuple[int, int, int]] = (2, 40, 0)
+
+#: The GraphQL query :meth:`SubprocessGitHubClient.blocked_by` sends. One hop:
+#: it reads the candidate's own ``blockedBy`` connection and does not walk
+#: further (§3.3.1, ADR-0047 "One hop, never traversed"). ``first: 100``
+#: exceeds GitHub's per-issue cap of 50 links, so a complete read is always one
+#: page (the fixture's ``page_size_note``).
+_BLOCKED_BY_QUERY: Final[str] = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      blockedBy(first: 100) {
+        totalCount
+        nodes {
+          number
+          state
+          repository { nameWithOwner }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+class GhCapabilityError(Exception):
+    """``gh`` cannot do something git-loopy requires, named at preflight.
+
+    Distinct from :exc:`GhError`: a :exc:`GhError` is one failed invocation; a
+    :exc:`GhCapabilityError` is a fact about the installed ``gh`` itself,
+    discovered *before* any candidate is walked, so it can be reported as "your
+    gh cannot do X, install >= Y" rather than surfacing later as a per-candidate
+    read failure a caller could mistake for "no blockers" (the hazard #438
+    names: an old ``gh`` failing silently inside the **Pool** read reads as an
+    empty Pool to an unattended Run).
+    """
+
+
+def parse_gh_version(raw: str) -> tuple[int, int, int]:
+    """Parse ``gh --version``'s first line into a ``(major, minor, patch)`` triple.
+
+    Pure, so the version gate can be unit-tested against arbitrary ``gh``
+    output without shelling out. Raises :exc:`GhCapabilityError` — not
+    :exc:`GhError` — because an unparseable version string is a capability
+    question ("can I trust what this gh reports?"), not a single failed
+    invocation.
+    """
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", raw)
+    if match is None:
+        raise GhCapabilityError(
+            f"could not parse a version from `gh --version` output: {raw!r}"
+        )
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+def verify_readiness_capability(
+    version: tuple[int, int, int],
+    *,
+    minimum: tuple[int, int, int] = MIN_GH_VERSION_FOR_READINESS,
+) -> None:
+    """Fail loud, at preflight, if ``version`` cannot read **Readiness**.
+
+    This is the safeguard #438 owes: adding a readiness read that only fails
+    once a candidate is already being walked would surface as a quiet
+    per-candidate error today's error path reads as "no blockers" — which an
+    unattended Run would take for an empty **Pool** and exit clean. Calling
+    this once, before any **Pickup**, turns that into a loud preflight failure
+    that names the missing capability and the remedy.
+
+    Args:
+        version: The installed ``gh``'s ``(major, minor, patch)``, as
+            :func:`parse_gh_version` reads it.
+        minimum: The oldest version considered capable;
+            :data:`MIN_GH_VERSION_FOR_READINESS` by default.
+
+    Raises:
+        GhCapabilityError: When ``version < minimum``, naming both versions and
+            the upgrade remedy.
+    """
+    if version < minimum:
+        installed = ".".join(str(part) for part in version)
+        required = ".".join(str(part) for part in minimum)
+        raise GhCapabilityError(
+            f"gh {installed} cannot read issue dependencies (blockedBy) via "
+            f"GraphQL; git-loopy requires gh >= {required}. Upgrade gh: "
+            "https://cli.github.com/."
+        )
+
+
+def _parse_blocked_by(data: object, cmd: Sequence[str]) -> BlockedByRead:
+    """Convert one ``gh api graphql`` response into a :class:`BlockedByRead`.
+
+    Handles GitHub's partial-error shape for an unreadable node (the count
+    arrives, the node's body does not, per ADR-0047 "An unprovable read is not
+    readiness"): a node GraphQL could not resolve comes back as ``None`` in the
+    ``nodes`` array rather than an object, and is translated here into a
+    :class:`~git_loopy.readiness.BlockerNode` with ``readable=False``.
+    """
+    try:
+        connection = data["data"]["repository"]["issue"]["blockedBy"]
+        total_count = int(connection["totalCount"])
+        raw_nodes = connection["nodes"]
+    except (KeyError, TypeError, IndexError) as exc:
+        raise GhError(
+            list(cmd), 0, f"gh api graphql blockedBy JSON malformed: {exc}"
+        ) from exc
+    nodes: list[BlockerNode] = []
+    for raw_node in raw_nodes:
+        if raw_node is None:
+            # GitHub returned the edge's count but not its body — a blocker in
+            # a repository the token cannot see. Routine, not exotic, once
+            # cross-repository blockers count (ADR-0047).
+            nodes.append(BlockerNode(ref="", state=None, readable=False))
+            continue
+        try:
+            repo_nwo = raw_node["repository"]["nameWithOwner"]
+            ref = f"{repo_nwo}#{raw_node['number']}"
+            state = str(raw_node["state"]).lower()
+        except (KeyError, TypeError) as exc:
+            raise GhError(
+                list(cmd), 0, f"gh api graphql blockedBy node malformed: {exc}"
+            ) from exc
+        nodes.append(BlockerNode(ref=ref, state=state, readable=True))
+    return BlockedByRead(total_count=total_count, nodes=tuple(nodes))
 
 
 class GhError(RuntimeError):
@@ -695,6 +840,26 @@ class GitHubClient(Protocol):
         """Fetch one pull request including its ``comments`` and head-ref fields."""
         ...
 
+    def gh_version(self) -> tuple[int, int, int]:
+        """The installed ``gh``'s ``(major, minor, patch)`` version.
+
+        Read once at preflight via :func:`verify_readiness_capability`, never
+        per candidate — the whole point is to fail before any **Pickup** is
+        attempted (§3.3.1, #438).
+        """
+        ...
+
+    def blocked_by(self, number: int) -> BlockedByRead:
+        """Read one candidate's ``blockedBy`` connection, one hop, via GraphQL.
+
+        MUST use GraphQL, never REST (§3.3.1): REST is documented to
+        undercount cross-repository dependencies, and to do so silently. Taken
+        at **Pickup**, per candidate the runner actually reaches — never at
+        collection, where it would cost one extra round-trip for every
+        ``ready-for-agent`` candidate rather than only the ones considered.
+        """
+        ...
+
 
 class SubprocessGitHubClient:
     """:class:`GitHubClient` shelling out to the real ``gh`` CLI.
@@ -1009,6 +1174,43 @@ class SubprocessGitHubClient:
         raw = self._checked(cmd)
         parsed = _parse_json(raw, [_GH_BIN, *cmd])
         return _parse_pr(parsed, [_GH_BIN, *cmd])
+
+    def gh_version(self) -> tuple[int, int, int]:
+        """The installed ``gh``'s ``(major, minor, patch)`` version.
+
+        Raises:
+            GhError: If ``gh --version`` itself fails to run.
+            GhCapabilityError: If its output cannot be parsed as a version.
+        """
+        raw = self._checked(["--version"])
+        return parse_gh_version(raw)
+
+    def blocked_by(self, number: int) -> BlockedByRead:
+        """Read one issue's ``blockedBy`` connection via ``gh api graphql``.
+
+        Args:
+            number: The candidate issue's number, in the repository the
+                process cwd resolves to (:meth:`repo_view`).
+
+        Raises:
+            GhError: On any subprocess or parse failure.
+        """
+        repo = self.repo_view()
+        cmd = [
+            "api",
+            "graphql",
+            "-f",
+            f"query={_BLOCKED_BY_QUERY}",
+            "-f",
+            f"owner={repo.owner}",
+            "-f",
+            f"name={repo.name}",
+            "-F",
+            f"number={number}",
+        ]
+        raw = self._checked(cmd)
+        parsed = _parse_json(raw, [_GH_BIN, *cmd])
+        return _parse_blocked_by(parsed, [_GH_BIN, *cmd])
 
 
 # --------------------------------------------------------------------------- #
