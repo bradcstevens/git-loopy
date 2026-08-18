@@ -25,7 +25,7 @@ pub use band::{
     ActivityBand, ACTIVITY_BAND_COLLAPSED_HEIGHT, ACTIVITY_BAND_HEIGHT, ACTIVITY_BAND_MIN_HEIGHT,
     QUEUE_MIN_HEIGHT,
 };
-pub use event::{Event, EventPayload, InsightCapabilities, IssueRef};
+pub use event::{Event, EventPayload, InsightCapabilities, IssueRef, LaneSlot};
 pub use input::{Admission, Input, InputQueue, Pointer, PointerAction};
 pub use navigation::{Flow, Key, Screen};
 pub use render::{
@@ -38,12 +38,19 @@ pub use state::{DashboardState, RunInputs};
 pub use timestamp::{Timestamp, Zone};
 pub use view::{
     project_run_view, Activity, ConsumptionView, ContextFill, ContributionRow, Dashboard,
-    DetailHeader, DrillIn, Header, IssueLog, IterationBreakdown, LogLineView, PeakContext, Queue,
-    QueueRow, RunView, Strikes, Summary, SummaryRow, TerminalCapabilities, ViewContext,
+    DetailHeader, DrillIn, Header, IssueLog, IterationBreakdown, LogLineView, ParallelDeclaration,
+    PeakContext, Queue, QueueRow, RunView, Strikes, Summary, SummaryRow, TerminalCapabilities,
+    ViewContext,
 };
 
 /// The Event-schema major version this core decodes.
 pub const SUPPORTED_EVENT_SCHEMA_VERSION: u32 = 1;
 
 /// The Wrapper-contract version whose Dashboard seam this core implements.
-pub const WRAPPER_CONTRACT_VERSION: &str = "1.4";
+///
+/// Derived from `git-loopy/conformance/dashboard-insights.json`'s
+/// `wrapper_contract_version` and gated against it
+/// (`tests/wrapper_contract_version.rs`, ADR-0044): the Wrapper contract went
+/// to 2.0 when Continuation was decommissioned (ADR-0046), a breaking change
+/// no minor bump could honestly encode.
+pub const WRAPPER_CONTRACT_VERSION: &str = "2.0";

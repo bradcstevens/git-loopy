@@ -939,7 +939,7 @@ fn draw_breakdown(
 /// Lane it ran in once Parallel contributions reach this band.
 fn contribution_label(row: &ContributionRow, glyphs: &Glyphs) -> String {
     match (&row.lane, row.iteration) {
-        (Some(lane), _) => format!("lane {}", issue_label(lane)),
+        (Some(lane), _) => format!("lane {}", lane_slot_label(lane)),
         (None, Some(iteration)) => format!("iter {iteration}"),
         (None, None) => glyphs.unknown.to_string(),
     }
@@ -1064,6 +1064,13 @@ fn issue_label(issue: &crate::event::IssueRef) -> String {
     match issue {
         crate::event::IssueRef::Number(number) => format!("#{number}"),
         crate::event::IssueRef::Path(path) => path.clone(),
+    }
+}
+
+fn lane_slot_label(lane: &crate::event::LaneSlot) -> String {
+    match lane {
+        crate::event::LaneSlot::Number(number) => format!("#{number}"),
+        crate::event::LaneSlot::Name(name) => name.clone(),
     }
 }
 

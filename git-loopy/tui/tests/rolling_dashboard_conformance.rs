@@ -1,10 +1,20 @@
-//! Family-wide Dashboard conformance.
+//! The rolling-dispatch Dashboard fold (ADR-0044).
 //!
-//! The Rust core reduces the *same* shared semantic fixture Python's
+//! `git-loopy/conformance/event-schema.json`'s `rolling_stream_cases` pin
+//! that a rolling-dispatch trace round-trips as *Events*; this fixture pins
+//! what the Dashboard does with it once decoded — the contribution-triple
+//! attribution, the Header `parallel` Declaration, and the Queue / drill-in
+//! contribution row / Summary row three render surfaces a
+//! `wrapper.contribution.end` reaches.
+//!
+//! This lives in its own top-level `rolling_dashboard_cases` key rather than
+//! `dashboard-insights.json`'s shared `cases` array (which
 //! `test_python_semantic_view_matches_every_dashboard_fixture_snapshot`
-//! consumes, through the same production seam a renderer uses. The fixture is
-//! the oracle: expected values come from `git-loopy/conformance`, never from
-//! this crate's own arithmetic (ADR-0013's anti-drift backbone).
+//! iterates unconditionally): the Python Runner does not yet project a
+//! `parallel` Header field, so folding this case into `cases` would make that
+//! Python suite fail for a gap this issue does not own. `rolling_stream_cases`
+//! already models this per-key/per-distribution split (ADR-0045), so the same
+//! shape is reused here instead of inventing a new one.
 
 use git_loopy_tui::{
     project_run_view, DashboardState, Event, IssueRef, RunInputs, TerminalCapabilities, Timestamp,
@@ -12,8 +22,6 @@ use git_loopy_tui::{
 };
 use serde_json::Value;
 
-/// Compiled in, so the suite pins the fixture in this checkout and the test
-/// itself needs no runtime filesystem access.
 const DASHBOARD_INSIGHTS: &str = include_str!("../../conformance/dashboard-insights.json");
 
 fn fixture() -> Value {
@@ -25,34 +33,16 @@ fn instant(value: &Value) -> Timestamp {
         .expect("a fixture instant is RFC 3339")
 }
 
-fn band_names(value: &Value) -> Vec<&str> {
-    value
-        .as_object()
-        .expect("a band group is an object")
-        .keys()
-        .map(String::as_str)
-        .collect()
-}
-
 #[test]
-fn the_rust_core_matches_every_dashboard_fixture_snapshot() {
+fn the_rust_core_matches_every_rolling_dashboard_fixture_snapshot() {
     let fixture = fixture();
-    let contract = &fixture["semantic_contract"];
-    let dashboard_band_order: Vec<&str> = contract["dashboard_band_order"]
+    let cases = fixture["rolling_dashboard_cases"]
         .as_array()
-        .expect("band order is a list")
-        .iter()
-        .map(|band| band.as_str().expect("a band name is a string"))
-        .collect();
-    let drill_in_band_order: Vec<&str> = contract["drill_in_band_order"]
-        .as_array()
-        .expect("band order is a list")
-        .iter()
-        .map(|band| band.as_str().expect("a band name is a string"))
-        .collect();
-
-    let cases = fixture["cases"].as_array().expect("cases is a list");
-    assert!(!cases.is_empty(), "the fixture must exercise the core");
+        .expect("rolling_dashboard_cases is a list");
+    assert!(
+        !cases.is_empty(),
+        "the fixture must exercise the rolling fold"
+    );
 
     for case in cases {
         let id = case["id"].as_str().expect("a case has an id");
@@ -91,29 +81,10 @@ fn the_rust_core_matches_every_dashboard_fixture_snapshot() {
             };
             let projected = serde_json::to_value(project_run_view(&state, &context, &drill_in))
                 .expect("the view serializes");
-            // The Header `parallel` Declaration (ADR-0044) is Rust-only: this
-            // shared fixture also feeds Python's own conformance suite, which
-            // does not yet project it, so this comparison looks past it and
-            // the field's own correctness is instead pinned by
-            // `rolling_dashboard_conformance.rs`.
-            let mut projected = projected;
-            if let Some(header) = projected["dashboard"]["header"].as_object_mut() {
-                header.remove("parallel");
-            }
 
             assert_eq!(
-                band_names(&projected["dashboard"]),
-                dashboard_band_order,
-                "{id}: Dashboard band order after {upto} Events"
-            );
-            assert_eq!(
-                band_names(&projected["drill_in"]),
-                drill_in_band_order,
-                "{id}: drill-in band order after {upto} Events"
-            );
-            assert_eq!(
                 projected, snapshot["expected"],
-                "{id}: semantic view after {upto} Events"
+                "{id}: rolling-dispatch semantic view after {upto} Events"
             );
         }
     }
