@@ -2,9 +2,9 @@ Set-StrictMode -Version Latest
 
 # The single semver authority for the PowerShell distribution's Release version.
 #
-# The Orchestrator answers `--version` with it, stamps it onto `wrapper.run.start`
-# and the Continuation `capabilities`, and refuses a clone-local TUI helper that
-# disagrees with it. The installer stages that helper. Both read the same file
+# The Orchestrator answers `--version` with it, stamps it onto `wrapper.run.start`,
+# and refuses a clone-local TUI helper that disagrees with it. The installer
+# stages that helper. Both read the same file
 # through this one reader, so there is no second opinion about what Release a
 # clone is (ADR-0016, Wrapper contract §16, issue #194).
 

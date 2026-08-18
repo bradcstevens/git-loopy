@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 1.28 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.0 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -454,8 +454,8 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 | `GIT_LOOPY_INTERACTIVE`        | 2     | auto (TTY)       | `0` disables the live interface (CI-safe).                     |
 | `GIT_LOOPY_MODEL_SELECT`       | 3     | off              | `1` enters the startup model picker (**ModelSelectionMode**). |
 | `GIT_LOOPY_DENY_TOOLS`         | 1     | empty            | Denylist of tools (set *union* across config tiers).          |
-| `GIT_LOOPY_DENY_SKILLS`        | 1     | empty            | Deprecated denylist of skills (set *union* across config tiers); subtracts only (§17). |
-| `GIT_LOOPY_ENABLED_SKILLS`     | 3     | unset            | Exact replacement of the configured base **Skill policy** for one Run; an explicit empty value is a real empty policy (§17). |
+| `GIT_LOOPY_DENY_SKILLS`        | 1     | empty            | Deprecated denylist of skills (set *union* across config tiers); subtracts only (§16). |
+| `GIT_LOOPY_ENABLED_SKILLS`     | 3     | unset            | Exact replacement of the configured base **Skill policy** for one Run; an explicit empty value is a real empty policy (§16). |
 | `GIT_LOOPY_SEND_TIMEOUT_SECONDS`| 1    | impl default     | Per-iteration agent send timeout.                             |
 | `GIT_LOOPY_OTEL_ENABLED`       | 4     | off              | `1` enables OTLP export (or `OTEL_EXPORTER_OTLP_ENDPOINT`).    |
 | `GIT_LOOPY_MAX_PARALLEL`       | 5     | `1`              | **Lane** count in **Parallel mode**.                          |
@@ -467,9 +467,8 @@ Every Orchestrator MUST emit its structured record as JSONL using the shared **E
 (`git_loopy.events`), so the **TUI helper**, the `.git-loopy/logs/<iso>-<run_id>.jsonl` replay
 log, and any external consumer read one format regardless of which port produced it.
 The additive Event schema has compatibility `schema_version` **1**; changing the Wrapper contract
-does not implicitly change that version. The current fixture revision is **1.1** because
-Continuation added optional event types without breaking schema-1 consumers. Unknown event types
-and unknown payload fields remain additive and MUST be ignored by compatible consumers.
+does not implicitly change that version. Unknown event types and unknown payload fields remain
+additive and MUST be ignored by compatible consumers.
 
 Every line shares this envelope, with keys in a stable order (envelope keys first, then payload
 keys sorted):
@@ -490,13 +489,10 @@ order *before* the `wrapper.afk_ready.collected` it explains. That collection Ev
 carries `excluded`, the count of exclusions, so a replay can tell an empty tracker apart from a
 tracker whose every candidate was rejected. `wrapper.pool.excluded` is Run-scoped, never
 contribution-scoped: it names work that never became a **Lane contribution**, so it carries the
-collecting Iteration's `iter` and no contribution identity. Continuation-schema 1.1 additions:
-`wrapper.continuation.reconciled`, `wrapper.continuation_dispatch.started`,
-`wrapper.continuation_dispatch.ended`, and `wrapper.continuation.stopped`. These are redacted
-observations only and never carry authoritative fragments, secrets, or runnable Instructions.
+collecting Iteration's `iter` and no contribution identity.
 Dashboard Insight additions within compatibility schema 1 are `wrapper.issue.activated`,
 `agent.output`, and `usage.context_window`; `wrapper.skill_policy.resolved` is the redacted
-Run-scoped record of the frozen **Effective Skill policy** (§17). `wrapper.dashboard.fault` is
+Run-scoped record of the frozen **Effective Skill policy** (§16). `wrapper.dashboard.fault` is
 the Run-scoped record of a **Dashboard fault** — a Dashboard that raised, either while running or
 while coming up, which the Run survives as an involuntary **Detach** (ADR-0024). One event covers
 both, because a replay needs to tell a fault from a voluntary Detach, not one fault from another.
@@ -512,7 +508,7 @@ none and never do. Rolling-dispatch additions
 within compatibility schema 1 are listed under *Rolling-dispatch contribution lifecycle* below.
 Producing these additive events is capability-dependent.
 Note the shape: each is dotted `wrapper.<noun>.<verb>`, with underscores used only *within* a
-segment (`afk_ready`, `auto_close`, `ask_user`, `pr`, `continuation_dispatch`, `work_finished`,
+segment (`afk_ready`, `auto_close`, `ask_user`, `pr`, `work_finished`,
 `branch_observed`, `recovery_started`, `refill_turn`), and two that are
 two-part (`wrapper.auto_close`, `wrapper.strike`). SDK-mapped types (emitted when the port streams
 SDK events): `session.created`, `session.idle`, `session.deleted`, `assistant.message`,
@@ -997,7 +993,7 @@ Each Orchestrator MUST pass the language-neutral fixtures in the
   (§12).
 - **Skill policy** — base-scope selection, explicit empty policy, environment replacement, Run
   overlays, disable-wins, legacy subtraction, Minimal fallback, the four validation failures, and
-  the redacted resolved-policy projection (§17).
+  the redacted resolved-policy projection (§16).
 
 The suite is the generalized successor to the cross-runner parity test ADR-0002 deleted. A
 conformance fixture change is the canonical way to evolve the contract.
@@ -1300,43 +1296,12 @@ before the Routing resolution is resolved — and it MUST route on what it infer
 tracker refused the write. The write is what saves the *next* Run the inference; losing it must
 not also lose the decision it recorded.
 
-## 15. Native Continuation boundary (Continuation rollout, MUST)
+## 15. Release and compatibility identity (MUST)
 
-The separately versioned [Continuation contract](continuation-contract.md) governs Producer
-publication, Reconciliation, Dispatch evidence, capability declarations, and future Automation.
-Wrapper contract 1.4 requires every supported Orchestrator distribution to expose the same public
-namespace without making Continuation part of the Run loop:
-
-```text
-git-loopy continuation capabilities
-git-loopy continuation publish
-git-loopy continuation reconcile
-git-loopy continuation record-dispatch-result
-git-loopy continuation repair-index
-```
-
-`capabilities` MUST return the native distribution's truthful **Continuation capability
-manifest**, including the exact distribution `release_version` and separately declared Wrapper,
-Event, Continuation, and record-format compatibility versions. Capability never grants authority.
-Every other operation MUST consume exactly one
-UTF-8 JSON object from stdin or an explicitly selected input file. Machine responses emit exactly
-one JSON object on stdout; diagnostics use stderr. Terminal rendering is available only through
-an explicit `reconcile --terminal` selection.
-
-Command exits are independent of Run exits: success and committed or idempotent receipts use `0`;
-semantic or operational rejection uses `1`; malformed invocation uses `2`. An operation present
-in the namespace but not advertised as supported MUST fail closed with exit `1`, and the command
-boundary MUST never perform a **Continuation action**.
-
-Continuation mode remains `off` by default. This foundation does not authorize report mode,
-execute-frontier, or concurrent Dispatch.
-
-## 16. Release and compatibility identity (MUST)
-
-The **Release version** is product identity, not a compatibility shortcut. `--version`,
-`wrapper.run.start`, and Continuation `capabilities` MUST report the same exact Release version for
-one distribution. No other Event is required to repeat it, and advancing the Wrapper contract does
-not advance the Event schema, Continuation contract, or record format.
+The **Release version** is product identity, not a compatibility shortcut. `--version` and
+`wrapper.run.start` MUST report the same exact Release version for one distribution. No other
+Event is required to repeat it, and advancing the Wrapper contract does not advance the Event
+schema or record format.
 
 Components selected as artifacts of one packaged distribution MUST have exact Release-version
 equality and fail closed on drift. An externally discovered TUI helper from another Release MAY
@@ -1344,7 +1309,7 @@ remain usable when Event-schema and capability negotiation prove compatibility, 
 Orchestrator MUST warn that the Release versions differ. Release equality alone MUST NOT establish
 cross-release compatibility.
 
-## 17. Closed-world Skill policy (Skill-policy rollout, MUST)
+## 16. Closed-world Skill policy (Skill-policy rollout, MUST)
 
 A Run's capability set is a **contract**, not an accident of the operator's machine. Every
 Orchestrator MUST resolve exactly which canonical Skill names a Run may load, freeze that answer
@@ -1390,7 +1355,7 @@ MUST remain distinguishable all the way from Config parsing to the resolver.
 (including an explicit empty value). Replacement changes the *names*, not the *selection*:
 `base_scope` and `fallback` describe which scope the base came from, so an environment
 replacement over a project policy still reports `project`, and an environment replacement with no
-configured scope at all still reports `minimal`. §17.6's startup classification — not
+configured scope at all still reports `minimal`. §16.6's startup classification — not
 `base_scope` — is what answers "was this installation ever configured".
 
 The repeatable `--enable-skill` and `--disable-skill` flags are temporary Run **overlays** applied
@@ -1466,7 +1431,7 @@ prevent.
 which Skills a Run *may* use. A consulted name is per-Iteration observed behaviour, a policy name
 is Run-level availability, and neither may be derived from the other.
 
-## 18. Changing this contract
+## 17. Changing this contract
 
 1. Update this document and bump the **Contract version**.
 2. Add or update the corresponding **Conformance** fixture(s).
@@ -1481,6 +1446,4 @@ which is the whole point of the backbone.
 
 **See also:** [`docs/runners.md`](runners.md) (the operator-facing runner reference),
 [ADR-0013](adr/0013-multi-language-runner-family.md) (the family decision),
-[`docs/continuation-contract.md`](continuation-contract.md) (the independent Continuation
-contract),
 [`CONTEXT.md`](../CONTEXT.md) (the glossary).

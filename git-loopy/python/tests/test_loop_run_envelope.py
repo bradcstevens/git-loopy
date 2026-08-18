@@ -38,11 +38,10 @@ class _NoPreflight:
 def _bare_loop(*, max_iterations: int) -> Any:
     """A ``_Loop`` carrying only what ``drive()`` reads before its round loop.
 
-    Constructed with ``object.__new__`` rather than the real ``__init__`` for
-    the same reason the Continuation-frontier suite does it: git, the writers, a
-    Copilot client and the Strike machine are all reached from *inside* an
-    iteration, and this suite replaces the iteration wholesale. A harness that
-    stood them up would be testing the harness.
+    Constructed with ``object.__new__`` rather than the real ``__init__``: git,
+    the writers, a Copilot client and the Strike machine are all reached from
+    *inside* an iteration, and this suite replaces the iteration wholesale. A
+    harness that stood them up would be testing the harness.
 
     ``_config`` is the *real* ``RunConfig`` rather than a namespace, because
     ``drive()`` reads whole slices of it — the **Run readback** reads the
@@ -57,7 +56,6 @@ def _bare_loop(*, max_iterations: int) -> Any:
         {"type": event_type, **payload}
     )
     bare._source = _NoPreflight()
-    bare._frontier_plan = None
     bare._include_prs = False
     bare._config = RunConfig(
         issue_source="github",

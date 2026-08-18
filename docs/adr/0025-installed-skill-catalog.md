@@ -1,5 +1,10 @@
 # Install the Skill catalog instead of shipping it
 
+> **Note (superseded in part by [ADR-0046](0046-continuation-is-decommissioned.md)):**
+> This decision references Workflow Continuation, which has since been decommissioned.
+> The reasoning below is preserved as the record of what was decided at the time.
+
+
 **Status:** accepted
 
 **Supersedes the redistribution half of** [ADR-0023](0023-pinned-external-skill-catalog.md).

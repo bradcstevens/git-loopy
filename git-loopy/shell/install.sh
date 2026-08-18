@@ -40,8 +40,6 @@ source "$script_dir/lib/release-version.sh"
 source "$script_dir/lib/events.sh"
 # shellcheck disable=SC1091
 source "$script_dir/lib/tui-install.sh"
-# shellcheck disable=SC1091
-source "$script_dir/lib/continuation.sh"
 
 usage() {
   cat <<'EOF'
@@ -147,13 +145,6 @@ done
 mkdir -p "$bin_dir"
 bin_dir="$(cd "$bin_dir" && pwd)"
 shim="$bin_dir/git-loopy"
-
-# Setup verifies the one native distribution it is installing (#257). The
-# distribution being verified is this clone — nothing resolves an entrypoint and
-# nothing names a family member, so the selection is expressed by which installer
-# the operator ran and is never written down. It runs before the shim is written
-# so a distribution that cannot do the foundation work installs nothing at all.
-git_loopy_verify_this_distribution foundation || exit 1
 
 # The shim exec's the launcher by absolute path, so git-loopy.sh still resolves
 # the shared git-loopy/PROMPT.md one directory above itself in this clone.

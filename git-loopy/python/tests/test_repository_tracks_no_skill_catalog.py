@@ -71,29 +71,18 @@ def test_the_repository_tracks_no_root_skill_catalog(repo_root: Path) -> None:
     )
 
 
-#: The one place a tracked ``SKILL.md`` may still live: the byte-for-byte mirror of
-#: the contract-carrying prompts at the pinned revision (#341, ADR-0034). It is a
-#: test fixture -- nothing installs it, no Run resolves against it, and Copilot CLI
-#: does not discover it.
-_CONTRACT_FIXTURE = "git-loopy/python/tests/fixtures/continuation-skills/"
-
-
 def test_a_source_archive_carries_no_skill_catalog(repo_root: Path) -> None:
     """A clean checkout is the tracked file list, so this is what one contains.
 
     The root tree is the catalog that existed; this is the guard against the
-    next one, wherever it is put. Anything shaped like a Skill outside the
-    Continuation contract fixture is a catalog re-establishing itself under a
-    path the first guard does not name.
+    next one, wherever it is put. Anything shaped like a Skill is a catalog
+    re-establishing itself under a path the first guard does not name.
     """
     prompts = _tracked(repo_root, "*SKILL.md")
-    assert prompts, "no SKILL.md is tracked at all -- the scan looks broken"
-
-    stray = sorted(rel for rel in prompts if not rel.startswith(_CONTRACT_FIXTURE))
-    assert stray == [], (
-        "these prompts sit outside the Continuation contract fixture, so this "
-        "repository is carrying a Skill catalog again -- git-loopy installs one "
-        f"from the pin instead (ADR-0025): {stray}"
+    assert prompts == [], (
+        "these prompts mean this repository is carrying a Skill catalog again "
+        "-- git-loopy installs one from the pin instead (ADR-0025): "
+        f"{prompts}"
     )
 
 

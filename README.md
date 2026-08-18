@@ -90,7 +90,6 @@ work needs it.
 | **Parallel Lanes** | Opt-in worktree-isolated Lanes work several `parallel-safe` issues at once, with a serialized, bounded-green Integration stage | [parallel mode](docs/parallel-mode.md) |
 | **Live Dashboard** | Per-Iteration activity, context fill, observed tokens, and billed cost while the Run is happening | [runners](docs/runners.md) |
 | **Closed-world Skill policy** | Exactly the Skills a Run may load — no ambient context bloat from whatever is installed on the host | [skill policy](docs/skill-policy.md) |
-| **Continuation guidance** | The one next action derived from the live state of the work, so a Workstream never stalls on "what now?" | [continuation contract](docs/continuation-contract.md) |
 
 ## Get started
 
@@ -160,11 +159,12 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 | [`/research`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/research) | Resolve factual uncertainty from high-trust primary sources and save cited findings in the repository. |
 | [`/prototype`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/prototype) | Build a throwaway logic or UI artifact when a runnable answer is cheaper than more discussion. |
 | [`/domain-modeling`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/domain-modeling) | Sharpen the project's shared language and capture architectural decisions. |
-| [`/handoff`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/handoff) | Compact a human-driven session so another agent can resume it without reconstructing the thread. |
-| [`/copilot-handoff`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/copilot-handoff) | Hand the conversation to a fresh background Copilot CLI session that picks the work up immediately. |
+| [`/handoff`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/handoff) | Pass the runtime and prompt output of a `/next` run to a fresh background agent that picks the work up immediately. |
 | [`/loop-me`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/loop-me) | Grill an operator into workflow specs for the automation they want this workspace to run. |
 | [`/wait-what`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/wait-what) | Ask for a re-pitch, in plain language and the project's own vocabulary, when an explanation did not land. |
 | [`/to-questionnaire`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/to-questionnaire) | Turn unresolved decisions into a questionnaire for the person who can answer them. |
+| [`/skill-router`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/skill-router) | Ask which skill or flow fits the situation in front of you. |
+| [`/mermaid-diagrams`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/mermaid-diagrams) | Draw software diagrams — flow, sequence, class, ERD, C4, state — in Mermaid syntax. |
 
 ### Turn intent into delivered work
 
@@ -190,7 +190,6 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 | [`/setup-git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/setup-git-loopy-skills) | Configure the repository's issue tracker, triage labels, and domain-document layout. |
 | [`/wizard`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/wizard) | Generate an interactive bash wizard for a manual procedure only a human can carry out. |
 | [`/next`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/next) | Route to the one action to take now, from the live state of the work. |
-| [`/continuation`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/continuation) | Present the guidance a Run published, reconciled from the durable Continuation records. |
 | [`/teach`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/teach) | Teach a concept over multiple sessions using the repository as a stateful workspace. |
 | [`/create-readme`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/create-readme) | Write a project README from what the repository actually contains. |
 | [`/writing-for-agents`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/writing-for-agents) | Write documents agents read — skills, `AGENTS.md`, and their siblings. |
@@ -283,7 +282,6 @@ flowchart TD
 | [Skill policy](docs/skill-policy.md) | The closed world of Skills a Run may load |
 | [Skills setup](docs/skills-setup.md) | Prerequisites and installing the skill catalog |
 | [Customization](docs/customization.md) | Prompt, config, routing, and repository-specific defaults |
-| [Continuation contract](docs/continuation-contract.md) | How the next action is derived from live state |
 | [Decision records](docs/adr/) | Why the system is built the way it is |
 
 ## Acknowledgments

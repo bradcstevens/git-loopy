@@ -1,6 +1,6 @@
 # A contract-carrying Skill is authored upstream and mirrored here
 
-**Status:** accepted
+**Status:** superseded by [ADR-0046](0046-continuation-is-decommissioned.md)
 
 **Completes** [ADR-0025](0025-installed-skill-catalog.md), whose last consequence —
 *"Skills that git-loopy itself depends on must exist upstream"* — was stated as a

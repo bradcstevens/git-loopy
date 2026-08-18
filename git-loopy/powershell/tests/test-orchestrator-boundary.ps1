@@ -891,25 +891,6 @@ exit 97
     }
 
     Remove-Item -LiteralPath $VersionPath -Recurse -Force -ErrorAction SilentlyContinue
-    $CapabilitiesStdout = Join-Path $TempDir "capabilities-missing.stdout"
-    $CapabilitiesStderr = Join-Path $TempDir "capabilities-missing.stderr"
-    $Status = Invoke-VersionEntrypoint `
-        -RuntimeEntrypoint $VersionEntrypoint `
-        -WorkingDirectory $VersionOutside `
-        -FakeBin $VersionBin `
-        -ToolLog $VersionToolLog `
-        -StdoutPath $CapabilitiesStdout `
-        -StderrPath $CapabilitiesStderr `
-        -Arguments @("continuation", "capabilities")
-    Assert-True ($Status -ne 0) (
-        "Continuation capabilities rejected missing Release metadata"
-    )
-    Assert-Equal 0 ([IO.File]::ReadAllText($CapabilitiesStdout).Length) (
-        "Continuation capabilities wrote no success without Release metadata"
-    )
-    Assert-Contains (
-        [IO.File]::ReadAllText($CapabilitiesStderr)
-    ) "cannot read Release" "Continuation Release metadata diagnostic"
     [IO.File]::WriteAllText(
         $VersionPath,
         "$ExpectedReleaseVersion`n",

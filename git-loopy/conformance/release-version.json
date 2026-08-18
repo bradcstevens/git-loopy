@@ -88,10 +88,6 @@
     {
       "id": "source-entrypoint",
       "expected_error": "shell --version"
-    },
-    {
-      "id": "manifest",
-      "expected_error": "shell Continuation capability manifest"
     }
   ],
   "artifact_drift_cases": [

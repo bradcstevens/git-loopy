@@ -1,5 +1,10 @@
 # Measured routing is a committed precedence tier, calibrated only on request
 
+> **Note (superseded in part by [ADR-0046](0046-continuation-is-decommissioned.md)):**
+> This decision references Workflow Continuation, which has since been decommissioned.
+> The reasoning below is preserved as the record of what was decided at the time.
+
+
 **Status:** accepted
 
 Once **Calibration** ([ADR-0027](0027-routing-is-calibrated-by-measurement.md)) produces a

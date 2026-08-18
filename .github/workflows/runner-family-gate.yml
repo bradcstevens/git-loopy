@@ -43,7 +43,6 @@ jobs:
           uv run --project git-loopy/python --all-extras
           python -m pytest -q git-loopy/python/tests/test_conformance.py
           git-loopy/python/tests/test_release_identity_conformance.py
-          git-loopy/python/tests/test_continuation_scenarios.py
 
       - name: Python test suite
         shell: bash
@@ -101,7 +100,6 @@ jobs:
           "$BASH_BIN" -n \
             git-loopy/shell/git-loopy.sh \
             git-loopy/shell/install.sh \
-            git-loopy/shell/lib/continuation.sh \
             git-loopy/shell/lib/events.sh \
             git-loopy/shell/lib/orchestrator.sh \
             git-loopy/shell/lib/release-version.sh \
@@ -114,7 +112,6 @@ jobs:
           SUITES=(
             git-loopy/shell/tests/test-event-conformance.sh
             git-loopy/shell/tests/test-orchestrator-conformance.sh
-            git-loopy/shell/tests/test-continuation-conformance.sh
             git-loopy/shell/tests/test-orchestrator-boundary.sh
             git-loopy/shell/tests/test-tui-install.sh
           )
@@ -199,7 +196,5 @@ jobs:
           }
           Invoke-Suite git-loopy/powershell/tests/test-event-conformance.ps1
           Invoke-Suite git-loopy/powershell/tests/test-orchestrator-conformance.ps1
-          Invoke-Suite git-loopy/powershell/tests/test-continuation-conformance.ps1
-          Invoke-Suite git-loopy/powershell/tests/test-continuation-frontier.ps1
           Invoke-Suite git-loopy/powershell/tests/test-orchestrator-boundary.ps1
           Invoke-Suite git-loopy/powershell/tests/test-tui-install.ps1

@@ -1,5 +1,10 @@
 # Agents infer the Task type, and the taxonomy closes to pay for it
 
+> **Note (superseded in part by [ADR-0046](0046-continuation-is-decommissioned.md)):**
+> This decision references Workflow Continuation, which has since been decommissioned.
+> The reasoning below is preserved as the record of what was decided at the time.
+
+
 **Status:** accepted
 
 Accepted at [#409](https://github.com/bradcstevens/git-loopy/issues/409), under the per-issue

@@ -110,7 +110,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
 import logging
 import os
 import re
@@ -128,7 +127,6 @@ from typing import (
     Iterable,
     Mapping,
     Protocol,
-    Sequence,
 )
 
 from copilot import CopilotClient
@@ -152,11 +150,6 @@ from git_loopy.config import (
     TaskTypeError,
     resolve_iteration_model,
 )
-from git_loopy.continuation import (
-    CapabilityUnsupported as ContinuationCapabilityUnsupported,
-)
-from git_loopy import continuation_frontier
-from git_loopy.continuation_report import ContinuationReporter
 from git_loopy.copilot_client import make_copilot_client
 from git_loopy.emit import EventEmitter
 from git_loopy.escalation import EscalationLedger
@@ -199,7 +192,7 @@ from git_loopy.sources import (
     RollingIssueSource,
 )
 from git_loopy.skill_catalog import discover_skill_catalog as _discover_skill_catalog
-from git_loopy.skill_exposure import SkillExposure, SkillExposureError
+from git_loopy.skill_exposure import SkillExposureError
 from git_loopy.skill_policy import SkillPolicyResolutionError
 from git_loopy.skill_run_preflight import (
     RunSkillPreflight,
@@ -316,249 +309,6 @@ def _make_task_type_label_client() -> gh_module.SubprocessTaskTypeLabelClient:
     watch the one write the classifier makes without a tracker.
     """
     return gh_module.SubprocessTaskTypeLabelClient()
-
-
-def _resolve_continuation_authority(
-    config: RunConfig, diag: logging.Logger
-) -> dict[str, Any] | None:
-    """Resolve this Run's §10 Continuation authority, or `None` for mode `off`.
-
-    `None` is mode `off`: an unconfigured Run never resolves an authority and
-    never touches the tracker on Continuation's behalf, so "preserve current Pool
-    behavior, output, retries, Strikes, and exits without invoking Continuation"
-    is a property of the wiring rather than a promise made by code that ran
-    anyway. A configured mode that §10 then narrows away is also `None`, said out
-    loud, because a Run that went quiet for a reason nobody printed looks exactly
-    like one that is working.
-    """
-    sources = config.continuation.declared_sources()
-    if not sources:
-        return None
-
-    from git_loopy import continuation as continuation_module
-
-    authority = continuation_module.resolve_authority({"sources": sources})
-    if not authority["participates"]:
-        diag.info(
-            "continuation authority resolved to off (declared %s): %s",
-            authority["declared_mode"],
-            ", ".join(
-                f"{entry['axis']}/{entry['reason']}" for entry in authority["narrowed"]
-            )
-            or "no narrowing recorded",
-        )
-        return None
-    return authority
-
-
-def _make_continuation_reporter(
-    config: RunConfig, diag: logging.Logger
-) -> ContinuationReporter | None:
-    """Build this Run's read-only Continuation observer, or `None`.
-
-    `None` covers both mode `off` and mode `execute-frontier`: an executing Run
-    reconciles on its own schedule around each Dispatch, and a reporter observing
-    the same project on the Iteration boundary would reconcile the same records
-    twice and print guidance the Run had already acted on.
-
-    Raises :class:`~git_loopy.continuation.CapabilityUnsupported` when the
-    configured mode is one this distribution does not advertise. The caller turns
-    that into the Wrapper contract's `preflight_failed`.
-    """
-    authority = _resolve_continuation_authority(config, diag)
-    if authority is None or authority["mode"] == continuation_frontier.MODE:
-        return None
-
-    from git_loopy import continuation as continuation_module
-
-    client = continuation_module.make_github_client()
-    return ContinuationReporter(
-        authority,
-        reconcile=lambda request: continuation_module.reconcile_records(
-            request, client
-        ),
-        on_guidance=lambda line: print(line, file=sys.stderr),
-    )
-
-
-def _runner_satisfied_requirements(
-    authority: Mapping[str, Any], exposure: SkillExposure
-) -> tuple[tuple[str, str], ...]:
-    """State, in §9's typed vocabulary, what this Run actually holds.
-
-    Both halves are derived rather than asserted, because §9 reads the posture as
-    a closed world: a claim made here that the host cannot honour turns into a
-    session that fails at the Instruction instead of an Action §9 declines to
-    authorize.
-
-    - `skill/<name>` comes from the Skill policy this Run resolved. A Skill that
-      was disabled or absent is one the session genuinely cannot invoke.
-    - `access/<kind>` comes from the operator's own `effect_scopes` ceiling. §10
-      is where an operator says which durable effects this Run may produce, so
-      the access claim is theirs to grant and never widens past it.
-    """
-    ceilings = authority.get("ceilings") or {}
-    return tuple(
-        sorted(
-            {("skill", name) for name in exposure.policy.enabled}
-            | {("access", kind) for kind in (ceilings.get("effect_scopes") or ())}
-        )
-    )
-
-
-def _make_continuation_plan(
-    config: RunConfig, diag: logging.Logger, exposure: SkillExposure
-) -> continuation_frontier.FrontierPlan | None:
-    """Build this Run's execute-frontier posture, or `None` for every other mode.
-
-    Preflight, deliberately: :func:`~git_loopy.continuation_frontier.plan_frontier`
-    raises when the resolved authority names a ceiling this distribution cannot
-    enforce or omits the actor an execute-frontier Run has to write Dispatch
-    evidence as. A Run that discovered that at the moment it had to record a
-    safety-case violation would lose the one record a human needs.
-    """
-    authority = _resolve_continuation_authority(config, diag)
-    if authority is None or authority["mode"] != continuation_frontier.MODE:
-        return None
-    if config.parallel > 1:
-        # `concurrent_dispatch` is advertised false. A Run that accepted the
-        # Parallel flag and then dispatched serially anyway would have quietly
-        # served a narrower thing than the operator asked for.
-        raise ContinuationCapabilityUnsupported(
-            "continuation mode execute-frontier does not support parallel dispatch"
-        )
-    return continuation_frontier.plan_frontier(
-        authority,
-        satisfied_requirements=_runner_satisfied_requirements(authority, exposure),
-    )
-
-
-def _dispatch_refs(dispatch: continuation_frontier.Dispatch) -> tuple[int | str, ...]:
-    """The issue refs one Dispatch may bind as its Active issue.
-
-    Only its own Target and workstream anchor. A session that could bind
-    something else would be reporting work against an Action nobody authorized.
-    """
-    refs: list[int | str] = []
-    for ref in (dispatch.target, dispatch.workstream_anchor):
-        number = ref.get("number") if isinstance(ref, Mapping) else None
-        if isinstance(number, int) and number not in refs:
-            refs.append(number)
-    return tuple(refs)
-
-
-class _TriggerWatch:
-    """Notices the one safety-case trigger a Runner can observe by itself.
-
-    A `wrapper.ask_user.attempted` Event means a session that swore it needed no
-    human reached for one anyway. Every other trigger a case declares is about
-    the world the Instruction touches, which only the Performer can see --- this
-    watches the single one that surfaces as a Runner-owned Event.
-    """
-
-    def __init__(self) -> None:
-        self.reached_for_a_human = False
-        #: Called once, the moment the trigger is seen, so the Dispatch can be
-        #: ended rather than merely classified after the fact.
-        self.on_reached: Callable[[], None] | None = None
-
-    def observe(self, event: Mapping[str, Any]) -> None:
-        if event.get("type") != events_module.WRAPPER_ASK_USER_ATTEMPTED:
-            return
-        already = self.reached_for_a_human
-        self.reached_for_a_human = True
-        if not already and self.on_reached is not None:
-            self.on_reached()
-
-
-def _human_boundary_outcome(
-    dispatch: continuation_frontier.Dispatch,
-) -> continuation_frontier.DispatchOutcome:
-    """Turn an observed trigger into the record §9 quarantines the Action on.
-
-    The reason is `human-decision` and nothing narrower on purpose: the Runner
-    saw that a human was needed, not *which* kind of human boundary it was, and
-    inventing a more specific typed reason would put a guess into a durable
-    record. The carrier is the evidence because it is the durable artifact the
-    record is written against and the one a human already watches.
-    """
-    return continuation_frontier.DispatchOutcome(
-        outcome="safety-case-violation",
-        reason="human-decision",
-        summary=(
-            f"noninteractive Dispatch of an {dispatch.kind} Action "
-            "reached for a human decision"
-        ),
-        evidence=(dict(dispatch.carrier),),
-    )
-
-
-def _dispatch_prompt(dispatch: continuation_frontier.Dispatch) -> str:
-    """Render the one Instruction this session runs, and nothing beyond it.
-
-    The published Instruction is the whole task --- it is what a Producer wrote
-    down as the exact thing to do --- so the preamble adds only the two facts the
-    session cannot infer: when it is done, and that it must stop there. Naming the
-    successor would hand a noninteractive session the chaining decision §9 keeps.
-    """
-    condition = json.dumps(dict(dispatch.completion_condition), sort_keys=True)
-    return (
-        "You are running one authorized Continuation Action, noninteractively.\n"
-        f"Action: {dispatch.summary}\n"
-        f"Completion condition: {condition}\n"
-        "Run this Instruction and stop. Do not start follow-up work, do not ask "
-        "questions, and do not wait for approval: nobody is watching this "
-        "session. If the Instruction cannot be completed without a human "
-        "decision, stop and say so.\n\n"
-        f"{dispatch.instruction.get('value', '')}"
-    )
-
-
-def _frontier_exit_code(
-    runs: Sequence[continuation_frontier.FrontierRun], *, diag: logging.Logger
-) -> int:
-    """Map every repository's typed stop onto the Wrapper contract's exit vocabulary.
-
-    The contract has five exit reasons and Continuation adds none, so the mapping
-    is by *disposition* rather than by reason: a boundary the Run was always going
-    to reach is a clean stop, and anything a human has to look at is not.
-
-    - `complete` and `expected-boundary` --- the Run may do no more, which is what
-      `empty_pool` already means for a Pool Run.
-    - `attention-required` --- a safety-case violation, an uncertain effect state
-      or a guidance fault. Exit non-zero, like `stuck`.
-    - the three Runner-owned refusals --- an ordinary execution failure, a lost
-      Dispatch record, an untrustworthy freeze. No §9 stop at all, and still not
-      success.
-
-    One repository is enough. Coverage is one Run, so a clean stop elsewhere never
-    hides the one a human has to look at.
-    """
-    attention = False
-    for run in runs:
-        if not run.healthy:
-            attention = True
-        stop = run.stop or {}
-        diag.log(
-            logging.ERROR if not run.healthy else logging.INFO,
-            "continuation frontier run for %s stopped: %s (%d dispatched%s)",
-            run.repository,
-            stop.get("reason") or _frontier_refusal(run),
-            len(run.dispatches),
-            ", evidence lost" if run.evidence_lost else "",
-        )
-    return exit_code_for("stuck" if attention else "empty_pool")
-
-
-def _frontier_refusal(run: continuation_frontier.FrontierRun) -> str:
-    """Name a Runner-owned refusal without borrowing a typed §9 reason for it."""
-    if run.coverage_fault:
-        return "runner-refusal/untrustworthy-freeze"
-    if run.evidence_lost:
-        return "runner-refusal/dispatch-evidence-not-recorded"
-    if run.execution_failed:
-        return "runner-refusal/execution-failed"
-    return "unreported"
 
 
 def _make_gate_runner() -> gate_module.AgentsMdGateRunner:
@@ -981,8 +731,6 @@ class _Loop:
         diag: logging.Logger,
         include_prs: bool = False,
         usage_observer: _EventObserver | None = None,
-        continuation: ContinuationReporter | None = None,
-        frontier_plan: continuation_frontier.FrontierPlan | None = None,
         rate_card: RateCard | None = None,
         classifier_pair: ClassifierPair | None = None,
         task_type_client: TaskTypeLabelClient | None = None,
@@ -1004,17 +752,7 @@ class _Loop:
         self._source = source
         self._diag = diag
         self._include_prs = include_prs
-        # Report mode's read-only observer, or `None` in mode `off` — which is
-        # the default, and the reason an unconfigured Run cannot reach any of
-        # this code at all rather than reaching a Continuation that declines.
-        self._continuation = continuation
-        # Execute-frontier's frozen posture, or `None` in every other mode. When
-        # it is set the Run drives the frontier instead of the Pool; the two are
-        # never both live, because §10 resolves exactly one mode.
-        self._frontier_plan = frontier_plan
         self._rollup = IterationRollupAccumulator(denomination=denomination)
-        if self._continuation is not None:
-            self._continuation.bind_emit(self._emit)
         # An extra, Run-scoped Consumption observer (#309). The rollup owns one
         # *current Iteration* slot, so it cannot answer "what has this whole
         # Run spent" — which is what AI-credit pressure is measured against.
@@ -1252,25 +990,6 @@ class _Loop:
             considered=considered,
         )
 
-    def _observe_continuation(self, iter_num: int, *, phase: str) -> None:
-        """Render read-only Continuation guidance for one Iteration boundary.
-
-        Guarded rather than trusted: an operator who adopted report mode agreed
-        to *see* guidance, not to a new way for a Run to fail. A Reconciliation
-        that cannot complete is a warning and nothing else.
-        """
-        if self._continuation is None:
-            return
-        try:
-            self._continuation.observe(iter_num=iter_num, phase=phase)
-        except Exception as exc:  # noqa: BLE001 - visibility is never fatal
-            self._diag.warning(
-                "continuation %s reconciliation failed: %s: %s",
-                phase,
-                type(exc).__name__,
-                exc,
-            )
-
     def _emit_skill_policy_resolved(self) -> None:
         if self._skill_preflight.migration_warning:
             print(
@@ -1412,10 +1131,6 @@ class _Loop:
                 issues=pool_refs,
                 excluded=len(collection.exclusions),
             )
-            # Report mode observes here and again after the Iteration's durable
-            # changes. The Pool above is untouched by what it finds: report mode
-            # grants visibility, never selection.
-            self._observe_continuation(iter_num, phase="pre-iteration")
             if not pool:
                 # Close the iteration cleanly so the snapshot lifecycle is
                 # consistent even on the empty-pool path.
@@ -1565,7 +1280,6 @@ class _Loop:
             #    [] (the agent owns the `git mv ... done/` step).
             with telemetry.span("git_loopy.enforce_closures"):
                 completions = self._handle_completions_safely(pool, new_commits)
-            self._observe_continuation(iter_num, phase="post-iteration")
 
             if issue_binding.active_ref is None:
                 fallback = self._infer_active_binding(
@@ -2222,225 +1936,6 @@ class _Loop:
             )
         return event
 
-    # -- fixed-frontier Run ------------------------------------------------
-
-    async def _perform_dispatch(
-        self, dispatch: continuation_frontier.Dispatch, *, iter_num: int
-    ) -> continuation_frontier.DispatchOutcome:
-        """Run exactly one authorized Action in exactly one Performer session.
-
-        The session is handed one Instruction and one completion condition and is
-        never told what comes next, because what comes next is a decision §9 makes
-        after observing what this Dispatch did. There is no loop here for the same
-        reason: the successor is chosen by the next Reconciliation, not by this
-        session and not by this method.
-
-        `complete` claims exactly one thing: the session ran to the end without
-        raising. It does not claim the completion condition was met, and nothing
-        downstream reads it as that claim --- the next Reconciliation re-derives
-        readiness and currency from the tracker, so an Action whose condition did
-        not hold is described by §9 rather than by this return value.
-
-        One safety-case trigger *is* enforced here, because one is observable
-        without the Performer's cooperation: a session that reaches for
-        `ask_user` has contradicted the case that called the Action AFK-safe, so
-        the Dispatch ends as a `safety-case-violation` and becomes durable
-        evidence. `uncertain-effect-state`, and every trigger about the world the
-        Instruction touches, still need the Performer to say so; until it does,
-        such a boundary reaches a human through the unmet completion condition on
-        the next Reconciliation rather than through a record.
-        """
-        binding = self._new_active_issue_binding(
-            iter_num, allowed_refs=_dispatch_refs(dispatch)
-        )
-        prompt = _dispatch_prompt(dispatch)
-        send_timeout = self._config.send_timeout_seconds
-        failure: str | None = None
-        # Joined to the Run's own accounting rather than substituted for it: the
-        # Consumption meter and the Summary rollup read this same stream, and a
-        # Dispatch they never saw is a Dispatch nobody bills.
-        watch = _TriggerWatch()
-        observer = _ChainedObserver(observers=(self._session_observer, watch))
-        running = asyncio.get_running_loop()
-        with telemetry.span("git_loopy.session"):
-            try:
-                async with IterationSession(
-                    self._client,
-                    config=self._config,
-                    event_log=self._writers.event_log,
-                    sinks=self._sinks,
-                    run_id=self._writers.run_id,
-                    iter_num=iter_num,
-                    model=self._config.model,
-                    reasoning_effort=self._config.reasoning_effort,
-                    issue_binding=binding,
-                    skill_exposure=self._skill_exposure,
-                    event_observer=observer,
-                ) as sdk_session:
-                    send = asyncio.ensure_future(
-                        sdk_session.send_and_wait(prompt, timeout=send_timeout)
-                    )
-                    # §9: a trigger *ends* the Dispatch. Denying the `ask_user`
-                    # call only stops the agent hearing an answer --- it stays
-                    # live and can keep spending the authorization's effects
-                    # against a safety case it has already contradicted.
-                    watch.on_reached = lambda: running.call_soon_threadsafe(send.cancel)
-                    if watch.reached_for_a_human:
-                        send.cancel()
-                    try:
-                        await send
-                    except asyncio.CancelledError:
-                        # Two different cancellations arrive as one exception. Ours
-                        # ends the Dispatch and is absorbed; a cancellation aimed at
-                        # *this* task is a shutdown, and swallowing it would let the
-                        # driver reconcile on into a Run nobody wants any more.
-                        outer = asyncio.current_task()
-                        if not watch.reached_for_a_human or (
-                            outer is not None and outer.cancelling() > 0
-                        ):
-                            raise
-                    except asyncio.TimeoutError:
-                        failure = f"session timed out after {send_timeout}s"
-                    except Exception as exc:  # noqa: BLE001 - reported as failure
-                        failure = f"{type(exc).__name__}: {exc}"
-            except Exception as exc:  # noqa: BLE001 - reported as failure
-                failure = f"session lifecycle failed: {type(exc).__name__}: {exc}"
-        if watch.reached_for_a_human:
-            # Ranked above `failure` deliberately. A session that asked for a
-            # human and *then* fell over still contradicted its safety case, and
-            # reporting the later failure would downgrade the one outcome that
-            # becomes durable evidence into an ordinary retryable one.
-            self._diag.warning(
-                "continuation dispatch %s reached for a human decision",
-                dispatch.action_identity,
-            )
-            return _human_boundary_outcome(dispatch)
-        if failure is not None:
-            # An ordinary Runner failure, not a Continuation boundary: it never
-            # becomes durable Dispatch evidence and never earns a typed §9 stop.
-            self._diag.warning(
-                "continuation dispatch %s failed: %s", dispatch.action_identity, failure
-            )
-            return continuation_frontier.DispatchOutcome(outcome="failed")
-        return continuation_frontier.DispatchOutcome(outcome="complete")
-
-    async def _drive_frontier(
-        self,
-        plan: continuation_frontier.FrontierPlan,
-        *,
-        client: Any | None = None,
-    ) -> int:
-        """Drive the frozen frontier instead of the Pool, then map its stop to an exit.
-
-        The driver is synchronous and the Performer is a coroutine, so the Run is
-        handed to a worker thread and each session is scheduled back onto this
-        event loop. That keeps the sequencing rules --- one freeze, one Action per
-        session, one Reconciliation after every Dispatch --- in one synchronous
-        place that can be pinned without an event loop.
-        """
-        from git_loopy import continuation as continuation_module
-
-        loop = asyncio.get_running_loop()
-        dispatches = 0
-        if client is None:
-            client = continuation_module.make_github_client()
-
-        def perform(
-            dispatch: continuation_frontier.Dispatch,
-        ) -> continuation_frontier.DispatchOutcome:
-            nonlocal dispatches
-            dispatches += 1
-            return asyncio.run_coroutine_threadsafe(
-                self._perform_dispatch(dispatch, iter_num=dispatches), loop
-            ).result()
-
-        def record(body: dict[str, Any]) -> Any:
-            # The record is written onto the Producer carrier that published the
-            # Action, so the carrier --- not the Run --- names the repository it
-            # lands in. §9 validates that the two agree.
-            return continuation_module.record_dispatch_result(
-                {
-                    "repository": body["carrier"]["repository"],
-                    "trusted_producers": list(plan.trusted_producers),
-                    "dispatch": body,
-                },
-                client,
-            )
-
-        driver = continuation_frontier.FrontierDriver(
-            plan,
-            reconcile=lambda request: continuation_module.reconcile_records(
-                request, client
-            ),
-            perform=perform,
-            record_evidence=record,
-            emit=self._emit,
-            on_guidance=lambda line: print(line, file=sys.stderr),
-            diagnose=lambda line: self._diag.warning("%s", line),
-        )
-        runs = await asyncio.to_thread(driver.run_all)
-        return _frontier_exit_code(runs, diag=self._diag)
-
-    async def _drive_frontier_run(
-        self, plan: continuation_frontier.FrontierPlan
-    ) -> int:
-        """Wrap one fixed-frontier Run in the same Run envelope the Pool emits.
-
-        `iterations_run` is 0 rather than the Dispatch count: an Iteration is a
-        Pool concept with its own rollup, Strike accounting and cap, and a
-        Dispatch is none of those. The Dispatches are reported by their own three
-        Events instead.
-        """
-        self._emit(
-            events_module.WRAPPER_RUN_START,
-            iter_num=None,
-            issue_source=self._config.issue_source,
-            release_version=self._release_version,
-            schema_version=events_module.EVENT_SCHEMA_VERSION,
-            insight_capabilities=events_module.python_insight_capabilities(
-                rate_card=self._rate_card is not None
-            ),
-            rate_card=(
-                None if self._rate_card is None else self._rate_card.to_payload()
-            ),
-            parallel_capabilities=dict(events_module.PYTHON_PARALLEL_CAPABILITIES),
-            max_iterations=self._config.max_iterations,
-            max_nmt_strikes=self._config.max_nmt_strikes,
-            # #410: what this Run parsed, gate-checked. Carried on the Event
-            # every drive path already emits rather than on one of its own —
-            # the readback describes the Run, and the Run has exactly one start.
-            **run_start_payload(self._config),
-        )
-        outcome_label = "empty_pool"
-        exit_code = 1
-        try:
-            exit_code = await self._drive_frontier(plan)
-            outcome_label = (
-                "empty_pool"
-                if exit_code == exit_code_for("empty_pool")
-                else "stuck"
-            )
-        except Exception as exc:
-            outcome_label = "crashed"
-            exit_code = 1
-            self._diag.error(
-                "git-loopy continuation frontier run crashed: %s: %s",
-                type(exc).__name__,
-                exc,
-            )
-            raise
-        finally:
-            try:
-                self._emit(
-                    events_module.WRAPPER_RUN_END,
-                    iter_num=None,
-                    outcome=outcome_label,
-                    iterations_run=0,
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                self._diag.warning("wrapper.run.end emit failed: %s", exc)
-        return exit_code
-
     # -- public driver -----------------------------------------------------
 
     async def drive(self) -> int:
@@ -2452,9 +1947,6 @@ class _Loop:
         rc = self._source.preflight()
         if rc is not None:
             return rc
-
-        if self._frontier_plan is not None:
-            return await self._drive_frontier_run(self._frontier_plan)
 
         # Capture the base branch once, before any iteration can run
         # `gh pr checkout`, so PR iterations can return to it (see the
@@ -2729,7 +2221,6 @@ class _ParallelLoop:
         gate_runner: gate_module.GateRunner,
         worktree_setup: worktree_module.WorktreeSetup,
         include_prs: bool = False,
-        continuation: ContinuationReporter | None = None,
         rate_card: RateCard | None = None,
         classifier_pair: ClassifierPair | None = None,
         task_type_client: TaskTypeLabelClient | None = None,
@@ -2865,7 +2356,6 @@ class _ParallelLoop:
             diag=diag,
             include_prs=include_prs,
             usage_observer=self._cost_meter,
-            continuation=continuation,
             classifier_pair=classifier_pair,
             task_type_client=task_type_client,
         )
@@ -4803,10 +4293,6 @@ async def run(
             workspace=Path(skill_workspace.name),
             discoverer=_discover_skill_catalog,
         )
-        continuation_reporter = _make_continuation_reporter(config, diag)
-        frontier_plan = _make_continuation_plan(
-            config, diag, skill_preflight.exposure
-        )
     except (
         OSError,
         PromptMetadataError,
@@ -4831,27 +4317,6 @@ async def run(
         # Skill preflight is preflight: it answers to the Wrapper contract's
         # `preflight_failed` reason rather than to a literal that merely
         # happens to equal it today.
-        return exit_code_for("preflight_failed")
-    except ContinuationCapabilityUnsupported as exc:
-        # Fail closed *before* the Pool. A Run that discovered mid-flight that it
-        # could not serve its configured mode would have already behaved like
-        # `off` while reporting success, which is the silent degradation the
-        # capability manifest exists to prevent.
-        diag.error("Continuation preflight failed: %s", exc)
-        print(
-            f"git-loopy: Continuation preflight failed: {exc}. "
-            "Verify this distribution with `git-loopy continuation capabilities`.",
-            file=sys.stderr,
-        )
-        try:
-            writers.run_summary.flush()
-        except Exception as flush_exc:
-            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
-        try:
-            await client.stop()
-        except Exception as stop_exc:
-            diag.warning("CopilotClient.stop() failed: %s", stop_exc)
-        skill_workspace.cleanup()
         return exit_code_for("preflight_failed")
     except RuntimeError as exc:
         diag.error(
@@ -4912,7 +4377,6 @@ async def run(
             gate_runner=_make_gate_runner(),
             worktree_setup=_make_worktree_setup(),
             include_prs=include_prs,
-            continuation=continuation_reporter,
             rate_card=rate_card,
             classifier_pair=classifier_pair,
             task_type_client=task_type_client,
@@ -4932,8 +4396,6 @@ async def run(
             source=source,
             diag=diag,
             include_prs=include_prs,
-            continuation=continuation_reporter,
-            frontier_plan=frontier_plan,
             rate_card=rate_card,
             classifier_pair=classifier_pair,
             task_type_client=task_type_client,

@@ -93,7 +93,7 @@ available directly in Copilot CLI. Setup still
 offers to scaffold an editable `PROMPT.md` override; accept it if you want to
 tune the Run instructions. This installs the commands but does not configure
 their issue tracker, labels, or domain layout - that is
-[Part 2](#part-2--configure-this-repo-with-setup-agent-skills).
+[Part 2](#part-2--configure-this-repo-with-setup-git-loopy-skills).
 
 Interactive `init` also establishes the scope's **Skill policy** — the
 closed-world set of Skills a Run may expose — through the same searchable
@@ -418,7 +418,7 @@ install it there too with
 `/setup-git-loopy-skills` is idempotent — re-run it. It edits the `## Agent skills` block in place and rewrites `docs/agents/*.md`. If you've hand-edited those files substantially, diff before accepting the rewrite.
 
 **Which issue trackers are supported?**
-GitHub, GitLab, local markdown, or "other" (free-form). There's no plugin to hunt for — say what you use during setup and the skill adapts. More detail lives in [`docs/customization.md`](customization.md#setup-agent-skills--the-entry-point-skill).
+GitHub, GitLab, local markdown, or "other" (free-form). There's no plugin to hunt for — say what you use during setup and the skill adapts. More detail lives in [`docs/customization.md`](customization.md#setup-git-loopy-skills--the-entry-point-skill).
 
 **How do I discover skills beyond the installed catalog?**
 `npx skills find <query>` from the shell. See [`docs/customization.md` → Skills reference](customization.md#skills-reference).

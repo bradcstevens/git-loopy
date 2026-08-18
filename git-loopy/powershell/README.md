@@ -127,19 +127,6 @@ isn't already on `PATH`. To uninstall, delete the shim (`git-loopy.cmd` or
 `git-loopy`) and the staged helper (`.git-loopy/bin`). Move the clone? Re-run
 `install.ps1`.
 
-**Before it writes anything, `install.ps1` verifies this clone's Continuation
-capability manifest against the `foundation` Continuation capability profile** and
-reports what it verified:
-
-```
-Verified this distribution's Continuation capabilities (foundation profile, contract 1.2, release 0.2.0-dev.0); unsupported optional capabilities: concurrent_dispatch.
-```
-
-The distribution being verified is the clone whose installer you ran, so nothing
-resolves an entrypoint and nothing names a family member — no host-specific
-executable path and no family-member choice is written down. A clone that misses a
-required capability names the requirement it fails and installs nothing at all.
-
 **The helper is the only thing `install.ps1` downloads, and a Run never downloads
 anything at all.** An air-gapped host installs from files it already has, and the
 published checksum manifest is required either way:
@@ -159,7 +146,7 @@ pwsh -NoLogo -NoProfile -File git-loopy/powershell/install.ps1 `
    filename the manifest names;
 3. `git-loopy-tui --version` reports this clone's **exact** Release version
    (Wrapper contract
-   [§16](../../docs/wrapper-contract.md#16-release-and-compatibility-identity-must));
+   [§16](../../docs/wrapper-contract.md#15-release-and-compatibility-identity-must));
 4. `git-loopy-tui --schema-version` reports an Event-schema range containing the
    version this port emits.
 
@@ -212,21 +199,6 @@ passing the same arguments after the file path.)
 `git-loopy --version` prints exactly `git-loopy <VERSION>` and does not require
 a repository, Config, GitHub, Copilot, network access, or an Event sink.
 
-### Native Continuation tracer
-
-The public `continuation` command supports contract-identical completion-envelope
-`publish` and read-only `reconcile`:
-
-```powershell
-git-loopy continuation capabilities
-git-loopy continuation publish --input completion.json
-git-loopy continuation reconcile --input reconciliation.json
-```
-
-The capability manifest is authoritative. Continuation remains off by default;
-terminal rendering, Runner modes, Dispatch recording, index repair, and
-concurrent Dispatch are not advertised by this distribution.
-
 ---
 
 ## Configuration surface (phase 1)
@@ -258,7 +230,7 @@ phases and are not read by this port yet.
 ### The closed-world Skill policy fails closed here
 
 The Python Orchestrator implements the closed-world **Skill policy**
-([contract §17](../../docs/wrapper-contract.md#17-closed-world-skill-policy-skill-policy-rollout-must))
+([contract §17](../../docs/wrapper-contract.md#16-closed-world-skill-policy-skill-policy-rollout-must))
 first. This port has no `config.toml` tier yet, so it cannot honour one — and
 running an Iteration on a *wider* capability set than the operator configured is
 the outcome §17.6 exists to prevent. Every policy surface therefore **aborts
@@ -324,7 +296,7 @@ On Windows the `.exe`, `.com`, `.cmd`, and `.bat` extensions are tried in that
 order at each rank; elsewhere the bare name is used.
 
 A clone-local helper is part of *this clone's* packaged distribution, so Wrapper
-contract [§16](../../docs/wrapper-contract.md#16-release-and-compatibility-identity-must)
+contract [§16](../../docs/wrapper-contract.md#15-release-and-compatibility-identity-must)
 requires exact Release-version equality: on drift it is **refused** and the Run
 continues in plain text. A helper found on `PATH` is a separate installation, so
 Release drift only earns a **warning** and it still runs. Release equality is

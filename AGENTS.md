@@ -41,8 +41,8 @@ blocking gate:
   git-loopy/python` on the files you touched and keep them clean; it becomes a gate
   row once the backlog is cleared.
 - **The Conformance adapter subset** the CI runs as its own fast job
-  (`test_conformance.py`, `test_release_identity_conformance.py`,
-  `test_continuation_scenarios.py`) is already inside the Python suite row; a second
+  (`test_conformance.py`, `test_release_identity_conformance.py`) is already
+  inside the Python suite row; a second
   row would only pay for it twice.
 - **`python -m git_loopy.skill_source`** (acquire and validate the pinned external
   Skill catalog, ADR-0023) reaches the network, so it can never be a gate: an

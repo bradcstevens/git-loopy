@@ -87,10 +87,6 @@ __all__ = [
     "WRAPPER_STRIKE",
     "WRAPPER_ASK_USER_ATTEMPTED",
     "WRAPPER_DASHBOARD_FAULT",
-    "WRAPPER_CONTINUATION_RECONCILED",
-    "WRAPPER_CONTINUATION_DISPATCH_STARTED",
-    "WRAPPER_CONTINUATION_DISPATCH_ENDED",
-    "WRAPPER_CONTINUATION_STOPPED",
     # Rolling-dispatch (Parallel mode) event-type constants
     "WRAPPER_POOL_REFRESHED",
     "WRAPPER_CONTRIBUTION_START",
@@ -285,10 +281,6 @@ WRAPPER_ASK_USER_ATTEMPTED = "wrapper.ask_user.attempted"
 # out from under them. Interactive Python Runs only — the shell and PowerShell
 # Orchestrators host no Dashboard and never emit it.
 WRAPPER_DASHBOARD_FAULT = "wrapper.dashboard.fault"
-WRAPPER_CONTINUATION_RECONCILED = "wrapper.continuation.reconciled"
-WRAPPER_CONTINUATION_DISPATCH_STARTED = "wrapper.continuation_dispatch.started"
-WRAPPER_CONTINUATION_DISPATCH_ENDED = "wrapper.continuation_dispatch.ended"
-WRAPPER_CONTINUATION_STOPPED = "wrapper.continuation.stopped"
 
 # Rolling-dispatch events (Parallel mode). Rolling dispatch reuses Lanes
 # continuously instead of synchronising a Wave, so the Parallel lifecycle is

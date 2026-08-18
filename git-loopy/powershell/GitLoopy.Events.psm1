@@ -28,10 +28,6 @@ $script:EventTypes = [ordered]@{
     # Orchestrator that hosts a Dashboard can emit it; this port hosts none, so
     # it carries the literal for vocabulary parity and never produces the Event.
     WRAPPER_DASHBOARD_FAULT = "wrapper.dashboard.fault"
-    WRAPPER_CONTINUATION_RECONCILED = "wrapper.continuation.reconciled"
-    WRAPPER_CONTINUATION_DISPATCH_STARTED = "wrapper.continuation_dispatch.started"
-    WRAPPER_CONTINUATION_DISPATCH_ENDED = "wrapper.continuation_dispatch.ended"
-    WRAPPER_CONTINUATION_STOPPED = "wrapper.continuation.stopped"
     WRAPPER_POOL_REFRESHED = "wrapper.pool.refreshed"
     WRAPPER_CONTRIBUTION_START = "wrapper.contribution.start"
     WRAPPER_CONTRIBUTION_WORK_FINISHED = "wrapper.contribution.work_finished"

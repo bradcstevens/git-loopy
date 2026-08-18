@@ -92,8 +92,6 @@ from git_loopy.config import (
     REASONING_EFFORT_ORDER,
     REASONING_EFFORTS,
     SUPPORTED_MODELS,
-    ContinuationInput,
-    ContinuationInputs,
     EffortGateWarning,
     RunConfig,
     SkillPolicyInput,
@@ -279,8 +277,6 @@ def build_parser() -> argparse.ArgumentParser:
             "  skills sync                    Re-copy Copilot's Skill baseline "
             "after confirmation.\n"
             "                                 See `git-loopy skills -h`.\n"
-            "  continuation                   Native Continuation contract commands.\n"
-            "                                 See `git-loopy continuation -h`.\n"
             "  calibrate --status             What this repository's corpus "
             "supports per Task type.\n"
             "  calibrate --dry-run            What a Calibration would cost, "
@@ -531,7 +527,7 @@ def build_parser() -> argparse.ArgumentParser:
 #: They are kept out of :func:`build_parser` because argparse cannot host an
 #: optional positional (``<max-iterations>``) alongside ``add_subparsers`` in one
 #: parser without misreading ``git-loopy 5`` as an invalid subcommand choice.
-_SUBCOMMANDS = ("init", "config", "skills", "labels", "continuation", "calibrate")
+_SUBCOMMANDS = ("init", "config", "skills", "labels", "calibrate")
 
 
 def _add_scope_flags(
@@ -565,7 +561,7 @@ def _add_scope_flags(
 
 
 def build_subcommand_parser() -> argparse.ArgumentParser:
-    """Construct the parser for management and Continuation commands.
+    """Construct the parser for management commands.
 
     Kept separate from :func:`build_parser` on purpose (see :data:`_SUBCOMMANDS`):
     :func:`main` pre-dispatches on the first token, so this parser is only ever
@@ -577,13 +573,13 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         prog="git-loopy",
         description=(
             "git-loopy subcommands (setup, Config, Skill management, "
-            "Continuation, and Calibration)."
+            "and Calibration)."
         ),
     )
     sub = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{init,config,skills,labels,continuation,calibrate}",
+        metavar="{init,config,skills,labels,calibrate}",
     )
 
     init = sub.add_parser(
@@ -685,50 +681,6 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "Never renames and never deletes."
         ),
     )
-
-    continuation = sub.add_parser(
-        "continuation",
-        help="Inspect or invoke the native Continuation contract boundary.",
-        description=(
-            "Native Continuation commands. Capability is not authority; unsupported "
-            "operations fail closed and never perform an Action."
-        ),
-    )
-    continuation_sub = continuation.add_subparsers(
-        dest="continuation_operation",
-        required=True,
-        metavar=(
-            "{capabilities,resolve-authority,publish,reconcile,"
-            "record-dispatch-result,repair-index}"
-        ),
-    )
-    continuation_sub.add_parser(
-        "capabilities",
-        help="Print the machine-readable Continuation capability manifest.",
-    )
-    for operation in (
-        "resolve-authority",
-        "publish",
-        "reconcile",
-        "record-dispatch-result",
-        "repair-index",
-    ):
-        command = continuation_sub.add_parser(
-            operation,
-            help=f"Invoke {operation} through the native Continuation module.",
-        )
-        command.add_argument(
-            "--input",
-            dest="input_path",
-            metavar="FILE",
-            help="Read the one UTF-8 JSON request object from FILE instead of stdin.",
-        )
-        if operation == "reconcile":
-            command.add_argument(
-                "--terminal",
-                action="store_true",
-                help="Explicitly select terminal rendering instead of machine JSON.",
-            )
 
     config = sub.add_parser(
         "config",
@@ -1126,21 +1078,6 @@ def _run_calibrate(args: argparse.Namespace) -> int:
     )
 
 
-def _run_continuation(args: argparse.Namespace) -> int:
-    """Dispatch one native Continuation command without starting a Run."""
-    try:
-        from git_loopy.continuation import run_command
-
-        return run_command(
-            args.continuation_operation,
-            input_path=getattr(args, "input_path", None),
-            terminal=bool(getattr(args, "terminal", False)),
-        )
-    except ReleaseVersionError as exc:
-        print(f"git-loopy: Release version error: {exc}", file=sys.stderr)
-        return 1
-
-
 def _parse_csv_env(value: str | None) -> list[str]:
     """Parse a comma-separated env-var value into a stripped list.
 
@@ -1392,84 +1329,6 @@ def _resolve_include_prs_tiered(
     if pv is not None:
         return pv
     return settings.table_bool(global_, "include_prs", scope="global")
-
-
-#: The axes an operator may cap, keyed by the :class:`ContinuationInput` field
-#: they populate. Config key and environment variable are both mechanical from
-#: the field name, so adding a ceiling to the contract cannot leave the
-#: configuration surface a tier behind.
-_CONTINUATION_LIST_FIELDS = (
-    "trusted_producers",
-    "maintainers",
-    "repositories",
-    "targets",
-    "action_kinds",
-    "instruction_modes",
-    "effect_scopes",
-)
-
-
-def _continuation_input_from_table(
-    table: Mapping[str, object], *, scope: str
-) -> ContinuationInput:
-    """Read one config table's Continuation keys, uncombined.
-
-    No defaulting and no fallback to another tier: this tier says exactly what it
-    said. Combination is `continuation.resolve_authority`'s job, and a resolver
-    that pre-merged would be a second, divergent copy of the narrowing rules.
-    """
-    return ContinuationInput(
-        mode=settings.table_str(table, "continuation_mode", scope=scope),
-        actor=settings.table_str(table, "continuation_actor", scope=scope),
-        **{
-            field: tuple(
-                settings.table_str_list(table, f"continuation_{field}", scope=scope)
-            )
-            for field in _CONTINUATION_LIST_FIELDS
-        },
-    )
-
-
-def _continuation_input_from_env(env: Mapping[str, str]) -> ContinuationInput:
-    """Read the runtime tier from the environment, in the same shape."""
-    return ContinuationInput(
-        mode=_clean_env_str(env.get("GIT_LOOPY_CONTINUATION_MODE")),
-        actor=_clean_env_str(env.get("GIT_LOOPY_CONTINUATION_ACTOR")),
-        **{
-            field: tuple(
-                _parse_csv_env(env.get(f"GIT_LOOPY_CONTINUATION_{field.upper()}"))
-            )
-            for field in _CONTINUATION_LIST_FIELDS
-        },
-    )
-
-
-def _clean_env_str(raw: str | None) -> str | None:
-    """An unset or all-whitespace variable is *absent*, not an empty declaration."""
-    if raw is None:
-        return None
-    value = raw.strip()
-    return value or None
-
-
-def _resolve_continuation(
-    env: Mapping[str, str],
-    project: Mapping[str, object],
-    global_: Mapping[str, object],
-) -> ContinuationInputs:
-    """Collect the three Continuation configuration tiers without merging them.
-
-    Deliberately *not* the ADR-0006 precedence chain the other knobs use. The
-    Continuation contract narrows monotonically — mode by lattice minimum, every
-    other axis by intersection — so "the most specific tier wins" would let a
-    project widen a ceiling its global table imposed, which is the one thing the
-    authority model exists to forbid.
-    """
-    return ContinuationInputs(
-        global_=_continuation_input_from_table(global_, scope="global"),
-        project=_continuation_input_from_table(project, scope="project"),
-        runtime=_continuation_input_from_env(env),
-    )
 
 
 def _resolve_send_timeout_seconds(
@@ -2062,7 +1921,6 @@ def resolve_config(
     verbosity = min(max(int(args.verbosity), 0), 3)
 
     issue_source = _resolve_issue_source(env, project, global_)
-    continuation = _resolve_continuation(env, project, global_)
     include_prs = _resolve_include_prs_tiered(env, project, global_)
     max_nmt_strikes = _resolve_max_nmt_strikes(env, project, global_)
     demotion_threshold = _resolve_demotion_threshold(env, project, global_)
@@ -2104,7 +1962,6 @@ def resolve_config(
     suppressed_by = routing_suppressed_by(args, env)
 
     run = RunConfig(
-        continuation=continuation,
         model=model,
         reasoning_effort=reasoning_effort,
         issue_source=issue_source,  # type: ignore[arg-type]
@@ -2305,8 +2162,6 @@ def main(argv: list[str] | None = None) -> int:
             return _run_skills(sub_args)
         if sub_args.command == "labels":
             return _run_labels(sub_args)
-        if sub_args.command == "continuation":
-            return _run_continuation(sub_args)
         if sub_args.command == "calibrate":
             return _run_calibrate(sub_args)
         return _run_config(sub_args)

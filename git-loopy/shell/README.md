@@ -27,7 +27,7 @@ the [Wrapper contract](../../docs/wrapper-contract.md), the
 | --- | --- |
 | **Bash 4+** | The Orchestrator uses associative arrays. Run `bash --version` to check. |
 | **`jq`** | Required by the shell port for JSON. `brew install jq` / `apt-get install jq`. (The PowerShell port needs no `jq`.) |
-| **Perl 5** | The native Continuation command uses core `JSON::PP`, `Encode`, and `Unicode::Normalize` modules to enforce the portable JSON profile without Python. Also the usual way the Orchestrator restores a default SIGPIPE at the agent boundary — see below. |
+| **Perl 5** | The usual way the Orchestrator restores a default SIGPIPE at the agent boundary — see below. |
 | **`gh`**, authenticated | `gh auth login`. The default issue source is GitHub Issues. |
 | **`git`** | On `PATH`. |
 | **`copilot`** | GitHub Copilot CLI, signed in: `npm install -g @github/copilot`, then run `copilot` once. |
@@ -144,18 +144,9 @@ The installer prints a `PATH` hint if the target directory isn't already on it.
 To uninstall, delete the shim (e.g. `rm ~/.local/bin/git-loopy`) and the staged
 helper (`rm -rf .git-loopy/bin`). Move the clone? Re-run `install.sh`.
 
-**Before it writes anything, `install.sh` verifies this clone's Continuation
-capability manifest against the `foundation` Continuation capability profile** and
-reports what it verified:
-
-```
-Verified this distribution's Continuation capabilities (foundation profile, contract 1.2, release 0.2.0-dev.0); unsupported optional capabilities: concurrent_dispatch, prospective_projection, terminal_rendering.
-```
-
-The distribution being verified is the clone whose installer you ran, so nothing
-resolves an entrypoint and nothing names a family member — no host-specific
-executable path and no family-member choice is written down. A clone that misses a
-required capability names the requirement it fails and installs nothing at all.
+**Before it writes anything, `install.sh` verifies the staged `git-loopy-tui`
+helper's published checksum, this clone's exact Release version, and Event-schema
+compatibility.**
 
 **The helper is the only thing `install.sh` downloads, and a Run never downloads
 anything at all.** It needs `curl` and either `sha256sum` or `shasum`; `jq` is
@@ -177,7 +168,7 @@ bash git-loopy/shell/install.sh \
    filename the manifest names;
 3. `git-loopy-tui --version` reports this clone's **exact** Release version
    (Wrapper contract
-   [§16](../../docs/wrapper-contract.md#16-release-and-compatibility-identity-must));
+   [§16](../../docs/wrapper-contract.md#15-release-and-compatibility-identity-must));
 4. `git-loopy-tui --schema-version` reports an Event-schema range containing the
    version this port emits.
 
@@ -266,7 +257,7 @@ phases and are not read by this port yet.
 ### The closed-world Skill policy fails closed here
 
 The Python Orchestrator implements the closed-world **Skill policy**
-([contract §17](../../docs/wrapper-contract.md#17-closed-world-skill-policy-skill-policy-rollout-must))
+([contract §17](../../docs/wrapper-contract.md#16-closed-world-skill-policy-skill-policy-rollout-must))
 first. This port has no `config.toml` tier yet, so it cannot honour one — and
 running an Iteration on a *wider* capability set than the operator configured is
 the outcome §17.6 exists to prevent. Every policy surface therefore **aborts
@@ -333,7 +324,7 @@ auto-detect**, matching the Python member:
 | 2 | `PATH` | the first `git-loopy-tui` on your `PATH` |
 
 A clone-local helper is part of *this clone's* packaged distribution, so Wrapper
-contract [§16](../../docs/wrapper-contract.md#16-release-and-compatibility-identity-must)
+contract [§16](../../docs/wrapper-contract.md#15-release-and-compatibility-identity-must)
 requires exact Release-version equality: on drift it is **refused** and the Run
 continues in plain text. A helper found on `PATH` is a separate installation, so
 Release drift only earns a **warning** and it still runs. Release equality is

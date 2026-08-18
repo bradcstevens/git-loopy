@@ -232,36 +232,6 @@ def test_git_loopy_version_fails_closed_when_release_metadata_is_unavailable(
         assert "unknown" not in result.stderr.lower()
 
 
-def test_continuation_capabilities_fails_cleanly_without_release_metadata(
-    tmp_path: Path,
-) -> None:
-    result = _run_with_runtime_release_metadata(
-        tmp_path,
-        arguments=["continuation", "capabilities"],
-        unavailable_kind="missing",
-    )
-
-    assert result.returncode != 0
-    assert result.stdout == ""
-    assert "Release version error:" in result.stderr
-    assert "Traceback" not in result.stderr
-    assert "unknown" not in result.stderr.lower()
-
-
-def test_non_capability_continuation_commands_do_not_read_release_metadata(
-    tmp_path: Path,
-) -> None:
-    result = _run_with_runtime_release_metadata(
-        tmp_path,
-        arguments=["continuation", "reconcile"],
-        unavailable_kind="missing",
-    )
-
-    assert result.returncode != 0
-    assert '"code":"invalid_request"' in result.stdout
-    assert "Release version error:" not in result.stderr
-
-
 def test_git_loopy_rejects_negative_iterations() -> None:
     """Negative ``max_iterations`` is rejected with a non-zero exit and clear error."""
     cmd = _git_loopy_command() + ["-1"]

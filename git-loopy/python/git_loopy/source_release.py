@@ -271,25 +271,6 @@ def verify_source_tree_identity(source_root: Path, expected_version: str) -> Non
                 f"found {output!r}"
             )
 
-        manifest_output = _run_identity_command(
-            family,
-            "Continuation capability manifest",
-            [*command, "continuation", "capabilities"],
-            cwd=source_root,
-            env=env,
-        )
-        try:
-            manifest = json.loads(manifest_output)
-            manifest_version = manifest["capabilities"]["release_version"]
-        except (json.JSONDecodeError, KeyError, TypeError) as exc:
-            raise SourceReleaseError(
-                f"{family} Continuation capability manifest is invalid"
-            ) from exc
-        if manifest_version != version:
-            raise SourceReleaseError(
-                f"{family} Continuation capability manifest mismatch: "
-                f"expected {version!r}, found {manifest_version!r}"
-            )
 
 
 def _extract_source_archive(archive_path: Path, destination: Path) -> Path:

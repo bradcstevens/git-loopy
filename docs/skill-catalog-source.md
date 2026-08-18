@@ -159,22 +159,3 @@ repository needs to change, which is the point: the claim in
 [`THIRD_PARTY_LICENSES.txt`](../git-loopy/python/git_loopy/THIRD_PARTY_LICENSES.txt)
 names this pin rather than repeating a revision that could drift away from it.
 
-### The one exception: a contract-carrying Skill
-
-Twelve Skills invoke a `git-loopy` subcommand, so part of what they tell a session
-to do is git-loopy's own contract rather than general engineering guidance. They
-are still authored upstream — that is not the exception — but this repository keeps
-a byte-identical **mirror** of them under
-`git-loopy/python/tests/fixtures/continuation-skills/`, because the suites that
-execute each documented request against the real native command have to run without
-touching the network.
-
-So a change to one of those twelve is **publish, pin, mirror**, in that order and
-in one commit: publish upstream, move the pin to the revision carrying it, then
-refresh the fixture from the acquired revision (`cp` from
-`.git-loopy/skill-source/skills/<name>/SKILL.md`). Never the other way round — a
-prompt edited in the fixture is a change no install can hand to a session. A pin
-bump that skips the refresh, a fixture edited on its own, and a Skill that grows a
-`git-loopy continuation` request upstream without being mirrored all fail
-`test_continuation_owner_coverage.py` on any machine that has acquired the pin
-([ADR-0034](adr/0034-contract-carrying-skills-are-authored-upstream.md)).

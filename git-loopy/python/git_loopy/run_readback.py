@@ -284,8 +284,8 @@ def run_start_payload(config: RunConfig) -> dict[str, Any]:
 
     The one call the drive paths make. Composing the pure builder with the live
     harness read here rather than at each emit site is what keeps the three
-    ``wrapper.run.start`` sites — a serial Run, a **Parallel mode** Run and a
-    Continuation frontier Run — describing one Run start one way.
+    ``wrapper.run.start`` sites — a serial Run and a **Parallel mode** Run —
+    describing one Run start one way.
     """
     return build_run_readback(
         config, harness_version=spawned_harness_version()

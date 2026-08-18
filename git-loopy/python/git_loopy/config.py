@@ -336,79 +336,6 @@ class SkillPolicyInputs:
         object.__setattr__(self, "disable_skills", frozenset(self.disable_skills))
 
 
-@dataclass(frozen=True)
-class ContinuationInput:
-    """One operator configuration source for Continuation authority.
-
-    Absent is not the same as empty. A source that declared no mode never asked
-    for anything and drops out of the resolution entirely; a source that declared
-    `off`, or an empty ceiling, asked for *nothing in particular* and narrows
-    every other source down to it. Collapsing the two would let an unconfigured
-    global table silently veto a project that adopted report mode.
-    """
-
-    mode: str | None = None
-    trusted_producers: tuple[str, ...] = ()
-    actor: str | None = None
-    maintainers: tuple[str, ...] = ()
-    repositories: tuple[str, ...] = ()
-    targets: tuple[str, ...] = ()
-    action_kinds: tuple[str, ...] = ()
-    instruction_modes: tuple[str, ...] = ()
-    effect_scopes: tuple[str, ...] = ()
-
-    @property
-    def present(self) -> bool:
-        return self.mode is not None
-
-    def as_source(self, source: str) -> dict[str, Any]:
-        """Render this source in the `resolve-authority` request shape."""
-        declared: dict[str, Any] = {
-            "source": source,
-            "mode": self.mode,
-            "trusted_producers": list(self.trusted_producers),
-            "ceilings": {
-                "repositories": list(self.repositories),
-                "targets": list(self.targets),
-                "action_kinds": list(self.action_kinds),
-                "instruction_modes": list(self.instruction_modes),
-                "effect_scopes": list(self.effect_scopes),
-            },
-        }
-        if self.actor is not None:
-            declared["actor"] = self.actor
-        if self.maintainers:
-            declared["maintainers"] = list(self.maintainers)
-        return declared
-
-
-@dataclass(frozen=True)
-class ContinuationInputs:
-    """Uncombined Continuation configuration, in the locked narrowing order.
-
-    These stay uncombined here for the reason the Skill-policy inputs do: the
-    combination *is* the contract, it lives in one place
-    (`continuation.resolve_authority`), and duplicating it in the config resolver
-    would give the family two narrowing implementations to disagree with.
-    """
-
-    global_: ContinuationInput = field(default_factory=ContinuationInput)
-    project: ContinuationInput = field(default_factory=ContinuationInput)
-    runtime: ContinuationInput = field(default_factory=ContinuationInput)
-
-    def declared_sources(self) -> list[dict[str, Any]]:
-        """Every source that declared a mode, in narrowing order."""
-        return [
-            declared.as_source(name)
-            for name, declared in (
-                ("global", self.global_),
-                ("project", self.project),
-                ("runtime", self.runtime),
-            )
-            if declared.present
-        ]
-
-
 class EffortGateWarning(Enum):
     """Why :func:`gate_reasoning_effort` would warn — the caller owns surfacing it.
 
@@ -714,14 +641,6 @@ class RunConfig:
             environment replacement, and temporary enable/disable overlays. These
             remain uncombined until the Effective Skill policy resolver consumes
             them at Run preflight.
-        continuation: Presence-aware global/project/runtime Continuation
-            configuration (issue #263) — mode, trusted-Producer policy, optional
-            actor and maintainer identities, and the five positive ceilings. Also
-            uncombined: the native `resolve-authority` operation narrows them at
-            Run preflight, so the Runner and the operator's own
-            `git-loopy continuation resolve-authority` answer the same question
-            with the same code. Every field absent means mode `off`, which is the
-            default and preserves Pool behaviour exactly.
         classifier_model: The model the **Task-type classifier** runs on
             (#377, ADR-0029), or ``None`` for "not configured". Deliberately a
             *separate* knob from :attr:`model`: borrowing the run-wide default
@@ -768,7 +687,6 @@ class RunConfig:
     context_tier: str = DEFAULT_CONTEXT_TIER
     routing_suppressed: bool = False
     skill_policy: SkillPolicyInputs = field(default_factory=SkillPolicyInputs)
-    continuation: ContinuationInputs = field(default_factory=ContinuationInputs)
     classifier_model: str | None = None
     classifier_effort: str | None = None
     issue_pin: int | None = None

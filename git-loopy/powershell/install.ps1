@@ -84,16 +84,6 @@ $ArtifactMetadata = Join-Path $RepositoryRoot "git-loopy/conformance/tui-artifac
 Import-Module (Join-Path $PSScriptRoot "GitLoopy.Release.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "GitLoopy.Events.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "GitLoopy.TuiInstall.psm1") -Force
-Import-Module (Join-Path $PSScriptRoot "GitLoopy.Continuation.psm1") -Force
-
-# Setup verifies the one native distribution it is installing (#257). The
-# distribution being verified is this clone — nothing resolves an entrypoint and
-# nothing names a family member, so the selection is expressed by which installer
-# the operator ran and is never written down. It runs before anything is created
-# so a distribution that cannot do the foundation work installs nothing at all.
-if (-not (Test-GitLoopyDistributionCapabilities -Name foundation)) {
-    exit 1
-}
 
 if ([string]::IsNullOrWhiteSpace($BinDir)) {
     if ($IsWindows) {

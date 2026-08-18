@@ -69,10 +69,6 @@ from git_loopy.skill_install import (
     installed_catalog_dir,
     refresh_installed_catalog,
 )
-from git_loopy.verification import (
-    ContinuationVerification,
-    verify_this_distribution,
-)
 from git_loopy.interactive.models import (
     ModelChoice,
     default_cursor_index,
@@ -613,15 +609,13 @@ def run_init(
     picker_runner: Any = None,
     git: Any = None,
     required_skills: Sequence[str] | None = None,
-    verify_continuation: Callable[[], ContinuationVerification] | None = None,
     label_client: Any = None,
     writer: Callable[[Path, Mapping[str, object]], None] = settings.write_config_atomic,
 ) -> int:
     """Run the first-run setup wizard; write Config (and optional assets) and exit.
 
-    Returns ``0`` on a completed write, non-zero when the operator cancels, when the
-    requested scope is unavailable, or when this distribution does not satisfy the
-    Continuation capability profile. Never starts the loop.
+    Returns ``0`` on a completed write, non-zero when the operator cancels or when
+    the requested scope is unavailable. Never starts the loop.
     """
     from git_loopy.cli import _DEFAULT_MODEL, _DEFAULT_REASONING_EFFORT, _warn
 
@@ -631,19 +625,6 @@ def run_init(
         default_effort = _DEFAULT_REASONING_EFFORT
     if warn is None:
         warn = _warn
-    if verify_continuation is None:
-        verify_continuation = verify_this_distribution
-
-    # First, and before the scope is even resolved: setup verifies the one native
-    # distribution it is setting up, which is the distribution running this code.
-    # Nothing about the choice is written down — no entrypoint is resolved and no
-    # family member is named — so the Config this wizard leaves behind stays portable
-    # across the family (#257).
-    verification = verify_continuation()
-    if not verification.satisfied:
-        warn(f"{verification.render()}; nothing was written.")
-        return 1
-    output_fn(verification.render())
 
     # Setup is where git-loopy acquires the Skills it runs on, and it happens
     # before anything is collected: the Skill policy the operator is about to

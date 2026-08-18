@@ -76,14 +76,11 @@ _Job = dict[str, Any]
 # still satisfies the shared Wrapper contract. A job is the family member's gate
 # iff its steps run these scripts.
 SHELL_CONFORMANCE = "test-orchestrator-conformance.sh"
-SHELL_CONTINUATION = "test-continuation-conformance.sh"
 SHELL_BOUNDARY = "test-orchestrator-boundary.sh"
 POWERSHELL_CONFORMANCE = "test-orchestrator-conformance.ps1"
-POWERSHELL_CONTINUATION = "test-continuation-conformance.ps1"
 POWERSHELL_BOUNDARY = "test-orchestrator-boundary.ps1"
 PYTHON_CONFORMANCE = "test_conformance.py"
 FAMILY_RELEASE_CONFORMANCE = "test_release_identity_conformance.py"
-PYTHON_CONTINUATION = "test_continuation_scenarios.py"
 PYTHON_TEST_TREE = "git-loopy/python/tests"
 # The Rust Dashboard core is a family member too: its suite drives the same
 # shared semantic fixture Python does, so it must not drift unwatched.
@@ -236,7 +233,6 @@ def _is_python_gate(job: _Job) -> bool:
         and PYTHON_TEST_TREE in text
         and PYTHON_CONFORMANCE in text
         and FAMILY_RELEASE_CONFORMANCE in text
-        and PYTHON_CONTINUATION in text
     )
 
 
@@ -245,7 +241,6 @@ def _is_shell_gate(job: _Job) -> bool:
     text = _job_run_text(job)
     return (
         SHELL_CONFORMANCE in text
-        and SHELL_CONTINUATION in text
         and SHELL_BOUNDARY in text
     )
 
@@ -255,7 +250,6 @@ def _is_powershell_gate(job: _Job) -> bool:
     text = _job_run_text(job)
     return (
         POWERSHELL_CONFORMANCE in text
-        and POWERSHELL_CONTINUATION in text
         and POWERSHELL_BOUNDARY in text
     )
 
@@ -641,7 +635,7 @@ FAMILY: tuple[_Member, ...] = (
     _Member(
         name="shell",
         predicate=_is_shell_gate,
-        tokens=(SHELL_CONFORMANCE, SHELL_CONTINUATION, SHELL_BOUNDARY),
+        tokens=(SHELL_CONFORMANCE, SHELL_BOUNDARY),
         platforms=frozenset({LINUX, MACOS}),
         census=_shell_census_reasons,
         census_marker=SHELL_CENSUS_MARKER,
@@ -649,7 +643,7 @@ FAMILY: tuple[_Member, ...] = (
     _Member(
         name="PowerShell",
         predicate=_is_powershell_gate,
-        tokens=(POWERSHELL_CONFORMANCE, POWERSHELL_CONTINUATION, POWERSHELL_BOUNDARY),
+        tokens=(POWERSHELL_CONFORMANCE, POWERSHELL_BOUNDARY),
         platforms=frozenset({LINUX, MACOS, WINDOWS}),
         census=_powershell_census_reasons,
         census_marker=POWERSHELL_CENSUS_MARKER,
@@ -1135,7 +1129,6 @@ def test_the_powershell_gate_reports_a_non_final_suite_failure(tmp_path: Path) -
     suites.mkdir(parents=True)
     for name in (
         POWERSHELL_CONFORMANCE,
-        POWERSHELL_CONTINUATION,
         POWERSHELL_BOUNDARY,
         "test-event-conformance.ps1",
         "test-tui-install.ps1",
@@ -1263,16 +1256,15 @@ def test_a_conditional_prerequisite_step_is_not_a_neutered_gate() -> None:
 def test_ci_runs_every_native_port_suite() -> None:
     """#267 AC1: the family gate runs the *complete* port suites, not a hand list.
 
-    The per-family predicates above name three scripts each, so a port could grow a
-    fourth suite -- automation, CLI framing, Event, exit, boundary, production-seam
+    The per-family predicates above name two scripts each, so a port could grow a
+    third suite -- automation, CLI framing, Event, exit, boundary, production-seam
     -- and have it never run in CI while every guard here stayed green. That is the
     cross-family drift the rollout gate exists to refuse: a member proves the same
     behaviour as the rest only if everything it wrote to prove it is actually run.
 
     The claim is therefore made against the tracked suites rather than against a
     list in this file: every ``tests/test-*.sh`` and ``tests/test-*.ps1`` in a port
-    must be named by some CI job. ``test-continuation-frontier.ps1`` is the suite
-    that arrived this way.
+    must be named by some CI job.
     """
     repo_root = _find_repo_root()
     if repo_root is None:

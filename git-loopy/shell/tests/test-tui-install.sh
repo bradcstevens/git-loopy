@@ -493,44 +493,6 @@ on_path_out="$(
 assert_contains "$on_path_out" "Run it from inside any git repository" \
   "a discoverable shim is reported as ready to run"
 
-# 10. Setup verifies the one native distribution it is installing (#257).
-#
-# The distribution being verified is the clone this installer belongs to, so the
-# report names the profile and this clone's Release rather than an executable path:
-# nothing host-specific is stated and nothing about the choice is written down.
-
-assert_contains "$guidance_out" "Continuation capabilities" \
-  "the installation reports the Continuation capabilities it verified"
-assert_contains "$guidance_out" "foundation profile" \
-  "the report names the capability profile that was satisfied"
-assert_contains "$guidance_out" "concurrent_dispatch" \
-  "the report names the optional capabilities this distribution does not support"
-
-# 11. A distribution that misses a required capability installs nothing at all.
-#
-# Verification runs before the launcher is written for the same reason preflight
-# exists: an operator who is told at install time never learns it from a Run that
-# fails further from the cause.
-unverifiable_clone="$cli_dir/unverifiable"
-make_fake_clone "$unverifiable_clone" 4.5.6
-# Drop one required native operation from the manifest this clone advertises.
-"$BASH" -c 'sed -e "s/\"repair-index\":true/\"repair-index\":false/" "$1" >"$1.patched" \
-  && mv "$1.patched" "$1"' _ "$unverifiable_clone/git-loopy/shell/lib/continuation.sh"
-
-set +e
-unverifiable_out="$(
-  "$BASH" "$unverifiable_clone/git-loopy/shell/install.sh" \
-    --bin-dir "$cli_dir/unverifiable-bin" --no-tui 2>&1
-)"
-unverifiable_status=$?
-set -e
-((unverifiable_status != 0)) ||
-  fail "an unverifiable distribution installed anyway"
-assert_contains "$unverifiable_out" "native-operations" \
-  "the refusal names the requirement the distribution does not satisfy"
-[[ ! -e "$cli_dir/unverifiable-bin/git-loopy" ]] ||
-  fail "an unverifiable distribution installed its launcher"
-
 # --- A Run never installs software ------------------------------------------
 #
 # The other half of the promise. Installation is an explicit act by the operator
@@ -538,7 +500,7 @@ assert_contains "$unverifiable_out" "native-operations" \
 # somebody already staged. Nothing on the Run path may reach for a network or for
 # this module, so that is asserted rather than merely documented.
 
-for run_path_module in continuation.sh events.sh orchestrator.sh tui.sh; do
+for run_path_module in events.sh orchestrator.sh tui.sh; do
   if grep -Eq '(^|[^[:alnum:]_-])(curl|wget)([^[:alnum:]_-]|$)|tui-install\.sh' \
     "$port_dir/lib/$run_path_module"; then
     fail "lib/$run_path_module reaches for a download on the Run path"

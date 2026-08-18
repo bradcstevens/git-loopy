@@ -1,5 +1,10 @@
 # git-loopy encodes repeatable workflows, so the "Ralph loop" name is retired
 
+> **Note (superseded in part by [ADR-0046](0046-continuation-is-decommissioned.md)):**
+> This decision references Workflow Continuation, which has since been decommissioned.
+> The reasoning below is preserved as the record of what was decided at the time.
+
+
 **Status:** accepted
 
 ## Context

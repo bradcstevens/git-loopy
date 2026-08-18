@@ -201,15 +201,7 @@ def test_source_tree_identity_rejects_distribution_drift(
             encoding="utf-8",
         )
     else:
-        continuation = root / "git-loopy/shell/lib/continuation.sh"
-        continuation.write_text(
-            continuation.read_text(encoding="utf-8").replace(
-                '    "$release_version" \\\n',
-                '    "9.9.9" \\\n',
-                1,
-            ),
-            encoding="utf-8",
-        )
+        raise AssertionError(f"unhandled source-tree drift case: {case['id']}")
 
     with pytest.raises(SourceReleaseError, match=case["expected_error"]):
         verify_source_tree_identity(

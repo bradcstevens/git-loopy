@@ -1,5 +1,10 @@
 # Use one Release version for the complete distribution
 
+> **Note (superseded in part by [ADR-0046](0046-continuation-is-decommissioned.md)):**
+> This decision references Workflow Continuation, which has since been decommissioned.
+> The reasoning below is preserved as the record of what was decided at the time.
+
+
 Git-loopy publishes one shared Semantic Versioning Release version for every
 Orchestrator, packaged Skill set, and TUI helper included in a distribution,
 with a root `VERSION` file as its source of truth. This gives operators one

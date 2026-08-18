@@ -411,7 +411,7 @@ def test_closed_issues_passes_an_incomplete_read_through() -> None:
     [
         "git-loopy/python/tests/test_gate.py",
         "git-loopy/shell/tests/test-orchestrator.sh",
-        "git-loopy/powershell/tests/test-continuation.ps1",
+        "git-loopy/powershell/tests/test-conformance.ps1",
         "pkg/thing_test.go",
         "src/components/Button.test.tsx",
         "src/models/user_spec.rb",
@@ -428,7 +428,7 @@ def test_conventional_test_paths_are_recognised(path: str) -> None:
     [
         "git-loopy/tui/src/app.rs",
         "docs/tests.md",
-        "git-loopy/python/git_loopy/verification.py",
+        "git-loopy/python/git_loopy/loop.py",
         "contest/entry.py",
         "src/latest.py",
     ],
