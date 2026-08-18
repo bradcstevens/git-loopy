@@ -71,6 +71,11 @@ docs/feature-requests/
 # Throwaway debugging scratch space (fake `gh` stubs, captured stdout/stderr).
 .scratch/
 
+# Captured stdout dropped in the repository root by an ad-hoc redirect, e.g.
+# `gh issue view 343 --comments > out343.txt`. That belongs in `.scratch/`;
+# rooted so a deliberate `out*.txt` fixture elsewhere in the tree stays visible.
+/out*.txt
+
 # Locally installed developer tooling (actionlint, cargo-dist). These are host
 # binaries and `cargo install` bookkeeping: 29 MB of macOS-arm64 executables is
 # useless to a Linux CI runner, which installs its own pinned copies. CI is the
