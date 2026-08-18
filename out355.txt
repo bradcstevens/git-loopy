@@ -1,0 +1,161 @@
+author:	bradcstevens
+association:	owner
+edited:	false
+status:	none
+--
+## Resolution
+
+**The Event schema owes a per-contribution stamp and a once-per-Run announcement — and it owes both to records that already exist. Nothing is added to the envelope, and no new event type is created.** The ticket asked what the envelope gains; the answer is *nothing*, and the reason is that the per-contribution fact it was reaching for already has a per-contribution event to ride on.
+
+Reading the code first moved this ticket the way measuring moved [#344](https://github.com/bradcstevens/git-loopy/issues/344) and [#354](https://github.com/bradcstevens/git-loopy/issues/354). Three of the ticket's six bullets dissolved on the facts, and one hazard nobody had charted turned up in their place.
+
+---
+
+### 1. Placement rides `wrapper.contribution.start`. The envelope is untouched.
+
+The envelope is `{ts, run_id, iter, type}` and nothing else (`events.py:585-590`, order pinned at `:441`). `lane_issue` is not a fifth envelope key in any meaningful sense — it is spliced onto the dict afterwards by `session.py:781-782`, **in Python only**; shell and PowerShell have no such key anywhere.
+
+`wrapper.contribution.start` (`events.py:301`) is **the** per-contribution event, it is **orchestrator-emitted** (`loop.py:3976`, inside `_open_contribution_accounting`), and it already carries `contribution_id`, `issue` and `lane_id`. Its emitter `_emit_contribution_event` already accepts `**payload`. The orchestrator *chose* the host, so it can stamp placement with nothing travelling back from the host to tell it.
+
+This satisfies [#343](https://github.com/bradcstevens/git-loopy/issues/343)'s *"Events must be stamped with the host per contribution"* **literally** — per contribution, on the contribution event — while honouring [#349](https://github.com/bradcstevens/git-loopy/issues/349)'s explicit **non**-requirement that the grade not become a per-event field. It is also exactly the shape [#348](https://github.com/bradcstevens/git-loopy/issues/348) reserved: capability in the manifest, **resolved value on the Event beside it**, on the `rate_card` template.
+
+**Rejected — the envelope field.** Its cost is not bytes. The envelope is the one surface all three Orchestrators hand-build — Python's `make_event`, shell's `jq -cn` template (`events.sh:316`) with its own collision assertion at `:307-313`, PowerShell's hashtable — plus the byte-exact `serialization_cases` in `event-schema.json`. It would put a key on every event of a Lane session to record a fact that changes once per contribution, and, because `lane_issue` is Python-only, would have made the envelope's Python/port divergence wider rather than narrower.
+
+**Rejected — a new lifecycle event.** The map's own out-of-scope note on renaming `advanced` records what a contract event-type literal costs: Python, shell, PowerShell **and** the Rust core, plus a version bump and fixture changes. Zero new literals is the whole point.
+
+### 2. The stamp is unconditional, and contract 1.24 is why.
+
+A Python Run stamps the host on **every** `wrapper.contribution.start` it emits, including when that host is the local machine.
+
+There is a precedent on the same event, and its stated reason transfers word for word (`event-schema.json:123`):
+
+> *"Every field is optional-when-present: a port that routes nothing emits Run start exactly as before and stays conforming, and a consumer reads their absence as 'this Runner does not route'. **The PRODUCER is unconditional — a Run that configured nothing publishes the readback describing exactly that, because the Run that puzzles an operator is the one where nothing they wrote appeared to take effect.**"*
+
+Under [#353](https://github.com/bradcstevens/git-loopy/issues/353) the host becomes something an operator selects. A Run where that selection silently failed to apply **is** the puzzling Run. Remote-only stamping was rejected because it conflates three permanently different traces — *ran locally*, *pre-change trace*, and *the stamp failed* — into one silence.
+
+### 3. The ticket's third bullet dissolved: there is no member that could be asked to lie.
+
+The ticket asked us to choose between *"omission, an explicit local value, and the field simply never occurring because the event never occurs."* The third is **fact, not a choice**.
+
+shell and PowerShell register `wrapper.contribution.start` in their name maps (`events.sh:46`, `GitLoopy.Events.psm1:36`) and have **zero call sites** for it. They emit no contribution event of any kind, confirming #343 §5 from the other direction. There is no field they could be obliged to populate with a lie, no omission convention to invent, and nothing to reconcile against #348 — which already has them declare `execution_hosts: []` off `parallel_mode: false`.
+
+That also settles *"what a fixture can assert about a field only one member ever emits"*, and it needed no new answer: #348 already ruled that Conformance pins **the relationship between a declaration and its producer, never its content**. Here the relationship is producer-unconditionality for a member that places contributions, and absence for one that does not — the 1.24 readback shape, enforced the way `test_conformance.py:698-710` already enforces it.
+
+### 4. A contribution that never started is a new **outcome**, not a new **moment**.
+
+[#357](https://github.com/bradcstevens/git-loopy/issues/357) requires that *"a contribution that never started"* be expressible as distinct from one that started and failed, *"or the Strike distinction cannot be made downstream from the trace"* — because #357 also ruled such a contribution **is never a Strike**.
+
+This is real and not theoretical: `wrapper.contribution.start` fires at **dispatch** (`loop.py:3951-3976`), orchestrator-side, before anything runs. Under [#350](https://github.com/bradcstevens/git-loopy/issues/350)'s *"one workflow run per issue, dispatched on demand"*, a quota-blocked workflow would produce a trace that says **start** for work that never happened.
+
+It is answered on `wrapper.contribution.end`, whose fixture contract is already the Strike carrier — `reason_values: ["published", "unchanged_branch", "checkpoint_failed", "serial_fallback"]` alongside `strike_reaction_values: ["reset", "+1"]`, described in its own fixture note as *"the authoritative finalized Parallel row and Strike transition."* #357 asked for a Strike distinction; it belongs where the Strike transition already lives.
+
+**Rejected — a `wrapper.contribution.placed` event.** It buys a genuinely observable placed→started interval, but that is **liveness**, and #350 already accepted *"coarse liveness live, full stream at completion."* It would spend a contract event-type on something #350 had already conceded.
+
+**Rejected — redefining `contribution.start` to fire on real execution.** Absence would encode never-started, at no new-literal cost, but it changes an existing event's meaning — the one thing the schema's own doctrine identifies as what actually breaks consumers — and would alter serial and local semantics to serve a remote case.
+
+**Rejected — a separate `started: false` field** (raised late, once §6's cost became visible). It would keep every change additive and freeze the wire axis forever. It was refused because `reason` is already the authoritative outcome vocabulary, and splitting one outcome across two fields makes `{reason: "unchanged_branch", started: false}` representable nonsense that no validation can ever retire. **A version number is cheap and moves once; representable nonsense is permanent.**
+
+### 5. Four tickets said "announce it once per Run." They land as one object plus two siblings.
+
+Every *announced once per Run* ruling on this map deferred its mechanism here. Collected: #349's **isolation grade**; #354's selected **host**, **declared capacity** and **starting Lane limit**; #357's **metering** disclosure (no-meter / free / metered); [#351](https://github.com/bradcstevens/git-loopy/issues/351)'s *"this Run's publishing identity does not trigger downstream CI."*
+
+They land on `wrapper.run.start`, which is already shaped for exactly this: its `required` set is `[release_version, schema_version, insight_capabilities, parallel_capabilities]` — two of the four already **grouped objects**, so a third is the shipped idiom, not an invention. #348 has already put the *capability* half (`execution_hosts`) into `parallel_capabilities` on this same record.
+
+**One `execution_host` object** carries what is genuinely one noun — #343's host with its two declared properties (placement, isolation grade) plus #354's capacity and starting limit. **#357's metering and #351's CI facts stay siblings, and the reason is load-bearing:** #343 §3 ruled that *where the orchestrator runs* is **"a deployment, not a host."** #351's fact fires only when the orchestrator is itself inside Actions pushing with `GITHUB_TOKEN` — a property of the deployment, not of where a Lane contribution was placed. Folding it into the host object would re-merge in the schema the exact distinction #343 drew, and would be meaningless in the ordinary case of a laptop orchestrator with remote Lanes.
+
+**Rejected — a `wrapper.host.announced` event**: a new contract literal, in four implementations, for something emitted exactly once on a record every port already emits and every consumer already parses.
+
+### 6. `wrapper.dashboard.fault` is retired, with a negative pin, and takes its exit code with it.
+
+[#352](https://github.com/bradcstevens/git-loopy/issues/352) handed this here as an orphan. The contract says what it is for (`wrapper-contract.md:499-505`):
+
+> *"the Run-scoped record of a **Dashboard fault** … which the Run survives as an involuntary **Detach** (ADR-0024) … a replay needs to tell a fault from a voluntary Detach … a voluntary Detach records no fault, **which is the distinction**."*
+
+**That distinction is precisely what #352 dissolved.** It ruled the Run **outlives its terminal**, making *"attach and re-attach one operation"*, and superseded ADR-0001 and ADR-0024 **in full**, with ADR-0024's promise *"now achieved by construction rather than by mechanism."* If the Run survives either way and a client simply re-attaches, there is no fault-vs-voluntary difference left for a replay to record. The event's reason for existing is gone, not merely its emitter.
+
+It is emitted at `interactive/driver.py:497` and drags `EXIT_DASHBOARD_FAULT = 3` (`driver.py:87`, returned at `:345`), which reports a Dashboard fault as the **Run's** exit status — under #352 simply false, since the Run does not die with its Dashboard. **The exit code retires in the same change**: leaving a code that reports a condition the contract no longer defines is a worse seam than a slightly larger diff.
+
+**The retirement idiom already ships.** `test_conformance.py:651`:
+
+```python
+assert "wrapper.pickup.routed" not in _EVENT_SCHEMA["event_types"].values()
+```
+
+A **negative pin** — a name deliberately held out of the vocabulary. `event_types` is *equality*-pinned (`test_conformance.py:830`), so all three members drop the name together, exactly as §18 prescribes.
+
+**Rejected — a registered-but-unemittable tombstone.** `event_types` is equality-pinned *as the vocabulary*; leaving the name in it advertises an event that can never occur. The negative pin is the part that actually matters, because it is what stops the name being reused later — the only way replay could ever come to reinterpret an old trace.
+
+**Rejected — re-purposing it for an attached client faulting.** #352 deliberately made a client's crash the client's own problem; this would import it straight back into the Run.
+
+### 7. Only one of these four changes touches the wire.
+
+The doctrine here is unusually well developed, and it argues against most of this ticket costing anything. `test_conformance.py:845-888` works through every bump since 1.19 and explains each refusal to move `event_schema_version`: **1.21** (seven optional fields on an existing record) — *"what breaks a pinned consumer is a field that **changes**, not one that **appears**"*; **1.24** (ten optional fields on `wrapper.run.start`) — *"the Rust `RunStart` is not `deny_unknown_fields`"*; **1.25** (a **required** key) — *"a key that appears on an object whose contract has always been 'at least these keys' changes nothing an existing consumer reads"*; **1.19 / 1.28** (a new event-type literal) — *"a consumer pinned to 1.1 skips an unmodelled type exactly as it always has."*
+
+Sorted against that:
+
+| Change | Shape | Moves the wire axis |
+| --- | --- | --- |
+| `host` on `contribution.start` | 1.21 / 1.24 | **No** |
+| `execution_host` + two disclosures on `run.start` | 1.24 exactly | **No** |
+| Retiring the `wrapper.dashboard.fault` literal | *inverse* of 1.19 / 1.28 | **No** — a 1.1 consumer reading strictly *fewer* types is unaffected |
+| **Widening `contribution.end`'s `reason`** | **novel** | **Yes** |
+
+**So: the Wrapper contract version bumps (§18 step 1, mandatory); `schema_version` stays `1`; `event_schema_version` moves `1.1` → `1.2` — earned by the enum widening alone.** §12 obliges a consumer to ignore an unknown *field*; nothing obliges it to tolerate an unknown *value*, and the fixture equality-pins the set (`test_conformance.py:1185`). A consumer honouring that closed vocabulary would meet a value it was told could not exist.
+
+This is the **first** move of that axis in the project's history, and the repo has never widened a shipped closed enum — every reason vocabulary in the history (`CONTRIBUTION_TERMINAL_REASONS`, `PARALLEL_DEGRADE_REASONS`, `PICKUP_REASONS`) was born with its final member set. The record should say plainly that the additions and the retirement did **not** earn the move, so the axis keeps meaning something.
+
+Checked and cleared: #348's plan to move the same axis for adding `execution_hosts` **looked** like it contradicted this doctrine and does not. `parallel_capabilities` is exact-set-pinned (`test_conformance.py:1644`: `assert set(event["parallel_capabilities"]) == set(parallel["names"])`) whereas `insight_capabilities` is *"at least these keys"* — so #348's addition genuinely is wire-visible where 1.25's was not. Whichever of the two lands first takes the `1.1 → 1.2` step and the other follows on.
+
+### 8. A legacy trace means what it said, never what we would now say.
+
+The ticket cites *"ADR-0020's legacy-trace rule — old traces 'stay readable and are never reinterpreted'."* **That quote does not exist.** Neither `never reinterpreted` nor `stay readable` appears anywhere in `docs/adr/`. The actual text (ADR-0020:245-246) is narrower: *"Old Wave-era replay logs remain valid historical input; new Parallel runs emit contribution lifecycle events."* Recorded because it is the only precedent the ticket invoked, and it is weaker than quoted.
+
+Mechanically replay is already safe: there is no separate replay module — replay re-feeds the same JSONL through `Event::from_jsonl_line` (`event.rs:490-492`) into the same tolerant decoder, and a pre-change trace containing `wrapper.dashboard.fault` decodes to `Other`, *"understood, just not shown"* (`run_loop.rs:252-272`).
+
+The live question is semantic, and §2 created it. Because stamping is unconditional, a `wrapper.contribution.start` **missing** `host` can only be a pre-change trace — and before the change everything ran locally, so *"absence means local"* would be factually true today.
+
+**It is refused anyway. Absence is `unknown`, and no consumer may infer `local` from it.** This map has thrown out this species of move twice: #357 refused `billable.total_ms` — *"a field named billable holding a number GitHub states is not"* — and #349 refused a grade name that would *"appear to promise"* more than it delivers. Reading `local` out of silence is the same shape: presenting an **inference** as an **observation**. It holds only until something else ever makes the field absent, at which point every historical rendering becomes retroactively wrong with no way to tell which. `unknown` costs a dash on a screen. The inference costs the ability to trust the field at all. And it is what ADR-0020 actually said: valid **historical input** — history, not material to reinterpret with vocabulary invented after it was written.
+
+### 9. Found while working this: a remote host's clock is not the orchestrator's clock.
+
+#350 §6 has the orchestrator ingest a remote contribution's Events into its own JSONL, and warned this ticket they arrive *"in a batch, late, and backdated."* Wall-clock `ts` tolerates that. A second axis does not, and no ticket had noticed it.
+
+The envelope carries `observed_monotonic` (`event.rs:70-77`): *"The **Orchestrator's** monotonic reading for this Event… **Durations are measured on this axis** so a wall-clock adjustment mid-Run cannot move them."* It is consumed unguarded — `main.rs:219` and `session.rs:193` both `event.observed_monotonic.or(last_monotonic)`, and `state.rs:349` feeds it into `monotonic_at_option`.
+
+A monotonic reading is meaningful only against its own machine's origin. An Actions runner's has no relationship to the operator's laptop's. Ingesting remote events with theirs intact would silently mix two unrelated clocks into duration arithmetic — wrong, possibly negative, with nothing detecting it.
+
+**Decision: ingest strips `observed_monotonic`; it is never re-stamped.** This costs **no schema change** — the field is already `Option<f64>` and every consumer already falls back — only a stated ingest rule. It costs nothing in practice either, because #350 already accepted *"coarse liveness live, full stream at completion"*: remote Lane live timing is degraded **by decision** already, so falling back to wall-clock `ts` for those durations takes nothing #350 had not already given up.
+
+**Rejected — re-stamping at ingest**: the mislabelled-number trap a third time, after #357's and #349's. It would put a real number in a field whose own docstring says it means something else, and render an entire remote contribution as having taken about zero time.
+
+### 10. The Dashboard reads none of this, and that is filed rather than decided.
+
+The largest finding of the session, and larger than the ticket anticipated. **The Rust Dashboard core models no rolling-dispatch Event at all.** `decode_payload` (`event.rs:498-528`) matches eleven literals; every one of `wrapper.contribution.*`, `wrapper.integration.*`, `wrapper.concurrency.changed` and `wrapper.parallel.*` falls to `EventPayload::Other`. A whole-tree grep of `git-loopy/tui/` for `concurrency`, `parallel.degraded` and `serial_fallback` returns **zero hits**.
+
+What it renders for "Parallel" is the pre-ADR-0020 **Wave** shape — `lane_issue`-routed events plus one multi-issue `wrapper.iteration.end` folded by `record_normalized_contributions` (`state.rs:719`). The fixture proves it: `dashboard-insights.json`'s `parallel-lanes-and-non-closure-outcomes` contains zero `wrapper.contribution.*` events. And `rolling_stream_cases` declares `distributions: ["python", "shell", "powershell"]` with **no rust/tui entry** — emission is pinned for three members, reduction for nobody.
+
+This collides with four inherited obligations (#354's *"emitted today and decoded nowhere"*, #353's sole-signal rendering priority, #349's and #357's/#351's once-per-Run disclosures). It also means **#352 over-claimed**: it accepted losing token-by-token text because *"the Rust core renders all of them from a trace alone"* — citing a **Wave-era** fixture. The claim holds for the serial/Wave stream and not for the rolling one, which is the only stream a Lane contribution emits. The conclusion may survive re-checking; the evidence offered for it does not cover the case.
+
+**It is filed, not decided here** — [#432](https://github.com/bradcstevens/git-loopy/issues/432). The gap is **seam-independent**: created when ADR-0020 shipped the rolling stream and the Rust core did not follow, and it exists today with no Execution host near it. Deciding it here would make this ticket own a rendering backlog it did not cause and block the map's destination on work that is not about the execution boundary — and filing is this map's established idiom (#348 → #414, #349 → #415, #351 → #418/#419, #353 → #430). The honest statement of the cost: this ticket decides what the records **say** knowing that, today, nobody reads them.
+
+---
+
+## What this hands to the rest of the map
+
+- **[#358](https://github.com/bradcstevens/git-loopy/issues/358)** (Stop) inherits §4's shape directly. A Stop that lands on a dispatched-but-never-started contribution has an outcome vocabulary to land in — and #357's rule that such a contribution is **never a Strike** now has a trace-readable expression. #358 should decide whether a stopped-in-flight contribution is a further `reason` value or an existing one, knowing that widening the enum is the one move that costs the wire axis, and that it costs it **only once** — if #358 widens it too and lands together, the two share the single `1.1 → 1.2` step rather than taking two.
+- **[#432](https://github.com/bradcstevens/git-loopy/issues/432)** receives the whole Dashboard-reduction gap, plus the correction to #352's evidence.
+- **#348** shares the `event_schema_version` step; whichever lands first takes it.
+- **Implementation** inherits a bounded blast radius: **zero** new event-type literals, one field on `wrapper.contribution.start`, one grouped object plus two siblings on `wrapper.run.start`, one widened enum, one retired literal with its exit code, and one ingest rule. Per §18 that is a contract bump, fixture edits, and all three Orchestrators moving together — with the Rust core needing no change to stay *conformant*, only to become *useful*, which is #432's job.
+
+## Terms
+
+No `CONTEXT.md` change. Consistent with the map's note and #343's precedent, **Execution host** and **Isolation grade** enter the glossary when code implements them; this ticket introduces no new term, only a carrier for two that #343 already drafted.
+
+--
+author:	bradcstevens
+association:	owner
+edited:	false
+status:	none
+--
+Resolved. The decision is in the resolution comment above; the map's Decisions-so-far carries the one-line gist.
+--
