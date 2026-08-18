@@ -17,13 +17,17 @@ import pytest
 
 from git_loopy import gh
 from git_loopy.gh import (
+    GhCapabilityError,
     GhError,
     GitHubClient,
     Issue,
     PullRequest,
     Repo,
     SubprocessGitHubClient,
+    parse_gh_version,
+    verify_readiness_capability,
 )
+from git_loopy.readiness import BlockedByRead, BlockerNode
 
 # The ``gh`` mechanics moved from module free functions onto the stateless
 # :class:`SubprocessGitHubClient` adapter (#47, mirroring the git seam #46). Bind
@@ -1161,3 +1165,159 @@ def test_a_throttled_close_verification_is_counted_too(monkeypatch) -> None:
         client.issue_close(42, "done")
 
     assert client.rate_limited_reads() == 1
+
+
+# --------------------------------------------------------------------------- #
+# Readiness (#438, ADR-0047, Wrapper contract §3.3.1)                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_parse_gh_version_reads_the_first_semver_triple() -> None:
+    assert parse_gh_version("gh version 2.63.2 (2024-11-04)\nhttps://...") == (
+        2,
+        63,
+        2,
+    )
+
+
+def test_parse_gh_version_raises_capability_error_on_unparseable_output() -> None:
+    with pytest.raises(GhCapabilityError):
+        parse_gh_version("not a version string")
+
+
+def test_verify_readiness_capability_passes_a_modern_gh() -> None:
+    verify_readiness_capability((2, 63, 2))  # no raise
+
+
+def test_verify_readiness_capability_fails_loud_naming_remedy_for_an_old_gh() -> None:
+    """#438 owes this: an old ``gh`` must fail loudly, naming the fix.
+
+    The hazard the ticket names is that a ``gh`` too old to report blockers
+    could fail *silently inside a list read*, which today's error path reads
+    as an empty **Pool** -- an unattended Run would quietly conclude there is
+    no work and exit clean. This is the loud alternative: a preflight
+    :exc:`GhCapabilityError` naming the installed version, the minimum
+    required, and the remedy.
+    """
+    with pytest.raises(GhCapabilityError) as excinfo:
+        verify_readiness_capability((2, 10, 0), minimum=(2, 40, 0))
+
+    message = str(excinfo.value)
+    assert "2.10.0" in message
+    assert "2.40.0" in message
+    assert "cli.github.com" in message
+
+
+def test_gh_version_parses_the_installed_client(monkeypatch) -> None:
+    def fake_run(cmd, **kw):
+        assert cmd == ["gh", "--version"]
+        return _completed(cmd, stdout="gh version 2.55.0 (2024-06-01)\n")
+
+    _install_fake_run(monkeypatch, fake_run)
+    client = SubprocessGitHubClient()
+
+    assert client.gh_version() == (2, 55, 0)
+
+
+def test_blocked_by_reads_open_and_closed_nodes_via_graphql(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[1:3] == ["repo", "view"]:
+            return _completed(
+                cmd,
+                stdout=json.dumps(
+                    {
+                        "owner": {"login": "acme"},
+                        "name": "widgets",
+                        "defaultBranchRef": {"name": "main"},
+                    }
+                ),
+            )
+        assert cmd[1:3] == ["api", "graphql"]
+        payload = {
+            "data": {
+                "repository": {
+                    "issue": {
+                        "blockedBy": {
+                            "totalCount": 2,
+                            "nodes": [
+                                {
+                                    "number": 92,
+                                    "state": "CLOSED",
+                                    "repository": {"nameWithOwner": "acme/widgets"},
+                                },
+                                {
+                                    "number": 93,
+                                    "state": "OPEN",
+                                    "repository": {"nameWithOwner": "acme/widgets"},
+                                },
+                            ],
+                        }
+                    }
+                }
+            }
+        }
+        return _completed(cmd, stdout=json.dumps(payload))
+
+    _install_fake_run(monkeypatch, fake_run)
+    client = SubprocessGitHubClient()
+
+    read = client.blocked_by(102)
+
+    assert read == BlockedByRead(
+        total_count=2,
+        nodes=(
+            BlockerNode(ref="acme/widgets#92", state="closed"),
+            BlockerNode(ref="acme/widgets#93", state="open"),
+        ),
+    )
+    graphql_call = next(cmd for cmd in calls if cmd[1:3] == ["api", "graphql"])
+    assert "-F" in graphql_call and "number=102" in graphql_call
+
+
+def test_blocked_by_translates_an_unreadable_node(monkeypatch) -> None:
+    """The count arrives, the node does not -- routine, not exotic (ADR-0047)."""
+
+    def fake_run(cmd, **kw):
+        if cmd[1:3] == ["repo", "view"]:
+            return _completed(
+                cmd,
+                stdout=json.dumps(
+                    {
+                        "owner": {"login": "acme"},
+                        "name": "widgets",
+                        "defaultBranchRef": {"name": "main"},
+                    }
+                ),
+            )
+        payload = {
+            "data": {
+                "repository": {
+                    "issue": {
+                        "blockedBy": {
+                            "totalCount": 2,
+                            "nodes": [
+                                {
+                                    "number": 97,
+                                    "state": "CLOSED",
+                                    "repository": {"nameWithOwner": "acme/widgets"},
+                                },
+                                None,
+                            ],
+                        }
+                    }
+                }
+            }
+        }
+        return _completed(cmd, stdout=json.dumps(payload))
+
+    _install_fake_run(monkeypatch, fake_run)
+    client = SubprocessGitHubClient()
+
+    read = client.blocked_by(104)
+
+    assert read.total_count == 2
+    assert read.nodes[0] == BlockerNode(ref="acme/widgets#97", state="closed")
+    assert read.nodes[1].readable is False

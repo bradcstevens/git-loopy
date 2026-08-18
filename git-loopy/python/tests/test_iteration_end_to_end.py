@@ -77,6 +77,7 @@ from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy.emit import EventEmitter
 from git_loopy.events import REDACTED_SECRET
 from git_loopy.persist import WritersBundle, create_writers
+from git_loopy.readiness import BlockedByRead, BlockerNode
 from git_loopy.session import SKILL_TOOL_NAME
 from git_loopy.sinks import SinkFanout
 from git_loopy.skill_catalog import build_skill_catalog
@@ -2349,6 +2350,8 @@ def _wire_multi_issue_github(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     issues: list[gh_module.Issue],
+    *,
+    blocked_by: dict[int, "BlockedByRead"] | None = None,
 ) -> tuple[FakeCopilotClient, FakeGitHubClient]:
     """Wire a Run whose Pool holds several candidates, so selection is visible."""
     (tmp_path / "git-loopy").mkdir()
@@ -2359,6 +2362,7 @@ def _wire_multi_issue_github(
     fake_gh = FakeGitHubClient(
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
         issues=issues,
+        blocked_by=blocked_by,
     )
     monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
     fake_client = FakeCopilotClient(scripted_events=[])
@@ -3378,6 +3382,154 @@ def test_a_defeated_issue_leaves_the_pool_whole(tmp_path, monkeypatch) -> None:
         if (event := json.loads(raw))["type"] == "wrapper.afk_ready.collected"
     ]
     assert collected == [[7, 31], [7, 31], [7, 31]]
+
+
+# ---------------------------------------------------------------------------
+# **Readiness** (#438, ADR-0047, Wrapper contract §3.3.1): a candidate carrying
+# an open native `blocked_by` dependency is not admissible at **Pickup**. The
+# runner passes it over and binds the next candidate instead -- in milliseconds,
+# never spending an agent session discovering the blocker for itself.
+# ---------------------------------------------------------------------------
+
+
+def test_a_blocked_candidate_is_passed_over_for_the_next_admissible_one(
+    tmp_path, monkeypatch
+) -> None:
+    """The whole ticket, end to end: #438's first property, demonstrated.
+
+    Issue 7 is the head of the order and carries an open native blocker.
+    **Pickup** passes it over -- costing no agent session at all -- and binds
+    issue 31 instead, the next candidate in §3.2's order.
+    """
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(7, "2026-01-01T00:00:00Z"),
+            _dated(31, "2026-05-01T00:00:00Z"),
+        ],
+        blocked_by={
+            7: BlockedByRead(
+                total_count=1,
+                nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+            )
+        },
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    )
+
+    assert exit_code == 0
+    assert [(e["type"], e["issue"]) for e in _pickup_events(tmp_path)] == [
+        ("wrapper.pickup.skipped", 7),
+        ("wrapper.pickup.bound", 31),
+    ]
+    skip = next(e for e in _pickup_events(tmp_path) if e["type"] == "wrapper.pickup.skipped")
+    assert skip["reason"] == "blocked_by_open_dependency: acme/widgets#93"
+
+
+def test_readiness_is_asked_before_routing_resolves(tmp_path, monkeypatch) -> None:
+    """#438: a candidate about to be passed over must not first pay to route.
+
+    Issue 7 carries both an open blocker *and* a ``task-type:`` label that
+    would refuse to resolve a **Routed pair** were routing ever asked. If
+    readiness were checked after routing, the walk would pay for (and report)
+    the routing refusal instead; asked first, it never reaches routing at all,
+    and the skip names the blocker rather than a routing complaint.
+    """
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                labels=["ready-for-agent", "task-type:not-a-real-key"],
+            ),
+            _dated(31, "2026-05-01T00:00:00Z"),
+        ],
+        blocked_by={
+            7: BlockedByRead(
+                total_count=1,
+                nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+            )
+        },
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    skip = next(e for e in _pickup_events(tmp_path) if e["type"] == "wrapper.pickup.skipped")
+    assert skip["issue"] == 7
+    assert skip["reason"] == "blocked_by_open_dependency: acme/widgets#93"
+    assert "routing refused" not in skip["reason"]
+
+
+def test_a_blocked_candidate_leaves_the_pool_whole_and_charges_no_strike(
+    tmp_path, monkeypatch
+) -> None:
+    """#438's second property: never attempted, so never charged.
+
+    Mirrors :func:`test_a_defeated_issue_leaves_the_pool_whole` for the
+    **Attempt lifecycle**: a blocked candidate stays in the **Pool** (the
+    closure whitelist, the collection Event and the emptiness test all still
+    see it), and -- unlike an Attempt-lifecycle skip, which follows a real
+    stall -- a readiness skip charges no **Strike** at all, because the issue
+    was never attempted.
+    """
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(7, "2026-01-01T00:00:00Z"),
+            _dated(31, "2026-05-01T00:00:00Z"),
+        ],
+        blocked_by={
+            7: BlockedByRead(
+                total_count=1,
+                nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+            )
+        },
+    )
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=9)
+        )
+    )
+
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    types_seen = {event["type"] for event in events}
+    # Pool retention: the collection Event still names the blocked issue.
+    collected = [e["issues"] for e in events if e["type"] == "wrapper.afk_ready.collected"]
+    assert collected == [[7, 31]]
+    # No Strike: a readiness skip was never an attempt.
+    assert "wrapper.strike" not in types_seen
+    iteration_end = next(e for e in events if e["type"] == "wrapper.iteration.end")
+    assert iteration_end["summary"]["strikes"] == 0
+
+
+def test_a_candidate_whose_blockers_all_closed_is_admitted_normally(
+    tmp_path, monkeypatch
+) -> None:
+    """Readiness clears itself: nobody edited the issue, its blocker closed."""
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [_dated(7, "2026-01-01T00:00:00Z")],
+        blocked_by={
+            7: BlockedByRead(
+                total_count=1,
+                nodes=(BlockerNode(ref="acme/widgets#90", state="closed"),),
+            )
+        },
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    assert [(e["type"], e["issue"]) for e in _pickup_events(tmp_path)] == [
+        ("wrapper.pickup.bound", 7),
+    ]
 
 
 def test_the_skip_names_the_ending_that_defeated_the_issue(

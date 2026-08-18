@@ -56,6 +56,7 @@ from git_loopy.gh import (
     ReadStep,
     next_read_step,
 )
+from git_loopy.readiness import BlockedByRead, BlockerNode, decide_readiness
 from git_loopy.issue_order import (
     LABEL_PRIORITY,
     MAX_ACCEPTED_YEAR,
@@ -3993,3 +3994,50 @@ def test_readiness_case_ids_are_unique() -> None:
     ids = [case["id"] for case in _readiness_cases()]
 
     assert len(set(ids)) == len(ids)
+
+
+def _blocked_by_read(case: dict[str, Any]) -> BlockedByRead:
+    """One fixture case's ``blocked_by`` object as the seam's own input type.
+
+    Translation only, per the Conformance README: the adapter shapes the
+    fixture record into :class:`~git_loopy.readiness.BlockedByRead` but calls
+    the production seam (:func:`~git_loopy.readiness.decide_readiness`) rather
+    than reproducing its decision.
+    """
+    connection = case["blocked_by"]
+    return BlockedByRead(
+        total_count=connection["total_count"],
+        nodes=tuple(
+            BlockerNode(
+                ref=node["ref"],
+                state=node["state"],
+                readable=node.get("readable", True),
+            )
+            for node in connection["nodes"]
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _readiness_cases(),
+    ids=lambda case: case["id"],
+)
+def test_readiness_fixture_drives_the_python_readiness_seam(
+    case: dict[str, Any],
+) -> None:
+    """#438: the pure readiness seam is *driven by* the fixture, not re-derived.
+
+    Every one of the fixture's ten cases must reach the exact verdict, skip
+    reason, and blocker set :func:`decide_readiness` produces -- the adapter
+    translates the fixture record into the seam's own input type and calls the
+    production decision, never a second copy of it.
+    """
+    expected = case["expected"]
+    verdict = decide_readiness(_blocked_by_read(case))
+
+    assert verdict.verdict == expected["verdict"], case["id"]
+    assert verdict.admissible is expected["admissible"], case["id"]
+    assert verdict.skip_reason == expected["skip_reason"], case["id"]
+    assert list(verdict.blockers) == expected.get("blockers", []), case["id"]
+
