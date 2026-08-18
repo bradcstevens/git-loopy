@@ -1,0 +1,261 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.0",
+  "verdicts": [
+    "ready",
+    "blocked"
+  ],
+  "verdicts_note": "**Readiness** is a fact about the tracker's dependency graph, not about how the issue was authored. A candidate that is **Blocked** is not admissible at **Pickup**: the runner passes it over and tries the next candidate in the section 3.2 order. Pinned by ADR-0047 and Wrapper contract section 3.3.1.",
+  "skip_reasons": [
+    {
+      "reason": "blocked_by_open_dependency",
+      "note": "At least one `blocked_by` dependency was read and is open. Reports an assertion that was read: a blocker exists, and the reason names it."
+    },
+    {
+      "reason": "readiness_unprovable",
+      "note": "The `blockedBy` connection was incomplete, or a node came back unreadable. Reports that no assertion could be read -- there may be no blocker at all. Deliberately not prefixed `blocked_`, because calling it blocked would assert the very thing the read failed to establish, and would tell an operator to wait for a blocker to close when that wait can never end."
+    }
+  ],
+  "read": {
+    "transport": "graphql",
+    "connection": "blockedBy",
+    "min_page_size": 50,
+    "hops": 1,
+    "decided_at": "pickup",
+    "transport_note": "GraphQL, never REST. REST is documented to undercount cross-repository dependencies and to do so silently -- there is no `totalCount` to notice the shortfall by -- so a REST read can report a blocked candidate as ready, which is the one outcome this fixture exists to prevent.",
+    "page_size_note": "GitHub caps `blockedBy` at 50 links per issue and GraphQL accepts `first: 100`, so a complete read is always one page. A member that asks for fewer than the cap has a defect; an incomplete read is never `the list is long`.",
+    "hops_note": "One hop, never traversed. Transitive traversal is a non-goal: it computes a property of the graph rather than reading an assertion about an issue, and it is unbounded in depth."
+  },
+  "pool_note": "A blocked candidate stays in the **Pool**. It is a **Pickup skip**, never a **Pool exclusion**: the closure whitelist, the collection Event and the emptiness test all still need to see it, and a Pool that is empty ends the Run cleanly where a Pool that is merely waiting has not run out of work.",
+  "strike_note": "A blocked candidate costs no **Strike**. It was never attempted, so it is reconsidered on the next **Iteration** the moment its last blocker closes, with no human touching the issue.",
+  "cases": [
+    {
+      "id": "no-blockers-is-ready",
+      "candidate": "acme/widgets#100",
+      "blocked_by": {
+        "total_count": 0,
+        "nodes": []
+      },
+      "expected": {
+        "verdict": "ready",
+        "admissible": true,
+        "skip_reason": null
+      },
+      "note": "The common path. An empty connection is a complete read, not an unprovable one."
+    },
+    {
+      "id": "every-blocker-closed-is-ready",
+      "candidate": "acme/widgets#101",
+      "blocked_by": {
+        "total_count": 2,
+        "nodes": [
+          {
+            "ref": "acme/widgets#90",
+            "state": "closed"
+          },
+          {
+            "ref": "acme/widgets#91",
+            "state": "closed"
+          }
+        ]
+      },
+      "expected": {
+        "verdict": "ready",
+        "admissible": true,
+        "skip_reason": null
+      },
+      "note": "Readiness clears itself. Nobody edited this issue; its blockers closed and it became admissible."
+    },
+    {
+      "id": "one-open-blocker-among-closed-is-blocked",
+      "candidate": "acme/widgets#102",
+      "blocked_by": {
+        "total_count": 3,
+        "nodes": [
+          {
+            "ref": "acme/widgets#92",
+            "state": "closed"
+          },
+          {
+            "ref": "acme/widgets#93",
+            "state": "open"
+          },
+          {
+            "ref": "acme/widgets#94",
+            "state": "closed"
+          }
+        ]
+      },
+      "expected": {
+        "verdict": "blocked",
+        "admissible": false,
+        "skip_reason": "blocked_by_open_dependency",
+        "blockers": [
+          "acme/widgets#93"
+        ]
+      },
+      "note": "One open edge is enough. The reported reason names the blocker so the operator is not left to find it."
+    },
+    {
+      "id": "incomplete-connection-is-unprovable",
+      "candidate": "acme/widgets#103",
+      "blocked_by": {
+        "total_count": 3,
+        "nodes": [
+          {
+            "ref": "acme/widgets#95",
+            "state": "closed"
+          },
+          {
+            "ref": "acme/widgets#96",
+            "state": "closed"
+          }
+        ]
+      },
+      "expected": {
+        "verdict": "blocked",
+        "admissible": false,
+        "skip_reason": "readiness_unprovable",
+        "blockers": []
+      },
+      "note": "Every node returned is closed, and the candidate would be ready if the read were complete. It is not: `total_count` accounts for a third edge nobody saw. Readiness that cannot be proven is not readiness. `blockers` is empty because none was established -- the verdict is manufactured from ignorance, and the fixture says so."
+    },
+    {
+      "id": "unreadable-node-is-unprovable",
+      "candidate": "acme/widgets#104",
+      "blocked_by": {
+        "total_count": 2,
+        "nodes": [
+          {
+            "ref": "acme/widgets#97",
+            "state": "closed"
+          },
+          {
+            "ref": "other-org/private#12",
+            "state": null,
+            "readable": false
+          }
+        ]
+      },
+      "expected": {
+        "verdict": "blocked",
+        "admissible": false,
+        "skip_reason": "readiness_unprovable",
+        "blockers": []
+      },
+      "note": "The count arrives, the node does not. Routine rather than exotic once cross-repository blockers count: a blocker in a repository the token cannot see returns exactly this shape."
+    },
+    {
+      "id": "open-cross-repository-blocker-blocks",
+      "candidate": "acme/widgets#105",
+      "blocked_by": {
+        "total_count": 1,
+        "nodes": [
+          {
+            "ref": "acme/platform#7",
+            "state": "open"
+          }
+        ]
+      },
+      "expected": {
+        "verdict": "blocked",
+        "admissible": false,
+        "skip_reason": "blocked_by_open_dependency",
+        "blockers": [
+          "acme/platform#7"
+        ]
+      },
+      "note": "Identical to a same-repository blocker. A `blocked_by` edge is a human assertion and does not weaken by crossing a repository boundary. The full `owner/repo#number` is carried so the operator knows this Run is waiting on work no Run here can do."
+    },
+    {
+      "id": "closed-cross-repository-blocker-is-ready",
+      "candidate": "acme/widgets#106",
+      "blocked_by": {
+        "total_count": 1,
+        "nodes": [
+          {
+            "ref": "acme/platform#8",
+            "state": "closed"
+          }
+        ]
+      },
+      "expected": {
+        "verdict": "ready",
+        "admissible": true,
+        "skip_reason": null
+      },
+      "note": "The boundary is irrelevant in both directions. A member that treated any cross-repository edge as blocking would fail here, and one that ignored them would fail the case above."
+    },
+    {
+      "id": "self-edge-is-an-ordinary-blocker",
+      "candidate": "acme/widgets#107",
+      "blocked_by": {
+        "total_count": 1,
+        "nodes": [
+          {
+            "ref": "acme/widgets#107",
+            "state": "open"
+          }
+        ]
+      },
+      "expected": {
+        "verdict": "blocked",
+        "admissible": false,
+        "skip_reason": "blocked_by_open_dependency",
+        "blockers": [
+          "acme/widgets#107"
+        ]
+      },
+      "note": "An issue blocked by itself has an open blocker, so it is blocked -- no special case, no cycle rule. Pinned explicitly so three ports agree rather than one treating `blocked by self` as vacuously ready and another failing on it. The graph is unsatisfiable and the tracker is where that is visible."
+    },
+    {
+      "id": "two-cycle-reads-as-an-ordinary-blocker",
+      "candidate": "acme/widgets#108",
+      "blocked_by": {
+        "total_count": 1,
+        "nodes": [
+          {
+            "ref": "acme/widgets#109",
+            "state": "open"
+          }
+        ]
+      },
+      "expected": {
+        "verdict": "blocked",
+        "admissible": false,
+        "skip_reason": "blocked_by_open_dependency",
+        "blockers": [
+          "acme/widgets#109"
+        ]
+      },
+      "note": "#109 is in turn blocked by #108, but that second hop is never read. At one hop a cycle is indistinguishable from an ordinary blocker, which is what makes the traversal non-goal affordable: there is no rule to state and no member is required to detect one."
+    },
+    {
+      "id": "a-read-open-blocker-outranks-an-unreadable-node",
+      "candidate": "acme/widgets#110",
+      "blocked_by": {
+        "total_count": 3,
+        "nodes": [
+          {
+            "ref": "acme/widgets#98",
+            "state": "open"
+          },
+          {
+            "ref": "other-org/private#13",
+            "state": null,
+            "readable": false
+          }
+        ]
+      },
+      "expected": {
+        "verdict": "blocked",
+        "admissible": false,
+        "skip_reason": "blocked_by_open_dependency",
+        "blockers": [
+          "acme/widgets#98"
+        ]
+      },
+      "note": "The connection is both incomplete and carries an unreadable node, yet an open blocker was positively read. The verdict is the same either way, so only the reason is in question, and the proven fact wins: `readiness_unprovable` means readiness could not be established, and here it was -- as false. Reporting the unprovable reason would withhold a blocker the runner is holding."
+    }
+  ]
+}

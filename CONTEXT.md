@@ -278,13 +278,31 @@ _Avoid_: assignment, dispatch, selection.
 
 **Pickup skip**:
 A candidate the runner walked past at **Pickup** without binding — one whose
-`task-type:` label refuses to resolve a **Routed pair**, or one the **Attempt lifecycle** has
-already defeated this run. Distinct from a **Pool
+`task-type:` label refuses to resolve a **Routed pair**, one the **Attempt lifecycle** has
+already defeated this run, or one that is **Blocked**. Distinct from a **Pool
 exclusion**, which happens at collection and is a human's mistake to fix: a skip is the
 runner declining work it could not start, and it carries a `wrapper.pickup.skipped`
 **Event** so that being passed over leaves a trace. An issue passed over fifty times
 used to be indistinguishable from one nobody had reached yet.
 _Avoid_: rejection, exclusion, deferral.
+
+**Readiness**:
+Whether a candidate's native tracker dependencies are all closed. A fact about the
+tracker's dependency graph rather than about how the issue was authored: it clears
+itself when the last blocker closes, with no human touching the issue. Read one hop at
+**Pickup**, for each candidate the runner reaches, and never traversed further.
+_Avoid_: eligibility (that is the human's `ready-for-agent` assertion, settled at
+collection), **Pool exclusion**, **Pickup skip** (that is what the runner *does* about
+unreadiness, not the fact itself).
+
+**Blocked**:
+A candidate carrying at least one open `blocked_by` dependency, or one whose
+dependencies could not be read. It is not admissible at **Pickup**, stays in the
+**Pool** so the closure whitelist and the emptiness test still see it, and costs no
+**Strike** — it was never attempted. A blocker in another repository blocks exactly as
+one in this repository does. An issue blocked by *itself* is blocked, like any other;
+a longer cycle is invisible at one hop and reads as an ordinary blocker.
+_Avoid_: ineligible, excluded, defeated, deferred.
 
 **Lease**:
 A run's exclusive right to work one issue, taken at **Pickup**, held while its owner

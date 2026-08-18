@@ -3797,3 +3797,199 @@ def test_attempt_lifecycle_walks(case: dict[str, Any]) -> None:
         assert attempts.skipped(ref) is not step[
             "admitted_at_next_pickup"
         ], f"step {index}"
+
+
+# ---------------------------------------------------------------------------
+# **Readiness** (#437): a candidate blocked by an open native tracker dependency
+# is not **Pickup**-admissible. ADR-0047, Wrapper contract section 3.3.1.
+#
+# These tests pin the *fixture* -- its vocabulary, and that every case's verdict
+# follows from its blocker set. They deliberately drive no runner: the members
+# implement readiness in #438-#441, and this decision lands one slice ahead of
+# them so they implement one decision rather than four compatible guesses.
+# ---------------------------------------------------------------------------
+
+_ISSUE_READINESS = _load_fixture("issue-readiness.json")
+
+_BLOCKED_BY_OPEN_DEPENDENCY = "blocked_by_open_dependency"
+_READINESS_UNPROVABLE = "readiness_unprovable"
+
+
+def _readiness_cases() -> list[dict[str, Any]]:
+    return _ISSUE_READINESS["cases"]
+
+
+def _read_open_blockers(case: dict[str, Any]) -> list[str]:
+    """Blockers positively read as open -- the only ones a member may name."""
+    return [
+        node["ref"]
+        for node in case["blocked_by"]["nodes"]
+        if node.get("readable", True) and node["state"] == "open"
+    ]
+
+
+def _read_is_incomplete(case: dict[str, Any]) -> bool:
+    """The connection under-delivered, or a node came back unreadable."""
+    connection = case["blocked_by"]
+    if len(connection["nodes"]) < connection["total_count"]:
+        return True
+    return any(not node.get("readable", True) for node in connection["nodes"])
+
+
+def test_readiness_skip_reasons_are_a_closed_vocabulary() -> None:
+    """Two reasons, and the fixture is where they are closed.
+
+    They are not synonyms. `blocked_by_open_dependency` reports an assertion that
+    was read; `readiness_unprovable` reports that none could be. Collapsing them
+    would have a member assert the very thing its read failed to establish.
+    """
+    reasons = [entry["reason"] for entry in _ISSUE_READINESS["skip_reasons"]]
+
+    assert reasons == [_BLOCKED_BY_OPEN_DEPENDENCY, _READINESS_UNPROVABLE]
+    assert len(set(reasons)) == len(reasons)
+    assert _ISSUE_READINESS["verdicts"] == ["ready", "blocked"]
+
+
+def test_the_readiness_read_is_graphql_one_hop_and_a_full_page() -> None:
+    """The three properties of the read that a member cannot choose for itself.
+
+    GraphQL because REST undercounts cross-repository dependencies *silently*,
+    and a member that undercounts reports a blocked issue as ready. One hop
+    because traversal computes a property of the graph rather than reading an
+    assertion. Fifty because that is GitHub's cap, so one page is always a
+    complete read and an incomplete one is never "the list is long".
+    """
+    read = _ISSUE_READINESS["read"]
+
+    assert read["transport"] == "graphql"
+    assert read["connection"] == "blockedBy"
+    assert read["hops"] == 1
+    assert read["min_page_size"] == 50
+    assert read["decided_at"] == "pickup"
+
+
+def test_every_readiness_case_declares_a_verdict_in_the_vocabulary() -> None:
+    """`ready` and `admissible` and "no reason" are one fact stated three ways."""
+    reasons = {entry["reason"] for entry in _ISSUE_READINESS["skip_reasons"]}
+
+    for case in _readiness_cases():
+        expected = case["expected"]
+        assert expected["verdict"] in _ISSUE_READINESS["verdicts"], case["id"]
+
+        ready = expected["verdict"] == "ready"
+        assert expected["admissible"] is ready, case["id"]
+        assert (expected["skip_reason"] is None) is ready, case["id"]
+
+        if not ready:
+            assert expected["skip_reason"] in reasons, case["id"]
+
+
+def test_every_readiness_verdict_follows_from_its_blocker_set() -> None:
+    """The fixture is a pure table, so its rows must be derivable from its inputs.
+
+    A row whose verdict does not follow from its own blocker set would pin three
+    ports to a decision nobody made.
+    """
+    for case in _readiness_cases():
+        expected = case["expected"]
+        open_blockers = _read_open_blockers(case)
+        incomplete = _read_is_incomplete(case)
+
+        if open_blockers:
+            # A blocker positively read as open outranks an incomplete read:
+            # the verdict is the same either way, and only the proven fact is
+            # worth reporting.
+            assert expected["verdict"] == "blocked", case["id"]
+            assert expected["skip_reason"] == _BLOCKED_BY_OPEN_DEPENDENCY, case["id"]
+            assert expected["blockers"] == open_blockers, case["id"]
+        elif incomplete:
+            assert expected["verdict"] == "blocked", case["id"]
+            assert expected["skip_reason"] == _READINESS_UNPROVABLE, case["id"]
+            assert expected["blockers"] == [], case["id"]
+        else:
+            assert expected["verdict"] == "ready", case["id"]
+
+
+def test_an_unprovable_readiness_case_names_no_blocker() -> None:
+    """It could not read one, so it must not claim one.
+
+    Naming a blocker here would send an operator to wait for something to close
+    that nothing established exists -- a wait that never ends.
+    """
+    unprovable = [
+        case
+        for case in _readiness_cases()
+        if case["expected"]["skip_reason"] == _READINESS_UNPROVABLE
+    ]
+
+    assert unprovable, "the unprovable read must be pinned, not left to guess"
+    for case in unprovable:
+        assert case["expected"]["blockers"] == [], case["id"]
+        assert _read_open_blockers(case) == [], case["id"]
+
+
+def test_a_cross_repository_blocker_is_decided_by_state_not_by_repository() -> None:
+    """Both directions, or the fixture only pins half the decision.
+
+    A member that treated every cross-repository edge as blocking would pass a
+    fixture that only carried the open case.
+    """
+    candidate_repo = "acme/widgets"
+
+    def crosses(case: dict[str, Any]) -> bool:
+        return any(
+            node["ref"].split("#", 1)[0] != candidate_repo
+            and node.get("readable", True)
+            for node in case["blocked_by"]["nodes"]
+        )
+
+    crossing = [case for case in _readiness_cases() if crosses(case)]
+    verdicts = {case["expected"]["verdict"] for case in crossing}
+
+    assert verdicts == {"ready", "blocked"}, "pin the closed case as well as the open"
+
+    for case in crossing:
+        open_blockers = _read_open_blockers(case)
+        if open_blockers:
+            # The reason carries the full owner/repo#number, never a bare number.
+            assert all("/" in ref and "#" in ref for ref in case["expected"]["blockers"])
+
+
+def test_a_self_edge_is_an_ordinary_blocker() -> None:
+    """No cycle rule, because one hop cannot see a cycle and will not look.
+
+    Pinned explicitly all the same, so no port treats "blocked by self" as
+    vacuously ready.
+    """
+    self_edged = [
+        case
+        for case in _readiness_cases()
+        if case["candidate"] in [node["ref"] for node in case["blocked_by"]["nodes"]]
+    ]
+
+    assert self_edged, "the self-edge must be pinned, not left to guess"
+    for case in self_edged:
+        assert case["expected"]["verdict"] == "blocked", case["id"]
+        assert case["expected"]["skip_reason"] == _BLOCKED_BY_OPEN_DEPENDENCY, case["id"]
+        assert case["expected"]["blockers"] == [case["candidate"]], case["id"]
+
+
+def test_the_readiness_fixture_covers_every_case_the_decision_names() -> None:
+    """AC#4's five cases, plus the two the decision forced while it was made."""
+    ids = {case["id"] for case in _readiness_cases()}
+
+    assert {
+        "no-blockers-is-ready",
+        "every-blocker-closed-is-ready",
+        "one-open-blocker-among-closed-is-blocked",
+        "incomplete-connection-is-unprovable",
+        "open-cross-repository-blocker-blocks",
+        "self-edge-is-an-ordinary-blocker",
+        "a-read-open-blocker-outranks-an-unreadable-node",
+    } <= ids
+
+
+def test_readiness_case_ids_are_unique() -> None:
+    ids = [case["id"] for case in _readiness_cases()]
+
+    assert len(set(ids)) == len(ids)

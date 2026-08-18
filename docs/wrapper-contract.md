@@ -134,6 +134,18 @@ A candidate the source could **not read** (a failed per-issue view, an unreadabl
 exclusion — it was never discriminated against, and reporting it as one would send the operator to
 fix headings that are probably fine. The existing warn-and-skip path continues to cover it.
 
+A candidate that is not **ready** — one carrying an open native `blocked_by` dependency, or one
+whose dependencies could not be read — is likewise NOT an exclusion (contract 2.0). The exclusion
+vocabulary above is **closed at those three reasons**, and readiness MUST NOT be added to it. An
+exclusion is an authoring mistake a human must fix; a blocked candidate is correctly authored work
+whose turn has not come, and it clears itself when its last blocker closes. It MUST remain in the
+**Pool** — the closure whitelist, the collection Event and the emptiness test all still need to
+see it, and a Pool that is *empty* ends the Run cleanly (§10) where a Pool that is merely *waiting*
+has not run out of work. Readiness is resolved at **Pickup** instead (§3.3), which is also the only
+place it can be afforded: a `blockedBy` read is not carried by the cheap list read, so deciding it
+here would cost one extra round-trip for every candidate collected rather than one for each
+candidate actually considered. See [ADR-0047](adr/0047-a-blocked-issue-is-not-pickup-admissible.md).
+
 Exclusions MUST be reported as `wrapper.pool.excluded` Events (§12), before the
 `wrapper.afk_ready.collected` they explain, and MUST also reach the operator's own output rather
 than only a debug log. An **empty eligible Pool caused entirely by exclusions** MUST read
@@ -269,22 +281,32 @@ An Orchestrator running serially MUST:
   Iteration, so no output is ever attributed retroactively.
 - **Render exactly the bound issue.** The prompt's issue set MUST carry that one issue (§4), not
   the Pool. An Orchestrator MUST NOT instruct the agent to select from a set.
-- **Skip and advance, never fail.** A candidate the Orchestrator cannot admit — today, one whose
-  `task-type:` label refuses to resolve a **Routed pair** (§14) — MUST be passed over and the next
-  candidate tried. A serial Run has no second Lane to leave the candidate for, so a refusal that
-  ended the Run would end it over one mislabelled issue. Each skip MUST be reported with the
+- **Skip and advance, never fail.** A candidate the Orchestrator cannot admit — one whose
+  `task-type:` label refuses to resolve a **Routed pair** (§14), one the **Attempt lifecycle** has
+  already defeated this Run, or one that is not **ready** (§3.3.1) — MUST be passed over and the
+  next candidate tried. A serial Run has no second Lane to leave the candidate for, so a refusal
+  that ended the Run would end it over one mislabelled issue. Each skip MUST be reported with the
   issue and the reason, as a `wrapper.pickup.skipped` Event (§12) and not only as a diagnostic.
 
-  **The admissible set is the member's own, and today only one member has a refusal to make.**
-  Admission is whatever an Orchestrator must resolve at Pickup in order to start the session on
-  the bound issue, and the only such resolution the contract names is §14's Routed pair — which
-  §14 records as *"future phase-3 work"* for the native ports. A member that resolves no Routed
-  pair therefore admits every candidate and binds the head of the order, which satisfies this
-  rule rather than skipping it: it has nothing it can refuse. When a native port implements §14
-  it acquires the refusal and this bullet with it, and its skips and its all-skipped Strike MUST
-  then match the reference member's. Admission MUST NOT be widened past that into re-deciding
-  eligibility — the `ready-for-agent` label and the AFK-ready discriminator settle that at
-  collection (§3.1), and a second opinion at Pickup would be a second place for it to disagree.
+  **The admissible set is open, and it governs every Pickup (contract 2.0).** Admission is
+  whatever an Orchestrator must resolve *at Pickup* in order to start the session on the bound
+  issue. The contract names three members: §14's **Routed pair** — which §14 records as *"future
+  phase-3 work"* for the native ports — the **Attempt lifecycle**, which refuses a candidate this
+  Run has already given up on, and **Readiness** (§3.3.1). A member that resolves none of them
+  admits every candidate and binds the head of the order, which satisfies this rule rather than
+  skipping it: it has nothing it can refuse. When a native port implements one it acquires that
+  refusal and this bullet with it, and its skips and its all-skipped Strike MUST then match the
+  reference member's.
+
+  The set is **open**, and this is what may join it: a refusal is admissible when it is a fact the
+  runner must resolve at Pickup to start the session, and when it is **not a second opinion on
+  something a human already asserted**. Eligibility — the `ready-for-agent` label and the AFK-ready
+  discriminator (§3.1) — is exactly such an assertion, and re-deciding it here would be a second
+  place for it to disagree. Readiness is not: it is a fact about the tracker's dependency graph,
+  not about how the issue was authored.
+
+  The admissible set is a property of **Pickup**, not of the serial loop: it governs a **Lane**
+  pickup (`binding_source: lane_pickup`) exactly as it governs this one.
 - **Record the binding (contract 1.13).** A **Pickup** that binds MUST emit
   `wrapper.pickup.bound` (§12) carrying the issue, the selection reason — `pin` when §3.2's
   **Pin** named this candidate, else `priority` or `order` — and where the candidate sat in the
@@ -314,7 +336,55 @@ first activation; contract 1.12 only moves which event is first.
 Serial Pickup does not change **Rolling dispatch**: a **Lane** already binds one issue at pickup
 (`binding_source: lane_pickup`) and keeps doing so — and emits the same `wrapper.pickup.bound`
 record when it does, because an operator auditing selection is asking one question about a Run,
-not two questions about two schedulers.
+not two questions about two schedulers. It applies the same admissible set, so a **Lane** MUST
+refuse candidacy to a candidate that is not **ready** rather than reserving it and releasing it
+again each turn.
+
+### 3.3.1 Readiness (contract 2.0, MUST)
+
+A candidate carrying an open native `blocked_by` dependency is **not admissible**. An Orchestrator
+MUST pass it over and try the next candidate in the §3.2 order. The candidate stays in the **Pool**
+(§3.1), and being passed over MUST NOT count a **Strike** — it was never attempted, so it costs
+nothing and is reconsidered on the next **Iteration** with no human touching the issue. See
+[ADR-0047](adr/0047-a-blocked-issue-is-not-pickup-admissible.md).
+
+**The read.** An Orchestrator MUST resolve readiness through the **GraphQL** `blockedBy` connection
+(`gh api graphql`), not through REST. REST is documented to undercount cross-repository
+dependencies and to do so silently — there is no `totalCount` to notice the shortfall by — so a
+REST read can report a blocked candidate as ready, which is the one outcome this section exists to
+prevent. The read is taken **at Pickup**, per candidate the runner reaches, not at collection.
+
+**One hop.** An Orchestrator MUST read the candidate's own `blockedBy` connection and MUST NOT
+traverse the dependency graph further. Transitive traversal is a **non-goal**: it computes a
+property of the graph rather than reading an assertion about an issue, and it is unbounded in
+depth. A candidate blocked by *itself* is therefore **blocked** like any other; a cycle of length
+two or more is indistinguishable from an ordinary blocker at one hop, and no member is required to
+detect one.
+
+**A blocker in another repository blocks**, identically to one in this repository, and the reported
+reason MUST carry the full `owner/repo#number`. The verdict MUST NOT depend on where the blocker
+lives: a `blocked_by` edge is a human assertion, and it does not weaken by crossing a repository
+boundary.
+
+**Completeness.** `blockedBy` is a paginated connection. An Orchestrator MUST request at least
+GitHub's per-issue cap of 50 links in a single page; asking for fewer is a member defect, not an
+expected state. Where the returned nodes do not account for `totalCount`, or a node comes back
+unreadable, readiness has **not been proven** and the candidate MUST be skipped — under
+`readiness_unprovable`, never under `blocked_by_open_dependency`. The two are different facts: the
+first reports that no assertion could be read, and there may be no blocker at all; the second
+reports an open blocker that was read. Reporting an unprovable read as blocked would assert the
+very thing the read failed to establish, and would tell an operator to wait for a blocker to close
+when the wait can never end.
+
+**Reason vocabulary.** A readiness skip MUST report one reason from this closed vocabulary on its
+`wrapper.pickup.skipped` Event (§12):
+
+| Reason | Meaning |
+| --- | --- |
+| `blocked_by_open_dependency` | At least one `blocked_by` dependency was read and is open |
+| `readiness_unprovable` | The `blockedBy` connection was incomplete or a node was unreadable |
+
+`issue-readiness.json` pins the verdict and the reason for every case.
 
 ## 4. Prompt assembly & agent invocation (phase 1, MUST)
 
