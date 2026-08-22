@@ -539,9 +539,13 @@ def test_create_writers_paths_under_dot_git_loopy(tmp_path: Path) -> None:
 
 
 def test_create_writers_no_dirs_until_first_write(tmp_path: Path) -> None:
-    """Factory call alone does not create .git-loopy/logs/ or .git-loopy/runs/."""
-    create_writers(tmp_path, run_id=_FIXED_RUN_ID, started_at=_FIXED_TS)
-    assert not (tmp_path / ".git-loopy").exists()
+    """Factory call creates ``.git-loopy/logs/`` eagerly (for the control
+    artifact, issue #446) but not ``.git-loopy/runs/`` nor the event log /
+    diagnostics files themselves — those still defer to first write."""
+    bundle = create_writers(tmp_path, run_id=_FIXED_RUN_ID, started_at=_FIXED_TS)
+    assert not (tmp_path / ".git-loopy" / "runs").exists()
+    assert not bundle.event_log.path.exists()
+    assert not bundle.diagnostics_path.exists()
 
 
 def test_create_writers_touches_gitignore_when_present_and_missing_entry(
@@ -641,16 +645,19 @@ def test_create_writers_diagnostics_logger_propagation_disabled(
 
 
 def test_create_writers_diagnostics_log_lazy_mkdir(tmp_path: Path) -> None:
-    """The diagnostic .log file (and .git-loopy/logs/) are not created until
-    the first emit on the logger."""
+    """The diagnostic .log file is not created until the first emit on the
+    logger, even though .git-loopy/logs/ already exists for the control
+    artifact (issue #446)."""
     bundle = create_writers(tmp_path, run_id=_FIXED_RUN_ID, started_at=_FIXED_TS)
-    assert not (tmp_path / ".git-loopy").exists()
+    assert not bundle.diagnostics_path.exists()
     bundle.diagnostics.info("diag msg")
     assert bundle.diagnostics_path.exists()
 
 
 def test_writers_bundle_is_frozen() -> None:
     """WritersBundle is a frozen dataclass — accidental mutation is rejected."""
+    from git_loopy.run_control import RunControlHandle
+
     bundle = WritersBundle(
         run_id=_FIXED_RUN_ID,
         started_at=_FIXED_TS,
@@ -660,6 +667,7 @@ def test_writers_bundle_is_frozen() -> None:
         ),
         diagnostics=logging.getLogger("git_loopy.diagnostics.test_frozen_check"),
         diagnostics_path=Path("/tmp/x.log"),
+        run_control=RunControlHandle(path=Path("/tmp/x.control.lock"), locked=False),
     )
     import dataclasses
 
@@ -710,13 +718,17 @@ def test_event_log_writer_handles_iter_none_in_payload(tmp_path: Path) -> None:
 
 
 def test_persist_module_imports_are_constrained() -> None:
-    """``persist.py`` may import only stdlib + ``git_loopy.events``.
+    """``persist.py`` may import only stdlib + ``git_loopy.events`` /
+    ``git_loopy.run_control``.
 
     Catches stray third-party imports (e.g. a misguided ``ulid`` import,
     or a ``requests`` slipped in by future drift) AND catches imports
-    of peer git-loopy modules other than ``events`` — keeps persist as a
-    pure "events → disk" seam without it accidentally growing
-    dependencies on gh / git / wrapper / loop / etc.
+    of peer git-loopy modules other than ``events`` / ``run_control`` —
+    keeps persist as a pure "events → disk" seam without it accidentally
+    growing dependencies on gh / git / wrapper / loop / etc. ``run_control``
+    (issue #446) is allowed because it is where the control-artifact
+    locking mechanics live; persist.py only anchors the artifact's path
+    alongside the trace.
     """
     source = Path(persist_module.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -736,8 +748,9 @@ def test_persist_module_imports_are_constrained() -> None:
         "pathlib",
         "types",
         "typing",
-        # our own module
+        # our own modules
         "git_loopy.events",
+        "git_loopy.run_control",
     }
     seen: set[str] = set()
     for node in ast.walk(tree):

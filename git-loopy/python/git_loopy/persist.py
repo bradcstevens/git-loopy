@@ -13,12 +13,19 @@ Run summary         ``.git-loopy/runs/<iso>-<run_id>.json``         Per-iteratio
 Process diag.       stderr + ``.git-loopy/logs/<iso>-<run_id>.log``  Human-readable diagnostics;
                                                                 stderr stream is primary, the
                                                                 ``.log`` file is the mirror.
+Control artifact    ``.git-loopy/logs/<iso>-<run_id>.control.lock`` Liveness oracle (issue #446):
+                                                                held under an OS advisory lock
+                                                                for the process's whole life.
 ==================  ==========================================  =================================
 
 All artefacts live under the **repo root** (resolved by callers via
-:func:`git_loopy.git.repo_root`). The directories are created lazily on
-first write so a process that exits before producing any output leaves
-no on-disk footprint.
+:func:`git_loopy.git.repo_root`). The event log, run summary and
+diagnostics directories are created lazily on first write so a process
+that exits before producing any output leaves no on-disk footprint. The
+control artifact is the one exception: it is published eagerly, at Run
+start, because a liveness oracle that only appears after the fact is
+useless to a concurrent sweep or Dashboard client (see
+:mod:`git_loopy.run_control`).
 
 Public surface:
 
@@ -31,11 +38,12 @@ Public surface:
 * :class:`WritersBundle` — frozen tuple-of-writers returned by
   :func:`create_writers`.
 * :func:`create_writers` — the canonical factory. Constructs an
-  :class:`EventLogWriter`, a :class:`RunSummaryWriter`, and a
-  diagnostics :class:`logging.Logger` all bound to the same ``run_id``
-  and ``started_at`` so the three artefact filenames share a stem. Also
-  appends ``.git-loopy/`` to ``.gitignore`` if the file exists and the entry
-  is not already present (idempotent).
+  :class:`EventLogWriter`, a :class:`RunSummaryWriter`, a diagnostics
+  :class:`logging.Logger` and a
+  :class:`~git_loopy.run_control.RunControlHandle`, all bound to the same
+  ``run_id`` and ``started_at`` so the artefact filenames share a stem.
+  Also appends ``.git-loopy/`` to ``.gitignore`` if the file exists and
+  the entry is not already present (idempotent).
 * :func:`make_run_id` — stdlib-only 26-char Crockford-base32 ULID.
 * :func:`ensure_gitignore_entry` — exposed for tests; called by
   :func:`create_writers`.
@@ -97,7 +105,9 @@ Design notes:
 * **Logger-handler hygiene.** :func:`create_writers` removes any
   pre-existing handlers on the named logger before attaching its own,
   so reusing a ``run_id`` in tests does not leak handlers across calls.
-* **Stdlib-only.** Enforced via AST inspection in
+* **Stdlib-only + one peer module.** :mod:`git_loopy.events` and
+  :mod:`git_loopy.run_control` (issue #446) are the only non-stdlib
+  imports allowed. Enforced via AST inspection in
   ``tests/test_persist.py::test_persist_module_imports_are_constrained``.
 """
 
@@ -117,6 +127,7 @@ from types import TracebackType
 from typing import Any, Callable, Mapping, Self, TextIO
 
 from git_loopy.events import scrub, to_jsonl_line
+from git_loopy.run_control import RunControlHandle, open_run_control
 
 __all__ = [
     "EventLogWriter",
@@ -496,6 +507,7 @@ class WritersBundle:
     run_summary: RunSummaryWriter
     diagnostics: logging.Logger
     diagnostics_path: Path
+    run_control: RunControlHandle
 
 
 def create_writers(
@@ -515,9 +527,16 @@ def create_writers(
       (replaces any pre-existing handlers on that name) with one
       :class:`logging.StreamHandler` to ``sys.stderr`` and one
       :class:`_LazyMkdirFileHandler` mirroring to the ``.log`` file.
+    * Creates ``.git-loopy/logs/`` immediately and publishes the control
+      artifact there under an OS advisory lock (issue #446), via
+      :func:`git_loopy.run_control.open_run_control`. This is the one
+      artifact **not** deferred to first write — a liveness oracle that
+      only appears once a Run has already produced output would be
+      useless to a concurrent sweep or Dashboard client.
 
-    Does **not** create any directories or files under ``.git-loopy/`` —
-    that I/O is deferred to each writer's first write / first emit.
+    The event log, run summary and diagnostics ``.log`` file do **not**
+    create their own directories or files under ``.git-loopy/`` — that I/O
+    is deferred to each writer's first write / first emit.
 
     Args:
         repo_root: Repository root :class:`Path`.
@@ -527,7 +546,8 @@ def create_writers(
             :func:`datetime.now` in UTC.
 
     Returns:
-        A :class:`WritersBundle` carrying the three writers + metadata.
+        A :class:`WritersBundle` carrying the writers, the control
+        artifact handle, and shared metadata.
 
     Raises:
         ValueError: If ``run_id`` is provided and does not match the
@@ -560,6 +580,9 @@ def create_writers(
     )
     diagnostics_path = logs_dir / f"{stem}.log"
     logger = _build_diagnostics_logger(run_id, diagnostics_path)
+    run_control = open_run_control(
+        logs_dir, stem, run_id=run_id, started_at=started_at
+    )
 
     return WritersBundle(
         run_id=run_id,
@@ -568,6 +591,7 @@ def create_writers(
         run_summary=run_summary,
         diagnostics=logger,
         diagnostics_path=diagnostics_path,
+        run_control=run_control,
     )
 
 

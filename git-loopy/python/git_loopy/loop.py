@@ -4449,6 +4449,14 @@ async def run(
         # are already final, and discarding them would make a Run that ended
         # badly the one Run whose experience is thrown away.
         _demote_after_run(config, git, loop, staircase, diag)
+        # Release the control artifact's advisory lock (issue #446) so a
+        # sweep or Dashboard client polling it sees this Run as dead the
+        # instant this line runs — same as if the OS had reclaimed it on
+        # a crash or kill, just tidier for the normal-exit path.
+        try:
+            writers.run_control.close()
+        except Exception as exc:
+            diag.warning("run_control.close() failed: %s", exc)
         # Always release the SDK subprocess, even on a body-level crash.
         if client is not None:
             try:
