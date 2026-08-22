@@ -549,9 +549,31 @@ to install. Contract and schema versions remain separate compatibility identitie
 _Avoid_: component version, protocol version, schema version.
 
 **Release target**:
-The planned **Release version** to which an issue contributes. It states delivery
-intent without changing the issue's workflow readiness or dependency relationships.
-_Avoid_: version label, release label.
+The stable **Release version** the current **Release line** is accumulating toward.
+Derived as a running maximum over the **Bump class** of every issue closed since the
+last **Promotion**, never assigned; it ratchets upward and never falls
+([ADR-0052](docs/adr/0052-the-release-line-advances-per-issue.md)).
+_Avoid_: version label, release label, planned version.
+
+**Release line**:
+The sequence of `dev.N` prereleases accumulating toward one **Release target**, one
+per closed issue that carries a bump. The counter counts closures and the target
+ratchets, so neither depends on the order Lanes finish in.
+_Avoid_: release train, dev branch, version series.
+
+**Bump class**:
+How much of the **Release version** one issue moves — `major`, `minor`, `patch`, or
+`none` — carried by a closed `semver:` label an agent infers at **Pickup** and writes
+back. A `none` advances nothing; an *absent* label is an unclassified issue, which is
+a fault rather than a fourth answer.
+_Avoid_: version label, severity, impact, semver level.
+
+**Promotion**:
+Cutting a stable **Release version** from a **Release line**. Triggered by the
+`vX.Y.Z` **milestone** closing, which is what makes "when it makes sense" a tracker
+event rather than a judgement — except for a `major` **Bump class**, which is exempt
+and cuts on the label alone.
+_Avoid_: release cut, graduation, publish.
 
 **Autonomous loop**:
 The *technique* git-loopy orchestrates — an unattended, iterative execution loop that
