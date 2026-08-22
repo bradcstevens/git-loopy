@@ -1486,6 +1486,10 @@ def test_run_init_bootstraps_the_tracker_label_vocabulary(tmp_path: Path) -> Non
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
+        "semver:major",
+        "semver:minor",
+        "semver:patch",
+        "semver:none",
     ]
     assert "parallel-safe" in out.text
 

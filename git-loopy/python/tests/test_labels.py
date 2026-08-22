@@ -20,6 +20,7 @@ import pytest
 
 from git_loopy import labels as labels_module
 from git_loopy.issue_order import LABEL_PRIORITY
+from git_loopy.release_version import BUMP_CLASS_KEYS, BUMP_CLASS_LABEL_PREFIX
 from git_loopy.skill_source import (
     ACQUIRE_COMMAND,
     DEFAULT_CHECKOUT,
@@ -68,7 +69,22 @@ def test_vocabulary_includes_the_canonical_task_type_labels(tmp_path: Path) -> N
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
+        "semver:major",
+        "semver:minor",
+        "semver:patch",
+        "semver:none",
     ]
+
+
+def test_vocabulary_includes_the_closed_bump_class_labels(tmp_path: Path) -> None:
+    """Every accepted release impact is provisioned before a Run can infer it."""
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+
+    assert [
+        spec.name
+        for spec in vocabulary
+        if spec.name.startswith(BUMP_CLASS_LABEL_PREFIX)
+    ] == [f"{BUMP_CLASS_LABEL_PREFIX}{key}" for key in BUMP_CLASS_KEYS]
 
 
 def test_vocabulary_follows_the_documented_mapping(tmp_path: Path) -> None:
@@ -103,6 +119,10 @@ def test_vocabulary_follows_the_documented_mapping(tmp_path: Path) -> None:
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
+        "semver:major",
+        "semver:minor",
+        "semver:patch",
+        "semver:none",
     ]
     assert [spec.role for spec in vocabulary] == [
         "needs-triage",
@@ -119,6 +139,10 @@ def test_vocabulary_follows_the_documented_mapping(tmp_path: Path) -> None:
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
+        "semver:major",
+        "semver:minor",
+        "semver:patch",
+        "semver:none",
     ]
 
 
@@ -243,6 +267,10 @@ def test_this_repository_s_own_documented_mapping_parses() -> None:
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
+        "semver:major",
+        "semver:minor",
+        "semver:patch",
+        "semver:none",
     ]
 
 
@@ -291,6 +319,10 @@ def test_bootstrap_creates_only_the_absent_labels(tmp_path: Path) -> None:
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
+        "semver:major",
+        "semver:minor",
+        "semver:patch",
+        "semver:none",
     ]
     assert result.created == (
         "needs-triage",
@@ -305,6 +337,10 @@ def test_bootstrap_creates_only_the_absent_labels(tmp_path: Path) -> None:
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
+        "semver:major",
+        "semver:minor",
+        "semver:patch",
+        "semver:none",
     )
     assert result.existing == (LABEL_READY_FOR_AGENT, "wontfix")
     assert result.unavailable is None
@@ -564,6 +600,10 @@ def test_the_template_setup_writes_into_a_consumer_repo_parses(tmp_path: Path) -
         "task-type:docs",
         "task-type:chore",
         "task-type:bugfix",
+        "semver:major",
+        "semver:minor",
+        "semver:patch",
+        "semver:none",
     ]
 
 

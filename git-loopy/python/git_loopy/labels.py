@@ -37,6 +37,10 @@ Design:
   keys routing accepts. This matters more than the other rows: the label-writing
   path *creates* a label before attaching it, so an invented key would become a
   real, permanent tracker label routing to the default forever (#375, ADR-0029).
+* **The Bump-class taxonomy is closed.** Its four labels come from
+  :data:`~git_loopy.release_version.BUMP_CLASS_KEYS`, the production decision
+  seam that reads them. Provisioning from those keys keeps the labels an agent
+  may infer aligned with the Release-version classes an Orchestrator accepts.
 * **Ensure, never reconcile — at ``init``.** :func:`bootstrap_labels` creates what
   is absent and leaves what exists exactly as it is — colour and description
   included. An operator who recoloured ``ready-for-agent`` keeps their colour, and
@@ -58,6 +62,7 @@ from typing import Protocol, Sequence, runtime_checkable
 
 from git_loopy.config import TASK_TYPE_KEYS, TASK_TYPE_LABEL_PREFIX
 from git_loopy.issue_order import LABEL_PRIORITY
+from git_loopy.release_version import BUMP_CLASS_KEYS, BUMP_CLASS_LABEL_PREFIX
 from git_loopy.sources import LABEL_PARALLEL_SAFE, LABEL_READY_FOR_AGENT
 
 __all__ = [
@@ -69,6 +74,7 @@ __all__ = [
     "LabelReconciliation",
     "TrackerLabel",
     "TRIAGE_ROLES",
+    "SEMVER_LABELS",
     "MAPPING_DOC_RELPATH",
     "MAX_DESCRIPTION_LENGTH",
     "bootstrap_labels",
@@ -193,6 +199,25 @@ TASK_TYPE_LABELS: tuple[LabelSpec, ...] = tuple(
     for key in TASK_TYPE_KEYS
 )
 
+#: The four ``semver:`` labels, one per key of the closed **Bump class** taxonomy.
+#:
+#: Derived from :data:`~git_loopy.release_version.BUMP_CLASS_KEYS`, the decision
+#: seam that resolves an issue's release impact. A second local key list could
+#: provision labels the Release line later refuses, or omit a label it accepts.
+SEMVER_LABELS: tuple[LabelSpec, ...] = tuple(
+    LabelSpec(
+        role=f"{BUMP_CLASS_LABEL_PREFIX}{key}",
+        name=f"{BUMP_CLASS_LABEL_PREFIX}{key}",
+        color="fbca04",
+        description=(
+            "Classifies an issue as not advancing the Release version."
+            if key == "none"
+            else f"Classifies an issue as a {key} Release-version bump."
+        ),
+    )
+    for key in BUMP_CLASS_KEYS
+)
+
 
 def read_tracker_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
     """Return the labels a Run needs, in the order ``init`` should ensure them.
@@ -200,7 +225,7 @@ def read_tracker_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
     The five triage roles are read from the repository's documented mapping so
     the vocabulary ``init`` writes is the vocabulary the skills actually apply.
     ``parallel-safe`` and ``priority`` are appended from the runner's own
-    constants, followed by the seven closed task-type labels.
+    constants, followed by the closed task-type and Bump-class labels.
 
     Args:
         repo_root: Repository root to look for the documented mapping under, or
@@ -218,7 +243,13 @@ def read_tracker_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
         )
         for spec in TRIAGE_ROLES
     )
-    return (*roles, PARALLEL_SAFE_ROLE, PRIORITY_ROLE, *TASK_TYPE_LABELS)
+    return (
+        *roles,
+        PARALLEL_SAFE_ROLE,
+        PRIORITY_ROLE,
+        *TASK_TYPE_LABELS,
+        *SEMVER_LABELS,
+    )
 
 
 #: One ``| `role` | `label` | meaning |`` row of the documented mapping table.
