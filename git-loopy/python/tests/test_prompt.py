@@ -241,6 +241,56 @@ def test_packaged_prompt_hands_the_agent_one_issue_and_no_menu() -> None:
     assert "it is the issue you work this iteration" in prompt
 
 
+def test_packaged_prompt_records_genuine_blockers_as_native_dependencies() -> None:
+    """A discovered blocker becomes a durable edge, not just prose (#442).
+
+    Before #442 the "unworkable end to end" path only ever left a
+    ``gh issue comment`` and emitted NMT: the blocker was found, written down as
+    prose, and thrown away, so the next Run selected the same issue and paid
+    for the same discovery again. The instruction now also tells the agent to
+    record a genuine, actually-identified open blocker as a native tracker
+    dependency of its own issue -- *in addition to* the comment, never instead
+    of it -- and only when ``docs/agents/issue-tracker.md`` says the tracker in
+    use offers that affordance (local-markdown ``prds`` mode does not).
+
+    Pinned as the contract's four load-bearing pieces: the affordance is
+    conditional on the tracker, the comment is preserved alongside the edge
+    rather than replaced by it, recording a guess is forbidden, and a blocker
+    that isn't an issue at all still only gets the comment-then-NMT path.
+    """
+    prompt = _packaged_prompt_text()
+
+    assert "record that blocking relationship as a native tracker dependency" in (
+        prompt
+    )
+    assert "docs/agents/issue-tracker.md" in prompt
+    assert "offers a dependency affordance" in prompt
+    assert "in addition to the comment" in prompt
+    assert "Never record a dependency for a blocker you have not actually " in prompt
+    assert (
+        "a blocker that isn't an issue at all still only gets the comment, "
+        "then NMT, exactly as before"
+    ) in prompt
+
+
+def test_issue_tracker_doc_documents_the_dependency_affordance_prompt_relies_on() -> None:
+    """`PROMPT.md` conditions its blocker-dependency instruction on this doc (#442).
+
+    Before this test, ``docs/agents/issue-tracker.md`` documented no dependency
+    operation at all, so the "tracker offers a dependency affordance" branch of
+    the #442 instruction could never fire for GitHub: the condition it reads
+    was permanently false. This pins the doc to actually declare the affordance
+    and the exact ``gh`` command that records it, so the instruction has
+    something true to read.
+    """
+    tracker_doc = (
+        Path(__file__).resolve().parents[3] / "docs" / "agents" / "issue-tracker.md"
+    ).read_text(encoding="utf-8")
+
+    assert "dependency affordance" in tracker_doc
+    assert "gh issue edit <number> --add-blocked-by <blocker-number>" in tracker_doc
+
+
 def test_packaged_prompt_makes_the_working_marker_a_confirmation() -> None:
     """The marker confirms a binding it no longer creates (#394).
 
