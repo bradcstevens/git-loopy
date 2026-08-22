@@ -17,7 +17,9 @@ import pytest
 from git_loopy.readiness import (
     SKIP_BLOCKED_BY_OPEN_DEPENDENCY,
     SKIP_READINESS_UNPROVABLE,
+    BlockedByRead,
     Readiness,
+    decide_readiness,
 )
 
 
@@ -54,6 +56,16 @@ def test_admissible_is_derived_and_not_an_independent_field() -> None:
     assert isinstance(type(Readiness).__dict__.get("admissible"), property) or isinstance(
         Readiness.__dict__.get("admissible"), property
     )
+
+
+def test_blocked_by_read_unprovable_constructor() -> None:
+    read = BlockedByRead.unprovable()
+    assert read.total_count == 1
+    assert read.nodes == ()
+    verdict = decide_readiness(read)
+    assert verdict.admissible is False
+    assert verdict.skip_reason == SKIP_READINESS_UNPROVABLE
+    assert verdict.blockers == ()
 
 
 @pytest.mark.parametrize(

@@ -2350,8 +2350,6 @@ def _wire_multi_issue_github(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     issues: list[gh_module.Issue],
-    *,
-    blocked_by: dict[int, "BlockedByRead"] | None = None,
 ) -> tuple[FakeCopilotClient, FakeGitHubClient]:
     """Wire a Run whose Pool holds several candidates, so selection is visible."""
     (tmp_path / "git-loopy").mkdir()
@@ -2362,7 +2360,6 @@ def _wire_multi_issue_github(
     fake_gh = FakeGitHubClient(
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
         issues=issues,
-        blocked_by=blocked_by,
     )
     monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
     fake_client = FakeCopilotClient(scripted_events=[])
@@ -2370,7 +2367,13 @@ def _wire_multi_issue_github(
     return fake_client, fake_gh
 
 
-def _dated(number: int, created_at: str, *, labels: list[str] | None = None):
+def _dated(
+    number: int,
+    created_at: str,
+    *,
+    labels: list[str] | None = None,
+    blocked_by: BlockedByRead | None = None,
+):
     issue = _make_issue(number)
     return gh_module.Issue(
         number=issue.number,
@@ -2381,6 +2384,7 @@ def _dated(number: int, created_at: str, *, labels: list[str] | None = None):
         url=issue.url,
         created_at=created_at,
         comments=(),
+        blocked_by=blocked_by if blocked_by is not None else BlockedByRead(total_count=0, nodes=()),
     )
 
 
@@ -3405,15 +3409,16 @@ def test_a_blocked_candidate_is_passed_over_for_the_next_admissible_one(
         tmp_path,
         monkeypatch,
         [
-            _dated(7, "2026-01-01T00:00:00Z"),
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                blocked_by=BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+                ),
+            ),
             _dated(31, "2026-05-01T00:00:00Z"),
         ],
-        blocked_by={
-            7: BlockedByRead(
-                total_count=1,
-                nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
-            )
-        },
     )
 
     exit_code = asyncio.run(
@@ -3446,15 +3451,13 @@ def test_readiness_is_asked_before_routing_resolves(tmp_path, monkeypatch) -> No
                 7,
                 "2026-01-01T00:00:00Z",
                 labels=["ready-for-agent", "task-type:not-a-real-key"],
+                blocked_by=BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+                ),
             ),
             _dated(31, "2026-05-01T00:00:00Z"),
         ],
-        blocked_by={
-            7: BlockedByRead(
-                total_count=1,
-                nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
-            )
-        },
     )
 
     asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
@@ -3481,15 +3484,16 @@ def test_a_blocked_candidate_leaves_the_pool_whole_and_charges_no_strike(
         tmp_path,
         monkeypatch,
         [
-            _dated(7, "2026-01-01T00:00:00Z"),
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                blocked_by=BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+                ),
+            ),
             _dated(31, "2026-05-01T00:00:00Z"),
         ],
-        blocked_by={
-            7: BlockedByRead(
-                total_count=1,
-                nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
-            )
-        },
     )
 
     asyncio.run(
@@ -3516,13 +3520,16 @@ def test_a_candidate_whose_blockers_all_closed_is_admitted_normally(
     _wire_multi_issue_github(
         tmp_path,
         monkeypatch,
-        [_dated(7, "2026-01-01T00:00:00Z")],
-        blocked_by={
-            7: BlockedByRead(
-                total_count=1,
-                nodes=(BlockerNode(ref="acme/widgets#90", state="closed"),),
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                blocked_by=BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="acme/widgets#90", state="closed"),),
+                ),
             )
-        },
+        ],
     )
 
     asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))

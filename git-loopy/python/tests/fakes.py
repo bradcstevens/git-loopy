@@ -25,7 +25,6 @@ from git_loopy.gh import (
     Repo,
 )
 from git_loopy.git import Commit, GitError
-from git_loopy.readiness import BlockedByRead
 
 
 class FakeGitClient:
@@ -532,15 +531,9 @@ class FakeGitHubClient:
         issue_close_errors: Mapping[int, GhError] | None = None,
         issue_comment_errors: Mapping[int, GhError] | None = None,
         pr_view_errors: Mapping[int, GhError] | None = None,
-        blocked_by: Mapping[int, BlockedByRead] | None = None,
         gh_version: tuple[int, int, int] = MIN_GH_VERSION_FOR_READINESS,
     ) -> None:
         self.authed = authed
-        # Per-number **Readiness** reads (#438). A number with no entry is
-        # ready — an empty connection, the common path
-        # (``issue-readiness.json``'s ``no-blockers-is-ready``).
-        self._blocked_by: dict[int, BlockedByRead] = dict(blocked_by or {})
-        self.blocked_by_calls: list[int] = []
         self.gh_version_value = gh_version
         self.repo = (
             repo if repo is not None else Repo(owner="octo", name="kit", default_branch="main")
@@ -582,10 +575,6 @@ class FakeGitHubClient:
 
     def gh_version(self) -> tuple[int, int, int]:
         return self.gh_version_value
-
-    def blocked_by(self, number: int) -> BlockedByRead:
-        self.blocked_by_calls.append(number)
-        return self._blocked_by.get(number, BlockedByRead(total_count=0, nodes=()))
 
     def seed_issue(self, issue: Issue) -> None:
         """Add or replace one issue in the store, as a mid-Run filing would.
@@ -651,16 +640,7 @@ class FakeGitHubClient:
                         f"issue #{number} not found",
                     )
                 )
-        # Readiness (#438) reads `blockedBy` off this same authoritative
-        # re-read (git_loopy.sources.GitHubIssueSource.readiness), so the
-        # per-number `blocked_by=` seeding is spliced onto the returned Issue
-        # here rather than through a separate dedicated call.
-        return replace(
-            issue,
-            blocked_by=self._blocked_by.get(
-                number, BlockedByRead(total_count=0, nodes=())
-            ),
-        )
+        return issue
 
     def issue_close(self, number: int, comment: str) -> None:
         self.issue_close_calls.append((number, comment))
