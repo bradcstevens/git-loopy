@@ -1659,7 +1659,7 @@ class _Loop:
             # the same reason the Attempt-lifecycle filter is: a candidate the
             # runner is about to pass over must not first pay to resolve a
             # **Routed pair** it will never run on.
-            verdict = self._source.readiness(item.ref)
+            verdict = self._source.readiness(item)
             if not verdict.admissible:
                 assert verdict.skip_reason is not None
                 if verdict.blockers:

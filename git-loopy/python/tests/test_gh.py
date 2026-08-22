@@ -1186,7 +1186,8 @@ def test_parse_gh_version_raises_capability_error_on_unparseable_output() -> Non
 
 
 def test_verify_readiness_capability_passes_a_modern_gh() -> None:
-    verify_readiness_capability((2, 63, 2))  # no raise
+    verify_readiness_capability((2, 94, 0))  # no raise
+    verify_readiness_capability((2, 99, 9))  # no raise
 
 
 def test_verify_readiness_capability_fails_loud_naming_remedy_for_an_old_gh() -> None:
@@ -1198,14 +1199,22 @@ def test_verify_readiness_capability_fails_loud_naming_remedy_for_an_old_gh() ->
     no work and exit clean. This is the loud alternative: a preflight
     :exc:`GhCapabilityError` naming the installed version, the minimum
     required, and the remedy.
-    """
-    with pytest.raises(GhCapabilityError) as excinfo:
-        verify_readiness_capability((2, 10, 0), minimum=(2, 40, 0))
 
-    message = str(excinfo.value)
-    assert "2.10.0" in message
-    assert "2.40.0" in message
-    assert "cli.github.com" in message
+    ``2.10.0`` predates even the pre-#438-finding-2 floor; ``2.93.9`` is one
+    patch short of the ``blockedBy``/``blocking`` JSON fields that landed in
+    ``gh`` v2.94.0 (finding 2's evidence, cited on
+    :data:`~git_loopy.gh.MIN_GH_VERSION_FOR_READINESS`) -- both must fail, and
+    the bound is not overridable (finding 4): no production caller has ever
+    needed a different floor than the one this capability actually requires.
+    """
+    for old in ((2, 10, 0), (2, 93, 9)):
+        with pytest.raises(GhCapabilityError) as excinfo:
+            verify_readiness_capability(old)
+
+        message = str(excinfo.value)
+        assert ".".join(str(part) for part in old) in message
+        assert "2.94.0" in message
+        assert "cli.github.com" in message
 
 
 def test_gh_version_parses_the_installed_client(monkeypatch) -> None:
@@ -1321,3 +1330,153 @@ def test_blocked_by_translates_an_unreadable_node(monkeypatch) -> None:
     assert read.total_count == 2
     assert read.nodes[0] == BlockerNode(ref="acme/widgets#97", state="closed")
     assert read.nodes[1].readable is False
+
+
+def test_issue_list_requests_blocked_by_in_the_shallow_json_field_set(
+    monkeypatch,
+) -> None:
+    """#438 finding 1: the shallow read requests blockers in the call it
+    already makes, adding no round-trip per candidate.
+
+    Before this fix, ``GitHubIssueSource.readiness`` paid a *second*,
+    dedicated ``gh api graphql`` call per candidate considered just to see
+    ``blockedBy`` -- this asserts the shallow list now asks for the field in
+    the one call it was always going to make.
+    """
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _completed(cmd, stdout=json.dumps(_ISSUE_JSON_LIST_PAYLOAD))
+
+    _install_fake_run(monkeypatch, fake_run)
+    issue_list("ready-for-agent")
+
+    json_fields = captured["cmd"][captured["cmd"].index("--json") + 1]
+    assert "blockedBy" in json_fields
+
+
+def test_issue_view_requests_blocked_by_in_the_json_field_set(monkeypatch) -> None:
+    """The authoritative Pickup re-read carries ``blockedBy`` too (#438
+    finding 1) -- it is the same shallow field set plus ``comments``."""
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _completed(
+            cmd,
+            stdout=json.dumps(
+                {
+                    "number": 7,
+                    "title": "t",
+                    "body": "b",
+                    "labels": [],
+                    "state": "OPEN",
+                    "url": "u",
+                    "comments": [],
+                }
+            ),
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    issue_view(7)
+
+    json_fields = captured["cmd"][captured["cmd"].index("--json") + 1]
+    assert "blockedBy" in json_fields
+
+
+def test_issue_list_parses_blocked_by_onto_the_issue(monkeypatch) -> None:
+    """Propagation, end to end: the JSON ``blockedBy`` connection lands on
+    :attr:`Issue.blocked_by`, exactly as :func:`~git_loopy.gh._parse_blocked_by`
+    parses the same connection shape from the dedicated GraphQL call (#438
+    finding 1 -- "parse it onto Issue")."""
+
+    def fake_run(cmd, **kw):
+        return _completed(
+            cmd,
+            stdout=json.dumps(
+                [
+                    {
+                        "number": 7,
+                        "title": "t",
+                        "body": "b",
+                        "labels": [],
+                        "state": "OPEN",
+                        "url": "u",
+                        "createdAt": "2026-01-02T03:04:05Z",
+                        "blockedBy": {
+                            "totalCount": 1,
+                            "nodes": [
+                                {
+                                    "number": 93,
+                                    "state": "OPEN",
+                                    "repository": {"nameWithOwner": "acme/widgets"},
+                                }
+                            ],
+                        },
+                    }
+                ]
+            ),
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    page = issue_list("ready-for-agent")
+
+    assert page.issues[0].blocked_by == BlockedByRead(
+        total_count=1,
+        nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+    )
+
+
+def test_issue_view_parses_blocked_by_onto_the_issue(monkeypatch) -> None:
+    """The authoritative Pickup re-read carries the propagation too."""
+
+    def fake_run(cmd, **kw):
+        return _completed(
+            cmd,
+            stdout=json.dumps(
+                {
+                    "number": 7,
+                    "title": "t",
+                    "body": "b",
+                    "labels": [],
+                    "state": "OPEN",
+                    "url": "u",
+                    "comments": [],
+                    "blockedBy": {
+                        "totalCount": 1,
+                        "nodes": [
+                            {
+                                "number": 90,
+                                "state": "CLOSED",
+                                "repository": {"nameWithOwner": "acme/widgets"},
+                            }
+                        ],
+                    },
+                }
+            ),
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    issue = issue_view(7)
+
+    assert issue.blocked_by == BlockedByRead(
+        total_count=1,
+        nodes=(BlockerNode(ref="acme/widgets#90", state="closed"),),
+    )
+
+
+def test_issue_missing_blocked_by_field_defaults_to_an_empty_connection(
+    monkeypatch,
+) -> None:
+    """A ``gh`` (or fixture) that omits ``blockedBy`` entirely leaves the
+    issue with an empty connection rather than raising -- the field is
+    additive, never load-bearing for the rest of :func:`_parse_issue`."""
+
+    def fake_run(cmd, **kw):
+        return _completed(cmd, stdout=json.dumps(_ISSUE_JSON_LIST_PAYLOAD))
+
+    _install_fake_run(monkeypatch, fake_run)
+    page = issue_list("ready-for-agent")
+
+    assert page.issues[0].blocked_by == BlockedByRead(total_count=0, nodes=())

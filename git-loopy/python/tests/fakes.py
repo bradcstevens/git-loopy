@@ -639,17 +639,28 @@ class FakeGitHubClient:
         if err is not None:
             self._fail(err)
         if number in self._issue_views:
-            return self._issue_views[number]
-        try:
-            return self._issues[number]
-        except KeyError:
-            self._fail(
-                GhError(
-                    ["gh", "issue", "view", str(number)],
-                    1,
-                    f"issue #{number} not found",
+            issue = self._issue_views[number]
+        else:
+            try:
+                issue = self._issues[number]
+            except KeyError:
+                self._fail(
+                    GhError(
+                        ["gh", "issue", "view", str(number)],
+                        1,
+                        f"issue #{number} not found",
+                    )
                 )
-            )
+        # Readiness (#438) reads `blockedBy` off this same authoritative
+        # re-read (git_loopy.sources.GitHubIssueSource.readiness), so the
+        # per-number `blocked_by=` seeding is spliced onto the returned Issue
+        # here rather than through a separate dedicated call.
+        return replace(
+            issue,
+            blocked_by=self._blocked_by.get(
+                number, BlockedByRead(total_count=0, nodes=())
+            ),
+        )
 
     def issue_close(self, number: int, comment: str) -> None:
         self.issue_close_calls.append((number, comment))
