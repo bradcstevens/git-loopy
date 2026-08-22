@@ -141,6 +141,7 @@ async def test_local_host_returns_success_for_a_clean_branch() -> None:
             dirty=False,
             untracked=False,
             ending=_ending(),
+            checkpoint_ok=True,
         )
 
     host = LocalExecutionHost(runner=runner)
@@ -164,6 +165,7 @@ async def test_local_host_rejects_a_branch_carrying_uncommitted_work() -> None:
             dirty=True,
             untracked=False,
             ending=_ending(),
+            checkpoint_ok=True,
         )
 
     host = LocalExecutionHost(runner=runner)
@@ -184,6 +186,7 @@ async def test_local_host_rejects_a_branch_carrying_untracked_work() -> None:
             dirty=False,
             untracked=True,
             ending=_ending(),
+            checkpoint_ok=True,
         )
 
     host = LocalExecutionHost(runner=runner)
@@ -202,6 +205,7 @@ async def test_local_host_rejects_an_unresolved_sha() -> None:
             dirty=False,
             untracked=False,
             ending=_ending(),
+            checkpoint_ok=True,
         )
 
     host = LocalExecutionHost(runner=runner)
@@ -209,6 +213,54 @@ async def test_local_host_rejects_an_unresolved_sha() -> None:
 
     assert isinstance(outcome, ContributionFailure)
     assert outcome.reason == "unresolved_branch_sha"
+
+
+def test_contribution_failure_refuses_unknown_classification() -> None:
+    with pytest.raises(ValueError, match="unknown contribution failure classification"):
+        ContributionFailure(
+            reason="typo",
+            classification="unknown",  # type: ignore[arg-type]
+            ending=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_local_host_rejects_a_failed_checkpoint() -> None:
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        return LocalRunResult(
+            branch="git-loopy/run/issue-42",
+            sha="cafef00d",
+            dirty=False,
+            untracked=False,
+            ending=_ending(),
+            checkpoint_ok=False,
+        )
+
+    outcome = await LocalExecutionHost(runner=runner).run_contribution(_request())
+
+    assert isinstance(outcome, ContributionFailure)
+    assert outcome.reason == "checkpoint_failed"
+    assert outcome.classification == "breach"
+
+
+@pytest.mark.asyncio
+async def test_local_host_rejects_an_unverified_worktree() -> None:
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        return LocalRunResult(
+            branch="git-loopy/run/issue-42",
+            sha="cafef00d",
+            dirty=False,
+            untracked=False,
+            ending=_ending(),
+            checkpoint_ok=True,
+            verification_error="git status failed",
+        )
+
+    outcome = await LocalExecutionHost(runner=runner).run_contribution(_request())
+
+    assert isinstance(outcome, ContributionFailure)
+    assert outcome.reason == "unverified_worktree_state"
+    assert outcome.classification == "breach"
 
 
 @pytest.mark.asyncio
@@ -225,6 +277,7 @@ async def test_local_host_never_retries_the_runner() -> None:
             dirty=False,
             untracked=False,
             ending=_ending(),
+            checkpoint_ok=True,
         )
 
     host = LocalExecutionHost(runner=runner)

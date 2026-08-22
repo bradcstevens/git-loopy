@@ -108,6 +108,9 @@ IsolationGrade = Literal["workspace separation only", "machine boundary"]
 #: Only ``"breach"`` reached an Agent session ending; the other two mean no
 #: ending exists for the Run to offer to its issue ledgers.
 ContributionFailureClass = Literal["breach", "never_started", "stall"]
+_CONTRIBUTION_FAILURE_CLASSES = frozenset(
+    {"breach", "never_started", "stall"}
+)
 
 
 @dataclass(frozen=True)
@@ -122,9 +125,10 @@ class ContributionRequest:
         prompt: The fully rendered prompt for this contribution's session.
         base_revision: The base revision the contribution's branch is cut
             from.
-        model: The resolved model for this contribution.
+        model: The resolved model for this contribution, or ``None`` when the
+            backend default remains in force.
         reasoning_effort: The resolved reasoning effort paired with
-            ``model``.
+            ``model``, or ``None`` when the backend chooses it.
         skill_policy: The Effective Skill policy in force for this
             contribution.
         run_id: The Run's ``run_id`` — handed to the host, never minted by
@@ -134,8 +138,8 @@ class ContributionRequest:
     issue_ref: Any
     prompt: str
     base_revision: str
-    model: str
-    reasoning_effort: str
+    model: str | None
+    reasoning_effort: str | None
     skill_policy: Any
     run_id: str
 
@@ -201,6 +205,10 @@ class ContributionFailure:
     detail: str = ""
 
     def __post_init__(self) -> None:
+        if self.classification not in _CONTRIBUTION_FAILURE_CLASSES:
+            raise ValueError(
+                f"unknown contribution failure classification: {self.classification!r}"
+            )
         if self.classification == "breach" and self.ending is None:
             raise ValueError("a breach must carry its session ending")
         if self.classification != "breach" and self.ending is not None:
@@ -283,6 +291,12 @@ class LocalRunResult:
             separately from the shared trace. Empty by default because the
             local runner emits directly onto the shared observer as it runs.
         ending: The local Agent session's resolved ending.
+        checkpoint_ok: Whether the local Checkpoint completed. A failed
+            Checkpoint is a breach because the host cannot provide a durable
+            branch.
+        verification_error: The failure to verify the branch's cleanliness, if
+            any. A host must reject an unverified branch rather than infer it
+            is clean.
     """
 
     branch: str
@@ -290,6 +304,8 @@ class LocalRunResult:
     dirty: bool
     untracked: bool
     ending: session_outcome_module.SessionOutcomeRecord
+    checkpoint_ok: bool
+    verification_error: str | None = None
     events: tuple[Mapping[str, Any], ...] = ()
 
 
@@ -347,6 +363,20 @@ class LocalExecutionHost:
         outcomes the runner *reports*, never masks a crash as a value).
         """
         result = await self._runner(request)
+        if not result.checkpoint_ok:
+            return ContributionFailure(
+                reason="checkpoint_failed",
+                classification="breach",
+                ending=result.ending,
+                detail=f"branch {result.branch!r} could not be checkpointed",
+            )
+        if result.verification_error is not None:
+            return ContributionFailure(
+                reason="unverified_worktree_state",
+                classification="breach",
+                ending=result.ending,
+                detail=result.verification_error,
+            )
         if result.dirty or result.untracked:
             return ContributionFailure(
                 reason="uncommitted_or_untracked_work",
