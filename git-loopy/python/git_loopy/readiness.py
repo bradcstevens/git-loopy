@@ -80,27 +80,28 @@ class BlockerNode:
 
 @dataclass(frozen=True)
 class BlockedByRead:
-    """One candidate's ``blockedBy`` connection, exactly as GraphQL returned it.
+    """One candidate's ``blockedBy`` read result.
+
+    A read that could not produce a connection has ``total_count=None`` rather
+    than fabricating a count/node mismatch. Otherwise the fields preserve the
+    connection GraphQL returned.
 
     Attributes:
         total_count: The connection's ``totalCount`` — the number of edges the
-            candidate asserts, whether or not every node came back.
+            candidate asserts, whether or not every node came back. ``None``
+            means the connection could not be read.
         nodes: The nodes GraphQL actually returned. May be shorter than
             ``total_count`` (an incomplete page) and may contain unreadable
             nodes (a blocker the token cannot see); see :attr:`BlockerNode`.
     """
 
-    total_count: int
+    total_count: int | None
     nodes: tuple[BlockerNode, ...] = ()
 
     @classmethod
     def unprovable(cls) -> "BlockedByRead":
-        """The sentinel for a connection never read or an unparseable error fallback.
-
-        Encodes ``total_count=1, nodes=()`` so :func:`decide_readiness` treats
-        it as incomplete/unprovable (#438 finding 4, ADR-0047).
-        """
-        return cls(total_count=1, nodes=())
+        """Return a result for a connection that could not be read (#438 finding 4)."""
+        return cls(total_count=None)
 
 
 @dataclass(frozen=True)
@@ -215,7 +216,7 @@ def decide_readiness(read: BlockedByRead) -> Readiness:
     open_blockers = tuple(node.ref for node in read.nodes if node.state == "open")
     if open_blockers:
         return Readiness.blocked(SKIP_BLOCKED_BY_OPEN_DEPENDENCY, open_blockers)
-    incomplete = len(read.nodes) < read.total_count
+    incomplete = read.total_count is None or len(read.nodes) < read.total_count
     unreadable = any(not node.readable for node in read.nodes)
     if incomplete or unreadable:
         return Readiness.blocked(SKIP_READINESS_UNPROVABLE)

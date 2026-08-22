@@ -60,7 +60,7 @@ def test_admissible_is_derived_and_not_an_independent_field() -> None:
 
 def test_blocked_by_read_unprovable_constructor() -> None:
     read = BlockedByRead.unprovable()
-    assert read.total_count == 1
+    assert read.total_count is None
     assert read.nodes == ()
     verdict = decide_readiness(read)
     assert verdict.admissible is False
