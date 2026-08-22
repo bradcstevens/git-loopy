@@ -14,6 +14,11 @@ import pytest
 
 from git_loopy import gh as gh_module
 from git_loopy import sources as sources_module
+from git_loopy.readiness import (
+    SKIP_BLOCKED_BY_OPEN_DEPENDENCY,
+    BlockedByRead,
+    BlockerNode,
+)
 from git_loopy.sources import (
     AfkReadyItem,
     Completion,
@@ -88,6 +93,7 @@ def _make_issue(
     title: str | None = None,
     created_at: str = "",
     comments: tuple[gh_module.Comment, ...] = (),
+    blocked_by: BlockedByRead | None = None,
 ) -> gh_module.Issue:
     return gh_module.Issue(
         number=number,
@@ -98,6 +104,9 @@ def _make_issue(
         url=f"https://github.com/x/y/issues/{number}",
         created_at=created_at,
         comments=comments,
+        blocked_by=blocked_by
+        if blocked_by is not None
+        else BlockedByRead(total_count=0, nodes=()),
     )
 
 
@@ -518,6 +527,22 @@ class TestGitHubCollectPool:
 
         assert [e.ref for e in collection.exclusions] == [43]
         assert collection.complete is True
+
+    def test_carries_blockers_from_collection_without_a_second_view(self) -> None:
+        """Readiness consumes the collection's authoritative issue view."""
+        blockers = BlockedByRead(
+            total_count=1,
+            nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+        )
+        gh = FakeGitHubClient(issues=[_make_issue(42, blocked_by=blockers)])
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        [item] = source.collect_pool().items
+        readiness = source.readiness(item)
+
+        assert item.blocked_by == blockers
+        assert readiness.skip_reason == SKIP_BLOCKED_BY_OPEN_DEPENDENCY
+        assert gh.issue_view_calls == [42]
 
     def test_re_verifies_discriminator_on_full_body(self) -> None:
         """If issue_view returns a different body lacking the discriminator, drop it."""
@@ -1253,7 +1278,7 @@ class TestModuleStructure:
         assert isinstance(IssueSource, _ProtocolMeta)
 
     def test_imports_are_constrained(self) -> None:
-        """sources.py may only import stdlib + git_loopy.{gh,git,issue_order,issue_pin,wrapper}.
+        """sources.py may only import stdlib + git_loopy.{gh,git,issue_order,issue_pin,readiness,wrapper}.
 
         Forbidden: copilot SDK, rich, git_loopy.{loop,cli,config,session,
         ui,persist,events,pricing,telemetry} — keeps the Protocol seam
@@ -1272,6 +1297,13 @@ class TestModuleStructure:
         reason: refusing an ineligible ``--issue N`` is one decision three
         Orchestrators share, and a source that decided it inline would be a
         second copy of it. It is held to the same purity guard.
+
+        ``readiness`` joined it with #438 for the same reason again: whether a
+        candidate is admissible at **Pickup** is a Wrapper-contract decision
+        (§3.3.1) pinned by ``issue-readiness.json``, so
+        :class:`~git_loopy.sources.GitHubIssueSource` calls the pure seam
+        rather than re-deciding readiness inline. It carries no I/O of its own
+        and costs the Protocol nothing.
         """
         import ast
 
@@ -1283,6 +1315,7 @@ class TestModuleStructure:
             "git",
             "issue_order",
             "issue_pin",
+            "readiness",
             "wrapper",
         }
 

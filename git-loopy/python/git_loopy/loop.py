@@ -1635,6 +1635,12 @@ class _Loop:
         that, so the pair it publishes is the pair the session below is built
         with — a record written before the classification would name a model
         that never ran.
+
+        **Readiness is asked before routing resolves** (#438, ADR-0047,
+        §3.3.1). Like the Attempt-lifecycle filter, it is cheap and answers a
+        Pickup-scoped fact; asking it before :meth:`_resolve_route` means a
+        candidate the walk is about to pass over never first pays to resolve a
+        **Routed pair** it will never run on.
         """
         self._routes = {}
 
@@ -1649,6 +1655,16 @@ class _Loop:
                 # would be exactly the indefinite passing-over ADR-0032 exists
                 # to make visible.
                 return f"already attempted this Run ({defeated.value})"
+            # **Readiness** (#438, ADR-0047, §3.3.1), asked before routing for
+            # the same reason the Attempt-lifecycle filter is: a candidate the
+            # runner is about to pass over must not first pay to resolve a
+            # **Routed pair** it will never run on.
+            verdict = self._source.readiness(item)
+            if not verdict.admissible:
+                assert verdict.skip_reason is not None
+                if verdict.blockers:
+                    return f"{verdict.skip_reason}: {', '.join(verdict.blockers)}"
+                return verdict.skip_reason
             try:
                 resolution = self._resolve_route(
                     item,
