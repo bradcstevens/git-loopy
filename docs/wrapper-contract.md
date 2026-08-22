@@ -1068,6 +1068,38 @@ Each Orchestrator MUST pass the language-neutral fixtures in the
 The suite is the generalized successor to the cross-runner parity test ADR-0002 deleted. A
 conformance fixture change is the canonical way to evolve the contract.
 
+### 13.1 Every fixture is claimed or waived (contract 2.0, MUST)
+
+Every fixture in `git-loopy/conformance/` MUST be **accounted for** by every member of the
+**Runner family** — the Python reference Orchestrator, the shell and PowerShell Orchestrators, and
+the Rust **Dashboard** core. Each (fixture, member) pair carries exactly one verdict:
+
+- **Claimed** — the member's own suite reads that fixture's bytes as it runs, takes an assertion's
+  expected value out of them, and compares it against what the member's *production* seam returns.
+  The test is falsifiable: mutate an expected field one of that member's asserted cases reads, and
+  that member's suite goes red. A filename in a README, a doc comment, or production code no test
+  drives is a *mention*, and a mention claims nothing.
+- **Waived, out of scope** — this contract or an accepted ADR puts the fixture's decision outside
+  the member's role (a packaging fixture for an Orchestrator that ships no packaging channel). A
+  reason, and nothing else.
+- **Waived, owed** — the member should exercise the fixture and does not. A reason **and** a
+  tracking issue, so the gap is visible as debt. "Nobody has got to it" is always this kind, never
+  out of scope, and where this contract is silent the entry is owed until a decision says
+  otherwise.
+
+Silence is not a fourth verdict. An unaccounted fixture is a **conformance failure**, not an
+absence: the suite's green means "every member was asked and agreed", and a fixture one member
+reads and three ignore produces that same green from a question only one member was asked.
+
+The verdicts live in one register, `git-loopy/conformance/fixture-claims.json`, which is itself
+Conformance data rather than a fixture and so carries no entry of its own. The **Python suite alone**
+reads it — the Integration gate covers the family, and four implementations of one static
+completeness check is four ways for the family to disagree about the file that records the family's
+agreement. The other three members MUST NOT be required to read it. **No tree is green that
+contains a fixture without a verdict for every member.** Verdicts should therefore land in the same
+change as the fixture; what is gated is the merged result, not the shape of the change. See
+[ADR-0049](adr/0049-every-conformance-fixture-is-claimed-or-waived-by-every-member.md).
+
 ## 14. Per-issue model routing (phase 3, MUST)
 
 Wherever an Orchestrator binds an Iteration to a **single Active issue at pickup** it MUST
@@ -1510,7 +1542,11 @@ is Run-level availability, and neither may be derived from the other.
    (`git-loopy/python/git_loopy/wrapper.py`) and the shell/PowerShell equivalents together.
 
 No Orchestrator lands a contract change alone — the Conformance suite fails any port left behind,
-which is the whole point of the backbone.
+which is the whole point of the backbone. §13.1 narrows how that can fail: a fixture no port has
+been asked about cannot land at all, and a port that has been asked and has not implemented the
+answer is recorded as *owing* the fixture, with a tracking issue, instead of passing green for never
+having heard of it. The suite still cannot compel a port to implement anything. What it refuses is
+the silent case.
 
 ---
 

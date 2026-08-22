@@ -310,7 +310,8 @@ stays alive, and expiring on its own if the owner stops. It names the run that h
 it, so a run that dies frees its issues without anyone intervening. Leases are what
 let several runs share one tracker: an issue under another run's live Lease is not
 available to this run.
-_Avoid_: claim, lock, reservation, hold.
+_Avoid_: claim unqualified (a **Fixture claim** is a different fact, about Conformance rather than
+about work), lock, reservation, hold.
 
 **Priority**:
 The axis on which an issue is worked ahead of older ones, carried as a label and read
@@ -895,6 +896,40 @@ progress/strike accounting, and the exit-code table — that every **Orchestrato
 must pass, keeping the **Runner family** from drifting. The generalized successor to the deleted
 two-runner cross-parity test (ADR-0002).
 _Avoid_: parity test (the retired two-runner name), integration tests.
+
+**Fixture claim**:
+A member of the **Runner family** exercising a **Conformance suite** fixture: its own suite reads
+that fixture's bytes while it runs, takes an assertion's expected value out of them, and compares
+it against what the member's production seam returns. The test is falsifiable — mutate an expected
+field one of that member's asserted cases reads, and that member's suite goes red. A filename in a
+README, a doc comment or production code no test drives is a mention, and a mention claims nothing.
+One qualifying case is a claim; how much of the fixture a member covers is a separate question.
+Every fixture is claimed or waived by every member; the verdicts live in
+`conformance/fixture-claims.json` (ADR-0049).
+_Avoid_: mention, reference, coverage; claim unqualified (that word's other job here is the
+**Lease** a run takes); **Permanent waiver** and **Owed waiver** (the two ways a fixture is
+accounted for *without* being exercised).
+
+**Permanent waiver**:
+A recorded verdict that a **Conformance suite** fixture is outside a member's role — a packaging
+fixture for an Orchestrator that ships no packaging channel, a discriminator fixture for a
+**Dashboard** that never reads an issue. It carries a reason and nothing else, because there is
+nothing to fix. Available only where the **Wrapper contract** or an accepted ADR puts the
+responsibility outside that member's role: the kind is a judgement about role, never about effort,
+so "nobody has got to it" is an **Owed waiver** every time, and so is a silence in the contract.
+_Avoid_: **Owed waiver** (that one is debt and carries a tracking issue; a gap relabelled permanent
+is debt made invisible), **Pool exclusion** (a human's authoring mistake in an issue — a different
+subject that only shares the shape of the sentence), skip, exemption, "not applicable".
+
+**Owed waiver**:
+A recorded verdict that a member *should* exercise a **Conformance suite** fixture and does not. It
+is a gap, so its entry must carry a **tracking issue** alongside its reason: the register is where
+the debt is *recorded*, and the tracker is the only place it is ever *scheduled*. Recording today's
+owed waivers is what lets the register land green and ratchet, red the first time a fixture arrives
+unaccounted for.
+_Avoid_: **Permanent waiver** (that one has no issue because there is nothing to fix), **Pool
+exclusion** (that is a human's authoring mistake, reported so a human fixes the *issue*), known
+failure, TODO, backlog entry.
 
 ### Parallel execution
 
