@@ -27,7 +27,12 @@ from git_loopy.gh import (
     parse_gh_version,
     verify_readiness_capability,
 )
-from git_loopy.readiness import BlockedByRead, BlockerNode
+from git_loopy.readiness import (
+    SKIP_READINESS_UNPROVABLE,
+    BlockedByRead,
+    BlockerNode,
+    decide_readiness,
+)
 
 # The ``gh`` mechanics moved from module free functions onto the stateless
 # :class:`SubprocessGitHubClient` adapter (#47, mirroring the git seam #46). Bind
@@ -1228,110 +1233,6 @@ def test_gh_version_parses_the_installed_client(monkeypatch) -> None:
     assert client.gh_version() == (2, 55, 0)
 
 
-def test_blocked_by_reads_open_and_closed_nodes_via_graphql(monkeypatch) -> None:
-    calls: list[list[str]] = []
-
-    def fake_run(cmd, **kw):
-        calls.append(cmd)
-        if cmd[1:3] == ["repo", "view"]:
-            return _completed(
-                cmd,
-                stdout=json.dumps(
-                    {
-                        "owner": {"login": "acme"},
-                        "name": "widgets",
-                        "defaultBranchRef": {"name": "main"},
-                    }
-                ),
-            )
-        assert cmd[1:3] == ["api", "graphql"]
-        payload = {
-            "data": {
-                "repository": {
-                    "issue": {
-                        "blockedBy": {
-                            "totalCount": 2,
-                            "nodes": [
-                                {
-                                    "number": 92,
-                                    "state": "CLOSED",
-                                    "repository": {"nameWithOwner": "acme/widgets"},
-                                },
-                                {
-                                    "number": 93,
-                                    "state": "OPEN",
-                                    "repository": {"nameWithOwner": "acme/widgets"},
-                                },
-                            ],
-                        }
-                    }
-                }
-            }
-        }
-        return _completed(cmd, stdout=json.dumps(payload))
-
-    _install_fake_run(monkeypatch, fake_run)
-    client = SubprocessGitHubClient()
-
-    read = client.blocked_by(102)
-
-    assert read == BlockedByRead(
-        total_count=2,
-        nodes=(
-            BlockerNode(ref="acme/widgets#92", state="closed"),
-            BlockerNode(ref="acme/widgets#93", state="open"),
-        ),
-    )
-    graphql_call = next(cmd for cmd in calls if cmd[1:3] == ["api", "graphql"])
-    assert "-F" in graphql_call and "number=102" in graphql_call
-
-
-def test_blocked_by_translates_an_unreadable_node(monkeypatch) -> None:
-    """The count arrives, the node does not -- routine, not exotic (ADR-0047)."""
-
-    def fake_run(cmd, **kw):
-        if cmd[1:3] == ["repo", "view"]:
-            return _completed(
-                cmd,
-                stdout=json.dumps(
-                    {
-                        "owner": {"login": "acme"},
-                        "name": "widgets",
-                        "defaultBranchRef": {"name": "main"},
-                    }
-                ),
-            )
-        payload = {
-            "data": {
-                "repository": {
-                    "issue": {
-                        "blockedBy": {
-                            "totalCount": 2,
-                            "nodes": [
-                                {
-                                    "number": 97,
-                                    "state": "CLOSED",
-                                    "repository": {"nameWithOwner": "acme/widgets"},
-                                },
-                                None,
-                            ],
-                        }
-                    }
-                }
-            }
-        }
-        return _completed(cmd, stdout=json.dumps(payload))
-
-    _install_fake_run(monkeypatch, fake_run)
-    client = SubprocessGitHubClient()
-
-    read = client.blocked_by(104)
-
-    assert read.total_count == 2
-    assert read.nodes[0] == BlockerNode(ref="acme/widgets#97", state="closed")
-    assert read.nodes[1].readable is False
-
-
 def test_issue_list_requests_blocked_by_in_the_shallow_json_field_set(
     monkeypatch,
 ) -> None:
@@ -1387,9 +1288,9 @@ def test_issue_view_requests_blocked_by_in_the_json_field_set(monkeypatch) -> No
 
 def test_issue_list_parses_blocked_by_onto_the_issue(monkeypatch) -> None:
     """Propagation, end to end: the JSON ``blockedBy`` connection lands on
-    :attr:`Issue.blocked_by`, exactly as :func:`~git_loopy.gh._parse_blocked_by`
-    parses the same connection shape from the dedicated GraphQL call (#438
-    finding 1 -- "parse it onto Issue")."""
+    :attr:`Issue.blocked_by`, exactly as
+    :func:`~git_loopy.gh._parse_blocked_by_connection` parses the connection
+    shape (#438 finding 1 -- "parse it onto Issue")."""
 
     def fake_run(cmd, **kw):
         return _completed(
@@ -1466,12 +1367,15 @@ def test_issue_view_parses_blocked_by_onto_the_issue(monkeypatch) -> None:
     )
 
 
-def test_issue_missing_blocked_by_field_defaults_to_an_empty_connection(
+def test_issue_missing_blocked_by_field_is_readiness_unprovable(
     monkeypatch,
 ) -> None:
-    """A ``gh`` (or fixture) that omits ``blockedBy`` entirely leaves the
-    issue with an empty connection rather than raising -- the field is
-    additive, never load-bearing for the rest of :func:`_parse_issue`."""
+    """A ``gh`` (or fixture) that omits ``blockedBy`` entirely is a connection
+    that was never read, not an empty one -- decide_readiness must report
+    ``readiness_unprovable``, not admit the candidate as ready (#438 finding 1,
+    ADR-0047 "An unprovable read is not readiness"). The field remains
+    additive for the rest of :func:`_parse_issue`: a missing field never
+    raises."""
 
     def fake_run(cmd, **kw):
         return _completed(cmd, stdout=json.dumps(_ISSUE_JSON_LIST_PAYLOAD))
@@ -1479,4 +1383,7 @@ def test_issue_missing_blocked_by_field_defaults_to_an_empty_connection(
     _install_fake_run(monkeypatch, fake_run)
     page = issue_list("ready-for-agent")
 
-    assert page.issues[0].blocked_by == BlockedByRead(total_count=0, nodes=())
+    verdict = decide_readiness(page.issues[0].blocked_by)
+    assert verdict.verdict == "blocked"
+    assert verdict.skip_reason == SKIP_READINESS_UNPROVABLE
+    assert verdict.blockers == ()

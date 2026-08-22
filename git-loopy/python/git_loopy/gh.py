@@ -273,28 +273,6 @@ _RATE_LIMIT_MARKERS: Final[tuple[str, ...]] = (
 #: loud, named failure before a single candidate is walked.
 MIN_GH_VERSION_FOR_READINESS: Final[tuple[int, int, int]] = (2, 94, 0)
 
-#: The GraphQL query :meth:`SubprocessGitHubClient.blocked_by` sends. One hop:
-#: it reads the candidate's own ``blockedBy`` connection and does not walk
-#: further (§3.3.1, ADR-0047 "One hop, never traversed"). ``first: 100``
-#: exceeds GitHub's per-issue cap of 50 links, so a complete read is always one
-#: page (the fixture's ``page_size_note``).
-_BLOCKED_BY_QUERY: Final[str] = """
-query($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) {
-    issue(number: $number) {
-      blockedBy(first: 100) {
-        totalCount
-        nodes {
-          number
-          state
-          repository { nameWithOwner }
-        }
-      }
-    }
-  }
-}
-"""
-
 
 class GhCapabilityError(Exception):
     """``gh`` cannot do something git-loopy requires, named at preflight.
@@ -362,14 +340,28 @@ def verify_readiness_capability(version: tuple[int, int, int]) -> None:
         )
 
 
-#: A ``blockedBy`` connection has no ``totalCount``/``nodes`` pair at all — the
-#: shape :meth:`SubprocessGitHubClient.issue_list` / :meth:`issue_view` see on a
-#: ``gh`` too old to have honoured the field, or on an issue with no blockers
-#: field the response happened to omit. Distinguished from a genuinely empty
-#: connection (``{"totalCount": 0, "nodes": []}``, which parses normally to the
-#: same value) only in that this default never raises — see
-#: :func:`_parse_blocked_by_connection`.
+#: A genuinely empty ``blockedBy`` connection: ``{"totalCount": 0, "nodes": []}``,
+#: which :func:`_parse_blocked_by_connection` parses to exactly this value. Used
+#: only when the field was actually present and actually empty — never as a
+#: default for a field the response omitted; see :data:`_UNPROVABLE_BLOCKED_BY`.
 _EMPTY_BLOCKED_BY: Final[BlockedByRead] = BlockedByRead(total_count=0, nodes=())
+
+#: The sentinel for a ``blockedBy`` field that was absent or ``null`` — the
+#: shape :meth:`SubprocessGitHubClient.issue_list` / :meth:`issue_view` see on a
+#: ``gh`` too old to have honoured the field, or on a response that happened to
+#: omit it. This is *not* the same fact as :data:`_EMPTY_BLOCKED_BY`: the
+#: connection was never read at all, so there is nothing to say no blocker was
+#: found. ``decide_readiness`` (:mod:`git_loopy.readiness`) treats
+#: ``total_count > len(nodes)`` as an incomplete, unprovable read regardless of
+#: the actual numbers involved, so ``total_count=1, nodes=()`` reaches
+#: ``readiness_unprovable`` through that same existing path rather than a
+#: dedicated one — an absent connection was wrongly admitted as ``ready``
+#: before this fix (ADR-0047 "An unprovable read is not readiness"; #438).
+#: Mirrors the identical sentinel
+#: :meth:`~git_loopy.sources.GitHubIssueSource.readiness` already constructs for
+#: its own ``GhError`` fallback, so "the connection was never read" has one
+#: shape project-wide.
+_UNPROVABLE_BLOCKED_BY: Final[BlockedByRead] = BlockedByRead(total_count=1, nodes=())
 
 
 def _parse_blocked_by_connection(
@@ -377,11 +369,10 @@ def _parse_blocked_by_connection(
 ) -> BlockedByRead:
     """Convert one ``blockedBy`` connection object into a :class:`BlockedByRead`.
 
-    Shared by :func:`_parse_blocked_by` (the connection nested inside a
-    ``gh api graphql`` response) and :func:`_parse_issue` (the connection
-    ``gh issue list``/``gh issue view --json blockedBy`` returns directly),
-    so the two calls that read the same connection shape cannot drift apart
-    on how they parse it (#438 finding 1).
+    The one parser for the connection shape ``gh issue list``/``gh issue view
+    --json blockedBy`` returns, kept separate from :func:`_parse_issue` so the
+    connection-shape parsing (partial-error nodes, missing keys) does not
+    entangle with the rest of the issue JSON (#438 finding 1).
 
     Handles GitHub's partial-error shape for an unreadable node (the count
     arrives, the node's body does not, per ADR-0047 "An unprovable read is not
@@ -414,17 +405,6 @@ def _parse_blocked_by_connection(
             ) from exc
         nodes.append(BlockerNode(ref=ref, state=state, readable=True))
     return BlockedByRead(total_count=total_count, nodes=tuple(nodes))
-
-
-def _parse_blocked_by(data: object, cmd: Sequence[str]) -> BlockedByRead:
-    """Convert one ``gh api graphql`` response into a :class:`BlockedByRead`."""
-    try:
-        connection = data["data"]["repository"]["issue"]["blockedBy"]
-    except (KeyError, TypeError, IndexError) as exc:
-        raise GhError(
-            list(cmd), 0, f"gh api graphql blockedBy JSON malformed: {exc}"
-        ) from exc
-    return _parse_blocked_by_connection(connection, cmd, field="api graphql blockedBy")
 
 
 class GhError(RuntimeError):
@@ -585,8 +565,12 @@ class Issue:
             **Pool** collection) and :func:`issue_view` (the authoritative
             **Pickup** re-read) populate it, so **Readiness**
             (:mod:`git_loopy.readiness`) never has to issue a second,
-            per-candidate ``gh api graphql`` call just to see it. Defaults to
-            an empty connection (``total_count=0``) — the common path.
+            per-candidate ``gh api graphql`` call just to see it. A field
+            actually present and empty parses to an empty connection
+            (``total_count=0``) — the common path. A field the response
+            omitted or returned ``null`` is a connection never read at all,
+            not an empty one, and maps instead to the sentinel that decides
+            ``readiness_unprovable`` (ADR-0047, #438 finding 1).
     """
 
     number: int
@@ -761,7 +745,7 @@ def _parse_issue(data: object, cmd: Sequence[str]) -> Issue:
         blocked_by = (
             _parse_blocked_by_connection(blocked_by_raw, cmd, field="issue blockedBy")
             if blocked_by_raw is not None
-            else _EMPTY_BLOCKED_BY
+            else _UNPROVABLE_BLOCKED_BY
         )
         return Issue(
             number=int(data["number"]),
@@ -914,17 +898,6 @@ class GitHubClient(Protocol):
         Read once at preflight via :func:`verify_readiness_capability`, never
         per candidate — the whole point is to fail before any **Pickup** is
         attempted (§3.3.1, #438).
-        """
-        ...
-
-    def blocked_by(self, number: int) -> BlockedByRead:
-        """Read one candidate's ``blockedBy`` connection, one hop, via GraphQL.
-
-        MUST use GraphQL, never REST (§3.3.1): REST is documented to
-        undercount cross-repository dependencies, and to do so silently. Taken
-        at **Pickup**, per candidate the runner actually reaches — never at
-        collection, where it would cost one extra round-trip for every
-        ``ready-for-agent`` candidate rather than only the ones considered.
         """
         ...
 
@@ -1252,33 +1225,6 @@ class SubprocessGitHubClient:
         """
         raw = self._checked(["--version"])
         return parse_gh_version(raw)
-
-    def blocked_by(self, number: int) -> BlockedByRead:
-        """Read one issue's ``blockedBy`` connection via ``gh api graphql``.
-
-        Args:
-            number: The candidate issue's number, in the repository the
-                process cwd resolves to (:meth:`repo_view`).
-
-        Raises:
-            GhError: On any subprocess or parse failure.
-        """
-        repo = self.repo_view()
-        cmd = [
-            "api",
-            "graphql",
-            "-f",
-            f"query={_BLOCKED_BY_QUERY}",
-            "-f",
-            f"owner={repo.owner}",
-            "-f",
-            f"name={repo.name}",
-            "-F",
-            f"number={number}",
-        ]
-        raw = self._checked(cmd)
-        parsed = _parse_json(raw, [_GH_BIN, *cmd])
-        return _parse_blocked_by(parsed, [_GH_BIN, *cmd])
 
 
 # --------------------------------------------------------------------------- #
