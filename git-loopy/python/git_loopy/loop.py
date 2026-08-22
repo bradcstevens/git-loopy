@@ -133,6 +133,7 @@ from copilot import CopilotClient
 from rich.console import Console
 
 from git_loopy import events as events_module
+from git_loopy import execution_host as execution_host_module
 from git_loopy import gate as gate_module
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
@@ -2224,6 +2225,7 @@ class _ParallelLoop:
         rate_card: RateCard | None = None,
         classifier_pair: ClassifierPair | None = None,
         task_type_client: TaskTypeLabelClient | None = None,
+        execution_host: execution_host_module.ExecutionHost | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -2251,6 +2253,40 @@ class _ParallelLoop:
         self._worktree_setup = worktree_setup
         self._run_id = writers.run_id
         self._repo_root = git.root
+        # The Execution host seam (#447, spec #445 §A/§C): every Lane
+        # contribution's agent session now travels through a declared host
+        # rather than the loop invoking `IterationSession` directly. Defaults
+        # to `LocalExecutionHost`, putting today's local behaviour behind the
+        # seam unchanged; `_run_local_contribution` supplies its mechanics.
+        # A test injects a fake host here instead — no network involved.
+        self._execution_host: execution_host_module.ExecutionHost = (
+            execution_host
+            if execution_host is not None
+            else execution_host_module.LocalExecutionHost(
+                runner=self._run_local_contribution
+            )
+        )
+        # Per-in-flight-contribution context (`contribution`, `_LaneWork`)
+        # keyed by `id(request)`, so `_run_local_contribution` can reach the
+        # loop state its mechanics need without the seam's own
+        # `ContributionRequest` carrying anything beyond what spec #445 §A
+        # names (issue reference, prompt, base revision, model/reasoning
+        # pair, Effective Skill policy, run_id) — never a working directory
+        # or a callback. Populated immediately before, and popped
+        # immediately after, each `self._execution_host.run_contribution`
+        # call.
+        self._contribution_context: dict[
+            int, tuple[rolling_scheduler.Contribution, _LaneWork]
+        ] = {}
+        # Companion to `_contribution_context`: the session-outcome half of
+        # `_run_local_contribution`'s work (`_LaneSessionSignals`, `changed`,
+        # `checkpoint_ok`) that `_run_lane_lifecycle` still needs once the
+        # host returns, but that is deliberately absent from the seam's own
+        # `ContributionOutcome` — a host's outcome names a branch and
+        # Events, never the Run's own Strike/Escalation bookkeeping.
+        self._lane_outcome_signals: dict[
+            int, tuple[_LaneSessionSignals, bool, bool]
+        ] = {}
 
         # Rolling dispatch (#219, ADR-0020) needs the two extra Pool
         # operations `RollingIssueSource` defines. Only the GitHub backend
@@ -3106,11 +3142,24 @@ class _ParallelLoop:
             recent = []
         commits_block = _format_recent_commits(recent)
 
-        signals = await self._run_lane_session(
+        request = self._build_contribution_request(
             contribution, lane_work, commits_block
         )
+        self._contribution_context[id(request)] = (contribution, lane_work)
+        try:
+            outcome = await self._execution_host.run_contribution(request)
+        finally:
+            self._contribution_context.pop(id(request), None)
+        signals, changed, checkpoint_ok = self._lane_outcome_signals.pop(
+            id(request)
+        )
+        if isinstance(outcome, execution_host_module.ContributionFailure):
+            self._diag.warning(
+                "lane #%s execution host (%s) refused contribution: %s (%s)",
+                ref, self._execution_host.placement,
+                outcome.reason, outcome.detail,
+            )
 
-        changed, checkpoint_ok = self._account_lane(contribution, lane_work)
         # The Lane's **Session outcome** (#403). `changed` is this mode's own
         # progress answer -- an agent commit or a Checkpoint on the Lane branch
         # -- so the ending agrees with what the scheduler was told about the
@@ -3198,11 +3247,80 @@ class _ParallelLoop:
             result.output_tail,
         )
 
-    async def _run_lane_session(
+    def _build_contribution_request(
         self,
         contribution: rolling_scheduler.Contribution,
         lane_work: _LaneWork,
         commits_block: str,
+    ) -> execution_host_module.ContributionRequest:
+        """Build the Execution host seam's one input shape for this Lane.
+
+        Carries exactly what spec #445 §A names — issue reference, rendered
+        prompt, base revision, resolved model/reasoning pair, the Effective
+        Skill policy, and the Run's ``run_id`` — and nothing about *how* the
+        host should do the work.
+        """
+        prompt = (
+            f"Previous commits: {commits_block} "
+            f"Issues: {lane_work.item.rendered_block} {self._prompt_text}"
+        )
+        return execution_host_module.ContributionRequest(
+            issue_ref=lane_work.item.ref,
+            prompt=prompt,
+            base_revision=self._resolve_base_ref(),
+            model=contribution.model,
+            reasoning_effort=contribution.reasoning_effort,
+            skill_policy=self._skill_exposure,
+            run_id=self._run_id,
+        )
+
+    async def _run_local_contribution(
+        self, request: execution_host_module.ContributionRequest
+    ) -> execution_host_module.LocalRunResult:
+        """The ``local`` Execution host's runner (#447).
+
+        This is exactly today's Lane-contribution mechanics — run the agent
+        session (:meth:`_run_lane_session`), then account for it and
+        Checkpoint a dirty tree (:meth:`_account_lane`) — reached through
+        :class:`~git_loopy.execution_host.LocalExecutionHost` rather than
+        called directly, so every Lane contribution now travels through the
+        seam with today's behaviour otherwise unchanged. The session-outcome
+        half the loop still needs (`_LaneSessionSignals`, `changed`,
+        `checkpoint_ok`) is stashed in ``self._lane_outcome_signals`` for
+        ``_run_lane_lifecycle`` to read back once the host returns — it is
+        deliberately not part of the seam's own outcome contract.
+        """
+        contribution, lane_work = self._contribution_context[id(request)]
+        signals = await self._run_lane_session(
+            contribution, lane_work, request.prompt
+        )
+        changed, checkpoint_ok = self._account_lane(contribution, lane_work)
+        self._lane_outcome_signals[id(request)] = (signals, changed, checkpoint_ok)
+        try:
+            sha = lane_work.git.head_sha()
+        except git_module.GitError:
+            sha = None
+        try:
+            dirty = lane_work.git.is_dirty()
+            untracked = lane_work.git.has_untracked()
+        except git_module.GitError:
+            # A dirty-check failure is not itself evidence of dirt; today's
+            # `_maybe_checkpoint_lane` treats the same failure as "skip,
+            # don't block" and this mirrors it rather than manufacturing a
+            # rejection the loop's own accounting never raised.
+            dirty, untracked = False, False
+        return execution_host_module.LocalRunResult(
+            branch=lane_work.branch,
+            sha=sha,
+            dirty=dirty,
+            untracked=untracked,
+        )
+
+    async def _run_lane_session(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
+        prompt: str,
     ) -> _LaneSessionSignals:
         """Run one Lane contribution's SDK session, pinned to its worktree.
 
@@ -3219,11 +3337,13 @@ class _ParallelLoop:
         ending itself is resolved by the caller, because the missing half is
         whether the Lane's branch carries anything, and that is not known until
         the Lane is accounted.
+
+        ``prompt`` arrives fully rendered (#447): the Execution host seam's
+        :class:`~git_loopy.execution_host.ContributionRequest` carries the
+        already-assembled prompt
+        (:meth:`_ParallelLoop._build_contribution_request`), so this method
+        no longer reassembles it from a commit-log fragment.
         """
-        prompt = (
-            f"Previous commits: {commits_block} "
-            f"Issues: {lane_work.item.rendered_block} {self._prompt_text}"
-        )
         send_timeout = self._config.send_timeout_seconds
         termination = session_outcome_module.SessionTermination.COMPLETED
         raised: session_outcome_module.SessionError | None = None
