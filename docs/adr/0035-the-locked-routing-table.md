@@ -1,6 +1,10 @@
 # The recommended routing table is locked, and a reasoning-incapable model is unroutable
 
-**Status:** accepted
+**Status:** accepted; its **table** is superseded by
+[ADR-0048](0048-the-recommended-routing-table-is-retuned.md). The rules below — a
+reasoning-incapable model is unroutable, `review` is never `gpt-5.6-sol`, and cross-vendor
+review holds by construction — stand, and ADR-0048 keeps them. The **values** in the table are
+history: read them as what the design once locked, not as what ships.
 
 Implemented by [#401](https://github.com/bradcstevens/git-loopy/issues/401), under the
 per-issue routing spec [#400](https://github.com/bradcstevens/git-loopy/issues/400). Locks the

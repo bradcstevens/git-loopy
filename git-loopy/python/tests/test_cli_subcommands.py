@@ -402,7 +402,12 @@ def test_main_config_routing_primitives_round_trip_without_guided_fetch(
     assert cli_module.main(["config", "routing", "list"]) == 0
     listed = capsys.readouterr().out
     assert "task-type:docs = gpt-5.4 @ high" in listed
-    assert "task-type:planning = claude-opus-5 @ max" in listed
+    # The seeded row `routing set docs` did not touch, read off the constant so
+    # a later retune of the recommended core moves this in lockstep (ADR-0048).
+    from git_loopy.config import RECOMMENDED_ROUTING
+
+    planning_model, planning_effort = RECOMMENDED_ROUTING["planning"]
+    assert f"task-type:planning = {planning_model} @ {planning_effort}" in listed
     assert (
         cli_module.main(
             ["config", "routing", "unset", "docs", "--project"]

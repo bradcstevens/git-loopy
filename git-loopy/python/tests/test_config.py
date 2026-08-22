@@ -220,27 +220,27 @@ def test_supported_models_matrix_matches_current_copilot_catalog() -> None:
 
 
 def test_recommended_routing_is_the_locked_core() -> None:
-    """The recommended core is the locked 7-type mapping in presentation order.
+    """The recommended core is the 7-type mapping in presentation order.
 
     Keyed by the bare ``task-type`` key (matching :attr:`RunConfig.routing` and
     the ``[routing]`` config table), in the fixed key order the guided-setup
     surfaces present. ``bugfix`` is the seventh key (#294) and is **appended**,
     so the original six keep the sequence the guided walk shipped with.
 
-    These are the values #285 locked, not the values the routing run proposed:
-    ``review`` departs to ``gpt-5.6-terra`` and ``chore`` to ``gpt-5.6-luna``.
-    Both departures are recorded in ADR-0035 — a future reader who "corrects"
-    either back toward the run fails here first.
+    These are ADR-0048's values, which supersede the ones #285 locked and the
+    ones the 2026-07-24 routing run proposed. ``review`` is deliberately not
+    ``gpt-5.6-sol`` — a rule ADR-0035 established and ADR-0048 keeps — and no
+    row holds ``max``, which is the escalation rung.
     """
     from git_loopy.config import RECOMMENDED_ROUTING
 
     assert dict(RECOMMENDED_ROUTING) == {
-        "planning": ("claude-opus-5", "max"),
-        "review": ("gpt-5.6-terra", "xhigh"),
-        "implementation": ("claude-sonnet-5", "low"),
-        "test": ("claude-sonnet-5", "medium"),
-        "docs": ("claude-sonnet-5", "low"),
-        "chore": ("gpt-5.6-luna", "none"),
+        "planning": ("claude-opus-5", "xhigh"),
+        "review": ("claude-opus-5", "high"),
+        "implementation": ("gpt-5.6-terra", "high"),
+        "test": ("gemini-3.6-flash", "high"),
+        "docs": ("gpt-5.6-terra", "low"),
+        "chore": ("gpt-5.6-luna", "medium"),
         "bugfix": ("claude-opus-5", "xhigh"),
     }
     # Ladder order is load-bearing: the guided walk presents the core in this
@@ -302,11 +302,11 @@ def test_recommended_routing_reserves_the_escalation_rung_for_the_default() -> N
     #286 locked the pair and named the rule that is invisible in every artifact:
     **the default reserves the ceiling, it does not spend it.** ``max`` is
     #291's escalation rung, so a default of ``max`` would leave unclassified
-    work — the whole corpus, since nothing produces ``task-type:`` labels — with
-    a second attempt at the identical pair.
+    work with a second attempt at the identical pair.
 
-    ``planning`` deliberately *diverges* from the default by holding the rung
-    outright, so it is asserted explicitly rather than mirrored off the default.
+    ADR-0048 extends the same rule to the routed rows, where ADR-0035's
+    ``planning`` had spent the rung outright: **no** recommended pair holds
+    ``max``, so escalation is live for all seven Task types rather than six.
     """
     from git_loopy import cli
     from git_loopy.config import RECOMMENDED_ROUTING, REASONING_EFFORT_ORDER
@@ -315,14 +315,11 @@ def test_recommended_routing_reserves_the_escalation_rung_for_the_default() -> N
         "claude-opus-5",
         "xhigh",
     )
-    rung_model, rung_effort = "claude-opus-5", "max"
+    rung_effort = "max"
     ladder = REASONING_EFFORT_ORDER
     assert ladder.index(cli._DEFAULT_REASONING_EFFORT) == ladder.index(rung_effort) - 1
-    assert RECOMMENDED_ROUTING["planning"] == (rung_model, rung_effort)
-    assert RECOMMENDED_ROUTING["planning"] != (
-        cli._DEFAULT_MODEL,
-        cli._DEFAULT_REASONING_EFFORT,
-    )
+    for key, (_model, effort) in RECOMMENDED_ROUTING.items():
+        assert effort != rung_effort, key
 
 
 def _tracked_project_config() -> dict[str, object]:

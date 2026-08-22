@@ -188,57 +188,65 @@ MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {}
 #: ==================  ====================  ========
 #: task-type key       Model                 Effort
 #: ==================  ====================  ========
-#: ``planning``        ``claude-opus-5``     ``max``
-#: ``review``          ``gpt-5.6-terra``     ``xhigh``
-#: ``implementation``  ``claude-sonnet-5``   ``low``
-#: ``test``            ``claude-sonnet-5``   ``medium``
-#: ``docs``            ``claude-sonnet-5``   ``low``
-#: ``chore``           ``gpt-5.6-luna``      ``none``
+#: ``planning``        ``claude-opus-5``     ``xhigh``
+#: ``review``          ``claude-opus-5``     ``high``
+#: ``implementation``  ``gpt-5.6-terra``     ``high``
+#: ``test``            ``gemini-3.6-flash``  ``high``
+#: ``docs``            ``gpt-5.6-terra``     ``low``
+#: ``chore``           ``gpt-5.6-luna``      ``medium``
 #: ``bugfix``          ``claude-opus-5``     ``xhigh``
 #: ==================  ====================  ========
 #:
-#: **Provenance.** Adopted from the model-routing run of **2026-07-24** (the v3
-#: table posted on issue #280, sourced from the live ``GET /models`` response for
-#: Copilot CLI ``1.0.75``), locked by #285 and #294, and recorded in
-#: ADR-0035. The table **departs from the run twice**, and both departures are
-#: what a future reader will otherwise "correct" back toward it:
+#: **Provenance.** Retuned on **2026-08-22** and recorded in ADR-0048, which
+#: supersedes the *values* ADR-0035 locked — sourced from the model-routing run
+#: of 2026-07-24 (#280, #285, #294) — while leaving every *rule* ADR-0035
+#: established standing. The rules that outlived the values, because each one is
+#: what a future reader will otherwise undo:
 #:
-#: * ``review`` is ``gpt-5.6-terra``, not the run's ``gpt-5.6-sol``. The run's
-#:   whole mitigation for Sol's measured task-cheating is that it "writes no
-#:   files and has no metric to game" — true of the ``code-review`` *subagent*
-#:   and false of the ``review`` *Task type*, which is a full write-capable Lane
-#:   holding authority to close its own issue. Terra is the run's own runner-up:
-#:   same vendor, so cross-vendor review still holds by construction.
-#: * ``chore`` is ``gpt-5.6-luna @ none``, not ``claude-haiku-4.5``. Haiku
-#:   exposes **no effort dial at all**, so ``claude-haiku-4.5 @ none`` is not a
-#:   configuration that exists: it *reads* as "Haiku with reasoning off" and
-#:   *delivers* Haiku with an uncapped internal thinking budget — and an effort
-#:   supplied to an effort-incapable model **hard-rejects session creation**
-#:   rather than downgrading (ADR-0019). Luna @ ``none`` is deterministic about
-#:   not thinking. The boundary rule this cashes out: **a reasoning-incapable
-#:   model is unroutable through** ``[routing]``, invariant at four layers —
-#:   this mapping's ``tuple[str, str]`` type, ``settings.table_routing``'s
-#:   exactly-``{model, effort}`` demand, ``init``'s ``supported_efforts`` filter,
-#:   and ``tests/test_config.py``'s uniform gates-clean assertion.
+#: * **No routed pair holds** ``max``. ``claude-opus-5 @ max`` is #291's
+#:   escalation rung, so a routed pair equal to the rung makes escalation a
+#:   no-op — the retry would reuse the identical pair. ADR-0035's ``planning``
+#:   spent the rung outright and bought that dead retry; every row now sits
+#:   below it, so escalation is live for all seven Task types.
+#: * **A reasoning-incapable model is unroutable through** ``[routing]``. An
+#:   effort supplied to an effort-incapable model — ``claude-haiku-4.5``,
+#:   ``claude-sonnet-4.5``, ``auto``, whose roster entries are the empty set —
+#:   **hard-rejects session creation** rather than downgrading (ADR-0019), so
+#:   ``claude-haiku-4.5 @ none`` is not a configuration that exists. Invariant
+#:   at four layers: this mapping's ``tuple[str, str]`` type,
+#:   ``settings.table_routing``'s exactly-``{model, effort}`` demand, ``init``'s
+#:   ``supported_efforts`` filter, and ``tests/test_config.py``'s uniform
+#:   gates-clean assertion.
+#: * **Never** ``gpt-5.6-sol`` **on** ``review``. The run's whole mitigation for
+#:   Sol's measured task-cheating is that it "writes no files and has no metric
+#:   to game" — true of the ``code-review`` *subagent* and false of the
+#:   ``review`` *Task type*, which is a full write-capable Lane holding
+#:   authority to close its own issue.
+#: * **Cross-vendor review holds by construction, not by mechanism.**
+#:   ``review`` is Anthropic while ``implementation`` and ``docs`` are OpenAI,
+#:   so a Lane never reviews its own vendor's work. There is no vendor map, no
+#:   cross-entry check and no warning enforcing it.
 #:
-#: ``bugfix`` is #294's addition at ``xhigh`` — ``high`` would make labelling a
-#: bug *cheaper* than not labelling it, and ``max`` is #291's escalation rung, so
-#: a ``max`` route would make escalation a no-op for bug work.
+#: ``bugfix`` stays at ``xhigh``: ``high`` would make labelling a bug *cheaper*
+#: than not labelling it, since the run-wide default is already ``xhigh``.
 #:
-#: ``planning`` and ``bugfix`` share a model with the **global default**
-#: (``claude-opus-5 @ xhigh``, ADR-0036) but not, in ``planning``'s case, its
-#: effort: the default deliberately sits one rung below the escalation rung so
-#: it *reserves* the ceiling, while ``planning`` spends it outright. That
-#: relation is rationale, not mechanism — the default is an independent constant
-#: in ``cli.py`` and is never derived from this table.
+#: ``test`` is the one row pinned to its model's ceiling — ``gemini-3.6-flash``
+#: offers ``minimal``/``low``/``medium``/``high`` and nothing above, so raising
+#: this row without changing its model would hard-reject at session creation.
+#:
+#: ``planning`` and ``bugfix`` now *equal* the **global default**
+#: (``claude-opus-5 @ xhigh``, ADR-0036), where ADR-0035's ``planning`` diverged
+#: from it. That is a coincidence of value, not mechanism — the default is an
+#: independent constant in ``cli.py``, is never derived from this table, and
+#: keeps reserving the escalation rung whether or not a row happens to match it.
 RECOMMENDED_ROUTING: Mapping[str, tuple[str, str]] = MappingProxyType(
     {
-        "planning": ("claude-opus-5", "max"),
-        "review": ("gpt-5.6-terra", "xhigh"),
-        "implementation": ("claude-sonnet-5", "low"),
-        "test": ("claude-sonnet-5", "medium"),
-        "docs": ("claude-sonnet-5", "low"),
-        "chore": ("gpt-5.6-luna", "none"),
+        "planning": ("claude-opus-5", "xhigh"),
+        "review": ("claude-opus-5", "high"),
+        "implementation": ("gpt-5.6-terra", "high"),
+        "test": ("gemini-3.6-flash", "high"),
+        "docs": ("gpt-5.6-terra", "low"),
+        "chore": ("gpt-5.6-luna", "medium"),
         "bugfix": ("claude-opus-5", "xhigh"),
     }
 )

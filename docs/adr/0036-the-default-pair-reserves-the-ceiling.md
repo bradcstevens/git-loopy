@@ -96,6 +96,9 @@ sets the pair to the operator's explicit value; the pair in force is theirs, not
   where the default matters most (no config file, so no `[routing]` table), and would let
   `config routing set planning …` silently move it. If a later decision moves `planning` off
   Opus 5 that sentence becomes false and nothing fails. That is what this record is for.
+  [ADR-0048](0048-the-recommended-routing-table-is-retuned.md) has since dropped `planning` to
+  `xhigh`, so the row and the default are now the *same pair* rather than a near-miss — and the
+  rule that reserves the rung is unchanged, because it was never read off that row.
 
 **Review trigger:** a change to the **escalation rung**, or a roster change touching
 `claude-opus-5`.
