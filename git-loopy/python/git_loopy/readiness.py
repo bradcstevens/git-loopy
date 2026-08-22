@@ -96,28 +96,86 @@ class BlockedByRead:
 
 @dataclass(frozen=True)
 class Readiness:
-    """The verdict one :class:`BlockedByRead` decides.
+    """The verdict one :class:`BlockedByRead` decides — a closed type, not
+    three independent primitives (#438 finding 3).
+
+    Earlier revisions carried ``verdict``, ``admissible``, and ``skip_reason``
+    as three independently-settable fields, which permitted contradictory
+    states no caller ever meant to construct — ``verdict="ready"`` with
+    ``admissible=False``, or ``"blocked"`` with ``skip_reason=None``. This
+    dataclass keeps ``verdict`` and ``skip_reason`` as the only state that
+    varies, derives ``admissible`` from ``verdict`` as a read-only property so
+    it can never independently disagree, and validates the
+    verdict/skip_reason/blockers pairing in ``__post_init__`` so a
+    contradictory instance cannot exist even via direct construction. The two
+    valid shapes are reached only through :meth:`ready` and :meth:`blocked` —
+    the closed constructors :func:`decide_readiness` itself is pinned to.
 
     Attributes:
         verdict: ``"ready"`` or ``"blocked"`` — one of
             :data:`READINESS_VERDICTS`.
-        admissible: Whether the candidate may be bound at **Pickup**.
-            Equivalent to ``verdict == "ready"``, carried as its own field so a
-            caller never has to re-derive the one fact it actually needs.
         skip_reason: One of :data:`SKIP_BLOCKED_BY_OPEN_DEPENDENCY` /
-            :data:`SKIP_READINESS_UNPROVABLE` when ``admissible`` is
-            ``False``, else ``None``.
+            :data:`SKIP_READINESS_UNPROVABLE` when ``verdict`` is
+            ``"blocked"``, else ``None``.
         blockers: The open blockers the read established, in the order the
-            connection returned them. Empty when ``admissible`` is ``True``,
+            connection returned them. Empty when ``verdict`` is ``"ready"``,
             and also empty for ``readiness_unprovable`` — that reason reports
             that no assertion could be read, so there is nothing proven to
             name.
     """
 
     verdict: str
-    admissible: bool
-    skip_reason: str | None
+    skip_reason: str | None = None
     blockers: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Refuse the states three independent fields used to permit.
+
+        ``ready`` never carries a reason or a blocker list; ``blocked``
+        always carries one of the two closed reasons, and ``blockers`` is
+        only ever populated for :data:`SKIP_BLOCKED_BY_OPEN_DEPENDENCY` — the
+        one reason that names a proven fact rather than reporting that
+        nothing could be proven.
+        """
+        if self.verdict not in READINESS_VERDICTS:
+            raise ValueError(f"not a closed Readiness verdict: {self.verdict!r}")
+        if self.verdict == "ready":
+            if self.skip_reason is not None or self.blockers:
+                raise ValueError(
+                    "a ready Readiness may carry no skip_reason and no blockers"
+                )
+            return
+        if self.skip_reason not in (
+            SKIP_BLOCKED_BY_OPEN_DEPENDENCY,
+            SKIP_READINESS_UNPROVABLE,
+        ):
+            raise ValueError(
+                f"a blocked Readiness must name a closed skip_reason, got "
+                f"{self.skip_reason!r}"
+            )
+        if self.blockers and self.skip_reason != SKIP_BLOCKED_BY_OPEN_DEPENDENCY:
+            raise ValueError(
+                f"{self.skip_reason!r} proves nothing to name; blockers must be empty"
+            )
+
+    @property
+    def admissible(self) -> bool:
+        """Whether the candidate may be bound at **Pickup**.
+
+        Derived from ``verdict`` — never its own field — so it cannot
+        independently disagree with the verdict it describes.
+        """
+        return self.verdict == "ready"
+
+    @classmethod
+    def ready(cls) -> "Readiness":
+        """The one admissible verdict: no reason, no blockers to name."""
+        return cls(verdict="ready")
+
+    @classmethod
+    def blocked(cls, skip_reason: str, blockers: tuple[str, ...] = ()) -> "Readiness":
+        """The one inadmissible verdict, naming why and (if provable) whom."""
+        return cls(verdict="blocked", skip_reason=skip_reason, blockers=blockers)
 
 
 def decide_readiness(read: BlockedByRead) -> Readiness:
@@ -147,19 +205,9 @@ def decide_readiness(read: BlockedByRead) -> Readiness:
     """
     open_blockers = tuple(node.ref for node in read.nodes if node.state == "open")
     if open_blockers:
-        return Readiness(
-            verdict="blocked",
-            admissible=False,
-            skip_reason=SKIP_BLOCKED_BY_OPEN_DEPENDENCY,
-            blockers=open_blockers,
-        )
+        return Readiness.blocked(SKIP_BLOCKED_BY_OPEN_DEPENDENCY, open_blockers)
     incomplete = len(read.nodes) < read.total_count
     unreadable = any(not node.readable for node in read.nodes)
     if incomplete or unreadable:
-        return Readiness(
-            verdict="blocked",
-            admissible=False,
-            skip_reason=SKIP_READINESS_UNPROVABLE,
-            blockers=(),
-        )
-    return Readiness(verdict="ready", admissible=True, skip_reason=None, blockers=())
+        return Readiness.blocked(SKIP_READINESS_UNPROVABLE)
+    return Readiness.ready()

@@ -581,13 +581,17 @@ class IssueSource(Protocol):
         """
         ...
 
-    def readiness(self, ref: int | str) -> Readiness:
+    def readiness(self, item: AfkReadyItem) -> Readiness:
         """This candidate's **Readiness** verdict (#438, ADR-0047, §3.3.1).
 
         Asked at **Pickup**, per candidate the runner reaches — never at
         collection. A source with no native dependency graph (the PRDs
         backend) has nothing to be blocked by and reports every candidate
-        ready.
+        ready. Takes the whole :class:`AfkReadyItem` (not a bare ref) so a
+        GitHub-backend implementation can tell a PR candidate from an issue
+        candidate via :attr:`AfkReadyItem.kind` — the native ``blocked_by``
+        dependency graph ADR-0047 reads is an *issue* concept; GitHub's own
+        GraphQL schema has no ``blockedBy`` connection on a pull request.
         """
         ...
 
@@ -1104,27 +1108,38 @@ class GitHubIssueSource:
                 exc,
             )
 
-    def readiness(self, ref: int | str) -> Readiness:
-        """This candidate's **Readiness**, via the client's GraphQL ``blocked_by``.
+    def readiness(self, item: AfkReadyItem) -> Readiness:
+        """This candidate's **Readiness**, from the Pickup re-read's ``blockedBy``.
 
         A non-``int`` ref (defensive only — the GitHub backend never produces
         one) has no dependency graph to read and is reported ready, mirroring
-        :class:`PrdsIssueSource`'s own answer.
+        :class:`PrdsIssueSource`'s own answer. A ``"pr"`` item is reported
+        ready without I/O for the same reason: GitHub's ``blockedBy``
+        connection lives on the ``Issue`` GraphQL type, not ``PullRequest``
+        (``repository.issue(number:)`` resolves ``null`` for a PR number), so
+        a native issue-dependency graph is not a fact a PR carries.
+
+        Reads via ``issue_view`` — the same authoritative re-read
+        :meth:`pickup` performs — rather than a dedicated ``gh api graphql``
+        call per candidate (#438 finding 1). ``blockedBy`` rides in the same
+        ``--json`` field set every shallow and full issue read already
+        requests (:data:`git_loopy.gh._SHALLOW_ISSUE_FIELDS`), so this never
+        costs a *second* round-trip beyond the one the candidate walk was
+        always going to pay to re-verify state/labels/body at Pickup.
 
         A read failure (:exc:`~git_loopy.gh.GhError`) is reported
         ``readiness_unprovable``: the connection could not be read at all,
         which is exactly what that reason means, and a transient failure here
         must not silently admit a candidate whose blockers were never checked.
         """
-        if not isinstance(ref, int):
-            return Readiness(
-                verdict="ready", admissible=True, skip_reason=None, blockers=()
-            )
+        ref = item.ref
+        if item.kind == "pr" or not isinstance(ref, int):
+            return Readiness.ready()
         try:
-            read = self._gh.blocked_by(ref)
+            read = self._gh.issue_view(ref).blocked_by
         except gh_module.GhError as exc:
             self._diag.warning(
-                "gh blockedBy read for #%s failed: %s; treating as unprovable",
+                "gh issue view #%s for readiness failed: %s; treating as unprovable",
                 ref,
                 exc,
             )
@@ -1501,10 +1516,8 @@ class PrdsIssueSource:
         _ = ref
         _ = body
 
-    def readiness(self, ref: int | str) -> Readiness:
+    def readiness(self, item: AfkReadyItem) -> Readiness:
         """Always ready — local markdown carries no native dependency graph."""
-        _ = ref
-        return Readiness(
-            verdict="ready", admissible=True, skip_reason=None, blockers=()
-        )
+        _ = item
+        return Readiness.ready()
 
