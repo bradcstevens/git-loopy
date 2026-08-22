@@ -1143,7 +1143,7 @@ class GitHubIssueSource:
                 ref,
                 exc,
             )
-            read = BlockedByRead(total_count=1, nodes=())
+            read = BlockedByRead.unprovable()
         return decide_readiness(read)
 
     def _detect_pr_advances(

@@ -361,7 +361,7 @@ _EMPTY_BLOCKED_BY: Final[BlockedByRead] = BlockedByRead(total_count=0, nodes=())
 #: :meth:`~git_loopy.sources.GitHubIssueSource.readiness` already constructs for
 #: its own ``GhError`` fallback, so "the connection was never read" has one
 #: shape project-wide.
-_UNPROVABLE_BLOCKED_BY: Final[BlockedByRead] = BlockedByRead(total_count=1, nodes=())
+_UNPROVABLE_BLOCKED_BY: Final[BlockedByRead] = BlockedByRead.unprovable()
 
 
 def _parse_blocked_by_connection(
@@ -396,13 +396,24 @@ def _parse_blocked_by_connection(
             nodes.append(BlockerNode(ref="", state=None, readable=False))
             continue
         try:
-            repo_nwo = raw_node["repository"]["nameWithOwner"]
-            ref = f"{repo_nwo}#{raw_node['number']}"
+            url = str(raw_node["url"])
+            number = raw_node["number"]
             state = str(raw_node["state"]).lower()
         except (KeyError, TypeError) as exc:
             raise GhError(
                 list(cmd), 0, f"gh {field} node malformed: {exc}"
             ) from exc
+        # ``gh`` 2.96.0's ``blockedBy`` nodes carry ``id``, ``number``,
+        # ``state``, ``title`` and ``url`` — no ``repository`` object (#438
+        # finding 1, verified against the live CLI). The owner/repo is only
+        # recoverable from ``url``: ``.../<owner>/<repo>/issues/<number>``.
+        try:
+            owner, repo_name = url.split("/")[3:5]
+        except (IndexError, ValueError) as exc:
+            raise GhError(
+                list(cmd), 0, f"gh {field} node malformed: url {url!r}"
+            ) from exc
+        ref = f"{owner}/{repo_name}#{number}"
         nodes.append(BlockerNode(ref=ref, state=state, readable=True))
     return BlockedByRead(total_count=total_count, nodes=tuple(nodes))
 

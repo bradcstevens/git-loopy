@@ -93,6 +93,15 @@ class BlockedByRead:
     total_count: int
     nodes: tuple[BlockerNode, ...] = ()
 
+    @classmethod
+    def unprovable(cls) -> "BlockedByRead":
+        """The sentinel for a connection never read or an unparseable error fallback.
+
+        Encodes ``total_count=1, nodes=()`` so :func:`decide_readiness` treats
+        it as incomplete/unprovable (#438 finding 4, ADR-0047).
+        """
+        return cls(total_count=1, nodes=())
+
 
 @dataclass(frozen=True)
 class Readiness:

@@ -1290,7 +1290,11 @@ def test_issue_list_parses_blocked_by_onto_the_issue(monkeypatch) -> None:
     """Propagation, end to end: the JSON ``blockedBy`` connection lands on
     :attr:`Issue.blocked_by`, exactly as
     :func:`~git_loopy.gh._parse_blocked_by_connection` parses the connection
-    shape (#438 finding 1 -- "parse it onto Issue")."""
+    shape (#438 finding 1 -- "parse it onto Issue").
+
+    Uses the real ``gh`` 2.96.0 node shape: ``id``, ``number``, ``state``,
+    ``title``, and ``url`` (no ``repository`` dict).
+    """
 
     def fake_run(cmd, **kw):
         return _completed(
@@ -1303,15 +1307,17 @@ def test_issue_list_parses_blocked_by_onto_the_issue(monkeypatch) -> None:
                         "body": "b",
                         "labels": [],
                         "state": "OPEN",
-                        "url": "u",
+                        "url": "https://github.com/acme/widgets/issues/7",
                         "createdAt": "2026-01-02T03:04:05Z",
                         "blockedBy": {
                             "totalCount": 1,
                             "nodes": [
                                 {
+                                    "id": "I_kwDO123",
                                     "number": 93,
+                                    "title": "Blocker issue",
                                     "state": "OPEN",
-                                    "repository": {"nameWithOwner": "acme/widgets"},
+                                    "url": "https://github.com/acme/widgets/issues/93",
                                 }
                             ],
                         },
@@ -1330,7 +1336,8 @@ def test_issue_list_parses_blocked_by_onto_the_issue(monkeypatch) -> None:
 
 
 def test_issue_view_parses_blocked_by_onto_the_issue(monkeypatch) -> None:
-    """The authoritative Pickup re-read carries the propagation too."""
+    """The authoritative Pickup re-read carries the propagation too, testing both
+    same-repository and cross-repository blocker nodes under the real ``gh`` shape."""
 
     def fake_run(cmd, **kw):
         return _completed(
@@ -1342,16 +1349,25 @@ def test_issue_view_parses_blocked_by_onto_the_issue(monkeypatch) -> None:
                     "body": "b",
                     "labels": [],
                     "state": "OPEN",
-                    "url": "u",
+                    "url": "https://github.com/acme/widgets/issues/7",
                     "comments": [],
                     "blockedBy": {
-                        "totalCount": 1,
+                        "totalCount": 2,
                         "nodes": [
                             {
+                                "id": "I_kwDO1",
                                 "number": 90,
+                                "title": "Same-repo blocker",
                                 "state": "CLOSED",
-                                "repository": {"nameWithOwner": "acme/widgets"},
-                            }
+                                "url": "https://github.com/acme/widgets/issues/90",
+                            },
+                            {
+                                "id": "I_kwDO2",
+                                "number": 42,
+                                "title": "Cross-repo blocker",
+                                "state": "OPEN",
+                                "url": "https://github.com/other-org/other-repo/issues/42",
+                            },
                         ],
                     },
                 }
@@ -1362,8 +1378,11 @@ def test_issue_view_parses_blocked_by_onto_the_issue(monkeypatch) -> None:
     issue = issue_view(7)
 
     assert issue.blocked_by == BlockedByRead(
-        total_count=1,
-        nodes=(BlockerNode(ref="acme/widgets#90", state="closed"),),
+        total_count=2,
+        nodes=(
+            BlockerNode(ref="acme/widgets#90", state="closed"),
+            BlockerNode(ref="other-org/other-repo#42", state="open"),
+        ),
     )
 
 
