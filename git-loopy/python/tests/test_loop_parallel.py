@@ -96,7 +96,7 @@ import asyncio
 import json
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -115,7 +115,15 @@ from git_loopy import gh as gh_module
 from git_loopy import git as git_module
 from git_loopy import loop as loop_module
 from git_loopy import rolling_pressure
+from git_loopy.attempt_lifecycle import AttemptState
 from git_loopy.config import RunConfig
+from git_loopy.execution_host import (
+    ContributionFailure,
+    ContributionOutcome,
+    ContributionRequest,
+    IsolationGrade,
+    Placement,
+)
 from git_loopy.events import WRAPPER_DASHBOARD_FAULT
 from git_loopy.gate import LoopFailure
 from git_loopy.interactive.driver import (
@@ -2561,6 +2569,66 @@ def _wire_two_lane_rolling(
         render_reasoning=False,
     )
     return fake_git, fake_gh, fake_client, cfg
+
+
+@dataclass
+class _TerminalFailureExecutionHost:
+    """A complete host double that never starts an Agent session."""
+
+    placement: Placement = "fake"
+    isolation_grade: IsolationGrade = "workspace separation only"
+    capacity: int = 4
+    calls: list[ContributionRequest] = field(default_factory=list)
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        self.calls.append(request)
+        if request.issue_ref == 42:
+            return ContributionFailure(
+                reason="fake_never_started",
+                classification="never_started",
+                ending=None,
+            )
+        return ContributionFailure(
+            reason="fake_stall",
+            classification="stall",
+            ending=None,
+        )
+
+
+def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
+    tmp_path, monkeypatch
+) -> None:
+    """A fake host is complete when exercised by ``_ParallelLoop`` itself (#447)."""
+    fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _TerminalFailureExecutionHost()
+    built: list[loop_module._ParallelLoop] = []
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        instance = real_parallel_loop(*args, execution_host=host, **kwargs)
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == 0
+    assert [request.issue_ref for request in host.calls] == [42, 43]
+    assert fake_client.created == []
+    assert fake_git.merge_calls == []
+    assert len(built) == 1
+    assert built[0]._serial._attempts.state(42) is AttemptState.FRESH
+    assert built[0]._serial._attempts.state(43) is AttemptState.FRESH
+    assert built[0]._serial._strike_machine.strikes == 0
+    assert [contribution.reason for contribution in built[0].finalized_contributions] == [
+        "unchanged_branch",
+        "unchanged_branch",
+    ]
 
 
 def test_parallel_lane_runs_worktree_setup_before_own_session(

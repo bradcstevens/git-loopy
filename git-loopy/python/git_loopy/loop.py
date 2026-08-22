@@ -2253,40 +2253,10 @@ class _ParallelLoop:
         self._worktree_setup = worktree_setup
         self._run_id = writers.run_id
         self._repo_root = git.root
-        # The Execution host seam (#447, spec #445 §A/§C): every Lane
-        # contribution's agent session now travels through a declared host
-        # rather than the loop invoking `IterationSession` directly. Defaults
-        # to `LocalExecutionHost`, putting today's local behaviour behind the
-        # seam unchanged; `_run_local_contribution` supplies its mechanics.
-        # A test injects a fake host here instead — no network involved.
-        self._execution_host: execution_host_module.ExecutionHost = (
-            execution_host
-            if execution_host is not None
-            else execution_host_module.LocalExecutionHost(
-                runner=self._run_local_contribution
-            )
-        )
-        # Per-in-flight-contribution context (`contribution`, `_LaneWork`)
-        # keyed by `id(request)`, so `_run_local_contribution` can reach the
-        # loop state its mechanics need without the seam's own
-        # `ContributionRequest` carrying anything beyond what spec #445 §A
-        # names (issue reference, prompt, base revision, model/reasoning
-        # pair, Effective Skill policy, run_id) — never a working directory
-        # or a callback. Populated immediately before, and popped
-        # immediately after, each `self._execution_host.run_contribution`
-        # call.
-        self._contribution_context: dict[
-            int, tuple[rolling_scheduler.Contribution, _LaneWork]
-        ] = {}
-        # Companion to `_contribution_context`: the session-outcome half of
-        # `_run_local_contribution`'s work (`_LaneSessionSignals`, `changed`,
-        # `checkpoint_ok`) that `_run_lane_lifecycle` still needs once the
-        # host returns, but that is deliberately absent from the seam's own
-        # `ContributionOutcome` — a host's outcome names a branch and
-        # Events, never the Run's own Strike/Escalation bookkeeping.
-        self._lane_outcome_signals: dict[
-            int, tuple[_LaneSessionSignals, bool, bool]
-        ] = {}
+        # A supplied host is reusable across contributions. The local adapter is
+        # built for each contribution below so its runner can close over the
+        # concrete Lane state without smuggling that state through the request.
+        self._execution_host = execution_host
 
         # Rolling dispatch (#219, ADR-0020) needs the two extra Pool
         # operations `RollingIssueSource` defines. Only the GitHub backend
@@ -3145,32 +3115,21 @@ class _ParallelLoop:
         request = self._build_contribution_request(
             contribution, lane_work, commits_block
         )
-        self._contribution_context[id(request)] = (contribution, lane_work)
-        try:
-            outcome = await self._execution_host.run_contribution(request)
-        finally:
-            self._contribution_context.pop(id(request), None)
-        signals, changed, checkpoint_ok = self._lane_outcome_signals.pop(
-            id(request)
-        )
+        host = self._host_for_contribution(contribution, lane_work)
+        outcome = await host.run_contribution(request)
         if isinstance(outcome, execution_host_module.ContributionFailure):
             self._diag.warning(
-                "lane #%s execution host (%s) refused contribution: %s (%s)",
-                ref, self._execution_host.placement,
-                outcome.reason, outcome.detail,
+                "lane #%s execution host (%s) %s: %s (%s)",
+                ref, host.placement, outcome.classification, outcome.reason, outcome.detail,
             )
+            self._finish_terminal_host_failure(
+                contribution, lane_work, outcome
+            )
+            return
 
-        # The Lane's **Session outcome** (#403). `changed` is this mode's own
-        # progress answer -- an agent commit or a Checkpoint on the Lane branch
-        # -- so the ending agrees with what the scheduler was told about the
-        # same contribution.
-        lane_outcome = session_outcome_module.resolve_session_outcome(
-            termination=signals.termination,
-            progressed=changed,
-            error=signals.error,
-            content_filtered=signals.content_filtered,
-            no_more_tasks=signals.no_more_tasks,
-        )
+        lane_work.branch = outcome.branch
+        lane_outcome = outcome.ending
+        assert lane_outcome is not None
         # Offered to the **Escalation rung**'s ledger before it is said out
         # loud (#408): a Lane that stalled silently is evidence about the
         # *issue*, and the Pickup that acts on it may well be a serial one.
@@ -3179,23 +3138,8 @@ class _ParallelLoop:
             self._diag, ref=lane_work.item.ref, record=lane_outcome
         )
 
-        if checkpoint_ok:
-            try:
-                self._git.remove_worktree(lane_work.path, force=True)
-            except git_module.GitError as exc:
-                self._diag.warning(
-                    "worktree remove for %s failed: %s", lane_work.path, exc
-                )
-        else:
-            # §3.10: a Checkpoint failure preserves the dirty branch and
-            # worktree for forensics / recovery rather than tearing it down.
-            self._diag.warning(
-                "lane #%s checkpoint failed; preserving worktree %s",
-                ref, lane_work.path,
-            )
-
         disposition = scheduler.finish_work(
-            contribution, changed=changed, checkpoint_ok=checkpoint_ok
+            contribution, changed=outcome.sha != lane_work.pre_sha
         )
         if disposition == rolling_scheduler.TERMINAL:
             self._lane_work.pop(contribution.contribution_id, None)
@@ -3274,8 +3218,50 @@ class _ParallelLoop:
             run_id=self._run_id,
         )
 
+    def _host_for_contribution(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
+    ) -> execution_host_module.ExecutionHost:
+        """Return the supplied host or a local adapter bound to this Lane."""
+        if self._execution_host is not None:
+            return self._execution_host
+
+        async def runner(
+            request: execution_host_module.ContributionRequest,
+        ) -> execution_host_module.LocalRunResult:
+            return await self._run_local_contribution(
+                request, contribution, lane_work
+            )
+
+        return execution_host_module.LocalExecutionHost(runner=runner)
+
+    def _finish_terminal_host_failure(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
+        outcome: execution_host_module.ContributionFailure,
+    ) -> None:
+        """Finalize a host failure before it can reach Integration."""
+        assert self._scheduler is not None
+        if outcome.classification == "breach":
+            ending = outcome.ending
+            assert ending is not None
+            self._serial._observe_session_ending(lane_work.item.ref, ending)
+            _report_session_outcome(
+                self._diag, ref=lane_work.item.ref, record=ending
+            )
+
+        disposition = self._scheduler.finish_terminal_failure(contribution)
+        assert disposition == rolling_scheduler.TERMINAL
+        self._lane_work.pop(contribution.contribution_id, None)
+        self._finalize_contribution(contribution, published=False)
+
     async def _run_local_contribution(
-        self, request: execution_host_module.ContributionRequest
+        self,
+        request: execution_host_module.ContributionRequest,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
     ) -> execution_host_module.LocalRunResult:
         """The ``local`` Execution host's runner (#447).
 
@@ -3284,18 +3270,21 @@ class _ParallelLoop:
         Checkpoint a dirty tree (:meth:`_account_lane`) — reached through
         :class:`~git_loopy.execution_host.LocalExecutionHost` rather than
         called directly, so every Lane contribution now travels through the
-        seam with today's behaviour otherwise unchanged. The session-outcome
-        half the loop still needs (`_LaneSessionSignals`, `changed`,
-        `checkpoint_ok`) is stashed in ``self._lane_outcome_signals`` for
-        ``_run_lane_lifecycle`` to read back once the host returns — it is
-        deliberately not part of the seam's own outcome contract.
+        seam with today's behaviour otherwise unchanged. The         session ending travels back on the outcome itself. The local runner also
+        retains the existing worktree cleanup rule immediately after its
+        Checkpoint result is known.
         """
-        contribution, lane_work = self._contribution_context[id(request)]
         signals = await self._run_lane_session(
             contribution, lane_work, request.prompt
         )
         changed, checkpoint_ok = self._account_lane(contribution, lane_work)
-        self._lane_outcome_signals[id(request)] = (signals, changed, checkpoint_ok)
+        ending = session_outcome_module.resolve_session_outcome(
+            termination=signals.termination,
+            progressed=changed,
+            error=signals.error,
+            content_filtered=signals.content_filtered,
+            no_more_tasks=signals.no_more_tasks,
+        )
         try:
             sha = lane_work.git.head_sha()
         except git_module.GitError:
@@ -3309,11 +3298,30 @@ class _ParallelLoop:
             # don't block" and this mirrors it rather than manufacturing a
             # rejection the loop's own accounting never raised.
             dirty, untracked = False, False
+        self._cleanup_lane_worktree(lane_work, checkpoint_ok)
         return execution_host_module.LocalRunResult(
             branch=lane_work.branch,
             sha=sha,
             dirty=dirty,
             untracked=untracked,
+            ending=ending,
+        )
+
+    def _cleanup_lane_worktree(
+        self, lane_work: _LaneWork, checkpoint_ok: bool
+    ) -> None:
+        """Apply the existing Checkpoint-owned worktree retention rule."""
+        if checkpoint_ok:
+            try:
+                self._git.remove_worktree(lane_work.path, force=True)
+            except git_module.GitError as exc:
+                self._diag.warning(
+                    "worktree remove for %s failed: %s", lane_work.path, exc
+                )
+            return
+        self._diag.warning(
+            "lane #%s checkpoint failed; preserving worktree %s",
+            lane_work.item.ref, lane_work.path,
         )
 
     async def _run_lane_session(

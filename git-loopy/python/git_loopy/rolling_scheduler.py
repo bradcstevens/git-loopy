@@ -646,6 +646,17 @@ class RollingScheduler:
         self._parked.sort(key=lambda entry: (entry[0], _ref_sort_key(entry[1].ref)))
         return PARKED
 
+    def finish_terminal_failure(self, contribution: Contribution) -> str:
+        """Finalize a host-reported terminal failure without local work signals.
+
+        The host failure's three-class vocabulary is intentionally not emitted
+        here: #453 owns widening the contribution-end event reasons. Until then,
+        the existing unpublished terminal reason keeps the wire unchanged while
+        the Run still takes a distinct, non-Integration control-flow path.
+        """
+        self._finalize(contribution, reason=REASON_UNCHANGED_BRANCH)
+        return TERMINAL
+
     def finalize(
         self,
         contribution: Contribution,

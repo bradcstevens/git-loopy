@@ -77,9 +77,12 @@ from typing import (
     runtime_checkable,
 )
 
+from git_loopy import session_outcome as session_outcome_module
+
 __all__ = [
     "Placement",
     "IsolationGrade",
+    "ContributionFailureClass",
     "ContributionRequest",
     "ContributionSuccess",
     "ContributionFailure",
@@ -100,6 +103,11 @@ Placement = str
 #: credentials and network — a workspace boundary, explicitly not a security
 #: boundary) and ``"machine boundary"`` (a future remote host).
 IsolationGrade = Literal["workspace separation only", "machine boundary"]
+
+#: The closed facts a host can report for a terminal contribution failure.
+#: Only ``"breach"`` reached an Agent session ending; the other two mean no
+#: ending exists for the Run to offer to its issue ledgers.
+ContributionFailureClass = Literal["breach", "never_started", "stall"]
 
 
 @dataclass(frozen=True)
@@ -148,6 +156,9 @@ class ContributionSuccess:
             :attr:`ExecutionHost.placement` at the moment of this outcome).
         isolation_grade: The host's declared isolation grade (mirrors
             :attr:`ExecutionHost.isolation_grade`).
+        ending: The Agent session ending. A successful contribution always
+            carries one, including when its outcome is ``None`` because the
+            session made progress.
     """
 
     branch: str
@@ -155,6 +166,11 @@ class ContributionSuccess:
     events: tuple[Mapping[str, Any], ...]
     placement: Placement
     isolation_grade: IsolationGrade
+    ending: session_outcome_module.SessionOutcomeRecord | None
+
+    def __post_init__(self) -> None:
+        if self.ending is None:
+            raise ValueError("a successful contribution must carry its session ending")
 
 
 @dataclass(frozen=True)
@@ -173,10 +189,24 @@ class ContributionFailure:
             carries uncommitted or untracked work — the seam rejects such a
             branch rather than treating it as durable.
         detail: A free-form human-readable detail for diagnostics.
+        classification: Whether the host breached after a session ended, never
+            started the contribution, or stalled without proving an ending.
+        ending: The Agent session ending for a ``"breach"``. It is absent for
+            ``"never_started"`` and ``"stall"``.
     """
 
     reason: str
+    classification: ContributionFailureClass
+    ending: session_outcome_module.SessionOutcomeRecord | None
     detail: str = ""
+
+    def __post_init__(self) -> None:
+        if self.classification == "breach" and self.ending is None:
+            raise ValueError("a breach must carry its session ending")
+        if self.classification != "breach" and self.ending is not None:
+            raise ValueError(
+                f"{self.classification} must not carry a session ending"
+            )
 
 
 #: The union of a host's two terminal outcomes.
@@ -252,12 +282,14 @@ class LocalRunResult:
         events: This contribution's Events, if the runner collected any
             separately from the shared trace. Empty by default because the
             local runner emits directly onto the shared observer as it runs.
+        ending: The local Agent session's resolved ending.
     """
 
     branch: str
     sha: str | None
     dirty: bool
     untracked: bool
+    ending: session_outcome_module.SessionOutcomeRecord
     events: tuple[Mapping[str, Any], ...] = ()
 
 
@@ -318,6 +350,8 @@ class LocalExecutionHost:
         if result.dirty or result.untracked:
             return ContributionFailure(
                 reason="uncommitted_or_untracked_work",
+                classification="breach",
+                ending=result.ending,
                 detail=(
                     f"branch {result.branch!r} carries "
                     f"{'uncommitted' if result.dirty else ''}"
@@ -328,6 +362,8 @@ class LocalExecutionHost:
         if result.sha is None:
             return ContributionFailure(
                 reason="unresolved_branch_sha",
+                classification="breach",
+                ending=result.ending,
                 detail=f"branch {result.branch!r} produced no resolvable HEAD SHA",
             )
         return ContributionSuccess(
@@ -336,4 +372,5 @@ class LocalExecutionHost:
             events=result.events,
             placement=self.placement,
             isolation_grade=self.isolation_grade,
+            ending=result.ending,
         )
