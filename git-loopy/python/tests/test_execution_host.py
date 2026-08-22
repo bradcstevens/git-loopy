@@ -12,7 +12,8 @@ Acceptance criteria reference: issue #447.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Literal
 
 import pytest
 
@@ -21,8 +22,14 @@ from git_loopy.execution_host import (
     ContributionRequest,
     ContributionSuccess,
     ExecutionHost,
+    IsolationGrade,
     LocalExecutionHost,
     LocalRunResult,
+    Placement,
+)
+from git_loopy.session_outcome import (
+    SessionOutcomeRecord,
+    SessionTermination,
 )
 
 
@@ -38,6 +45,14 @@ def _request(**overrides: object) -> ContributionRequest:
     )
     defaults.update(overrides)
     return ContributionRequest(**defaults)  # type: ignore[arg-type]
+
+
+def _ending() -> SessionOutcomeRecord:
+    return SessionOutcomeRecord(
+        outcome=None,
+        progressed=True,
+        termination=SessionTermination.COMPLETED,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -121,7 +136,11 @@ def test_local_host_satisfies_execution_host_protocol() -> None:
 async def test_local_host_returns_success_for_a_clean_branch() -> None:
     async def runner(request: ContributionRequest) -> LocalRunResult:
         return LocalRunResult(
-            branch="git-loopy/run/issue-42", sha="cafef00d", dirty=False, untracked=False
+            branch="git-loopy/run/issue-42",
+            sha="cafef00d",
+            dirty=False,
+            untracked=False,
+            ending=_ending(),
         )
 
     host = LocalExecutionHost(runner=runner)
@@ -133,13 +152,18 @@ async def test_local_host_returns_success_for_a_clean_branch() -> None:
     assert outcome.events == ()
     assert outcome.placement == "local"
     assert outcome.isolation_grade == "workspace separation only"
+    assert outcome.ending == _ending()
 
 
 @pytest.mark.asyncio
 async def test_local_host_rejects_a_branch_carrying_uncommitted_work() -> None:
     async def runner(request: ContributionRequest) -> LocalRunResult:
         return LocalRunResult(
-            branch="git-loopy/run/issue-42", sha="cafef00d", dirty=True, untracked=False
+            branch="git-loopy/run/issue-42",
+            sha="cafef00d",
+            dirty=True,
+            untracked=False,
+            ending=_ending(),
         )
 
     host = LocalExecutionHost(runner=runner)
@@ -147,13 +171,19 @@ async def test_local_host_rejects_a_branch_carrying_uncommitted_work() -> None:
 
     assert isinstance(outcome, ContributionFailure)
     assert outcome.reason == "uncommitted_or_untracked_work"
+    assert outcome.classification == "breach"
+    assert outcome.ending == _ending()
 
 
 @pytest.mark.asyncio
 async def test_local_host_rejects_a_branch_carrying_untracked_work() -> None:
     async def runner(request: ContributionRequest) -> LocalRunResult:
         return LocalRunResult(
-            branch="git-loopy/run/issue-42", sha="cafef00d", dirty=False, untracked=True
+            branch="git-loopy/run/issue-42",
+            sha="cafef00d",
+            dirty=False,
+            untracked=True,
+            ending=_ending(),
         )
 
     host = LocalExecutionHost(runner=runner)
@@ -167,7 +197,11 @@ async def test_local_host_rejects_a_branch_carrying_untracked_work() -> None:
 async def test_local_host_rejects_an_unresolved_sha() -> None:
     async def runner(request: ContributionRequest) -> LocalRunResult:
         return LocalRunResult(
-            branch="git-loopy/run/issue-42", sha=None, dirty=False, untracked=False
+            branch="git-loopy/run/issue-42",
+            sha=None,
+            dirty=False,
+            untracked=False,
+            ending=_ending(),
         )
 
     host = LocalExecutionHost(runner=runner)
@@ -186,7 +220,11 @@ async def test_local_host_never_retries_the_runner() -> None:
         nonlocal calls
         calls += 1
         return LocalRunResult(
-            branch="git-loopy/run/issue-42", sha="cafef00d", dirty=False, untracked=False
+            branch="git-loopy/run/issue-42",
+            sha="cafef00d",
+            dirty=False,
+            untracked=False,
+            ending=_ending(),
         )
 
     host = LocalExecutionHost(runner=runner)
@@ -222,18 +260,15 @@ class FakeExecutionHost:
     timeout / cancellation path against a host that never answers.
     """
 
-    outcome: object
-    placement: str = "fake"
-    isolation_grade: str = "workspace separation only"
+    outcome: ContributionSuccess | ContributionFailure | Literal["stall"]
+    placement: Placement = "fake"
+    isolation_grade: IsolationGrade = "workspace separation only"
     capacity: int = 4
-    calls: list[ContributionRequest] | None = None
+    calls: list[ContributionRequest] = field(default_factory=list)
 
-    def __post_init__(self) -> None:
-        if self.calls is None:
-            self.calls = []
-
-    async def run_contribution(self, request: ContributionRequest):
-        assert self.calls is not None
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionSuccess | ContributionFailure:
         self.calls.append(request)
         if self.outcome == "stall":
             await asyncio.Event().wait()  # never set: simulates a stalled host
@@ -248,6 +283,7 @@ async def test_fake_host_returns_a_prepared_branch_with_no_network() -> None:
         events=(),
         placement="fake",
         isolation_grade="workspace separation only",
+        ending=_ending(),
     )
     host = FakeExecutionHost(outcome=success)
     request = _request(issue_ref=7)
@@ -260,7 +296,12 @@ async def test_fake_host_returns_a_prepared_branch_with_no_network() -> None:
 
 @pytest.mark.asyncio
 async def test_fake_host_returns_a_terminal_failure_with_no_network() -> None:
-    failure = ContributionFailure(reason="environment_error", detail="toolchain missing")
+    failure = ContributionFailure(
+        reason="environment_error",
+        classification="never_started",
+        ending=None,
+        detail="toolchain missing",
+    )
     host = FakeExecutionHost(outcome=failure)
 
     outcome = await host.run_contribution(_request())
@@ -278,5 +319,9 @@ async def test_fake_host_can_stall_with_no_network() -> None:
 
 
 def test_fake_host_satisfies_execution_host_protocol() -> None:
-    host = FakeExecutionHost(outcome=ContributionFailure(reason="x"))
+    host = FakeExecutionHost(
+        outcome=ContributionFailure(
+            reason="x", classification="never_started", ending=None
+        )
+    )
     assert isinstance(host, ExecutionHost)
