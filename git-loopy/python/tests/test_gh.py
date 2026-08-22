@@ -1386,6 +1386,55 @@ def test_issue_view_parses_blocked_by_onto_the_issue(monkeypatch) -> None:
     )
 
 
+def test_issue_view_maps_gh_zero_value_blocker_node_to_unreadable(monkeypatch) -> None:
+    """``gh --json`` encodes an unreadable linked issue as its Go zero value.
+
+    ``LinkedIssueConnection.Nodes`` is a value slice, so GraphQL's unreadable
+    ``null`` node becomes this object instead of JSON ``null`` when ``gh``
+    renders it. The candidate stays available for Pickup, where its readiness
+    becomes unprovable rather than making the enclosing issue unreadable.
+    """
+
+    def fake_run(cmd, **kw):
+        return _completed(
+            cmd,
+            stdout=json.dumps(
+                {
+                    "number": 7,
+                    "title": "t",
+                    "body": "b",
+                    "labels": [],
+                    "state": "OPEN",
+                    "url": "https://github.com/acme/widgets/issues/7",
+                    "comments": [],
+                    "blockedBy": {
+                        "totalCount": 1,
+                        "nodes": [
+                            {
+                                "id": "",
+                                "number": 0,
+                                "title": "",
+                                "state": "",
+                                "url": "",
+                            }
+                        ],
+                    },
+                }
+            ),
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    issue = issue_view(7)
+
+    assert issue.blocked_by == BlockedByRead(
+        total_count=1,
+        nodes=(BlockerNode(ref="", state=None, readable=False),),
+    )
+    verdict = decide_readiness(issue.blocked_by)
+    assert verdict.skip_reason == SKIP_READINESS_UNPROVABLE
+    assert verdict.blockers == ()
+
+
 def test_issue_missing_blocked_by_field_is_readiness_unprovable(
     monkeypatch,
 ) -> None:

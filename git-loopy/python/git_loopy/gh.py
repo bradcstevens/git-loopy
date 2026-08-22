@@ -351,16 +351,9 @@ _EMPTY_BLOCKED_BY: Final[BlockedByRead] = BlockedByRead(total_count=0, nodes=())
 #: ``gh`` too old to have honoured the field, or on a response that happened to
 #: omit it. This is *not* the same fact as :data:`_EMPTY_BLOCKED_BY`: the
 #: connection was never read at all, so there is nothing to say no blocker was
-#: found. ``decide_readiness`` (:mod:`git_loopy.readiness`) treats
-#: ``total_count > len(nodes)`` as an incomplete, unprovable read regardless of
-#: the actual numbers involved, so ``total_count=1, nodes=()`` reaches
-#: ``readiness_unprovable`` through that same existing path rather than a
-#: dedicated one — an absent connection was wrongly admitted as ``ready``
-#: before this fix (ADR-0047 "An unprovable read is not readiness"; #438).
-#: Mirrors the identical sentinel
-#: :meth:`~git_loopy.sources.GitHubIssueSource.readiness` already constructs for
-#: its own ``GhError`` fallback, so "the connection was never read" has one
-#: shape project-wide.
+#: found. Its explicit ``total_count=None`` representation reaches
+#: ``readiness_unprovable`` without overloading a real GraphQL connection
+#: (#438 finding 4, ADR-0047).
 _UNPROVABLE_BLOCKED_BY: Final[BlockedByRead] = BlockedByRead.unprovable()
 
 
@@ -374,11 +367,11 @@ def _parse_blocked_by_connection(
     connection-shape parsing (partial-error nodes, missing keys) does not
     entangle with the rest of the issue JSON (#438 finding 1).
 
-    Handles GitHub's partial-error shape for an unreadable node (the count
-    arrives, the node's body does not, per ADR-0047 "An unprovable read is not
-    readiness"): a node GraphQL could not resolve comes back as ``None`` in the
-    ``nodes`` array rather than an object, and is translated here into a
-    :class:`~git_loopy.readiness.BlockerNode` with ``readable=False``.
+    ``gh --json`` renders a GraphQL-unreadable node as the Go zero value
+    ``{"id":"","number":0,"state":"","title":"","url":""}``, because its
+    ``LinkedIssueConnection.Nodes`` is a value slice. It is translated to a
+    :class:`~git_loopy.readiness.BlockerNode` with ``readable=False`` so the
+    candidate remains in the Pool and is skipped as unprovable at Pickup.
     """
     try:
         total_count = int(connection["totalCount"])
@@ -389,10 +382,14 @@ def _parse_blocked_by_connection(
         ) from exc
     nodes: list[BlockerNode] = []
     for raw_node in raw_nodes:
-        if raw_node is None:
-            # GitHub returned the edge's count but not its body — a blocker in
-            # a repository the token cannot see. Routine, not exotic, once
-            # cross-repository blockers count (ADR-0047).
+        if (
+            isinstance(raw_node, dict)
+            and raw_node.get("id") == ""
+            and raw_node.get("number") == 0
+            and raw_node.get("state") == ""
+            and raw_node.get("title") == ""
+            and raw_node.get("url") == ""
+        ):
             nodes.append(BlockerNode(ref="", state=None, readable=False))
             continue
         try:
