@@ -319,11 +319,12 @@ class RollingScheduler:
         """Whether this Run has neither worked ``candidate`` nor reserved it.
 
         Two distinct claims, because they have different lifetimes.
-        :attr:`_worked` is #219 §1.7's monotonic guard: it latches at agent
-        session start and never releases. :attr:`_in_setup` covers the window a
-        reservation is still provisional — the candidate is gone from the cache
-        but a membership refresh would re-list it, and §3.3 makes it eligible
-        again only if that setup *fails*.
+        :attr:`_worked` latches at an Agent session start. A host result proving
+        that no session started releases it again; every actual session keeps
+        the guard for the Run. :attr:`_in_setup` covers the window a reservation
+        is still provisional — the candidate is gone from the cache but a
+        membership refresh would re-list it, and §3.3 makes it eligible again
+        only if that setup *fails*.
         """
         return candidate.ref not in self._worked and candidate.ref not in self._in_setup
 
@@ -646,15 +647,24 @@ class RollingScheduler:
         self._parked.sort(key=lambda entry: (entry[0], _ref_sort_key(entry[1].ref)))
         return PARKED
 
-    def finish_terminal_failure(self, contribution: Contribution) -> str:
+    def finish_terminal_failure(
+        self, contribution: Contribution, *, reoffer: bool
+    ) -> str:
         """Finalize a host-reported terminal failure without local work signals.
 
         The host failure's three-class vocabulary is intentionally not emitted
         here: #453 owns widening the contribution-end event reasons. Until then,
         the existing unpublished terminal reason keeps the wire unchanged while
         the Run still takes a distinct, non-Integration control-flow path.
+
+        A host that never started or stalled did not start an Agent session.
+        Undo the provisional session claim so the Pool can offer its issue again;
+        a breach keeps the claim because that Agent session did run.
         """
         self._finalize(contribution, reason=REASON_UNCHANGED_BRANCH)
+        if reoffer:
+            self._units_spent -= 1
+            self._worked.discard(contribution.ref)
         return TERMINAL
 
     def finalize(

@@ -253,6 +253,20 @@ def test_worked_guard_latches_at_session_start_and_never_releases() -> None:
     assert source.membership_calls > 1
 
 
+def test_blamefree_host_failure_releases_the_provisional_session_claim() -> None:
+    """A host that never started work leaves its issue eligible for another Lane."""
+    scheduler, _source, clock = _scheduler_with_clock([11], lane_cap=1, max_iterations=5)
+    scheduler.start()
+    contribution = scheduler.start_session(scheduler.reserve()[0])
+
+    disposition = scheduler.finish_terminal_failure(contribution, reoffer=True)
+
+    assert disposition == "terminal"
+    assert scheduler.remaining_units == 5
+    clock.advance(120.0)
+    assert [reservation.item.ref for reservation in scheduler.reserve()] == [11]
+
+
 # --------------------------------------------------------------------------- #
 # §3.8-3.11, §7.6 — the terminal dispositions at the Lane-work boundary
 # --------------------------------------------------------------------------- #

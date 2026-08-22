@@ -3122,12 +3122,14 @@ class _ParallelLoop:
                 "lane #%s execution host (%s) %s: %s (%s)",
                 ref, host.placement, outcome.classification, outcome.reason, outcome.detail,
             )
+            self._cleanup_injected_host_worktree(lane_work)
             self._finish_terminal_host_failure(
                 contribution, lane_work, outcome
             )
             return
 
         lane_work.branch = outcome.branch
+        self._cleanup_injected_host_worktree(lane_work)
         lane_outcome = outcome.ending
         assert lane_outcome is not None
         # Offered to the **Escalation rung**'s ledger before it is said out
@@ -3252,7 +3254,9 @@ class _ParallelLoop:
                 self._diag, ref=lane_work.item.ref, record=ending
             )
 
-        disposition = self._scheduler.finish_terminal_failure(contribution)
+        disposition = self._scheduler.finish_terminal_failure(
+            contribution, reoffer=outcome.classification != "breach"
+        )
         assert disposition == rolling_scheduler.TERMINAL
         self._lane_work.pop(contribution.contribution_id, None)
         self._finalize_contribution(contribution, published=False)
@@ -3270,7 +3274,8 @@ class _ParallelLoop:
         Checkpoint a dirty tree (:meth:`_account_lane`) — reached through
         :class:`~git_loopy.execution_host.LocalExecutionHost` rather than
         called directly, so every Lane contribution now travels through the
-        seam with today's behaviour otherwise unchanged. The         session ending travels back on the outcome itself. The local runner also
+        seam with today's behaviour otherwise unchanged. The session ending
+        travels back on the outcome itself. The local runner also
         retains the existing worktree cleanup rule immediately after its
         Checkpoint result is known.
         """
@@ -3292,12 +3297,10 @@ class _ParallelLoop:
         try:
             dirty = lane_work.git.is_dirty()
             untracked = lane_work.git.has_untracked()
-        except git_module.GitError:
-            # A dirty-check failure is not itself evidence of dirt; today's
-            # `_maybe_checkpoint_lane` treats the same failure as "skip,
-            # don't block" and this mirrors it rather than manufacturing a
-            # rejection the loop's own accounting never raised.
+            verification_error = None
+        except git_module.GitError as exc:
             dirty, untracked = False, False
+            verification_error = f"could not verify worktree state: {exc}"
         self._cleanup_lane_worktree(lane_work, checkpoint_ok)
         return execution_host_module.LocalRunResult(
             branch=lane_work.branch,
@@ -3305,7 +3308,14 @@ class _ParallelLoop:
             dirty=dirty,
             untracked=untracked,
             ending=ending,
+            checkpoint_ok=checkpoint_ok,
+            verification_error=verification_error,
         )
+
+    def _cleanup_injected_host_worktree(self, lane_work: _LaneWork) -> None:
+        """Reclaim the clean local placeholder a non-local host did not use."""
+        if self._execution_host is not None:
+            self._cleanup_lane_worktree(lane_work, checkpoint_ok=True)
 
     def _cleanup_lane_worktree(
         self, lane_work: _LaneWork, checkpoint_ok: bool

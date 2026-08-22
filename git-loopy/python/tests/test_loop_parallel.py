@@ -121,6 +121,7 @@ from git_loopy.execution_host import (
     ContributionFailure,
     ContributionOutcome,
     ContributionRequest,
+    ContributionSuccess,
     IsolationGrade,
     Placement,
 )
@@ -132,7 +133,11 @@ from git_loopy.interactive.driver import (
 )
 from git_loopy.interactive.state import LiveRunState
 from git_loopy.interactive.terminal import TerminalOwner
-from git_loopy.session_outcome import SessionOutcome
+from git_loopy.session_outcome import (
+    SessionOutcome,
+    SessionOutcomeRecord,
+    SessionTermination,
+)
 from git_loopy.skill_catalog import build_skill_catalog
 from git_loopy.sources import PoolCandidate
 from git_loopy.staircase import Candidate, PriceStaircase
@@ -2584,6 +2589,22 @@ class _TerminalFailureExecutionHost:
         self, request: ContributionRequest
     ) -> ContributionOutcome:
         self.calls.append(request)
+        calls_for_issue = sum(
+            call.issue_ref == request.issue_ref for call in self.calls
+        )
+        if calls_for_issue > 1:
+            return ContributionSuccess(
+                branch=git_module.lane_branch_name(request.run_id, request.issue_ref),
+                sha="0000000000000000000000000000000000000001",
+                events=(),
+                placement=self.placement,
+                isolation_grade=self.isolation_grade,
+                ending=SessionOutcomeRecord(
+                    outcome=None,
+                    progressed=True,
+                    termination=SessionTermination.COMPLETED,
+                ),
+            )
         if request.issue_ref == 42:
             return ContributionFailure(
                 reason="fake_never_started",
@@ -2618,14 +2639,18 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     exit_code = asyncio.run(loop_module.run(cfg))
 
     assert exit_code == 0
-    assert [request.issue_ref for request in host.calls] == [42, 43]
+    assert [request.issue_ref for request in host.calls].count(42) == 2
+    assert [request.issue_ref for request in host.calls].count(43) == 2
     assert fake_client.created == []
     assert fake_git.merge_calls == []
+    assert fake_git.active_worktrees == []
     assert len(built) == 1
     assert built[0]._serial._attempts.state(42) is AttemptState.FRESH
     assert built[0]._serial._attempts.state(43) is AttemptState.FRESH
     assert built[0]._serial._strike_machine.strikes == 0
     assert [contribution.reason for contribution in built[0].finalized_contributions] == [
+        "unchanged_branch",
+        "unchanged_branch",
         "unchanged_branch",
         "unchanged_branch",
     ]
