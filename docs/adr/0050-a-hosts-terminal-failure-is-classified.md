@@ -1,4 +1,4 @@
-# A host's terminal failure is classified, and only a breach reaches the issue's ledger
+# ADR-0050: A host's terminal failure is classified, and only a breach reaches the issue's ledger
 
 **Status:** accepted
 
