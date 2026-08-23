@@ -960,42 +960,23 @@ def _run_info(
     """Present the installation inventory without turning it into a health gate."""
     environment = os.environ if env is None else env
     executable = Path(sys.argv[0]) if executable_path is None else executable_path
-    try:
-        from git_loopy import installation
+    from git_loopy import installation
 
+    try:
         inventory = installation.inspect_installation(
             env=environment,
             executable_path=executable,
         )
     except Exception:  # info reports unavailable identity rather than failing.
-        if args.json:
-            import json
-
-            output_fn(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "artifact": "python-runner",
-                        "executable": str(executable),
-                        "install_channel": {"name": "unproven", "proven": False},
-                        "release_version": None,
-                        "resolved_commit": None,
-                        "published": None,
-                        "edge_install": None,
-                        "assets": [],
-                    },
-                    sort_keys=True,
-                )
-            )
-        else:
-            output_fn("Artifact: python-runner")
-            output_fn(f"Executable: {executable}")
-            output_fn("Install channel: unproven")
-            output_fn("Release version: unknown")
-            output_fn("Resolved commit: unknown")
-            output_fn("Published Release: unknown")
-            output_fn("Edge install: unknown")
-        return 0
+        inventory = installation.Installation(
+            artifact="python-runner",
+            executable=str(executable),
+            install_channel=installation.InstallChannel(name="unproven", proven=False),
+            release_version=None,
+            resolved_commit=None,
+            published=None,
+            edge_install=None,
+        )
 
     if args.json:
         import json

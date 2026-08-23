@@ -306,3 +306,68 @@ def test_inventory_json_shape_is_stable(tmp_path: Path) -> None:
         "edge_install": False,
         "assets": [],
     }
+
+
+def test_inventory_ignores_a_consumer_repository_around_this_module(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A project-local install must not adopt its host project's identity.
+
+    Regression for the review of #534: the ``__file__`` fallback reported the
+    surrounding repository's HEAD, and — when that project happened to carry a
+    tag matching this Release version — a published verdict earned by another
+    repository entirely.
+    """
+    project = tmp_path / "operator-project"
+    module = project / ".venv" / "lib" / "git_loopy" / "installation.py"
+    module.parent.mkdir(parents=True)
+    module.touch()
+    git = project / ".git"
+    (git / "refs" / "heads").mkdir(parents=True)
+    (git / "refs" / "heads" / "main").write_text(f"{'9' * 40}\n", encoding="utf-8")
+    (git / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (git / "refs" / "tags").mkdir(parents=True)
+    (git / "refs" / "tags" / "v1.2.3").write_text(f"{'9' * 40}\n", encoding="utf-8")
+
+    executable = tmp_path / "elsewhere" / "git-loopy"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+
+    monkeypatch.setattr(installation, "__file__", str(module))
+    monkeypatch.setattr(installation, "_metadata_identity", lambda _version: None)
+
+    inventory = installation.inspect_installation(
+        env={"HOME": str(tmp_path / "home")},
+        executable_path=executable,
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.resolved_commit is None
+    assert inventory.published is None
+    assert inventory.edge_install is None
+
+
+def test_inventory_still_reads_identity_from_this_modules_own_checkout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The guard rejects foreign repositories without disabling the fallback."""
+    repository, _ = _write_checkout(tmp_path, commit="7" * 40, tag_commit="8" * 40)
+    module = repository / "git-loopy" / "python" / "git_loopy" / "installation.py"
+    module.touch()
+
+    executable = tmp_path / "elsewhere" / "git-loopy"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+
+    monkeypatch.setattr(installation, "__file__", str(module))
+    monkeypatch.setattr(installation, "_metadata_identity", lambda _version: None)
+
+    inventory = installation.inspect_installation(
+        env={"HOME": str(tmp_path / "home")},
+        executable_path=executable,
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.resolved_commit == "7" * 40
+    assert inventory.published is False
+    assert inventory.edge_install is True

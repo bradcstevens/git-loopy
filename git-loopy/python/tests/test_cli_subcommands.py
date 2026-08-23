@@ -239,6 +239,63 @@ def test_main_info_reports_stable_json_and_never_runs_the_loop(
     assert json.loads(capsys.readouterr().out) == expected.json_dict()
 
 
+def test_main_info_prints_every_identity_line_in_plain_text(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from git_loopy import installation
+
+    inventory = installation.Installation(
+        artifact="python-runner",
+        executable="/operator/bin/git-loopy",
+        install_channel=installation.InstallChannel(name="uv-tool", proven=True),
+        release_version="1.2.3",
+        resolved_commit="a" * 40,
+        published=False,
+        edge_install=True,
+    )
+    monkeypatch.setattr(
+        installation, "inspect_installation", lambda **_kwargs: inventory
+    )
+
+    assert cli_module.main(["info"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "Artifact: python-runner",
+        "Executable: /operator/bin/git-loopy",
+        "Install channel: uv-tool",
+        "Release version: 1.2.3",
+        f"Resolved commit: {'a' * 40}",
+        "Published Release: no",
+        "Edge install: yes",
+    ]
+
+
+def test_main_info_renders_absent_identity_as_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from git_loopy import installation
+
+    inventory = installation.Installation(
+        artifact="python-runner",
+        executable="/operator/bin/git-loopy",
+        install_channel=installation.InstallChannel(name="homebrew", proven=True),
+        release_version="1.2.3",
+        resolved_commit=None,
+        published=None,
+        edge_install=None,
+    )
+    monkeypatch.setattr(
+        installation, "inspect_installation", lambda **_kwargs: inventory
+    )
+
+    assert cli_module.main(["info"]) == 0
+    output = capsys.readouterr().out.splitlines()
+    assert "Resolved commit: unknown" in output
+    assert "Published Release: unknown" in output
+    assert "Edge install: unknown" in output
+
+
 def test_main_info_exits_zero_when_inventory_cannot_be_read(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

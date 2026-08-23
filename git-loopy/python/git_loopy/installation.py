@@ -209,7 +209,14 @@ def _is_installer_launcher(executable: Path) -> bool:
 def _resolve_identity(
     executable: Path, release_version: str | None
 ) -> tuple[str | None, bool | None]:
-    """Read the local checkout identity when this artifact retains one."""
+    """Read the local checkout identity when this artifact retains one.
+
+    Every repository consulted here is proven to be git-loopy's own checkout
+    first.  A consumer project that merely *contains* the executable or this
+    module would otherwise contribute its own HEAD, and — when its tags happen
+    to match this Release version — a published verdict that belongs to another
+    repository entirely.
+    """
     repository = _find_repository(executable)
     if repository is not None and not _is_git_loopy_checkout(repository):
         identity = _metadata_identity(release_version)
@@ -220,7 +227,7 @@ def _resolve_identity(
         identity = _metadata_identity(release_version)
         if identity is not None:
             return identity
-        repository = _find_repository(Path(__file__))
+        repository = _git_loopy_repository(Path(__file__))
     if repository is None:
         return None, None
 
@@ -228,6 +235,14 @@ def _resolve_identity(
     if commit is None:
         return None, None
     return commit, _is_published_release(repository, commit, release_version)
+
+
+def _git_loopy_repository(path: Path) -> Path | None:
+    """Return ``path``'s repository only when it is git-loopy's own checkout."""
+    repository = _find_repository(path)
+    if repository is None or not _is_git_loopy_checkout(repository):
+        return None
+    return repository
 
 
 def _metadata_identity(
