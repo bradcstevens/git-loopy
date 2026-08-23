@@ -14,9 +14,13 @@ operator action through that one model rather than keeping its own state.
 
 from __future__ import annotations
 
+from textual.app import App  # noqa: E402
 from textual.widgets import DataTable, Input  # noqa: E402
 
-from git_loopy.interactive.skill_picker_app import SkillPickerApp  # noqa: E402
+from git_loopy.interactive.skill_picker_app import (  # noqa: E402
+    SkillPickerApp,
+    SkillPickerScreen,
+)
 from git_loopy.skillscmd import (  # noqa: E402
     SkillSelectionModel,
     SkillSelectionResult,
@@ -50,6 +54,20 @@ def _model(enabled: tuple[str, ...] = ("codebase-design", "tdd")) -> SkillSelect
         ),
         enabled=enabled,
     )
+
+
+async def test_screen_can_be_hosted_and_driven_directly() -> None:
+    screen = SkillPickerScreen(_model())
+
+    class Host(App[None]):
+        def on_mount(self) -> None:
+            self.push_screen(screen)
+
+    async with Host().run_test() as pilot:
+        await pilot.press("space")
+        await pilot.pause()
+
+    assert screen.selection.enabled == ("tdd",)
 
 
 def _rendered(app: SkillPickerApp) -> str:
