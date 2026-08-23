@@ -1712,11 +1712,25 @@ def test_run_init_blocks_a_runner_policy_naming_an_untracked_project_skill(
 def test_run_init_accepts_the_policy_the_rebuild_callback_resolved(
     tmp_path: Path,
 ) -> None:
-    """The picker's own answer is not re-litigated: it already passed."""
+    """The picker's own answer is not re-litigated: it already passed.
+
+    The discovery count is the assertion that keeps the memo honest. Validating
+    a policy means discovering the catalog, so a memo that stopped hitting
+    would double every interactive setup's Copilot inventory spin-up while
+    every behavioural assertion here still passed.
+    """
     packaged = _packaged(tmp_path)
     packaged.update(
         _policy_seams(tmp_path, catalog=_baseline_catalog(), required_skills=("tdd",))
     )
+    discoveries: list[None] = []
+    catalog = _baseline_catalog()
+
+    async def counting_discoverer(_client: object, **_kwargs: object) -> SkillCatalog:
+        discoveries.append(None)
+        return catalog
+
+    packaged["discoverer"] = counting_discoverer
     out = _Output()
 
     def runner(**kwargs: Any) -> Any:
@@ -1738,6 +1752,8 @@ def test_run_init_accepts_the_policy_the_rebuild_callback_resolved(
     assert rc == 0
     written = tomllib.loads(settings.project_config_path(tmp_path).read_text())
     assert "tdd" in written["enabled_skills"]
+    # One discovery, not two: the answer set is the one the callback resolved.
+    assert len(discoveries) == 1
 
 
 def test_run_init_inventory_failure_through_the_callback_writes_nothing(
