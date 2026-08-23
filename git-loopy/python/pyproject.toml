@@ -35,6 +35,10 @@ keywords = ["github-copilot", "git-loopy", "autonomous", "agent", "afk"]
 dependencies = [
     "github-copilot-sdk==1.0.5",
     "rich>=13.7.0,<14",
+    # Load-bearing cap: Textual 7.0.0 raises its floor to rich>=14.2.0,
+    # while the Run renderer pins Rich 13 for its panels and tables. Textual
+    # 6 and below require only rich>=13.3.3, so today's pins already agree.
+    "textual>=0.86,<6",
 ]
 
 [project.optional-dependencies]
@@ -45,20 +49,6 @@ otel = [
     "opentelemetry-api>=1.20,<2",
     "opentelemetry-sdk>=1.20,<2",
     "opentelemetry-exporter-otlp>=1.20,<2",
-]
-
-# Optional interactive TUI (issue #23, ADR-0001). Off by default so the base
-# install stays a pure line-printer with no curses/async-screen dependency.
-# Operators who want the live dashboard install `.[tui]`.
-#
-# Textual is pinned BELOW 6 on purpose: Textual 6.x bumps its own floor to
-# `rich>=14`, which would collide with this kit's `rich>=13.7,<14` pin (the
-# line-printer Renderer is built against the Rich 13 API). Every Textual 5.x /
-# late-0.8x release still depends on `rich>=13.3`, so the `<6` ceiling keeps
-# the interactive extra installable alongside the base Rich pin. Treat any bump
-# to `>=6` as a deliberate migration that also moves the `rich` pin.
-tui = [
-    "textual>=0.86,<6",
 ]
 
 # Release-channel tooling (issue #196). winget's manifests are YAML, and the

@@ -238,11 +238,10 @@ async def test_fetch_live_models_uses_throwaway_client_context() -> None:
 
 
 def test_picker_module_does_not_import_textual_at_top() -> None:
-    """picker.py stays importable (and fallback-testable) without the [tui] extra.
+    """picker.py keeps Textual lazy at module import time.
 
-    Textual is imported lazily inside the default ``run_app`` only on the success
-    path that actually shows the picker, so this module — and its fallback path —
-    import cleanly in the base install.
+    Textual is imported lazily inside the default ``run_app`` only on the path
+    that actually shows the picker, so this module imports cleanly.
     """
     import ast
     from pathlib import Path

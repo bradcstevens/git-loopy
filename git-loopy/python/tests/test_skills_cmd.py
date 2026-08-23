@@ -151,9 +151,9 @@ def test_picker_selection_takes_textual_only_with_the_extra_and_a_terminal() -> 
 
     Both implementations drive the same :class:`SkillSelectionModel` and return
     the same :class:`SkillSelectionResult`, so choosing between them is purely a
-    question of what the invocation can render. Missing ``[tui]`` or a
-    non-terminal stdout (a pipe, CI) keeps the plain-terminal path that the base
-    installation has always had.
+    question of what the invocation can render. A non-terminal stdout (a pipe,
+    CI) keeps the plain-terminal path, while a terminal can use Textual from
+    the base installation.
     """
     assert (
         skillscmd.select_skill_picker(isatty=True, textual_importable=True)
@@ -174,8 +174,8 @@ def test_skill_policy_commands_never_import_textual_on_the_plain_path() -> None:
 
     Run in a clean subprocess so the assertion is deterministic regardless of
     what the in-process session already imported. This is what keeps ``--help``,
-    every non-interactive command, and the base test suite free of the ``[tui]``
-    extra: the probe is ``importlib.util.find_spec``, and the Textual picker is
+    every non-interactive command free of an unnecessary Textual import: the
+    probe is ``importlib.util.find_spec``, and the Textual picker is
     imported only inside :func:`skillscmd.run_textual_skill_picker`.
     """
     import subprocess

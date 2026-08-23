@@ -1,8 +1,7 @@
 """Pilot tests for ``git_loopy.interactive.skill_picker_app`` (issue #231).
 
-Gated behind ``pytest.importorskip("textual")`` so a base installation without
-the ``[tui]`` extra skips them — the optional picker is an alternate renderer
-over the same **Skill policy** selection model, never a new requirement.
+These run against the base Textual dependency; the picker is an alternate
+renderer over the same **Skill policy** selection model.
 
 These drive the real :class:`SkillPickerApp` through Textual's Pilot to prove
 the behaviours that need a running app: arrow navigation, space toggling,
@@ -14,10 +13,6 @@ operator action through that one model rather than keeping its own state.
 """
 
 from __future__ import annotations
-
-import pytest
-
-pytest.importorskip("textual")
 
 from textual.widgets import DataTable, Input  # noqa: E402
 

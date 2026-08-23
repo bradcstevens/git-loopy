@@ -1,7 +1,7 @@
 """Tests for ``git_loopy.interactive.detect`` (issue #23 — interactive gating).
 
-Pins the precedence (flag > env > TTY) and the ``[tui]``-extra requirement,
-including the warn-only-when-explicit fallback. Pure — no TTY required.
+Pins the precedence (flag > env > TTY) and the warn-only-when-explicit
+fallback. Pure — no TTY required.
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ def test_blank_env_is_ignored_and_falls_back_to_tty() -> None:
 
 
 # ---------------------------------------------------------------------------
-# [tui] extra requirement
+# Textual availability requirement
 # ---------------------------------------------------------------------------
 
 
@@ -162,9 +162,10 @@ def test_blank_env_is_ignored_and_stays_off() -> None:
 
 
 def test_textual_available_returns_bool() -> None:
-    # In this dev venv the [tui] extra is installed, so it should be True;
-    # the contract under test is simply that it returns a bool without raising.
-    assert isinstance(textual_available(), bool)
+    import textual
+
+    assert textual is not None
+    assert textual_available() is True
 
 
 def test_detect_module_imports_are_constrained() -> None:

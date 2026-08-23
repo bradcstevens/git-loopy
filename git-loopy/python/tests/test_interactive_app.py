@@ -1,8 +1,8 @@
 """Pilot tests for ``git_loopy.interactive.app`` — the tabless two-level live
 interface (ADR-0003, issue #30).
 
-Gated behind ``pytest.importorskip("textual")`` so the base (no ``[tui]`` extra)
-install skips it. These cover the structural backbone:
+These run against the base Textual dependency. They cover the structural
+backbone:
 
 * **Level 1 — the Dashboard** (the only top-level screen, no tab bar): the
   header band, the live **Queue**, and a compact **Summary** rollup band,
@@ -20,10 +20,6 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-
-import pytest
-
-pytest.importorskip("textual")
 
 from rich.text import Text  # noqa: E402
 from textual.widgets import ContentSwitcher, DataTable, Static  # noqa: E402
