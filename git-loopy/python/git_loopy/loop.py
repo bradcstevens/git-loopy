@@ -3050,7 +3050,17 @@ class _ParallelLoop:
 
         model = resolution.model
         reasoning_effort = resolution.reasoning_effort
-        base = self._resolve_base_ref()
+        try:
+            base = self._git.head_sha()
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "base head_sha for issue #%s failed: %s; releasing reservation",
+                ref,
+                exc,
+            )
+            passed_over(f"base revision failed: {exc}")
+            scheduler.release(reservation)
+            return
         branch = git_module.lane_branch_name(self._run_id, ref)
         path = _lane_worktree_path(self._repo_root, self._run_id, ref)
         try:
@@ -3064,11 +3074,9 @@ class _ParallelLoop:
             scheduler.release(reservation)
             return
 
-        lane_work = _LaneWork(item=item, branch=branch, path=path, git=wt_git)
-        try:
-            lane_work.pre_sha = wt_git.head_sha()
-        except git_module.GitError as exc:
-            self._diag.warning("lane #%s pre head_sha failed: %s", ref, exc)
+        lane_work = _LaneWork(
+            item=item, branch=branch, path=path, git=wt_git, pre_sha=base
+        )
 
         # Prepare the freshly created worktree before its agent session
         # starts (#65). Non-fatal: a broken environment still lets the agent
@@ -3113,7 +3121,7 @@ class _ParallelLoop:
         commits_block = _format_recent_commits(recent)
 
         request = self._build_contribution_request(
-            contribution, lane_work, commits_block
+            contribution, lane_work, commits_block, base_revision=base
         )
         host = self._host_for_contribution(contribution, lane_work)
         outcome = await host.run_contribution(request)
@@ -3122,7 +3130,10 @@ class _ParallelLoop:
                 "lane #%s execution host (%s) %s: %s (%s)",
                 ref, host.placement, outcome.classification, outcome.reason, outcome.detail,
             )
-            self._cleanup_injected_host_worktree(lane_work)
+            self._cleanup_injected_host_worktree(
+                lane_work,
+                discard_branch=outcome.classification != "breach",
+            )
             self._finish_terminal_host_failure(
                 contribution, lane_work, outcome
             )
@@ -3198,6 +3209,8 @@ class _ParallelLoop:
         contribution: rolling_scheduler.Contribution,
         lane_work: _LaneWork,
         commits_block: str,
+        *,
+        base_revision: str,
     ) -> execution_host_module.ContributionRequest:
         """Build the Execution host seam's one input shape for this Lane.
 
@@ -3213,7 +3226,7 @@ class _ParallelLoop:
         return execution_host_module.ContributionRequest(
             issue_ref=lane_work.item.ref,
             prompt=prompt,
-            base_revision=self._resolve_base_ref(),
+            base_revision=base_revision,
             model=contribution.model,
             reasoning_effort=contribution.reasoning_effort,
             skill_policy=self._skill_exposure,
@@ -3312,10 +3325,14 @@ class _ParallelLoop:
             verification_error=verification_error,
         )
 
-    def _cleanup_injected_host_worktree(self, lane_work: _LaneWork) -> None:
+    def _cleanup_injected_host_worktree(
+        self, lane_work: _LaneWork, *, discard_branch: bool = False
+    ) -> None:
         """Reclaim the clean local placeholder a non-local host did not use."""
         if self._execution_host is not None:
             self._cleanup_lane_worktree(lane_work, checkpoint_ok=True)
+            if discard_branch:
+                self._delete_branch_safely(lane_work.item.ref, lane_work.branch)
 
     def _cleanup_lane_worktree(
         self, lane_work: _LaneWork, checkpoint_ok: bool
@@ -3963,12 +3980,12 @@ class _ParallelLoop:
             )
 
     def _delete_branch_safely(self, ref: int | str, branch: str) -> None:
-        """``git branch -D`` an integrated branch; a failure only warns."""
+        """``git branch -D`` a discarded Lane branch; a failure only warns."""
         try:
             self._git.delete_branch(branch)
         except git_module.GitError as exc:
             self._diag.warning(
-                "integration #%s: delete of %s failed: %s", ref, branch, exc
+                "lane #%s: delete of %s failed: %s", ref, branch, exc
             )
 
     async def _auto_resolve_lane(

@@ -503,7 +503,7 @@ def test_parallel_run_dispatches_two_lanes(tmp_path, monkeypatch) -> None:
     add_paths = {p for (p, _b, _base) in adds}
     branches = sorted(b for (_p, b, _base) in adds)
     bases = {base for (_p, _b, base) in adds}
-    assert bases == {"main"}, "Lanes are cut from the base branch"
+    assert all(base != "main" for base in bases)
     for path in add_paths:
         assert path.parent.parent.name == f"{tmp_path.name}.worktrees"
         assert tmp_path not in path.parents, "worktrees live OUTSIDE the repo"
@@ -2641,9 +2641,13 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     assert exit_code == 0
     assert [request.issue_ref for request in host.calls].count(42) == 2
     assert [request.issue_ref for request in host.calls].count(43) == 2
+    assert {request.base_revision for request in host.calls} == {
+        "0000000000000000000000000000000000000001"
+    }
     assert fake_client.created == []
     assert fake_git.merge_calls == []
     assert fake_git.active_worktrees == []
+    assert len(_lane_branch_deletes(fake_git)) == 2
     assert len(built) == 1
     assert built[0]._serial._attempts.state(42) is AttemptState.FRESH
     assert built[0]._serial._attempts.state(43) is AttemptState.FRESH
