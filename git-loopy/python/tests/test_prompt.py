@@ -18,6 +18,7 @@ location, which is stable).
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import zipfile
@@ -28,6 +29,7 @@ import pytest
 import git_loopy
 from git_loopy import loop as loop_module
 from git_loopy import settings
+from git_loopy.skill_source import read_skill_source_pin
 
 
 def _global_env(global_home: Path) -> dict[str, str]:
@@ -156,6 +158,167 @@ def test_packaged_prompt_nudges_mapped_skills_but_exempts_infrastructure() -> No
         "Development infrastructure intentionally has no mapped skill and may proceed "
         "without invoking one."
     ) in prompt
+
+
+# ---------------------------------------------------------------------------
+# "SKILLS NOT TO INVOKE": every Skill it names has to be a real Skill
+# ---------------------------------------------------------------------------
+
+#: The external Skill catalog revision the name set below was read at. Asserted
+#: against ``git_loopy/skill_source.json`` so that moving the pin has to walk
+#: *through* this list rather than around it.
+_PINNED_CATALOG_REVISION = "3be91eb4a235365a9e9c6bc9360bba0f62f28c2d"
+
+#: Every canonical Skill name in the **installed catalog** at that revision.
+#:
+#: Pinned here rather than read live, because the catalog is a checkout under
+#: git-loopy's own config home (ADR-0025) — machine-local, absent on CI and on a
+#: fresh clone. **Update this set whenever ``skill_source.json`` moves the pin**,
+#: which the revision assertion below forces you to notice.
+_PINNED_CATALOG_SKILLS: frozenset[str] = frozenset(
+    {
+        "batch-grill-me",
+        "code-review",
+        "codebase-audit",
+        "codebase-design",
+        "create-readme",
+        "diagnosing-bugs",
+        "domain-modeling",
+        "grill-me",
+        "grill-with-docs",
+        "grilling",
+        "handoff",
+        "implement",
+        "improve-codebase-architecture",
+        "loop-me",
+        "mermaid-diagrams",
+        "microsoft-code-reference",
+        "microsoft-docs",
+        "microsoft-foundry",
+        "next",
+        "playwright-cli",
+        "prototype",
+        "push",
+        "research",
+        "resolving-merge-conflicts",
+        "setup-git-loopy-skills",
+        "skill-router",
+        "tdd",
+        "teach",
+        "to-questionnaire",
+        "to-spec",
+        "to-tickets",
+        "triage",
+        "wait-what",
+        "wayfinder",
+        "wizard",
+        "writing-for-agents",
+        "writing-great-skills",
+    }
+)
+
+#: The Skills the packaged prompt tells an iteration to leave alone. Pinned as a
+#: set so that adding or dropping an exclusion is a decision someone made here,
+#: not a silent edit to a prose bullet.
+_EXPECTED_EXCLUSIONS: frozenset[str] = frozenset(
+    {
+        "triage",
+        "to-spec",
+        "to-tickets",
+        "to-questionnaire",
+        "wayfinder",
+        "grill-me",
+        "batch-grill-me",
+        "grill-with-docs",
+        "grilling",
+        "improve-codebase-architecture",
+        "teach",
+        "handoff",
+        "implement",
+        "next",
+        "loop-me",
+        "setup-git-loopy-skills",
+        "writing-for-agents",
+        "writing-great-skills",
+    }
+)
+
+_SKILL_REFERENCE = re.compile(r"`/([a-z][a-z0-9]*(?:-[a-z0-9]+)*)`")
+
+
+def _skills_not_to_invoke_section() -> str:
+    """The packaged prompt's ``# SKILLS NOT TO INVOKE`` section, heading to heading."""
+    prompt = _packaged_prompt_text()
+    heading = "# SKILLS NOT TO INVOKE"
+    start = prompt.index(heading)
+    return prompt[start : prompt.index("\n# ", start + len(heading))]
+
+
+def _excluded_skills() -> frozenset[str]:
+    """The Skill names the section's bullets exclude.
+
+    Only the names ahead of each bullet's em dash. What follows it is rationale
+    that may name a Skill the iteration is *expected* to reach for (``/tdd``,
+    ``/codebase-design``) — the opposite of an exclusion.
+    """
+    names: set[str] = set()
+    for line in _skills_not_to_invoke_section().splitlines():
+        if line.startswith("- "):
+            names.update(_SKILL_REFERENCE.findall(line[2:].split(" — ", 1)[0]))
+    return frozenset(names)
+
+
+def test_the_pinned_catalog_revision_is_the_one_this_repository_pins() -> None:
+    """The name sets above describe *this* pin, so guard the pin they describe."""
+    assert read_skill_source_pin().revision == _PINNED_CATALOG_REVISION, (
+        "the Skill catalog pin moved; re-read the catalog at the new revision "
+        "and update _PINNED_CATALOG_REVISION, _PINNED_CATALOG_SKILLS, and any "
+        "exclusion in PROMPT.md the move renamed or retired"
+    )
+
+
+def test_every_skill_the_exclusion_section_names_is_in_the_catalog() -> None:
+    """A name that matches no Skill excludes no Skill (#536).
+
+    ``# SKILLS NOT TO INVOKE`` is prose, so an entry survives the Skill it names
+    being renamed or retired upstream — and reads exactly like a live exclusion
+    while excluding nothing. That is silent: an iteration invokes the renamed
+    Skill, and the list still looks complete. Checked over the whole section,
+    not just the bullet heads, so a typo in a rationale clause is caught too.
+    """
+    referenced = frozenset(_SKILL_REFERENCE.findall(_skills_not_to_invoke_section()))
+    unknown = sorted(referenced - _PINNED_CATALOG_SKILLS)
+
+    assert not unknown, (
+        f"PROMPT.md's exclusion section names Skills that are absent from the "
+        f"pinned catalog: {unknown}"
+    )
+
+
+def test_the_exclusion_list_is_pinned_against_silent_drift() -> None:
+    """The excluded set is a decision, so changing it has to be one too.
+
+    The catalog check above only proves each name is real; it says nothing about
+    a Skill that arrived in the catalog and was never ruled on. Pinning the set
+    turns every later add or drop into a two-file edit with a reviewer.
+    """
+    assert _excluded_skills() == _EXPECTED_EXCLUSIONS
+
+
+def test_the_prompt_excludes_the_orchestrators_that_would_nest() -> None:
+    """No Skill that drives or picks work runs *inside* an iteration (#536).
+
+    ``/implement`` was excluded because the loop already is that orchestration.
+    The same argument reaches ``/next``, whose route table hands work to
+    ``/implement`` — and which selects work the runner has already bound — and
+    ``/loop-me``, which starts a whole Run inside one of its own iterations.
+    """
+    excluded = _excluded_skills()
+
+    for name in ("implement", "next", "loop-me", "handoff"):
+        assert name in excluded, (
+            f"/{name} drives or selects work and must stay out of an iteration"
+        )
 
 
 # ---------------------------------------------------------------------------
