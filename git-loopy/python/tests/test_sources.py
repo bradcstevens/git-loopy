@@ -24,8 +24,10 @@ from git_loopy.sources import (
     Completion,
     GitHubIssueSource,
     IssueSource,
+    PoolCandidate,
     PrdsIssueSource,
     is_afk_ready,
+    is_lane_candidate,
     is_pr_afk_ready,
 )
 from tests.fakes import FakeGitHubClient
@@ -215,6 +217,71 @@ class TestAfkReadyExclusion:
     )
     def test_is_afk_ready_is_the_boolean_projection(self, body: str) -> None:
         assert is_afk_ready(body) is (sources_module.afk_ready_exclusion(body) is None)
+
+
+# --------------------------------------------------------------------------- #
+# Lane candidacy — the Parallel-mode half of §3.3's admissible set             #
+# --------------------------------------------------------------------------- #
+
+
+class TestIsLaneCandidate:
+    """#439, ADR-0047: **Readiness** joins Lane candidacy without replacing it.
+
+    A **Lane**'s only way to decline a reservation hands the candidate back to
+    the list it came from, so a blocked candidate reserved at all would be
+    reserved and released once per scheduler turn for the rest of the Run.
+    Refusing candidacy says it once. The decision is taken on the blockers the
+    **Membership read** already carried, so no refresh pays a per-candidate read.
+    """
+
+    @staticmethod
+    def _candidate(**overrides: Any) -> PoolCandidate:
+        fields: dict[str, Any] = {
+            "ref": 31,
+            "title": "issue 31",
+            "labels": ("ready-for-agent", "parallel-safe"),
+            "blocked_by": BlockedByRead(total_count=0),
+        }
+        fields.update(overrides)
+        return PoolCandidate(**fields)
+
+    def test_a_candidate_whose_blockers_are_all_closed_is_lane_work(self) -> None:
+        closed = BlockedByRead(
+            total_count=1, nodes=(BlockerNode(ref="x/y#7", state="closed"),)
+        )
+        assert is_lane_candidate(self._candidate(blocked_by=closed)) is True
+
+    def test_an_open_blocker_refuses_candidacy(self) -> None:
+        open_blocker = BlockedByRead(
+            total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)
+        )
+        assert is_lane_candidate(self._candidate(blocked_by=open_blocker)) is False
+
+    def test_an_unprovable_read_refuses_candidacy(self) -> None:
+        """Readiness that could not be proven is not readiness (ADR-0047)."""
+        assert (
+            is_lane_candidate(self._candidate(blocked_by=BlockedByRead.unprovable()))
+            is False
+        )
+
+    def test_a_candidate_whose_blockers_were_never_read_refuses_candidacy(
+        self,
+    ) -> None:
+        """The default is unprovable, so an unset field cannot promote work.
+
+        The field is only ever set from a **Membership read**, which parses an
+        absent ``blockedBy`` to unprovable — but the type a candidacy predicate
+        reads directly is the wrong place to assume a connection nobody read
+        found nothing.
+        """
+        assert is_lane_candidate(PoolCandidate(ref=31, title="issue 31")) is False
+
+    def test_readiness_does_not_replace_the_parallel_safe_assertion(self) -> None:
+        """Ready is not enough: Lane work is still a human's assertion (#219)."""
+        assert is_lane_candidate(self._candidate(labels=("ready-for-agent",))) is False
+
+    def test_a_non_integer_ref_is_never_lane_work(self) -> None:
+        assert is_lane_candidate(self._candidate(ref="prds/f/001-x.md")) is False
 
 
 # --------------------------------------------------------------------------- #

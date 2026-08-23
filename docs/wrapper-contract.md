@@ -141,10 +141,9 @@ exclusion is an authoring mistake a human must fix; a blocked candidate is corre
 whose turn has not come, and it clears itself when its last blocker closes. It MUST remain in the
 **Pool** — the closure whitelist, the collection Event and the emptiness test all still need to
 see it, and a Pool that is *empty* ends the Run cleanly (§10) where a Pool that is merely *waiting*
-has not run out of work. Readiness is resolved at **Pickup** instead (§3.3), which is also the only
-place it can be afforded: a `blockedBy` read is not carried by the cheap list read, so deciding it
-here would cost one extra round-trip for every candidate collected rather than one for each
-candidate actually considered. See [ADR-0047](adr/0047-a-blocked-issue-is-not-pickup-admissible.md).
+has not run out of work. Readiness is decided at **Pickup** and at **Lane candidacy** instead
+(§3.3, §3.3.1), never here. See
+[ADR-0047](adr/0047-a-blocked-issue-is-not-pickup-admissible.md).
 
 Exclusions MUST be reported as `wrapper.pool.excluded` Events (§12), before the
 `wrapper.afk_ready.collected` they explain, and MUST also reach the operator's own output rather
@@ -348,11 +347,31 @@ MUST pass it over and try the next candidate in the §3.2 order. The candidate s
 nothing and is reconsidered on the next **Iteration** with no human touching the issue. See
 [ADR-0047](adr/0047-a-blocked-issue-is-not-pickup-admissible.md).
 
-**The read.** An Orchestrator MUST resolve readiness through the **GraphQL** `blockedBy` connection
-(`gh api graphql`), not through REST. REST is documented to undercount cross-repository
-dependencies and to do so silently — there is no `totalCount` to notice the shortfall by — so a
-REST read can report a blocked candidate as ready, which is the one outcome this section exists to
-prevent. The read is taken **at Pickup**, per candidate the runner reaches, not at collection.
+**The read.** An Orchestrator MUST resolve readiness through the **GraphQL** `blockedBy` connection,
+not through REST. REST is documented to undercount cross-repository dependencies and to do so
+silently — there is no `totalCount` to notice the shortfall by — so a REST read can report a blocked
+candidate as ready, which is the one outcome this section exists to prevent. `gh issue list` and
+`gh issue view` both serve `--json blockedBy` from GraphQL (`gh` 2.94.0 and later), so the
+requirement is on the *source of the connection*, not on which `gh` subcommand fetched it.
+
+**The connection rides a read already being made.** An Orchestrator MUST NOT pay a per-candidate
+round-trip for readiness. `blockedBy` MUST be requested as a field of the calls the Orchestrator
+already makes — the §3.1 collection list read and the §3.3 authoritative re-read — so that neither
+collecting a **Pool** nor refreshing a **Membership read** (§9) costs anything extra however large
+the Pool grows. Which read a verdict is taken from is what distinguishes the two seams that decide
+it:
+
+- **Pickup** (serial, §3.3) decides from the authoritative per-issue re-read it already performs to
+  confirm the candidate is still `ready-for-agent` and still open. That read is the same one whose
+  staleness check binds the issue, so a blocked candidate is passed over on facts no older than the
+  binding would have been.
+- **Lane candidacy** (Parallel mode, §9) decides from the continuously refreshed **Membership read**,
+  which is the only read a scheduler turn takes. A Lane that reserves a candidate still revalidates
+  at its own Pickup; candidacy is a *cheaper refusal taken earlier*, never a replacement for it.
+
+A **Membership read** that could not determine a candidate's blockers leaves readiness **unknown**,
+which is not ready — matching how an incomplete read already leaves the Pool's emptiness unknown
+(§9) rather than reporting it empty.
 
 **One hop.** An Orchestrator MUST read the candidate's own `blockedBy` connection and MUST NOT
 traverse the dependency graph further. Transitive traversal is a **non-goal**: it computes a
@@ -385,6 +404,28 @@ when the wait can never end.
 | `readiness_unprovable` | The `blockedBy` connection was incomplete or a node was unreadable |
 
 `issue-readiness.json` pins the verdict and the reason for every case.
+
+**Lane candidacy (Parallel mode).** A **Lane** MUST refuse **candidacy** to a candidate that is not
+ready, rather than reserving it and declining it at its own Pickup. The **Attempt lifecycle** (§9)
+fixed the shape: a Lane's only way to decline a reservation hands the candidate back to the list it
+came from, so a candidate that will be refused every turn would be reserved, skipped and released
+once per scheduler turn for the rest of the Run. Refusing candidacy says the same thing once.
+
+Refusal is **not eviction**. The candidate MUST stay in the scheduler's cache, because the next
+**Membership read** is the whole of what promotes it: a blocker closing mid-Run makes it
+candidate-eligible on the following refresh, with no Run restarted and no human touching the issue.
+This is what separates readiness from an **Attempt-lifecycle** defeat, which nothing inside the Run
+can undo and which therefore does evict.
+
+Readiness **composes** with the other candidacy predicates and MUST NOT replace any of them: a
+candidate must still carry `parallel-safe`, must still pass the Attempt-lifecycle skip, and the
+scheduler's own collision guard is untouched.
+
+Because both seams read the same assertion, **both orders MUST agree**: a Lane MUST NOT reserve an
+issue a serial Iteration of the same Run already found blocked, and a serial fallback taken while
+Lane concurrency is throttled MUST NOT bind one the scheduler already refused. A candidacy refusal
+is silent by design — it is the churn this rule exists to remove — while a serial Pickup skip
+reports itself as §3.3.1 requires.
 
 ## 4. Prompt assembly & agent invocation (phase 1, MUST)
 

@@ -97,6 +97,11 @@ leave capacity idle. A Run that sits at two Lanes under a cap of five is not
 malfunctioning. The reasons it holds back:
 
 - **A small eligible Pool.** There is nothing `parallel-safe` left to start.
+- **A blocked candidate.** An issue carrying an open `blocked_by` dependency — or
+  one whose dependencies the **Membership read** could not determine — is refused
+  Lane candidacy, so it is never reserved and never released. It stays cached, and
+  the next refresh that sees its last blocker closed makes it a candidate again
+  mid-Run, with nothing restarted.
 - **Integration backpressure** (below).
 - **A contracted Effective Lane limit.** The number of Lanes the runner may fill
   *right now* starts below your cap and moves against **Pressure signals**:

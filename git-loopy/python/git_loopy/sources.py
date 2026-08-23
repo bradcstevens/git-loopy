@@ -438,16 +438,18 @@ class PoolCandidate:
         blocked_by: The candidate's native dependency connection from this
             **Membership read**. A Lane's candidacy predicate decides its
             **Readiness** from this already-carried value, so refresh stays one
-            list call however large the **Pool** is.
+            list call however large the **Pool** is. Defaults to
+            :meth:`~git_loopy.readiness.BlockedByRead.unprovable`, matching
+            :attr:`AfkReadyItem.blocked_by`: a record whose blockers were never
+            read has not established that there are none, and the type a
+            candidacy predicate reads directly is the wrong place to assume it.
     """
 
     ref: int | str
     title: str
     labels: tuple[str, ...] = ()
     created_at: str = ""
-    blocked_by: BlockedByRead = field(
-        default_factory=lambda: BlockedByRead(total_count=0)
-    )
+    blocked_by: BlockedByRead = field(default_factory=BlockedByRead.unprovable)
 
 
 def is_lane_candidate(candidate: PoolCandidate) -> bool:

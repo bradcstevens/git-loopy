@@ -199,7 +199,11 @@ collected. It is discriminated and ordered exactly as a Pool is, but it is never
 for anything: no **Pickup** reads it, it cannot make an issue **gone**, and it cannot
 establish that the Pool is empty. It may only add rows. Its cadence is a floor, not a
 period — an Orchestrator takes it on a tick it already owns, never from a second writer
-([ADR-0042](docs/adr/0042-a-membership-read-keeps-the-queue-live.md)).
+([ADR-0042](docs/adr/0042-a-membership-read-keeps-the-queue-live.md)). It carries each
+candidate's blockers on the one list call it already makes, so **Parallel mode** can refuse
+**Lane** candidacy to a **Blocked** issue without a refresh paying a round-trip per
+candidate; a read that could not determine them leaves **Readiness** unknown, exactly as an
+incomplete read already leaves emptiness unknown.
 _Avoid_: poll, refresh, shallow pool, live pool.
 
 **Strike**:
@@ -289,15 +293,19 @@ _Avoid_: rejection, exclusion, deferral.
 **Readiness**:
 Whether a candidate's native tracker dependencies are all closed. A fact about the
 tracker's dependency graph rather than about how the issue was authored: it clears
-itself when the last blocker closes, with no human touching the issue. Read one hop at
-**Pickup**, for each candidate the runner reaches, and never traversed further.
+itself when the last blocker closes, with no human touching the issue. Read one hop and
+never traversed further. Decided at two seams, from whichever read that seam was already
+taking: at **Pickup**, from the authoritative re-read, for each candidate the serial
+runner reaches; and at **Lane** candidacy, from the **Membership read**, for each
+candidate **Rolling dispatch** considers.
 _Avoid_: eligibility (that is the human's `ready-for-agent` assertion, settled at
 collection), **Pool exclusion**, **Pickup skip** (that is what the runner *does* about
 unreadiness, not the fact itself).
 
 **Blocked**:
 A candidate carrying at least one open `blocked_by` dependency, or one whose
-dependencies could not be read. It is not admissible at **Pickup**, stays in the
+dependencies could not be read. It is not admissible at **Pickup** and is refused
+**Lane** candidacy outright — never reserved and never released — stays in the
 **Pool** so the closure whitelist and the emptiness test still see it, and costs no
 **Strike** — it was never attempted. A blocker in another repository blocks exactly as
 one in this repository does. An issue blocked by *itself* is blocked, like any other;

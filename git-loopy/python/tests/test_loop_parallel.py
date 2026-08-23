@@ -127,7 +127,7 @@ from git_loopy.interactive.terminal import TerminalOwner
 from git_loopy.readiness import BlockedByRead, BlockerNode
 from git_loopy.session_outcome import SessionOutcome
 from git_loopy.skill_catalog import build_skill_catalog
-from git_loopy.sources import PoolCandidate
+from git_loopy.sources import GitHubIssueSource, PoolCandidate
 from git_loopy.staircase import Candidate, PriceStaircase
 from git_loopy.worktree import SetupResult
 from tests.fakes import FakeGateRunner, FakeGitClient, FakeGitHubClient
@@ -4701,12 +4701,45 @@ def test_a_lane_pickup_records_what_it_bound_and_where(tmp_path, monkeypatch) ->
     )
 
 
+def _spy_lane_reservations(monkeypatch) -> list[int | str]:
+    """Record every ref a **Lane** paid an authoritative **Pickup** read for.
+
+    ``RollingIssueSource.pickup`` is the reservation: it is the only path from a
+    cached candidate to Lane work, and #219 §2.10 makes it the read a Lane must
+    pay before dispatching. So the refs passed to it *are* the candidates this
+    Run offered a Lane, which is the fact #439 changes and the one an outcome
+    assertion cannot see — a candidate refused candidacy and one reserved and
+    then declined reach the same worktrees and the same ``pickup.bound``
+    records, and differ only in what they cost per scheduler turn.
+    """
+    reserved: list[int | str] = []
+    real_pickup = GitHubIssueSource.pickup
+
+    def _recording(self: GitHubIssueSource, ref: int | str):
+        reserved.append(ref)
+        return real_pickup(self, ref)
+
+    monkeypatch.setattr(GitHubIssueSource, "pickup", _recording)
+    return reserved
+
+
 def test_parallel_dispatch_waits_for_a_blocker_to_close_before_reserving_a_lane(
     tmp_path, monkeypatch
 ) -> None:
-    """#439: a blocked candidate never consumes a Lane or a release cycle."""
+    """#439: a blocked candidate never consumes a Lane or a release cycle.
+
+    **Rolling dispatch** refuses it *candidacy*, so it is never reserved — where
+    reserving and then declining it at **Pickup** would hand it straight back to
+    the cache it came from and re-reserve it on the very next scheduler turn,
+    for the rest of the Run. The reservation ledger is what says which happened:
+    one read per candidate, taken when it was actually dispatchable.
+
+    It is refused rather than dropped, so the **Membership read** that sees the
+    blocker closed is the whole of what promotes it — mid-Run, with no restart.
+    """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    reserved = _spy_lane_reservations(monkeypatch)
     blocked = _make_issue(
         31,
         labels=["ready-for-agent", "parallel-safe"],
@@ -4768,14 +4801,27 @@ def test_parallel_dispatch_waits_for_a_blocker_to_close_before_reserving_a_lane(
         if event["type"] == "wrapper.pickup.bound"
     ]
     assert bound == [7, 31]
+    # One reservation each, and #31's is the one that dispatched it. Reserving
+    # and declining would have charged an authoritative read per turn it spent
+    # blocked, and left a release behind each time.
+    assert reserved == [7, 31]
 
 
 def test_parallel_serial_fallback_skips_a_candidate_rolling_dispatch_refused(
     tmp_path, monkeypatch
 ) -> None:
-    """A blocker read is consistent whether the Lane or serial path reaches it first."""
+    """Lane-then-serial: the scheduler refused it, so the fallback cannot bind it.
+
+    A serial **Iteration** taken while Lane concurrency is throttled works
+    whatever sits at the **Pool**'s head, including a **Parallel-safe** issue no
+    Lane would touch. Both seams read the same tracker fact, so the verdict has
+    to be the same one — and the serial half is the half that leaves a record,
+    because a serial **Pickup** has somewhere to put a skip and Lane candidacy
+    does not.
+    """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    reserved = _spy_lane_reservations(monkeypatch)
     blocked = _make_issue(
         44,
         labels=["ready-for-agent", "parallel-safe"],
@@ -4843,6 +4889,85 @@ def test_parallel_serial_fallback_skips_a_candidate_rolling_dispatch_refused(
         int(path.name.removeprefix("issue-"))
         for path, _branch, _base in _lane_worktree_adds(fake_git)
     ] == [44]
+    # The Lane read #44 once — after the blocker closed. The turns it spent
+    # blocked cost no reservation at all.
+    assert reserved == [44]
+
+
+def test_a_lane_refuses_an_issue_a_serial_iteration_already_found_blocked(
+    tmp_path, monkeypatch
+) -> None:
+    """Serial-then-Lane: the other order, with Lane capacity going spare.
+
+    The serial half of a **Parallel-mode** Run reaches the whole **Pool**, so it
+    meets a blocked **Parallel-safe** candidate before any Lane does and leaves
+    a ``wrapper.pickup.skipped`` behind. Nothing about that record narrows Lane
+    candidacy — **Readiness** is not Run state the way the **Attempt
+    lifecycle** is — so the Lane has to refuse it on its own, from the blockers
+    the **Membership read** carried, on every turn concurrency is available.
+
+    Two serial-required issues, so the Run takes two serial turns with a Lane
+    walk between them: the second walk is the one that happens *after* the
+    serial Pickup already published its verdict on #44.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    reserved = _spy_lane_reservations(monkeypatch)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                44,
+                labels=["ready-for-agent", "parallel-safe"],
+                blocked_by=BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="x/y#7", state="open"),),
+                ),
+            ),
+            _make_issue(45, labels=["ready-for-agent"]),
+            _make_issue(46, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+            serial_closes=True,
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                parallel=2,
+                max_iterations=2,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    )
+
+    events = _logged_events(tmp_path)
+    assert [e["issue"] for e in events if e["type"] == "wrapper.pickup.bound"] == [
+        45,
+        46,
+    ]
+    skipped = [e for e in events if e["type"] == "wrapper.pickup.skipped"]
+    # Both serial Pickups walked past it, under the reason that names the
+    # blocker rather than under an authoring fault the operator would go and
+    # try to fix.
+    assert [e["issue"] for e in skipped] == [44, 44]
+    assert {e["reason"] for e in skipped} == {"blocked_by_open_dependency: x/y#7"}
+    # And no Lane ever offered it one, though two Lanes stood free throughout.
+    assert reserved == []
+    assert _lane_worktree_adds(fake_git) == []
 
 
 def test_a_lane_whose_routing_is_refused_leaves_a_skip_behind(
@@ -5564,7 +5689,10 @@ def test_a_defeated_issue_stops_being_a_lane_candidate(tmp_path, monkeypatch) ->
 
     def _candidate(ref: int) -> PoolCandidate:
         return PoolCandidate(
-            ref=ref, title=f"#{ref}", labels=("ready-for-agent", "parallel-safe")
+            ref=ref,
+            title=f"#{ref}",
+            labels=("ready-for-agent", "parallel-safe"),
+            blocked_by=BlockedByRead(total_count=0),
         )
 
     # Neither issue was ever worked, so the collision guard admits both.
@@ -5575,6 +5703,96 @@ def test_a_defeated_issue_stops_being_a_lane_candidate(tmp_path, monkeypatch) ->
 
     assert pool.eligible(_candidate(98)) is False
     assert pool.eligible(_candidate(99)) is True
+    # A defeated issue leaves the cache too: nothing inside this Run can make it
+    # eligible again, so retaining it would only withhold a terminal Pool claim.
+    assert pool.cacheable(_candidate(98)) is False
+
+
+def test_a_blocked_issue_stops_being_a_lane_candidate_but_stays_cached(
+    tmp_path, monkeypatch
+) -> None:
+    """**Readiness** joins Lane candidacy, and only candidacy (#439, ADR-0047).
+
+    The **Attempt lifecycle** established the shape (#412): the Lane path's only
+    way to decline a reservation hands the candidate straight back to the list it
+    came from, so a candidate the runner will refuse every turn is refused
+    *candidacy* instead — said once, rather than reserved, skipped and released
+    once per scheduler turn for the rest of the Run.
+
+    **Blocked** is refused at the same seam but not by the same predicate, and
+    the difference is which of the two the cache keeps. A defeated issue can
+    never become eligible again inside this Run; a blocked one clears itself the
+    moment its last blocker closes, with nobody touching the issue. So readiness
+    narrows ``eligible`` and leaves ``cacheable`` alone, and the next
+    **Membership read** — which already carries the blockers, on the one list
+    call it always made — is the whole of what promotes it.
+
+    Asserted on the predicates the Run actually composed rather than through a
+    dispatched Lane, because #438 already refuses a blocked candidate at the
+    authoritative **Pickup**: an end-to-end Run reaches the same worktrees and
+    the same ``wrapper.pickup.bound`` records either way. Whether the candidate
+    was ever *offered* a Lane is exactly the fact this ticket changes, and this
+    is where it is visible.
+    """
+    fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    built: list[loop_module._ParallelLoop] = []
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _capture(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        instance = real_parallel_loop(*args, **kwargs)
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _capture)
+
+    asyncio.run(loop_module.run(cfg))
+
+    assert len(built) == 1
+    pool = built[0]._pool
+    assert pool is not None
+
+    def _candidate(ref: int, blocked_by: BlockedByRead) -> PoolCandidate:
+        return PoolCandidate(
+            ref=ref,
+            title=f"#{ref}",
+            labels=("ready-for-agent", "parallel-safe"),
+            blocked_by=blocked_by,
+        )
+
+    ready = _candidate(98, BlockedByRead(total_count=0))
+    blocked = _candidate(
+        98,
+        BlockedByRead(total_count=1, nodes=(BlockerNode(ref="x/y#7", state="open"),)),
+    )
+    unprovable = _candidate(98, BlockedByRead.unprovable())
+
+    assert pool.eligible(ready) is True
+    assert pool.eligible(blocked) is False
+    # An unprovable read is not readiness: a refresh that could not determine
+    # blockers must not promote the candidate it failed to read.
+    assert pool.eligible(unprovable) is False
+
+    # Refused candidacy, not evicted: all three stay cached, so the refresh that
+    # sees the blocker closed is the only thing needed to promote them.
+    assert pool.cacheable(blocked) is True
+    assert pool.cacheable(unprovable) is True
+
+    # Composed with the existing predicates rather than replacing them: a
+    # candidate no human called Parallel-safe is still not Lane work, Ready or
+    # not, and the Attempt lifecycle still refuses a defeated one.
+    assert (
+        pool.eligible(
+            PoolCandidate(
+                ref=98,
+                title="#98",
+                labels=("ready-for-agent",),
+                blocked_by=BlockedByRead(total_count=0),
+            )
+        )
+        is False
+    )
+    built[0]._serial._attempts.observe(98, SessionOutcome.TIMEOUT)
+    assert pool.eligible(ready) is False
 
 
 class _ClassifyingLaneSession(_ParallelFakeSession):
