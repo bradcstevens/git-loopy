@@ -68,24 +68,38 @@ foreach ($Reason in @($Discriminator["exclusion_reasons"])) {
     }
 }
 
-# Wrapper contract §3.3.1 — Readiness is decided at Pickup from the
-# `blockedBy` connection collection carried. Drive the production verdict seam
-# from every fixture case so the PowerShell Orchestrator agrees with the
+# Wrapper contract §3.3.1 — the `blockedBy` connection rides collection and the
+# verdict is taken at Pickup from what it carried. Drive the production verdict
+# seam from every fixture case so the PowerShell Orchestrator agrees with the
 # reference member on open, cross-repository, and unprovable blockers.
 $IssueReadiness = ConvertFrom-GitLoopyJsonText -Text (
     Get-Content -LiteralPath (Join-Path $ConformanceDir "issue-readiness.json") -Raw
 )
-foreach ($Case in $IssueReadiness["cases"]) {
-    [string[]]$ExpectedBlockers = @()
-    if ($Case["expected"].Contains("blockers")) {
-        $ExpectedBlockers = [string[]]$Case["expected"]["blockers"]
-    }
-    $BlockedBy = [ordered]@{
+
+# The fixture writes a blocker's state as `open`/`closed`; `gh --json blockedBy`
+# returns the GraphQL enum `OPEN`/`CLOSED`. Both castings are real, and a port
+# that read only one of them would answer *ready* for a blocker it was handed —
+# the one outcome this fixture exists to prevent. So every case is driven twice,
+# and the casing is applied here rather than normalized into the connection: an
+# adapter that folded the fixture's vocabulary into `gh`'s would be doing the
+# port's job for it and would stay green while production could not.
+function New-ReadinessConnection {
+    param(
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Case,
+        [Parameter(Mandatory)]
+        [scriptblock]$StateCasing
+    )
+
+    return [ordered]@{
         totalCount = $Case["blocked_by"]["total_count"]
         nodes = @(
             foreach ($Node in @($Case["blocked_by"]["nodes"])) {
                 if ($Node["readable"] -eq $false) {
-                    [ordered]@{}
+                    # `gh --json` renders a node GraphQL would not disclose as
+                    # its Go zero value, so the count arrives and the body does
+                    # not.
+                    [ordered]@{ id = ""; number = 0; state = ""; url = "" }
                     continue
                 }
                 if ($Node["ref"] -notmatch '^([^/]+)/([^#]+)#([0-9]+)$') {
@@ -94,23 +108,38 @@ foreach ($Case in $IssueReadiness["cases"]) {
                 [ordered]@{
                     id = "fixture"
                     number = [int]$Matches[3]
-                    state = ([string]$Node["state"]).ToUpperInvariant()
+                    state = & $StateCasing ([string]$Node["state"])
                     url = "https://github.com/$($Matches[1])/$($Matches[2])/issues/$($Matches[3])"
                 }
             }
         )
     }
-    $Actual = Get-GitLoopyReadiness -BlockedBy $BlockedBy
+}
+
+$StateCasings = [ordered]@{
+    "as the fixture writes it" = { param($State) $State }
+    "as gh returns it" = { param($State) $State.ToUpperInvariant() }
+}
+foreach ($Case in $IssueReadiness["cases"]) {
+    [string[]]$ExpectedBlockers = @()
+    if ($Case["expected"].Contains("blockers")) {
+        $ExpectedBlockers = [string[]]$Case["expected"]["blockers"]
+    }
     $Expected = [ordered]@{
         verdict = $Case["expected"]["verdict"]
         admissible = $Case["expected"]["admissible"]
         skip_reason = $Case["expected"]["skip_reason"]
         blockers = $ExpectedBlockers
     }
-    Assert-Equal `
-        ($Expected | ConvertTo-Json -Compress -Depth 10) `
-        ($Actual | ConvertTo-Json -Compress -Depth 10) `
-        "issue-readiness fixture: $($Case["id"])"
+    foreach ($Casing in $StateCasings.GetEnumerator()) {
+        $Actual = Get-GitLoopyReadiness -BlockedBy (
+            New-ReadinessConnection -Case $Case -StateCasing $Casing.Value
+        )
+        Assert-Equal `
+            ($Expected | ConvertTo-Json -Compress -Depth 10) `
+            ($Actual | ConvertTo-Json -Compress -Depth 10) `
+            "issue-readiness fixture: $($Case["id"]) ($($Casing.Key))"
+    }
 }
 
 # The connection request binds production; the other fixture values are

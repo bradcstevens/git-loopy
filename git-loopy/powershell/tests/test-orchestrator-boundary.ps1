@@ -203,7 +203,7 @@ else {
     ""
 }
 switch -CaseSensitive ($Command) {
-"version" {
+"--version" {
     [Console]::Out.WriteLine(
         $(if ($env:FAKE_GH_VERSION) {
                 $env:FAKE_GH_VERSION
@@ -480,7 +480,7 @@ else {
     ""
 }
 switch -CaseSensitive ($Command) {
-"version" {
+"--version" {
     Write-Output $(if ($env:FAKE_GH_VERSION) {
             $env:FAKE_GH_VERSION
         }
@@ -2896,6 +2896,32 @@ Start-Sleep -Seconds $Sleep
     }
     Reset-GitLoopyIterationLifecycleState
 
+    # The reference's `IterationRollup.finish` normalization: a terminal reason
+    # *is* the Iteration's outcome, and the derived per-issue status only stands
+    # in for it when no reason was given. Ported as the rule rather than as a
+    # list of the reasons this port happens to pass today, so a Run that ends
+    # for a new reason reports that reason to the Dashboard instead of the
+    # `no_progress` it derived on the way there.
+    foreach ($Ending in @(
+        @{ Reason = "all_skipped"; Outcome = "all_skipped" },
+        @{ Reason = "aborted"; Outcome = "aborted" },
+        @{ Reason = ""; Outcome = "no_progress" }
+    )) {
+        $Ended = Get-GitLoopyIterationRollup `
+            -IterationStartedMonotonic 30 `
+            -FinishedMonotonic 32 `
+            -ActiveIssue $null `
+            -ActiveStartedAt $null `
+            -FirstStartedAt $null `
+            -ActiveClosedAt $null `
+            -ActiveClosedMonotonic $null `
+            -Strikes 0 `
+            -TerminalOutcome $Ending["Reason"]
+        Assert-Equal $Ending["Outcome"] $Ended["outcome"] (
+            "an Iteration ending on '$($Ending["Reason"])' reports it"
+        )
+    }
+
     # A serial **Pickup** is *prospective*: it binds before the agent session
     # starts, so its Active time begins at the binding and not at the Iteration
     # start. Only the three after-the-fact fallbacks -- `closure`, `commit` and
@@ -4308,6 +4334,206 @@ Start-Sleep -Seconds $Sleep
         "the agent was handed the pinned issue"
     )
 
+    # The readiness capability gate, driven over `gh` versions that are not
+    # installed. Both halves are pure, so the whole refusal is exercisable from
+    # a stubbed `gh --version` rather than from whatever the host happens to
+    # have. The stub replaces whatever `gh` is in scope and is put back after,
+    # so this block neither inherits nor leaves a `gh` for its neighbours.
+    $script:GateRequests = [Collections.Generic.List[string]]::new()
+    $script:GateVersionText = ""
+    $script:GateVersionExit = 0
+    $PreviousGh = Get-Item -LiteralPath "function:global:gh" -ErrorAction Ignore
+    function global:gh {
+        $script:GateRequests.Add([string]::Join(" ", $args))
+        $global:LASTEXITCODE = $script:GateVersionExit
+        if ($script:GateVersionText) {
+            return $script:GateVersionText
+        }
+    }
+    function Invoke-ReadinessGate {
+        param(
+            [AllowEmptyString()]
+            [string]$VersionText,
+            [int]$ExitCode = 0,
+            [Parameter(Mandatory)]
+            [ref]$Stderr
+        )
+
+        $script:GateRequests.Clear()
+        $script:GateVersionText = $VersionText
+        $script:GateVersionExit = $ExitCode
+        $Captured = [IO.StringWriter]::new()
+        $Previous = [Console]::Error
+        [Console]::SetError($Captured)
+        try {
+            $Verdict = Assert-GitLoopyReadinessCapability
+        }
+        finally {
+            [Console]::SetError($Previous)
+        }
+        $Stderr.Value = $Captured.ToString()
+        return $Verdict
+    }
+    function Set-ReadinessFloor {
+        param([Parameter(Mandatory)][version]$Floor)
+
+        & (Get-Module -Name "GitLoopy.Orchestrator") {
+            param($Value)
+            $Script:GitLoopyMinGhVersionForReadiness = $Value
+        } $Floor
+    }
+
+    # `gh --version`'s real output: the triple sits on the first line beside a
+    # build date, with the release URL on a second line.
+    Assert-Equal ([version]"2.94.0") (
+        ConvertTo-GitLoopyGhVersion -Text (
+            "gh version 2.94.0 (2026-01-01)`n" +
+            "https://github.com/cli/cli/releases/tag/v2.94.0"
+        )
+    ) "gh --version's first line is where the version is read"
+    # Read per component and decimally: `08` is eight, and a build component
+    # beyond the triple is not part of the comparison.
+    Assert-Equal ([version]"2.8.0") (
+        ConvertTo-GitLoopyGhVersion -Text "gh version 2.08.0"
+    ) "a zero-padded component is read decimally"
+    Assert-Equal ([version]"2.94.0") (
+        ConvertTo-GitLoopyGhVersion -Text "gh version 2.94.0.1 (2026-01-01)"
+    ) "a four-component build is read as its triple"
+    Assert-Equal $null (
+        ConvertTo-GitLoopyGhVersion -Text "gh version unknown"
+    ) "output carrying no version parses to nothing"
+    Assert-True (
+        Test-GitLoopyVersionLessThan `
+            -Actual ([version]"2.9.0") `
+            -Required ([version]"2.94.0")
+    ) "versions compare numerically per component, never lexically"
+
+    $OriginalFloor = & (Get-Module -Name "GitLoopy.Orchestrator") {
+        $Script:GitLoopyMinGhVersionForReadiness
+    }
+    try {
+        $GateStderr = ""
+        Assert-True (
+            Invoke-ReadinessGate `
+                -VersionText "gh version $OriginalFloor (2026-01-01)" `
+                -Stderr ([ref]$GateStderr)
+        ) "gh at the floor can read blockers"
+        Assert-Equal 0 $GateStderr.Length "an admitted gh says nothing"
+        Assert-Equal "--version" (
+            [string]::Join(" ", $script:GateRequests)
+        ) "the gate reads the command its message names"
+
+        Assert-True (-not (
+                Invoke-ReadinessGate `
+                    -VersionText "gh version 2.93.9 (2026-01-01)" `
+                    -Stderr ([ref]$GateStderr)
+            )) "gh below the floor is refused"
+        Assert-Contains $GateStderr "gh 2.93.9 cannot read issue dependencies" (
+            "the refusal names the installed gh"
+        )
+        Assert-Contains $GateStderr "``gh issue list``/``gh issue view --json``" (
+            "the refusal names the reads that would have failed"
+        )
+        Assert-Contains $GateStderr "requires gh >= $OriginalFloor" (
+            "the refusal names the floor"
+        )
+        Assert-Contains $GateStderr "https://cli.github.com/" (
+            "the refusal names the remedy"
+        )
+
+        Assert-True (-not (
+                Invoke-ReadinessGate `
+                    -VersionText "gh version 2.94.0" `
+                    -ExitCode 1 `
+                    -Stderr ([ref]$GateStderr)
+            )) "a gh that cannot report its version is refused"
+        Assert-Contains $GateStderr "``gh --version`` failed" (
+            "a failed version read names the command that failed"
+        )
+        Assert-True (-not (
+                Invoke-ReadinessGate `
+                    -VersionText "gh version unknown" `
+                    -Stderr ([ref]$GateStderr)
+            )) "a gh whose version cannot be parsed is refused"
+        Assert-Contains $GateStderr "could not parse a version" (
+            "an unparseable version read says so rather than guessing"
+        )
+
+        # The floor and the message it names come from the one constant, so
+        # moving it moves the refusal — not just the wording.
+        Set-ReadinessFloor -Floor "3.10.2"
+        Assert-True (-not (
+                Invoke-ReadinessGate `
+                    -VersionText "gh version 2.94.0 (2026-01-01)" `
+                    -Stderr ([ref]$GateStderr)
+            )) "the moved floor refuses what the old one admitted"
+        Assert-Contains $GateStderr "requires gh >= 3.10.2" (
+            "the refusal names the moved floor"
+        )
+        Assert-True (
+            Invoke-ReadinessGate `
+                -VersionText "gh version 3.10.2 (2026-01-01)" `
+                -Stderr ([ref]$GateStderr)
+        ) "the moved floor admits what it names"
+        # 3.9.9 sorts *after* 3.10.2 lexically and before it numerically.
+        Assert-True (-not (
+                Invoke-ReadinessGate `
+                    -VersionText "gh version 3.9.9 (2026-01-01)" `
+                    -Stderr ([ref]$GateStderr)
+            )) "the moved floor compares its minor component numerically"
+    }
+    finally {
+        Set-ReadinessFloor -Floor $OriginalFloor
+        Remove-Item -LiteralPath "function:global:gh" -ErrorAction Ignore
+        if ($null -ne $PreviousGh) {
+            Set-Item -LiteralPath "function:global:gh" -Value $PreviousGh.ScriptBlock
+        }
+    }
+
+    # Readiness answers per *source*, mirroring the reference member's
+    # `IssueSource.readiness(item)`: local markdown has no dependency graph to
+    # be blocked by, and GitHub decides from the connection collection carried.
+    $BlockedCandidate = [ordered]@{
+        number = 51
+        blocked_by = [ordered]@{
+            totalCount = 1
+            nodes = @(
+                [ordered]@{
+                    id = "blocker"
+                    number = 93
+                    state = "OPEN"
+                    url = "https://github.com/acme/widgets/issues/93"
+                }
+            )
+        }
+    }
+    $PrdsVerdict = Get-GitLoopyCandidateReadiness `
+        -Candidate $BlockedCandidate `
+        -IssueSource "prds"
+    Assert-True $PrdsVerdict["admissible"] (
+        "a local-markdown candidate has no dependency graph to be blocked by"
+    )
+    $GitHubVerdict = Get-GitLoopyCandidateReadiness `
+        -Candidate $BlockedCandidate `
+        -IssueSource "github"
+    Assert-True (-not $GitHubVerdict["admissible"]) (
+        "a GitHub candidate with an open blocker is not admissible"
+    )
+    Assert-Equal "blocked_by_open_dependency" (
+        [string]$GitHubVerdict["skip_reason"]
+    ) "the GitHub verdict names why"
+    Assert-Equal "acme/widgets#93" (
+        [string]::Join(", ", @($GitHubVerdict["blockers"]))
+    ) "the GitHub verdict names whom"
+    # An absent connection is not an empty one: nothing was read, so nothing
+    # says no blocker was found.
+    $UnreadVerdict = Get-GitLoopyCandidateReadiness `
+        -Candidate ([ordered]@{ number = 51 }) `
+        -IssueSource "github"
+    Assert-Equal "readiness_unprovable" (
+        [string]$UnreadVerdict["skip_reason"]
+    ) "a candidate whose connection never arrived is not silently admitted"
+
     # ADR-0047: a blocked candidate remains in the Pool but is passed over at
     # Pickup, where the carried connection names its open blocker. No session or
     # Strike is spent discovering tracker state the collection already held.
@@ -4474,6 +4700,9 @@ Start-Sleep -Seconds $Sleep
     Assert-True (-not [IO.File]::Exists($env:FAKE_COPILOT_CALLS)) (
         "all-blocked Pool starts no agent session"
     )
+    Assert-Contains ([IO.File]::ReadAllText($AllBlockedStderr)) (
+        "all 1 candidate(s) in the Pool were skipped"
+    ) "the all-blocked ending tells the operator how much it passed over"
 }
 finally {
     foreach ($Name in @(
