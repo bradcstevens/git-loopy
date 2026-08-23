@@ -22,9 +22,10 @@ Filtering narrows the *view* only. The shared model keeps ``enabled`` and
 off-screen and is still in the saved policy afterwards.
 
 This module imports Textual at the top, so — like
-:mod:`git_loopy.interactive.picker_app` — it is reached only through a lazy
-import (:func:`git_loopy.skillscmd.run_textual_skill_picker`), and a base
-installation never loads it unless the picker is used.
+:mod:`git_loopy.interactive.picker_app` — it is reached through a lazy import
+(:func:`git_loopy.skillscmd.run_textual_skill_picker`). The dependency is now
+in the base installation, but keeping the lazy boundary keeps non-interactive
+commands' import path light.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Input, Static
 
 from git_loopy.skillscmd import (
@@ -42,7 +44,7 @@ from git_loopy.skillscmd import (
     SkillSelectionRow,
 )
 
-__all__ = ["SkillPickerApp"]
+__all__ = ["SkillPickerApp", "SkillPickerScreen"]
 
 _SEARCH = "skill-search"
 _ROWS = "skill-rows"
@@ -97,10 +99,8 @@ class _SearchInput(Input):
         return super().check_consume_key(key, character)
 
 
-class SkillPickerApp(App["SkillSelectionResult | None"]):
+class SkillPickerScreen(Screen["SkillSelectionResult | None"]):
     """Searchable multi-select over one :class:`SkillSelectionModel`."""
-
-    TITLE = "git-loopy · select Skills"
 
     CSS = """
     #skill-search {
@@ -224,8 +224,44 @@ class SkillPickerApp(App["SkillSelectionResult | None"]):
         if errors:
             self._set_status(f"Cannot save: {'; '.join(errors)}.")
             return
-        self.exit(SkillSelectionResult(self.selection.enabled))
+        self.dismiss(SkillSelectionResult(self.selection.enabled))
 
     def action_cancel(self) -> None:
         """esc / Ctrl+C: the caller writes nothing at all."""
-        self.exit(None)
+        self.dismiss(None)
+
+
+class SkillPickerApp(App["SkillSelectionResult | None"]):
+    """Thin standalone host for :class:`SkillPickerScreen`."""
+
+    TITLE = "git-loopy · select Skills"
+
+    def __init__(self, model: SkillSelectionModel) -> None:
+        super().__init__()
+        self._picker_screen: SkillPickerScreen | None = None
+        self._model = model
+
+    def on_mount(self) -> None:
+        self._picker_screen = SkillPickerScreen(self._model)
+        self.push_screen(self._picker_screen, self._on_result)
+
+    @property
+    def selection(self) -> SkillSelectionModel:
+        """Compatibility view of the shared model for standalone callers."""
+        assert self._picker_screen is not None
+        return self._picker_screen.selection
+
+    @property
+    def status(self) -> str:
+        """Compatibility view of the screen status for standalone callers."""
+        assert self._picker_screen is not None
+        return self._picker_screen.status
+
+    def query_one(self, selector, expect_type=None):
+        """Keep the old wrapper test/caller access to the hosted widgets."""
+        if self._picker_screen is not None:
+            return self._picker_screen.query_one(selector, expect_type)
+        return super().query_one(selector, expect_type)
+
+    def _on_result(self, result: SkillSelectionResult | None) -> None:
+        self.exit(result)

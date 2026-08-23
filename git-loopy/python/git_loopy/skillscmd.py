@@ -230,9 +230,9 @@ def run_textual_skill_picker(
     accepting them is what lets one collection seam call either implementation
     without knowing which it got.
 
-    Textual is imported **here**, not at module import, so ``--help``, every
-    non-interactive command, and the base test suite never pay for — or require
-    — the optional extra.
+    Textual is imported **here**, not at module import, so ``--help`` and every
+    non-interactive command keep a light import path even though Textual is now
+    a base dependency.
     """
     from .interactive.skill_picker_app import SkillPickerApp
 
