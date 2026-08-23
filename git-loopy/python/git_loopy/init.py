@@ -699,7 +699,6 @@ def run_init(
     required_skills: Sequence[str] | None = None,
     label_client: Any = None,
     writer: Callable[[Path, Mapping[str, object]], None] = settings.write_config_atomic,
-    **legacy: Any,
 ) -> int:
     """Run the first-run setup wizard; write Config (and optional assets) and exit.
 
@@ -714,11 +713,8 @@ def run_init(
         default_effort = _DEFAULT_REASONING_EFFORT
     if warn is None:
         warn = _warn
-    input_fn = legacy.pop("input_fn", input)
-    output_fn = legacy.pop("output_fn", print)
-    picker_runner = legacy.pop("picker_runner", None)
-    if legacy:
-        raise TypeError(f"unexpected run_init arguments: {', '.join(sorted(legacy))}")
+    input_fn: Callable[[str], str] = input
+    output_fn: Callable[[str], None] = print
 
     # Setup is where git-loopy acquires the Skills it runs on, and it happens
     # before anything is collected: the Skill policy the operator is about to
@@ -798,7 +794,7 @@ def run_init(
                     output_fn=output_fn,
                     client_factory=client_factory,
                     discoverer=discoverer,
-                    picker_runner=picker_runner,
+                    picker_runner=None,
                     git=git,
                     required_skills=_post_setup_required_skills(
                         repo_root=repo_root,
