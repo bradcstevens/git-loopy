@@ -124,10 +124,11 @@ def _resolve_channel(executable: Path, env: Mapping[str, str]) -> InstallChannel
     ``git-loopy`` there, so calling either owner from that path would be a
     dangerous guess.
     """
-    if _is_relative_to(executable, _uv_tool_dir(env) / "git-loopy"):
+    resolved = _resolve_link(executable)
+    if _is_relative_to(resolved, _uv_tool_dir(env) / "git-loopy"):
         return InstallChannel(name="uv-tool", proven=True)
     if any(
-        _is_relative_to(executable, prefix / "Cellar" / "git-loopy")
+        _is_relative_to(resolved, prefix / "Cellar" / "git-loopy")
         for prefix in _homebrew_prefixes(env)
     ):
         return InstallChannel(name="homebrew", proven=True)
@@ -168,6 +169,14 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
     return True
 
 
+def _resolve_link(path: Path) -> Path:
+    """Follow a package manager's launcher link without changing displayed path."""
+    try:
+        return path.resolve(strict=True)
+    except OSError:
+        return path
+
+
 def _is_installer_launcher(executable: Path) -> bool:
     """Recognize the exact self-contained shim the shell installer writes."""
     try:
@@ -189,7 +198,7 @@ def _resolve_identity(
 ) -> tuple[str | None, bool | None]:
     """Read the local checkout identity when this artifact retains one."""
     repository = _find_repository(executable)
-    if repository is None:
+    if repository is None or not _is_git_loopy_checkout(repository):
         identity = _metadata_identity(release_version)
         if identity is not None:
             return identity
@@ -254,6 +263,11 @@ def _find_repository(path: Path) -> Path | None:
     return None
 
 
+def _is_git_loopy_checkout(repository: Path) -> bool:
+    """Whether a repository is the source artifact, not a consumer project."""
+    return (repository / "git-loopy" / "python" / "git_loopy" / "VERSION").is_file()
+
+
 def _read_head(repository: Path) -> str | None:
     git_dir = _git_dir(repository)
     if git_dir is None:
@@ -316,21 +330,32 @@ def _is_published_release(
     try:
         tagged = (git_dir / tag).read_text(encoding="utf-8").strip()
     except (OSError, UnicodeError):
-        tagged = _packed_ref(git_dir, tag)
-    if tagged is None or not _COMMIT.fullmatch(tagged):
+        packed = _packed_ref(git_dir, tag)
+        if packed is None:
+            return False
+        tagged, peeled = packed
+        if peeled is not None:
+            return peeled == commit
+        return _peel_tag(git_dir, tagged) == commit
+    if not _COMMIT.fullmatch(tagged):
         return False
     return _peel_tag(git_dir, tagged) == commit
 
 
-def _packed_ref(git_dir: Path, tag: str) -> str | None:
+def _packed_ref(git_dir: Path, tag: str) -> tuple[str, str | None] | None:
     try:
         lines = (git_dir / "packed-refs").read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError):
         return None
-    for line in lines:
+    for index, line in enumerate(lines):
         parts = line.split(" ", maxsplit=1)
         if len(parts) == 2 and parts[1] == tag and _COMMIT.fullmatch(parts[0]):
-            return parts[0]
+            peeled: str | None = None
+            if index + 1 < len(lines) and lines[index + 1].startswith("^"):
+                candidate = lines[index + 1][1:]
+                if _COMMIT.fullmatch(candidate):
+                    peeled = candidate
+            return parts[0], peeled
     return None
 
 
