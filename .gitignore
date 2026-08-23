@@ -24,6 +24,8 @@ node_modules/
 dist/
 build/
 coverage/
+.coverage
+.coverage.*
 .nyc_output/
 
 # Python (kept so this template is safe to scaffold a Python app into)

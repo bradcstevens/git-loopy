@@ -1890,3 +1890,55 @@ def test_run_init_unresolvable_required_skills_writes_nothing(tmp_path: Path) ->
     assert rc == 1
     assert not settings.project_config_path(tmp_path).exists()
     assert any("Required Skills" in message for message in warnings)
+
+
+def test_run_init_revalidates_when_the_runner_changes_the_scaffold_decision(
+    tmp_path: Path,
+) -> None:
+    """A policy resolved for a scaffolding setup is not valid for a bare one.
+
+    ``scaffold`` chooses *which instructions* the Required Skills come from:
+    scaffolding resolves them against the packaged prompt, not scaffolding
+    against whatever is already on disk. A runner that collects under one and
+    answers under the other — a #507 back-navigation — must not have the first
+    answer's validation stand in for the second.
+    """
+    stale = tmp_path / "git-loopy" / settings.PROMPT_FILENAME
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text(
+        "---\nrequired-skills:\n  - stale-skill\n---\nSTALE\n", encoding="utf-8"
+    )
+    packaged = _packaged(tmp_path)
+    packaged_prompt = tmp_path / "pkg" / "PROMPT.md"
+    packaged_prompt.write_text(
+        "---\nrequired-skills:\n  - tdd\n---\nPACKAGED\n", encoding="utf-8"
+    )
+    packaged["packaged_prompt"] = packaged_prompt
+    packaged.update(_policy_seams(tmp_path, catalog=_baseline_catalog()))
+    packaged["required_skills"] = None
+    warnings: list[str] = []
+    out = _Output()
+
+    def runner(**kwargs: Any) -> Any:
+        # Collect while scaffolding (requirement: tdd), then answer without it
+        # (requirement: stale-skill) without collecting again.
+        return _answers(
+            scaffold=False,
+            enabled_skills=kwargs["rebuild_skill_selection"](True, "project"),
+        )
+
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            wizard_runner=runner,
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            warn=warnings.append,
+            **packaged,
+        )
+
+    assert rc == 1
+    assert not settings.project_config_path(tmp_path).exists()
+    assert any("stale-skill" in message for message in warnings)

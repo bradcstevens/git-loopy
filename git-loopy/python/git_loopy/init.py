@@ -808,9 +808,13 @@ def run_init(
     resolved_scope = scope or ("project" if repo_root is not None else "global")
     targets = _resolve_targets(resolved_scope, repo_root, env)
     prompt_source = packaged_prompt or _packaged_prompt_path()
-    #: Every ``(scope, policy)`` the rebuild callback already resolved, so the
-    #: answer set the runner returns is re-resolved only when it is a new one.
-    validated_policies: list[tuple[str, tuple[str, ...]]] = []
+    #: Every ``(scope, scaffold, policy)`` the rebuild callback already resolved,
+    #: so the answer set the runner returns is re-resolved only when it is a new
+    #: one. ``scaffold`` belongs in the key because it *selects the requirement*:
+    #: a scaffolding setup resolves Required Skills against the packaged prompt
+    #: and a non-scaffolding one against whatever prompt is already on disk, so
+    #: the same policy can be valid under one and invalid under the other.
+    validated_policies: list[tuple[str, bool, tuple[str, ...]]] = []
 
     try:
         if assume_yes:
@@ -860,8 +864,12 @@ def run_init(
                     installed_skills_dir=skills_source,
                 )
                 # Remember what the picker already resolved, so the answer set
-                # below is re-validated only when it is *not* this one.
-                validated_policies.append((selected_scope, tuple(collected)))
+                # below is re-validated only when it is *not* this one. The
+                # scaffold decision is part of the key, not incidental to it:
+                # it chose which prompt the requirement came from.
+                validated_policies.append(
+                    (selected_scope, scaffold_decision, tuple(collected))
+                )
                 return collected
 
             runner_options: dict[str, Any] = {}
@@ -895,7 +903,7 @@ def run_init(
             # picker did not just resolve — because the runner assembled one, or
             # skipped the callback entirely — is resolved here before it can
             # reach a Config (ADR-0015).
-            if (resolved_scope, enabled_skills) not in validated_policies:
+            if (resolved_scope, scaffold, enabled_skills) not in validated_policies:
                 _validate_skill_policy(
                     enabled_skills,
                     scope=resolved_scope,
