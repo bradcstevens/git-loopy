@@ -654,6 +654,27 @@ def _report_session_outcome(
     )
 
 
+def _terminal_reason_for(
+    outcome: execution_host_module.ContributionFailure,
+) -> str:
+    """Map an **Execution host**'s terminal failure onto a published reason.
+
+    The host reports *why it refused*; the Run decides what that means on the
+    wire (ADR-0050). The three-class failure vocabulary is not published yet —
+    #453 owns widening ``wrapper.contribution.end``'s ``reason`` — so a
+    failure lands on one of the terminal reasons the wire already carries.
+
+    The distinction that must survive is ``checkpoint_failed``: a contribution
+    whose work could not be *captured* is not a contribution whose branch
+    simply carried nothing, ``docs/wrapper-contract.md`` requires readers to
+    tell them apart, and it is the one refusal every placement can report.
+    Everything else is a branch with nothing to integrate.
+    """
+    if outcome.reason == execution_host_module.REASON_CHECKPOINT_FAILED:
+        return rolling_scheduler.REASON_CHECKPOINT_FAILED
+    return rolling_scheduler.REASON_UNCHANGED_BRANCH
+
+
 class _EventObserver(Protocol):
     """Anything that folds raw Events into its own accounting."""
 
@@ -3206,8 +3227,14 @@ class _ParallelLoop:
             )
             return
 
+        # Reclaim the local placeholder *before* adopting the host's branch: a
+        # host that contributed on a branch of its own leaves the deterministic
+        # Lane branch holding nothing, and §F's collection rule cannot reach it
+        # (it is neither merged into base nor named by the closing issue).
+        self._cleanup_injected_host_worktree(
+            lane_work, discard_branch=lane_work.branch != outcome.branch
+        )
         lane_work.branch = outcome.branch
-        self._cleanup_injected_host_worktree(lane_work)
         lane_outcome = outcome.ending
         assert lane_outcome is not None
         # Offered to the **Escalation rung**'s ledger before it is said out
@@ -3218,8 +3245,13 @@ class _ParallelLoop:
             self._diag, ref=lane_work.item.ref, record=lane_outcome
         )
 
+        # One progress fact per contribution (#403): the ending the outcome
+        # carries is what the scheduler is told, so a contribution's
+        # disposition can never contradict the ending just reported for it.
+        # Re-deriving it from the completion SHA would be a second answer the
+        # local runner's own commit accounting can disagree with.
         disposition = scheduler.finish_work(
-            contribution, changed=outcome.sha != lane_work.pre_sha
+            contribution, changed=lane_outcome.progressed
         )
         if disposition == rolling_scheduler.TERMINAL:
             self._lane_work.pop(contribution.contribution_id, None)
@@ -3335,7 +3367,9 @@ class _ParallelLoop:
             )
 
         disposition = self._scheduler.finish_terminal_failure(
-            contribution, reoffer=outcome.classification != "breach"
+            contribution,
+            reoffer=outcome.classification != "breach",
+            reason=_terminal_reason_for(outcome),
         )
         assert disposition == rolling_scheduler.TERMINAL
         self._lane_work.pop(contribution.contribution_id, None)
@@ -3395,7 +3429,16 @@ class _ParallelLoop:
     def _cleanup_injected_host_worktree(
         self, lane_work: _LaneWork, *, discard_branch: bool = False
     ) -> None:
-        """Reclaim the clean local placeholder a non-local host did not use."""
+        """Reclaim the local placeholder a substituted host did not use.
+
+        Dispatch always cuts the deterministic Lane worktree and branch locally,
+        because that is what the ``local`` placement needs. A substituted host
+        that never ran, or that contributed on a branch of its own, leaves that
+        placeholder holding nothing — and ADR-0050 §F's collection rule cannot
+        reach it, since it is neither merged into base nor named by the closing
+        issue. ``discard_branch`` is how the caller says so; a placeholder the
+        host *did* contribute on is the contribution's own branch and is kept.
+        """
         if self._execution_host is not None:
             self._cleanup_lane_worktree(lane_work, checkpoint_ok=True)
             if discard_branch:

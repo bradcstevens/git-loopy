@@ -1485,6 +1485,89 @@ def test_parallel_lane_checkpoint_commits_in_its_own_worktree(
     assert fake_git.commit_messages == []
 
 
+def test_parallel_lane_checkpoint_failure_keeps_its_terminal_reason(
+    tmp_path, monkeypatch
+) -> None:
+    """A failed Lane **Checkpoint** still ends as ``checkpoint_failed`` (#447).
+
+    Routing the failure through the **Execution host** seam must not cost the
+    wire the distinction it already publishes: ``docs/wrapper-contract.md``
+    requires ``wrapper.contribution.end``'s ``reason`` to tell
+    ``checkpoint_failed`` apart from ``unchanged_branch``, and #447 promised a
+    Run's Events stay byte-identical. The host reports the refusal
+    (``checkpoint_failed``) and the Run — not the host — turns it into that
+    terminal reason, so a contribution whose work could not be captured is
+    never mistaken for one whose branch simply carried nothing.
+
+    The existing retention rule rides along unchanged (#219 §3.10): a failed
+    Checkpoint preserves the Lane's worktree instead of tearing it down.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    class _UncheckpointableClient(_ParallelFakeClient):
+        """Leaves the Lane dirty AND makes its Checkpoint commit fail."""
+
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            working_directory = kwargs.get("working_directory")
+            if working_directory is None:
+                return session
+            real_send_and_wait = session.send_and_wait
+
+            async def failing_send_and_wait(
+                prompt: str, *, timeout: float = 60.0, **extra: Any
+            ) -> SessionEvent | None:
+                result = await real_send_and_wait(prompt, timeout=timeout, **extra)
+                lane_git = fake_git.worktree_client(Path(working_directory))
+                assert lane_git is not None, "Lane worktree must still be live"
+                lane_git.dirty = True
+                lane_git.commit_error = git_module.GitError(
+                    ["git", "commit", "-m", "checkpoint"], 1, "index.lock exists"
+                )
+                return result
+
+            session.send_and_wait = failing_send_and_wait  # type: ignore[method-assign]
+            return session
+
+    fake_client = _UncheckpointableClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(
+        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    asyncio.run(loop_module.run(cfg))
+
+    ends = [
+        e
+        for e in _logged_events(tmp_path)
+        if e["type"] == "wrapper.contribution.end"
+    ]
+    assert [e["reason"] for e in ends] == ["checkpoint_failed"]
+    # §3.10's retention rule is untouched: the dirty worktree is preserved.
+    assert fake_git.worktree_removes == []
+    assert fake_git.merge_calls == []
+
+
 def test_parallel_integration_lands_and_closes_both_lanes(
     tmp_path, monkeypatch
 ) -> None:
@@ -2629,7 +2712,15 @@ class _TerminalFailureExecutionHost:
 def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     tmp_path, monkeypatch
 ) -> None:
-    """A fake host is complete when exercised by ``_ParallelLoop`` itself (#447)."""
+    """A fake host is complete when exercised by ``_ParallelLoop`` itself (#447).
+
+    Drives the whole blameless cycle ADR-0050 describes with no Agent session
+    and no network: a ``never_started`` and a ``stall`` are terminal for their
+    contribution, spend neither an **Attempt** nor a **Strike**, hand back the
+    placeholder branch they never ran on, and leave their issue eligible — so
+    the ordinary **Pool** re-offers it, and the host's second, succeeding
+    contribution travels on into **Integration** exactly as a local one would.
+    """
     fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_rolling(
         tmp_path, monkeypatch
     )
@@ -2647,25 +2738,174 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     exit_code = asyncio.run(loop_module.run(cfg))
 
     assert exit_code == 0
+    # Each issue was offered twice: the blameless failure spent no unit, so it
+    # stayed eligible and the ordinary Pool re-offered it.
     assert [request.issue_ref for request in host.calls].count(42) == 2
     assert [request.issue_ref for request in host.calls].count(43) == 2
     assert {request.base_revision for request in host.calls} == {
         "0000000000000000000000000000000000000001"
     }
+    # No Agent session, on any path -- the seam is substitutable in fact.
     assert fake_client.created == []
-    assert fake_git.merge_calls == []
     assert fake_git.active_worktrees == []
-    assert len(_lane_branch_deletes(fake_git)) == 2
+    # The placeholder each blameless failure left behind is reclaimed, which is
+    # what lets the re-offer cut the same deterministic Lane branch again.
+    run_id = _run_id(tmp_path)
+    assert sorted(_lane_branch_deletes(fake_git)) == sorted(
+        git_module.lane_branch_name(run_id, ref) for ref in (42, 43)
+    )
     assert len(built) == 1
     assert built[0]._serial._attempts.state(42) is AttemptState.FRESH
     assert built[0]._serial._attempts.state(43) is AttemptState.FRESH
     assert built[0]._serial._strike_machine.strikes == 0
-    assert [contribution.reason for contribution in built[0].finalized_contributions] == [
-        "unchanged_branch",
-        "unchanged_branch",
-        "unchanged_branch",
-        "unchanged_branch",
+    # Both blameless failures finalize terminally and ahead of the re-offered
+    # contributions, which the host then carried into Integration.
+    reasons = [
+        contribution.reason for contribution in built[0].finalized_contributions
     ]
+    assert len(reasons) == 4
+    assert reasons[:2] == ["unchanged_branch", "unchanged_branch"]
+    assert len(fake_git.merge_calls) == 2
+
+
+@dataclass
+class _ForeignBranchExecutionHost:
+    """A host double that contributes on a branch it named itself."""
+
+    placement: Placement = "fake"
+    isolation_grade: IsolationGrade = "workspace separation only"
+    capacity: int = 4
+    calls: list[ContributionRequest] = field(default_factory=list)
+
+    def contributed_branch(self, issue_ref: int | str) -> str:
+        return f"host/contributed/issue-{issue_ref}"
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        self.calls.append(request)
+        return ContributionSuccess(
+            branch=self.contributed_branch(request.issue_ref),
+            sha=request.base_revision,
+            events=(),
+            placement=self.placement,
+            isolation_grade=self.isolation_grade,
+            ending=SessionOutcomeRecord(
+                outcome=SessionOutcome.NO_PROGRESS,
+                progressed=False,
+                termination=SessionTermination.COMPLETED,
+            ),
+        )
+
+
+def test_parallel_loop_reclaims_the_placeholder_a_substituted_host_did_not_use(
+    tmp_path, monkeypatch
+) -> None:
+    """A Lane branch no host ever contributed on is reaped (#447, ADR-0050 §F).
+
+    Dispatch always cuts the deterministic Lane branch locally, because that is
+    what the ``local`` placement needs. A substituted host that contributes on
+    a branch of its own leaves that placeholder behind holding nothing — and
+    §F's collection rule cannot reach it, since it is neither merged into base
+    nor named by the closing issue. So the Run reclaims it at the seam, exactly
+    as it already does for a host failure that never ran.
+
+    The branch a host *did* contribute on is untouched: only a placeholder the
+    host declined to use is discarded.
+    """
+    fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _ForeignBranchExecutionHost()
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, execution_host=host, **kwargs)
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == 0
+    run_id = _run_id(tmp_path)
+    placeholders = {
+        git_module.lane_branch_name(run_id, ref) for ref in (42, 43)
+    }
+    assert set(_lane_branch_deletes(fake_git)) == placeholders
+    # The host's own branches are never touched by the placeholder reclamation.
+    assert not any(
+        host.contributed_branch(ref) in fake_git.branch_deletes for ref in (42, 43)
+    )
+    assert fake_git.active_worktrees == []
+    assert fake_client.created == []
+
+
+@dataclass
+class _NoProgressEndingExecutionHost:
+    """A host whose branch head moved but whose ending reports no progress."""
+
+    placement: Placement = "fake"
+    isolation_grade: IsolationGrade = "workspace separation only"
+    capacity: int = 4
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        return ContributionSuccess(
+            branch=git_module.lane_branch_name(request.run_id, request.issue_ref),
+            sha="0000000000000000000000000000000000000009",
+            events=(),
+            placement=self.placement,
+            isolation_grade=self.isolation_grade,
+            ending=SessionOutcomeRecord(
+                outcome=SessionOutcome.NO_PROGRESS,
+                progressed=False,
+                termination=SessionTermination.COMPLETED,
+            ),
+        )
+
+
+def test_parallel_contribution_disposition_agrees_with_the_ending_it_reports(
+    tmp_path, monkeypatch
+) -> None:
+    """One progress fact per contribution, carried on the outcome (#447, #403).
+
+    A **Lane contribution**'s ending and its scheduler disposition answer the
+    same question, and the Run must not answer it twice: before the
+    **Execution host** seam, one ``changed`` drove both, so "the ending agrees
+    with what the scheduler was told about the same contribution". The seam
+    keeps that invariant by reading the progress fact off the ending the
+    outcome already carries rather than re-deriving it from the completion SHA
+    — a second derivation the local runner's own commit accounting can
+    contradict, and which no host can be held to.
+
+    So a contribution the Run has just reported as no-progress is finalized
+    ``unchanged_branch`` and never reaches **Integration**, however far its
+    branch head appears to have moved.
+    """
+    fake_git, fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    built: list[loop_module._ParallelLoop] = []
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        instance = real_parallel_loop(
+            *args, execution_host=_NoProgressEndingExecutionHost(), **kwargs
+        )
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == 0
+    assert fake_git.merge_calls == []
+    assert fake_gh.issue_close_calls == []
+    assert [
+        contribution.reason for contribution in built[0].finalized_contributions
+    ] == ["unchanged_branch", "unchanged_branch"]
 
 
 def test_parallel_lane_runs_worktree_setup_before_own_session(

@@ -651,20 +651,25 @@ class RollingScheduler:
         return PARKED
 
     def finish_terminal_failure(
-        self, contribution: Contribution, *, reoffer: bool
+        self, contribution: Contribution, *, reoffer: bool, reason: str
     ) -> str:
         """Finalize a host-reported terminal failure without local work signals.
 
         The host failure's three-class vocabulary is intentionally not emitted
         here: #453 owns widening the contribution-end event reasons. Until then,
-        the existing unpublished terminal reason keeps the wire unchanged while
-        the Run still takes a distinct, non-Integration control-flow path.
+        the caller maps the host's failure onto one of the terminal reasons the
+        wire already publishes, which keeps the wire unchanged while the Run
+        still takes a distinct, non-Integration control-flow path.
 
         A host that never started or stalled did not start an Agent session.
         Undo the provisional session claim so the Pool can offer its issue again;
         a breach keeps the claim because that Agent session did run.
+
+        Args:
+            reoffer: Whether the issue returns to the **Pool** unspent.
+            reason: The already-published terminal reason to finalize with.
         """
-        self._finalize(contribution, reason=REASON_UNCHANGED_BRANCH)
+        self._finalize(contribution, reason=reason)
         if reoffer:
             self._units_spent -= 1
             self._worked.discard(contribution.ref)

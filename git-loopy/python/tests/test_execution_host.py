@@ -17,6 +17,7 @@ from typing import Literal
 
 import pytest
 
+from git_loopy import execution_host
 from git_loopy.execution_host import (
     ContributionFailure,
     ContributionRequest,
@@ -240,6 +241,9 @@ async def test_local_host_rejects_a_failed_checkpoint() -> None:
 
     assert isinstance(outcome, ContributionFailure)
     assert outcome.reason == "checkpoint_failed"
+    # The one host reason the Run maps onto an already-published terminal
+    # reason, so the seam names it rather than leaving it a stray literal.
+    assert execution_host.REASON_CHECKPOINT_FAILED == "checkpoint_failed"
     assert outcome.classification == "breach"
 
 

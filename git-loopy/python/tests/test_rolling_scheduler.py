@@ -20,7 +20,11 @@ import pytest
 
 from git_loopy.rolling_concurrency import ConcurrencyController
 from git_loopy.rolling_pool import RollingPool
-from git_loopy.rolling_scheduler import RollingScheduler
+from git_loopy.rolling_scheduler import (
+    REASON_CHECKPOINT_FAILED,
+    REASON_UNCHANGED_BRANCH,
+    RollingScheduler,
+)
 from git_loopy.sources import (
     AfkReadyItem,
     MembershipSnapshot,
@@ -270,12 +274,33 @@ def test_blamefree_host_failure_releases_the_provisional_session_claim() -> None
     scheduler.start()
     contribution = scheduler.start_session(scheduler.reserve()[0])
 
-    disposition = scheduler.finish_terminal_failure(contribution, reoffer=True)
+    disposition = scheduler.finish_terminal_failure(
+        contribution, reoffer=True, reason=REASON_UNCHANGED_BRANCH
+    )
 
     assert disposition == "terminal"
     assert scheduler.remaining_units == 5
     clock.advance(120.0)
     assert [reservation.item.ref for reservation in scheduler.reserve()] == [11]
+
+
+def test_a_host_failure_finalizes_with_the_reason_the_run_chose() -> None:
+    """The Run, not the host, names the terminal reason it publishes (#447).
+
+    ``wrapper.contribution.end``'s ``reason`` must keep telling
+    ``checkpoint_failed`` apart from ``unchanged_branch``, so the caller maps
+    the host's refusal onto one of them rather than the scheduler assuming one.
+    """
+    scheduler, _source = _scheduler([11], lane_cap=1)
+    scheduler.start()
+    contribution = scheduler.start_session(scheduler.reserve()[0])
+
+    disposition = scheduler.finish_terminal_failure(
+        contribution, reoffer=False, reason=REASON_CHECKPOINT_FAILED
+    )
+
+    assert disposition == "terminal"
+    assert contribution.reason == "checkpoint_failed"
 
 
 # --------------------------------------------------------------------------- #

@@ -83,6 +83,7 @@ __all__ = [
     "Placement",
     "IsolationGrade",
     "ContributionFailureClass",
+    "REASON_CHECKPOINT_FAILED",
     "ContributionRequest",
     "ContributionSuccess",
     "ContributionFailure",
@@ -111,6 +112,16 @@ ContributionFailureClass = Literal["breach", "never_started", "stall"]
 _CONTRIBUTION_FAILURE_CLASSES = frozenset(
     {"breach", "never_started", "stall"}
 )
+
+#: The failure ``reason`` a host reports when it could not hand back a durable
+#: branch because the **Checkpoint** meant to capture the tree failed. It is
+#: the one host reason the Run's wire already publishes a matching terminal
+#: reason for (``wrapper.contribution.end``'s ``checkpoint_failed``, which
+#: ``docs/wrapper-contract.md`` requires readers to tell apart from
+#: ``unchanged_branch``), so it is named here rather than spelled inline: the
+#: mapping from host reason to terminal reason is the Run's, and it needs
+#: something stable to key on.
+REASON_CHECKPOINT_FAILED = "checkpoint_failed"
 
 
 @dataclass(frozen=True)
@@ -150,7 +161,13 @@ class ContributionSuccess:
 
     Attributes:
         branch: The durable branch name the orchestrator can reach.
-        sha: The completion SHA the branch resolves to.
+        sha: The completion SHA the branch resolves to. A host that cannot
+            name it has not succeeded (ADR-0050), which is why it is
+            constitutive of this shape rather than optional on it: §E's
+            Integration "merges the SHA, never the name", SHA-pinning its
+            fetch. Only a host that fetches — the first non-local placement —
+            has that fetch to pin, so today the seam is where this datum is
+            checked rather than where it is spent.
         events: This contribution's Events, in whatever form the host
             produced them. :class:`LocalExecutionHost`'s production runner
             emits directly onto the Run's shared trace as it runs (there is
@@ -365,7 +382,7 @@ class LocalExecutionHost:
         result = await self._runner(request)
         if not result.checkpoint_ok:
             return ContributionFailure(
-                reason="checkpoint_failed",
+                reason=REASON_CHECKPOINT_FAILED,
                 classification="breach",
                 ending=result.ending,
                 detail=f"branch {result.branch!r} could not be checkpointed",
