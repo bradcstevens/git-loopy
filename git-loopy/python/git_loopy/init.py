@@ -538,6 +538,49 @@ def _collect_skill_policy(
         ) from exc
 
 
+def _validate_skill_policy(
+    enabled: Sequence[str],
+    *,
+    scope: str,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    client_factory: Callable[[], Any] | None,
+    discoverer: Any,
+    git: Any,
+    required_skills: Sequence[str] | None,
+    installed_skills_dir: Path,
+) -> None:
+    """Resolve a policy the runner produced without going through the picker.
+
+    The rebuild callback validates whatever *it* collects, but the seam lets a
+    runner return an answer set it assembled some other way — or never collect
+    one at all. ADR-0015's closed world is a property of what setup *writes*,
+    not of the path the answer took to get here, so the policy about to be
+    committed is resolved once more against the same rule.
+    """
+    from git_loopy import skillscmd
+
+    options: dict[str, Any] = {}
+    if discoverer is not None:
+        options["discoverer"] = discoverer
+    try:
+        skillscmd.validate_skill_policy(
+            enabled,
+            scope=scope,
+            repo_root=repo_root,
+            env=env,
+            client_factory=client_factory,
+            git=git,
+            required_skills=required_skills,
+            installed_skills_dir=installed_skills_dir,
+            **options,
+        )
+    except skillscmd.SKILL_POLICY_FAILURES as exc:
+        raise _SkillPolicyUnavailable(
+            f"cannot establish a Skill policy: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
 def _resolve_scope(
     scope: str | None,
     *,
@@ -586,6 +629,7 @@ def _default_wizard_runner(
     default_model: str,
     default_effort: str | None,
     rebuild_skill_selection: Callable[..., tuple[str, ...]],
+    scope_locked: bool = False,
     input_fn: Callable[[str], str] = input,
     output_fn: Callable[[str], None] = print,
     warn: Callable[[str], None] = print,
@@ -595,20 +639,26 @@ def _default_wizard_runner(
     This is deliberately a boring adapter: issue 504 moves the seam, while the
     Textual application and removal of these renderers belong to later issues.
     """
-    if len(scope_options) == 1:
+    if scope_locked:
+        # The operator already fixed the scope with a flag, so there is nothing
+        # to ask. A *single* option is not the same thing: outside a repository
+        # the question still has something to tell the operator, below.
         resolved_scope = scope_options[0]
     else:
         labels = [
-            "project  (this repository: <repo>/git-loopy/)",
+            "project  (this repository: <repo>/git-loopy/)"
+            if "project" in scope_options
+            else "project  (unavailable: not in a git repository)",
             "global   (this machine: ~/.config/git-loopy/)",
         ]
+        selectable = [option in scope_options for option in ("project", "global")]
         scope_index = _ask_index(
             input_fn,
             output_fn,
             "Configure git-loopy for which scope?",
             labels,
-            default_index=0,
-            selectable=[option in scope_options for option in ("project", "global")],
+            default_index=0 if selectable[0] else 1,
+            selectable=selectable,
             prompt_label="Scope",
         )
         resolved_scope = ("project", "global")[scope_index]
@@ -758,6 +808,9 @@ def run_init(
     resolved_scope = scope or ("project" if repo_root is not None else "global")
     targets = _resolve_targets(resolved_scope, repo_root, env)
     prompt_source = packaged_prompt or _packaged_prompt_path()
+    #: Every ``(scope, policy)`` the rebuild callback already resolved, so the
+    #: answer set the runner returns is re-resolved only when it is a new one.
+    validated_policies: list[tuple[str, tuple[str, ...]]] = []
 
     try:
         if assume_yes:
@@ -786,7 +839,7 @@ def run_init(
                 scaffold_decision: bool, selected_scope: str
             ) -> tuple[str, ...]:
                 selected_targets = _resolve_targets(selected_scope, repo_root, env)
-                return _collect_skill_policy(
+                collected = _collect_skill_policy(
                     scope=selected_scope,
                     repo_root=repo_root,
                     env=env,
@@ -806,6 +859,10 @@ def run_init(
                     ),
                     installed_skills_dir=skills_source,
                 )
+                # Remember what the picker already resolved, so the answer set
+                # below is re-validated only when it is *not* this one.
+                validated_policies.append((selected_scope, tuple(collected)))
+                return collected
 
             runner_options: dict[str, Any] = {}
             if wizard_runner is _default_wizard_runner:
@@ -818,6 +875,7 @@ def run_init(
                 default_model=default_model,
                 default_effort=default_effort,  # type: ignore[arg-type]
                 rebuild_skill_selection=rebuild_skill_selection,
+                scope_locked=scope is not None,
                 **runner_options,
             )
             if answers is None:
@@ -832,9 +890,35 @@ def run_init(
             effort = answers.effort
             routing = answers.routing
             scaffold = answers.scaffold
-            enabled_skills = answers.enabled_skills
+            enabled_skills = tuple(answers.enabled_skills)
+            # The runner owns the questions, never the invariants. A policy the
+            # picker did not just resolve — because the runner assembled one, or
+            # skipped the callback entirely — is resolved here before it can
+            # reach a Config (ADR-0015).
+            if (resolved_scope, enabled_skills) not in validated_policies:
+                _validate_skill_policy(
+                    enabled_skills,
+                    scope=resolved_scope,
+                    repo_root=repo_root,
+                    env=env,
+                    client_factory=client_factory,
+                    discoverer=discoverer,
+                    git=git,
+                    required_skills=_post_setup_required_skills(
+                        repo_root=repo_root,
+                        env=env,
+                        prompt_path=targets.prompt_path,
+                        prompt_source=prompt_source,
+                        scaffold=scaffold,
+                        required_skills=required_skills,
+                    ),
+                    installed_skills_dir=skills_source,
+                )
     except InitCancelled:
         output_fn("git-loopy init cancelled; nothing was written.")
+        return 1
+    except _ScopeUnavailable as exc:
+        warn(str(exc))
         return 1
     except _SkillPolicyUnavailable as exc:
         # A Skill policy that cannot be resolved is never silently downgraded to

@@ -21,6 +21,7 @@ from git_loopy import init as init_module
 from git_loopy import settings
 from git_loopy import skill_install
 from git_loopy.interactive.models import ModelChoice
+from git_loopy.skill_catalog import SkillCatalogError
 from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
 from git_loopy.skillscmd import SkillSelectionResult
 from tests.fakes import FakeGitClient
@@ -1590,3 +1591,302 @@ def test_run_init_treats_a_declined_runner_as_a_cancellation(tmp_path: Path) -> 
 
     assert rc != 0
     assert not settings.project_config_path(tmp_path).exists()
+
+
+# --- The seam keeps setup's guarantees (PR #513 review) ----------------------
+#
+# The injected runner owns the *questions*. It never owns the invariants, and it
+# never owns what an operator can see. These pin both halves: an answer set the
+# runner assembled itself is resolved against ADR-0015 like any other, and the
+# packaged renderer still explains a scope it cannot offer.
+
+
+def _answers(**overrides: Any) -> Any:
+    """A complete answer set a runner can return without asking anything."""
+    fields: dict[str, Any] = {
+        "scope": "project",
+        "model": "claude-opus-4.8",
+        "effort": "max",
+        "routing": None,
+        "scaffold": False,
+        "enabled_skills": (),
+    }
+    fields.update(overrides)
+    return init_module.InitAnswers(**fields)
+
+
+def test_run_init_reports_a_runner_scope_the_environment_cannot_offer(
+    tmp_path: Path,
+) -> None:
+    """An unavailable scope is an actionable message, never a traceback.
+
+    The guard existed, but it raised inside a ``try`` that handled only
+    cancellation and Skill-policy failure, so ``_ScopeUnavailable`` escaped
+    ``run_init`` entirely.
+    """
+    warnings: list[str] = []
+    out = _Output()
+
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            scope=None,
+            assume_yes=False,
+            repo_root=None,
+            env=_env(tmp_path),
+            wizard_runner=lambda **_kwargs: _answers(scope="project"),
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            warn=warnings.append,
+            **_packaged(tmp_path),
+        )
+
+    assert rc == 1
+    assert any("project" in message for message in warnings)
+    assert not settings.global_config_path(_env(tmp_path)).exists()
+
+
+def test_run_init_blocks_a_runner_policy_missing_a_required_skill(
+    tmp_path: Path,
+) -> None:
+    """A runner that never collects a policy cannot write an open world."""
+    packaged = _packaged(tmp_path)
+    packaged.update(
+        _policy_seams(tmp_path, catalog=_baseline_catalog(), required_skills=("tdd",))
+    )
+    warnings: list[str] = []
+    out = _Output()
+
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            wizard_runner=lambda **_kwargs: _answers(enabled_skills=()),
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            warn=warnings.append,
+            **packaged,
+        )
+
+    assert rc == 1
+    assert not settings.project_config_path(tmp_path).exists()
+    assert not (tmp_path / "git-loopy" / "PROMPT.md").exists()
+    assert any("tdd" in message for message in warnings)
+
+
+def test_run_init_blocks_a_runner_policy_naming_an_untracked_project_skill(
+    tmp_path: Path,
+) -> None:
+    """The project git-tracking rule survives the seam too."""
+    catalog = SkillCatalog(
+        winners={
+            "local-only": SkillCatalogWinner(
+                "local-only",
+                "project",
+                copilot_enabled=True,
+                path=tmp_path / ".copilot" / "skills" / "local-only" / "SKILL.md",
+            ),
+        }
+    )
+    packaged = _packaged(tmp_path)
+    packaged.update(_policy_seams(tmp_path, catalog=catalog))
+    warnings: list[str] = []
+    out = _Output()
+
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            wizard_runner=lambda **_kwargs: _answers(enabled_skills=("local-only",)),
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            warn=warnings.append,
+            **packaged,
+        )
+
+    assert rc == 1
+    assert not settings.project_config_path(tmp_path).exists()
+    assert any("local-only" in message for message in warnings)
+
+
+def test_run_init_accepts_the_policy_the_rebuild_callback_resolved(
+    tmp_path: Path,
+) -> None:
+    """The picker's own answer is not re-litigated: it already passed."""
+    packaged = _packaged(tmp_path)
+    packaged.update(
+        _policy_seams(tmp_path, catalog=_baseline_catalog(), required_skills=("tdd",))
+    )
+    out = _Output()
+
+    def runner(**kwargs: Any) -> Any:
+        return _answers(
+            enabled_skills=kwargs["rebuild_skill_selection"](False, "project")
+        )
+
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            wizard_runner=runner,
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            **packaged,
+        )
+
+    assert rc == 0
+    written = tomllib.loads(settings.project_config_path(tmp_path).read_text())
+    assert "tdd" in written["enabled_skills"]
+
+
+def test_run_init_inventory_failure_through_the_callback_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    """Unresolvable inventory fails setup rather than opening the world."""
+
+    async def explode(_client: object, **_kwargs: object) -> SkillCatalog:
+        raise SkillCatalogError("Copilot inventory is unavailable")
+
+    packaged = _packaged(tmp_path)
+    packaged["discoverer"] = explode
+    warnings: list[str] = []
+    out = _Output()
+
+    def runner(**kwargs: Any) -> Any:
+        return _answers(
+            enabled_skills=kwargs["rebuild_skill_selection"](False, "project")
+        )
+
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            wizard_runner=runner,
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            warn=warnings.append,
+            **packaged,
+        )
+
+    assert rc == 1
+    assert not settings.project_config_path(tmp_path).exists()
+    assert any("Skill policy" in message for message in warnings)
+
+
+def test_run_init_cancelling_the_picker_through_the_callback_writes_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancelling the picker stays an ordinary wizard cancellation."""
+    from git_loopy import skillscmd
+
+    def cancelling(_picker_runner: Any = None) -> Any:
+        def run(_model: Any, **_kwargs: Any) -> Any:
+            raise skillscmd.SkillPolicyCancelled
+
+        return run
+
+    monkeypatch.setattr(skillscmd, "_resolve_picker_runner", cancelling)
+    out = _Output()
+
+    def runner(**kwargs: Any) -> Any:
+        return _answers(
+            enabled_skills=kwargs["rebuild_skill_selection"](False, "project")
+        )
+
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            wizard_runner=runner,
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            **_packaged(tmp_path),
+        )
+
+    assert rc == 1
+    assert not settings.project_config_path(tmp_path).exists()
+
+
+def test_the_packaged_runner_explains_a_project_scope_it_cannot_offer(
+    tmp_path: Path,
+) -> None:
+    """Outside a repository the scope question still renders, and says why.
+
+    Collapsing ``scope_options`` to one entry is not the operator's answer to
+    anything: it is the reason the question exists.
+    """
+    out = _Output()
+    answers = init_module._default_wizard_runner(
+        scope_options=("global",),
+        model_choices=[_choice("claude-opus-4.8")],
+        default_model="claude-opus-4.8",
+        default_effort="max",
+        rebuild_skill_selection=lambda *_args: (),
+        input_fn=_Input("2", "1", "1", "n", "n"),
+        output_fn=out,
+    )
+
+    assert answers.scope == "global"
+    assert any("not in a git repository" in line for line in out.lines)
+
+
+def test_the_packaged_runner_skips_the_scope_question_the_flag_already_answered(
+    tmp_path: Path,
+) -> None:
+    """An explicit ``--scope`` / ``--global`` leaves nothing to ask."""
+    out = _Output()
+    answers = init_module._default_wizard_runner(
+        scope_options=("global",),
+        model_choices=[_choice("claude-opus-4.8")],
+        default_model="claude-opus-4.8",
+        default_effort="max",
+        rebuild_skill_selection=lambda *_args: (),
+        scope_locked=True,
+        input_fn=_Input("1", "1", "n", "n"),
+        output_fn=out,
+    )
+
+    assert answers.scope == "global"
+    assert not any("which scope" in line.lower() for line in out.lines)
+
+
+def test_run_init_unresolvable_required_skills_writes_nothing(tmp_path: Path) -> None:
+    """Instructions whose Required Skills cannot be parsed fail setup.
+
+    The Skill policy is only meaningful against the Run instructions setup
+    leaves behind, so instructions it cannot read are not an empty requirement
+    list — they are a reason to write nothing at all.
+    """
+    packaged = _packaged(tmp_path)
+    broken = tmp_path / "pkg" / "BROKEN.md"
+    broken.write_text("---\nrequired-skills:\n  - tdd\n", encoding="utf-8")
+    packaged["packaged_prompt"] = broken
+    packaged["required_skills"] = None
+    warnings: list[str] = []
+    out = _Output()
+
+    def runner(**kwargs: Any) -> Any:
+        return _answers(
+            scaffold=True,
+            enabled_skills=kwargs["rebuild_skill_selection"](True, "project"),
+        )
+
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            wizard_runner=runner,
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            warn=warnings.append,
+            **packaged,
+        )
+
+    assert rc == 1
+    assert not settings.project_config_path(tmp_path).exists()
+    assert any("Required Skills" in message for message in warnings)

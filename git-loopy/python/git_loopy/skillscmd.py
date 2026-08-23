@@ -691,6 +691,47 @@ def _validate_policy(
     )
 
 
+def validate_skill_policy(
+    enabled: Iterable[str],
+    *,
+    scope: str,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    client_factory: ClientFactory | None = None,
+    discoverer: CatalogDiscoverer = discover_skill_catalog,
+    git: GitClient | None = None,
+    required_skills: Iterable[str] | None = None,
+    installed_skills_dir: Path | None = None,
+    legacy_denied: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """Resolve a policy the caller already holds, without collecting one.
+
+    The companion to :func:`collect_skill_policy` for a caller that obtained a
+    proposed policy some other way — ``init``'s injected wizard runner is free
+    to return an answer set it never routed through the picker, and ADR-0015's
+    closed world has to hold for that answer set too. Both functions resolve
+    through the same :func:`_validate_policy`, so neither can drift into a
+    second opinion about what a valid policy is.
+
+    Raises any member of :data:`SKILL_POLICY_FAILURES` when the policy cannot
+    be resolved, and returns the policy unchanged when it can.
+    """
+    names = tuple(enabled)
+    context = _collect_policy_context(
+        scope=scope,
+        repo_root=repo_root,
+        env=env,
+        client_factory=client_factory,
+        discoverer=discoverer,
+        git=git,
+        required_skills=required_skills,
+        installed_skills_dir=installed_skills_dir,
+        legacy_denied=legacy_denied,
+    )
+    _validate_policy(names, scope=scope, context=context)
+    return names
+
+
 def _policy_config_path(
     *,
     scope: str,
