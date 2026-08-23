@@ -50,3 +50,33 @@ A check worth having is a check the Run should be performing.
 Moving environment checks into Run preflight changes when a Run fails — earlier, and for reasons it
 previously discovered late or not at all. This is Python-Runner-only for the reasons given in
 ADR-0054, and enters no Conformance fixture.
+
+## Amendment: `doctor` repairs behind an explicit flag
+
+Accepted after the decisions above, on evidence they were taken without.
+
+As first written, this ADR read "`doctor` judges" as "`doctor` never writes," and ADR-0054 placed
+every repair in `update`. That invented a new command shape while an established one was already in
+the house: **`git-loopy labels` reports by default and repairs behind `--apply`**, and it is
+explicitly the pattern #516 cites as the shape this repository uses for "tell me what is wrong before
+it costs anything."
+
+The house pattern wins. `doctor` reports by default and may repair behind an explicit `--apply`. It
+still never repairs silently, and the default invocation still writes nothing.
+
+**Which leaves the question of who repairs what, since `update` also repairs. A repair lives where
+its cause lives.**
+
+- **Caused by a Release** — a prompt override left behind by a newer Release, a **Config** carrying a
+  key a Release retired — belongs to `update`. `doctor` reports these and names `update` as the
+  remedy.
+- **Broken independently of any Release** — a **Skill policy** naming a Skill that vanished upstream,
+  a host whose tooling moved — belongs to `doctor --apply`.
+
+The retired task-type key is the case that forces the rule to be stated: it is *both* Release-caused
+and blocking a Run right now, so both commands have a claim. It goes to `update`, by cause.
+
+This division is what makes #517, #519, and ADR-0054 consistent with one another rather than
+competing: #519 already requires that every fixable row "say what fixes it, deferring to the commands
+that already own those repairs rather than duplicating them," which is the same rule read from the
+reporting side.

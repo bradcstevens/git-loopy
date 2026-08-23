@@ -137,3 +137,9 @@ and is pinned at `CONTEXT.md:601`. It needed discoverability, not code.
 justification — asserting every member exposes the same surface — only becomes true if family parity
 ever lands. `--help` becomes categorized in the same change, so the thing operators reflexively type
 is the good one.
+
+**`update` is not the only command that repairs.** ADR-0055's amendment admits `doctor --apply`,
+following the `git-loopy labels` house pattern, and divides the two by cause: a repair for something
+a Release caused belongs to `update`; a repair for something broken independently of a Release
+belongs to `doctor --apply`. The **Config** repair described above stays with `update` under that
+rule, because a retired taxonomy key is Release-caused.
