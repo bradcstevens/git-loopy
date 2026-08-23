@@ -25,6 +25,7 @@ from git_loopy.git import (
     GitError,
     SubprocessGitClient,
     integration_branch_name,
+    is_reserved_branch,
     lane_branch_name,
 )
 
@@ -132,7 +133,9 @@ def _worktree_paths(repo: Path) -> list[str]:
 
 def test_commit_message_property_joins_subject_and_body() -> None:
     """Closure-keyword scanning runs against the full message — both halves."""
-    c = Commit(sha="a" * 40, subject="Closes #42", body="See follow-up.", date="2026-05-15")
+    c = Commit(
+        sha="a" * 40, subject="Closes #42", body="See follow-up.", date="2026-05-15"
+    )
     assert c.message == "Closes #42\nSee follow-up."
 
 
@@ -863,9 +866,7 @@ def test_commits_between_excludes_a_runner_checkpoint(tmp_path: Path) -> None:
     git = SubprocessGitClient(tmp_path)
 
     # The agent authors real work; the loop reads the post-iteration head.
-    agent_sha = _commit(
-        tmp_path, "feat: agent work\n\nCloses #42", file_name="a.txt"
-    )
+    agent_sha = _commit(tmp_path, "feat: agent work\n\nCloses #42", file_name="a.txt")
     head = git.head_sha()
     assert head == agent_sha
 
@@ -897,6 +898,81 @@ def test_lane_branch_name_is_pure_string_policy() -> None:
     # run_id and issue number are the only variables; the prefix is fixed.
     assert lane_branch_name("RUNA", 1) != lane_branch_name("RUNA", 2)
     assert lane_branch_name("RUNA", 1) != lane_branch_name("RUNB", 1)
+
+
+def test_reserved_branch_namespace_identifies_only_git_loopy_branches() -> None:
+    """Reclamation ownership follows the branch name, never a worktree path."""
+    assert is_reserved_branch(lane_branch_name("RUNA", 1))
+    assert is_reserved_branch(integration_branch_name("RUNA", 1))
+    assert not is_reserved_branch("main")
+    assert not is_reserved_branch("operator/git-loopy/experiment")
+
+
+def test_common_git_dir_worktree_is_invisible_to_the_main_worktree(
+    tmp_path: Path,
+) -> None:
+    """A Lane workspace under the common git dir survives main-tree hygiene."""
+    repo, _siblings, client = _sibling_worktree_repo(tmp_path)
+    workspace = client.common_git_dir() / "git-loopy" / "RUN123" / "issue-7"
+
+    lane = client.add_worktree(
+        workspace, branch=lane_branch_name("RUN123", 7), base="main"
+    )
+
+    assert workspace.is_dir()
+    assert workspace.is_relative_to(client.common_git_dir())
+    assert not (repo / ".gitignore").exists()
+    status = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert status.stdout == ""
+
+    staged = subprocess.run(
+        ["git", "-C", str(repo), "add", "-A"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "embedded git repository" not in staged.stderr
+    subprocess.run(
+        ["git", "-C", str(repo), "clean", "-ffxd"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert workspace.is_dir()
+    assert lane.current_branch() == lane_branch_name("RUN123", 7)
+
+
+def test_common_git_dir_workspaces_are_private_to_each_clone(tmp_path: Path) -> None:
+    """Two clones register only the workspace their own common git dir holds."""
+    repo_a = tmp_path / "clone-a"
+    repo_b = tmp_path / "clone-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    _init_repo(repo_a)
+    _init_repo(repo_b)
+    _commit(repo_a, "base")
+    _commit(repo_b, "base")
+    client_a = SubprocessGitClient(repo_a)
+    client_b = SubprocessGitClient(repo_b)
+    workspace_a = client_a.common_git_dir() / "git-loopy" / "RUN" / "issue-7"
+    workspace_b = client_b.common_git_dir() / "git-loopy" / "RUN" / "issue-7"
+
+    client_a.add_worktree(workspace_a, branch=lane_branch_name("RUN", 7), base="main")
+    client_b.add_worktree(workspace_b, branch=lane_branch_name("RUN", 7), base="main")
+
+    assert workspace_a != workspace_b
+    assert workspace_b.resolve() not in {
+        Path(path).resolve() for path in _worktree_paths(repo_a)
+    }
+    assert workspace_a.resolve() not in {
+        Path(path).resolve() for path in _worktree_paths(repo_b)
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -990,9 +1066,7 @@ def test_remove_worktree_force_removes_a_dirty_worktree(tmp_path: Path) -> None:
     """``force=True`` tears down a worktree with uncommitted changes; plain remove refuses."""
     repo, siblings, client = _sibling_worktree_repo(tmp_path)
     wt_path = siblings / "lane-7"
-    lane = client.add_worktree(
-        wt_path, branch=lane_branch_name("RUN", 7), base="main"
-    )
+    lane = client.add_worktree(wt_path, branch=lane_branch_name("RUN", 7), base="main")
     # Dirty the Lane worktree (a tracked-file modification).
     (lane.root / "base.txt").write_text("modified in lane")
     assert lane.is_dirty() is True
@@ -1082,6 +1156,7 @@ def test_delete_branch_raises_for_unknown_branch(tmp_path: Path) -> None:
     with pytest.raises(GitError):
         client.delete_branch(lane_branch_name("RUN", 999))
 
+
 def _tree_sha(repo: Path, rev: str) -> str:
     """Return the tree SHA a revision points at (for a tree-equality assertion)."""
     completed = subprocess.run(
@@ -1114,8 +1189,7 @@ def test_abort_merge_undoes_an_in_progress_conflicted_merge(tmp_path: Path) -> N
 def test_integration_branch_name_uses_the_integrate_convention() -> None:
     """The auto-resolution branch is distinct from the retained Lane branch (#63)."""
     assert (
-        integration_branch_name("RUN123", 42)
-        == "git-loopy/RUN123/integrate/issue-42"
+        integration_branch_name("RUN123", 42) == "git-loopy/RUN123/integrate/issue-42"
     )
     # Distinct from the Lane breadcrumb branch for the same issue.
     assert integration_branch_name("RUN123", 42) != lane_branch_name("RUN123", 42)
@@ -1166,7 +1240,9 @@ def test_commit_paths_leaves_a_pre_staged_unrelated_change_uncommitted(
     (tmp_path / "staged.txt").write_text("staged but not ours\n")
     subprocess.run(
         ["git", "-C", str(tmp_path), "add", "staged.txt"],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     (tmp_path / "routing.measured.toml").write_text("status = 'provisional'\n")
 
@@ -1206,6 +1282,8 @@ def _tracked_at_head(path: Path) -> set[str]:
     """Every path tracked at ``HEAD``."""
     completed = subprocess.run(
         ["git", "-C", str(path), "ls-tree", "-r", "--name-only", "HEAD"],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     return set(completed.stdout.split())

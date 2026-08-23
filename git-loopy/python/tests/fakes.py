@@ -156,14 +156,16 @@ class FakeGitClient:
         # per-client counter above cannot answer "where did the abort happen?"
         # — which is the whole question once ADR-0020 moves the conflicting
         # merge off base and into a private Integration worktree.
-        self.repo_merge_aborts: list[Path] = (
-            [] if _abort_spy is None else _abort_spy
-        )
+        self.repo_merge_aborts: list[Path] = [] if _abort_spy is None else _abort_spy
 
     @property
     def root(self) -> Path:
         """The repository root this client is bound to (parity with the adapter)."""
         return self._root
+
+    def common_git_dir(self) -> Path:
+        """Return the fake repository's shared git directory."""
+        return self._root / ".git"
 
     # -- internal helpers --------------------------------------------------
 
@@ -361,9 +363,7 @@ class FakeGitClient:
         """
         if "/integrate/" in branch:
             return False
-        return any(
-            branch.endswith(f"/issue-{n}") for n in self._merge_conflict_issues
-        )
+        return any(branch.endswith(f"/issue-{n}") for n in self._merge_conflict_issues)
 
     def merge(self, branch: str) -> None:
         """Model ``git merge --no-ff <branch>`` — land a Lane branch on base.
@@ -536,7 +536,9 @@ class FakeGitHubClient:
         self.authed = authed
         self.gh_version_value = gh_version
         self.repo = (
-            repo if repo is not None else Repo(owner="octo", name="kit", default_branch="main")
+            repo
+            if repo is not None
+            else Repo(owner="octo", name="kit", default_branch="main")
         )
         # Backing stores keyed by number (insertion order preserved for *_list).
         self._issues: dict[int, Issue] = {issue.number: issue for issue in issues}

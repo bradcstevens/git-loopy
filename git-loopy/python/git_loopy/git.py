@@ -51,6 +51,8 @@ The client's mechanics:
 * :meth:`~SubprocessGitClient.recent_commits` — last ``n`` commits, newest-first.
 * :meth:`~SubprocessGitClient.range_count` — ``git rev-list --count`` for
   ``pre..head``.
+* :meth:`~SubprocessGitClient.common_git_dir` — the repository-owned location
+  for ephemeral Lane and Integration workspaces.
 * :meth:`~SubprocessGitClient.add_worktree` /
   :meth:`~SubprocessGitClient.remove_worktree` — the Parallel-mode **Lane**
   worktree lifecycle (ADR-0008): ``git worktree add -b <branch> <path> <base>``
@@ -86,11 +88,13 @@ __all__ = [
     "Commit",
     "GitClient",
     "SubprocessGitClient",
+    "is_reserved_branch",
     "lane_branch_name",
 ]
 
 _GIT_BIN: Final[str] = "git"
 _STDERR_TAIL_LIMIT: Final[int] = 400
+_RESERVED_BRANCH_PREFIX: Final[str] = "git-loopy/"
 
 # Shared format string for commits_between and recent_commits.
 # `-z` makes inter-commit separators NUL bytes; within a commit, fields are
@@ -210,15 +214,27 @@ def _stderr_tail(stderr: str | None) -> str:
 # --------------------------------------------------------------------------- #
 
 
+def is_reserved_branch(branch: str) -> bool:
+    """Return whether ``branch`` belongs to git-loopy's reclaimable namespace.
+
+    ``git-loopy/`` is reserved for branches the runner creates for Lane and
+    Integration workspaces. Reclamation must decide ownership from this branch
+    namespace, never from a workspace path: legacy sibling directories can
+    interleave an operator's unrelated worktrees with the runner's.
+    """
+    return branch.startswith(_RESERVED_BRANCH_PREFIX)
+
+
 def lane_branch_name(run_id: str, issue_number: int) -> str:
     """Return the branch name for a Parallel-mode **Lane**.
 
     Parallel mode (ADR-0008) gives each **Lane** its own worktree on a dedicated
     branch cut from base. The branch follows the **git-loopy** convention from
-    ADR-0005: ``git-loopy/<run_id>/issue-<N>``. Keeping this as a pure,
-    seam-level helper lets the Wave/Lane orchestrator (a later slice) construct
-    the branch it hands to :meth:`GitClient.add_worktree` without restating the
-    format, and pins the convention under test here.
+    ADR-0005: ``git-loopy/<run_id>/issue-<N>``. ``git-loopy/`` is reserved for
+    runner-owned branches and is therefore the namespace later workspace
+    reclamation may select. Keeping this as a pure, seam-level helper lets the
+    Lane orchestrator construct the branch it hands to
+    :meth:`GitClient.add_worktree` without restating the format.
 
     Args:
         run_id: The run identifier (a 26-char ULID in production, but any
@@ -279,6 +295,15 @@ class GitClient(Protocol):
         Root-bound by construction: :meth:`add_worktree` returns a client whose
         ``root`` is the new worktree, so a Parallel-mode Lane can pin its agent
         session to ``str(client.root)`` via the SDK's ``working_directory``.
+        """
+        ...
+
+    def common_git_dir(self) -> Path:
+        """Return the repository's shared git directory.
+
+        A Git repository may have several linked worktrees, each with its own
+        administrative git dir. Parallel workspaces belong under the one shared
+        directory so they are invisible to all working trees' file operations.
         """
         ...
 
@@ -431,6 +456,15 @@ class SubprocessGitClient:
     def root(self) -> Path:
         """The repository root every git call runs in."""
         return self._root
+
+    def common_git_dir(self) -> Path:
+        """Return the resolved directory Git shares across this repository's worktrees."""
+        common_dir = Path(
+            _run(["rev-parse", "--git-common-dir"], cwd=self._root).strip()
+        )
+        if not common_dir.is_absolute():
+            common_dir = self._root / common_dir
+        return common_dir.resolve()
 
     @classmethod
     def discover(cls, start: Path | str | None = None) -> SubprocessGitClient:
@@ -988,9 +1022,7 @@ class SubprocessGitClient:
 # --------------------------------------------------------------------------- #
 
 
-def _parse_log_z(
-    args: Sequence[str], *, cwd: Path | str | None = None
-) -> list[Commit]:
+def _parse_log_z(args: Sequence[str], *, cwd: Path | str | None = None) -> list[Commit]:
     """Parse output of ``git log -z`` with our standard ``_LOG_FORMAT``.
 
     Each record has the shape::

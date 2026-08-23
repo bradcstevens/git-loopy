@@ -1025,8 +1025,11 @@ _Avoid_: Wave, batch, cohort, sliding window.
 **Lane**:
 One reusable concurrent execution slot in **Parallel mode**. A Lane works one
 **Parallel-safe** issue at a time in its own worktree and branch, then becomes available
-for refill once its finished branch is admitted to **Integration**. Shown as one active
-row in the **Dashboard**, with its own timer and **Log**.
+for refill once its finished branch is admitted to **Integration**. Lane workspaces live
+under this clone's common git directory, outside every working tree's content operations.
+Their `git-loopy/` branches are reserved for runner-owned work and are the only branches
+future reclamation may select. Shown as one active row in the **Dashboard**, with its own
+timer and **Log**.
 _Avoid_: worker, thread.
 
 **Lane contribution**:
@@ -1084,7 +1087,8 @@ The private worktree a **Lane contribution** is merged into and gated in before 
 reaches the base branch. Each contribution gets its own stage, and bounded
 auto-resolution reuses the stage its contribution is already in. Because the stage is
 private, a red or conflicting result is never observable on base and there is nothing to
-undo.
+undo. Like a Lane workspace, it lives under the clone's common git directory and on a
+reserved `git-loopy/` branch.
 _Avoid_: integration branch, staging area, merge queue entry.
 
 **Integration**:
