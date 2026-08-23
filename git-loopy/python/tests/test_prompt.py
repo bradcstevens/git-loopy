@@ -158,6 +158,17 @@ def test_packaged_prompt_nudges_mapped_skills_but_exempts_infrastructure() -> No
     ) in prompt
 
 
+def test_packaged_prompt_makes_genuine_issue_blockers_native_dependencies() -> None:
+    """A discovered open issue blocker survives as a readiness-visible edge (#442)."""
+    prompt = _packaged_prompt_text()
+
+    assert "tracker offers native dependencies" in prompt
+    assert "genuine blocker as a real, open issue" in prompt
+    assert "native dependency on your own issue" in prompt
+    assert "Do not record a dependency you have not actually identified as an open issue" in prompt
+    assert "comment, then output `<promise>NO MORE TASKS</promise>`" in prompt
+
+
 # ---------------------------------------------------------------------------
 # Sync guard: the project override and packaged default stay byte-identical
 # ---------------------------------------------------------------------------
