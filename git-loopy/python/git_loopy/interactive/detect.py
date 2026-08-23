@@ -1,9 +1,9 @@
 """``git_loopy.interactive.detect`` — interactive-path gating (issue #23).
 
-Decides whether one ``git-loopy`` invocation takes the **interactive** path (a
-Textual app observing the loop) or stays on today's exact line-printer behavior.
-Deep + pure (stdlib + ``typing`` only — no Textual), so the decision is
-unit-testable without a TTY and importing it never costs a Textual import.
+Decides whether one ``git-loopy`` invocation takes the **interactive** path (the
+live Dashboard) or uses the line-printer path. Deep + pure (stdlib +
+``typing`` only — no Textual), so the decision is unit-testable without a TTY
+and importing it never costs a Textual import.
 
 Precedence (highest first):
 
@@ -11,13 +11,9 @@ Precedence (highest first):
 2. The ``GIT_LOOPY_INTERACTIVE`` env override (``1``/``true``/... vs ``0``/...).
 3. Auto-detect from TTY-ness (interactive only when stdout is a terminal).
 
-Whatever the resolved *intent*, the interactive path additionally requires
-Textual to be importable. When interactivity was
-**explicitly** requested (flag or env) but Textual is missing, a warning is
-emitted and the run falls back to the line printer; when interactivity was only
-auto-detected, the fallback is silent. Every non-interactive outcome (non-TTY,
-``--no-interactive``, or ``GIT_LOOPY_INTERACTIVE=0``) yields
-today's byte-for-byte line-printer behavior.
+Textual is a base runtime dependency, so these three tiers wholly determine the
+path. Every non-interactive outcome (non-TTY, ``--no-interactive``, or
+``GIT_LOOPY_INTERACTIVE=0``) uses the line printer.
 
 A second, narrower gate lives here too: :func:`resolve_model_selection` decides
 whether the interactive run opens the one-time startup **ModelSelectionMode**
@@ -28,8 +24,6 @@ kept in this same pure module so it stays unit-testable without Textual.
 from __future__ import annotations
 
 import importlib.util
-from typing import Callable
-
 __all__ = ["resolve_interactive", "resolve_model_selection", "textual_available"]
 
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -61,46 +55,24 @@ def resolve_interactive(
     flag: bool | None,
     env_value: str | None,
     isatty: bool,
-    textual_importable: bool,
-    warn: Callable[[str], None],
 ) -> bool:
-    """Resolve the interactive path from flag / env / TTY plus Textual presence.
+    """Resolve the interactive path from flag / environment / TTY.
 
     Args:
         flag: Tri-state ``--interactive`` (``True``) / ``--no-interactive``
             (``False``) / neither (``None``).
         env_value: Raw ``GIT_LOOPY_INTERACTIVE`` value (``None``/blank = unset).
         isatty: Whether the runner's stdout is a terminal.
-        textual_importable: Whether Textual is importable
-            (typically :func:`textual_available`).
-        warn: Non-fatal warning sink, used only when interactivity was
-            explicitly requested but Textual is missing.
 
     Returns:
-        ``True`` to take the interactive path; ``False`` to keep the
-        line printer.
+        ``True`` to take the interactive path; ``False`` to use the line
+        printer.
     """
-    explicit = flag is not None or _env_is_set(env_value)
-
     if flag is not None:
-        intent = flag
-    elif _env_is_set(env_value):
-        intent = _is_truthy(env_value)
-    else:
-        intent = isatty
-
-    if not intent:
-        return False
-
-    if not textual_importable:
-        if explicit:
-            warn(
-                "interactive mode was requested but Textual is not importable; "
-                "falling back to the line printer."
-            )
-        return False
-
-    return True
+        return flag
+    if _env_is_set(env_value):
+        return _is_truthy(env_value)
+    return isatty
 
 
 def resolve_model_selection(*, flag: bool | None, env_value: str | None) -> bool:

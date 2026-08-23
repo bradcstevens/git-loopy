@@ -112,6 +112,11 @@ git-loopy init
 git-loopy
 ```
 
+On a terminal, a Run now opens the live **Dashboard** by default instead of the
+line printer. Operators who prefer the line printer can opt out with
+`--no-interactive` or `GIT_LOOPY_INTERACTIVE=0`; a non-terminal Run continues
+to use the line printer.
+
 Useful variations:
 
 ```bash
