@@ -124,6 +124,7 @@ from git_loopy.interactive.driver import (
 )
 from git_loopy.interactive.state import LiveRunState
 from git_loopy.interactive.terminal import TerminalOwner
+from git_loopy.readiness import BlockedByRead, BlockerNode
 from git_loopy.session_outcome import SessionOutcome
 from git_loopy.skill_catalog import build_skill_catalog
 from git_loopy.sources import PoolCandidate
@@ -337,7 +338,11 @@ def _stub_run_skill_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _make_issue(
-    number: int, *, labels: list[str], body: str = _AFK_BODY
+    number: int,
+    *,
+    labels: list[str],
+    body: str = _AFK_BODY,
+    blocked_by: BlockedByRead | None = None,
 ) -> gh_module.Issue:
     return gh_module.Issue(
         number=number,
@@ -347,6 +352,9 @@ def _make_issue(
         state="OPEN",
         url=f"https://github.com/x/y/issues/{number}",
         comments=(),
+        blocked_by=blocked_by
+        if blocked_by is not None
+        else BlockedByRead(total_count=0),
     )
 
 
@@ -4691,6 +4699,150 @@ def test_a_lane_pickup_records_what_it_bound_and_where(tmp_path, monkeypatch) ->
     assert types.index("wrapper.pickup.bound") < types.index(
         "wrapper.issue.activated"
     )
+
+
+def test_parallel_dispatch_waits_for_a_blocker_to_close_before_reserving_a_lane(
+    tmp_path, monkeypatch
+) -> None:
+    """#439: a blocked candidate never consumes a Lane or a release cycle."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    blocked = _make_issue(
+        31,
+        labels=["ready-for-agent", "parallel-safe"],
+        blocked_by=BlockedByRead(
+            total_count=1,
+            nodes=(BlockerNode(ref="x/y#7", state="open"),),
+        ),
+    )
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            blocked,
+            _make_issue(7, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git, scripted_events=[_usage_event("claude-opus-4.8-max")]
+        ),
+    )
+
+    class _UnblockAfterFirstIntegration(FakeGateRunner):
+        def run(self, worktree: Path):
+            fake_gh.seed_issue(
+                replace(blocked, blocked_by=BlockedByRead(total_count=0))
+            )
+            return super().run(worktree)
+
+    monkeypatch.setattr(
+        loop_module,
+        "_make_gate_runner",
+        lambda: _UnblockAfterFirstIntegration(),
+    )
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                parallel=2,
+                max_iterations=2,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 0
+
+    assert [
+        int(path.name.removeprefix("issue-"))
+        for path, _branch, _base in _lane_worktree_adds(fake_git)
+    ] == [7, 31]
+    bound = [
+        event["issue"]
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.pickup.bound"
+    ]
+    assert bound == [7, 31]
+
+
+def test_parallel_serial_fallback_skips_a_candidate_rolling_dispatch_refused(
+    tmp_path, monkeypatch
+) -> None:
+    """A blocker read is consistent whether the Lane or serial path reaches it first."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    blocked = _make_issue(
+        44,
+        labels=["ready-for-agent", "parallel-safe"],
+        blocked_by=BlockedByRead(
+            total_count=1,
+            nodes=(BlockerNode(ref="x/y#7", state="open"),),
+        ),
+    )
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            blocked,
+            _make_issue(45, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    class _UnblockDuringSerialSession(_ParallelFakeSession):
+        async def send_and_wait(
+            self, prompt: str, *, timeout: float = 60.0, **extra: Any
+        ) -> SessionEvent | None:
+            result = await super().send_and_wait(prompt, timeout=timeout, **extra)
+            if self._working_directory is None:
+                fake_gh.seed_issue(
+                    replace(blocked, blocked_by=BlockedByRead(total_count=0))
+                )
+            return result
+
+    class _UnblockDuringSerialClient(_ParallelFakeClient):
+        _session_cls = _UnblockDuringSerialSession
+
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _UnblockDuringSerialClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+            serial_closes=True,
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                parallel=2,
+                max_iterations=2,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 0
+
+    skipped = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.pickup.skipped"
+    ]
+    assert [event["issue"] for event in skipped] == [44]
+    assert skipped[0]["reason"] == "blocked_by_open_dependency: x/y#7"
+    assert [
+        int(path.name.removeprefix("issue-"))
+        for path, _branch, _base in _lane_worktree_adds(fake_git)
+    ] == [44]
 
 
 def test_a_lane_whose_routing_is_refused_leaves_a_skip_behind(

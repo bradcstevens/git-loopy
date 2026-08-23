@@ -161,6 +161,10 @@ class RollingPool:
             than the bound.
         eligible: Eligibility predicate. Defaults to :func:`is_parallel_safe`;
             a scheduler composes its Run-scoped worked-issue guard into it.
+        cacheable: Membership predicate. Defaults to :func:`is_parallel_safe`;
+            unlike ``eligible``, it retains candidates that are temporarily
+            **Blocked** so the next refresh can promote them when their
+            blockers close.
         backoff: The bounded exponential backoff policy.
     """
 
@@ -169,6 +173,7 @@ class RollingPool:
     clock: Callable[[], float] = field(default=lambda: 0.0)
     jitter: Callable[[float], float] | None = None
     eligible: Callable[[PoolCandidate], bool] = is_parallel_safe
+    cacheable: Callable[[PoolCandidate], bool] = is_parallel_safe
     backoff: RefreshBackoff = field(default_factory=RefreshBackoff)
 
     _entries: list[_CachedCandidate] = field(default_factory=list, init=False)
@@ -318,8 +323,10 @@ class RollingPool:
         armed for the unmet-demand question must not answer this one.
 
         Returns:
-            ``True`` only if the fresh snapshot is complete, no eligible
-            candidate remains, and nothing is quarantined.
+            ``True`` only if the fresh snapshot is complete, no cacheable
+            candidate remains, and nothing is quarantined. A **Blocked**
+            candidate is not dispatchable, but its preserved cache entry keeps
+            its readiness unknown to the terminal decision.
         """
         snapshot = self._refresh_now()
         if not snapshot.complete:
@@ -335,7 +342,7 @@ class RollingPool:
                 ),
             )
             return False
-        return self.available_count == 0
+        return not self._entries
 
     def _refresh_now(self) -> MembershipSnapshot:
         """Force one refresh regardless of the backoff window."""
@@ -382,10 +389,13 @@ class RollingPool:
     def _reconcile(self, snapshot: MembershipSnapshot) -> None:
         """Fold one complete snapshot into the cache without moving survivors.
 
-        #219 §2.9: remove missing or ineligible candidates, update survivors in
-        place, append newcomers in the order the snapshot gave them, retain
-        quarantined candidates' FIFO positions. Order is the **Queue**'s order —
-        a candidate that keeps its place keeps its place.
+        #219 §2.9: remove missing or uncacheable candidates, update survivors
+        # in place, append newcomers in the order the snapshot gave them, retain
+        # quarantined candidates' FIFO positions. A candidate may be cacheable
+        # but not currently eligible when it is **Blocked**: preserving it makes
+        # the next Membership read the only change needed to promote it. Order
+        # is the **Queue**'s order — a candidate that keeps its place keeps its
+        # place.
 
         That snapshot order is now the Wrapper contract §3.2 **selection
         order**, which is the whole of #393: the first refresh seeds an ordered
@@ -395,9 +405,7 @@ class RollingPool:
         **Priority**, because reordering a cache that Lanes are walking would
         break the position guarantee this method exists to hold.
         """
-        observed = {
-            c.ref: c for c in snapshot.candidates if self.eligible(c)
-        }
+        observed = {c.ref: c for c in snapshot.candidates if self.cacheable(c)}
         survivors: list[_CachedCandidate] = []
         for entry in self._entries:
             fresh = observed.pop(entry.candidate.ref, None)

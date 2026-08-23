@@ -190,6 +190,7 @@ from git_loopy.sources import (
     PoolCollection,
     PrdsIssueSource,
     RollingIssueSource,
+    is_lane_candidate,
 )
 from git_loopy.skill_catalog import discover_skill_catalog as _discover_skill_catalog
 from git_loopy.skill_exposure import SkillExposureError
@@ -2295,6 +2296,7 @@ class _ParallelLoop:
                 source=source,
                 clock=time.monotonic,
                 eligible=self._lane_candidate_eligible,
+                cacheable=self._lane_candidate_cacheable,
             )
             self._scheduler = rolling_scheduler.RollingScheduler(
                 diag=diag,
@@ -2376,8 +2378,21 @@ class _ParallelLoop:
             task_type_client=task_type_client,
         )
 
+    def _lane_candidate_cacheable(self, candidate: PoolCandidate) -> bool:
+        """Whether this candidate belongs in the Rolling dispatch cache.
+
+        A **Blocked** candidate is not Lane-candidate eligible, but it remains
+        cacheable until a later **Membership read** proves it Ready. The
+        **Attempt lifecycle** differs: a defeated candidate cannot become
+        eligible during this Run, so retaining it would block a terminal Pool
+        claim without a future refresh being able to change that fact.
+        """
+        return is_parallel_safe(candidate) and not self._serial._attempts.skipped(
+            candidate.ref
+        )
+
     def _lane_candidate_eligible(self, candidate: PoolCandidate) -> bool:
-        """Is this candidate **Lane** work *and* still owed an attempt (#412)?
+        """Is this candidate **Lane** work, Ready, and still owed an attempt?
 
         The **Lane** half of the **Attempt lifecycle** skip. A Lane Pickup is a
         Pickup, so a defeated issue must not reach one — but the Lane path
@@ -2404,9 +2419,7 @@ class _ParallelLoop:
         head) was never in the guard, and nothing else would stop a Lane
         reserving it once concurrency recovered.
         """
-        return is_parallel_safe(candidate) and not self._serial._attempts.skipped(
-            candidate.ref
-        )
+        return self._lane_candidate_cacheable(candidate) and is_lane_candidate(candidate)
 
     def _alloc_iter_num(self) -> int:
         """Allocate the next Run-wide sequence number for session tagging.

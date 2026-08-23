@@ -305,12 +305,15 @@ class RollingScheduler:
     _next_contribution: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
-        # Compose the Run-scoped worked-issue guard into the Pool's eligibility
-        # predicate (#219 §2.15). The guard deliberately does not live in the
-        # cache: it is Run state this scheduler owns, and a cache could only
-        # ever approximate it.
+        # Compose the Run-scoped worked-issue guard into both Pool predicates
+        # (#219 §2.15). The guard deliberately does not live in the cache: it
+        # is Run state this scheduler owns, and a cache could only ever
+        # approximate it. A candidate unready only because it is **Blocked**
+        # remains cacheable; one this Run already claimed does not.
         inner = self.pool.eligible
         self.pool.eligible = lambda c: inner(c) and self._unclaimed(c)
+        cache_inner = self.pool.cacheable
+        self.pool.cacheable = lambda c: cache_inner(c) and self._unclaimed(c)
         self._controller = self.concurrency or ConcurrencyController(
             configured_lane_cap=self.lane_cap
         )

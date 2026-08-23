@@ -23,6 +23,7 @@ from git_loopy.sources import (
     PICKUP_UNAVAILABLE,
     PICKUP_VALIDATED,
 )
+from git_loopy.readiness import BlockedByRead, BlockerNode
 
 
 def _silent_logger() -> logging.Logger:
@@ -33,9 +34,20 @@ def _silent_logger() -> logging.Logger:
     return logger
 
 
-def _candidate(ref: int, *, title: str = "", parallel_safe: bool = True) -> PoolCandidate:
+def _candidate(
+    ref: int,
+    *,
+    title: str = "",
+    parallel_safe: bool = True,
+    blocked_by: BlockedByRead | None = None,
+) -> PoolCandidate:
     labels = ("ready-for-agent",) + (("parallel-safe",) if parallel_safe else ())
-    return PoolCandidate(ref=ref, title=title or f"issue {ref}", labels=labels)
+    return PoolCandidate(
+        ref=ref,
+        title=title or f"issue {ref}",
+        labels=labels,
+        blocked_by=blocked_by or BlockedByRead(total_count=0),
+    )
 
 
 def _snapshot(refs: list[int], *, complete: bool = True) -> MembershipSnapshot:
@@ -202,6 +214,103 @@ class TestReconciliation:
 
 
 class TestTake:
+    def test_a_blocked_candidate_is_not_reserved_and_stays_cached(self) -> None:
+        """A Lane only sees a Ready candidate; a blocked one awaits refresh."""
+        from git_loopy.rolling_pool import is_parallel_safe
+        from git_loopy.sources import is_lane_candidate
+
+        blocked = _candidate(
+            31,
+            blocked_by=BlockedByRead(
+                total_count=1,
+                nodes=(BlockerNode(ref="x/y#7", state="open"),),
+            ),
+        )
+        source = ScriptedSource(
+            [
+                MembershipSnapshot(
+                    candidates=(blocked, _candidate(7)),
+                    complete=True,
+                )
+            ]
+        )
+        pool = _pool(
+            source,
+            eligible=is_lane_candidate,
+            cacheable=is_parallel_safe,
+        )
+        pool.start()
+
+        take = pool.take()
+
+        assert take.item is not None and take.item.ref == 7
+        assert source.pickup_calls == [7]
+        assert pool.candidate_refs == (31,)
+
+    def test_a_refresh_promotes_a_candidate_after_its_blocker_closes(self) -> None:
+        """Readiness changes on a refresh, without restarting the Run."""
+        from git_loopy.rolling_pool import is_parallel_safe
+        from git_loopy.sources import is_lane_candidate
+
+        source = ScriptedSource(
+            [
+                MembershipSnapshot(
+                    candidates=(
+                        _candidate(
+                            31,
+                            blocked_by=BlockedByRead(
+                                total_count=1,
+                                nodes=(BlockerNode(ref="x/y#7", state="open"),),
+                            ),
+                        ),
+                    ),
+                    complete=True,
+                ),
+                MembershipSnapshot(candidates=(_candidate(31),), complete=True),
+            ]
+        )
+        pool = _pool(
+            source,
+            eligible=is_lane_candidate,
+            cacheable=is_parallel_safe,
+        )
+        pool.start()
+
+        pool.service(refillable=1)
+        take = pool.take()
+
+        assert take.item is not None and take.item.ref == 31
+        assert source.membership_calls == 2
+
+    def test_an_unprovable_membership_read_is_not_lane_candidacy(self) -> None:
+        """A missing blocker connection cannot silently promote Lane work."""
+        from git_loopy.rolling_pool import is_parallel_safe
+        from git_loopy.sources import is_lane_candidate
+
+        source = ScriptedSource(
+            [
+                MembershipSnapshot(
+                    candidates=(
+                        _candidate(31, blocked_by=BlockedByRead.unprovable()),
+                        _candidate(7),
+                    ),
+                    complete=True,
+                )
+            ]
+        )
+        pool = _pool(
+            source,
+            eligible=is_lane_candidate,
+            cacheable=is_parallel_safe,
+        )
+        pool.start()
+
+        take = pool.take()
+
+        assert take.item is not None and take.item.ref == 7
+        assert source.pickup_calls == [7]
+        assert pool.candidate_refs == (31,)
+
     def test_returns_the_fifo_head_after_validating_it(self) -> None:
         source = ScriptedSource([_snapshot([31, 7])])
         pool = _pool(source)
@@ -846,9 +955,13 @@ class TestLanesWorkOldestFirst:
                 _issue(19, "2026-03-01T00:00:00Z"),
             ]
         )
+        def unworked(candidate: PoolCandidate) -> bool:
+            return "parallel-safe" in candidate.labels and candidate.ref not in worked
+
         pool = _pool(
             GitHubIssueSource(_silent_logger(), gh=gh),
-            eligible=lambda c: "parallel-safe" in c.labels and c.ref not in worked,
+            eligible=unworked,
+            cacheable=unworked,
         )
         pool.start()
 

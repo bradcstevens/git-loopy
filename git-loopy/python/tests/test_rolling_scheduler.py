@@ -253,6 +253,17 @@ def test_worked_guard_latches_at_session_start_and_never_releases() -> None:
     assert source.membership_calls > 1
 
 
+def test_a_worked_candidate_does_not_block_the_final_empty_refresh() -> None:
+    """A lifecycle refusal cannot be re-cached behind the scheduler's guard."""
+    scheduler, _source = _scheduler([11], lane_cap=1)
+    scheduler.start()
+    (reservation,) = scheduler.reserve()
+    contribution = scheduler.start_session(reservation)
+    scheduler.finish_work(contribution, changed=False)
+
+    assert scheduler.confirm_empty() is True
+
+
 # --------------------------------------------------------------------------- #
 # §3.8-3.11, §7.6 — the terminal dispositions at the Lane-work boundary
 # --------------------------------------------------------------------------- #

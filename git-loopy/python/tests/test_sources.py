@@ -1263,6 +1263,7 @@ class TestModuleStructure:
             "PoolExclusion",
             "afk_ready_exclusion",
             "in_selection_order",
+            "is_lane_candidate",
             "is_afk_ready",
             "is_pr_afk_ready",
         }
@@ -1648,6 +1649,20 @@ class TestShallowMembership:
 
         impl.shallow_membership()
 
+        assert gh.issue_view_calls == []
+
+    def test_a_membership_candidate_carries_its_blockers(self) -> None:
+        """Rolling dispatch decides candidacy from the one cheap list read."""
+        blockers = BlockedByRead(
+            total_count=1,
+            nodes=(BlockerNode(ref="x/y#7", state="open"),),
+        )
+        gh = FakeGitHubClient(issues=[_make_issue(31, blocked_by=blockers)])
+        impl = GitHubIssueSource(_silent_logger(), gh=gh)
+
+        [candidate] = impl.shallow_membership().candidates
+
+        assert candidate.blocked_by == blockers
         assert gh.issue_view_calls == []
 
     def test_failed_read_is_incomplete_rather_than_empty(self) -> None:
@@ -2061,6 +2076,28 @@ class TestPickup:
         )
         pickup = impl.pickup(31)
         assert pickup.outcome == sources_module.PICKUP_UNAVAILABLE
+        assert pickup.item is None
+
+    def test_a_newly_open_blocker_makes_pickup_stale(self) -> None:
+        """The authoritative read must not reserve work Membership once saw Ready."""
+        listed = _make_issue(31, labels=["ready-for-agent", "parallel-safe"])
+        impl = self._source(
+            issues=[listed],
+            issue_views={
+                31: _make_issue(
+                    31,
+                    labels=["ready-for-agent", "parallel-safe"],
+                    blocked_by=BlockedByRead(
+                        total_count=1,
+                        nodes=(BlockerNode(ref="x/y#7", state="open"),),
+                    ),
+                )
+            },
+        )
+
+        pickup = impl.pickup(31)
+
+        assert pickup.outcome == sources_module.PICKUP_STALE
         assert pickup.item is None
 
     def test_priority_does_not_excuse_a_missing_parallel_safe(self) -> None:

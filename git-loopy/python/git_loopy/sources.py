@@ -88,6 +88,7 @@ __all__ = [
     "PoolExclusion",
     "afk_ready_exclusion",
     "in_selection_order",
+    "is_lane_candidate",
     "is_afk_ready",
     "is_pr_afk_ready",
 ]
@@ -434,12 +435,34 @@ class PoolCandidate:
             built on has to survive the cheap refresh — a candidate that only
             acquires its timestamp at the authoritative pickup read acquires it
             after the decision that needed it.
+        blocked_by: The candidate's native dependency connection from this
+            **Membership read**. A Lane's candidacy predicate decides its
+            **Readiness** from this already-carried value, so refresh stays one
+            list call however large the **Pool** is.
     """
 
     ref: int | str
     title: str
     labels: tuple[str, ...] = ()
     created_at: str = ""
+    blocked_by: BlockedByRead = field(
+        default_factory=lambda: BlockedByRead(total_count=0)
+    )
+
+
+def is_lane_candidate(candidate: PoolCandidate) -> bool:
+    """Return whether a **Parallel-safe** candidate is Ready for a **Lane**.
+
+    The human's **Parallel-safe** assertion and the tracker's **Readiness**
+    fact are independent candidacy predicates. Keeping their composition beside
+    the Membership record means every Rolling-dispatch caller applies the same
+    pure decision to the blocker connection the **Membership read** carried.
+    """
+    return (
+        isinstance(candidate.ref, int)
+        and LABEL_PARALLEL_SAFE in candidate.labels
+        and decide_readiness(candidate.blocked_by).admissible
+    )
 
 
 @dataclass(frozen=True)
@@ -951,6 +974,7 @@ class GitHubIssueSource:
                 title=issue.title,
                 labels=tuple(issue.labels),
                 created_at=issue.created_at,
+                blocked_by=issue.blocked_by,
             )
             for issue in ordered
         )
@@ -985,10 +1009,11 @@ class GitHubIssueSource:
         """Re-read ``ref`` authoritatively and render it for dispatch.
 
         Applies #219 §2.10 verbatim: the issue must still be open, still carry
-        ``ready-for-agent`` *and* ``parallel-safe``, and still satisfy the
-        AFK-ready body discriminator. The same read supplies the comments and
-        rendered prompt block, so a **Lane** never dispatches from membership
-        that a cheap refresh happened to observe some seconds ago.
+        ``ready-for-agent`` *and* ``parallel-safe``, still satisfy the
+        AFK-ready body discriminator, and still be **Ready**. The same read
+        supplies the comments, blockers, and rendered prompt block, so a
+        **Lane** never dispatches from membership that a cheap refresh happened
+        to observe some seconds ago.
 
         Returns:
             A :class:`Pickup` whose ``outcome`` is ``"validated"`` (dispatchable),
@@ -1013,6 +1038,7 @@ class GitHubIssueSource:
             or LABEL_READY_FOR_AGENT not in labels
             or LABEL_PARALLEL_SAFE not in labels
             or not is_afk_ready(full.body or "")
+            or not decide_readiness(full.blocked_by).admissible
         ):
             return Pickup(outcome=PICKUP_STALE)
 
