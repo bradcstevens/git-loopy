@@ -617,6 +617,10 @@ class RunConfig:
             :mod:`git_loopy.cli` resolves it from ``--parallel N`` /
             ``GIT_LOOPY_MAX_PARALLEL`` (defaulting to ``N=3`` when Parallel
             mode is requested without an explicit cap). Must be ≥ 1.
+        execution_host: The requested **Execution host** placement for this
+            Run. ``"local"`` is the default; a distribution refuses an
+            unsupported placement during preflight rather than silently falling
+            back to local.
         issue_pin: The invocation-scoped **Pin** (#396, ADR-0032): the single
             issue ``--issue N`` named, or ``None``. It bypasses the §3.2
             selection **order** and nothing else — an issue pinned here still
@@ -697,6 +701,7 @@ class RunConfig:
     render_reasoning: bool = True
     otel_enabled: bool = False
     parallel: int = 1
+    execution_host: str = "local"
     send_timeout_seconds: float = DEFAULT_SEND_TIMEOUT_SECONDS
     routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)
     context_tier: str = DEFAULT_CONTEXT_TIER

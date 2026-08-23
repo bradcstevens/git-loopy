@@ -79,12 +79,24 @@ jq -e \
 jq -e \
   --argjson capabilities "$GIT_LOOPY_PARALLEL_CAPABILITIES_JSON" \
   '
-    .parallel_capabilities.orchestrators.shell == $capabilities
-    and ($capabilities | keys_unsorted) == .parallel_capabilities.names
-    and all($capabilities[]; type == "boolean")
+    (.parallel_capabilities.orchestrators.shell == (
+      $capabilities
+      | with_entries(select(.key != "execution_hosts"))
+    ))
+    and ($capabilities | keys_unsorted) == (
+      .parallel_capabilities.names + ["execution_hosts"]
+    )
+    and all(
+      .parallel_capabilities.names[];
+      $capabilities[.] | type == "boolean"
+    )
+    and ($capabilities.execution_hosts | type == "array" and length == 0)
     and (
       $capabilities.parallel_mode
-      or all($capabilities[]; . == false)
+      or (
+        all(.parallel_capabilities.names[]; $capabilities[.] == false)
+        and $capabilities.execution_hosts == []
+      )
     )
   ' "$fixture" >/dev/null ||
   fail "shell parallel capability manifest drifted from event-schema.json"

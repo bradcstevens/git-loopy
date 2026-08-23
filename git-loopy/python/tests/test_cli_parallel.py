@@ -27,6 +27,7 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "GIT_LOOPY_ISSUE_SOURCE",
         "GIT_LOOPY_MAX_NMT_STRIKES",
         "GIT_LOOPY_MAX_PARALLEL",
+        "GIT_LOOPY_EXECUTION_HOST",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -138,3 +139,26 @@ def test_parallel_flag_rejects_sub_one(
     with pytest.raises(SystemExit) as excinfo:
         cli_module.main(["--parallel", "0"])
     assert excinfo.value.code == 2
+
+
+def test_execution_host_defaults_to_local(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _capture_config(monkeypatch, tmp_path, [])
+    assert cfg.execution_host == "local"
+
+
+def test_execution_host_flag_overrides_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("GIT_LOOPY_EXECUTION_HOST", "github-actions")
+    cfg = _capture_config(monkeypatch, tmp_path, ["--execution-host", "local"])
+    assert cfg.execution_host == "local"
+
+
+def test_empty_execution_host_is_preserved_for_preflight(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("GIT_LOOPY_EXECUTION_HOST", "github-actions")
+    cfg = _capture_config(monkeypatch, tmp_path, ["--execution-host", ""])
+    assert cfg.execution_host == ""

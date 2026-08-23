@@ -858,6 +858,7 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
         "integration_backlog": True,
         "adaptive_lane_limit": True,
         "contribution_events": True,
+        "execution_hosts": ["local"],
     }
     # No "round" exists under Rolling dispatch, so a Lane contribution never
     # emits `wrapper.iteration.start`/`.end` (see this test's docstring).
@@ -1558,6 +1559,37 @@ def test_parallel_workspace_root_failure_refuses_the_run_at_preflight(
     assert fake_client.create_calls == []
     assert fake_gh.issue_close_calls == []
     assert fake_client.stop_call_count == 1
+
+
+@pytest.mark.parametrize("execution_host", ["github-actions", ""])
+def test_unsupported_execution_host_refuses_the_run_at_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    execution_host: str,
+) -> None:
+    """A host placement this distribution cannot drive is never downgraded."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        execution_host=execution_host,
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == loop_module.exit_code_for("preflight_failed")
+    error = capsys.readouterr().err
+    assert "execution_hosts" in error
+    assert "Python" in error
+    assert "GIT_LOOPY_EXECUTION_HOST" in error
 
 
 def test_parallel_lane_checkpoint_failure_keeps_its_terminal_reason(

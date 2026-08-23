@@ -318,6 +318,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  GIT_LOOPY_MAX_NMT_STRIKES    Strike threshold (default: 3).\n"
             "  GIT_LOOPY_MAX_PARALLEL       Parallel-mode Lane cap "
             "(default: serial; --parallel wins).\n"
+            "  GIT_LOOPY_EXECUTION_HOST     Execution-host placement "
+            "(default: local; --execution-host wins).\n"
             "  GIT_LOOPY_CALIBRATE_CONCURRENCY\n"
             "                              Trials a Calibration runs at once, "
             "each in its own worktree\n"
@@ -406,6 +408,17 @@ def build_parser() -> argparse.ArgumentParser:
             "issues concurrently, each in its own git worktree + branch. "
             "Bare --parallel uses N=%d. Omitted = serial. Overrides "
             "GIT_LOOPY_MAX_PARALLEL." % _DEFAULT_MAX_PARALLEL
+        ),
+    )
+    parser.add_argument(
+        "--execution-host",
+        dest="execution_host",
+        default=None,
+        metavar="PLACEMENT",
+        help=(
+            "Execution-host placement for this Run. Overrides "
+            "GIT_LOOPY_EXECUTION_HOST; unsupported placements are refused "
+            "during preflight rather than falling back to local."
         ),
     )
     parser.add_argument(
@@ -2014,6 +2027,12 @@ def resolve_config(
     if effort_flag is not None:
         effort_raw = effort_flag
     model, reasoning_effort = _resolve_model_and_effort(model_raw, effort_raw, warn=warn)
+    execution_host_flag = getattr(args, "execution_host", None)
+    execution_host = (
+        execution_host_flag
+        if execution_host_flag is not None
+        else env.get("GIT_LOOPY_EXECUTION_HOST", "local")
+    )
 
     # The **Task-type classifier**'s own pair (#377, ADR-0029). Resolved from its
     # own env var and its own Config keys, and deliberately *not* from the flags
@@ -2052,6 +2071,7 @@ def resolve_config(
         render_reasoning=bool(args.render_reasoning),
         otel_enabled=_otel_enabled(env, project, global_),
         parallel=_resolve_parallel(args, env),
+        execution_host=execution_host,
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
         routing=routing,
         routing_suppressed=suppressed_by is not None,

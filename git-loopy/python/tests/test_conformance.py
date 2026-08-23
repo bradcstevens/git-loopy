@@ -886,7 +886,7 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "2.0"
+    assert _EVENT_SCHEMA["contract_version"] == "2.1"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
@@ -1353,6 +1353,39 @@ def test_event_fixture_pins_the_parallel_capability_manifest() -> None:
             assert not any(manifest.values()), orchestrator
 
 
+def _execution_host_producers() -> tuple[str, ...]:
+    """Execution host placements with a production adapter in this distribution."""
+    source = (
+        Path(events_module.__file__).parent / "execution_host.py"
+    ).read_text(encoding="utf-8")
+    return tuple(
+        dict.fromkeys(
+            re.findall(
+                r"@property\s+def placement\(self\) -> Placement:.*?"
+                r'return "([^"]+)"',
+                source,
+                flags=re.DOTALL,
+            )
+        )
+    )
+
+
+def test_event_fixture_pins_the_execution_host_declaration() -> None:
+    """#450: host placement is declared beside the parallel capabilities.
+
+    The fixture declares only the closed placement vocabulary. It deliberately
+    does not prescribe an Orchestrator's selection; each member derives its
+    declaration from the hosts it actually implements.
+    """
+    declaration = _EVENT_SCHEMA["parallel_capabilities"]["execution_hosts"]
+    assert declaration["identifiers"] == ["local"]
+    assert tuple(events_module.PYTHON_EXECUTION_HOSTS) == _execution_host_producers()
+
+    manifest = events_module.python_parallel_capabilities()
+    assert all(host in declaration["identifiers"] for host in manifest["execution_hosts"])
+    assert not manifest["execution_hosts"] or manifest["parallel_mode"]
+
+
 def test_python_parallel_manifest_matches_the_producers_it_has() -> None:
     """A declared capability is a claim about this distribution's own code.
 
@@ -1641,7 +1674,13 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
     for source, event in _pinned_run_start_events():
         for key in required:
             assert key in event, (source, key)
-        assert set(event["parallel_capabilities"]) == set(parallel["names"]), source
+        manifest = event["parallel_capabilities"]
+        assert set(manifest) == {*parallel["names"], "execution_hosts"}, source
+        assert isinstance(manifest["execution_hosts"], list), source
+        assert set(manifest["execution_hosts"]) <= set(
+            parallel["execution_hosts"]["identifiers"]
+        ), source
+        assert not manifest["execution_hosts"] or manifest["parallel_mode"], source
         # An Orchestrator declares one manifest, so a trace may not mix them: a
         # record claiming a real Orchestrator's Insight manifest must carry that
         # same Orchestrator's parallel manifest. A serialization probe carrying
@@ -1656,7 +1695,9 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
             assert claimed & {
                 name
                 for name, declared in parallel["orchestrators"].items()
-                if declared == event["parallel_capabilities"]
+                if declared == {
+                    key: manifest[key] for key in parallel["names"]
+                }
             }, source
         checked += 1
     assert checked, "no pinned wrapper.run.start was found to check"

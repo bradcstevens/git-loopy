@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.0",
+  "contract_version": "2.1",
   "promotion_trials": 5,
   "roster": {
     "synth-cheap-a": {

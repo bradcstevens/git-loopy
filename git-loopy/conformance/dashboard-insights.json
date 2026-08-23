@@ -1,6 +1,6 @@
 {
   "fixture_schema_version": "1.4",
-  "wrapper_contract_version": "2.0",
+  "wrapper_contract_version": "2.1",
   "event_schema_version": "1.1",
   "semantic_contract": {
     "dashboard_band_order": [
@@ -389,7 +389,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "max_nmt_strikes": 3
         },
@@ -779,7 +780,8 @@
             "rolling_dispatch": false,
             "integration_backlog": false,
             "adaptive_lane_limit": false,
-            "contribution_events": false
+            "contribution_events": false,
+            "execution_hosts": []
           },
           "rate_card": null,
           "max_nmt_strikes": 3,
@@ -1322,7 +1324,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "max_nmt_strikes": 3
         },
@@ -1815,7 +1818,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "rate_card": {
             "models": {
@@ -2980,7 +2984,8 @@
             "rolling_dispatch": false,
             "integration_backlog": false,
             "adaptive_lane_limit": false,
-            "contribution_events": false
+            "contribution_events": false,
+            "execution_hosts": []
           },
           "rate_card": null,
           "max_nmt_strikes": 3
@@ -3407,7 +3412,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "rate_card": null,
           "max_nmt_strikes": 3
@@ -3874,7 +3880,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "max_nmt_strikes": 3
         },
@@ -4263,7 +4270,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "max_nmt_strikes": 3
         },
@@ -4693,7 +4701,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "max_nmt_strikes": 3
         },
@@ -5568,7 +5577,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "max_nmt_strikes": 3
         },

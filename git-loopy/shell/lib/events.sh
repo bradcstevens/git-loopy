@@ -123,7 +123,8 @@ declare -r GIT_LOOPY_PARALLEL_CAPABILITIES_JSON='{
   "rolling_dispatch": false,
   "integration_backlog": false,
   "adaptive_lane_limit": false,
-  "contribution_events": false
+  "contribution_events": false,
+  "execution_hosts": []
 }'
 
 # The Run-start Insight manifest as it goes on the wire: the frozen

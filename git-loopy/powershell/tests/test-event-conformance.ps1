@@ -130,11 +130,11 @@ Assert-Equal (
 # contribution stream either, so the whole manifest is false with it.
 $ExpectedParallel = $Fixture["parallel_capabilities"]["orchestrators"]["powershell"]
 $ActualParallel = Get-GitLoopyParallelCapabilities
-Assert-Equal $ExpectedParallel.Count $ActualParallel.Count (
+Assert-Equal ($ExpectedParallel.Count + 1) $ActualParallel.Count (
     "parallel capability count"
 )
 Assert-Equal (
-    ($Fixture["parallel_capabilities"]["names"] -join ",")
+    (@($Fixture["parallel_capabilities"]["names"]) + "execution_hosts" -join ",")
 ) (($ActualParallel.Keys -join ",")) "parallel capability names and order"
 foreach ($Name in $ExpectedParallel.Keys) {
     Assert-True $ActualParallel.Contains($Name) "missing parallel capability $Name"
@@ -145,12 +145,21 @@ foreach ($Name in $ExpectedParallel.Keys) {
         "parallel capability $Name must be boolean"
     )
 }
+Assert-True ($ActualParallel["execution_hosts"] -is [array]) (
+    "execution_hosts must be a list"
+)
+Assert-Equal 0 $ActualParallel["execution_hosts"].Count (
+    "PowerShell declares no Execution hosts"
+)
 if (-not $ActualParallel["parallel_mode"]) {
-    foreach ($Name in $ActualParallel.Keys) {
+    foreach ($Name in $ExpectedParallel.Keys) {
         Assert-True (-not $ActualParallel[$Name]) (
             "parallel_mode is false so $Name cannot be advertised"
         )
     }
+    Assert-Equal 0 $ActualParallel["execution_hosts"].Count (
+        "parallel_mode is false so no Execution host can be advertised"
+    )
 }
 
 # The manifest is a claim about this port's own code, so read the code. A

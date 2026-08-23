@@ -68,6 +68,8 @@ __all__ = [
     "PYTHON_INSIGHT_CAPABILITIES",
     "PARALLEL_CAPABILITY_NAMES",
     "PYTHON_PARALLEL_CAPABILITIES",
+    "PYTHON_EXECUTION_HOSTS",
+    "python_parallel_capabilities",
     # Wrapper event-type constants
     "WRAPPER_RUN_START",
     "WRAPPER_RUN_END",
@@ -221,6 +223,18 @@ PYTHON_PARALLEL_CAPABILITIES: dict[str, bool] = {
     # this declares.
     "contribution_events": True,
 }
+# Placement is relative to the Orchestrator, never an isolation grade. The
+# manifest is intentionally a list: a future host extends this declaration
+# without adding a boolean to every Runner-family member.
+PYTHON_EXECUTION_HOSTS: tuple[str, ...] = ("local",)
+
+
+def python_parallel_capabilities() -> dict[str, bool | list[str]]:
+    """The Python Runner's complete Run-start Parallel manifest."""
+    return {
+        **PYTHON_PARALLEL_CAPABILITIES,
+        "execution_hosts": list(PYTHON_EXECUTION_HOSTS),
+    }
 
 _DEFAULT_CONTEXT_TARGET_TOKENS = 100_000
 _DEFAULT_CONTEXT_CEILING_TOKENS = 150_000

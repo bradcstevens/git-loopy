@@ -508,6 +508,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         "integration_backlog": True,
         "adaptive_lane_limit": True,
         "contribution_events": True,
+        "execution_hosts": ["local"],
     }
     iteration_end = next(
         event

@@ -116,6 +116,7 @@ $script:ParallelCapabilities = [ordered]@{
     integration_backlog = $false
     adaptive_lane_limit = $false
     contribution_events = $false
+    execution_hosts = [string[]]@()
 }
 
 $script:EnvelopeKeys = @("ts", "run_id", "iter", "type")

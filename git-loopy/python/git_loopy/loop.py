@@ -2026,7 +2026,7 @@ class _Loop:
             rate_card=(
                 None if self._rate_card is None else self._rate_card.to_payload()
             ),
-            parallel_capabilities=dict(events_module.PYTHON_PARALLEL_CAPABILITIES),
+            parallel_capabilities=events_module.python_parallel_capabilities(),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
             # #410: what this Run parsed, gate-checked.
@@ -2519,7 +2519,7 @@ class _ParallelLoop:
             rate_card=(
                 None if self._rate_card is None else self._rate_card.to_payload()
             ),
-            parallel_capabilities=dict(events_module.PYTHON_PARALLEL_CAPABILITIES),
+            parallel_capabilities=events_module.python_parallel_capabilities(),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
             # #410: what this Run parsed, gate-checked.
@@ -4414,6 +4414,22 @@ async def run(
         )
         return 1
     diag = writers.diagnostics
+
+    if config.execution_host not in events_module.PYTHON_EXECUTION_HOSTS:
+        supported = ", ".join(events_module.PYTHON_EXECUTION_HOSTS) or "(none)"
+        print(
+            f"git-loopy: Execution host {config.execution_host!r} is unsupported: "
+            "the Python distribution declares "
+            f"parallel_capabilities.execution_hosts as [{supported}]. "
+            "Set GIT_LOOPY_EXECUTION_HOST to a declared placement.",
+            file=sys.stderr,
+        )
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
+        return exit_code_for("preflight_failed")
 
     try:
         prompt_text = _read_prompt(repo_root, os.environ)
