@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "subagentStop": [
+      {
+        "type": "command",
+        "bash": "/Users/bradcstevens/.copilot/skills/next/chain.sh complete"
+      }
+    ]
+  }
+}
