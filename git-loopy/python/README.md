@@ -57,8 +57,8 @@ deferred, so the install string points at this repo's nested package via
 `#subdirectory=git-loopy/python`:
 
 ```bash
-# Put a single `git-loopy` command on PATH (user-global).
-uv tool install "git+https://github.com/bradcstevens/git-loopy#subdirectory=git-loopy/python"
+# Put a single `git-loopy` command for the published v0.9.0 Release on PATH.
+uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.9.0#subdirectory=git-loopy/python"
 
 # ...then run it from inside any git repo:
 cd ~/some/other/repo && git-loopy
@@ -68,14 +68,14 @@ For an ephemeral, npx-style run (no install), use `uvx` with the same spec (a
 bare `uvx git-loopy` is reserved for a future PyPI release):
 
 ```bash
-uvx --from "git+https://github.com/bradcstevens/git-loopy#subdirectory=git-loopy/python" git-loopy
+uvx --from "git+https://github.com/bradcstevens/git-loopy@v0.9.0#subdirectory=git-loopy/python" git-loopy
 ```
 
 Repos already on Python/uv can instead add it as a **project-local dev
 dependency** and run it through their own environment:
 
 ```bash
-uv add --dev "git+https://github.com/bradcstevens/git-loopy#subdirectory=git-loopy/python"
+uv add --dev "git+https://github.com/bradcstevens/git-loopy@v0.9.0#subdirectory=git-loopy/python"
 uv run git-loopy
 ```
 
@@ -84,6 +84,15 @@ wheel (see [Prompt resolution](#prompt-resolution)), so a bare `git-loopy` works
 in a repo that has no `git-loopy/` folder at all. Persist per-run knobs in a
 [`config.toml`](#persistent-config-configtoml) — hand-written, or scaffolded for
 you by [`git-loopy init`](#first-run-setup-git-loopy-init) — when you want them.
+
+The commands above are all **v0.9.0 Release** installs: `git-loopy --version`
+reports `git-loopy 0.9.0`, the installation's Release identity. To choose a
+different named Release, use its published tag in the same position (for
+example, `@v0.8.0`). To deliberately install unreleased source, pin a full
+commit SHA instead; that is an **Edge install**, whose identity is the SHA, not
+the source `VERSION` value. See the root
+[installation channels](../../README.md#installation-identity-and-channels)
+for commands.
 
 ---
 

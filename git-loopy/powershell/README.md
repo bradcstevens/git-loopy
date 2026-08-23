@@ -85,7 +85,8 @@ reuse the single shared [`git-loopy/PROMPT.md`](../PROMPT.md).
 ### Run in place (baseline)
 
 ```powershell
-git clone https://github.com/bradcstevens/git-loopy
+# Clone the published v0.9.0 Release.
+git clone --branch v0.9.0 --depth 1 https://github.com/bradcstevens/git-loopy
 # From inside the git repository you want to work (issues labeled ready-for-agent):
 pwsh -NoLogo -NoProfile -File /path/to/git-loopy/powershell/git-loopy.ps1
 ```
@@ -106,6 +107,13 @@ launcher shim on your `PATH` that runs this clone's `git-loopy.ps1`, and the
 where the Orchestrator looks for it first. On Windows the shim is a
 `git-loopy.cmd`; on Linux and macOS it is a `git-loopy` script with a `pwsh`
 shebang.
+
+The clone command above is a **v0.9.0 Release** install, so
+`git-loopy --version` reports `git-loopy 0.9.0`. To install another named
+Release, replace `v0.9.0` with its published tag. Pinning a full unreleased
+commit SHA instead is an **Edge install**: identify it by that SHA, not by the
+source `VERSION` value. See the root
+[installation channels](../../README.md#installation-identity-and-channels).
 
 ```powershell
 pwsh -NoLogo -NoProfile -File git-loopy/powershell/install.ps1     # default bin dir

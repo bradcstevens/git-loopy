@@ -99,8 +99,8 @@ work needs it.
 [`docs/skills-setup.md`](docs/skills-setup.md#prerequisites).
 
 ```bash
-# Install the engine once, user-global.
-uv tool install "git+https://github.com/bradcstevens/git-loopy#subdirectory=git-loopy/python"
+# Install the current published Release once, user-global.
+uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.9.0#subdirectory=git-loopy/python"
 
 # In the repository you want it to work on:
 cd ~/code/my-project
@@ -135,6 +135,27 @@ git-loopy config list             # the effective settings a Run would use
 Hosts without Python can run the [shell](git-loopy/shell/README.md) or
 [PowerShell](git-loopy/powershell/README.md) Orchestrator instead — same
 contract, same Dashboard.
+
+### Installation identity and channels
+
+The default command installs the published **v0.9.0 Release**. Its
+installation identity is therefore `git-loopy 0.9.0`: `git-loopy --version`
+and `wrapper.run.start` report that exact Release version.
+
+To install another named, published Release, replace the tag with the Release
+you want. For example, this installs the published **v0.8.0 Release**:
+
+```bash
+uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.8.0#subdirectory=git-loopy/python"
+```
+
+An unreleased commit is an explicit **Edge install**, not a Release install.
+Pin the full commit SHA deliberately and identify that installation by its SHA;
+do not treat its source `VERSION` output as proof of Release identity:
+
+```bash
+uv tool install "git+https://github.com/bradcstevens/git-loopy@<unreleased-commit-sha>#subdirectory=git-loopy/python"
+```
 
 ## The skills and their purpose
 

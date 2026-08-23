@@ -25,12 +25,13 @@ installer never copies the Orchestrator out of the tree"* (`shell/install.sh:9-1
 resolves to two artifacts with two unrelated upgrade procedures, and last-installer-wins decides
 which.
 
-**The shipped install channel has no Release identity.** The documented command carries no tag or
-ref, so it resolves the default branch. `read_runtime_release_version` reads the checked-in
-`VERSION` file (`release_version.py:76-79`), which is a source constant. Two machines can therefore
-both report `git-loopy 0.9.0` and be two hundred commits apart. This sits oddly beside the effort
-already spent on Release identity — ADR-0052, `release_trust.py`, `conformance/release-version.json`,
-and a `homebrew.py` that refuses a formula whose fields drifted from the Release it names.
+**The install channel must carry Release identity.** The documented command pins a published Release
+tag rather than resolving the default branch. `read_runtime_release_version` reads the checked-in
+`VERSION` file (`release_version.py:76-79`), which is a source constant, so an unpinned channel
+could otherwise leave two machines reporting `git-loopy 0.9.0` while hundreds of commits apart.
+The documented Release channel keeps that identity coherent with ADR-0052,
+`release_trust.py`, `conformance/release-version.json`, and a `homebrew.py` that refuses a formula
+whose fields drifted from the Release it names.
 
 **A scaffolded `PROMPT.md` shadows the packaged one forever.** Precedence is *"project, global, then
 packaged"* (`prompt.py:204`), and the scaffold's frontmatter declares only `required-skills` — no
