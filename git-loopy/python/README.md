@@ -96,6 +96,45 @@ for commands.
 
 ---
 
+## Installation identity (`git-loopy info`)
+
+`git-loopy info` describes the Python Runner artifact currently executing: its
+executable path, **Install channel** (only when that ownership can be proven),
+**Release version**, resolved commit, whether that commit is a published Release,
+and **Edge install** status. It is read-only and always exits `0`; unavailable
+identity is reported as `unknown`, never treated as a health failure.
+
+```bash
+git-loopy info
+git-loopy info --json
+```
+
+`--json` emits this stable schema. Fields with unknown facts are `null`; the
+`assets` array is intentionally empty until the installation inventory's
+Config-home asset half lands.
+
+```json
+{
+  "schema_version": 1,
+  "artifact": "python-runner",
+  "executable": "/path/to/git-loopy",
+  "install_channel": {"name": "uv-tool", "proven": true},
+  "release_version": "0.9.0",
+  "resolved_commit": "0123456789abcdef0123456789abcdef01234567",
+  "published": true,
+  "edge_install": false,
+  "assets": []
+}
+```
+
+`install_channel.name` is `uv-tool`, `homebrew`, `installer-launcher`, or
+`unproven`. `unproven` is deliberate: `uv tool install` and the shell installer
+can both place a `git-loopy` command in the same XDG bin directory, so inferring
+an owner without the shell installer's self-identifying shim could make a later
+mutating command operate on the wrong artifact.
+
+---
+
 ## First-run setup (`git-loopy init`)
 
 `git-loopy init` is an interactive wizard that installs the pinned Skill catalog

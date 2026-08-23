@@ -34,6 +34,7 @@ old bash launcher is retired):
 
 * ``--version`` — print the distribution Release version and exit before Run
   discovery, configuration, dependencies, or services.
+* ``info`` — describe the installation identity and exit successfully.
 * Positional ``<max-iterations>`` — ``0`` (or omitted) means unlimited.
 * ``--model ID`` — per-run model override (top of the precedence chain).
 * ``--reasoning-effort EFFORT`` — per-run reasoning-effort override.
@@ -276,6 +277,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  config                         Manage persisted settings: "
             "set / get / list / edit / path.\n"
             "                                 See `git-loopy config -h`.\n"
+            "  info                           Describe this installation's "
+            "identity and channel.\n"
+            "                                 See `git-loopy info -h`.\n"
             "  skills list                    Inspect the closed-world Skill "
             "policy.\n"
             "  skills edit                    Edit a project or global Skill "
@@ -532,7 +536,7 @@ def build_parser() -> argparse.ArgumentParser:
 #: They are kept out of :func:`build_parser` because argparse cannot host an
 #: optional positional (``<max-iterations>``) alongside ``add_subparsers`` in one
 #: parser without misreading ``git-loopy 5`` as an invalid subcommand choice.
-_SUBCOMMANDS = ("init", "config", "skills", "labels", "calibrate")
+_SUBCOMMANDS = ("init", "config", "skills", "labels", "calibrate", "info")
 
 
 def _add_scope_flags(
@@ -578,13 +582,13 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         prog="git-loopy",
         description=(
             "git-loopy subcommands (setup, Config, Skill management, "
-            "and Calibration)."
+            "Calibration, and installation identity)."
         ),
     )
     sub = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{init,config,skills,labels,calibrate}",
+        metavar="{init,config,skills,labels,calibrate,info}",
     )
 
     init = sub.add_parser(
@@ -685,6 +689,22 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "and correct the colour / description of the ones that drifted. "
             "Never renames and never deletes."
         ),
+    )
+
+    info = sub.add_parser(
+        "info",
+        help="Describe this installation's artifact, channel, and identity.",
+        description=(
+            "Report the installed artifact, the Install channel when it can be "
+            "proven, Release version, resolved commit, and Edge-install status. "
+            "This command describes facts only and exits successfully even when "
+            "some identity facts are unavailable."
+        ),
+    )
+    info.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the stable installation-inventory JSON document.",
     )
 
     config = sub.add_parser(
@@ -934,6 +954,58 @@ def _run_labels(args: argparse.Namespace) -> int:
         client=_make_label_client(),
         apply=bool(args.apply),
     )
+
+
+def _run_info(
+    args: argparse.Namespace,
+    *,
+    env: Mapping[str, str] | None = None,
+    executable_path: Path | None = None,
+    output_fn: Callable[[str], None] = print,
+) -> int:
+    """Present the installation inventory without turning it into a health gate."""
+    environment = os.environ if env is None else env
+    executable = Path(sys.argv[0]) if executable_path is None else executable_path
+    from git_loopy import installation
+
+    try:
+        inventory = installation.inspect_installation(
+            env=environment,
+            executable_path=executable,
+        )
+    except Exception:  # info reports unavailable identity rather than failing.
+        inventory = installation.Installation(
+            artifact="python-runner",
+            executable=str(executable),
+            install_channel=installation.InstallChannel(name="unproven", proven=False),
+            release_version=None,
+            resolved_commit=None,
+            published=None,
+            edge_install=None,
+        )
+
+    if args.json:
+        import json
+
+        output_fn(json.dumps(inventory.json_dict(), sort_keys=True))
+    else:
+        output_fn(f"Artifact: {inventory.artifact}")
+        output_fn(f"Executable: {inventory.executable}")
+        output_fn(f"Install channel: {inventory.install_channel.name}")
+        output_fn(f"Release version: {_display_identity(inventory.release_version)}")
+        output_fn(f"Resolved commit: {_display_identity(inventory.resolved_commit)}")
+        output_fn(f"Published Release: {_display_identity(inventory.published)}")
+        output_fn(f"Edge install: {_display_identity(inventory.edge_install)}")
+    return 0
+
+
+def _display_identity(value: object) -> str:
+    """Render absent identity as a fact without attaching a judgement."""
+    if value is None:
+        return "unknown"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    return str(value)
 
 
 def _run_config(args: argparse.Namespace) -> int:
@@ -2163,6 +2235,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_labels(sub_args)
         if sub_args.command == "calibrate":
             return _run_calibrate(sub_args)
+        if sub_args.command == "info":
+            return _run_info(sub_args)
         return _run_config(sub_args)
 
     parser = build_parser()

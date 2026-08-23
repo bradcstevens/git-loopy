@@ -14,6 +14,7 @@ no wizard I/O happens; these tests assert only the *routing*.
 from __future__ import annotations
 
 import io
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,12 @@ def test_subcommand_parser_parses_skills_list() -> None:
     args = cli_module.build_subcommand_parser().parse_args(["skills", "list"])
     assert args.command == "skills"
     assert args.skills_command == "list"
+
+
+def test_subcommand_parser_parses_info_json() -> None:
+    args = cli_module.build_subcommand_parser().parse_args(["info", "--json"])
+    assert args.command == "info"
+    assert args.json is True
 
 
 def test_subcommand_parser_parses_skills_edit_scope() -> None:
@@ -209,6 +216,101 @@ def test_main_skills_list_routes_to_handler_no_loop(
     assert cli_module.main(["skills", "list"]) == 0
     assert seen == ["list"]
     assert captured == []
+
+
+def test_main_info_reports_stable_json_and_never_runs_the_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from git_loopy import installation
+
+    expected = installation.Installation(
+        artifact="python-runner",
+        executable="/operator/bin/git-loopy",
+        install_channel=installation.InstallChannel(name="unproven", proven=False),
+        release_version=None,
+        resolved_commit=None,
+        published=None,
+        edge_install=None,
+    )
+    monkeypatch.setattr(installation, "inspect_installation", lambda **_kwargs: expected)
+
+    assert cli_module.main(["info", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == expected.json_dict()
+
+
+def test_main_info_prints_every_identity_line_in_plain_text(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from git_loopy import installation
+
+    inventory = installation.Installation(
+        artifact="python-runner",
+        executable="/operator/bin/git-loopy",
+        install_channel=installation.InstallChannel(name="uv-tool", proven=True),
+        release_version="1.2.3",
+        resolved_commit="a" * 40,
+        published=False,
+        edge_install=True,
+    )
+    monkeypatch.setattr(
+        installation, "inspect_installation", lambda **_kwargs: inventory
+    )
+
+    assert cli_module.main(["info"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "Artifact: python-runner",
+        "Executable: /operator/bin/git-loopy",
+        "Install channel: uv-tool",
+        "Release version: 1.2.3",
+        f"Resolved commit: {'a' * 40}",
+        "Published Release: no",
+        "Edge install: yes",
+    ]
+
+
+def test_main_info_renders_absent_identity_as_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from git_loopy import installation
+
+    inventory = installation.Installation(
+        artifact="python-runner",
+        executable="/operator/bin/git-loopy",
+        install_channel=installation.InstallChannel(name="homebrew", proven=True),
+        release_version="1.2.3",
+        resolved_commit=None,
+        published=None,
+        edge_install=None,
+    )
+    monkeypatch.setattr(
+        installation, "inspect_installation", lambda **_kwargs: inventory
+    )
+
+    assert cli_module.main(["info"]) == 0
+    output = capsys.readouterr().out.splitlines()
+    assert "Resolved commit: unknown" in output
+    assert "Published Release: unknown" in output
+    assert "Edge install: unknown" in output
+
+
+def test_main_info_exits_zero_when_inventory_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from git_loopy import installation
+
+    def broken_inventory(**_kwargs: object) -> installation.Installation:
+        raise RuntimeError("broken installation")
+
+    monkeypatch.setattr(installation, "inspect_installation", broken_inventory)
+
+    assert cli_module.main(["info"]) == 0
+    output = capsys.readouterr().out
+    assert "Install channel: unproven" in output
+    assert "Release version: unknown" in output
 
 
 def test_skills_edit_dispatches_selected_scope(
