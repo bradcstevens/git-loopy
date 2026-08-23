@@ -326,8 +326,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  OTEL_EXPORTER_OTLP_ENDPOINT  Presence enables OTel.\n"
             "  GIT_LOOPY_INTERACTIVE           '1' forces the TUI, '0' forces "
             "the line printer\n"
-            "                              (default: auto-detect from TTY; "
-            "needs the [tui] extra).\n"
+            "                              (default: auto-detect from TTY).\n"
             "  GIT_LOOPY_MODEL_SELECT          '1' opts into the startup model "
             "picker (ModelSelectionMode);\n"
             "                              off by default. --select-model wins "
@@ -484,8 +483,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=None,
         help=(
-            "Force the interactive Textual dashboard (requires the [tui] "
-            "extra). Default: auto-detect from a TTY. Overrides "
+            "Force the interactive Textual dashboard. Default: auto-detect "
+            "from a TTY. Overrides "
             "GIT_LOOPY_INTERACTIVE."
         ),
     )
@@ -1372,7 +1371,7 @@ def _resolve_interactive_intent(
     """Merge the interactive *intent*: flag > env > project > global > ``None``.
 
     This produces only the operator's *stated* preference across the config
-    chain; the live TTY / ``[tui]``-extra gating is applied separately by
+    chain; the live TTY / Textual gating is applied separately by
     :func:`_should_run_interactive` (which keeps
     :func:`git_loopy.interactive.detect.resolve_interactive` unchanged).
     """
@@ -1821,7 +1820,7 @@ class ResolvedConfig:
     ``run`` is the effective :class:`RunConfig` the loop consumes.
     ``interactive`` is the merged interactive preference across the chain
     (flag > env > project > global > ``None``); it is kept *outside* ``RunConfig``
-    because the loop never consumes it — the live TTY / ``[tui]`` gating happens
+    because the loop never consumes it — the live TTY / Textual gating happens
     in :func:`_should_run_interactive`.
 
     ``routing_provenance`` and ``routing_suppressed_by`` are the *reporting* half
@@ -1998,7 +1997,7 @@ def _should_run_interactive(interactive: bool | None) -> bool:
 
     Takes the merged interactive *intent* (already resolved across the flag /
     env / project / global chain by :func:`resolve_config`) and applies the live
-    gating — stdout TTY-ness and whether the optional ``[tui]`` extra (Textual)
+    gating — stdout TTY-ness and whether Textual
     is importable — delegating the precedence to
     :func:`git_loopy.interactive.detect.resolve_interactive` (which stays
     unchanged: the merged intent is passed as its ``flag`` with no separate
@@ -2123,7 +2122,7 @@ def _model_select_unavailable_message(config: RunConfig) -> str:
 
     The startup picker is a TUI action; when it is requested on a run that takes
     no interactive path (non-TTY, ``--no-interactive``, ``GIT_LOOPY_INTERACTIVE=0``,
-    or the ``[tui]`` extra absent) there is nowhere to draw it, so the run keeps
+    or Textual absent) there is nowhere to draw it, so the run keeps
     the configured model rather than prompting.
     """
     target = config.model or "the configured model"
@@ -2131,8 +2130,8 @@ def _model_select_unavailable_message(config: RunConfig) -> str:
         target = f"{target} ({config.reasoning_effort})"
     return (
         "ModelSelectionMode was requested (--select-model / GIT_LOOPY_MODEL_SELECT) "
-        "but no interactive TUI is available to show the picker (it needs a TTY "
-        f"and the [tui] extra); using {target}."
+        "but no interactive TUI is available to show the picker (it needs a TTY); "
+        f"using {target}."
     )
 
 
@@ -2309,7 +2308,7 @@ def main(argv: list[str] | None = None) -> int:
     # Interactive path (issue #23, ADR-0001): launch the loop as a peer of a
     # Textual app observing a LiveRunState. The driver module imports Textual,
     # so it is reached only once `_should_run_interactive` has confirmed the
-    # [tui] extra is importable. Every non-interactive condition keeps today's
+    # interactive path. Every non-interactive condition keeps today's
     # exact line-printer behavior (driver left as None).
     select_model = _should_select_model(args)
     if _should_run_interactive(resolved.interactive):

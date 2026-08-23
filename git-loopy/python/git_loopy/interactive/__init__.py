@@ -20,7 +20,7 @@ touches the screen.
 * :mod:`git_loopy.interactive.app` and :mod:`git_loopy.interactive.driver` import
   Textual and are imported **lazily**, only once
   :func:`git_loopy.interactive.detect.resolve_interactive` has confirmed the
-  interactive path (an interactive TTY plus an importable ``[tui]`` extra).
+  interactive path (an interactive TTY plus importable Textual).
 """
 
 from __future__ import annotations

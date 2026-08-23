@@ -143,6 +143,7 @@ source = { editable = "." }
 dependencies = [
     { name = "github-copilot-sdk" },
     { name = "rich" },
+    { name = "textual" },
 ]
 
 [package.optional-dependencies]
@@ -163,10 +164,6 @@ otel = [
 release = [
     { name = "pyyaml" },
 ]
-tui = [
-    { name = "textual" },
-]
-
 [package.metadata]
 requires-dist = [
     { name = "github-copilot-sdk", specifier = "==1.0.5" },
@@ -181,10 +178,10 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'release'", specifier = ">=6" },
     { name = "rich", specifier = ">=13.7.0,<14" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "textual", marker = "extra == 'tui'", specifier = ">=0.86,<6" },
+    { name = "textual", specifier = ">=0.86,<6" },
     { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.2,<0.0.25" },
 ]
-provides-extras = ["otel", "tui", "release", "dev"]
+provides-extras = ["otel", "release", "dev"]
 
 [[package]]
 name = "github-copilot-sdk"

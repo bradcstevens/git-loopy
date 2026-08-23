@@ -363,9 +363,9 @@ def test_main_interactive_unloadable_dashboard_falls_back_to_line_printer(
 ) -> None:
     """A Dashboard that cannot even be loaded still leaves the Run to run.
 
-    The ``[tui]`` gate probes Textual with ``find_spec``, which does not import
-    it — so a Textual that is present but broken (a partial install, an
-    incompatible dependency) passes the gate and then fails on the real import.
+    The Textual availability probe uses ``find_spec``, which does not import it
+    — so a Textual that is present but broken (a partial install, an
+    incompatible dependency) passes the probe and then fails on the real import.
     That is the earliest possible startup failure, and it must degrade exactly
     like the extra being absent rather than abort the Run.
     """

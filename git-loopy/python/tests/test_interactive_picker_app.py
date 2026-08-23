@@ -1,7 +1,7 @@
 """Pilot tests for ``git_loopy.interactive.picker_app`` (issue #24).
 
-Gated behind ``pytest.importorskip("textual")`` so the base (no ``[tui]`` extra)
-install skips them. They drive the real :class:`ModelPickerApp` via Textual's
+These run against the base Textual dependency. They drive the real
+:class:`ModelPickerApp` via Textual's
 Pilot to prove the acceptance behaviours that need a running app:
 
 * selecting an enabled model with efforts advances to stage 2 and returns the
@@ -16,10 +16,6 @@ The pure projection + the orchestration/fallback are unit-tested (ungated) in
 """
 
 from __future__ import annotations
-
-import pytest
-
-pytest.importorskip("textual")
 
 from textual.widgets import DataTable  # noqa: E402
 

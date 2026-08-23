@@ -119,7 +119,7 @@ you:
 
 | | Full-screen picker | Plain picker |
 | --- | --- | --- |
-| Used when | stdout is a terminal **and** the `[tui]` extra is installed | anywhere else — a pipe, CI, `--no-interactive`, or no `[tui]` extra |
+| Used when | stdout is a terminal | anywhere else — a pipe, CI, or `--no-interactive` |
 | Search | type to filter, live | type the text, then Enter |
 | Toggle | `Space` on the highlighted row | the row's number |
 | Clear the filter | delete the search text | an empty line |
@@ -127,11 +127,10 @@ you:
 | Save | `Enter` | `done`, then `y` at the confirmation |
 | Cancel | `Esc` or `Ctrl+C` | `q` |
 
-The full-screen picker is **optional, never required**. `pip install
-'git-loopy[tui]'` (or `uv sync --extra tui`) enables it; without the extra the
-plain picker runs and nothing is lost — the two are interchangeable and return
-the same selection. git-loopy probes for the extra without importing it, so a
-base install never pays for a dependency it does not have.
+The full-screen picker is available in the base installation. A non-terminal
+still uses the plain picker, and nothing is lost — the two are interchangeable
+and return the same selection. git-loopy probes for Textual without importing
+it, so non-interactive commands never pay for a screen they do not show.
 
 Both renderings obey identical rules, because both read one shared model:
 

@@ -34,7 +34,7 @@ Design (mirrors :mod:`git_loopy.settings` being the pure I/O half):
   Skill policy** (exactly the **Required Skills**) without contacting the
   machine's Copilot Skill inventory. The model rows reuse
   :func:`git_loopy.interactive.models.to_model_choices` (stdlib + config only, no
-  Textual), rendered as a **plain-text numbered list** — no ``[tui]`` extra.
+  Textual), rendered as a **plain-text numbered list**.
 
 The Skill policy is collected through :func:`git_loopy.skillscmd.collect_skill_policy`,
 the same seam ``git-loopy skills edit`` uses, so both commands share one Skill

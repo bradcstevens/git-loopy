@@ -34,7 +34,7 @@ indicator.
 
 This module imports Textual, so it is imported **only on the interactive path**,
 after :func:`git_loopy.interactive.detect.resolve_interactive` has confirmed the
-optional ``[tui]`` extra is importable. The pure model lives in
+Textual is importable. The pure model lives in
 :mod:`git_loopy.interactive.state`; everything here is presentation.
 """
 

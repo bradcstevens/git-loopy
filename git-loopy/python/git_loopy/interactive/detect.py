@@ -11,12 +11,12 @@ Precedence (highest first):
 2. The ``GIT_LOOPY_INTERACTIVE`` env override (``1``/``true``/... vs ``0``/...).
 3. Auto-detect from TTY-ness (interactive only when stdout is a terminal).
 
-Whatever the resolved *intent*, the interactive path additionally requires the
-optional ``[tui]`` extra (Textual) to be importable. When interactivity was
+Whatever the resolved *intent*, the interactive path additionally requires
+Textual to be importable. When interactivity was
 **explicitly** requested (flag or env) but Textual is missing, a warning is
 emitted and the run falls back to the line printer; when interactivity was only
 auto-detected, the fallback is silent. Every non-interactive outcome (non-TTY,
-``--no-interactive``, ``GIT_LOOPY_INTERACTIVE=0``, or ``[tui]`` absent) yields
+``--no-interactive``, or ``GIT_LOOPY_INTERACTIVE=0``) yields
 today's byte-for-byte line-printer behavior.
 
 A second, narrower gate lives here too: :func:`resolve_model_selection` decides
@@ -36,7 +36,7 @@ _TRUTHY = {"1", "true", "yes", "on"}
 
 
 def textual_available() -> bool:
-    """Return whether the optional ``[tui]`` extra (Textual) is importable.
+    """Return whether Textual is importable.
 
     Uses :func:`importlib.util.find_spec` so the probe does **not** actually
     import Textual (no screen/curses side effects) — it only checks that the
@@ -71,10 +71,10 @@ def resolve_interactive(
             (``False``) / neither (``None``).
         env_value: Raw ``GIT_LOOPY_INTERACTIVE`` value (``None``/blank = unset).
         isatty: Whether the runner's stdout is a terminal.
-        textual_importable: Whether the ``[tui]`` extra is importable
+        textual_importable: Whether Textual is importable
             (typically :func:`textual_available`).
         warn: Non-fatal warning sink, used only when interactivity was
-            explicitly requested but the ``[tui]`` extra is missing.
+            explicitly requested but Textual is missing.
 
     Returns:
         ``True`` to take the interactive path; ``False`` to keep the
@@ -95,9 +95,8 @@ def resolve_interactive(
     if not textual_importable:
         if explicit:
             warn(
-                "interactive mode was requested but the optional [tui] extra "
-                "(Textual) is not importable; falling back to the line "
-                "printer. Install it with: pip install 'git-loopy[tui]'"
+                "interactive mode was requested but Textual is not importable; "
+                "falling back to the line printer."
             )
         return False
 

@@ -16,15 +16,11 @@ Two groups:
   operator-sized band vs the flexing Queue (keyboard and mouse), and the
   Log-open / Esc display ride-along.
 
-Gated behind ``pytest.importorskip("textual")`` so the base (no ``[tui]`` extra)
-install skips the Pilot tests; the pure header helper is exercised alongside.
+The Pilot tests run against the base Textual dependency; the pure header helper
+is exercised alongside.
 """
 
 from __future__ import annotations
-
-import pytest
-
-pytest.importorskip("textual")
 
 from rich.text import Text  # noqa: E402
 from textual import events  # noqa: E402
@@ -1156,7 +1152,6 @@ async def test_sizing_is_inert_while_a_log_hides_the_dashboard() -> None:
         await pilot.pause()
         assert band.requested == _ACTIVITY_BAND_HEIGHT
         assert band.size.height == 8
-
 
 
 

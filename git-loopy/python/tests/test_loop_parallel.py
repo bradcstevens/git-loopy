@@ -4442,7 +4442,7 @@ def test_parallel_dashboard_fault_at_startup_runs_every_lane_in_scrollback(
     happens before the loop task exists: every Lane's event goes to the line
     printer from the **Run**'s first line, nothing is handed to a Dashboard that
     was never there, and the exit code is left to the work — this is the
-    ``[tui]``-extra-absent path's behaviour, and Parallel mode learns no second
+    Textual-unavailable path's behaviour, and Parallel mode learns no second
     one.
     """
     fake_git, fake_gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
