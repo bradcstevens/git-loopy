@@ -6,7 +6,6 @@ import asyncio
 import os
 import sys
 from dataclasses import dataclass, replace
-from importlib.resources import files
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Mapping, Sequence
@@ -604,6 +603,21 @@ class _PolicyContext:
     configured: bool = True
 
 
+@dataclass(frozen=True)
+class SkillPolicyCollection:
+    """A discovered Skill policy ready for an interaction owner to render.
+
+    Discovery, baseline seeding, and validation evidence are gathered before an
+    interface receives the model.  The opaque context preserves that evidence
+    for :func:`validate_skill_policy`, so callers cannot accidentally validate
+    a choice against a second, different catalog.
+    """
+
+    model: SkillSelectionModel
+    _context: _PolicyContext
+    _scope: str
+
+
 def _collect_policy_context(
     *,
     scope: str,
@@ -669,6 +683,52 @@ def _collect_policy_context(
             seed=seed.names,
             configured=seed.configured,
         )
+
+
+def discover_skill_policy(
+    *,
+    scope: str,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    client_factory: ClientFactory | None = None,
+    discoverer: CatalogDiscoverer = discover_skill_catalog,
+    git: GitClient | None = None,
+    required_skills: Iterable[str] | None = None,
+    installed_skills_dir: Path | None = None,
+    legacy_denied: Iterable[str] = (),
+) -> SkillPolicyCollection:
+    """Discover and seed a policy without choosing or rendering anything."""
+    context = _collect_policy_context(
+        scope=scope,
+        repo_root=repo_root,
+        env=env,
+        client_factory=client_factory,
+        discoverer=discoverer,
+        git=git,
+        required_skills=required_skills,
+        installed_skills_dir=installed_skills_dir,
+        legacy_denied=legacy_denied,
+    )
+    return SkillPolicyCollection(
+        model=_selection_model(
+            catalog=context.catalog,
+            enabled=context.seed,
+            required=context.required,
+            tracked_project_skills=context.tracked,
+        ),
+        _context=context,
+        _scope=scope,
+    )
+
+
+def validate_skill_policy(
+    collection: SkillPolicyCollection,
+    enabled: Iterable[str],
+) -> tuple[str, ...]:
+    """Validate a chosen policy against its discovered catalog and constraints."""
+    selected = tuple(sorted(set(enabled)))
+    _validate_policy(selected, scope=collection._scope, context=collection._context)
+    return selected
 
 
 def _validate_policy(
@@ -780,8 +840,7 @@ def collect_skill_policy(
     The discovery workspace is gone before this returns, so a caller that writes
     afterwards can never leave a changed Config behind a teardown failure.
     """
-    runner = _resolve_picker_runner(picker_runner)
-    context = _collect_policy_context(
+    collection = discover_skill_policy(
         scope=scope,
         repo_root=repo_root,
         env=env,
@@ -792,17 +851,11 @@ def collect_skill_policy(
         installed_skills_dir=installed_skills_dir,
         legacy_denied=legacy_denied,
     )
-    model = _selection_model(
-        catalog=context.catalog,
-        enabled=context.seed,
-        required=context.required,
-        tracked_project_skills=context.tracked,
-    )
-    result = runner(model, input_fn=input_fn, output_fn=output_fn)
+    runner = _resolve_picker_runner(picker_runner)
+    result = runner(collection.model, input_fn=input_fn, output_fn=output_fn)
     if result is None:
         raise SkillPolicyCancelled
-    _validate_policy(result.enabled, scope=scope, context=context)
-    return result.enabled
+    return validate_skill_policy(collection, result.enabled)
 
 
 def run_skills_edit(

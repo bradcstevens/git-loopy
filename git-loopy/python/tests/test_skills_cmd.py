@@ -12,7 +12,11 @@ from typing import Any
 import pytest
 
 from git_loopy import settings, skillscmd
-from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
+from git_loopy.skill_policy import (
+    MissingRequiredSkills,
+    SkillCatalog,
+    SkillCatalogWinner,
+)
 from git_loopy.skillscmd import (
     SkillSelectionModel,
     SkillSelectionResult,
@@ -22,6 +26,75 @@ from git_loopy.skillscmd import (
     run_skills_list,
 )
 from tests.fakes import FakeGitClient
+
+
+def test_discover_skill_policy_returns_a_seeded_model_without_a_picker(
+    tmp_path: Path,
+) -> None:
+    """Interaction owners can render the policy model after headless discovery."""
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(_client: object, **_kwargs: object) -> SkillCatalog:
+        return SkillCatalog(
+            winners={
+                "baseline": SkillCatalogWinner(
+                    "baseline", "builtin", copilot_enabled=True
+                ),
+                "required": SkillCatalogWinner("required", "packaged"),
+            }
+        )
+
+    collection = skillscmd.discover_skill_policy(
+        scope="global",
+        repo_root=tmp_path,
+        env={"HOME": str(tmp_path / "home")},
+        client_factory=FakeClient,
+        discoverer=discover,
+        git=FakeGitClient(tmp_path),
+        required_skills=("required",),
+        installed_skills_dir=tmp_path / "packaged",
+    )
+
+    assert collection.model.enabled == ("baseline", "required")
+    required = next(row for row in collection.model.rows if row.name == "required")
+    assert required.required is True
+
+
+def test_validate_skill_policy_checks_a_choice_without_a_picker(tmp_path: Path) -> None:
+    """Validation stays authoritative when a caller owns the interaction."""
+
+    class FakeClient:
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    async def discover(_client: object, **_kwargs: object) -> SkillCatalog:
+        return SkillCatalog(
+            winners={"required": SkillCatalogWinner("required", "packaged")}
+        )
+
+    collection = skillscmd.discover_skill_policy(
+        scope="global",
+        repo_root=tmp_path,
+        env={"HOME": str(tmp_path / "home")},
+        client_factory=FakeClient,
+        discoverer=discover,
+        git=FakeGitClient(tmp_path),
+        required_skills=("required",),
+        installed_skills_dir=tmp_path / "packaged",
+    )
+
+    assert skillscmd.validate_skill_policy(collection, ("required",)) == ("required",)
+    with pytest.raises(MissingRequiredSkills):
+        skillscmd.validate_skill_policy(collection, ())
 
 
 def test_skill_selection_filter_preserves_hidden_selections() -> None:
