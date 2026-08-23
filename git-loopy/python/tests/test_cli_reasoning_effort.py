@@ -130,7 +130,7 @@ def test_main_default_invocation_uses_base_model_and_default_effort(
     assert len(captured) == 1
     cfg = captured[0]
     assert cfg.model == "claude-opus-5"
-    assert cfg.reasoning_effort == "xhigh"
+    assert cfg.reasoning_effort == "max"
 
 
 def test_main_strips_effort_suffix_to_base_model_id(

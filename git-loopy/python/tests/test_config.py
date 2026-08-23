@@ -296,28 +296,34 @@ def test_recommended_routing_pairs_are_valid_against_the_roster() -> None:
         assert gated.warning is None, key
 
 
-def test_recommended_routing_reserves_the_escalation_rung_for_the_default() -> None:
-    """The run-wide default is ``claude-opus-5 @ xhigh`` — one rung below ``max``.
+def test_the_default_pair_spends_the_ceiling_and_no_routed_pair_does() -> None:
+    """The run-wide default is ``claude-opus-5 @ max`` — the top of the ladder.
 
-    #286 locked the pair and named the rule that is invisible in every artifact:
-    **the default reserves the ceiling, it does not spend it.** ``max`` is
-    #291's escalation rung, so a default of ``max`` would leave unclassified
-    work with a second attempt at the identical pair.
+    ADR-0056 supersedes ADR-0036, which held the default one rung *below* the
+    escalation rung so that unclassified work had somewhere to escalate to.
+    That rung is now spent up front: the first attempt is the one that matters,
+    and a retry that only fires after a wasted session is worth less than the
+    strength it withheld.
 
-    ADR-0048 extends the same rule to the routed rows, where ADR-0035's
-    ``planning`` had spent the rung outright: **no** recommended pair holds
-    ``max``, so escalation is live for all seven Task types rather than six.
+    The consequence is asserted rather than hidden — the **default pair equals
+    the escalation rung**, so escalation on *unclassified* work is a no-op. It
+    is a real pair change for every classified issue, because ADR-0048's rule
+    survives untouched: **no** recommended routed pair holds ``max``.
     """
     from git_loopy import cli
     from git_loopy.config import RECOMMENDED_ROUTING, REASONING_EFFORT_ORDER
 
     assert (cli._DEFAULT_MODEL, cli._DEFAULT_REASONING_EFFORT) == (
         "claude-opus-5",
-        "xhigh",
+        "max",
     )
     rung_effort = "max"
     ladder = REASONING_EFFORT_ORDER
-    assert ladder.index(cli._DEFAULT_REASONING_EFFORT) == ladder.index(rung_effort) - 1
+    assert ladder.index(cli._DEFAULT_REASONING_EFFORT) == len(ladder) - 1
+    assert cli._DEFAULT_ESCALATION_RUNG == (
+        cli._DEFAULT_MODEL,
+        cli._DEFAULT_REASONING_EFFORT,
+    )
     for key, (_model, effort) in RECOMMENDED_ROUTING.items():
         assert effort != rung_effort, key
 

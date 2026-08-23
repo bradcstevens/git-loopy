@@ -145,20 +145,26 @@ _DEFAULT_MODEL = "claude-opus-5"
 # "works out of the box at full reasoning" intent. Once the operator
 # picks a model, effort comes from the env / model suffix / model default.
 #
-# ``xhigh`` and deliberately **not** ``max`` (ADR-0036): ``max`` is the
-# escalation rung, so a default that spent it would leave unclassified work —
-# which is the whole corpus while nothing produces ``task-type:`` labels — with
-# a second attempt at the identical pair. The default **reserves** the ceiling.
-_DEFAULT_REASONING_EFFORT = "xhigh"
+# ``max`` — the ceiling, deliberately (ADR-0056, superseding ADR-0036). ADR-0036
+# held this one rung down at ``xhigh`` so the escalation rung stayed reachable;
+# ADR-0056 spends it instead, on the finding that the first attempt is the one
+# that matters and a rung that only ever fires after a wasted session is worth
+# less than the strength it withholds. The cost is named, not hidden: see
+# :data:`_DEFAULT_ESCALATION_RUNG`.
+_DEFAULT_REASONING_EFFORT = "max"
 #: The built-in **Escalation rung**: the pair an issue whose session ended in
 #: silent no-progress is retried at when no ``[escalation]`` block names another
-#: (#408). Same model as the **Default pair**, one effort rung above it — the
-#: default reserves ``max`` for exactly this (ADR-0036), and each issue gets
-#: exactly one escalation, so there is no further rung to keep headroom for and
-#: the ceiling is spent here rather than saved. It lives beside the default it
-#: is defined against rather than in :mod:`git_loopy.escalation`, which imports
-#: the harness SDK transitively and so must stay off the subcommand-dispatch
-#: path this module is on.
+#: (#408). Same model as the **Default pair** and, since ADR-0056, the same
+#: effort — so for **unclassified** work escalation is a **no-op**: the retry
+#: reuses the identical pair and buys no new information. That is accepted, not
+#: overlooked. ADR-0036 existed to prevent exactly this and ADR-0056 supersedes
+#: it; the rung is kept rather than removed because it is still a real pair
+#: change for every **Routed pair**, none of which holds ``max`` (ADR-0048), and
+#: because ``[escalation]`` in either Config scope still overrides it.
+#:
+#: It lives beside the default it is defined against rather than in
+#: :mod:`git_loopy.escalation`, which imports the harness SDK transitively and so
+#: must stay off the subcommand-dispatch path this module is on.
 _DEFAULT_ESCALATION_RUNG: tuple[str, str] = (_DEFAULT_MODEL, "max")
 
 

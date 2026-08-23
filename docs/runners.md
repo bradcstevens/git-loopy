@@ -138,7 +138,7 @@ The cost figure surfaced by the runner is an **estimate** based on provider list
 ## Invocation
 
 ```bash
-# Unlimited iterations, default model (claude-opus-5 at `xhigh` reasoning effort).
+# Unlimited iterations, default model (claude-opus-5 at `max` reasoning effort).
 uv run --project git-loopy/python git-loopy
 
 # Cap at 50 iterations.

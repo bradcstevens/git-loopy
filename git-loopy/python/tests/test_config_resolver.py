@@ -67,7 +67,7 @@ def test_resolve_all_empty_yields_builtin_defaults() -> None:
     run = resolved.run
     assert isinstance(run, RunConfig)
     assert run.model == "claude-opus-5"
-    assert run.reasoning_effort == "xhigh"
+    assert run.reasoning_effort == "max"
     assert run.issue_source == "github"
     assert run.include_prs is None
     assert run.max_iterations == 0
@@ -412,7 +412,7 @@ def test_max_nmt_strikes_subone_config_aborts() -> None:
 
 def test_model_effort_pure_default() -> None:
     run = _resolve().run
-    assert (run.model, run.reasoning_effort) == ("claude-opus-5", "xhigh")
+    assert (run.model, run.reasoning_effort) == ("claude-opus-5", "max")
 
 
 def test_config_model_from_project() -> None:
@@ -1073,18 +1073,25 @@ def test_escalation_is_on_by_default_at_the_built_in_rung() -> None:
     assert _resolve().run.escalation_rung == cli._DEFAULT_ESCALATION_RUNG
 
 
-def test_the_built_in_rung_sits_one_rung_above_the_default_pair() -> None:
-    """ADR-0036's whole point: the default reserves the ceiling for this.
+def test_the_built_in_rung_equals_the_default_pair() -> None:
+    """ADR-0056 spends the ceiling the default used to reserve.
 
-    A rung equal to the **Default pair** would make escalation a no-op for every
-    unlabelled issue — which is most of them — so the two constants are pinned
-    against each other rather than each against a literal.
+    Under ADR-0036 the rung sat one effort rung *above* the **Default pair**, so
+    that an unlabelled issue which stalled had somewhere stronger to go.
+    ADR-0056 moved the default up to ``max`` — the top of the ladder — so the two
+    constants now hold the identical pair and escalation on unclassified work is
+    a **no-op**.
+
+    That is the accepted cost of the decision, not a regression, so it is pinned
+    here: a future change that re-separates them is re-deciding ADR-0056 and
+    should say so. Escalation stays a real pair change for every *classified*
+    issue, because ADR-0048 keeps ``max`` out of the routed table.
     """
     resolved = _resolve().run
 
     assert resolved.escalation_rung is not None
     assert resolved.escalation_rung[0] == resolved.model
-    assert resolved.escalation_rung[1] != resolved.reasoning_effort
+    assert resolved.escalation_rung[1] == resolved.reasoning_effort
 
 
 def test_a_config_file_names_the_rung() -> None:

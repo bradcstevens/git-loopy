@@ -3,7 +3,7 @@
 # Edit freely, or manage with `git-loopy init` / `git-loopy config`.
 
 model = "claude-opus-5"
-reasoning_effort = "xhigh"
+reasoning_effort = "max"
 
 # Per-issue routing (ADR-0048, superseding ADR-0035's values). This is the
 # recommended table, seeded here because the flagship consumer of routing has to
@@ -11,10 +11,12 @@ reasoning_effort = "xhigh"
 # through the early return in `resolve_iteration_model` and no `task-type:` label
 # is ever read.
 #
-# The run-wide pair above is what an unlabelled issue gets. It is deliberately
-# one rung below the escalation rung (`claude-opus-5 @ max`), so the default
-# reserves the ceiling rather than spending it (ADR-0036). No route below holds
-# `max` either, so escalation stays live for every Task type.
+# The run-wide pair above is what an unlabelled issue gets, and it is deliberately
+# the ceiling (`max`, ADR-0056 superseding ADR-0036). It therefore *equals* the
+# escalation rung (`claude-opus-5 @ max`), so an unlabelled issue that stalls
+# silently is retried at the identical pair — a known no-op, accepted because the
+# first attempt is the one that matters. No route below holds `max`, so escalation
+# is still a real pair change for every Task type that carries a label.
 [routing.planning]
 model = "claude-opus-5"
 effort = "xhigh"

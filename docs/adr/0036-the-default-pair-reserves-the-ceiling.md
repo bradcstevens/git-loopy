@@ -1,6 +1,11 @@
 # The run-wide default pair is `claude-opus-5 @ xhigh`, and it reserves the ceiling
 
-**Status:** accepted
+**Status:** superseded by [ADR-0056](0056-the-default-pair-spends-the-ceiling.md), which moves the
+effort to `max`. The **model** and every argument below for choosing `claude-opus-5` stand. The
+rule this record exists to state — *the default reserves the ceiling* — is the part that is
+history: ADR-0056 spends it deliberately, and accepts the no-op escalation on unclassified work
+that this record was written to prevent. Read the reasoning below as the case that was weighed
+and overturned, not as what ships.
 
 Implemented by [#401](https://github.com/bradcstevens/git-loopy/issues/401), under the
 per-issue routing spec [#400](https://github.com/bradcstevens/git-loopy/issues/400). Decides

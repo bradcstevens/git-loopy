@@ -706,10 +706,10 @@ _Avoid_: model override, effective model.
 The kit's built-in model and reasoning effort — the pair a unit of work runs on when
 **Routing** resolved nothing, which is every unit whose issue carries no **Task type**.
 **Atomic**: naming a model opts out of the kit's effort too, and the pair becomes "let the
-backend pick". It sits deliberately one rung *below* the escalation rung, so the default
-**reserves** the ceiling instead of spending it and work that stalls has somewhere to escalate
-to (ADR-0036). Identical in every member of the **Runner family**, and an independent constant:
-it resembles one seeded **Routed pair** by rationale, never by derivation.
+backend pick". It sits deliberately *at* the ceiling, so the default **spends** the escalation
+rung rather than reserving it and unclassified work that stalls has nowhere stronger to go
+(ADR-0056, superseding ADR-0036). Identical in every member of the **Runner family**, and an
+independent constant: it resembles one seeded **Routed pair** by rationale, never by derivation.
 _Avoid_: global default (ambiguous — **Config** has global scope), fallback model.
 
 **Escalation rung**:
@@ -721,12 +721,13 @@ issue resolve to the rung instead of its **Routed pair**, reporting the escalate
 source** so a retry at a dearer pair is never mistaken for a routed one. Escalation is **once**
 (a single rung, not a ladder), **sticky** for the rest of the **Run** so the issue does not fall
 back to the pair that already stalled on it, **strike-free** because trying harder must not be
-punished by the mechanism that aborts a **Run**, a **no-op** where the routed pair already equals
-the rung, and per issue rather than per mode — a **Lane** and a serial **Iteration** read and feed
-one ledger. It is configurable from the **Config** file only and on by default at
-`claude-opus-5 @ max`, and an explicit model pin suppresses it exactly as it suppresses
-**Routing**. It is blind to work that ran expensively and produced nothing usable, because
-progress is commit-shaped and not quality-shaped.
+punished by the mechanism that aborts a **Run**, a **no-op** where the pair in force already
+equals the rung — which since ADR-0056 includes the **Default pair**, so unclassified work is
+retried at what it already ran on — and per issue rather than per mode — a **Lane** and a serial
+**Iteration** read and feed one ledger. It is configurable from the **Config** file only and on
+by default at `claude-opus-5 @ max`, and an explicit model pin suppresses it exactly as it
+suppresses **Routing**. It is blind to work that ran expensively and produced nothing usable,
+because progress is commit-shaped and not quality-shaped.
 _Avoid_: retry model, fallback pair (that is the **Default pair**), escalation ladder.
 
 **Attempt lifecycle**:

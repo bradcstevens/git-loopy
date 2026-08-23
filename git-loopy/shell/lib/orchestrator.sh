@@ -491,7 +491,7 @@ git_loopy_resolve_config() {
     if [[ -n "$suffix_effort" ]]; then
       effort="$suffix_effort"
     elif ((model_explicit == 0)); then
-      effort="xhigh"
+      effort="max"
     else
       effort=""
     fi

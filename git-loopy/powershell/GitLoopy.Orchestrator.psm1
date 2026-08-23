@@ -328,7 +328,7 @@ function Resolve-GitLoopyConfig {
             $ReasoningEffort = $SuffixEffort
         }
         elseif (-not $ModelExplicit) {
-            $ReasoningEffort = "xhigh"
+            $ReasoningEffort = "max"
         }
         else {
             $ReasoningEffort = $null

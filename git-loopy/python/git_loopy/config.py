@@ -207,7 +207,10 @@ MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {}
 #:   escalation rung, so a routed pair equal to the rung makes escalation a
 #:   no-op — the retry would reuse the identical pair. ADR-0035's ``planning``
 #:   spent the rung outright and bought that dead retry; every row now sits
-#:   below it, so escalation is live for all seven Task types.
+#:   below it, so escalation is live for all seven Task types. This rule is
+#:   what keeps ADR-0056 — which spends the rung on the *run-wide default* —
+#:   from making escalation inert everywhere rather than only for unclassified
+#:   work.
 #: * **A reasoning-incapable model is unroutable through** ``[routing]``. An
 #:   effort supplied to an effort-incapable model — ``claude-haiku-4.5``,
 #:   ``claude-sonnet-4.5``, ``auto``, whose roster entries are the empty set —
@@ -227,18 +230,22 @@ MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {}
 #:   so a Lane never reviews its own vendor's work. There is no vendor map, no
 #:   cross-entry check and no warning enforcing it.
 #:
-#: ``bugfix`` stays at ``xhigh``: ``high`` would make labelling a bug *cheaper*
-#: than not labelling it, since the run-wide default is already ``xhigh``.
+#: ``bugfix`` stays at ``xhigh``, which since ADR-0056 is one rung *below* the
+#: run-wide default (``claude-opus-5 @ max``) rather than equal to it. ADR-0048
+#: chose it over ``high`` so that labelling a bug was not *cheaper* than leaving
+#: it unlabelled; moving the default to the ceiling inverted that relation, and
+#: ADR-0056 records the inversion as the first thing a table retune should
+#: reconsider. The values here are measured, so they are left alone until one is.
 #:
 #: ``test`` is the one row pinned to its model's ceiling — ``gemini-3.6-flash``
 #: offers ``minimal``/``low``/``medium``/``high`` and nothing above, so raising
 #: this row without changing its model would hard-reject at session creation.
 #:
-#: ``planning`` and ``bugfix`` now *equal* the **global default**
-#: (``claude-opus-5 @ xhigh``, ADR-0036), where ADR-0035's ``planning`` diverged
-#: from it. That is a coincidence of value, not mechanism — the default is an
-#: independent constant in ``cli.py``, is never derived from this table, and
-#: keeps reserving the escalation rung whether or not a row happens to match it.
+#: ``planning`` and ``bugfix`` sit at ``claude-opus-5 @ xhigh``, which ADR-0036
+#: had made *equal* to the **global default**. ADR-0056 moved that default up to
+#: ``max``, so they are a rung below it again. Either way it is a coincidence of
+#: value, not mechanism — the default is an independent constant in ``cli.py``
+#: and is never derived from this table.
 RECOMMENDED_ROUTING: Mapping[str, tuple[str, str]] = MappingProxyType(
     {
         "planning": ("claude-opus-5", "xhigh"),
