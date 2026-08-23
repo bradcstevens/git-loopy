@@ -142,6 +142,7 @@ from git_loopy.session_outcome import (
 from git_loopy.skill_catalog import build_skill_catalog
 from git_loopy.sources import GitHubIssueSource, PoolCandidate
 from git_loopy.staircase import Candidate, PriceStaircase
+from git_loopy.wrapper import checkpoint_message
 from git_loopy.worktree import SetupResult
 from tests.fakes import FakeGateRunner, FakeGitClient, FakeGitHubClient
 from tests.test_interactive_terminal import FakeTerminal
@@ -1484,6 +1485,149 @@ def test_parallel_lane_checkpoint_commits_in_its_own_worktree(
     # ``wt``-prefixed SHAs, and the main worktree wrote no commit at all.
     assert checkpoint["sha"].startswith("wt")
     assert fake_git.commit_messages == []
+
+
+@pytest.mark.parametrize(
+    ("commit_fails", "reclaimed"),
+    [(False, True), (True, False)],
+)
+def test_parallel_cancellation_salvages_a_dirty_lane_workspace_before_reclaim(
+    tmp_path, monkeypatch, commit_fails: bool, reclaimed: bool
+) -> None:
+    """Cancelling a Lane saves its dirty work without leaking its workspace (#452).
+
+    A cancelled session does not return through the ordinary Lane-work boundary,
+    so its dirty tree must be salvaged from the Run-exit path.  That salvage uses
+    the ordinary Checkpoint commit message but emits no Checkpoint Event: the
+    Run did not finish the contribution, and a later Run must not inherit a
+    trace row for work it never touched.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    started = asyncio.Event()
+    hold = asyncio.Event()
+    lane_git: FakeGitClient | None = None
+
+    class _CancellableClient(_ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            nonlocal lane_git
+            session = await super().create_session(**kwargs)
+            working_directory = kwargs.get("working_directory")
+            if working_directory is None:
+                return session
+
+            async def wait_while_dirty(
+                prompt: str, *, timeout: float = 60.0, **extra: Any
+            ) -> SessionEvent | None:
+                nonlocal lane_git
+                lane_git = fake_git.worktree_client(Path(working_directory))
+                assert lane_git is not None
+                lane_git.dirty = True
+                started.set()
+                await hold.wait()
+                return await session.send_and_wait(prompt, timeout=timeout, **extra)
+
+            session.send_and_wait = wait_while_dirty  # type: ignore[method-assign]
+            return session
+
+    fake_client = _CancellableClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def scenario() -> None:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        assert lane_git is not None
+        if commit_fails:
+            lane_git.commit_error = git_module.GitError(
+                ["git", "commit", "-m", "checkpoint"], 1, "index.lock exists"
+            )
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+
+    asyncio.run(scenario())
+
+    assert lane_git is not None
+    assert lane_git.commit_messages == [checkpoint_message(42)]
+    assert bool(_lane_worktree_removes(fake_git)) is reclaimed
+    assert bool(fake_git.active_worktrees) is not reclaimed
+    assert not [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.checkpoint.recorded"
+    ]
+
+
+def test_parallel_exception_salvages_and_reclaims_a_dirty_lane_workspace(
+    tmp_path, monkeypatch
+) -> None:
+    """A crashing Lane uses the same Run-exit salvage path as cancellation (#452)."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    crashed_lane: FakeGitClient | None = None
+
+    async def crash_local_lane(
+        self: loop_module._ParallelLoop,
+        request: ContributionRequest,
+        contribution: object,
+        lane_work: object,
+    ) -> object:
+        del self, request, contribution
+        nonlocal crashed_lane
+        crashed_lane = lane_work.git
+        crashed_lane.dirty = True
+        raise RuntimeError("simulated Lane crash")
+
+    monkeypatch.setattr(
+        loop_module._ParallelLoop, "_run_local_contribution", crash_local_lane
+    )
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) != 0
+
+    assert crashed_lane is not None
+    assert crashed_lane.commit_messages == [checkpoint_message(42)]
+    assert fake_git.active_worktrees == []
+    events = _logged_events(tmp_path)
+    assert not [e for e in events if e["type"] == "wrapper.checkpoint.recorded"]
+    assert [e["type"] for e in events].count("wrapper.contribution.end") == 1
 
 
 def test_parallel_workspace_paths_are_owned_by_the_clones_git_dir(

@@ -669,6 +669,11 @@ class RollingScheduler:
             reoffer: Whether the issue returns to the **Pool** unspent.
             reason: The already-published terminal reason to finalize with.
         """
+        if contribution in self._admitted:
+            self._admitted.remove(contribution)
+        self._parked = [
+            entry for entry in self._parked if entry[1] is not contribution
+        ]
         self._finalize(contribution, reason=reason)
         if reoffer:
             self._units_spent -= 1

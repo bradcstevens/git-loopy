@@ -2124,6 +2124,7 @@ class _LaneWork:
     path: Path
     git: git_module.GitClient
     pre_sha: str | None = None
+    reclaimed: bool = False
 
 
 @dataclass
@@ -2367,6 +2368,10 @@ class _ParallelLoop:
         # `lane_id`) so it survives the reusable Lane slot moving on to
         # another issue once this contribution is admitted (#219 §7).
         self._lane_work: dict[str, _LaneWork] = {}
+        # The contribution that owns each live Lane workspace.  Run-exit
+        # reclamation needs this alongside the workspace to close interrupted
+        # accounting after salvaging the branch.
+        self._open_lane_contributions: dict[str, rolling_scheduler.Contribution] = {}
         # The accounting-scope number each open **Lane contribution** was
         # opened with (#310), keyed the same way and for the same reason: a
         # contribution's Consumption, timing, and Summary row belong to the
@@ -2814,6 +2819,7 @@ class _ParallelLoop:
                     task.cancel()
                 await asyncio.gather(*self._pending, return_exceptions=True)
                 self._pending.clear()
+            self._reclaim_open_lane_workspaces()
 
     @property
     def finalized_contributions(self) -> tuple[rolling_scheduler.Contribution, ...]:
@@ -3181,6 +3187,7 @@ class _ParallelLoop:
             reservation, model=model, reasoning_effort=reasoning_effort
         )
         self._lane_work[contribution.contribution_id] = lane_work
+        self._open_lane_contributions[contribution.contribution_id] = contribution
         self._open_contribution_accounting(contribution)
 
         lane_binding = self._serial._new_active_issue_binding(
@@ -3293,7 +3300,8 @@ class _ParallelLoop:
             contribution, changed=lane_outcome.progressed
         )
         if disposition == rolling_scheduler.TERMINAL:
-            self._lane_work.pop(contribution.contribution_id, None)
+            if lane_work.reclaimed:
+                self._lane_work.pop(contribution.contribution_id, None)
             self._finalize_contribution(contribution, published=False)
             return
         if disposition == rolling_scheduler.ADMITTED:
@@ -3411,7 +3419,8 @@ class _ParallelLoop:
             reason=_terminal_reason_for(outcome),
         )
         assert disposition == rolling_scheduler.TERMINAL
-        self._lane_work.pop(contribution.contribution_id, None)
+        if lane_work.reclaimed:
+            self._lane_work.pop(contribution.contribution_id, None)
         self._finalize_contribution(contribution, published=False)
 
     async def _run_local_contribution(
@@ -3479,8 +3488,8 @@ class _ParallelLoop:
         host *did* contribute on is the contribution's own branch and is kept.
         """
         if self._execution_host is not None:
-            self._cleanup_lane_worktree(lane_work, checkpoint_ok=True)
-            if discard_branch:
+            preserve_branch = self._salvage_and_reclaim_lane_workspace(lane_work)
+            if discard_branch and not preserve_branch:
                 self._delete_branch_safely(lane_work.item.ref, lane_work.branch)
 
     def _cleanup_lane_worktree(
@@ -3488,17 +3497,77 @@ class _ParallelLoop:
     ) -> None:
         """Apply the existing Checkpoint-owned worktree retention rule."""
         if checkpoint_ok:
-            try:
-                self._git.remove_worktree(lane_work.path, force=True)
-            except git_module.GitError as exc:
-                self._diag.warning(
-                    "worktree remove for %s failed: %s", lane_work.path, exc
-                )
+            self._remove_lane_workspace(lane_work)
             return
         self._diag.warning(
             "lane #%s checkpoint failed; preserving worktree %s",
             lane_work.item.ref, lane_work.path,
         )
+
+    def _salvage_and_reclaim_lane_workspace(self, lane_work: _LaneWork) -> bool:
+        """Checkpoint a dirty Lane workspace without emitting an Event, then reclaim it.
+
+        Returns whether the Lane branch must be retained because it contains
+        salvaged work, or salvage itself failed.
+        """
+        if lane_work.reclaimed:
+            return False
+        try:
+            dirty = lane_work.git.is_dirty() or lane_work.git.has_untracked()
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "lane #%s salvage state check failed; preserving worktree %s: %s",
+                lane_work.item.ref,
+                lane_work.path,
+                exc,
+            )
+            return True
+        if dirty:
+            try:
+                lane_work.git.add_all()
+                lane_work.git.commit(checkpoint_message(lane_work.item.ref))
+            except git_module.GitError as exc:
+                self._diag.warning(
+                    "lane #%s salvage Checkpoint failed; preserving worktree %s: %s",
+                    lane_work.item.ref,
+                    lane_work.path,
+                    exc,
+                )
+                return True
+        self._remove_lane_workspace(lane_work)
+        return dirty
+
+    def _remove_lane_workspace(self, lane_work: _LaneWork) -> None:
+        """Remove a Lane workspace after its durable work has been preserved."""
+        if lane_work.reclaimed:
+            return
+        try:
+            self._git.remove_worktree(lane_work.path, force=True)
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "worktree remove for %s failed: %s", lane_work.path, exc
+            )
+        else:
+            lane_work.reclaimed = True
+
+    def _reclaim_open_lane_workspaces(self) -> None:
+        """Salvage every Lane still live when the Rolling driver exits."""
+        for contribution_id, lane_work in tuple(self._lane_work.items()):
+            self._salvage_and_reclaim_lane_workspace(lane_work)
+            if lane_work.reclaimed:
+                self._lane_work.pop(contribution_id, None)
+        for contribution_id, contribution in tuple(
+            self._open_lane_contributions.items()
+        ):
+            if contribution.reason is not None:
+                continue
+            assert self._scheduler is not None
+            self._scheduler.finish_terminal_failure(
+                contribution,
+                reoffer=False,
+                reason=rolling_scheduler.REASON_UNCHANGED_BRANCH,
+            )
+            self._finalize_contribution(contribution, published=False)
 
     async def _run_lane_session(
         self,
@@ -3705,7 +3774,7 @@ class _ParallelLoop:
         assert self._scheduler is not None
         async with self._integration_lock:
             latched_before = self._scheduler.serial_latched
-            lane_work = self._lane_work.pop(contribution.contribution_id, None)
+            lane_work = self._lane_work.get(contribution.contribution_id)
             if lane_work is None:  # pragma: no cover - defensive
                 self._diag.error(
                     "integration #%s: missing lane state for contribution %s",
@@ -3822,6 +3891,10 @@ class _ParallelLoop:
         ``closed`` once its ``wrapper.auto_close`` lands).
         """
         self._apply_strike_reaction(contribution)
+        self._open_lane_contributions.pop(contribution.contribution_id, None)
+        lane_work = self._lane_work.get(contribution.contribution_id)
+        if lane_work is not None and lane_work.reclaimed:
+            self._lane_work.pop(contribution.contribution_id, None)
         scope = self._contribution_iter.pop(contribution.contribution_id, None)
         if scope is None:  # pragma: no cover - defensive
             return
