@@ -918,12 +918,9 @@ assert_equal "1" "$(<"$FAKE_COPILOT_CALLS")" \
 
 # A Pool containing only Blocked candidates is still non-empty and its skipped
 # candidates charge no Strike, so no session is spent rediscovering the fact.
-# Wrapper contract §10/§14.3: a Pickup that walked a non-empty Pool and bound
-# none of it ends the Run under `all_skipped` (exit 1) rather than reporting the
-# exit-0 empty queue — "there is nothing to do" and "I could not take any of
-# what there is" are different facts. Ending here rather than re-walking is what
-# the reference member does; the *reading* an all-Blocked Pool deserves is #443's
-# to change, in all four members at once.
+# Wrapper contract §10/§14.3: a Pickup that walked a non-empty Pool of open
+# blocker refusals ends waiting on blockers (exit 1), rather than reporting an
+# empty queue or an operator-repairable all-skipped Run.
 repo="$temp_dir/readiness-all-blocked"
 fake_bin="$temp_dir/readiness-all-blocked-bin"
 make_real_repo "$repo"
@@ -953,15 +950,56 @@ jq -se '
   and ([.[] | select(.type == "wrapper.pickup.bound")] | length == 0)
   and ([.[] | select(.type == "wrapper.strike")] | length == 0)
   and ([.[] | select(.type == "wrapper.iteration.end") | .outcome]
-    == ["all_skipped"])
+    == ["all_blocked"])
   and (.[-1].type == "wrapper.run.end")
-  and (.[-1].outcome == "all_skipped")
+  and (.[-1].outcome == "all_blocked")
   and (.[-1].iterations_run == 1)
 ' "$temp_dir/readiness-all-blocked.stdout" >/dev/null ||
-  fail "all-Blocked Pool did not end the Run all_skipped without a Strike"
+  fail "all-Blocked Pool did not end the Run waiting on blockers without a Strike"
 assert_contains "$(<"$temp_dir/readiness-all-blocked.stderr")" \
-  "serial Pickup bound nothing" \
-  "the all-skipped ending names what it could not take"
+  "waiting on blockers" \
+  "the all-blocked ending tells the operator why work did not start"
+
+# A Pool that mixes a proven blocker with a read the Runner could not prove is
+# still all-skipped: "waiting" must not hide work an operator can repair.
+repo="$temp_dir/readiness-mixed-skips"
+fake_bin="$temp_dir/readiness-mixed-skips-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+jq '[.[0], (.[1] | .blockedBy = {totalCount: 1, nodes: []})]' \
+  "$temp_dir/readiness-pickup-list.json" \
+  >"$temp_dir/readiness-mixed-skips-list.json"
+mkdir -p "$temp_dir/readiness-mixed-skips-views"
+jq '.[0] + {comments: []}' "$temp_dir/readiness-pickup-list.json" \
+  >"$temp_dir/readiness-mixed-skips-views/51.json"
+jq '.[1] | .blockedBy = {totalCount: 1, nodes: []} | . + {comments: []}' \
+  "$temp_dir/readiness-pickup-list.json" \
+  >"$temp_dir/readiness-mixed-skips-views/52.json"
+export FAKE_GH_LOG="$temp_dir/readiness-mixed-skips-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/readiness-mixed-skips-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/readiness-mixed-skips-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/readiness-mixed-skips-views"
+setup_copilot_env "readiness-mixed-skips"
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/readiness-mixed-skips.stdout" \
+  "$temp_dir/readiness-mixed-skips.stderr" 5
+status=$?
+set -e
+assert_equal "1" "$status" "a mixed blocked Pool exits nonzero"
+[[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
+  fail "a mixed blocked Pool started a session"
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.skipped") | .reason] ==
+    ["blocked_by_open_dependency: example/repo#50", "readiness_unprovable"])
+  and ([.[] | select(.type == "wrapper.pickup.bound")] | length == 0)
+  and ([.[] | select(.type == "wrapper.strike")] | length == 0)
+  and ([.[] | select(.type == "wrapper.iteration.end") | .outcome] ==
+    ["all_skipped"])
+  and (.[-1].type == "wrapper.run.end")
+  and (.[-1].outcome == "all_skipped")
+' "$temp_dir/readiness-mixed-skips.stdout" >/dev/null ||
+  fail "a mixed blocked Pool did not preserve the all-skipped ending"
 
 export FAKE_GH_LOG="$temp_dir/github-cap-gh.log"
 export FAKE_GH_LIST_COUNT="$temp_dir/github-cap-list.count"

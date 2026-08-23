@@ -57,6 +57,7 @@ __all__ = [
     "PICKUP_REASON_PRIORITY",
     "PICKUP_REASONS",
     "Admit",
+    "AdmissionRefusal",
     "reason_for",
     "SerialSkip",
     "SerialPickup",
@@ -91,10 +92,22 @@ PICKUP_REASONS: Final[tuple[str, ...]] = (
     PICKUP_REASON_PIN,
 )
 
-#: Whether one candidate may be bound. Returns the reason it may *not* be, or
-#: ``None`` to accept — so the common answer is the falsy one and a caller with
-#: no policy needs no callable at all.
-Admit = Callable[[AfkReadyItem], "str | None"]
+@dataclass(frozen=True)
+class AdmissionRefusal:
+    """Why a candidate cannot be bound, including its terminal classification.
+
+    ``reason`` is the operator-facing Pickup-skip payload.
+    ``waiting_on_blocker`` records a proved open native dependency without
+    asking a terminal caller to parse that payload.
+    """
+
+    reason: str
+    waiting_on_blocker: bool = False
+
+
+#: Whether one candidate may be bound. A string keeps simple admission policies
+#: ergonomic; :class:`AdmissionRefusal` carries terminal classification data.
+Admit = Callable[[AfkReadyItem], "str | AdmissionRefusal | None"]
 
 
 def _admit_everything(item: AfkReadyItem) -> str | None:
@@ -114,6 +127,7 @@ class SerialSkip:
     ref: int | str
     position: int
     reason: str
+    waiting_on_blocker: bool = False
 
 
 @dataclass(frozen=True)
@@ -226,7 +240,16 @@ def pick_serial(
                 skipped=tuple(skipped),
                 considered=tuple(considered),
             )
-        skipped.append(SerialSkip(ref=item.ref, position=position, reason=refusal))
+        if isinstance(refusal, str):
+            refusal = AdmissionRefusal(reason=refusal)
+        skipped.append(
+            SerialSkip(
+                ref=item.ref,
+                position=position,
+                reason=refusal.reason,
+                waiting_on_blocker=refusal.waiting_on_blocker,
+            )
+        )
     return SerialPickup(
         item=None,
         position=None,

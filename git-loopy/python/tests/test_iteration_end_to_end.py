@@ -3513,6 +3513,82 @@ def test_a_blocked_candidate_leaves_the_pool_whole_and_charges_no_strike(
     assert iteration_end["summary"]["strikes"] == 0
 
 
+def test_an_all_blocked_pool_ends_waiting_on_blockers(tmp_path, monkeypatch) -> None:
+    """A non-empty Pool with only proven open blockers is not all-skipped."""
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                blocked_by=BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+                ),
+            )
+        ],
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=5))
+    )
+
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    assert exit_code == loop_module.exit_code_for("all_blocked")
+    assert [event["type"] for event in events].count("wrapper.pickup.skipped") == 1
+    assert not any(event["type"] == "wrapper.pickup.bound" for event in events)
+    assert not any(event["type"] == "wrapper.strike" for event in events)
+    assert next(
+        event for event in events if event["type"] == "wrapper.iteration.end"
+    )["outcome"] == "all_blocked"
+    run_end = next(event for event in events if event["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "all_blocked"
+    assert run_end["iterations_run"] == 1
+
+
+def test_a_blocked_and_unroutable_pool_remains_all_skipped(
+    tmp_path, monkeypatch
+) -> None:
+    """Waiting must not hide a refusal an operator can repair."""
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                blocked_by=BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+                ),
+            ),
+            _dated(
+                31,
+                "2026-05-01T00:00:00Z",
+                labels=["ready-for-agent", "task-type:not-a-real-key"],
+            ),
+        ],
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=5))
+    )
+
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    assert exit_code == loop_module.exit_code_for("all_skipped")
+    skip_reasons = [
+        event["reason"]
+        for event in events
+        if event["type"] == "wrapper.pickup.skipped"
+    ]
+    assert skip_reasons[0] == "blocked_by_open_dependency: acme/widgets#93"
+    assert skip_reasons[1].startswith("routing refused:")
+    assert next(
+        event for event in events if event["type"] == "wrapper.run.end"
+    )["outcome"] == "all_skipped"
+
+
 def test_a_candidate_whose_blockers_all_closed_is_admitted_normally(
     tmp_path, monkeypatch
 ) -> None:

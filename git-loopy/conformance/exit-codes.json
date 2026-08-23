@@ -23,6 +23,11 @@
       "exit_code": 1
     },
     {
+      "id": "all-blocked-run-is-waiting",
+      "reason": "all_blocked",
+      "exit_code": 1
+    },
+    {
       "id": "preflight-failure-is-aborted",
       "reason": "preflight_failed",
       "exit_code": 1

@@ -812,7 +812,7 @@ git_loopy_exit_code_for() {
     empty_pool | iteration_cap)
       printf '0\n'
       ;;
-    stuck | all_skipped | preflight_failed)
+    stuck | all_skipped | all_blocked | preflight_failed)
       printf '1\n'
       ;;
     usage_error)
@@ -1939,18 +1939,18 @@ _GIT_LOOPY_PICKUP_REF=""
 _GIT_LOOPY_PICKUP_AT=""
 
 # What `git_loopy_pick_serial` reports back, named once so its caller branches on
-# a word rather than on a bare integer. `GIT_LOOPY_PICKUP_ALL_SKIPPED` is the one
-# status that is not a failure: the walk ran to the end of a non-empty Pool and
-# every candidate refused admission, which §10 gives its own Run ending rather
-# than letting it read as the exit-0 empty queue.
+# a word rather than on a bare integer. A completed walk distinguishes a Pool
+# waiting only on proved open blockers from one with a refusal an operator can
+# repair.
 GIT_LOOPY_PICKUP_UNBOUND=1
 GIT_LOOPY_PICKUP_ALL_SKIPPED=2
 GIT_LOOPY_PICKUP_EMIT_FAILED=3
+GIT_LOOPY_PICKUP_ALL_BLOCKED=4
 
 git_loopy_pick_serial() {
   local iteration="$1"
   local head ref observed_at readiness reason blockers event_reason label
-  local considered=0 position=0
+  local considered=0 position=0 all_waiting_on_blockers=1
   GIT_LOOPY_PICKUP_JSON='[]'
   _GIT_LOOPY_PICKUP_REF=""
   _GIT_LOOPY_PICKUP_AT=""
@@ -1972,6 +1972,8 @@ git_loopy_pick_serial() {
     if ! jq -e '.admissible' <<<"$readiness" >/dev/null; then
       reason="$(jq -r '.skip_reason' <<<"$readiness")" ||
         return "$GIT_LOOPY_PICKUP_UNBOUND"
+      [[ "$reason" == "blocked_by_open_dependency" ]] ||
+        all_waiting_on_blockers=0
       label="$ref"
       [[ "$ref" =~ ^[0-9]+$ ]] && label="#$ref"
       blockers="$(jq -r '.blockers | join(", ")' <<<"$readiness")" ||
@@ -2016,6 +2018,9 @@ git_loopy_pick_serial() {
     return 0
   done < <(jq -c '.[]' <<<"$GIT_LOOPY_POOL_JSON")
 
+  if ((all_waiting_on_blockers)); then
+    return "$GIT_LOOPY_PICKUP_ALL_BLOCKED"
+  fi
   return "$GIT_LOOPY_PICKUP_ALL_SKIPPED"
 }
 
@@ -3085,7 +3090,8 @@ git_loopy_run_discovery() {
     # exactly that issue. The prompt is one issue, not a menu.
     local pickup_status=0
     git_loopy_pick_serial "$iteration" || pickup_status=$?
-    if ((pickup_status == GIT_LOOPY_PICKUP_ALL_SKIPPED)); then
+    if ((pickup_status == GIT_LOOPY_PICKUP_ALL_SKIPPED ||
+      pickup_status == GIT_LOOPY_PICKUP_ALL_BLOCKED)); then
       # Wrapper contract §3.3/§10 — a non-empty Pool the Pickup could bind none
       # of is not the empty queue, and reporting it as one would end a Run
       # cleanly over a repository state nobody has finished with. It is terminal
@@ -3093,17 +3099,24 @@ git_loopy_run_discovery() {
       # and nothing inside the Run can change the next walk's answer, so
       # continuing would spend the whole Iteration budget reaching this same
       # ending. #443 owns what a Pool that is merely *waiting* should read as.
-      printf 'git-loopy: serial Pickup bound nothing: all %s candidate(s) in the Pool were skipped; this Iteration worked no issue.\n' \
-        "$pool_length" >&2
+      local terminal_outcome="all_skipped"
+      if ((pickup_status == GIT_LOOPY_PICKUP_ALL_BLOCKED)); then
+        terminal_outcome="all_blocked"
+        printf 'git-loopy: serial Pickup bound nothing: all %s candidate(s) in the Pool wait on open blockers; this Run is waiting on blockers.\n' \
+          "$pool_length" >&2
+      else
+        printf 'git-loopy: serial Pickup bound nothing: all %s candidate(s) in the Pool were skipped; this Iteration worked no issue.\n' \
+          "$pool_length" >&2
+      fi
       local iteration_end_payload
-      git_loopy_build_iteration_rollup 0 0 0 "$strikes" "all_skipped" || return 1
+      git_loopy_build_iteration_rollup 0 0 0 "$strikes" "$terminal_outcome" || return 1
       iteration_end_payload="$GIT_LOOPY_ITERATION_ROLLUP_JSON"
       git_loopy_emit_event \
         "${GIT_LOOPY_EVENT_TYPES[WRAPPER_ITERATION_END]}" \
         "$iteration" \
         "$iteration_end_payload" || return 1
       iterations_run="$iteration"
-      outcome="all_skipped"
+      outcome="$terminal_outcome"
       break
     fi
     ((pickup_status == GIT_LOOPY_PICKUP_EMIT_FAILED)) && return 1
@@ -3272,8 +3285,8 @@ git_loopy_run_discovery() {
     iteration_cap)
       exit_code="$(git_loopy_exit_code_for "iteration_cap")"
       ;;
-    all_skipped)
-      exit_code="$(git_loopy_exit_code_for "all_skipped")"
+    all_skipped | all_blocked)
+      exit_code="$(git_loopy_exit_code_for "$outcome")"
       ;;
     stuck)
       exit_code="$(git_loopy_exit_code_for "stuck")"

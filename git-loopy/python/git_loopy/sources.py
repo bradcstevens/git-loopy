@@ -58,7 +58,12 @@ from git_loopy.issue_order import (
     promote_pinned,
 )
 from git_loopy.issue_pin import PinnedIssue, refuse_pin
-from git_loopy.readiness import BlockedByRead, Readiness, decide_readiness
+from git_loopy.readiness import (
+    SKIP_BLOCKED_BY_OPEN_DEPENDENCY,
+    BlockedByRead,
+    Readiness,
+    decide_readiness,
+)
 from git_loopy.wrapper import (
     actionable_close_refs,
     exit_code_for,
@@ -464,6 +469,14 @@ def is_lane_candidate(candidate: PoolCandidate) -> bool:
         isinstance(candidate.ref, int)
         and LABEL_PARALLEL_SAFE in candidate.labels
         and decide_readiness(candidate.blocked_by).admissible
+    )
+
+
+def has_proven_open_blocker(candidate: PoolCandidate) -> bool:
+    """Return whether this candidate's carried read proves an open blocker."""
+    return (
+        decide_readiness(candidate.blocked_by).skip_reason
+        == SKIP_BLOCKED_BY_OPEN_DEPENDENCY
     )
 
 

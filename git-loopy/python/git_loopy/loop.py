@@ -175,6 +175,7 @@ from git_loopy.rolling_pool import RollingPool, is_parallel_safe
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.run_readback import run_start_payload
 from git_loopy.serial_pickup import (
+    AdmissionRefusal,
     SerialPickup,
     pick_serial,
     reason_for,
@@ -1150,12 +1151,7 @@ class _Loop:
                 # Not the empty-Pool outcome, and it must not be reported as
                 # one: there *was* work and none of it could be taken, which is
                 # a Run going nowhere rather than a Run that is finished.
-                self._diag.error(
-                    "serial Pickup bound nothing: all %d candidate(s) in the "
-                    "Pool were skipped; this Iteration worked no issue",
-                    len(pool),
-                )
-                return self._finish_unworked_iteration(iter_num)
+                return self._finish_unworked_iteration(iter_num, pickup)
             active = pickup.item
             resolution = self._routes[active.ref]
             model, reasoning_effort = resolution.model, resolution.reasoning_effort
@@ -1645,7 +1641,7 @@ class _Loop:
         """
         self._routes = {}
 
-        def admit(item: AfkReadyItem) -> str | None:
+        def admit(item: AfkReadyItem) -> str | AdmissionRefusal | None:
             defeated = self._attempts.defeated_by(item.ref)
             if defeated is not None:
                 # The **Attempt lifecycle** filter (#412), asked before routing
@@ -1664,7 +1660,10 @@ class _Loop:
             if not verdict.admissible:
                 assert verdict.skip_reason is not None
                 if verdict.blockers:
-                    return f"{verdict.skip_reason}: {', '.join(verdict.blockers)}"
+                    return AdmissionRefusal(
+                        reason=f"{verdict.skip_reason}: {', '.join(verdict.blockers)}",
+                        waiting_on_blocker=True,
+                    )
                 return verdict.skip_reason
             try:
                 resolution = self._resolve_route(
@@ -1712,15 +1711,17 @@ class _Loop:
             )
         return pickup
 
-    def _finish_unworked_iteration(self, iter_num: int) -> tuple[str, int, int]:
+    def _finish_unworked_iteration(
+        self, iter_num: int, pickup: SerialPickup
+    ) -> tuple[str, int, int]:
         """End the Run on an Iteration whose **Pickup** bound nothing (#413).
 
         Reached only when a non-empty Pool's every candidate was skipped. It is
         deliberately not the ``empty_pool`` outcome: that one exits the Run 0
         because there is no work, and reporting "I could not take any of it" the
-        same way would end a Run cleanly over a repairable tracker state. So it
-        has its own **Run outcome** and its own non-zero exit reason,
-        ``all_skipped``.
+        same way would end a Run cleanly over a repairable tracker state. It
+        therefore ends as ``all_skipped``, unless every refusal proves an open
+        native blocker, in which case it ends as ``all_blocked``.
 
         Terminating here rather than recording a **Strike** and carrying on is
         what stops the livelock #413 opened. Once the ceiling counts *skipped
@@ -1732,8 +1733,26 @@ class _Loop:
         the next Iteration could differ: the lifecycle is monotonic and the Pool
         is re-read from a tracker no session is touching.
         """
-        self._finish_iteration(iter_num, outcome="all_skipped")
-        return ("all_skipped", 0, 0)
+        assert pickup.skipped
+        outcome = (
+            "all_blocked"
+            if all(skip.waiting_on_blocker for skip in pickup.skipped)
+            else "all_skipped"
+        )
+        if outcome == "all_blocked":
+            self._diag.error(
+                "serial Pickup bound nothing: all %d candidate(s) in the Pool "
+                "wait on open blockers; this Run is waiting on blockers",
+                len(pickup.considered),
+            )
+        else:
+            self._diag.error(
+                "serial Pickup bound nothing: all %d candidate(s) in the Pool "
+                "were skipped; this Iteration worked no issue",
+                len(pickup.considered),
+            )
+        self._finish_iteration(iter_num, outcome=outcome)
+        return (outcome, 0, 0)
 
     def _infer_active_binding(
         self,
@@ -2024,15 +2043,15 @@ class _Loop:
                         outcome_label = "empty_pool"
                         exit_code = exit_code_for("empty_pool")
                         break
-                    if outcome == "all_skipped":
+                    if outcome in {"all_skipped", "all_blocked"}:
                         # #413: there *was* work and none of it could be taken.
                         # Distinct from `empty_pool` (which exits 0) because a
                         # Run that gave up is not a Run that finished, and
                         # distinct from `stuck` because the ceiling was never
                         # reached — a single defeated issue ends a Run whose
                         # Pool held only that one.
-                        outcome_label = "all_skipped"
-                        exit_code = exit_code_for("all_skipped")
+                        outcome_label = outcome
+                        exit_code = exit_code_for(outcome)
                         break
                     if outcome == "aborted":
                         outcome_label = "stuck"
@@ -2276,6 +2295,10 @@ class _ParallelLoop:
         # Parallel mode degrades entirely to the serial path (`drive`).
         self._pool: RollingPool | None = None
         self._scheduler: rolling_scheduler.RollingScheduler | None = None
+        # A Lane routing refusal is a **Pickup skip**, not a fatal worker
+        # exception. Keep the candidate cached but ineligible for this Run so
+        # the terminal classifier can honestly report all_skipped.
+        self._rolling_refused: set[int | str] = set()
         # Bounded adaptive Lane concurrency (#219 §6, #309). The **Lane cap**
         # is a safety ceiling, not a utilization promise: under sustained
         # **Integration** backpressure, 429s, AI-credit or host/setup pressure,
@@ -2419,7 +2442,11 @@ class _ParallelLoop:
         head) was never in the guard, and nothing else would stop a Lane
         reserving it once concurrency recovered.
         """
-        return self._lane_candidate_cacheable(candidate) and is_lane_candidate(candidate)
+        return (
+            candidate.ref not in self._rolling_refused
+            and self._lane_candidate_cacheable(candidate)
+            and is_lane_candidate(candidate)
+        )
 
     def _alloc_iter_num(self) -> int:
         """Allocate the next Run-wide sequence number for session tagging.
@@ -2579,8 +2606,8 @@ class _ParallelLoop:
             )
             if outcome == "empty_pool":
                 return "empty_pool", exit_code_for("empty_pool"), iter_num
-            if outcome == "all_skipped":
-                return "all_skipped", exit_code_for("all_skipped"), iter_num
+            if outcome in {"all_skipped", "all_blocked"}:
+                return outcome, exit_code_for(outcome), iter_num
             if outcome == "aborted":
                 return "stuck", exit_code_for("stuck"), iter_num
 
@@ -2681,7 +2708,7 @@ class _ParallelLoop:
                         # let a Parallel-mode Run emit the abort Event and then
                         # grant itself serial Iterations forever.
                         scheduler.strike_limit_reached()
-                    if outcome == "all_skipped":
+                    if outcome in {"all_skipped", "all_blocked"}:
                         # #413, and terminal *here* rather than latched for the
                         # idle-check, because the scheduler grants a serial turn
                         # only once every Lane has drained (`quiescent`): a
@@ -2692,8 +2719,8 @@ class _ParallelLoop:
                         # candidates for as long as the Run has units, which is
                         # the livelock this outcome exists to end.
                         return (
-                            "all_skipped",
-                            exit_code_for("all_skipped"),
+                            outcome,
+                            exit_code_for(outcome),
                             scheduler._units_spent,
                         )
                     # An `empty_pool` outcome is deliberately NOT terminal here:
@@ -2722,10 +2749,19 @@ class _ParallelLoop:
                         exit_code_for("iteration_cap"),
                         scheduler._units_spent,
                     )
-                if serial_pool_seen and scheduler.confirm_empty():
+                # The terminal read is authoritative for the Lane half. A
+                # candidate that became Ready while another Lane ran makes its
+                # classifier return ``None``, so the driver reserves it rather
+                # than reporting a stale all-blocked/all-skipped outcome.
+                terminal_outcome = (
+                    scheduler.confirm_terminal_outcome()
+                    if serial_pool_seen
+                    else None
+                )
+                if terminal_outcome is not None:
                     return (
-                        "empty_pool",
-                        exit_code_for("empty_pool"),
+                        terminal_outcome,
+                        exit_code_for(terminal_outcome),
                         scheduler._units_spent,
                     )
                 if not serial_pool_seen:
@@ -3059,8 +3095,9 @@ class _ParallelLoop:
         except TaskTypeError as exc:
             self._diag.error("lane #%s routing refused: %s", ref, exc)
             passed_over(f"routing refused: {exc}")
+            self._rolling_refused.add(ref)
             scheduler.release(reservation)
-            raise
+            return
 
         # The **Task-type classifier**'s second call site (#409, ADR-0029),
         # through the same shared seam. Deliberately *after* the refusal above:

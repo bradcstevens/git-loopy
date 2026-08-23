@@ -1402,6 +1402,7 @@ function Get-GitLoopyExitCode {
         "iteration_cap" { return 0 }
         "stuck" { return 1 }
         "all_skipped" { return 1 }
+        "all_blocked" { return 1 }
         "preflight_failed" { return 1 }
         "usage_error" { return 2 }
         default { throw "Unknown Run exit reason: $Reason" }
@@ -3161,7 +3162,7 @@ function Get-GitLoopyCurrentIterationRollup {
 # It does not sort. Order is decided at the read (§3.2), and re-deciding it here
 # would be a second implementation of the one decision
 # `conformance/issue-ordering.json` exists to keep single.
-$script:GitLoopySerialPickupAllSkipped = $false
+$script:GitLoopySerialPickupTerminalOutcome = $null
 function Select-GitLoopySerialPickup {
     [CmdletBinding()]
     param(
@@ -3177,11 +3178,12 @@ function Select-GitLoopySerialPickup {
     )
 
     $Items = @($Pool)
-    $script:GitLoopySerialPickupAllSkipped = $false
+    $script:GitLoopySerialPickupTerminalOutcome = $null
     if ($Items.Count -eq 0) {
         return @()
     }
     [int]$Position = 0
+    $AllWaitingOnBlockers = $true
     foreach ($Head in $Items) {
         $Position += 1
         $Ref = if ($Head.Contains("number")) {
@@ -3195,6 +3197,9 @@ function Select-GitLoopySerialPickup {
             -IssueSource $IssueSource
         if (-not $Readiness["admissible"]) {
             $Reason = [string]$Readiness["skip_reason"]
+            if ($Reason -cne "blocked_by_open_dependency") {
+                $AllWaitingOnBlockers = $false
+            }
             $Blockers = [string]::Join(", ", @($Readiness["blockers"]))
             $EventReason = if ([string]::IsNullOrEmpty($Blockers)) {
                 $Reason
@@ -3249,7 +3254,12 @@ function Select-GitLoopySerialPickup {
         )
         return @($Head)
     }
-    $script:GitLoopySerialPickupAllSkipped = $true
+    $script:GitLoopySerialPickupTerminalOutcome = if ($AllWaitingOnBlockers) {
+        "all_blocked"
+    }
+    else {
+        "all_skipped"
+    }
     return @()
 }
 
@@ -4263,7 +4273,8 @@ function Invoke-GitLoopyDiscoveryLoop {
             -Iteration $Iteration `
             -Pool $Pool `
             -IssueSource $Config.IssueSource)
-        if ($PickedPool.Count -eq 0 -and $script:GitLoopySerialPickupAllSkipped) {
+        if ($PickedPool.Count -eq 0 -and
+            $null -ne $script:GitLoopySerialPickupTerminalOutcome) {
             # Wrapper contract §3.3/§10 — a non-empty Pool the Pickup could bind
             # none of is not the empty queue, and reporting it as one would end a
             # Run cleanly over a repository state nobody has finished with. It is
@@ -4272,22 +4283,32 @@ function Invoke-GitLoopyDiscoveryLoop {
             # walk's answer, so continuing would spend the whole Iteration budget
             # reaching this same ending. #443 owns what a Pool that is merely
             # *waiting* should read as.
-            [Console]::Error.WriteLine(
-                "git-loopy: serial Pickup bound nothing: all $($Pool.Count) " +
-                "candidate(s) in the Pool were skipped; this Iteration worked " +
-                "no issue."
-            )
+            $TerminalOutcome = $script:GitLoopySerialPickupTerminalOutcome
+            if ($TerminalOutcome -ceq "all_blocked") {
+                [Console]::Error.WriteLine(
+                    "git-loopy: serial Pickup bound nothing: all $($Pool.Count) " +
+                    "candidate(s) in the Pool wait on open blockers; this Run is " +
+                    "waiting on blockers."
+                )
+            }
+            else {
+                [Console]::Error.WriteLine(
+                    "git-loopy: serial Pickup bound nothing: all $($Pool.Count) " +
+                    "candidate(s) in the Pool were skipped; this Iteration worked " +
+                    "no issue."
+                )
+            }
             $Rollup = Get-GitLoopyCurrentIterationRollup `
                 -FinishedMonotonic (Get-GitLoopyMonotonicSeconds) `
                 -Strikes $Strikes `
-                -TerminalOutcome "all_skipped"
+                -TerminalOutcome $TerminalOutcome
             Write-GitLoopyEvent `
                 -Context $Context `
                 -Type $EventTypes["WRAPPER_ITERATION_END"] `
                 -Iteration $Iteration `
                 -Payload $Rollup
             $IterationsRun = $Iteration
-            $Outcome = "all_skipped"
+            $Outcome = $TerminalOutcome
             break
         }
 
@@ -4489,8 +4510,8 @@ function Invoke-GitLoopyDiscoveryLoop {
     if ($Outcome -ceq "stuck") {
         return Get-GitLoopyExitCode -Reason "stuck"
     }
-    if ($Outcome -ceq "all_skipped") {
-        return Get-GitLoopyExitCode -Reason "all_skipped"
+    if ($Outcome -ceq "all_skipped" -or $Outcome -ceq "all_blocked") {
+        return Get-GitLoopyExitCode -Reason $Outcome
     }
     return Get-GitLoopyExitCode -Reason "iteration_cap"
 }

@@ -342,7 +342,8 @@ non-zero.
 | `0` | Clean — Pool empty | An Iteration's collection finds no `ready-for-agent` issues. |
 | `0` | Clean — cap reached | The optional iteration cap `N` is reached. |
 | `1` | Aborted — stuck | `GIT_LOOPY_MAX_NMT_STRIKES` consecutive no-progress Iterations. |
-| `1` | Aborted — all skipped | A **Pickup** walked a non-empty Pool and could bind none of it — today, every candidate **Blocked** by an open `blocked_by` dependency. Deliberately not the exit-`0` empty Pool: "there is nothing to do" and "I could not take any of what there is" are different facts. |
+| `1` | Aborted — all skipped | A **Pickup** walked a non-empty Pool and could bind none of it for a reason an operator can repair. Deliberately not the exit-`0` empty Pool: "there is nothing to do" and "I could not take any of what there is" are different facts. |
+| `1` | Waiting — all blocked | Every Pickup refusal proved an open native `blocked_by` dependency. The distinct `all_blocked` reason lets an operator wait for dependency closure rather than repair the Pool. |
 | `1` | Aborted — preflight | A precondition failed before the first Iteration (unauthenticated `gh`, `gh` older than 2.94.0 and so unable to read `blockedBy`, missing `docs/agents/issue-tracker.md`, missing `copilot`, …). |
 | `2` | Usage error | Malformed invocation (e.g. a non-numeric iteration cap). |
 

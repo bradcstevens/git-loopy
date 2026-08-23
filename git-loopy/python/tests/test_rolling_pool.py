@@ -415,6 +415,92 @@ class TestTake:
         assert source.pickup_calls == []
 
 
+class TestTerminalOutcome:
+    def test_a_complete_pool_of_open_blockers_ends_waiting_on_blockers(self) -> None:
+        """A waiting cache is neither empty nor a reason to poll indefinitely."""
+        from git_loopy.rolling_pool import is_parallel_safe
+        from git_loopy.sources import is_lane_candidate
+
+        blocked = _candidate(
+            31,
+            blocked_by=BlockedByRead(
+                total_count=1,
+                nodes=(BlockerNode(ref="x/y#7", state="open"),),
+            ),
+        )
+        source = ScriptedSource(
+            [MembershipSnapshot(candidates=(blocked,), complete=True)]
+        )
+        pool = _pool(
+            source,
+            eligible=is_lane_candidate,
+            cacheable=is_parallel_safe,
+        )
+        pool.start()
+
+        assert pool.confirm_terminal_outcome() == "all_blocked"
+        assert source.membership_calls == 2
+
+    def test_an_unprovable_read_keeps_a_waiting_pool_all_skipped(self) -> None:
+        """A dependency read failure is an actionable refusal, not a wait."""
+        from git_loopy.rolling_pool import is_parallel_safe
+        from git_loopy.sources import is_lane_candidate
+
+        source = ScriptedSource(
+            [
+                MembershipSnapshot(
+                    candidates=(
+                        _candidate(
+                            31,
+                            blocked_by=BlockedByRead(
+                                total_count=1,
+                                nodes=(BlockerNode(ref="x/y#7", state="open"),),
+                            ),
+                        ),
+                        _candidate(7, blocked_by=BlockedByRead.unprovable()),
+                    ),
+                    complete=True,
+                )
+            ]
+        )
+        pool = _pool(
+            source,
+            eligible=is_lane_candidate,
+            cacheable=is_parallel_safe,
+        )
+        pool.start()
+
+        assert pool.confirm_terminal_outcome() == "all_skipped"
+
+    def test_a_final_refresh_that_finds_ready_work_is_not_terminal(self) -> None:
+        """A blocker may close while another Lane is finishing."""
+        from git_loopy.rolling_pool import is_parallel_safe
+        from git_loopy.sources import is_lane_candidate
+
+        blocked = _candidate(
+            31,
+            blocked_by=BlockedByRead(
+                total_count=1,
+                nodes=(BlockerNode(ref="x/y#7", state="open"),),
+            ),
+        )
+        source = ScriptedSource(
+            [
+                MembershipSnapshot(candidates=(blocked,), complete=True),
+                MembershipSnapshot(candidates=(_candidate(31),), complete=True),
+            ]
+        )
+        pool = _pool(
+            source,
+            eligible=is_lane_candidate,
+            cacheable=is_parallel_safe,
+        )
+        pool.start()
+
+        assert pool.confirm_terminal_outcome() is None
+        assert pool.candidate_refs == (31,)
+
+
 # --------------------------------------------------------------------------- #
 # Unmet-demand refresh triggering + backoff (#219 §2.2-2.7)                    #
 # --------------------------------------------------------------------------- #

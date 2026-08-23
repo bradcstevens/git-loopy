@@ -4644,8 +4644,8 @@ Start-Sleep -Seconds $Sleep
         "--json number,title,body,labels,state,url,createdAt,blockedBy"
     ) "collection requests blockers from the one shallow field set"
 
-    # A non-empty Pool whose candidates are all blocked ends as all_skipped
-    # rather than consuming the configured iteration budget.
+    # A non-empty Pool whose candidates all name open blockers ends waiting on
+    # blockers rather than consuming the configured iteration budget.
     $AllBlockedRows = @($ReadinessRows[0])
     $AllBlockedList = Join-Path $TempDir "readiness-all-blocked-list.json"
     [IO.File]::WriteAllText(
@@ -4685,14 +4685,14 @@ Start-Sleep -Seconds $Sleep
             $_["type"] -ceq "wrapper.iteration.end"
         }
     )
-    Assert-Equal "all_skipped" $AllBlockedIteration[0]["outcome"] (
-        "all-blocked Iteration reports all_skipped"
+    Assert-Equal "all_blocked" $AllBlockedIteration[0]["outcome"] (
+        "all-blocked Iteration reports all_blocked"
     )
     $AllBlockedRun = @(
         $AllBlockedEvents | Where-Object { $_["type"] -ceq "wrapper.run.end" }
     )
-    Assert-Equal "all_skipped" $AllBlockedRun[0]["outcome"] (
-        "all-blocked Run reports all_skipped"
+    Assert-Equal "all_blocked" $AllBlockedRun[0]["outcome"] (
+        "all-blocked Run reports all_blocked"
     )
     Assert-Equal 1 $AllBlockedRun[0]["iterations_run"] (
         "all-blocked Pool stops after one Iteration"
@@ -4701,8 +4701,70 @@ Start-Sleep -Seconds $Sleep
         "all-blocked Pool starts no agent session"
     )
     Assert-Contains ([IO.File]::ReadAllText($AllBlockedStderr)) (
-        "all 1 candidate(s) in the Pool were skipped"
-    ) "the all-blocked ending tells the operator how much it passed over"
+        "waiting on blockers"
+    ) "the all-blocked ending tells the operator why work did not start"
+
+    # A read that cannot prove readiness is not a blocker wait. Mixing it with
+    # a proven blocker retains all_skipped so an operator-facing repair is not
+    # hidden behind the waiting outcome.
+    $MixedRows = @(
+        $ReadinessRows[0],
+        [ordered]@{
+            number = 52
+            title = "Unreadable readiness"
+            body = $ReadinessBody
+            labels = @([ordered]@{ name = "ready-for-agent" })
+            state = "OPEN"
+            url = "https://github.com/acme/widgets/issues/52"
+            createdAt = "2026-01-02T00:00:00Z"
+            blockedBy = [ordered]@{ totalCount = 1; nodes = @() }
+            comments = @()
+        }
+    )
+    $MixedList = Join-Path $TempDir "readiness-mixed-skips-list.json"
+    [IO.File]::WriteAllText(
+        $MixedList,
+        ($MixedRows | ConvertTo-Json -Depth 10 -AsArray)
+    )
+    [IO.File]::WriteAllText(
+        (Join-Path $ReadinessViews "52.json"),
+        ($MixedRows[1] | ConvertTo-Json -Depth 10)
+    )
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "readiness-mixed-skips-list.count"
+    $env:FAKE_GH_LIST_JSON = $MixedList
+    Set-CopilotEnv -Prefix "readiness-mixed-skips"
+    $MixedStdout = Join-Path $TempDir "readiness-mixed-skips.stdout"
+    $MixedStderr = Join-Path $TempDir "readiness-mixed-skips.stderr"
+    $MixedStatus = Invoke-Entrypoint `
+        -Repo $ReadinessRepo `
+        -FakeBin $ReadinessBin `
+        -StdoutPath $MixedStdout `
+        -StderrPath $MixedStderr `
+        -Arguments @("5")
+    Assert-Equal 1 $MixedStatus "mixed blocked Pool exits nonzero"
+    $MixedEvents = Read-Events -Path $MixedStdout
+    $MixedSkipReasons = @(
+        $MixedEvents |
+            Where-Object { $_["type"] -ceq "wrapper.pickup.skipped" } |
+            ForEach-Object { $_["reason"] }
+    )
+    Assert-Equal 2 $MixedSkipReasons.Count "mixed blocked Pool emits both skips"
+    Assert-Equal "blocked_by_open_dependency: acme/widgets#93" $MixedSkipReasons[0] (
+        "mixed blocked Pool names the proved blocker"
+    )
+    Assert-Equal "readiness_unprovable" $MixedSkipReasons[1] (
+        "mixed blocked Pool preserves the unreadable readiness refusal"
+    )
+    Assert-Equal "all_skipped" @(
+        $MixedEvents |
+            Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )[0]["outcome"] "mixed blocked Iteration remains all_skipped"
+    Assert-Equal "all_skipped" @(
+        $MixedEvents | Where-Object { $_["type"] -ceq "wrapper.run.end" }
+    )[0]["outcome"] "mixed blocked Run remains all_skipped"
+    Assert-True (-not [IO.File]::Exists($env:FAKE_COPILOT_CALLS)) (
+        "mixed blocked Pool starts no agent session"
+    )
 }
 finally {
     foreach ($Name in @(

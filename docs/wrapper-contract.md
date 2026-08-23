@@ -534,6 +534,7 @@ error (exit `2`).
 | `0`  | Clean — cap reached  | The optional iteration cap `N` (§9) is reached.                      |
 | `1`  | Aborted — stuck      | The `GIT_LOOPY_MAX_NMT_STRIKES` Strike ceiling is spent (§6).        |
 | `1`  | Aborted — all skipped | A Pickup found the Pool non-empty and could bind none of it (§14.3). |
+| `1`  | Waiting — all blocked | Every Pickup refusal proved an open native blocker (§3.3.1).         |
 | `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1).      |
 | `2`  | Usage error          | Malformed invocation (e.g. non-numeric iteration cap, §9).           |
 
@@ -546,6 +547,14 @@ terminal reason of its own, a Run every one of whose candidates is defeated woul
 same Pool for as long as its Iteration cap allowed. A Runner without a Pickup never reaches this
 reason and is not required to name it beyond mapping it (§10 is the family-wide termination
 matrix that `conformance/exit-codes.json` pins for every member).
+
+`all_blocked` is terminal on the same evidence: a Run cannot close a blocker without first
+starting work, and no candidate can start. It deliberately shares exit `1` with `all_skipped`.
+Both leave work unfinished, so an unattended caller must not treat either as the clean,
+exit-`0` empty Pool; the distinct reason is the actionable branch for a caller that can wait for
+dependency closure instead of repairing a refusal. `all_blocked` applies only when every skipped
+candidate proves an open dependency. A mixed Pool remains `all_skipped`, so waiting never hides
+work an operator can fix.
 
 ## 11. Environment-variable surface (MUST honour the phase-1 core)
 

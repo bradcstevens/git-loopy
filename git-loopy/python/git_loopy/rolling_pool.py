@@ -61,6 +61,7 @@ from git_loopy.sources import (
     PICKUP_VALIDATED,
     PoolCandidate,
     RollingIssueSource,
+    has_proven_open_blocker,
 )
 
 __all__ = [
@@ -328,12 +329,24 @@ class RollingPool:
             candidate is not dispatchable, but its preserved cache entry keeps
             its readiness unknown to the terminal decision.
         """
+        return self.confirm_terminal_outcome() == "empty_pool"
+
+    def confirm_terminal_outcome(self) -> str | None:
+        """Classify a quiescent cache from one authoritative Membership read.
+
+        A complete cache with no survivors is empty. A complete cache whose
+        survivors all prove an open native blocker is waiting on blockers. Any
+        unreadable or unprovable records make the Pool ``all_skipped``: they
+        are a refusal an operator can repair, not a reason to keep polling.
+        Incomplete and quarantined reads remain non-terminal because the Run
+        has no complete fact to report.
+        """
         snapshot = self._refresh_now()
         if not snapshot.complete:
             self.diag.warning(
                 "final Pool refresh was incomplete; not claiming an empty Pool"
             )
-            return False
+            return None
         if any(entry.quarantined for entry in self._entries):
             self.diag.warning(
                 "unresolved candidates remain (%s); not claiming an empty Pool",
@@ -341,8 +354,17 @@ class RollingPool:
                     str(e.candidate.ref) for e in self._entries if e.quarantined
                 ),
             )
-            return False
-        return not self._entries
+            return None
+        if not self._entries:
+            return "empty_pool"
+        if any(
+            not entry.quarantined and self.eligible(entry.candidate)
+            for entry in self._entries
+        ):
+            return None
+        if all(has_proven_open_blocker(entry.candidate) for entry in self._entries):
+            return "all_blocked"
+        return "all_skipped"
 
     def _refresh_now(self) -> MembershipSnapshot:
         """Force one refresh regardless of the backoff window."""

@@ -761,6 +761,10 @@ class RollingScheduler:
         """
         return self.pool.confirm_empty()
 
+    def confirm_terminal_outcome(self) -> str | None:
+        """Return the authoritative terminal reason for the Lane half of the Pool."""
+        return self.pool.confirm_terminal_outcome()
+
     def _finalize(self, contribution: Contribution, *, reason: str) -> None:
         """Close a contribution exactly once and record its Strike reaction."""
         contribution.published = reason == REASON_PUBLISHED
