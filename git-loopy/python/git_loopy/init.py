@@ -564,7 +564,7 @@ def _validate_skill_policy(
     if discoverer is not None:
         options["discoverer"] = discoverer
     try:
-        skillscmd.validate_skill_policy(
+        skillscmd.validate_skill_policy_for_scope(
             enabled,
             scope=scope,
             repo_root=repo_root,

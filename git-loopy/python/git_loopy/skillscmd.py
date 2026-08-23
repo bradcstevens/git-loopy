@@ -751,7 +751,7 @@ def _validate_policy(
     )
 
 
-def validate_skill_policy(
+def validate_skill_policy_for_scope(
     enabled: Iterable[str],
     *,
     scope: str,
@@ -764,14 +764,20 @@ def validate_skill_policy(
     installed_skills_dir: Path | None = None,
     legacy_denied: Iterable[str] = (),
 ) -> tuple[str, ...]:
-    """Resolve a policy the caller already holds, without collecting one.
+    """Resolve a policy the caller already holds, collecting its context here.
 
     The companion to :func:`collect_skill_policy` for a caller that obtained a
     proposed policy some other way — ``init``'s injected wizard runner is free
     to return an answer set it never routed through the picker, and ADR-0015's
-    closed world has to hold for that answer set too. Both functions resolve
-    through the same :func:`_validate_policy`, so neither can drift into a
-    second opinion about what a valid policy is.
+    closed world has to hold for that answer set too.
+
+    Distinct from :func:`validate_skill_policy`, which takes a
+    :class:`SkillPolicyCollection` the caller already holds and so validates
+    against *that* collection's evidence. This one has no collection, so it
+    discovers the context itself from ``scope`` — which is why it cannot be the
+    same function, and why the two names differ rather than overloading one.
+    Both resolve through the same :func:`_validate_policy`, so neither can drift
+    into a second opinion about what a valid policy is.
 
     Raises any member of :data:`SKILL_POLICY_FAILURES` when the policy cannot
     be resolved, and returns the policy unchanged when it can.
