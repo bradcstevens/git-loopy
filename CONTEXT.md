@@ -565,7 +565,7 @@ _Avoid_: release train, dev branch, version series.
 How much of the **Release version** one issue moves — `major`, `minor`, `patch`, or
 `none` — carried by a closed `semver:` label an agent infers at **Pickup** and writes
 back. A `none` advances nothing; an *absent* label is an unclassified issue, which is
-a fault rather than a fourth answer.
+a fault rather than a fifth answer.
 _Avoid_: version label, severity, impact, semver level.
 
 **Promotion**:

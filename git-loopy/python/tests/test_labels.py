@@ -398,6 +398,21 @@ def test_bootstrap_matches_an_existing_label_case_insensitively(tmp_path: Path) 
     assert result.existing == ("wontfix",)
 
 
+def test_bootstrap_reports_a_recased_bump_class_label(tmp_path: Path) -> None:
+    """Exact bump-class matching cannot treat ``semver:Minor`` as provisioned."""
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    client = _FakeLabelClient("semver:Minor")
+
+    result = labels_module.bootstrap_labels(vocabulary, client)
+
+    assert "semver:minor" not in result.created
+    assert "semver:minor" not in result.existing
+    assert result.unavailable == (
+        "tracker carries non-canonical semver: label 'semver:Minor'; "
+        "expected 'semver:minor'"
+    )
+
+
 def test_bootstrap_reports_an_unreachable_tracker_without_raising(
     tmp_path: Path,
 ) -> None:

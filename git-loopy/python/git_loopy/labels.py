@@ -333,7 +333,9 @@ def bootstrap_labels(
     raises — both come back as :attr:`LabelBootstrap.unavailable`.
     """
     try:
-        present = {name.casefold() for name in client.label_list()}
+        present = {
+            name.casefold(): name for name in client.label_list()
+        }
     except Exception as exc:  # noqa: BLE001 - any backend failure is "unavailable"
         return LabelBootstrap(unavailable=_reason(exc))
 
@@ -342,6 +344,7 @@ def bootstrap_labels(
     # already carried look missing in the report.
     existing: list[str] = []
     absent: list[LabelSpec] = []
+    noncanonical_semver: list[tuple[str, str]] = []
     seen: set[str] = set()
     for spec in vocabulary:
         folded = spec.name.casefold()
@@ -349,7 +352,14 @@ def bootstrap_labels(
             continue
         seen.add(folded)
         if folded in present:
-            existing.append(spec.name)
+            actual = present[folded]
+            if (
+                spec.name.startswith(BUMP_CLASS_LABEL_PREFIX)
+                and actual != spec.name
+            ):
+                noncanonical_semver.append((actual, spec.name))
+            else:
+                existing.append(spec.name)
         else:
             absent.append(spec)
 
@@ -364,6 +374,16 @@ def bootstrap_labels(
                 unavailable=_reason(exc),
             )
         created.append(spec.name)
+    if noncanonical_semver:
+        actual, expected = noncanonical_semver[0]
+        return LabelBootstrap(
+            created=tuple(created),
+            existing=tuple(existing),
+            unavailable=(
+                f"tracker carries non-canonical semver: label {actual!r}; "
+                f"expected {expected!r}"
+            ),
+        )
     return LabelBootstrap(created=tuple(created), existing=tuple(existing))
 
 
