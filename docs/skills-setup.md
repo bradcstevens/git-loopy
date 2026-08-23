@@ -51,7 +51,8 @@ When using the repository as a project scaffold, clone it, drop its history,
 and start your own:
 
 ```bash
-git clone https://github.com/bradcstevens/git-loopy my-project
+# Start from the published v0.9.0 Release.
+git clone --branch v0.9.0 --depth 1 https://github.com/bradcstevens/git-loopy my-project
 cd my-project
 rm -rf .git
 git init && git add -A && git commit -m "Initialize project from git-loopy"

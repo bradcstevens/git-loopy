@@ -106,7 +106,8 @@ reuse the single shared [`git-loopy/PROMPT.md`](../PROMPT.md).
 ### Run in place (baseline)
 
 ```bash
-git clone https://github.com/bradcstevens/git-loopy
+# Clone the published v0.9.0 Release.
+git clone --branch v0.9.0 --depth 1 https://github.com/bradcstevens/git-loopy
 # From inside the git repository you want to work (issues labeled ready-for-agent):
 bash /path/to/git-loopy/shell/git-loopy.sh
 ```
@@ -125,6 +126,13 @@ bash git-loopy/shell/git-loopy.sh
 launcher shim on your `PATH` that runs this clone's `git-loopy.sh`, and the
 `git-loopy-tui` helper this clone's Release pins, staged into
 `.git-loopy/bin/` where the Orchestrator looks for it first.
+
+The clone command above is a **v0.9.0 Release** install, so
+`git-loopy --version` reports `git-loopy 0.9.0`. To install another named
+Release, replace `v0.9.0` with its published tag. Pinning a full unreleased
+commit SHA instead is an **Edge install**: identify it by that SHA, not by the
+source `VERSION` value. See the root
+[installation channels](../../README.md#installation-identity-and-channels).
 
 ```bash
 bash git-loopy/shell/install.sh              # -> ~/.local/bin/git-loopy
