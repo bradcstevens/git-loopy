@@ -98,7 +98,7 @@ def test_explicit_request_without_textual_warns_and_falls_back() -> None:
         _resolve(flag=True, textual_importable=False, warnings=warnings) is False
     )
     assert len(warnings) == 1
-    assert "tui" in warnings[0].lower()
+    assert "textual" in warnings[0].lower()
 
 
 def test_env_request_without_textual_warns_and_falls_back() -> None:

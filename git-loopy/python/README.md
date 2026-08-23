@@ -36,8 +36,7 @@ uv sync --project git-loopy/python
 # Optional: install the OpenTelemetry extra to enable opt-in tracing.
 uv sync --project git-loopy/python --extra otel
 
-# Optional: install the interactive TUI extra (live dashboard + Stop).
-uv sync --project git-loopy/python --extra tui
+# Textual is installed as a base dependency (live dashboard + Stop).
 ```
 
 **Requires:** Python **≥ 3.11** on PATH, and either
@@ -118,7 +117,7 @@ The wizard:
   only **global** is available.
 - **Always writes `config.toml`** to that scope with your chosen `model` /
   `reasoning_effort`, seeded from the same live model list the `--select-model`
-  picker uses, rendered as a plain numbered list (no `[tui]` extra required).
+  picker uses, rendered as a plain numbered list when stdout is not a terminal.
 - **Installs the workflow Skill catalog first**, before collecting anything —
   because the **Skill policy** you are about to choose is a choice among the
   installed catalog. It clones
