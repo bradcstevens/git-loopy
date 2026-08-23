@@ -2948,6 +2948,200 @@ def test_parallel_loop_reclaims_the_placeholder_a_substituted_host_did_not_use(
 
 
 @dataclass
+class _RemoteBranchExecutionHost:
+    """A host double whose completed branches must be fetched before Integration."""
+
+    git: FakeGitClient
+    placement: Placement = "github-actions"
+    isolation_grade: IsolationGrade = "machine boundary"
+    capacity: int = 4
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        ref = f"refs/heads/host/contribution/issue-{request.issue_ref}"
+        source = self.git.add_worktree(
+            self.git.root / f"host-source-{request.issue_ref}",
+            branch=f"host/source/issue-{request.issue_ref}",
+            base=request.base_revision,
+        )
+        source.simulate_agent_commit(
+            subject=f"feat: remote issue {request.issue_ref}",
+            body=f"Closes #{request.issue_ref}",
+        )
+        self.git.remove_worktree(source.root)
+        remote = "https://example.test/owner/repo.git"
+        self.git.remote_refs[(remote, ref)] = source
+        return ContributionSuccess(
+            branch=None,
+            remote=remote,
+            ref=ref,
+            sha=source.head_sha(),
+            events=(),
+            placement=self.placement,
+            isolation_grade=self.isolation_grade,
+            ending=SessionOutcomeRecord(
+                outcome=None,
+                progressed=True,
+                termination=SessionTermination.COMPLETED,
+            ),
+        )
+
+
+def test_parallel_loop_materializes_remote_contributions_before_integration(
+    tmp_path, monkeypatch
+) -> None:
+    fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _RemoteBranchExecutionHost(fake_git)
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, execution_host=host, **kwargs)
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == 0
+    run_id = _run_id(tmp_path)
+    materialized = {
+        f"git-loopy/{run_id}/materialized/issue-{ref}" for ref in (42, 43)
+    }
+    assert {branch for _remote, _sha, branch in fake_git.fetch_calls} == materialized
+    assert materialized <= set(fake_git.branch_deletes)
+    assert fake_client.created == []
+
+
+@dataclass
+class _AbsentRemoteExecutionHost:
+    """A host double that promises a remote ref it never published."""
+
+    placement: Placement = "github-actions"
+    isolation_grade: IsolationGrade = "machine boundary"
+    capacity: int = 4
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        return ContributionSuccess(
+            branch=None,
+            remote="https://example.test/owner/repo.git",
+            ref=f"refs/heads/host/contribution/issue-{request.issue_ref}",
+            sha="a" * 40,
+            events=(),
+            placement=self.placement,
+            isolation_grade=self.isolation_grade,
+            ending=SessionOutcomeRecord(
+                outcome=SessionOutcome.TIMEOUT,
+                progressed=False,
+                termination=SessionTermination.TIMED_OUT,
+            ),
+        )
+
+
+def test_parallel_loop_treats_a_proven_missing_remote_ref_as_a_breach(
+    tmp_path, monkeypatch
+) -> None:
+    fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    built: list[loop_module._ParallelLoop] = []
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        instance = real_parallel_loop(
+            *args, execution_host=_AbsentRemoteExecutionHost(), **kwargs
+        )
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == 0
+    assert fake_git.fetch_calls == []
+    assert fake_client.created == []
+    assert len(built) == 1
+    assert built[0]._serial._strike_machine.strikes == 2
+
+
+@dataclass
+class _RemoteStallThenLocalExecutionHost:
+    """A remote host whose unresponsive first attempt is retried by the Run."""
+
+    placement: Placement = "github-actions"
+    isolation_grade: IsolationGrade = "machine boundary"
+    capacity: int = 4
+    calls: list[ContributionRequest] = field(default_factory=list)
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        self.calls.append(request)
+        ending = SessionOutcomeRecord(
+            outcome=None,
+            progressed=True,
+            termination=SessionTermination.COMPLETED,
+        )
+        if sum(call.issue_ref == request.issue_ref for call in self.calls) == 1:
+            return ContributionSuccess(
+                branch=None,
+                remote="https://example.test/owner/repo.git",
+                ref=f"refs/heads/host/contribution/issue-{request.issue_ref}",
+                sha="a" * 40,
+                events=(),
+                placement=self.placement,
+                isolation_grade=self.isolation_grade,
+                ending=ending,
+            )
+        return ContributionSuccess(
+            branch=git_module.lane_branch_name(request.run_id, request.issue_ref),
+            sha=request.base_revision,
+            events=(),
+            placement="local",
+            isolation_grade="workspace separation only",
+            ending=ending,
+        )
+
+
+def test_parallel_loop_reoffers_an_unreachable_remote_without_a_strike(
+    tmp_path, monkeypatch
+) -> None:
+    fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+
+    def _unreachable(remote: str, ref: str) -> str | None:
+        raise git_module.GitError(
+            ["git", "ls-remote", remote, ref], 128, "connection timed out"
+        )
+
+    monkeypatch.setattr(fake_git, "probe_remote_ref", _unreachable)
+    host = _RemoteStallThenLocalExecutionHost()
+    built: list[loop_module._ParallelLoop] = []
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        instance = real_parallel_loop(*args, execution_host=host, **kwargs)
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == 0
+    assert [request.issue_ref for request in host.calls].count(42) == 2
+    assert [request.issue_ref for request in host.calls].count(43) == 2
+    assert fake_client.created == []
+    assert len(built) == 1
+    assert built[0]._serial._strike_machine.strikes == 0
+
+
+@dataclass
 class _NoProgressEndingExecutionHost:
     """A host whose branch head moved but whose ending reports no progress."""
 

@@ -157,6 +157,25 @@ async def test_local_host_returns_success_for_a_clean_branch() -> None:
     assert outcome.ending == _ending()
 
 
+def test_remote_host_success_returns_the_completion_triple() -> None:
+    outcome = ContributionSuccess(
+        branch=None,
+        remote="https://example.test/owner/repo.git",
+        ref="refs/heads/git-loopy/run-1/issue-42",
+        sha="a" * 40,
+        events=(),
+        placement="github-actions",
+        isolation_grade="machine boundary",
+        ending=_ending(),
+    )
+
+    assert (outcome.remote, outcome.ref, outcome.sha) == (
+        "https://example.test/owner/repo.git",
+        "refs/heads/git-loopy/run-1/issue-42",
+        "a" * 40,
+    )
+
+
 @pytest.mark.asyncio
 async def test_local_host_rejects_a_branch_carrying_uncommitted_work() -> None:
     async def runner(request: ContributionRequest) -> LocalRunResult:

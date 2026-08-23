@@ -157,10 +157,11 @@ class ContributionRequest:
 
 @dataclass(frozen=True)
 class ContributionSuccess:
-    """A host's successful outcome: a durable, clean branch plus its Events.
+    """A host's successful outcome: a durable contribution plus its Events.
 
     Attributes:
-        branch: The durable branch name the orchestrator can reach.
+        branch: The durable local branch name the orchestrator can reach, or
+            ``None`` when a remote host instead reports ``remote`` and ``ref``.
         sha: The completion SHA the branch resolves to. A host that cannot
             name it has not succeeded (ADR-0050), which is why it is
             constitutive of this shape rather than optional on it: §E's
@@ -180,18 +181,30 @@ class ContributionSuccess:
         ending: The Agent session ending. A successful contribution always
             carries one, including when its outcome is ``None`` because the
             session made progress.
+        remote: The remote holding a non-local contribution, when applicable.
+        ref: The fully-qualified ref holding a non-local contribution, when
+            applicable. Together with ``remote`` and ``sha`` it is the
+            completion triple Integration materializes before staging.
     """
 
-    branch: str
+    branch: str | None
     sha: str
     events: tuple[Mapping[str, Any], ...]
     placement: Placement
     isolation_grade: IsolationGrade
     ending: session_outcome_module.SessionOutcomeRecord | None
+    remote: str | None = None
+    ref: str | None = None
 
     def __post_init__(self) -> None:
         if self.ending is None:
             raise ValueError("a successful contribution must carry its session ending")
+        if (self.remote is None) != (self.ref is None):
+            raise ValueError("a remote contribution must name both remote and ref")
+        if self.remote is None and self.branch is None:
+            raise ValueError("a local contribution must name its branch")
+        if self.remote is not None and self.branch is not None:
+            raise ValueError("a remote contribution must not name a local branch")
 
 
 @dataclass(frozen=True)

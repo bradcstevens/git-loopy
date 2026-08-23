@@ -143,6 +143,8 @@ class FakeGitClient:
         )
         self.merge_calls: list[str] = []
         self.branch_deletes: list[str] = []
+        self.remote_refs: dict[tuple[str, str], FakeGitClient] = {}
+        self.fetch_calls: list[tuple[str, str, str]] = []
         # Integration recovery (#63 / ADR-0020). ``merge_conflicts`` scripts the
         # issue numbers whose **Lane** branch raises on :meth:`merge` (models a
         # conflicting landing) so a test drives the abort + auto-resolution path.
@@ -419,6 +421,33 @@ class FakeGitClient:
         for commit in child._log:
             if commit.sha not in known:
                 self._log.append(commit)
+
+    def probe_remote_ref(self, remote: str, ref: str) -> str | None:
+        """Return the scripted remote contribution ref, if the remote has it."""
+        branch = self.remote_refs.get((remote, ref))
+        return branch.head_sha() if branch is not None else None
+
+    def fetch_sha(self, remote: str, sha: str, branch: str) -> None:
+        """Materialize a scripted remote ref as a local branch."""
+        self.fetch_calls.append((remote, sha, branch))
+        source = next(
+            (
+                candidate
+                for (candidate_remote, _ref), candidate in self.remote_refs.items()
+                if candidate_remote == remote and candidate.head_sha() == sha
+            ),
+            None,
+        )
+        if source is None:
+            raise GitError(["git", "fetch", remote, sha], 128, "unknown remote SHA")
+        self._branches[branch] = source
+
+    def resolve_ref(self, ref: str) -> str:
+        """Resolve a materialized or local branch to its current SHA."""
+        branch = self._branches.get(ref)
+        if branch is None:
+            raise GitError(["git", "rev-parse", ref], 128, "unknown ref")
+        return branch.head_sha()
 
     def abort_merge(self) -> None:
         """Model ``git merge --abort`` — unwind a conflicted merge (#63).

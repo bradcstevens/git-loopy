@@ -133,6 +133,7 @@ from copilot import CopilotClient
 from rich.console import Console
 
 from git_loopy import events as events_module
+from git_loopy import contribution_materialization as materialization_module
 from git_loopy import execution_host as execution_host_module
 from git_loopy import gate as gate_module
 from git_loopy import gh as gh_module
@@ -2284,6 +2285,7 @@ class _ParallelLoop:
         # a Parallel Summary is denominated by one card too (#331).
         self._rate_card = rate_card
         self._git = git
+        self._materializer = materialization_module.ContributionMaterializer(git)
         self._prompt_text = prompt_text
         self._writers = writers
         self._sinks = sinks
@@ -3231,10 +3233,43 @@ class _ParallelLoop:
             )
             return
 
+        if outcome.remote is not None:
+            assert outcome.ref is not None
+            materialized = self._materializer.materialize(
+                remote=outcome.remote,
+                ref=outcome.ref,
+                completion_sha=outcome.sha,
+                destination_branch=(
+                    f"git-loopy/{self._run_id}/materialized/issue-{ref}"
+                ),
+            )
+            if not isinstance(materialized, materialization_module.Materialized):
+                self._cleanup_injected_host_worktree(lane_work, discard_branch=True)
+                if isinstance(materialized, materialization_module.Breach):
+                    failure = execution_host_module.ContributionFailure(
+                        reason=materialized.reason,
+                        classification="breach",
+                        ending=outcome.ending,
+                        detail=materialized.detail,
+                    )
+                else:
+                    failure = execution_host_module.ContributionFailure(
+                        reason="remote_materialization_stalled",
+                        classification="stall",
+                        ending=None,
+                        detail=materialized.detail,
+                    )
+                self._finish_terminal_host_failure(contribution, lane_work, failure)
+                return
+            outcome = dataclass_replace(
+                outcome, branch=materialized.branch, remote=None, ref=None
+            )
+
         # Reclaim the local placeholder *before* adopting the host's branch: a
         # host that contributed on a branch of its own leaves the deterministic
         # Lane branch holding nothing, and §F's collection rule cannot reach it
         # (it is neither merged into base nor named by the closing issue).
+        assert outcome.branch is not None
         self._cleanup_injected_host_worktree(
             lane_work, discard_branch=lane_work.branch != outcome.branch
         )

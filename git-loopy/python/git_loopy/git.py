@@ -492,6 +492,22 @@ class GitClient(Protocol):
         """
         ...
 
+    def probe_remote_ref(self, remote: str, ref: str) -> str | None:
+        """Return a remote ref's commit SHA, or ``None`` when it is absent.
+
+        Transport and authentication failures raise :exc:`GitError`; callers
+        must not infer absence from their text.
+        """
+        ...
+
+    def fetch_sha(self, remote: str, sha: str, branch: str) -> None:
+        """Fetch an advertised commit ``sha`` into local ``branch``."""
+        ...
+
+    def resolve_ref(self, ref: str) -> str:
+        """Resolve a local ref to its full commit SHA."""
+        ...
+
     def delete_branch(self, branch: str) -> None:
         """Delete the local ``branch`` after it has been integrated.
 
@@ -1092,6 +1108,27 @@ class SubprocessGitClient:
                 auto-resolution slice (#63) owns recovery.
         """
         _run(["merge", "--no-ff", "--no-edit", branch], cwd=self._root)
+
+    def probe_remote_ref(self, remote: str, ref: str) -> str | None:
+        """Probe a remote ref explicitly, preserving absence versus outage."""
+        out = _run(["ls-remote", "--refs", remote, ref], cwd=self._root)
+        line = next(iter(out.splitlines()), "")
+        if not line:
+            return None
+        return line.split(maxsplit=1)[0]
+
+    def fetch_sha(self, remote: str, sha: str, branch: str) -> None:
+        """Fetch ``sha`` into ``refs/heads/branch`` without following its name."""
+        _run(
+            ["fetch", "--no-tags", remote, f"{sha}:refs/heads/{branch}"],
+            cwd=self._root,
+        )
+
+    def resolve_ref(self, ref: str) -> str:
+        """Resolve ``ref`` as a commit, rejecting absent or non-commit refs."""
+        return _run(
+            ["rev-parse", "--verify", f"{ref}^{{commit}}"], cwd=self._root
+        ).strip()
 
     def delete_branch(self, branch: str) -> None:
         """Delete the local ``branch`` via ``git branch -D``.

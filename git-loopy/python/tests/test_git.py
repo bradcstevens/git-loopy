@@ -903,6 +903,41 @@ def test_lane_branch_name_is_pure_string_policy() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Remote contribution fetch                                                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_remote_ref_probe_and_sha_pinned_fetch_materialize_a_local_branch(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _init_repo(source)
+    completion_sha = _commit(source, "host contribution")
+    remote = tmp_path / "host.git"
+    subprocess.run(
+        ["git", "clone", "--bare", str(source), str(remote)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    consumer = tmp_path / "consumer"
+    subprocess.run(
+        ["git", "clone", str(remote), str(consumer)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    client = SubprocessGitClient(consumer)
+    destination = "git-loopy/RUN/materialized/issue-42"
+
+    assert client.probe_remote_ref(str(remote), "refs/heads/main") == completion_sha
+    client.fetch_sha(str(remote), completion_sha, destination)
+
+    assert client.resolve_ref(destination) == completion_sha
+
+
+# --------------------------------------------------------------------------- #
 # The reserved branch namespace and workspace placement (#449)                 #
 # --------------------------------------------------------------------------- #
 
