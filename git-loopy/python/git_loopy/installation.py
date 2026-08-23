@@ -217,7 +217,9 @@ def _resolve_identity(
     return commit, _is_published_release(repository, commit, release_version)
 
 
-def _metadata_identity(release_version: str | None) -> tuple[str | None, bool | None] | None:
+def _metadata_identity(
+    release_version: str | None,
+) -> tuple[str | None, bool | None] | None:
     """Read PEP 610 metadata left by a source or editable Python installation."""
     try:
         raw = distribution("git-loopy").read_text("direct_url.json")
@@ -235,13 +237,8 @@ def _metadata_identity(release_version: str | None) -> tuple[str | None, bool | 
     vcs_info = metadata.get("vcs_info")
     if isinstance(vcs_info, dict):
         commit = vcs_info.get("commit_id")
-        revision = vcs_info.get("requested_revision")
         if isinstance(commit, str) and _COMMIT.fullmatch(commit):
-            published: bool | None = None
-            if release_version is not None and isinstance(revision, str):
-                if revision in {release_version, f"v{release_version}"}:
-                    published = True
-            return commit, published
+            return commit, None
 
     url = metadata.get("url")
     if not isinstance(url, str):
@@ -335,13 +332,13 @@ def _is_published_release(
     except (OSError, UnicodeError):
         packed = _packed_ref(git_dir, tag)
         if packed is None:
-            return False
+            return None
         tagged, peeled = packed
         if peeled is not None:
             return peeled == commit
         return _peel_tag(git_dir, tagged) == commit
     if not _COMMIT.fullmatch(tagged):
-        return False
+        return None
     return _peel_tag(git_dir, tagged) == commit
 
 

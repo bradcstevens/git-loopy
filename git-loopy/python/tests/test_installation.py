@@ -149,6 +149,19 @@ def test_inventory_reports_a_tagged_release_as_published(tmp_path: Path) -> None
     assert inventory.edge_install is False
 
 
+def test_inventory_keeps_missing_release_tag_evidence_unknown(tmp_path: Path) -> None:
+    _repository, executable = _write_checkout(tmp_path, commit="d" * 40)
+
+    inventory = installation.inspect_installation(
+        env={"HOME": str(tmp_path / "home")},
+        executable_path=executable,
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.published is None
+    assert inventory.edge_install is None
+
+
 def test_inventory_recognizes_a_packed_annotated_release_tag(tmp_path: Path) -> None:
     commit = "e" * 40
     tag_object = "f" * 40
@@ -208,7 +221,7 @@ def test_inventory_does_not_report_a_consumer_head_without_provenance(
     assert inventory.edge_install is None
 
 
-def test_vcs_metadata_only_proves_a_release_tag(
+def test_inventory_reports_vcs_commit_with_unknown_publication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     commit = "3" * 40
@@ -224,7 +237,15 @@ def test_vcs_metadata_only_proves_a_release_tag(
 
     monkeypatch.setattr(installation, "distribution", lambda _name: _Distribution())
 
-    assert installation._metadata_identity("1.2.3") == (commit, None)
+    inventory = installation.inspect_installation(
+        env={"HOME": "/operator"},
+        executable_path=Path("/operator/bin/git-loopy"),
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.resolved_commit == commit
+    assert inventory.published is None
+    assert inventory.edge_install is None
 
 
 def test_inventory_json_shape_is_stable(tmp_path: Path) -> None:
