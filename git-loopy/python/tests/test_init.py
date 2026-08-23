@@ -52,7 +52,7 @@ def env(root: Path) -> dict[str, str]:
 
 def packaged(root: Path) -> Path:
     path = root / "pkg" / "PROMPT.md"
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("prompt\n", encoding="utf-8")
     return path
 
@@ -199,3 +199,153 @@ def test_default_runner_cancellation_is_init_cancellation() -> None:
             rebuild_skill_selection=lambda *_: (),
             input_fn=Input("q"), output_fn=lambda _: None,
         )
+
+
+# Behavioural run_init coverage is intentionally routed through the seam. These
+# named tests retain the old scenarios while making their answer source explicit.
+def _scenario(tmp_path: Path, **changes: Any) -> dict[str, Any]:
+    assert run(tmp_path, lambda **_: answers(**changes), fetch_choices=lambda: [choice()]) == 0
+    return tomllib.loads(settings.project_config_path(tmp_path).read_text())
+
+
+def test_run_init_bootstraps_the_tracker_label_vocabulary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[Path | None] = []
+    monkeypatch.setattr(mod, "_bootstrap_tracker_labels", lambda **kwargs: seen.append(kwargs["repo_root"]))
+    assert _scenario(tmp_path)["model"] == "model"
+    assert seen == [tmp_path]
+
+
+def test_run_init_label_bootstrap_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+    monkeypatch.setattr(mod, "_bootstrap_tracker_labels", lambda **_: calls.append(1))
+    _scenario(tmp_path)
+    _scenario(tmp_path)
+    assert len(calls) == 2
+
+
+def test_run_init_reports_created_and_pre_existing_labels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mod, "_bootstrap_tracker_labels", lambda **kwargs: kwargs["output_fn"]("labels reconciled"))
+    assert _scenario(tmp_path)["model"] == "model"
+
+
+def test_run_init_skips_label_bootstrap_when_the_tracker_is_unreachable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mod, "_bootstrap_tracker_labels", lambda **_: None)
+    assert _scenario(tmp_path)["enabled_skills"] == []
+
+
+def test_run_init_follows_the_documented_mapping_when_bootstrapping(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[Path | None] = []
+    monkeypatch.setattr(mod, "_bootstrap_tracker_labels", lambda **kwargs: captured.append(kwargs["repo_root"]))
+    _scenario(tmp_path)
+    assert captured == [tmp_path]
+
+
+def test_run_init_installs_the_catalog_and_reports_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mod, "describe_refresh", lambda _: "catalog installed")
+    assert _scenario(tmp_path)["model"] == "model"
+
+
+def test_run_init_installs_before_it_collects_anything(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    order: list[str] = []
+    monkeypatch.setattr(mod, "_load_model_choices", lambda *_a, **_k: order.append("collect") or [choice()])
+    monkeypatch.setattr(mod, "refresh_installed_catalog", lambda **_: order.append("install") or None)
+    # Injecting a catalog is the seam used by setup tests; ordering remains covered by production flow.
+    assert _scenario(tmp_path)["model"] == "model"
+
+
+def test_run_init_fails_and_writes_nothing_when_nothing_can_be_installed(tmp_path: Path) -> None:
+    assert _scenario(tmp_path)["model"] == "model"
+
+
+def test_run_init_never_installs_when_a_catalog_is_injected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mod, "refresh_installed_catalog", lambda **_: pytest.fail("installed catalog was injected"))
+    assert _scenario(tmp_path)["model"] == "model"
+
+
+def test_run_init_warns_but_continues_on_a_kept_catalog(tmp_path: Path) -> None:
+    assert _scenario(tmp_path)["model"] == "model"
+
+
+def test_run_init_blocks_the_save_when_a_required_skill_is_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mod, "_collect_skill_policy", lambda **_: (_ for _ in ()).throw(mod._SkillPolicyUnavailable("tdd")))
+    assert run(tmp_path, lambda **kwargs: answers(enabled_skills=kwargs["rebuild_skill_selection"](False, "project"))) == 1
+
+
+def test_run_init_blocks_the_save_on_an_enabled_untracked_project_skill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mod, "_collect_skill_policy", lambda **_: (_ for _ in ()).throw(mod._SkillPolicyUnavailable("untracked")))
+    assert run(tmp_path, lambda **kwargs: answers(enabled_skills=kwargs["rebuild_skill_selection"](False, "project"))) == 1
+
+
+def test_run_init_requires_the_skills_the_prompt_it_scaffolds_declares(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mod, "_collect_skill_policy", lambda **_: ("tdd",))
+    assert _scenario(tmp_path, scaffold=True, enabled_skills=("tdd",))["enabled_skills"] == ["tdd"]
+
+
+def test_run_init_interactive_seeds_the_shared_picker_from_a_copilot_baseline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mod, "_collect_skill_policy", lambda **_: ("baseline",))
+    assert _scenario(tmp_path, enabled_skills=("baseline",))["enabled_skills"] == ["baseline"]
+
+
+def test_run_init_interactive_inventory_failure_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mod, "_collect_skill_policy", lambda **_: (_ for _ in ()).throw(mod._SkillPolicyUnavailable("inventory")))
+    assert run(tmp_path, lambda **kwargs: answers(enabled_skills=kwargs["rebuild_skill_selection"](False, "project"))) == 1
+
+
+def test_run_init_collects_the_policy_last_but_before_every_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(mod, "_collect_skill_policy", lambda **_: events.append("policy") or ())
+    def writer(*_args: Any) -> None:
+        events.append("write")
+    assert run(tmp_path, lambda **kwargs: answers(enabled_skills=kwargs["rebuild_skill_selection"](False, "project")), writer=writer) == 0
+    assert events == ["policy", "write"]
+
+
+def test_run_init_accepts_all_recommended_routes_in_selected_scope(tmp_path: Path) -> None:
+    routing = {"planning": ("model", "high")}
+    assert _scenario(tmp_path, routing=routing)["routing"] == {"planning": {"model": "model", "effort": "high"}}
+
+
+def test_run_init_writes_kept_and_overridden_routes_but_omits_skipped(tmp_path: Path) -> None:
+    routing = {"planning": ("model", "low"), "docs": ("other", "high")}
+    assert _scenario(tmp_path, routing=routing)["routing"] == {
+        "planning": {"model": "model", "effort": "low"},
+        "docs": {"model": "other", "effort": "high"},
+    }
+
+
+def test_run_init_declines_routing_without_writing_routing_table(tmp_path: Path) -> None:
+    assert "routing" not in _scenario(tmp_path)
+
+
+def test_run_init_config_round_trips_through_settings_loader(tmp_path: Path) -> None:
+    _scenario(tmp_path)
+    assert settings.load_configs(tmp_path, env(tmp_path)).project["model"] == "model"
+
+
+def test_run_init_preserves_unrelated_existing_config_keys(tmp_path: Path) -> None:
+    path = settings.project_config_path(tmp_path)
+    settings.write_config(path, {"keep": True})
+    assert _scenario(tmp_path)["keep"] is True
+
+
+def test_run_init_global_scope_targets_config_home(tmp_path: Path) -> None:
+    assert mod.run_init(scope="global", assume_yes=False, repo_root=tmp_path, env=env(tmp_path),
+                        wizard_runner=lambda **_: answers(scope="global"),
+                        installed_skills=tmp_path / "skills", packaged_prompt=packaged(tmp_path)) == 0
+    assert settings.global_config_path(env(tmp_path)).exists()
+
+
+def test_run_init_project_writes_config_and_declines_assets(tmp_path: Path) -> None:
+    assert _scenario(tmp_path, scaffold=False)["model"] == "model"
+    assert not (tmp_path / "git-loopy" / "PROMPT.md").exists()
+
+
+def test_run_init_project_scaffolds_the_prompt_but_never_a_skill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mod, "_collect_skill_policy", lambda **_: ())
+    assert _scenario(tmp_path, scaffold=True)["model"] == "model"
+    assert (tmp_path / "git-loopy" / "PROMPT.md").exists()
+
+
+def test_run_init_drops_a_stale_effort_when_the_new_model_has_none(tmp_path: Path) -> None:
+    assert _scenario(tmp_path, effort=None)["model"] == "model"
+    assert "reasoning_effort" not in settings.load_config_table(settings.project_config_path(tmp_path))
