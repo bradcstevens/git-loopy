@@ -606,6 +606,42 @@ whole precedence chain (not one file); `path` prints the resolved location(s); `
 scope's file in `$EDITOR`. Scope selection mirrors **init**.
 _Avoid_: config command as a synonym for the persisted **Config** itself.
 
+**Install channel**:
+The mechanism that put one git-loopy artifact on a machine and is therefore the only thing entitled
+to replace or remove it — a `uv` tool install, a Homebrew formula, or an installer-placed launcher.
+A channel git-loopy cannot *prove* from the artifact's own location is one it refuses to act on
+(ADR-0054).
+_Avoid_: package manager (only one kind of channel), distribution (that is what a channel carries).
+
+**update (subcommand)**:
+Refreshing the machine-local state git-loopy installed — the prompt override, **Config**, the
+**installed catalog**, and the TUI helper — against the **Release version** already installed.
+Never touches the tracker and never changes which Release is installed.
+_Avoid_: upgrade, sync, refresh-all.
+
+**upgrade (subcommand)**:
+Replacing the installed distribution with a different **Release version** through its **install
+channel**, then running **update**. Moves exactly one artifact: the one it is itself running from.
+_Avoid_: update, self-update, install.
+
+**Edge install**:
+An installation sitting on an unreleased commit rather than a published **Release version**, where
+the version the distribution reports is not an identity. Reached only by explicit opt-in, and always
+reported as such rather than passing for the Release it names.
+_Avoid_: nightly, dev build, unstable.
+
+**Scaffold provenance**:
+The record of which **Release version** wrote an operator-editable asset and what it wrote, which is
+what makes a customized asset distinguishable from a stale one. An asset with no record is treated
+as customized.
+_Avoid_: version stamp, checksum, manifest (that is the **installed catalog**'s record).
+
+**doctor (subcommand)**:
+The verdict-bearing view of whether this machine can start a **Run**, reporting the same preflights a
+Run performs rather than a parallel set of its own (ADR-0055). Distinguished from `info`, which
+reports the same facts carrying no verdict.
+_Avoid_: check, validate, healthcheck; diagnostics (that is the Event/log record).
+
 **Global vs project scope**:
 Whether **Config** and assets apply machine-wide (**global**) or only within one repository
 (**project**). Project overrides global. The git-loopy engine is installed once, globally; scope
