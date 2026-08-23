@@ -277,8 +277,8 @@ full-screen Textual picker on a terminal and the plain numbered one everywhere
 else — drive the
 same selection model and obey the same rules; the keys for each are in
 [`docs/skills-setup.md`](skills-setup.md#the-skill-picker-has-two-renderings-and-one-set-of-rules).
-The full-screen picker is **optional, never required**: without the extra the
-plain picker runs and returns the same selection.
+The full-screen picker is used on a terminal; the plain picker is used
+otherwise and returns the same selection.
 
 Two rules are enforced *in the picker*, not at save time:
 
