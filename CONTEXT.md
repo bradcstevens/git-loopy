@@ -1024,13 +1024,20 @@ _Avoid_: Wave, batch, cohort, sliding window.
 
 **Lane**:
 One reusable concurrent execution slot in **Parallel mode**. A Lane works one
-**Parallel-safe** issue at a time in its own worktree and branch, then becomes available
-for refill once its finished branch is admitted to **Integration**. Lane workspaces live
-under this clone's common git directory, outside every working tree's content operations.
-Their `git-loopy/` branches are reserved for runner-owned work and are the only branches
-future reclamation may select. Shown as one active row in the **Dashboard**, with its own
-timer and **Log**.
+**Parallel-safe** issue at a time in its own **Lane workspace** and branch, then becomes
+available for refill once its finished branch is admitted to **Integration**. Shown as one
+active row in the **Dashboard**, with its own timer and **Log**.
 _Avoid_: worker, thread.
+
+**Lane workspace**:
+The private worktree one **Lane** works its issue in. It lives inside the clone's own git
+directory, under the **Reserved branch namespace**'s subtree and keyed by run and issue, so
+it is never *content* in any working tree: no status, staging, or clean operation in the
+repository can see, capture, or destroy a live workspace, and no ignore entry is needed to
+keep it that way. It is per-clone, so two clones never share one, and it is removed with
+the clone. Torn down as soon as its **Lane contribution** finishes.
+_Avoid_: sandbox, checkout, scratch directory; worktree alone (the **Integration stage** is
+one too).
 
 **Lane contribution**:
 One **Parallel-safe** issue's end-to-end unit of **Parallel mode** work, beginning
@@ -1087,9 +1094,19 @@ The private worktree a **Lane contribution** is merged into and gated in before 
 reaches the base branch. Each contribution gets its own stage, and bounded
 auto-resolution reuses the stage its contribution is already in. Because the stage is
 private, a red or conflicting result is never observable on base and there is nothing to
-undo. Like a Lane workspace, it lives under the clone's common git directory and on a
-reserved `git-loopy/` branch.
+undo. Placed exactly like a **Lane workspace** — inside the clone's git directory, on a
+branch in the **Reserved branch namespace** — with an `integrate/` segment that keeps it
+distinct from the Lane workspace for the same issue.
 _Avoid_: integration branch, staging area, merge queue entry.
+
+**Reserved branch namespace**:
+`git-loopy/`, the branch prefix the runner cuts every branch of its own under — a
+**Lane workspace**'s branch and its **Integration stage**'s alike — and which nothing else
+in a repository may claim. It is the *only* thing that decides whether a leftover worktree
+is git-loopy's to reclaim. A location can never decide it: workspaces once lived in a
+sibling directory that an operator's own worktrees could share, so reclaiming by path
+would take work git-loopy was never given.
+_Avoid_: branch prefix, runner branches, worktree directory.
 
 **Integration**:
 The serialized **Parallel mode** stage that consumes the **Integration backlog** one

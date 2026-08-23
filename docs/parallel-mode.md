@@ -140,6 +140,44 @@ Practically: raising `GIT_LOOPY_MAX_PARALLEL` past the point where Integration
 saturates buys nothing. Integration, not the Lane count, is the governing
 resource.
 
+## Where the workspaces live, and which branches are ours
+
+A **Lane workspace** — and the private **Integration stage** its contribution is
+gated in — is a git worktree, and both are placed inside your repository's own
+git directory:
+
+```
+<repo>/.git/git-loopy/<run_id>/issue-<N>            ← the Lane workspace
+<repo>/.git/git-loopy/<run_id>/integrate/issue-<N>  ← its Integration stage
+```
+
+That location is chosen so a live Lane cannot get in the way of the very
+commands the agents in it are running. The git directory is not *content* in any
+working tree, so a workspace never appears in `git status`, cannot be picked up
+by `git add -A` (and produces no embedded-repository warning), survives `git
+clean -ffxd`, and is skipped by tree-walking feedback loops — with **no
+`.gitignore` entry**, so nothing about your repository has to change to make it
+so. It is also per-clone: two clones of the same repository each get their own
+workspaces, neither can see the other's, and deleting a clone deletes its
+workspaces with it.
+
+You do not have to clean anything up in the normal case: a workspace is torn
+down as soon as its contribution finishes.
+
+**`git-loopy/` is a reserved branch namespace.** Every branch the runner cuts
+for itself lives under it — `git-loopy/<run_id>/issue-<N>` for a Lane and
+`git-loopy/<run_id>/integrate/issue-<N>` for its stage — and it is the *only*
+thing git-loopy will ever use to decide that a workspace is its own to reclaim.
+Don't put your own branches there.
+
+Reading ownership from the branch rather than from a directory is what makes
+residue safe to identify. Earlier Runs placed workspaces in a sibling
+`<repo>.worktrees/` directory, which an operator's own worktrees could also be
+living in; sweeping that directory by location would take work nobody asked
+git-loopy to touch. A leftover from those Runs is still recognisable — it is on
+a `git-loopy/` branch, wherever it sits — while a worktree of yours next to it
+is not, and never will be.
+
 ## Interleaving with serial work
 
 When the runner finds **Serial-required** work, serial demand latches: refill

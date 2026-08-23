@@ -51,8 +51,9 @@ The client's mechanics:
 * :meth:`~SubprocessGitClient.recent_commits` — last ``n`` commits, newest-first.
 * :meth:`~SubprocessGitClient.range_count` — ``git rev-list --count`` for
   ``pre..head``.
-* :meth:`~SubprocessGitClient.common_git_dir` — the repository-owned location
-  for ephemeral Lane and Integration workspaces.
+* :meth:`~SubprocessGitClient.common_git_dir` — the directory git shares
+  across this clone's worktrees, which is where a **Lane workspace** and an
+  **Integration stage** live.
 * :meth:`~SubprocessGitClient.add_worktree` /
   :meth:`~SubprocessGitClient.remove_worktree` — the Parallel-mode **Lane**
   worktree lifecycle (ADR-0008): ``git worktree add -b <branch> <path> <base>``
@@ -61,6 +62,10 @@ The client's mechanics:
   while keeping its branch as a breadcrumb. :func:`lane_branch_name` is the pure
   ``git-loopy/<run_id>/issue-<N>`` branch-naming helper the Lane orchestrator
   feeds to ``add_worktree``.
+* :meth:`~SubprocessGitClient.list_worktrees` — every worktree this clone
+  registers, as :class:`Worktree` values. :func:`reserved_worktrees` is the
+  pure selector that narrows those to the ones git-loopy owns, deciding
+  ownership from the **reserved branch namespace** and never from a path.
 
 Design notes:
 
@@ -81,19 +86,25 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Protocol, Sequence, runtime_checkable
+from typing import Final, Iterable, Protocol, Sequence, runtime_checkable
 
 __all__ = [
     "GitError",
     "Commit",
     "GitClient",
     "SubprocessGitClient",
+    "Worktree",
     "is_reserved_branch",
     "lane_branch_name",
+    "reserved_worktrees",
 ]
 
 _GIT_BIN: Final[str] = "git"
 _STDERR_TAIL_LIMIT: Final[int] = 400
+
+# The branch namespace git-loopy reserves for the branches it cuts itself.
+# Ownership of a workspace is decided from this prefix and from nothing else
+# — see :func:`is_reserved_branch`.
 _RESERVED_BRANCH_PREFIX: Final[str] = "git-loopy/"
 
 # Shared format string for commits_between and recent_commits.
@@ -161,6 +172,26 @@ class Commit:
         return f"{self.subject}\n{self.body}"
 
 
+@dataclass(frozen=True)
+class Worktree:
+    """One worktree a clone registers, as ``git worktree list`` reports it.
+
+    The value :func:`reserved_worktrees` selects over. It carries the two
+    facts that decide ownership and disposal — *which branch* it is checked
+    out on and *where* it sits — and deliberately keeps them separate, because
+    only the branch may be used to decide whether git-loopy owns it.
+
+    Attributes:
+        path: The worktree's absolute root directory.
+        branch: The branch it is checked out on, without a ``refs/heads/``
+            prefix. ``None`` for a detached ``HEAD``, which is never
+            git-loopy's own.
+    """
+
+    path: Path
+    branch: str | None
+
+
 def _run(
     args: Sequence[str],
     *,
@@ -210,19 +241,61 @@ def _stderr_tail(stderr: str | None) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Parallel-mode Lane branch naming (ADR-0005 / ADR-0008)                       #
+# The reserved branch namespace (ADR-0005 / ADR-0008)                          #
 # --------------------------------------------------------------------------- #
 
 
 def is_reserved_branch(branch: str) -> bool:
-    """Return whether ``branch`` belongs to git-loopy's reclaimable namespace.
+    """Return whether ``branch`` is one git-loopy cut for itself.
 
-    ``git-loopy/`` is reserved for branches the runner creates for Lane and
-    Integration workspaces. Reclamation must decide ownership from this branch
-    namespace, never from a workspace path: legacy sibling directories can
-    interleave an operator's unrelated worktrees with the runner's.
+    ``git-loopy/`` is **reserved**: every **Lane workspace** and **Integration
+    stage** branch is created under it, and nothing else in the repository may
+    claim it. That makes the namespace — not a directory — the answer to "is
+    this residue mine?". A path cannot answer it: the legacy sibling
+    ``<repo>.worktrees/`` directory interleaved git-loopy's worktrees with an
+    operator's own, so matching by location would sweep up work nobody asked
+    git-loopy to touch.
+
+    The prefix is matched at the *start* of the name, so an operator branch
+    that merely contains the word (``operator/git-loopy/experiment``) is not
+    reserved and is never selected.
+
+    Args:
+        branch: A branch name as git reports it, without a ``refs/heads/``
+            prefix.
+
+    Returns:
+        ``True`` if the branch is inside git-loopy's reserved namespace.
     """
     return branch.startswith(_RESERVED_BRANCH_PREFIX)
+
+
+def reserved_worktrees(worktrees: Iterable[Worktree]) -> list[Worktree]:
+    """Select the worktrees git-loopy owns, by branch and never by path.
+
+    The selector git-loopy's own reclamation reads: given every worktree a
+    clone registers (:meth:`GitClient.list_worktrees`), it keeps exactly those
+    checked out on a :func:`is_reserved_branch` branch, wherever they sit on
+    disk. A detached worktree reports no branch and is therefore never
+    reserved — git-loopy always checks its workspaces out on a named branch,
+    so a detached tree is somebody else's.
+
+    Args:
+        worktrees: The worktrees to narrow, in any order.
+
+    Returns:
+        The reserved subset, in the order supplied.
+    """
+    return [
+        worktree
+        for worktree in worktrees
+        if worktree.branch is not None and is_reserved_branch(worktree.branch)
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# Parallel-mode Lane branch naming (ADR-0005 / ADR-0008)                       #
+# --------------------------------------------------------------------------- #
 
 
 def lane_branch_name(run_id: str, issue_number: int) -> str:
@@ -230,11 +303,12 @@ def lane_branch_name(run_id: str, issue_number: int) -> str:
 
     Parallel mode (ADR-0008) gives each **Lane** its own worktree on a dedicated
     branch cut from base. The branch follows the **git-loopy** convention from
-    ADR-0005: ``git-loopy/<run_id>/issue-<N>``. ``git-loopy/`` is reserved for
-    runner-owned branches and is therefore the namespace later workspace
-    reclamation may select. Keeping this as a pure, seam-level helper lets the
-    Lane orchestrator construct the branch it hands to
-    :meth:`GitClient.add_worktree` without restating the format.
+    ADR-0005: ``git-loopy/<run_id>/issue-<N>`` — inside the **reserved branch
+    namespace** (:func:`is_reserved_branch`), which is what later lets the
+    branch be recognised as git-loopy's own. Keeping this as a pure,
+    seam-level helper lets the Lane orchestrator construct the branch it hands
+    to :meth:`GitClient.add_worktree` without restating the format, and pins
+    the convention under test here.
 
     Args:
         run_id: The run identifier (a 26-char ULID in production, but any
@@ -298,15 +372,6 @@ class GitClient(Protocol):
         """
         ...
 
-    def common_git_dir(self) -> Path:
-        """Return the repository's shared git directory.
-
-        A Git repository may have several linked worktrees, each with its own
-        administrative git dir. Parallel workspaces belong under the one shared
-        directory so they are invisible to all working trees' file operations.
-        """
-        ...
-
     def head_sha(self) -> str:
         """Return the current ``HEAD`` commit SHA (full 40-char form)."""
         ...
@@ -321,6 +386,18 @@ class GitClient(Protocol):
 
     def is_tracked(self, path: Path | str) -> bool:
         """Return whether ``path`` contains tracked files and no untracked files."""
+        ...
+
+    def common_git_dir(self) -> Path:
+        """Return the directory git shares across this clone's worktrees.
+
+        A repository has one common git directory and one administrative
+        directory per linked worktree. **Lane workspaces** and **Integration
+        stages** are placed under the common one: it is per-clone, it is not
+        content in any working tree (so no status, staging, or clean operation
+        can reach it, and it needs no ``.gitignore`` entry), and it is removed
+        with the clone.
+        """
         ...
 
     def add_all(self) -> None:
@@ -376,8 +453,9 @@ class GitClient(Protocol):
 
         The Parallel-mode **Lane** primitive (ADR-0008): each Lane works in its
         own worktree on a dedicated branch (``git-loopy/<run_id>/issue-<N>`` — see
-        :func:`lane_branch_name`) branched from the base branch, created in a
-        sibling directory **outside** the repo (never nested inside it).
+        :func:`lane_branch_name`) branched from the base branch, created under
+        the clone's :meth:`common_git_dir` and so outside every working tree's
+        content.
 
         Returns a **root-bound** :class:`GitClient` for the new worktree, so every
         mechanic above (``head_sha`` / ``is_dirty`` / ``has_untracked`` / ``add_all``
@@ -438,6 +516,17 @@ class GitClient(Protocol):
         """
         ...
 
+    def list_worktrees(self) -> list[Worktree]:
+        """Return every worktree this clone registers, main worktree included.
+
+        The enumeration half of reclamation; :func:`reserved_worktrees` is the
+        selection half. Deliberately reports *all* of them, wherever they sit
+        — including any left in the legacy sibling ``<repo>.worktrees/``
+        directory — so that ownership is decided once, by branch, rather than
+        by trusting where a worktree happens to live.
+        """
+        ...
+
 
 class SubprocessGitClient:
     """Root-bound :class:`GitClient` shelling out to the real ``git`` CLI.
@@ -458,10 +547,21 @@ class SubprocessGitClient:
         return self._root
 
     def common_git_dir(self) -> Path:
-        """Return the resolved directory Git shares across this repository's worktrees."""
-        common_dir = Path(
-            _run(["rev-parse", "--git-common-dir"], cwd=self._root).strip()
-        )
+        """Return the resolved directory git shares across this clone's worktrees.
+
+        ``git rev-parse --git-common-dir`` answers with the *shared* git
+        directory even when this client is bound to a linked worktree (whose
+        own ``--git-dir`` is a per-worktree subdirectory of it), so every
+        workspace a Run creates lands in the same per-clone place regardless of
+        which worktree resolved it. Git may answer relatively (a bare
+        ``.git``), so the result is anchored on :attr:`root` and resolved.
+
+        Raises:
+            GitError: If ``git`` is not on PATH or the root is not inside a git
+                repository.
+        """
+        out = _run(["rev-parse", "--git-common-dir"], cwd=self._root).strip()
+        common_dir = Path(out)
         if not common_dir.is_absolute():
             common_dir = self._root / common_dir
         return common_dir.resolve()
@@ -927,8 +1027,9 @@ class SubprocessGitClient:
         succeeds. ``path`` itself must not already exist.
 
         Args:
-            path: Directory for the new worktree — a sibling **outside** the repo
-                by convention (never nested inside it).
+            path: Directory for the new worktree — under
+                :meth:`common_git_dir` by convention, so it is invisible to
+                every working tree's content operations.
             branch: Name of the new branch to create (see :func:`lane_branch_name`).
             base: Commit-ish the branch is cut from (typically the base branch,
                 e.g. ``"main"``).
@@ -1016,13 +1117,52 @@ class SubprocessGitClient:
         """
         _run(["merge", "--abort"], cwd=self._root)
 
+    def list_worktrees(self) -> list[Worktree]:
+        """Return every registered worktree via ``git worktree list``.
+
+        Read with ``--porcelain -z``, which is the parse git's own manual
+        prescribes: one ``key value`` field per NUL-terminated record line, an
+        empty field terminating each record, and paths emitted verbatim. The
+        newline-terminated form cannot represent a worktree directory
+        containing a newline — a legal path — and would silently mispair a path
+        with somebody else's branch, which is precisely the mistake that must
+        not happen when the branch is what decides ownership. ``branch`` comes
+        as a full ``refs/heads/<name>`` ref and is stripped back to the name
+        :func:`is_reserved_branch` matches; a detached or bare record carries no
+        ``branch`` field at all and yields ``branch=None``.
+
+        Raises:
+            GitError: If ``git`` is not on PATH, the root is not inside a git
+                repository, or ``git`` is too old to accept
+                ``worktree list --porcelain -z`` (2.36+).
+        """
+        out = _run(["worktree", "list", "--porcelain", "-z"], cwd=self._root)
+        worktrees: list[Worktree] = []
+        path: Path | None = None
+        branch: str | None = None
+        for field in out.split("\0"):
+            if field.startswith("worktree "):
+                path = Path(field[len("worktree ") :])
+                branch = None
+            elif field.startswith("branch ") and path is not None:
+                ref = field[len("branch ") :]
+                prefix = "refs/heads/"
+                branch = ref[len(prefix) :] if ref.startswith(prefix) else ref
+            elif not field and path is not None:
+                worktrees.append(Worktree(path=path, branch=branch))
+                path = None
+                branch = None
+        return worktrees
+
 
 # --------------------------------------------------------------------------- #
 # Internal: NUL-delimited log parser                                          #
 # --------------------------------------------------------------------------- #
 
 
-def _parse_log_z(args: Sequence[str], *, cwd: Path | str | None = None) -> list[Commit]:
+def _parse_log_z(
+    args: Sequence[str], *, cwd: Path | str | None = None
+) -> list[Commit]:
     """Parse output of ``git log -z`` with our standard ``_LOG_FORMAT``.
 
     Each record has the shape::

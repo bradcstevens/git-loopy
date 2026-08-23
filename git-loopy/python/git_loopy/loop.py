@@ -449,7 +449,8 @@ def _make_issue_source(
     if config.issue_source == "prds":
         return PrdsIssueSource(repo_root, diag)
     raise ValueError(
-        f"unknown issue_source {config.issue_source!r}; expected 'github' or 'prds'"
+        f"unknown issue_source {config.issue_source!r}; expected "
+        f"'github' or 'prds'"
     )
 
 
@@ -544,11 +545,15 @@ def _format_recent_commits(commits: Iterable[git_module.Commit]) -> str:
 def _lane_worktree_path(
     common_git_dir: Path, run_id: str, issue_number: int | str
 ) -> Path:
-    """Compute a Lane's workspace under its repository's common git directory.
+    """Compute a Lane's **workspace** path under the clone's git directory.
 
-    Lanes live in ``<common-git-dir>/git-loopy/<run_id>/issue-<N>``. The
-    common git directory is per-clone and excluded from all worktree content
-    operations, so a live Lane cannot appear in status, staging, or clean.
+    Lanes live in ``<common-git-dir>/git-loopy/<run_id>/issue-<N>``, grouped by
+    run so a run's workspaces are easy to find and reap, and one directory per
+    issue so concurrent Lanes never share a tree. The common git directory is
+    not content in any working tree, so a live Lane is invisible to ``git
+    status``, unreachable by ``git add -A``, and survives ``git clean -ffxd``
+    — all without an ignore entry — while still being per-clone and dying with
+    the clone.
     """
     return common_git_dir / "git-loopy" / run_id / f"issue-{issue_number}"
 
@@ -573,13 +578,17 @@ def _integration_worktree_path(
 
     *Every* Lane contribution is merged and gated in
     ``<common-git-dir>/git-loopy/<run_id>/integrate/issue-<N>`` before anything
-    reaches base. The ``integrate/`` subgroup cannot collide with the Lane's own
-    ``issue-<N>`` workspace. The leaf stays ``issue-<N>`` (matching
+    reaches base — alongside the Lane workspaces under the same per-run
+    directory but in an ``integrate/`` subgroup, so it never collides with the
+    Lane's own ``issue-<N>`` workspace. The leaf stays ``issue-<N>`` (matching
     :func:`_lane_worktree_path`) so the workspace still addresses exactly one
-    issue. Bounded auto-resolution reuses the stage already cut for the
-    contribution, so recovery costs no extra workspace.
+    issue. Bounded auto-resolution for a red / conflicting contribution reuses
+    the stage that contribution was already staged in, so recovery costs no
+    extra workspace.
     """
-    return common_git_dir / "git-loopy" / run_id / "integrate" / f"issue-{issue_number}"
+    return (
+        common_git_dir / "git-loopy" / run_id / "integrate" / f"issue-{issue_number}"
+    )
 
 
 @dataclass(frozen=True)
@@ -775,7 +784,9 @@ class _Loop:
         # ``drive`` only when PRs are in scope). ``None`` = unknown / detached
         # HEAD, which disables the defensive restore.
         self._base_branch: str | None = None
-        self._strike_machine = NMTStrikeStateMachine(max_strikes=config.max_nmt_strikes)
+        self._strike_machine = NMTStrikeStateMachine(
+            max_strikes=config.max_nmt_strikes
+        )
         # The last Iteration's **Session outcome** (#403). Held as the record
         # rather than as the line it prints, because the per-issue attempt
         # lifecycle is keyed off the ending; recording it is all that happens
@@ -1050,7 +1061,9 @@ class _Loop:
 
     # -- iteration body ----------------------------------------------------
 
-    async def _run_one_iteration(self, iter_num: int) -> tuple[str, int, int]:
+    async def _run_one_iteration(
+        self, iter_num: int
+    ) -> tuple[str, int, int]:
         """Run a single AFK iteration.
 
         Returns:
@@ -1071,7 +1084,9 @@ class _Loop:
         spans); see
         ``tests/test_iteration_end_to_end.py::test_loop_emits_otel_span_tree_when_enabled``.
         """
-        with telemetry.span("git_loopy.iteration", iter=iter_num) as iteration_span:
+        with telemetry.span(
+            "git_loopy.iteration", iter=iter_num
+        ) as iteration_span:
             iteration_started_at = datetime.now(timezone.utc)
             self._emit(
                 events_module.WRAPPER_ITERATION_START,
@@ -1091,7 +1106,8 @@ class _Loop:
                     on_branch = self._git.current_branch()
                 except git_module.GitError as exc:
                     self._diag.warning(
-                        "current_branch check failed: %s; skipping base restore",
+                        "current_branch check failed: %s; skipping base "
+                        "restore",
                         exc,
                     )
                     on_branch = None
@@ -1105,7 +1121,8 @@ class _Loop:
                         )
                     except git_module.GitError as exc:
                         self._diag.warning(
-                            "could not restore base branch %s: %s; continuing on %s",
+                            "could not restore base branch %s: %s; "
+                            "continuing on %s",
                             self._base_branch,
                             exc,
                             on_branch,
@@ -1259,8 +1276,7 @@ class _Loop:
             except git_module.GitError as exc:
                 self._diag.warning(
                     "post-iteration git head_sha failed: %s; "
-                    "skipping commit accounting",
-                    exc,
+                    "skipping commit accounting", exc,
                 )
                 head = pre_sha
             try:
@@ -1268,8 +1284,7 @@ class _Loop:
             except git_module.GitError as exc:
                 self._diag.warning(
                     "post-iteration commits_between failed: %s; "
-                    "skipping commit accounting",
-                    exc,
+                    "skipping commit accounting", exc,
                 )
                 new_commits = []
 
@@ -1280,7 +1295,9 @@ class _Loop:
                 completions = self._handle_completions_safely(pool, new_commits)
 
             if issue_binding.active_ref is None:
-                fallback = self._infer_active_binding(pool, completions, new_commits)
+                fallback = self._infer_active_binding(
+                    pool, completions, new_commits
+                )
                 if fallback is not None:
                     ref, source = fallback
                     issue_binding.bind(
@@ -1336,7 +1353,9 @@ class _Loop:
             #    ``wrapper.checkpoint.recorded``, not ``wrapper.commit.recorded``)
             #    and it never resets a Strike. Non-fatal — a failure warns and
             #    the loop carries on (a local-only repo still completes).
-            checkpoint_sha = self._maybe_checkpoint(iter_num, issue_binding.active_ref)
+            checkpoint_sha = self._maybe_checkpoint(
+                iter_num, issue_binding.active_ref
+            )
 
             # 9) Auto-push (ADR-0004, second half). Whenever this iteration
             #    produced new commits — agent commits (step 6) and/or the
@@ -1379,7 +1398,9 @@ class _Loop:
             # ending is now what charges the ceiling — through the **Attempt
             # lifecycle** it feeds — so a machine read first would report the
             # count as it stood before this Iteration's own defeat.
-            self._record_session_outcome(active.ref, session_ending, iter_num=iter_num)
+            self._record_session_outcome(
+                active.ref, session_ending, iter_num=iter_num
+            )
             outcome = self._strike_machine.tick(
                 commits_in_iter=commits_in_iter,
                 auto_closures_in_iter=auto_closures,
@@ -1447,7 +1468,9 @@ class _Loop:
             sha=sha,
             issue=active_ref,
         )
-        self._diag.info("recorded checkpoint %s (attributed to %s)", sha, active_ref)
+        self._diag.info(
+            "recorded checkpoint %s (attributed to %s)", sha, active_ref
+        )
         return sha
 
     # -- serial Pickup -----------------------------------------------------
@@ -1836,14 +1859,15 @@ class _Loop:
         """
         try:
             return list(
-                self._source.handle_completions(pool=pool, new_commits=new_commits)
+                self._source.handle_completions(
+                    pool=pool, new_commits=new_commits
+                )
             )
         except Exception as exc:  # pragma: no cover - defensive
             self._diag.warning(
                 "source.handle_completions raised %s: %s; "
                 "continuing iteration with zero completions",
-                type(exc).__name__,
-                exc,
+                type(exc).__name__, exc,
             )
             return []
 
@@ -2058,9 +2082,7 @@ class _Loop:
                 exit_code = 1
                 self._diag.error(
                     "git-loopy iteration %d crashed: %s: %s",
-                    iter_num,
-                    type(exc).__name__,
-                    exc,
+                    iter_num, type(exc).__name__, exc,
                 )
                 raise
         finally:
@@ -2282,6 +2304,16 @@ class _ParallelLoop:
         self._worktree_setup = worktree_setup
         self._run_id = writers.run_id
         self._repo_root = git.root
+        # Where every Lane workspace and Integration stage this Run creates
+        # lives (#449): the clone's own git directory, resolved once. It is
+        # per-clone and outside every working tree's content, so a live
+        # workspace cannot be seen, staged, or cleaned by the tree an agent is
+        # working in — and it needs no ignore entry to stay that way.
+        #
+        # Resolved here, at construction, because the answer is a fact about
+        # the clone and not about any one issue: a git that cannot give it up
+        # would fail identically for every Lane, so retrying per Lane would
+        # only spin. ``run`` turns the failure into a preflight refusal.
         self._workspace_root = git.common_git_dir()
         # A supplied host is reusable across contributions. The local adapter is
         # built for each contribution below so its runner can close over the
@@ -2497,7 +2529,9 @@ class _ParallelLoop:
             parallel_mode=True,
             lane_cap=self._config.parallel,
             effective_lane_limit=(
-                self._scheduler.effective_limit if self._scheduler is not None else None
+                self._scheduler.effective_limit
+                if self._scheduler is not None
+                else None
             ),
         )
         self._report_parallel_degraded()
@@ -2514,24 +2548,19 @@ class _ParallelLoop:
         try:
             try:
                 if self._rolling_capable:
-                    (
-                        outcome_label,
-                        exit_code,
-                        iterations_run,
-                    ) = await self._drive_rolling()
+                    outcome_label, exit_code, iterations_run = (
+                        await self._drive_rolling()
+                    )
                 else:
-                    (
-                        outcome_label,
-                        exit_code,
-                        iterations_run,
-                    ) = await self._drive_serial_only()
+                    outcome_label, exit_code, iterations_run = (
+                        await self._drive_serial_only()
+                    )
             except Exception as exc:
                 outcome_label = "crashed"
                 exit_code = 1
                 self._diag.error(
                     "git-loopy parallel run crashed: %s: %s",
-                    type(exc).__name__,
-                    exc,
+                    type(exc).__name__, exc,
                 )
                 raise
         finally:
@@ -2694,11 +2723,9 @@ class _ParallelLoop:
                     and scheduler.serial_turn()
                 ):
                     self._report_serial_fallback(scheduler)
-                    (
-                        outcome,
-                        _commits,
-                        _closures,
-                    ) = await self._serial._run_one_iteration(self._alloc_iter_num())
+                    outcome, _commits, _closures = (
+                        await self._serial._run_one_iteration(self._alloc_iter_num())
+                    )
                     # Reconcile the shared `max_iterations` budget into the
                     # scheduler's own ledger: it only spends a unit at
                     # `start_session` (Lane sessions), so a serial
@@ -2759,7 +2786,9 @@ class _ParallelLoop:
                 # classifier return ``None``, so the driver reserves it rather
                 # than reporting a stale all-blocked/all-skipped outcome.
                 terminal_outcome = (
-                    scheduler.confirm_terminal_outcome() if serial_pool_seen else None
+                    scheduler.confirm_terminal_outcome()
+                    if serial_pool_seen
+                    else None
                 )
                 if terminal_outcome is not None:
                     return (
@@ -2999,8 +3028,7 @@ class _ParallelLoop:
         except Exception as exc:
             self._diag.warning(
                 "parallel pool peek failed: %s: %s; treating as unread",
-                type(exc).__name__,
-                exc,
+                type(exc).__name__, exc,
             )
             return PoolCollection(complete=False)
 
@@ -3132,8 +3160,7 @@ class _ParallelLoop:
         except git_module.GitError as exc:
             self._diag.warning(
                 "worktree add for issue #%s failed: %s; releasing reservation",
-                ref,
-                exc,
+                ref, exc,
             )
             passed_over(f"worktree setup failed: {exc}")
             scheduler.release(reservation)
@@ -3179,7 +3206,9 @@ class _ParallelLoop:
         try:
             recent = self._git.recent_commits(5)
         except git_module.GitError as exc:
-            self._diag.warning("recent_commits failed: %s; using empty prefix", exc)
+            self._diag.warning(
+                "recent_commits failed: %s; using empty prefix", exc
+            )
             recent = []
         commits_block = _format_recent_commits(recent)
 
@@ -3191,17 +3220,15 @@ class _ParallelLoop:
         if isinstance(outcome, execution_host_module.ContributionFailure):
             self._diag.warning(
                 "lane #%s execution host (%s) %s: %s (%s)",
-                ref,
-                host.placement,
-                outcome.classification,
-                outcome.reason,
-                outcome.detail,
+                ref, host.placement, outcome.classification, outcome.reason, outcome.detail,
             )
             self._cleanup_injected_host_worktree(
                 lane_work,
                 discard_branch=outcome.classification != "breach",
             )
-            self._finish_terminal_host_failure(contribution, lane_work, outcome)
+            self._finish_terminal_host_failure(
+                contribution, lane_work, outcome
+            )
             return
 
         # Reclaim the local placeholder *before* adopting the host's branch: a
@@ -3218,7 +3245,9 @@ class _ParallelLoop:
         # loud (#408): a Lane that stalled silently is evidence about the
         # *issue*, and the Pickup that acts on it may well be a serial one.
         self._serial._observe_session_ending(lane_work.item.ref, lane_outcome)
-        _report_session_outcome(self._diag, ref=lane_work.item.ref, record=lane_outcome)
+        _report_session_outcome(
+            self._diag, ref=lane_work.item.ref, record=lane_outcome
+        )
 
         # One progress fact per contribution (#403): the ending the outcome
         # carries is what the scheduler is told, so a contribution's
@@ -3260,9 +3289,7 @@ class _ParallelLoop:
         except Exception as exc:  # never let setup abort the Lane
             self._diag.warning(
                 "worktree setup for issue #%s raised %s: %s; continuing",
-                lane_work.item.ref,
-                type(exc).__name__,
-                exc,
+                lane_work.item.ref, type(exc).__name__, exc,
             )
             return
         if not result.ran:
@@ -3270,16 +3297,13 @@ class _ParallelLoop:
         if result.passed:
             self._diag.info(
                 "worktree setup for issue #%s ran %r",
-                lane_work.item.ref,
-                result.command,
+                lane_work.item.ref, result.command,
             )
             return
         self._diag.warning(
             "worktree setup for issue #%s FAILED (exit %s): %r; continuing "
             "(agent will still run). Output tail: %s",
-            lane_work.item.ref,
-            result.returncode,
-            result.command,
+            lane_work.item.ref, result.returncode, result.command,
             result.output_tail,
         )
 
@@ -3324,7 +3348,9 @@ class _ParallelLoop:
         async def runner(
             request: execution_host_module.ContributionRequest,
         ) -> execution_host_module.LocalRunResult:
-            return await self._run_local_contribution(request, contribution, lane_work)
+            return await self._run_local_contribution(
+                request, contribution, lane_work
+            )
 
         return execution_host_module.LocalExecutionHost(runner=runner)
 
@@ -3340,7 +3366,9 @@ class _ParallelLoop:
             ending = outcome.ending
             assert ending is not None
             self._serial._observe_session_ending(lane_work.item.ref, ending)
-            _report_session_outcome(self._diag, ref=lane_work.item.ref, record=ending)
+            _report_session_outcome(
+                self._diag, ref=lane_work.item.ref, record=ending
+            )
 
         disposition = self._scheduler.finish_terminal_failure(
             contribution,
@@ -3369,7 +3397,9 @@ class _ParallelLoop:
         retains the existing worktree cleanup rule immediately after its
         Checkpoint result is known.
         """
-        signals = await self._run_lane_session(contribution, lane_work, request.prompt)
+        signals = await self._run_lane_session(
+            contribution, lane_work, request.prompt
+        )
         changed, checkpoint_ok = self._account_lane(contribution, lane_work)
         ending = session_outcome_module.resolve_session_outcome(
             termination=signals.termination,
@@ -3418,7 +3448,9 @@ class _ParallelLoop:
             if discard_branch:
                 self._delete_branch_safely(lane_work.item.ref, lane_work.branch)
 
-    def _cleanup_lane_worktree(self, lane_work: _LaneWork, checkpoint_ok: bool) -> None:
+    def _cleanup_lane_worktree(
+        self, lane_work: _LaneWork, checkpoint_ok: bool
+    ) -> None:
         """Apply the existing Checkpoint-owned worktree retention rule."""
         if checkpoint_ok:
             try:
@@ -3430,8 +3462,7 @@ class _ParallelLoop:
             return
         self._diag.warning(
             "lane #%s checkpoint failed; preserving worktree %s",
-            lane_work.item.ref,
-            lane_work.path,
+            lane_work.item.ref, lane_work.path,
         )
 
     async def _run_lane_session(
@@ -3500,7 +3531,9 @@ class _ParallelLoop:
                 ),
             ) as sdk_session:
                 try:
-                    await sdk_session.send_and_wait(prompt, timeout=send_timeout)
+                    await sdk_session.send_and_wait(
+                        prompt, timeout=send_timeout
+                    )
                 except asyncio.TimeoutError:
                     termination = session_outcome_module.SessionTermination.TIMED_OUT
                 except Exception as exc:
@@ -3551,7 +3584,9 @@ class _ParallelLoop:
                 head = wt_git.head_sha()
                 new_commits = wt_git.commits_between(lane_work.pre_sha, head)
             except git_module.GitError as exc:
-                self._diag.warning("lane #%s commit accounting failed: %s", ref, exc)
+                self._diag.warning(
+                    "lane #%s commit accounting failed: %s", ref, exc
+                )
                 new_commits = []
 
         for c in new_commits:
@@ -3568,7 +3603,9 @@ class _ParallelLoop:
         changed = bool(new_commits) or checkpoint_sha is not None
         return changed, checkpoint_ok
 
-    def _maybe_checkpoint_lane(self, lane_work: _LaneWork) -> tuple[str | None, bool]:
+    def _maybe_checkpoint_lane(
+        self, lane_work: _LaneWork
+    ) -> tuple[str | None, bool]:
         """Per-worktree Checkpoint on a Lane branch (ADR-0004, per-Lane).
 
         Mirrors :meth:`_Loop._maybe_checkpoint` but scoped to the Lane's own
@@ -3600,8 +3637,7 @@ class _ParallelLoop:
         except git_module.GitError as exc:
             self._diag.warning(
                 "lane #%s checkpoint commit failed: %s; continuing without it",
-                ref,
-                exc,
+                ref, exc,
             )
             return None, False
         self._serial._emit(
@@ -3638,13 +3674,14 @@ class _ParallelLoop:
             if lane_work is None:  # pragma: no cover - defensive
                 self._diag.error(
                     "integration #%s: missing lane state for contribution %s",
-                    contribution.ref,
-                    contribution.contribution_id,
+                    contribution.ref, contribution.contribution_id,
                 )
                 published = False
             else:
                 published = await self._integrate_lane(contribution, lane_work)
-            newly_admitted = self._scheduler.finalize(contribution, published=published)
+            newly_admitted = self._scheduler.finalize(
+                contribution, published=published
+            )
             if latched_before != self._scheduler.serial_latched:
                 # §5.2: an unpublished contribution requests serial service of
                 # its own. Reported on the same terms as the peek's latch —
@@ -3688,9 +3725,11 @@ class _ParallelLoop:
         an Iteration (no barrier round), and the Wrapper contract reserves the
         Iteration pair — and its positive ``iter`` — for serial work.
         """
-        self._contribution_iter[contribution.contribution_id] = _ContributionAccounting(
-            iter_num=self._alloc_iter_num(),
-            started_monotonic=time.monotonic(),
+        self._contribution_iter[contribution.contribution_id] = (
+            _ContributionAccounting(
+                iter_num=self._alloc_iter_num(),
+                started_monotonic=time.monotonic(),
+            )
         )
         self._emit_contribution_event(
             contribution, events_module.WRAPPER_CONTRIBUTION_START
@@ -3761,8 +3800,7 @@ class _ParallelLoop:
         except Exception as exc:  # pragma: no cover - defensive
             self._diag.warning(
                 "contribution #%s accounting rollup failed: %s",
-                contribution.ref,
-                exc,
+                contribution.ref, exc,
             )
             return
         self._emit_contribution_event(
@@ -3782,13 +3820,14 @@ class _ParallelLoop:
         )
         try:
             self._serial._writers.run_summary.record(
-                IterationCounters.from_rollup(iter_num=scope.iter_num, payload=rollup)
+                IterationCounters.from_rollup(
+                    iter_num=scope.iter_num, payload=rollup
+                )
             )
         except Exception as exc:  # pragma: no cover - defensive
             self._diag.warning(
                 "RunSummaryWriter.record failed for contribution #%s: %s",
-                contribution.ref,
-                exc,
+                contribution.ref, exc,
             )
 
     def _apply_strike_reaction(
@@ -3853,9 +3892,7 @@ class _ParallelLoop:
                 self._diag.warning(
                     "integration #%s: private merge of %s conflicted: %s; "
                     "aborting and auto-resolving",
-                    ref,
-                    lane_work.branch,
-                    exc,
+                    ref, lane_work.branch, exc,
                 )
                 self._abort_stage_merge_safely(stage, ref)
                 return await self._auto_resolve_lane(
@@ -3895,21 +3932,21 @@ class _ParallelLoop:
             self._diag.warning(
                 "integration #%s: could not create private integration "
                 "worktree: %s; falling back to serial",
-                ref,
-                exc,
+                ref, exc,
             )
             return None
         return _IntegrationStage(branch=branch, path=path, git=git)
 
-    def _reap_integration_stage(self, stage: _IntegrationStage, ref: int | str) -> None:
+    def _reap_integration_stage(
+        self, stage: _IntegrationStage, ref: int | str
+    ) -> None:
         """Tear down the private stage on every path (#219 §4.16, criterion #9)."""
         try:
             self._git.remove_worktree(stage.path, force=True)
         except git_module.GitError as exc:
             self._diag.warning(
                 "integration #%s: integration worktree remove failed: %s",
-                ref,
-                exc,
+                ref, exc,
             )
         self._delete_branch_safely(ref, stage.branch)
 
@@ -3933,18 +3970,16 @@ class _ParallelLoop:
         except git_module.GitError as exc:
             self._diag.warning(
                 "integration #%s: base head_sha failed: %s; not publishing",
-                ref,
-                exc,
+                ref, exc,
             )
             return False
         try:
             self._git.merge(stage.branch)
         except git_module.GitError as exc:
             self._diag.warning(
-                "integration #%s: publish of verified %s failed: %s; not publishing",
-                ref,
-                stage.branch,
-                exc,
+                "integration #%s: publish of verified %s failed: %s; not "
+                "publishing",
+                ref, stage.branch, exc,
             )
             return False
         if not self._base_advanced(pre_base, ref):
@@ -3988,17 +4023,14 @@ class _ParallelLoop:
         except gate_module.GateError as exc:
             self._diag.warning(
                 "integration #%s: %s gate could not run: %s; treating as red",
-                ref,
-                phase,
-                exc,
+                ref, phase, exc,
             )
             return False
         if not result.passed:
             failure = result.failure
             self._diag.warning(
                 "integration #%s: %s gate failed on %r (%s)",
-                ref,
-                phase,
+                ref, phase,
                 failure.name if failure else "unknown",
                 failure.summary if failure else "no detail",
             )
@@ -4046,11 +4078,12 @@ class _ParallelLoop:
         except git_module.GitError as exc:
             self._diag.warning(
                 "integration #%s: post-merge accounting failed: %s",
-                item.ref,
-                exc,
+                item.ref, exc,
             )
             landed = []
-        for completion in self._serial._handle_completions_safely([item], landed):
+        for completion in self._serial._handle_completions_safely(
+            [item], landed
+        ):
             self._serial._emit(
                 events_module.WRAPPER_AUTO_CLOSE,
                 iter_num=None,
@@ -4065,7 +4098,9 @@ class _ParallelLoop:
         try:
             self._git.delete_branch(branch)
         except git_module.GitError as exc:
-            self._diag.warning("lane #%s: delete of %s failed: %s", ref, branch, exc)
+            self._diag.warning(
+                "lane #%s: delete of %s failed: %s", ref, branch, exc
+            )
 
     async def _auto_resolve_lane(
         self,
@@ -4158,25 +4193,19 @@ class _ParallelLoop:
                     self._diag.warning(
                         "integration #%s: auto-resolution attempt %s timed out "
                         "after %ss; treating as still-red",
-                        contribution.ref,
-                        attempt,
-                        send_timeout,
+                        contribution.ref, attempt, send_timeout,
                     )
                 except Exception as exc:
                     self._diag.warning(
                         "integration #%s: auto-resolution attempt %s raised "
                         "%s: %s; treating as still-red",
-                        contribution.ref,
-                        attempt,
-                        type(exc).__name__,
-                        exc,
+                        contribution.ref, attempt, type(exc).__name__, exc,
                     )
         except Exception as exc:
             self._diag.error(
-                "integration #%s: auto-resolution session lifecycle failed: %s: %s",
-                contribution.ref,
-                type(exc).__name__,
-                exc,
+                "integration #%s: auto-resolution session lifecycle failed: "
+                "%s: %s",
+                contribution.ref, type(exc).__name__, exc,
             )
 
     def _resolution_prompt(
@@ -4463,7 +4492,9 @@ async def run(
     #    the exception escape.
     include_prs = _resolve_include_prs(config, repo_root)
     try:
-        source = _make_issue_source(config, repo_root, diag, include_prs=include_prs)
+        source = _make_issue_source(
+            config, repo_root, diag, include_prs=include_prs
+        )
     except ValueError as exc:
         diag.error("issue source construction failed: %s", exc)
         print(f"git-loopy: {exc}", file=sys.stderr)
@@ -4510,8 +4541,7 @@ async def run(
     except Exception as exc:
         diag.error(
             "CopilotClient construction failed: %s: %s",
-            type(exc).__name__,
-            exc,
+            type(exc).__name__, exc,
         )
         print(
             f"git-loopy: failed to construct CopilotClient: "
@@ -4610,26 +4640,53 @@ async def run(
     task_type_client = _make_task_type_label_client()
     loop: _Loop | _ParallelLoop
     if config.parallel > 1:
-        loop = _ParallelLoop(
-            config=config,
-            release_version=release_version,
-            git=git,
-            prompt_text=prompt_text,
-            denomination=denomination,
-            writers=writers,
-            sinks=sinks,
-            summary=summary,
-            client=client,
-            skill_preflight=skill_preflight,
-            source=source,
-            diag=diag,
-            gate_runner=_make_gate_runner(),
-            worktree_setup=_make_worktree_setup(),
-            include_prs=include_prs,
-            rate_card=rate_card,
-            classifier_pair=classifier_pair,
-            task_type_client=task_type_client,
-        )
+        try:
+            loop = _ParallelLoop(
+                config=config,
+                release_version=release_version,
+                git=git,
+                prompt_text=prompt_text,
+                denomination=denomination,
+                writers=writers,
+                sinks=sinks,
+                summary=summary,
+                client=client,
+                skill_preflight=skill_preflight,
+                source=source,
+                diag=diag,
+                gate_runner=_make_gate_runner(),
+                worktree_setup=_make_worktree_setup(),
+                include_prs=include_prs,
+                rate_card=rate_card,
+                classifier_pair=classifier_pair,
+                task_type_client=task_type_client,
+            )
+        except git_module.GitError as exc:
+            # Parallel mode resolves where its **Lane workspaces** live up
+            # front (#449). A clone that cannot name its own git directory has
+            # nowhere to put them, and would fail identically for every Lane —
+            # so this is preflight, refused before any work starts, and never a
+            # tracebacked exit. The cleanup mirrors the Skill-preflight
+            # refusals above: this is the last point before the `finally` that
+            # would otherwise release the SDK subprocess.
+            diag.error("Lane workspace preflight failed: %s", exc)
+            print(
+                f"git-loopy: Parallel mode could not resolve this repository's "
+                f"git directory, so it has nowhere to place a Lane workspace: "
+                f"{exc}",
+                file=sys.stderr,
+            )
+            try:
+                writers.run_summary.flush()
+            except Exception as flush_exc:
+                diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+            try:
+                await client.stop()
+            except Exception as stop_exc:
+                diag.warning("CopilotClient.stop() failed: %s", stop_exc)
+            skill_workspace.cleanup()
+            control.close()
+            return exit_code_for("preflight_failed")
     else:
         loop = _Loop(
             config=config,
@@ -4671,8 +4728,7 @@ async def run(
                     except Exception as exc:
                         diag.error(
                             "git-loopy loop crashed: %s: %s",
-                            type(exc).__name__,
-                            exc,
+                            type(exc).__name__, exc,
                         )
                         exit_code = 1
         except Exception as exc:
@@ -4682,11 +4738,11 @@ async def run(
             # tracebacked exit.
             diag.error(
                 "writers __exit__ failed: %s: %s",
-                type(exc).__name__,
-                exc,
+                type(exc).__name__, exc,
             )
             print(
-                f"git-loopy: writers __exit__ failed: {type(exc).__name__}: {exc}",
+                f"git-loopy: writers __exit__ failed: "
+                f"{type(exc).__name__}: {exc}",
                 file=sys.stderr,
             )
             exit_code = 1

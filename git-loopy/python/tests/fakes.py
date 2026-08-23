@@ -24,7 +24,7 @@ from git_loopy.gh import (
     RateLimitCounter,
     Repo,
 )
-from git_loopy.git import Commit, GitError
+from git_loopy.git import Commit, GitError, Worktree
 
 
 class FakeGitClient:
@@ -156,7 +156,9 @@ class FakeGitClient:
         # per-client counter above cannot answer "where did the abort happen?"
         # — which is the whole question once ADR-0020 moves the conflicting
         # merge off base and into a private Integration worktree.
-        self.repo_merge_aborts: list[Path] = [] if _abort_spy is None else _abort_spy
+        self.repo_merge_aborts: list[Path] = (
+            [] if _abort_spy is None else _abort_spy
+        )
 
     @property
     def root(self) -> Path:
@@ -164,7 +166,12 @@ class FakeGitClient:
         return self._root
 
     def common_git_dir(self) -> Path:
-        """Return the fake repository's shared git directory."""
+        """The fake clone's shared git directory — where workspaces are placed.
+
+        The adapter resolves this from ``git rev-parse --git-common-dir``; the
+        fake models the ordinary answer for a non-bare clone so a Lane's
+        workspace path is shaped exactly as production shapes it.
+        """
         return self._root / ".git"
 
     # -- internal helpers --------------------------------------------------
@@ -342,6 +349,22 @@ class FakeGitClient:
         """Paths of the worktrees currently live (added and not yet removed)."""
         return list(self._worktrees)
 
+    def list_worktrees(self) -> list[Worktree]:
+        """Model ``git worktree list`` — this client plus every live child.
+
+        Reports the branch each one has checked out, which is the fact
+        ownership is decided from (:func:`git_loopy.git.reserved_worktrees`).
+        A removed worktree is gone from the listing even though its branch
+        survives as a breadcrumb, exactly as real git reports it.
+        """
+        return [
+            Worktree(path=self._root, branch=self.branch),
+            *(
+                Worktree(path=path, branch=child.branch)
+                for path, child in self._worktrees.items()
+            ),
+        ]
+
     def worktree_client(self, path: Path) -> FakeGitClient | None:
         """Return the live child client bound to ``path`` (or ``None``).
 
@@ -363,7 +386,9 @@ class FakeGitClient:
         """
         if "/integrate/" in branch:
             return False
-        return any(branch.endswith(f"/issue-{n}") for n in self._merge_conflict_issues)
+        return any(
+            branch.endswith(f"/issue-{n}") for n in self._merge_conflict_issues
+        )
 
     def merge(self, branch: str) -> None:
         """Model ``git merge --no-ff <branch>`` — land a Lane branch on base.
@@ -536,9 +561,7 @@ class FakeGitHubClient:
         self.authed = authed
         self.gh_version_value = gh_version
         self.repo = (
-            repo
-            if repo is not None
-            else Repo(owner="octo", name="kit", default_branch="main")
+            repo if repo is not None else Repo(owner="octo", name="kit", default_branch="main")
         )
         # Backing stores keyed by number (insertion order preserved for *_list).
         self._issues: dict[int, Issue] = {issue.number: issue for issue in issues}

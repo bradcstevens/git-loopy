@@ -225,6 +225,25 @@ def test_fake_worktree_child_satisfies_gitclient_protocol(tmp_path: Path) -> Non
     assert isinstance(lane, GitClient)
 
 
+def test_fake_list_worktrees_carries_the_branch_of_every_live_worktree(
+    tmp_path: Path,
+) -> None:
+    """Parity with the adapter: the listing names the branch, and drops removals."""
+    parent = FakeGitClient(tmp_path, branch="main")
+    lane_path = parent.common_git_dir() / "git-loopy" / "R" / "issue-7"
+    parent.add_worktree(lane_path, branch="git-loopy/R/issue-7", base="main")
+
+    listed = parent.list_worktrees()
+
+    assert {(w.path, w.branch) for w in listed} == {
+        (tmp_path, "main"),
+        (Path(lane_path), "git-loopy/R/issue-7"),
+    }
+    # A torn-down worktree leaves the listing, though its branch lives on.
+    parent.remove_worktree(lane_path)
+    assert [w.path for w in parent.list_worktrees()] == [tmp_path]
+
+
 # ---------------------------------------------------------------------------
 # FakeGitClient — Integration: merge + delete_branch (#62 / ADR-0009)
 # ---------------------------------------------------------------------------
