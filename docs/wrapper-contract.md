@@ -355,19 +355,16 @@ candidate as ready, which is the one outcome this section exists to prevent. `gh
 requirement is on the *source of the connection*, not on which `gh` subcommand fetched it.
 
 **The connection rides a read already being made.** An Orchestrator MUST NOT pay a per-candidate
-round-trip for readiness. `blockedBy` MUST be requested as a field of the calls the Orchestrator
-already makes — the §3.1 collection list read and the §3.3 authoritative re-read — so that neither
-collecting a **Pool** nor refreshing a **Membership read** (§9) costs anything extra however large
-the Pool grows. Which read a verdict is taken from is what distinguishes the two seams that decide
-it:
+round-trip for readiness. `blockedBy` MUST be requested on the §3.1 collection read and the
+**Membership read** (§9), then carried with each candidate. Thus collecting a **Pool** and
+refreshing Membership cost nothing extra however large the Pool grows.
 
-- **Pickup** (serial, §3.3) decides from the authoritative per-issue re-read it already performs to
-  confirm the candidate is still `ready-for-agent` and still open. That read is the same one whose
-  staleness check binds the issue, so a blocked candidate is passed over on facts no older than the
-  binding would have been.
-- **Lane candidacy** (Parallel mode, §9) decides from the continuously refreshed **Membership read**,
-  which is the only read a scheduler turn takes. A Lane that reserves a candidate still revalidates
-  at its own Pickup; candidacy is a *cheaper refusal taken earlier*, never a replacement for it.
+**Pickup** (serial, §3.3) takes the readiness verdict while it walks the ordered Pool, from the
+connection the collection read carried for that candidate. It MUST NOT issue a second dependency
+read to decide that verdict. **Lane candidacy** (Parallel mode, §9) takes its verdict from the
+continuously refreshed **Membership read**, which is the only read a scheduler turn takes. A Lane
+that reserves a candidate still performs its normal Pickup validation; candidacy is a *cheaper
+refusal taken earlier*, never a replacement for that validation.
 
 A **Membership read** that could not determine a candidate's blockers leaves readiness **unknown**,
 which is not ready — matching how an incomplete read already leaves the Pool's emptiness unknown

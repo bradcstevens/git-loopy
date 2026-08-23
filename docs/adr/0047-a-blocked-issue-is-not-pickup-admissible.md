@@ -27,10 +27,10 @@ discriminator's two headings. Only a human can change it, and §3.1 settles it a
 issue; a blocker closes somewhere and the candidate is admissible on the next **Iteration**.
 
 Because they are different in kind, they belong at different moments. Eligibility is decided once,
-at collection, from the cheap list read. Readiness is decided at **Pickup**, per candidate, and
-only for the candidates the runner actually reaches — walking §3.2's order front to back and
-stopping at the first admissible one. That is one dependency read per candidate considered, not
-one per candidate collected.
+at collection, from the cheap list read. The `blockedBy` connection is collected with each
+candidate and **Readiness** is decided at **Pickup**, as the runner walks §3.2's order front to
+back and stops at the first admissible one. Pickup evaluates the carried connection; it does not
+make a second dependency read.
 
 §3.3 said admission "MUST NOT be widened past that into re-deciding eligibility". That prose was
 already stale when this was decided: the serial `admit` refuses on the **Attempt lifecycle**
@@ -52,12 +52,11 @@ closure whitelist, the collection Event and the emptiness test all still need to
 that is empty ends the Run cleanly; a Pool whose candidates are merely waiting has not run out of
 work. Excluding a blocked issue would make those two indistinguishable.
 
-§3.1 also forbids the alternative on cost. Exclusions "MUST be reported as `wrapper.pool.excluded`
-Events, **before** the `wrapper.afk_ready.collected` they explain", and "MUST NOT cost an extra
-source round-trip: the cheap list read already carries the body the decision is made on." A
-`blockedBy` read is not in the cheap list read. Deciding readiness at collection would cost one
-extra read for **every** `ready-for-agent` candidate, where deciding it at Pickup costs one for
-each candidate actually considered — and on the common path, that is one.
+§3.1 also forbids the alternative on meaning. Exclusions "MUST be reported as
+`wrapper.pool.excluded` Events, **before** the `wrapper.afk_ready.collected` they explain"; a
+blocked candidate is not an exclusion even though its `blockedBy` connection rides the collection
+read. The runner decides the carried fact only at Pickup, so the Pool, its collection Event, and
+its emptiness test still retain the candidate.
 
 ## It charges no Strike
 
@@ -140,8 +139,9 @@ without its node.
 
 ## The read is GraphQL
 
-The contract pins **GraphQL** as the dependency read. This is the first GraphQL call in git-loopy;
-every existing `gh` invocation in `gh.py` is REST.
+The contract pins **GraphQL** as the dependency connection. `gh issue list` and `gh issue view`
+serve `--json blockedBy` from GraphQL, so the collection and Membership reads can carry it without
+adding a dedicated request.
 
 It is pinned rather than left to each member because REST is documented to **undercount**
 cross-repository dependencies, and it undercounts silently — there is no `totalCount` to notice
@@ -152,10 +152,10 @@ the members would mean four members with four different truths about the same is
 ## Considered and rejected
 
 - **Decide readiness at collection, as a Pool exclusion.** One decision point instead of two, and
-  it reuses machinery that already exists. Rejected because it is the wrong meaning and the wrong
-  price: a blocked issue is not an authoring mistake, an excluded candidate leaves the Pool that
-  the closure whitelist and the emptiness test still need it in, and §3.1 forbids the extra
-  round-trip it would cost on every candidate rather than on the ones considered.
+  it reuses machinery that already exists. Rejected because it is the wrong meaning: a blocked
+  issue is not an authoring mistake, and an excluded candidate leaves the Pool that the closure
+  whitelist and the emptiness test still need it in. Carrying `blockedBy` on collection changes the
+  transport cost, not that distinction.
 
 - **Leave it to the agent, as `PROMPT.md` does today.** Costs nothing and already "works": the
   agent reads the issue, notices the dependency, and stops. Rejected because it spends a whole
@@ -201,7 +201,8 @@ paragraph.
   predates this decision and is not closed here.
 - **§3.3's admissible set is now open**, and governs **Lane** pickup as well as serial Pickup, so
   [#439] implements a stated rule rather than inventing one.
-- **git-loopy acquires a GraphQL dependency.** `gh api graphql` joins the REST calls in `gh.py`.
+- **git-loopy reads the GraphQL connection through existing issue reads.** `blockedBy` rides the
+  collection and Membership reads, so readiness adds no per-candidate round-trip.
 - **A Run may end with a Pool nobody can start.** Every candidate blocked is not an All-skipped
   Run and must not read as one; [#443] settles what it reads as.
 

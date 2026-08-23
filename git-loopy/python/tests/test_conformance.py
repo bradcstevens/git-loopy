@@ -3866,6 +3866,7 @@ def test_the_readiness_read_is_graphql_one_hop_and_a_full_page() -> None:
     assert read["connection"] == "blockedBy"
     assert read["hops"] == 1
     assert read["min_page_size"] == 50
+    assert read["fetched_at"] == "collection"
     assert read["decided_at"] == "pickup"
 
 
@@ -4040,4 +4041,3 @@ def test_readiness_fixture_drives_the_python_readiness_seam(
     assert verdict.admissible is expected["admissible"], case["id"]
     assert verdict.skip_reason == expected["skip_reason"], case["id"]
     assert list(verdict.blockers) == expected.get("blockers", []), case["id"]
-
