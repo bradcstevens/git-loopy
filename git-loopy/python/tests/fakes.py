@@ -16,6 +16,7 @@ from typing import Iterable, Mapping, NoReturn, Sequence
 
 from git_loopy.gate import GateResult, LoopFailure
 from git_loopy.gh import (
+    MIN_GH_VERSION_FOR_READINESS,
     GhError,
     Issue,
     IssueListPage,
@@ -530,8 +531,10 @@ class FakeGitHubClient:
         issue_close_errors: Mapping[int, GhError] | None = None,
         issue_comment_errors: Mapping[int, GhError] | None = None,
         pr_view_errors: Mapping[int, GhError] | None = None,
+        gh_version: tuple[int, int, int] = MIN_GH_VERSION_FOR_READINESS,
     ) -> None:
         self.authed = authed
+        self.gh_version_value = gh_version
         self.repo = (
             repo if repo is not None else Repo(owner="octo", name="kit", default_branch="main")
         )
@@ -569,6 +572,9 @@ class FakeGitHubClient:
     def rate_limited_reads(self) -> int:
         """How many injected failures were GitHub throttling this Run."""
         return self._rate_limited()
+
+    def gh_version(self) -> tuple[int, int, int]:
+        return self.gh_version_value
 
     def seed_issue(self, issue: Issue) -> None:
         """Add or replace one issue in the store, as a mid-Run filing would.
@@ -622,17 +628,19 @@ class FakeGitHubClient:
         if err is not None:
             self._fail(err)
         if number in self._issue_views:
-            return self._issue_views[number]
-        try:
-            return self._issues[number]
-        except KeyError:
-            self._fail(
-                GhError(
-                    ["gh", "issue", "view", str(number)],
-                    1,
-                    f"issue #{number} not found",
+            issue = self._issue_views[number]
+        else:
+            try:
+                issue = self._issues[number]
+            except KeyError:
+                self._fail(
+                    GhError(
+                        ["gh", "issue", "view", str(number)],
+                        1,
+                        f"issue #{number} not found",
+                    )
                 )
-            )
+        return issue
 
     def issue_close(self, number: int, comment: str) -> None:
         self.issue_close_calls.append((number, comment))
