@@ -51,7 +51,7 @@ Many skills in the installed catalog exist for **human-driven sessions or upstre
 
 - `/triage` — relabels issues into the `ready-for-agent` pool.
 - `/to-spec`, `/to-tickets` — create or relabel issues (a spec and its sliced tickets) upstream of the loop.
-- `/to-questionnaire`, `/intake`, `/wayfinder` — capture and shape requirements into specs/tickets; the loop consumes their output, it doesn't produce it.
+- `/to-questionnaire`, `/wayfinder` — capture and shape requirements into specs/tickets; the loop consumes their output, it doesn't produce it.
 
 **Human-in-the-loop skills** — they need a person to answer, so they can't run unattended. Most are `disable-model-invocation: true`; `/grilling` is model-invocable but still needs a human to grill:
 
@@ -63,7 +63,9 @@ Many skills in the installed catalog exist for **human-driven sessions or upstre
 
 - `/handoff` — pointless here because each iteration is a fresh one-shot invocation; persistence happens via commits and (sparingly) issue comments, not handoff docs.
 - `/implement` — a human-driven "implement this spec end-to-end" orchestrator; this loop already *is* that orchestration (it picks one task, drives `/tdd`, and commits), so invoking it would just nest a second driver.
-- `/setup-git-loopy-skills`, `/writing-great-skills` — install or author skills, not loop work.
+- `/next` — a router whose route table hands work straight to `/implement`, so it nests that same second driver; and the runner has already bound your issue, so its selection role contradicts the binding rather than merely duplicating it.
+- `/loop-me` — starts a loop of its own, which inside a loop iteration is the nesting above one level worse.
+- `/setup-git-loopy-skills`, `/writing-for-agents`, `/writing-great-skills` — install skills or author the documents agents read, not loop work.
 
 The guidance the excluded and now-removed skills used to carry still holds and is already inlined above: favour reviewable output over token compression while running unattended, go up a layer to map an unfamiliar area before drilling in, stress-test plans against the domain docs, and reach for deep-module design via `/codebase-design`.
 
