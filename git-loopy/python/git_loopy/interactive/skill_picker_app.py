@@ -24,7 +24,7 @@ off-screen and is still in the saved policy afterwards.
 This module imports Textual at the top, so — like
 :mod:`git_loopy.interactive.picker_app` — it is reached only through a lazy
 import (:func:`git_loopy.skillscmd.run_textual_skill_picker`), and a base
-installation without the ``[tui]`` extra never loads it.
+installation never loads it unless the picker is used.
 """
 
 from __future__ import annotations

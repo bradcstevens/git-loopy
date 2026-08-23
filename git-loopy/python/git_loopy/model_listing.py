@@ -12,7 +12,7 @@ them, which is precisely what ADR-0026 requires the card not to do.
 
 **Import discipline.** The SDK is imported lazily inside the default fetch, so
 this module — and crucially the fallback path a **Run** takes when the fetch
-fails — stays importable without the optional ``[tui]`` extra and testable
+fails — stays importable without loading Textual and testable
 without a live backend.
 """
 

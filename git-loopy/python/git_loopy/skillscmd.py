@@ -222,7 +222,7 @@ def run_textual_skill_picker(
     input_fn: Callable[[str], str] = input,
     output_fn: Callable[[str], None] = print,
 ) -> SkillSelectionResult | None:
-    """Run the optional ``[tui]`` picker; return ``None`` on cancel.
+    """Run the Textual picker; return ``None`` on cancel.
 
     Signature-compatible with :func:`run_plain_skill_picker` so the two are
     interchangeable behind :data:`PickerRunner`. ``input_fn`` and ``output_fn``
@@ -248,7 +248,7 @@ def select_skill_picker(
 
     The plain-terminal picker is the base installation's guarantee, so it is the
     fallback for every invocation that cannot render a fullscreen app — the
-    ``[tui]`` extra absent, or stdout not a terminal. Both implementations drive
+    Textual unavailable, or stdout not a terminal. Both implementations drive
     the same :class:`SkillSelectionModel` and return the same
     :class:`SkillSelectionResult`, so this decides presentation only.
     """
@@ -265,7 +265,7 @@ def _stdout_isatty() -> bool:
 
 
 def _textual_importable() -> bool:
-    """Probe the ``[tui]`` extra without importing it.
+    """Probe Textual availability without importing it.
 
     Reuses the interactive path's pure probe (``importlib.util.find_spec``), so
     checking costs no Textual import and no screen side effects.

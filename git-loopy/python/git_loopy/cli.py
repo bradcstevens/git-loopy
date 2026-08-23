@@ -1371,7 +1371,7 @@ def _resolve_interactive_intent(
     """Merge the interactive *intent*: flag > env > project > global > ``None``.
 
     This produces only the operator's *stated* preference across the config
-    chain; the live TTY / ``[tui]``-extra gating is applied separately by
+    chain; the live TTY / Textual gating is applied separately by
     :func:`_should_run_interactive` (which keeps
     :func:`git_loopy.interactive.detect.resolve_interactive` unchanged).
     """
@@ -1820,7 +1820,7 @@ class ResolvedConfig:
     ``run`` is the effective :class:`RunConfig` the loop consumes.
     ``interactive`` is the merged interactive preference across the chain
     (flag > env > project > global > ``None``); it is kept *outside* ``RunConfig``
-    because the loop never consumes it — the live TTY / ``[tui]`` gating happens
+    because the loop never consumes it — the live TTY / Textual gating happens
     in :func:`_should_run_interactive`.
 
     ``routing_provenance`` and ``routing_suppressed_by`` are the *reporting* half
@@ -1997,7 +1997,7 @@ def _should_run_interactive(interactive: bool | None) -> bool:
 
     Takes the merged interactive *intent* (already resolved across the flag /
     env / project / global chain by :func:`resolve_config`) and applies the live
-    gating — stdout TTY-ness and whether the optional ``[tui]`` extra (Textual)
+    gating — stdout TTY-ness and whether Textual
     is importable — delegating the precedence to
     :func:`git_loopy.interactive.detect.resolve_interactive` (which stays
     unchanged: the merged intent is passed as its ``flag`` with no separate
@@ -2122,7 +2122,7 @@ def _model_select_unavailable_message(config: RunConfig) -> str:
 
     The startup picker is a TUI action; when it is requested on a run that takes
     no interactive path (non-TTY, ``--no-interactive``, ``GIT_LOOPY_INTERACTIVE=0``,
-    or the ``[tui]`` extra absent) there is nowhere to draw it, so the run keeps
+    or Textual absent) there is nowhere to draw it, so the run keeps
     the configured model rather than prompting.
     """
     target = config.model or "the configured model"

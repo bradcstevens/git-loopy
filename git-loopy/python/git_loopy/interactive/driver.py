@@ -83,7 +83,7 @@ __all__ = [
 #: It reports a fault that took a live view the operator *had*. A Dashboard that
 #: never started (#326) is reported by its notice and its record but not here:
 #: the run was a line-printer run from its first line, exactly as it is when the
-#: ``[tui]`` extra is absent, and the exit code stays the work's own.
+#: Textual is unavailable, and the exit code stays the work's own.
 EXIT_DASHBOARD_FAULT = 3
 
 #: Factory for the observing app, injected so tests can swap in a fake app and
@@ -126,7 +126,7 @@ class DashboardFault:
     * the exit code is left to the work. A mid-**Run** fault takes something the
       operator had, so it is reported in the exit code (:data:`EXIT_DASHBOARD_FAULT`
       when the loop itself came out clean). A Dashboard that never started is the
-      case the ``[tui]``-extra-absent path already handles as an ordinary
+      case the Textual-unavailable path already handles as an ordinary
       line-printer run, and there is one behaviour to learn rather than two.
     """
 
@@ -297,7 +297,7 @@ class InteractiveDriver:
         :data:`EXIT_DASHBOARD_FAULT` — the only remaining fact worth reporting.
         A fault *at startup* leaves the exit code entirely to the work: nothing
         was taken from the operator mid-run, and this is the case the
-        ``[tui]``-extra-absent path already reports as an ordinary line-printer
+        Textual-unavailable path already reports as an ordinary line-printer
         run (see :class:`DashboardFault`).
         """
         try:

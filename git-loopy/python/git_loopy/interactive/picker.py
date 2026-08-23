@@ -28,7 +28,7 @@ inside the default ``run_app``, and the SDK ``CopilotClient`` lazily inside
 :func:`git_loopy.model_listing.fetch_live_models`. Together with the injectable
 ``fetch`` / ``run_app`` seams this
 keeps :func:`resolve_run_model` — and crucially its fallback path — importable
-and unit-testable without the optional ``[tui]`` extra and without a live
+and unit-testable without importing Textual and without a live
 backend (mirrors how :mod:`git_loopy.interactive.driver` keeps Textual out of
 :mod:`git_loopy.loop`).
 """
