@@ -198,11 +198,15 @@ def _resolve_identity(
 ) -> tuple[str | None, bool | None]:
     """Read the local checkout identity when this artifact retains one."""
     repository = _find_repository(executable)
-    if repository is None or not _is_git_loopy_checkout(repository):
+    if repository is not None and not _is_git_loopy_checkout(repository):
         identity = _metadata_identity(release_version)
         if identity is not None:
             return identity
+        return None, None
     if repository is None:
+        identity = _metadata_identity(release_version)
+        if identity is not None:
+            return identity
         repository = _find_repository(Path(__file__))
     if repository is None:
         return None, None
@@ -233,11 +237,10 @@ def _metadata_identity(release_version: str | None) -> tuple[str | None, bool | 
         commit = vcs_info.get("commit_id")
         revision = vcs_info.get("requested_revision")
         if isinstance(commit, str) and _COMMIT.fullmatch(commit):
-            published = (
-                revision in {release_version, f"v{release_version}"}
-                if release_version is not None and isinstance(revision, str)
-                else False
-            )
+            published: bool | None = None
+            if release_version is not None and isinstance(revision, str):
+                if revision in {release_version, f"v{release_version}"}:
+                    published = True
             return commit, published
 
     url = metadata.get("url")

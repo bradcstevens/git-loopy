@@ -190,6 +190,43 @@ def test_inventory_uses_package_metadata_for_a_consumer_project(
     assert inventory.edge_install is True
 
 
+def test_inventory_does_not_report_a_consumer_head_without_provenance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repository, executable = _write_checkout(tmp_path, commit="1" * 40)
+    (repository / "git-loopy").rename(repository / "consumer")
+    monkeypatch.setattr(installation, "_metadata_identity", lambda _version: None)
+
+    inventory = installation.inspect_installation(
+        env={"HOME": str(tmp_path / "home")},
+        executable_path=executable,
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.resolved_commit is None
+    assert inventory.published is None
+    assert inventory.edge_install is None
+
+
+def test_vcs_metadata_only_proves_a_release_tag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commit = "3" * 40
+
+    class _Distribution:
+        def read_text(self, filename: str) -> str:
+            assert filename == "direct_url.json"
+            return (
+                '{"url": "https://example.invalid/git-loopy", '
+                '"vcs_info": {"commit_id": "' + commit + '", '
+                '"requested_revision": "main"}}'
+            )
+
+    monkeypatch.setattr(installation, "distribution", lambda _name: _Distribution())
+
+    assert installation._metadata_identity("1.2.3") == (commit, None)
+
+
 def test_inventory_json_shape_is_stable(tmp_path: Path) -> None:
     commit = "d" * 40
     _repository, executable = _write_checkout(
