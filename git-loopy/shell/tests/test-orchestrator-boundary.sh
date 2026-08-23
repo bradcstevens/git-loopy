@@ -917,8 +917,13 @@ assert_equal "1" "$(<"$FAKE_COPILOT_CALLS")" \
   "blocked candidate never started a session"
 
 # A Pool containing only Blocked candidates is still non-empty and its skipped
-# candidates charge no Strike. The all-waiting end state itself belongs to #443;
-# this port only proves it does not spend an agent session to rediscover it.
+# candidates charge no Strike, so no session is spent rediscovering the fact.
+# Wrapper contract §10/§14.3: a Pickup that walked a non-empty Pool and bound
+# none of it ends the Run under `all_skipped` (exit 1) rather than reporting the
+# exit-0 empty queue — "there is nothing to do" and "I could not take any of
+# what there is" are different facts. Ending here rather than re-walking is what
+# the reference member does; the *reading* an all-Blocked Pool deserves is #443's
+# to change, in all four members at once.
 repo="$temp_dir/readiness-all-blocked"
 fake_bin="$temp_dir/readiness-all-blocked-bin"
 make_real_repo "$repo"
@@ -933,21 +938,30 @@ export FAKE_GH_LIST_COUNT="$temp_dir/readiness-all-blocked-list.count"
 export FAKE_GH_LIST_JSON="$temp_dir/readiness-all-blocked-list.json"
 export FAKE_GH_VIEW_DIR="$temp_dir/readiness-all-blocked-views"
 setup_copilot_env "readiness-all-blocked"
-if ! run_turn_entrypoint \
+set +e
+run_turn_entrypoint \
   "$repo" "$fake_bin" "$temp_dir/readiness-all-blocked.stdout" \
-  "$temp_dir/readiness-all-blocked.stderr" 1; then
-  fail "all-Blocked Pickup Run did not exit 0: $(<"$temp_dir/readiness-all-blocked.stderr")"
-fi
+  "$temp_dir/readiness-all-blocked.stderr" 5
+status=$?
+set -e
+assert_equal "1" "$status" \
+  "an all-Blocked Pool aborts the Run instead of reporting a finished queue"
 [[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
   fail "all-Blocked Pool started a session"
 jq -se '
   ([.[] | select(.type == "wrapper.pickup.skipped")] | length == 1)
   and ([.[] | select(.type == "wrapper.pickup.bound")] | length == 0)
   and ([.[] | select(.type == "wrapper.strike")] | length == 0)
+  and ([.[] | select(.type == "wrapper.iteration.end") | .outcome]
+    == ["all_skipped"])
   and (.[-1].type == "wrapper.run.end")
-  and (.[-1].outcome == "iteration_cap")
+  and (.[-1].outcome == "all_skipped")
+  and (.[-1].iterations_run == 1)
 ' "$temp_dir/readiness-all-blocked.stdout" >/dev/null ||
-  fail "all-Blocked Pool did not remain waiting without a Strike"
+  fail "all-Blocked Pool did not end the Run all_skipped without a Strike"
+assert_contains "$(<"$temp_dir/readiness-all-blocked.stderr")" \
+  "serial Pickup bound nothing" \
+  "the all-skipped ending names what it could not take"
 
 export FAKE_GH_LOG="$temp_dir/github-cap-gh.log"
 export FAKE_GH_LIST_COUNT="$temp_dir/github-cap-list.count"
@@ -2295,6 +2309,108 @@ jq -se '
   assert_equal "priority" "$(jq -r '.reason' <<<"$emitted")" \
     "a Priority head is bound because it carried the label, not because of order"
 ) || fail "the shell Pickup record does not say why it bound what it bound"
+
+# ADR-0047 / §3.3.1: **Readiness** is asked of a *candidate*, and what the answer
+# depends on is the source it came from. The GitHub source carries a `blockedBy`
+# connection collection already paid for; the local-markdown source has no native
+# dependency graph at all, so it has nothing to be **Blocked** by. Naming that
+# seam keeps the source question out of the Pickup walk, where it would otherwise
+# read as a second opinion about which backend is running.
+(
+  # shellcheck source=../lib/orchestrator.sh
+  source "$port_dir/lib/orchestrator.sh"
+
+  GIT_LOOPY_ISSUE_SOURCE="github"
+  blocked='{"number": 51, "blocked_by": {"totalCount": 1, "nodes": [{
+    "id": "n", "number": 50, "state": "OPEN", "title": "t",
+    "url": "https://github.com/example/repo/issues/50"}]}}'
+  assert_equal \
+    '{"admissible":false,"blockers":["example/repo#50"],"skip_reason":"blocked_by_open_dependency","verdict":"blocked"}' \
+    "$(jq -cS . <<<"$(git_loopy_candidate_readiness "$blocked")")" \
+    "a GitHub candidate is judged on the connection its collection carried"
+
+  unread='{"number": 52}'
+  assert_equal "readiness_unprovable" \
+    "$(jq -r '.skip_reason' <<<"$(git_loopy_candidate_readiness "$unread")")" \
+    "a GitHub candidate whose connection never arrived is not proven ready"
+
+  GIT_LOOPY_ISSUE_SOURCE="prds"
+  markdown='{"ref": "prds/feature/001-thing.md", "title": "t", "body": "b"}'
+  assert_equal \
+    '{"admissible":true,"blockers":[],"skip_reason":null,"verdict":"ready"}' \
+    "$(jq -cS . <<<"$(git_loopy_candidate_readiness "$markdown")")" \
+    "a local-markdown candidate has no dependency graph and is ready"
+) || fail "the shell Readiness seam does not answer per candidate source"
+
+# #438's preflight safeguard: `blockedBy` rides the collection read, and a `gh`
+# that cannot serve the field fails *inside* that read -- which this port's
+# collection reports as an empty **Pool**, i.e. as a finished Run. The floor is
+# established once, before a Pool exists. It is asserted through
+# `GIT_LOOPY_MIN_GH_VERSION_FOR_READINESS` rather than against transcribed
+# numbers, because a gate that agreed with a copy of the constant would keep
+# agreeing after the constant moved.
+(
+  # shellcheck source=../lib/orchestrator.sh
+  source "$port_dir/lib/orchestrator.sh"
+
+  stub_version=""
+  gh() {
+    [[ "${1-}" == "--version" ]] || return 90
+    printf 'gh version %s (2026-01-01)\nhttps://github.com/cli/cli/releases/tag/v%s\n' \
+      "$stub_version" "$stub_version"
+  }
+
+  GIT_LOOPY_MIN_GH_VERSION_FOR_READINESS="3.10.2"
+  for accepted in 3.10.2 3.10.3 3.11.0 4.0.0; do
+    stub_version="$accepted"
+    git_loopy_verify_readiness_capability 2>/dev/null ||
+      fail "gh $accepted was refused against a 3.10.2 Readiness floor"
+  done
+  for refused in 3.10.1 3.9.99 2.94.0 1.99.99; do
+    stub_version="$refused"
+    if git_loopy_verify_readiness_capability 2>/dev/null; then
+      fail "gh $refused was accepted against a 3.10.2 Readiness floor"
+    fi
+  done
+
+  GIT_LOOPY_MIN_GH_VERSION_FOR_READINESS="2.94.0"
+  stub_version="2.94.0"
+  git_loopy_verify_readiness_capability 2>/dev/null ||
+    fail "gh 2.94.0 -- the release that added blockedBy -- was refused"
+  stub_version="2.93.9"
+  message="$(git_loopy_verify_readiness_capability 2>&1)" &&
+    fail "gh 2.93.9 was accepted for a Readiness collection"
+  assert_contains "$message" "gh 2.93.9 cannot read issue dependencies (blockedBy)" \
+    "the refusal names the gh that cannot answer"
+  assert_contains "$message" "requires gh >= 2.94.0" \
+    "the refusal names the floor the operator must reach"
+
+  # `gh` does not ship these shapes today, but the gate is the one thing standing
+  # between an operator and a Run that reports "no work" when it means "I could
+  # not ask" -- so it may not refuse a capable `gh` over how the number was
+  # written. A component is decimal however it is spelled (bare arithmetic reads
+  # `08` as a bad octal literal and aborts), and a build with a fourth component
+  # is still the release its first three name.
+  stub_version="2.08.0"
+  if git_loopy_verify_readiness_capability 2>/dev/null; then
+    fail "gh 2.08.0 was accepted: 8 was not compared numerically against 94"
+  fi
+  stub_version="2.094.0"
+  git_loopy_verify_readiness_capability 2>/dev/null ||
+    fail "gh 2.094.0 was refused: a zero-padded component is still 94"
+  stub_version="2.94.0.1"
+  git_loopy_verify_readiness_capability 2>/dev/null ||
+    fail "gh 2.94.0.1 was refused: a fourth component is not a fourth opinion"
+
+  gh() { return 91; }
+  if git_loopy_verify_readiness_capability 2>/dev/null; then
+    fail "a gh that could not report its version was accepted"
+  fi
+  gh() { printf 'not a version string\n'; }
+  if git_loopy_verify_readiness_capability 2>/dev/null; then
+    fail "an unparseable gh version was accepted"
+  fi
+) || fail "the shell Readiness preflight does not follow its named gh floor"
 
 # A **Pickup** is *prospective*: it names the issue as the work on it begins, so
 # Active time starts at the binding. Only the three after-the-fact fallbacks are

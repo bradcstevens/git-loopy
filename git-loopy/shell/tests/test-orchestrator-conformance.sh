@@ -98,6 +98,42 @@ while IFS= read -r case_json; do
   assert_equal "$expected" "$actual" "issue-readiness fixture: $case_id"
 done < <(jq -c '.cases[]' "$conformance_dir/issue-readiness.json")
 
+# §3.3.1 — the connection MUST ride a read this port already makes, and the
+# fixture's `read` block is what says which read and which field. The verdict
+# adapter above cannot see that: it would keep passing while a port paid one
+# dedicated dependency round-trip per candidate.
+#
+# One assertion here binds production and the rest are a tripwire, which is the
+# split to read them by. `connection` is checked *against* the one place this
+# port names its shallow field set, so dropping `blockedBy` from that constant
+# fails here. `transport`, `fetched_at`, `decided_at` and `hops` assert the
+# fixture alone: this port issues no GraphQL of its own and names no page size,
+# so it has no counterpart to compare them to. They earn their place by failing
+# the moment the shared read shape moves under a member -- if `fetched_at` went
+# back to `pickup`, the membership assertion below would still pass while this
+# port's whole reason for riding the collection read had evaporated, and a
+# member that reads its verdict out of a fixture it no longer matches is exactly
+# the drift the Conformance suite exists to catch.
+readiness_read="$(jq -c '.read' "$conformance_dir/issue-readiness.json")"
+assert_equal "graphql" "$(jq -r '.transport' <<<"$readiness_read")" \
+  "issue-readiness read: GraphQL, never REST"
+assert_equal "collection" "$(jq -r '.fetched_at' <<<"$readiness_read")" \
+  "issue-readiness read: the connection rides the collection read"
+assert_equal "pickup" "$(jq -r '.decided_at' <<<"$readiness_read")" \
+  "issue-readiness read: the verdict is taken at Pickup"
+assert_equal "1" "$(jq -r '.hops' <<<"$readiness_read")" \
+  "issue-readiness read: one hop, never traversed"
+# `gh --json <connection>` is GraphQL-backed and pages the connection itself, so
+# this port meets `transport` and `min_page_size` by asking for the field on a
+# read it already makes rather than by naming a page size of its own.
+readiness_connection="$(jq -r '.connection' <<<"$readiness_read")"
+case ",$GIT_LOOPY_SHALLOW_ISSUE_FIELDS," in
+  *",$readiness_connection,"*) ;;
+  *)
+    fail "issue-readiness read: the shallow field set does not request $readiness_connection"$'\n'"fields:   $GIT_LOOPY_SHALLOW_ISSUE_FIELDS"
+    ;;
+esac
+
 # Wrapper contract §3.2 — the total order over eligible issues (#391, ADR-0032).
 # The adapter drives the fixture through `git_loopy_order_issues` itself; a
 # reimplementation here would pass while the Orchestrator ordered a Pool
