@@ -80,6 +80,23 @@ def test_inventory_proves_a_uv_tool_launcher_symlink(tmp_path: Path) -> None:
     )
 
 
+def test_inventory_proves_a_windows_uv_tool_launcher(tmp_path: Path) -> None:
+    appdata = tmp_path / "AppData" / "Roaming"
+    executable = appdata / "uv" / "bin" / "git-loopy.exe"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+
+    inventory = installation.inspect_installation(
+        env={"APPDATA": str(appdata)},
+        executable_path=executable,
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.install_channel == installation.InstallChannel(
+        name="uv-tool", proven=True
+    )
+
+
 def test_inventory_does_not_guess_at_the_shared_xdg_bin_location() -> None:
     """The shell launcher and uv can both own this pathname."""
     inventory = installation.inspect_installation(
@@ -179,6 +196,24 @@ def test_inventory_recognizes_a_packed_annotated_release_tag(tmp_path: Path) -> 
 
     assert inventory.published is True
     assert inventory.edge_install is False
+
+
+def test_inventory_reads_a_packed_head_ref(tmp_path: Path) -> None:
+    commit = "a" * 40
+    repository, executable = _write_checkout(tmp_path, commit=commit, tag_commit=commit)
+    (repository / ".git" / "refs" / "heads" / "main").unlink()
+    (repository / ".git" / "packed-refs").write_text(
+        f"{commit} refs/heads/main\n",
+        encoding="utf-8",
+    )
+
+    inventory = installation.inspect_installation(
+        env={"HOME": str(tmp_path / "home")},
+        executable_path=executable,
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.resolved_commit == commit
 
 
 def test_inventory_uses_package_metadata_for_a_consumer_project(

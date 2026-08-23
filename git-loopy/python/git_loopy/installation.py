@@ -127,6 +127,8 @@ def _resolve_channel(executable: Path, env: Mapping[str, str]) -> InstallChannel
     resolved = _resolve_link(executable)
     if _is_relative_to(resolved, _uv_tool_dir(env) / "git-loopy"):
         return InstallChannel(name="uv-tool", proven=True)
+    if _is_windows_uv_launcher(executable, env):
+        return InstallChannel(name="uv-tool", proven=True)
     if any(
         _is_relative_to(resolved, prefix / "Cellar" / "git-loopy")
         for prefix in _homebrew_prefixes(env)
@@ -147,6 +149,17 @@ def _uv_tool_dir(env: Mapping[str, str]) -> Path:
     home = env.get("HOME")
     base = Path(home) if home and home.strip() else Path.home()
     return base / ".local" / "share" / "uv" / "tools"
+
+
+def _is_windows_uv_launcher(executable: Path, env: Mapping[str, str]) -> bool:
+    """Recognize uv's copied Windows launcher from its owned bin directory."""
+    if executable.name.casefold() != "git-loopy.exe":
+        return False
+    configured = env.get("UV_TOOL_BIN_DIR")
+    if configured and configured.strip():
+        return executable.parent == Path(configured)
+    appdata = env.get("APPDATA")
+    return bool(appdata and executable.parent == Path(appdata) / "uv" / "bin")
 
 
 def _homebrew_prefixes(env: Mapping[str, str]) -> tuple[Path, ...]:
@@ -308,13 +321,15 @@ def _common_git_dir(git_dir: Path) -> Path:
 
 
 def _read_ref(git_dir: Path, ref: str) -> str | None:
-    for directory in (git_dir, _common_git_dir(git_dir)):
+    common = _common_git_dir(git_dir)
+    for directory in (git_dir, common):
         try:
             value = (directory / ref).read_text(encoding="utf-8").strip()
         except (OSError, UnicodeError):
             continue
         return value
-    return None
+    packed = _packed_ref(common, ref)
+    return packed[0] if packed is not None else None
 
 
 def _is_published_release(
@@ -336,9 +351,13 @@ def _is_published_release(
         tagged, peeled = packed
         if peeled is not None:
             return peeled == commit
+        if tagged == commit:
+            return True
         return _peel_tag(git_dir, tagged) == commit
     if not _COMMIT.fullmatch(tagged):
         return None
+    if tagged == commit:
+        return True
     return _peel_tag(git_dir, tagged) == commit
 
 
@@ -367,7 +386,7 @@ def _peel_tag(git_dir: Path, object_id: str) -> str | None:
     try:
         text = zlib.decompress(object_path.read_bytes()).decode("utf-8")
     except (OSError, UnicodeError, zlib.error):
-        return object_id
+        return None
     header, _, body = text.partition("\x00")
     if not header.startswith("tag "):
         return object_id
