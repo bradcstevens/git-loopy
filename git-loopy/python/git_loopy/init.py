@@ -306,38 +306,13 @@ def _collect_model_and_effort(
 ) -> tuple[str, str | None]:
     """Interactively seed the run's model + reasoning effort from a numbered list."""
     choices = _load_model_choices(fetch_choices, warn=warn)
-
-    model_index = _ask_index(
-        input_fn,
-        output_fn,
-        "Select a model:",
-        [_model_label(c) for c in choices],
-        default_index=default_cursor_index(choices, preferred=default_model),
-        selectable=[c.selectable for c in choices],
-        prompt_label="Model",
+    return _select_model_and_effort_from_choices(
+        input_fn=input_fn,
+        output_fn=output_fn,
+        choices=choices,
+        default_model=default_model,
+        default_effort=default_effort,
     )
-    chosen = choices[model_index]
-
-    if not chosen.supported_efforts:
-        output_fn(f"  {chosen.id} takes no reasoning effort; skipping.")
-        return chosen.id, None
-
-    efforts = list(chosen.supported_efforts)
-    if chosen.id == default_model and default_effort in efforts:
-        effort_default = efforts.index(default_effort)
-    elif chosen.default_effort in efforts:
-        effort_default = efforts.index(chosen.default_effort)
-    else:
-        effort_default = len(efforts) - 1
-    effort_index = _ask_index(
-        input_fn,
-        output_fn,
-        f"Select a reasoning effort for {chosen.id}:",
-        efforts,
-        default_index=effort_default,
-        prompt_label="Reasoning effort",
-    )
-    return chosen.id, efforts[effort_index]
 
 
 def _load_model_choices(
@@ -724,7 +699,6 @@ def run_init(
     required_skills: Sequence[str] | None = None,
     label_client: Any = None,
     writer: Callable[[Path, Mapping[str, object]], None] = settings.write_config_atomic,
-    **legacy: Any,
 ) -> int:
     """Run the first-run setup wizard; write Config (and optional assets) and exit.
 
@@ -739,15 +713,7 @@ def run_init(
         default_effort = _DEFAULT_REASONING_EFFORT
     if warn is None:
         warn = _warn
-    # Keep old callers source-compatible during the expand phase. These are
-    # intentionally not part of the entrypoint contract; the single runner is
-    # the seam new callers use.
-    input_fn = legacy.pop("input_fn", input)
-    output_fn = legacy.pop("output_fn", print)
-    picker_runner = legacy.pop("picker_runner", None)
-    if legacy:
-        unexpected = ", ".join(sorted(legacy))
-        raise TypeError(f"unexpected run_init arguments: {unexpected}")
+    output_fn: Callable[[str], None] = print
 
     # Setup is where git-loopy acquires the Skills it runs on, and it happens
     # before anything is collected: the Skill policy the operator is about to
@@ -772,13 +738,7 @@ def run_init(
             raise _ScopeUnavailable(
                 "the project scope needs a git repository; run inside one or use --global."
             )
-        scope_options = (
-            (scope,)
-            if scope is not None
-            else ("project", "global")
-            if repo_root is not None
-            else ("global",)
-        )
+        scope_options = (scope,) if scope is not None else ("project", "global")
         model_choices = (
             _load_model_choices(fetch_choices, warn=warn) if not assume_yes else []
         )
@@ -826,11 +786,9 @@ def run_init(
                     scope=selected_scope,
                     repo_root=repo_root,
                     env=env,
-                    input_fn=input_fn,
-                    output_fn=output_fn,
                     client_factory=client_factory,
                     discoverer=discoverer,
-                    picker_runner=picker_runner,
+                    picker_runner=None,
                     git=git,
                     required_skills=_post_setup_required_skills(
                         repo_root=repo_root,
@@ -849,12 +807,13 @@ def run_init(
                 default_model=default_model,
                 default_effort=default_effort,  # type: ignore[arg-type]
                 rebuild_skill_selection=rebuild_skill_selection,
-                input_fn=input_fn,
-                output_fn=output_fn,
-                warn=warn,
             )
             if answers is None:
                 raise InitCancelled
+            if answers.scope not in scope_options:
+                raise _ScopeUnavailable(
+                    f"wizard returned unavailable scope {answers.scope!r}"
+                )
             resolved_scope = answers.scope
             targets = _resolve_targets(resolved_scope, repo_root, env)
             model = answers.model
