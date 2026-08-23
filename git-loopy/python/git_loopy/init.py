@@ -17,11 +17,10 @@ is machine-wide by construction, so a project scope never gets a copy of it.
 
 Design (mirrors :mod:`git_loopy.settings` being the pure I/O half):
 
-* **Fully injectable.** :func:`run_init` takes its ``input_fn`` / ``output_fn``,
-  its scaffold **target dirs** (derived from an injected ``repo_root`` + ``env``),
-  its installed Skill catalog, and its live-model ``fetch_choices`` seam, so no
-  test touches the real TTY, ``~/.config``, or a live backend (prior art:
-  ``tests/test_cli_interactive.py``).
+* **Fully injectable.** :func:`run_init` takes one ``wizard_runner`` seam. The
+  runner receives the scope/model choices, defaults, and a Skill-selection
+  rebuild callback, so no test touches the real TTY, ``~/.config``, or a live
+  backend (prior art: ``tests/test_cli_interactive.py``).
 * **Collect-then-commit.** Every decision (scope, model, effort, the closed-world
   **Skill policy**, and whether to scaffold the prompt override) is gathered
   *first*. Nothing in the chosen scope is written until all prompts succeed, so
@@ -90,6 +89,21 @@ _UNSET: object = object()
 
 class InitCancelled(Exception):
     """Raised internally when the operator cancels a prompt (``q`` / EOF / Ctrl-C)."""
+
+
+@dataclass(frozen=True)
+class InitAnswers:
+    """The complete answer set returned by an interactive setup runner."""
+
+    scope: str
+    model: str
+    effort: str | None
+    routing: dict[str, tuple[str, str]] | None
+    scaffold: bool
+    enabled_skills: tuple[str, ...]
+
+
+WizardRunner = Callable[..., InitAnswers | None]
 
 
 # ---------------------------------------------------------------------------
@@ -292,38 +306,13 @@ def _collect_model_and_effort(
 ) -> tuple[str, str | None]:
     """Interactively seed the run's model + reasoning effort from a numbered list."""
     choices = _load_model_choices(fetch_choices, warn=warn)
-
-    model_index = _ask_index(
-        input_fn,
-        output_fn,
-        "Select a model:",
-        [_model_label(c) for c in choices],
-        default_index=default_cursor_index(choices, preferred=default_model),
-        selectable=[c.selectable for c in choices],
-        prompt_label="Model",
+    return _select_model_and_effort_from_choices(
+        input_fn=input_fn,
+        output_fn=output_fn,
+        choices=choices,
+        default_model=default_model,
+        default_effort=default_effort,
     )
-    chosen = choices[model_index]
-
-    if not chosen.supported_efforts:
-        output_fn(f"  {chosen.id} takes no reasoning effort; skipping.")
-        return chosen.id, None
-
-    efforts = list(chosen.supported_efforts)
-    if chosen.id == default_model and default_effort in efforts:
-        effort_default = efforts.index(default_effort)
-    elif chosen.default_effort in efforts:
-        effort_default = efforts.index(chosen.default_effort)
-    else:
-        effort_default = len(efforts) - 1
-    effort_index = _ask_index(
-        input_fn,
-        output_fn,
-        f"Select a reasoning effort for {chosen.id}:",
-        efforts,
-        default_index=effort_default,
-        prompt_label="Reasoning effort",
-    )
-    return chosen.id, efforts[effort_index]
 
 
 def _load_model_choices(
@@ -549,6 +538,49 @@ def _collect_skill_policy(
         ) from exc
 
 
+def _validate_skill_policy(
+    enabled: Sequence[str],
+    *,
+    scope: str,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    client_factory: Callable[[], Any] | None,
+    discoverer: Any,
+    git: Any,
+    required_skills: Sequence[str] | None,
+    installed_skills_dir: Path,
+) -> None:
+    """Resolve a policy the runner produced without going through the picker.
+
+    The rebuild callback validates whatever *it* collects, but the seam lets a
+    runner return an answer set it assembled some other way — or never collect
+    one at all. ADR-0015's closed world is a property of what setup *writes*,
+    not of the path the answer took to get here, so the policy about to be
+    committed is resolved once more against the same rule.
+    """
+    from git_loopy import skillscmd
+
+    options: dict[str, Any] = {}
+    if discoverer is not None:
+        options["discoverer"] = discoverer
+    try:
+        skillscmd.validate_skill_policy(
+            enabled,
+            scope=scope,
+            repo_root=repo_root,
+            env=env,
+            client_factory=client_factory,
+            git=git,
+            required_skills=required_skills,
+            installed_skills_dir=installed_skills_dir,
+            **options,
+        )
+    except skillscmd.SKILL_POLICY_FAILURES as exc:
+        raise _SkillPolicyUnavailable(
+            f"cannot establish a Skill policy: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
 def _resolve_scope(
     scope: str | None,
     *,
@@ -590,15 +622,122 @@ class _ScopeUnavailable(Exception):
     """Raised when the project scope is requested outside a git repository."""
 
 
+def _default_wizard_runner(
+    *,
+    scope_options: Sequence[str],
+    model_choices: Sequence[ModelChoice],
+    default_model: str,
+    default_effort: str | None,
+    rebuild_skill_selection: Callable[..., tuple[str, ...]],
+    scope_locked: bool = False,
+    input_fn: Callable[[str], str] = input,
+    output_fn: Callable[[str], None] = print,
+    warn: Callable[[str], None] = print,
+) -> InitAnswers:
+    """Collect answers with the existing numbered prompts.
+
+    This is deliberately a boring adapter: issue 504 moves the seam, while the
+    Textual application and removal of these renderers belong to later issues.
+    """
+    if scope_locked:
+        # The operator already fixed the scope with a flag, so there is nothing
+        # to ask. A *single* option is not the same thing: outside a repository
+        # the question still has something to tell the operator, below.
+        resolved_scope = scope_options[0]
+    else:
+        labels = [
+            "project  (this repository: <repo>/git-loopy/)"
+            if "project" in scope_options
+            else "project  (unavailable: not in a git repository)",
+            "global   (this machine: ~/.config/git-loopy/)",
+        ]
+        selectable = [option in scope_options for option in ("project", "global")]
+        scope_index = _ask_index(
+            input_fn,
+            output_fn,
+            "Configure git-loopy for which scope?",
+            labels,
+            default_index=0 if selectable[0] else 1,
+            selectable=selectable,
+            prompt_label="Scope",
+        )
+        resolved_scope = ("project", "global")[scope_index]
+    model, effort = _select_model_and_effort_from_choices(
+        input_fn=input_fn,
+        output_fn=output_fn,
+        choices=model_choices,
+        default_model=default_model,
+        default_effort=default_effort,
+    )
+    routing = (
+        collect_routing(
+            input_fn=input_fn,
+            output_fn=output_fn,
+            fetch_choices=lambda: model_choices,
+            warn=warn,
+        )
+        if _ask_yes_no(input_fn, "Configure per-task-type routing?", default=False)
+        else None
+    )
+    scaffold = _ask_yes_no(
+        input_fn,
+        "Also scaffold an editable PROMPT.md override into "
+        f"the {resolved_scope} scope?",
+        default=True,
+    )
+    enabled = rebuild_skill_selection(scaffold, resolved_scope)
+    return InitAnswers(resolved_scope, model, effort, routing, scaffold, tuple(enabled))
+
+
+def _select_model_and_effort_from_choices(
+    *,
+    input_fn: Callable[[str], str],
+    output_fn: Callable[[str], None],
+    choices: Sequence[ModelChoice],
+    default_model: str,
+    default_effort: str | None,
+) -> tuple[str, str | None]:
+    """Numbered model/effort collection over an already-fetched choice list."""
+    model_index = _ask_index(
+        input_fn,
+        output_fn,
+        "Select a model:",
+        [_model_label(choice) for choice in choices],
+        default_index=default_cursor_index(choices, preferred=default_model),
+        selectable=[choice.selectable for choice in choices],
+        prompt_label="Model",
+    )
+    chosen = choices[model_index]
+    if not chosen.supported_efforts:
+        output_fn(f"  {chosen.id} takes no reasoning effort; skipping.")
+        return chosen.id, None
+    efforts = list(chosen.supported_efforts)
+    effort_default = (
+        efforts.index(default_effort)
+        if chosen.id == default_model and default_effort in efforts
+        else efforts.index(chosen.default_effort)
+        if chosen.default_effort in efforts
+        else len(efforts) - 1
+    )
+    effort_index = _ask_index(
+        input_fn,
+        output_fn,
+        f"Select a reasoning effort for {chosen.id}:",
+        efforts,
+        default_index=effort_default,
+        prompt_label="Reasoning effort",
+    )
+    return chosen.id, efforts[effort_index]
+
+
 def run_init(
     *,
     scope: str | None,
     assume_yes: bool,
     repo_root: Path | None,
     env: Mapping[str, str],
-    input_fn: Callable[[str], str] = input,
-    output_fn: Callable[[str], None] = print,
     fetch_choices: Callable[[], Sequence[ModelChoice]] = _default_fetch_choices,
+    wizard_runner: WizardRunner = _default_wizard_runner,
     packaged_prompt: Path | None = None,
     installed_skills: Path | None = None,
     default_model: str | None = None,
@@ -606,7 +745,6 @@ def run_init(
     warn: Callable[[str], None] | None = None,
     client_factory: Callable[[], Any] | None = None,
     discoverer: Any = None,
-    picker_runner: Any = None,
     git: Any = None,
     required_skills: Sequence[str] | None = None,
     label_client: Any = None,
@@ -625,6 +763,8 @@ def run_init(
         default_effort = _DEFAULT_REASONING_EFFORT
     if warn is None:
         warn = _warn
+    input_fn: Callable[[str], str] = input
+    output_fn: Callable[[str], None] = print
 
     # Setup is where git-loopy acquires the Skills it runs on, and it happens
     # before anything is collected: the Skill policy the operator is about to
@@ -645,12 +785,16 @@ def run_init(
         output_fn(describe_refresh(outcome))
 
     try:
-        resolved_scope = _resolve_scope(
-            scope,
-            assume_yes=assume_yes,
-            repo_root=repo_root,
-            input_fn=input_fn,
-            output_fn=output_fn,
+        if scope == "project" and repo_root is None:
+            raise _ScopeUnavailable(
+                "the project scope needs a git repository; run inside one or use --global."
+            )
+        scope_options = (
+            (scope,) if scope is not None else ("project", "global")
+            if repo_root is not None else ("global",)
+        )
+        model_choices = (
+            _load_model_choices(fetch_choices, warn=warn) if not assume_yes else []
         )
     except _ScopeUnavailable as exc:
         warn(str(exc))
@@ -661,8 +805,16 @@ def run_init(
 
     # Resolve the write targets + packaged sources up front so the collect phase
     # reads the same paths the commit phase will write (collect-then-commit).
+    resolved_scope = scope or ("project" if repo_root is not None else "global")
     targets = _resolve_targets(resolved_scope, repo_root, env)
     prompt_source = packaged_prompt or _packaged_prompt_path()
+    #: Every ``(scope, scaffold, policy)`` the rebuild callback already resolved,
+    #: so the answer set the runner returns is re-resolved only when it is a new
+    #: one. ``scaffold`` belongs in the key because it *selects the requirement*:
+    #: a scaffolding setup resolves Required Skills against the packaged prompt
+    #: and a non-scaffolding one against whatever prompt is already on disk, so
+    #: the same policy can be valid under one and invalid under the other.
+    validated_policies: list[tuple[str, bool, tuple[str, ...]]] = []
 
     try:
         if assume_yes:
@@ -687,58 +839,94 @@ def run_init(
                 )
             )
         else:
-            model, effort = _collect_model_and_effort(
-                input_fn=input_fn,
-                output_fn=output_fn,
-                fetch_choices=fetch_choices,
-                default_model=default_model,
-                default_effort=default_effort,  # type: ignore[arg-type]
-                warn=warn,
-            )
-            routing = (
-                collect_routing(
-                    input_fn=input_fn,
-                    output_fn=output_fn,
-                    fetch_choices=fetch_choices,
-                    warn=warn,
-                )
-                if _ask_yes_no(
-                    input_fn,
-                    "Configure per-task-type routing?",
-                    default=False,
-                )
-                else None
-            )
-            scaffold = _ask_yes_no(
-                input_fn,
-                "Also scaffold an editable PROMPT.md override into the "
-                f"{resolved_scope} scope?",
-                default=True,
-            )
-            # Last, because the policy must answer to the Run instructions this
-            # setup will leave behind — which the scaffold decision determines.
-            enabled_skills = _collect_skill_policy(
-                scope=resolved_scope,
-                repo_root=repo_root,
-                env=env,
-                input_fn=input_fn,
-                output_fn=output_fn,
-                client_factory=client_factory,
-                discoverer=discoverer,
-                picker_runner=picker_runner,
-                git=git,
-                required_skills=_post_setup_required_skills(
+            def rebuild_skill_selection(
+                scaffold_decision: bool, selected_scope: str
+            ) -> tuple[str, ...]:
+                selected_targets = _resolve_targets(selected_scope, repo_root, env)
+                collected = _collect_skill_policy(
+                    scope=selected_scope,
                     repo_root=repo_root,
                     env=env,
-                    prompt_path=targets.prompt_path,
-                    prompt_source=prompt_source,
-                    scaffold=scaffold,
-                    required_skills=required_skills,
-                ),
-                installed_skills_dir=skills_source,
+                    input_fn=input_fn,
+                    output_fn=output_fn,
+                    client_factory=client_factory,
+                    discoverer=discoverer,
+                    picker_runner=None,
+                    git=git,
+                    required_skills=_post_setup_required_skills(
+                        repo_root=repo_root,
+                        env=env,
+                        prompt_path=selected_targets.prompt_path,
+                        prompt_source=prompt_source,
+                        scaffold=scaffold_decision,
+                        required_skills=required_skills,
+                    ),
+                    installed_skills_dir=skills_source,
+                )
+                # Remember what the picker already resolved, so the answer set
+                # below is re-validated only when it is *not* this one. The
+                # scaffold decision is part of the key, not incidental to it:
+                # it chose which prompt the requirement came from.
+                validated_policies.append(
+                    (selected_scope, scaffold_decision, tuple(collected))
+                )
+                return collected
+
+            runner_options: dict[str, Any] = {}
+            if wizard_runner is _default_wizard_runner:
+                runner_options.update(
+                    input_fn=input_fn, output_fn=output_fn, warn=warn
+                )
+            answers = wizard_runner(
+                scope_options=scope_options,
+                model_choices=model_choices,
+                default_model=default_model,
+                default_effort=default_effort,  # type: ignore[arg-type]
+                rebuild_skill_selection=rebuild_skill_selection,
+                scope_locked=scope is not None,
+                **runner_options,
             )
+            if answers is None:
+                raise InitCancelled
+            if answers.scope not in scope_options:
+                raise _ScopeUnavailable(
+                    f"wizard returned unavailable scope {answers.scope!r}"
+                )
+            resolved_scope = answers.scope
+            targets = _resolve_targets(resolved_scope, repo_root, env)
+            model = answers.model
+            effort = answers.effort
+            routing = answers.routing
+            scaffold = answers.scaffold
+            enabled_skills = tuple(answers.enabled_skills)
+            # The runner owns the questions, never the invariants. A policy the
+            # picker did not just resolve — because the runner assembled one, or
+            # skipped the callback entirely — is resolved here before it can
+            # reach a Config (ADR-0015).
+            if (resolved_scope, scaffold, enabled_skills) not in validated_policies:
+                _validate_skill_policy(
+                    enabled_skills,
+                    scope=resolved_scope,
+                    repo_root=repo_root,
+                    env=env,
+                    client_factory=client_factory,
+                    discoverer=discoverer,
+                    git=git,
+                    required_skills=_post_setup_required_skills(
+                        repo_root=repo_root,
+                        env=env,
+                        prompt_path=targets.prompt_path,
+                        prompt_source=prompt_source,
+                        scaffold=scaffold,
+                        required_skills=required_skills,
+                    ),
+                    installed_skills_dir=skills_source,
+                )
     except InitCancelled:
         output_fn("git-loopy init cancelled; nothing was written.")
+        return 1
+    except _ScopeUnavailable as exc:
+        warn(str(exc))
         return 1
     except _SkillPolicyUnavailable as exc:
         # A Skill policy that cannot be resolved is never silently downgraded to
