@@ -1,6 +1,6 @@
 """``git_loopy.persist`` — filesystem side of observability.
 
-This module owns the three artefacts the runner writes per
+This module owns the three data artefacts the runner writes per
 ``git-loopy`` invocation:
 
 ==================  ==========================================  =================================
@@ -14,6 +14,10 @@ Process diag.       stderr + ``.git-loopy/logs/<iso>-<run_id>.log``  Human-reada
                                                                 stderr stream is primary, the
                                                                 ``.log`` file is the mirror.
 ==================  ==========================================  =================================
+
+The Run's adjacent ``.control`` artifact is created and locked by
+:mod:`git_loopy.run_control`; it is deliberately separate because its advisory
+lock is liveness state rather than persisted observability data.
 
 All artefacts live under the **repo root** (resolved by callers via
 :func:`git_loopy.git.repo_root`). The directories are created lazily on

@@ -78,6 +78,7 @@ from git_loopy.emit import EventEmitter
 from git_loopy.events import REDACTED_SECRET
 from git_loopy.persist import WritersBundle, create_writers
 from git_loopy.readiness import BlockedByRead, BlockerNode
+from git_loopy.run_control import is_run_alive
 from git_loopy.session import SKILL_TOOL_NAME
 from git_loopy.sinks import SinkFanout
 from git_loopy.skill_catalog import build_skill_catalog
@@ -417,6 +418,9 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
     assert len(jsonl_files) == 1, (
         f"expected exactly one JSONL log; got {jsonl_files}"
     )
+    control_path = jsonl_files[0].with_suffix(".control")
+    assert control_path.exists()
+    assert is_run_alive(control_path) is False
     log_lines = jsonl_files[0].read_text(encoding="utf-8").splitlines()
     assert log_lines, "JSONL log must not be empty"
     events_seen: list[dict[str, Any]] = []

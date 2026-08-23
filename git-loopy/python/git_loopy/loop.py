@@ -165,6 +165,7 @@ from git_loopy.denomination import (
 from git_loopy.prompt import PromptMetadataError, load_prompt
 from git_loopy.rate_card import RateCard
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
+from git_loopy.run_control import RunControlArtifact
 from git_loopy.skill_install import (
     SkillInstallError,
     describe_refresh,
@@ -4197,23 +4198,12 @@ async def run(
         return 1
     repo_root = git.root
 
-    try:
-        prompt_text = _read_prompt(repo_root, os.environ)
-    except FileNotFoundError as exc:
-        print(f"git-loopy: {exc}", file=sys.stderr)
-        return 1
-
-    # 2) Cost denomination — resolved once per Run and threaded as one seam
-    #    (#328), so every Cost-bearing surface denominates identically. Cost is
-    #    the **AI Credits** the harness reported billing (ADR-0026, #329), which
-    #    needs nothing loaded and can therefore never stop a Run from starting:
-    #    the price-file preflight that could abort here is deleted with the table
-    #    it validated (#330).
-    denomination = BilledCreditsDenomination()
-
-    # 3) Writers + diagnostics logger + renderer + sink fan-out.
+    # 2) Per-Run artifacts. The control artifact needs the repository root, so
+    # release and root resolution above intentionally remain outside its scope.
+    # From here, every Run preflight and cleanup path remains liveness-visible.
     try:
         writers = create_writers(repo_root)
+        control = RunControlArtifact.acquire(writers.event_log.path)
     except Exception as exc:
         print(
             f"git-loopy: failed to construct writers bundle: "
@@ -4221,6 +4211,24 @@ async def run(
             file=sys.stderr,
         )
         return 1
+    diag = writers.diagnostics
+
+    try:
+        prompt_text = _read_prompt(repo_root, os.environ)
+    except FileNotFoundError as exc:
+        print(f"git-loopy: {exc}", file=sys.stderr)
+        control.close()
+        return 1
+
+    # 3) Cost denomination — resolved once per Run and threaded as one seam
+    #    (#328), so every Cost-bearing surface denominates identically. Cost is
+    #    the **AI Credits** the harness reported billing (ADR-0026, #329), which
+    #    needs nothing loaded and can therefore never stop a Run from starting:
+    #    the price-file preflight that could abort here is deleted with the table
+    #    it validated (#330).
+    denomination = BilledCreditsDenomination()
+
+    # 4) Renderer + sink fan-out.
     summary = RunSummary(
         denomination=denomination,
         # Read off the same declaration published in the Run-start capability
@@ -4276,9 +4284,7 @@ async def run(
                 diag=writers.diagnostics,
             ),
         )
-    diag = writers.diagnostics
-
-    # 4) IssueSource (factory dispatches on config.issue_source). A
+    # 5) IssueSource (factory dispatches on config.issue_source). A
     #    ValueError here means the config carried a value the loop
     #    doesn't recognise — surface a clean exit 1 rather than letting
     #    the exception escape.
@@ -4294,9 +4300,10 @@ async def run(
             writers.run_summary.flush()
         except Exception as flush_exc:
             diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
         return 1
 
-    # 5) Skill catalog. git-loopy ships no Skills; it installs them from the
+    # 6) Skill catalog. git-loopy ships no Skills; it installs them from the
     #    pinned external repository and refreshes that install at the start of
     #    every Run (ADR-0025), so a Run always executes the revision this
     #    distribution stands behind rather than whatever was left on disk. An
@@ -4313,6 +4320,7 @@ async def run(
             writers.run_summary.flush()
         except Exception as flush_exc:
             diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
         return exit_code_for("preflight_failed")
     if skill_refresh.warning:
         diag.warning("Skill catalog refresh: %s", skill_refresh.warning)
@@ -4321,7 +4329,7 @@ async def run(
         diag.info("%s", describe_refresh(skill_refresh))
         print(f"git-loopy: {describe_refresh(skill_refresh)}", file=sys.stderr)
 
-    # 6) SDK client (lazy via the factory the tests monkeypatch). If
+    # 7) SDK client (lazy via the factory the tests monkeypatch). If
     #    construction itself raises (SDK install broken, port already
     #    held by another process, etc.) we must surface a clean error
     #    rather than letting the traceback escape ``asyncio.run``.
@@ -4344,6 +4352,7 @@ async def run(
             writers.run_summary.flush()
         except Exception as flush_exc:
             diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
         return 1
 
     skill_workspace = TemporaryDirectory(prefix="git-loopy-run-skills-")
@@ -4380,6 +4389,7 @@ async def run(
         except Exception as stop_exc:
             diag.warning("CopilotClient.stop() failed: %s", stop_exc)
         skill_workspace.cleanup()
+        control.close()
         # Skill preflight is preflight: it answers to the Wrapper contract's
         # `preflight_failed` reason rather than to a literal that merely
         # happens to equal it today.
@@ -4404,6 +4414,7 @@ async def run(
         except Exception as stop_exc:
             diag.warning("CopilotClient.stop() failed: %s", stop_exc)
         skill_workspace.cleanup()
+        control.close()
         # Skill preflight is preflight: it answers to the Wrapper contract's
         # `preflight_failed` reason rather than to a literal that merely
         # happens to equal it today.
@@ -4530,6 +4541,7 @@ async def run(
             telemetry.force_flush()
         except Exception as exc:  # pragma: no cover - defensive
             diag.warning("telemetry.force_flush() failed: %s", exc)
+        control.close()
 
     return exit_code
 
