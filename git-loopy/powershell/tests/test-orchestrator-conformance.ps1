@@ -68,6 +68,68 @@ foreach ($Reason in @($Discriminator["exclusion_reasons"])) {
     }
 }
 
+# Wrapper contract §3.3.1 — Readiness is decided at Pickup from the
+# `blockedBy` connection collection carried. Drive the production verdict seam
+# from every fixture case so the PowerShell Orchestrator agrees with the
+# reference member on open, cross-repository, and unprovable blockers.
+$IssueReadiness = ConvertFrom-GitLoopyJsonText -Text (
+    Get-Content -LiteralPath (Join-Path $ConformanceDir "issue-readiness.json") -Raw
+)
+foreach ($Case in $IssueReadiness["cases"]) {
+    [string[]]$ExpectedBlockers = @()
+    if ($Case["expected"].Contains("blockers")) {
+        $ExpectedBlockers = [string[]]$Case["expected"]["blockers"]
+    }
+    $BlockedBy = [ordered]@{
+        totalCount = $Case["blocked_by"]["total_count"]
+        nodes = @(
+            foreach ($Node in @($Case["blocked_by"]["nodes"])) {
+                if ($Node["readable"] -eq $false) {
+                    [ordered]@{}
+                    continue
+                }
+                if ($Node["ref"] -notmatch '^([^/]+)/([^#]+)#([0-9]+)$') {
+                    throw "FAIL: malformed readiness fixture ref: $($Node["ref"])"
+                }
+                [ordered]@{
+                    id = "fixture"
+                    number = [int]$Matches[3]
+                    state = ([string]$Node["state"]).ToUpperInvariant()
+                    url = "https://github.com/$($Matches[1])/$($Matches[2])/issues/$($Matches[3])"
+                }
+            }
+        )
+    }
+    $Actual = Get-GitLoopyReadiness -BlockedBy $BlockedBy
+    $Expected = [ordered]@{
+        verdict = $Case["expected"]["verdict"]
+        admissible = $Case["expected"]["admissible"]
+        skip_reason = $Case["expected"]["skip_reason"]
+        blockers = $ExpectedBlockers
+    }
+    Assert-Equal `
+        ($Expected | ConvertTo-Json -Compress -Depth 10) `
+        ($Actual | ConvertTo-Json -Compress -Depth 10) `
+        "issue-readiness fixture: $($Case["id"])"
+}
+
+# The connection request binds production; the other fixture values are
+# contract tripwires for the shared vocabulary the port consumes.
+$ReadinessRead = $IssueReadiness["read"]
+Assert-Equal "graphql" $ReadinessRead["transport"] (
+    "issue-readiness read: GraphQL, never REST"
+)
+Assert-Equal "collection" $ReadinessRead["fetched_at"] (
+    "issue-readiness read: the connection rides collection"
+)
+Assert-Equal "pickup" $ReadinessRead["decided_at"] (
+    "issue-readiness read: the verdict is taken at Pickup"
+)
+Assert-Equal 1 $ReadinessRead["hops"] "issue-readiness read: one hop"
+Assert-True (
+    (Get-GitLoopyShallowIssueFields).Split(",") -ccontains $ReadinessRead["connection"]
+) "issue-readiness read: the shallow fields request the carried connection"
+
 # Wrapper contract §3.2 — the total order over eligible issues (#391, ADR-0032).
 # Driven through `Get-GitLoopyIssueOrder` itself: an adapter that reproduced the
 # comparison would stay green while the Orchestrator ordered a Pool differently,

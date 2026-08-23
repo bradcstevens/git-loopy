@@ -790,7 +790,10 @@ $Script:GitLoopyListMaxLimit = 1600
 $Script:GitLoopyIssuePin = $null
 
 $Script:GitLoopyShallowIssueFields =
-    "number,title,body,labels,state,url,createdAt"
+    "number,title,body,labels,state,url,createdAt,blockedBy"
+# `blockedBy` first shipped in gh 2.94.0. An older client rejects it from the
+# collection read, which would otherwise reach the empty-Pool fallback.
+$Script:GitLoopyMinGhVersionForReadiness = "2.94.0"
 # The label the Pool query filters on, named once so the pin's eligibility check
 # (`Assert-GitLoopyPinEligible`) cannot drift from the query it must agree with.
 $Script:GitLoopyReadyLabel = "ready-for-agent"
@@ -803,6 +806,183 @@ $Script:GitLoopyMaxAcceptedYear = 9999
 $Script:GitLoopyTimestampPattern = [regex]::new(
     '^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?' +
     '(?:[Zz]|([+-])(\d{2}):(\d{2}))$')
+
+function Get-GitLoopyShallowIssueFields {
+    [CmdletBinding()]
+    param()
+
+    return $Script:GitLoopyShallowIssueFields
+}
+
+function ConvertTo-GitLoopyGhVersion {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Text
+    )
+
+    $Match = [regex]::Match(
+        $Text,
+        '(?m)^gh version ([0-9]+(?:\.[0-9]+){2,3})(?:\s|$)'
+    )
+    if (-not $Match.Success) {
+        return $null
+    }
+    try {
+        return [version]$Match.Groups[1].Value
+    }
+    catch [ArgumentException] {
+        return $null
+    }
+}
+
+function Test-GitLoopyVersionLessThan {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [version]$Actual,
+        [Parameter(Mandatory)]
+        [version]$Required
+    )
+
+    return $Actual -lt $Required
+}
+
+function Assert-GitLoopyReadinessCapability {
+    [CmdletBinding()]
+    param()
+
+    $VersionOutput = @(& gh version 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        [Console]::Error.WriteLine(
+            "git-loopy: could not determine the installed gh version required " +
+            "to read issue dependencies (blockedBy)."
+        )
+        return $false
+    }
+    $Installed = ConvertTo-GitLoopyGhVersion -Text (
+        [string]::Join([Environment]::NewLine, $VersionOutput)
+    )
+    $Required = ConvertTo-GitLoopyGhVersion -Text (
+        "gh version $Script:GitLoopyMinGhVersionForReadiness"
+    )
+    if ($null -eq $Installed -or $null -eq $Required) {
+        [Console]::Error.WriteLine(
+            "git-loopy: could not determine the gh version required to read " +
+            "issue dependencies (blockedBy); git-loopy requires gh >= " +
+            "$Script:GitLoopyMinGhVersionForReadiness. Upgrade gh: " +
+            "https://cli.github.com/."
+        )
+        return $false
+    }
+    if (Test-GitLoopyVersionLessThan -Actual $Installed -Required $Required) {
+        [Console]::Error.WriteLine(
+            "git-loopy: gh $Installed cannot read issue dependencies (blockedBy) " +
+            "via `gh issue list`/`gh issue view --json`; git-loopy requires gh >= " +
+            "$Script:GitLoopyMinGhVersionForReadiness. Upgrade gh: " +
+            "https://cli.github.com/."
+        )
+        return $false
+    }
+    return $true
+}
+
+# Wrapper contract §3.3.1 — decide from the carried GraphQL connection. This is
+# deliberately pure: collection performs the source read, while Pickup decides
+# whether the candidate is admissible without another dependency round-trip.
+function Get-GitLoopyReadiness {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$BlockedBy
+    )
+
+    $ConnectionIsValid = (
+        $BlockedBy -is [Collections.IDictionary] -and
+        $BlockedBy.Contains("totalCount") -and
+        $BlockedBy.Contains("nodes") -and
+        $BlockedBy["totalCount"] -is [ValueType] -and
+        $BlockedBy["totalCount"] -isnot [bool] -and
+        [double]$BlockedBy["totalCount"] -ge 0 -and
+        [double]$BlockedBy["totalCount"] -eq [math]::Floor(
+            [double]$BlockedBy["totalCount"]
+        ) -and
+        $BlockedBy["nodes"] -is [Collections.IList]
+    )
+    [object[]]$Nodes = @()
+    if ($ConnectionIsValid) {
+        $Nodes = [object[]]$BlockedBy["nodes"]
+    }
+    $OpenBlockers = [Collections.Generic.List[string]]::new()
+    $Unreadable = $false
+
+    foreach ($Node in $Nodes) {
+        $Readable = $Node -is [Collections.IDictionary] -and
+            -not [string]::IsNullOrWhiteSpace([string]$Node["id"]) -and
+            $Node["number"] -is [ValueType] -and
+            $Node["number"] -isnot [bool] -and
+            [double]$Node["number"] -gt 0 -and
+            [double]$Node["number"] -eq [math]::Floor([double]$Node["number"]) -and
+            -not [string]::IsNullOrWhiteSpace([string]$Node["state"]) -and
+            [string]$Node["url"] -match (
+                '^https?://[^/]+/([^/]+)/([^/]+)/issues/([0-9]+)$'
+            )
+        if (-not $Readable) {
+            $Unreadable = $true
+            continue
+        }
+        $Ref = "$($Matches[1])/$($Matches[2])#$($Matches[3])"
+        if ([string]$Node["state"] -ceq "OPEN") {
+            $OpenBlockers.Add($Ref)
+        }
+    }
+
+    if ($OpenBlockers.Count -gt 0) {
+        return [ordered]@{
+            verdict = "blocked"
+            admissible = $false
+            skip_reason = "blocked_by_open_dependency"
+            blockers = [string[]]$OpenBlockers
+        }
+    }
+    if (
+        -not $ConnectionIsValid -or
+        $Nodes.Count -ne [int]$BlockedBy["totalCount"] -or
+        $Unreadable
+    ) {
+        return [ordered]@{
+            verdict = "blocked"
+            admissible = $false
+            skip_reason = "readiness_unprovable"
+            blockers = [string[]]@()
+        }
+    }
+    return [ordered]@{
+        verdict = "ready"
+        admissible = $true
+        skip_reason = $null
+        blockers = [string[]]@()
+    }
+}
+
+function Get-GitLoopyCandidateReadiness {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Candidate,
+        [string]$IssueSource = "github"
+    )
+
+    if ($IssueSource -cne "github") {
+        return [ordered]@{
+            verdict = "ready"
+            admissible = $true
+            skip_reason = $null
+            blockers = [string[]]@()
+        }
+    }
+    return Get-GitLoopyReadiness -BlockedBy $Candidate["blocked_by"]
+}
 
 # `ConvertFrom-Json` coerces anything ISO-8601-shaped into a [datetime], and it
 # is *more* liberal than §3.2's grammar: it accepts a zone-less
@@ -1347,6 +1527,10 @@ function Get-GitLoopyIterationRollup {
         }
     }
 
+    if ($TerminalOutcome -ceq "all_skipped") {
+        $Outcome = "all_skipped"
+    }
+
     return [ordered]@{
         outcome = $Outcome
         duration_seconds = $Duration
@@ -1668,6 +1852,9 @@ function Invoke-GitLoopyPreflight {
             [Console]::Error.WriteLine(
                 "git-loopy: gh is required for the GitHub issue source."
             )
+            return $null
+        }
+        if (-not (Assert-GitLoopyReadinessCapability)) {
             return $null
         }
         & gh auth status *> $null
@@ -2132,6 +2319,9 @@ function Get-GitLoopyGitHubPool {
             state = [string]$Full["state"]
             url = [string]$Full["url"]
             created_at = [string]($Full["createdAt"] ?? $Full["created_at"] ?? "")
+            # The connection arrived on the existing membership read. Carry it
+            # forward for Pickup rather than opening a dependency-only request.
+            blocked_by = $Full["blockedBy"]
             comments = [object[]]$Comments
         }
     }
@@ -2891,6 +3081,7 @@ function Get-GitLoopyCurrentIterationRollup {
 # It does not sort. Order is decided at the read (§3.2), and re-deciding it here
 # would be a second implementation of the one decision
 # `conformance/issue-ordering.json` exists to keep single.
+$script:GitLoopySerialPickupAllSkipped = $false
 function Select-GitLoopySerialPickup {
     [CmdletBinding()]
     param(
@@ -2901,52 +3092,83 @@ function Select-GitLoopySerialPickup {
         [Parameter(Mandatory)]
         [int]$Iteration,
         [AllowEmptyCollection()]
-        [object[]]$Pool
+        [object[]]$Pool,
+        [string]$IssueSource = "github"
     )
 
     $Items = @($Pool)
+    $script:GitLoopySerialPickupAllSkipped = $false
     if ($Items.Count -eq 0) {
         return @()
     }
-    $Head = $Items[0]
-    $Ref = if ($Head.Contains("number")) {
-        [string]$Head["number"]
-    }
-    else {
-        [string]$Head["ref"]
-    }
+    [int]$Position = 0
+    foreach ($Head in $Items) {
+        $Position += 1
+        $Ref = if ($Head.Contains("number")) {
+            [string]$Head["number"]
+        }
+        else {
+            [string]$Head["ref"]
+        }
+        $Readiness = Get-GitLoopyCandidateReadiness `
+            -Candidate $Head `
+            -IssueSource $IssueSource
+        if (-not $Readiness["admissible"]) {
+            $Reason = [string]$Readiness["skip_reason"]
+            $Blockers = [string]::Join(", ", @($Readiness["blockers"]))
+            $EventReason = if ([string]::IsNullOrEmpty($Blockers)) {
+                $Reason
+            }
+            else {
+                "${Reason}: $Blockers"
+            }
+            $Label = if ($Ref -match '^[0-9]+$') { "#$Ref" } else { $Ref }
+            [Console]::Error.WriteLine(
+                "git-loopy: serial Pickup skipped $Label - " +
+                "$($Reason.Replace('_', ' '))" +
+                $(if ([string]::IsNullOrEmpty($Blockers)) { "" } else { ": $Blockers" })
+            )
+            Write-GitLoopyPickupSkipped `
+                -Context $Context `
+                -EventTypes $EventTypes `
+                -Iteration $Iteration `
+                -Ref $Ref `
+                -Reason $EventReason `
+                -Position $Position `
+                -Considered $Items.Count
+            continue
+        }
 
-    $Bound = Publish-GitLoopyActiveBinding `
-        -Context $Context `
-        -EventTypes $EventTypes `
-        -Iteration $Iteration `
-        -Ref $Ref `
-        -Source "serial_pickup" `
-        -ObservedAt ([DateTimeOffset]::UtcNow)
-    if (-not $Bound) {
-        # The selection stands even though the binding did not. An activation is
-        # refused exactly when the Iteration is already bound, so the prompt
-        # keeps the one issue rather than reverting to the whole Pool: putting
-        # the menu back would ask the agent to rank a list whose answer the
-        # runner had already decided without it.
+        $Bound = Publish-GitLoopyActiveBinding `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -Iteration $Iteration `
+            -Ref $Ref `
+            -Source "serial_pickup" `
+            -ObservedAt ([DateTimeOffset]::UtcNow)
+        if (-not $Bound) {
+            [Console]::Error.WriteLine(
+                "git-loopy: serial Pickup selected $Ref but its activation was " +
+                "refused; the Iteration works that issue on the standing binding."
+            )
+            return @($Head)
+        }
+        $Label = if ($Ref -match '^[0-9]+$') { "#$Ref" } else { $Ref }
+        Write-GitLoopyPickupBound `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -Iteration $Iteration `
+            -Ref $Ref `
+            -Head $Head `
+            -Position $Position `
+            -Considered $Items.Count
         [Console]::Error.WriteLine(
-            "git-loopy: serial Pickup selected $Ref but its activation was " +
-            "refused; the Iteration works that issue on the standing binding."
+            "git-loopy: serial Pickup bound $Label (position $Position of $($Items.Count))"
         )
         return @($Head)
     }
-    $Label = if ($Ref -match '^[0-9]+$') { "#$Ref" } else { $Ref }
-    Write-GitLoopyPickupBound `
-        -Context $Context `
-        -EventTypes $EventTypes `
-        -Iteration $Iteration `
-        -Ref $Ref `
-        -Head $Head `
-        -Considered $Items.Count
-    [Console]::Error.WriteLine(
-        "git-loopy: serial Pickup bound $Label (position 1 of $($Items.Count))"
-    )
-    return @($Head)
+    $script:GitLoopySerialPickupAllSkipped = $true
+    return @()
 }
 
 # One **Pickup** binding as an Event (#397): which issue, why it was chosen, and
@@ -2965,6 +3187,7 @@ function Write-GitLoopyPickupBound {
         [string]$Ref,
         [Parameter(Mandatory)]
         [Collections.IDictionary]$Head,
+        [int]$Position = 1,
         [Parameter(Mandatory)]
         [int]$Considered
     )
@@ -2976,7 +3199,39 @@ function Write-GitLoopyPickupBound {
         -Payload (Get-GitLoopyPickupRecord `
             -Ref $Ref `
             -Head $Head `
+            -Position $Position `
             -Considered $Considered)
+}
+
+function Write-GitLoopyPickupSkipped {
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [int]$Iteration,
+        [Parameter(Mandatory)]
+        [string]$Ref,
+        [Parameter(Mandatory)]
+        [string]$Reason,
+        [Parameter(Mandatory)]
+        [int]$Position,
+        [Parameter(Mandatory)]
+        [int]$Considered
+    )
+
+    $Issue = if ($Ref -match '^[0-9]+$') { [int]$Ref } else { $Ref }
+    Write-GitLoopyEvent `
+        -Context $Context `
+        -Type $EventTypes["WRAPPER_PICKUP_SKIPPED"] `
+        -Iteration $Iteration `
+        -Payload ([ordered]@{
+            issue = $Issue
+            reason = $Reason
+            position = $Position
+            considered = $Considered
+        })
 }
 
 # The payload half of a **Pickup** record, separated from its emission so the
@@ -2987,6 +3242,7 @@ function Get-GitLoopyPickupRecord {
         [string]$Ref,
         [Parameter(Mandatory)]
         [Collections.IDictionary]$Head,
+        [int]$Position = 1,
         [Parameter(Mandatory)]
         [int]$Considered
     )
@@ -3013,7 +3269,7 @@ function Get-GitLoopyPickupRecord {
     return [ordered]@{
         issue = $Issue
         reason = $Reason
-        position = 1
+        position = $Position
         considered = $Considered
     }
 }
@@ -3914,7 +4170,22 @@ function Invoke-GitLoopyDiscoveryLoop {
             -Context $Context `
             -EventTypes $EventTypes `
             -Iteration $Iteration `
-            -Pool $Pool)
+            -Pool $Pool `
+            -IssueSource $Config.IssueSource)
+        if ($PickedPool.Count -eq 0 -and $script:GitLoopySerialPickupAllSkipped) {
+            $Rollup = Get-GitLoopyCurrentIterationRollup `
+                -FinishedMonotonic (Get-GitLoopyMonotonicSeconds) `
+                -Strikes $Strikes `
+                -TerminalOutcome "all_skipped"
+            Write-GitLoopyEvent `
+                -Context $Context `
+                -Type $EventTypes["WRAPPER_ITERATION_END"] `
+                -Iteration $Iteration `
+                -Payload $Rollup
+            $IterationsRun = $Iteration
+            $Outcome = "all_skipped"
+            break
+        }
 
         # Assemble the same minimum context as the Python reference (last-5
         # commits + the bound issue's block + the resolved shared prompt) and
@@ -4114,6 +4385,9 @@ function Invoke-GitLoopyDiscoveryLoop {
     if ($Outcome -ceq "stuck") {
         return Get-GitLoopyExitCode -Reason "stuck"
     }
+    if ($Outcome -ceq "all_skipped") {
+        return Get-GitLoopyExitCode -Reason "all_skipped"
+    }
     return Get-GitLoopyExitCode -Reason "iteration_cap"
 }
 
@@ -4208,6 +4482,12 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyIssueListToCompletion",
     "Get-GitLoopyNextReadStep",
     "Get-GitLoopyReadSchedule",
+    "Get-GitLoopyShallowIssueFields",
+    "ConvertTo-GitLoopyGhVersion",
+    "Test-GitLoopyVersionLessThan",
+    "Assert-GitLoopyReadinessCapability",
+    "Get-GitLoopyReadiness",
+    "Get-GitLoopyCandidateReadiness",
     "Get-GitLoopyPriorityLabel",
     "Get-GitLoopyAcceptedYearRange",
     "Get-GitLoopyPriorityRank",
@@ -4219,6 +4499,7 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyOrderedCandidates",
     "Select-GitLoopySerialPickup",
     "Write-GitLoopyPickupBound",
+    "Write-GitLoopyPickupSkipped",
     "Get-GitLoopyPickupRecord",
     "Get-GitLoopyExitCode",
     "Get-GitLoopyCloseKeywordPattern",

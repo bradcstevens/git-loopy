@@ -27,7 +27,7 @@ the [Wrapper contract](../../docs/wrapper-contract.md), the
 | Requirement | Notes |
 | --- | --- |
 | **PowerShell 7+** (`pwsh`) | On **Windows, Linux, or macOS**. Run `pwsh --version` to check. This port needs **no `jq`** — it uses PowerShell's built-in `ConvertFrom-Json`. |
-| **`gh`**, authenticated | `gh auth login`. The default issue source is GitHub Issues. |
+| **`gh` 2.94.0+**, authenticated | `gh auth login`. The default issue source is GitHub Issues; this minimum supports the `blockedBy` dependency connection. |
 | **`git`** | On `PATH`. |
 | **`copilot`** | GitHub Copilot CLI, signed in: `npm install -g @github/copilot`, then run `copilot` once. |
 
