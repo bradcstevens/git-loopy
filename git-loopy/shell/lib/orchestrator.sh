@@ -1093,6 +1093,7 @@ git_loopy_preflight() {
         >&2
       return 1
     }
+    git_loopy_verify_readiness_capability || return 1
     gh repo view --json owner,name,defaultBranchRef >/dev/null 2>&1 || {
       printf '%s\n' \
         'git-loopy: gh could not resolve this GitHub repository.' >&2
@@ -1111,6 +1112,34 @@ git_loopy_preflight() {
 
   GIT_LOOPY_REPO_ROOT="$repo_root"
   GIT_LOOPY_PROMPT_PATH="$prompt_path"
+}
+
+git_loopy_verify_readiness_capability() {
+  local raw version major minor patch
+  raw="$(gh --version 2>&1)" || {
+    printf '%s\n' \
+      'git-loopy: gh --version failed. Install gh from https://cli.github.com/.' \
+      >&2
+    return 1
+  }
+  if [[ "$raw" =~ gh[[:space:]]version[[:space:]]([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+    major="${BASH_REMATCH[1]}"
+    minor="${BASH_REMATCH[2]}"
+    patch="${BASH_REMATCH[3]}"
+  else
+    printf 'git-loopy: could not parse a version from `gh --version` output: %s\n' \
+      "${raw%%$'\n'*}" >&2
+    return 1
+  fi
+
+  if ((10#$major < 2)) ||
+    ((10#$major == 2 && 10#$minor < 94)) ||
+    ((10#$major == 2 && 10#$minor == 94 && 10#$patch < 0)); then
+    printf '%s\n' \
+      "git-loopy: gh $major.$minor.$patch cannot read issue dependencies (blockedBy) via \`gh issue list\`/\`gh issue view --json\`; git-loopy requires gh >= $GIT_LOOPY_MIN_GH_VERSION_FOR_READINESS. Upgrade gh: https://cli.github.com/." \
+      >&2
+    return 1
+  fi
 }
 
 # Wrapper contract §3.2 — refuse the invocation when `--issue N` names an issue
@@ -1201,6 +1230,7 @@ _git_loopy_normalize_issue() {
     state: (.state // "OPEN"),
     url: (.url // ""),
     created_at: (.createdAt // .created_at // ""),
+    blocked_by: (.blockedBy // null),
     comments: [
       (.comments // [])[]
       | {
@@ -1268,7 +1298,17 @@ git_loopy_next_read_step() {
 
 # The `--json` field set every shallow issue read asks for, named once so this
 # port cannot drift from the Python reference's `_SHALLOW_ISSUE_FIELDS`.
-GIT_LOOPY_SHALLOW_ISSUE_FIELDS="number,title,body,labels,state,url,createdAt"
+# `blockedBy` is GraphQL-backed by gh, rides the collection read, and is carried
+# to Pickup rather than triggering one dependency read per candidate.
+GIT_LOOPY_SHALLOW_ISSUE_FIELDS="number,title,body,labels,state,url,createdAt,blockedBy"
+# GitHub caps this connection at 50 links. gh's GraphQL-backed `--json
+# blockedBy` fetch meets that single-page contract; this named floor prevents a
+# port-local reader from silently treating an incomplete connection as ready.
+GIT_LOOPY_BLOCKED_BY_PAGE_SIZE=50
+# `blockedBy` first shipped in gh 2.94.0. A lower version would fail inside the
+# collection read and masquerade as an empty Pool, so capability is established
+# once in preflight before the Pool exists.
+GIT_LOOPY_MIN_GH_VERSION_FOR_READINESS="2.94.0"
 # The label the Pool query filters on, named once so the pin's eligibility check
 # (`_git_loopy_preflight_pin`) cannot drift from the query it must agree with.
 GIT_LOOPY_READY_LABEL="ready-for-agent"
@@ -1305,6 +1345,80 @@ _git_loopy_gh_issue_list_to_completion() {
     fi
     limit="$next_limit"
   done
+}
+
+# Convert one GraphQL `blockedBy` connection returned by gh into the Readiness
+# verdict Pickup needs. It is deliberately pure: collection carries the
+# connection, and this function performs no tracker I/O or graph traversal.
+#
+# Emits `{verdict, admissible, skip_reason, blockers}` so the fixture adapter
+# can drive exactly the decision the serial Pickup uses.
+git_loopy_decide_readiness() {
+  local blocked_by="$1"
+  jq -c '
+    def node_ref:
+      if (.url | type) == "string" then
+        try (
+          .url
+          | capture("^https?://[^/]+/(?<owner>[^/]+)/(?<repo>[^/]+)/issues/(?<number>[0-9]+)$")
+          | "\(.owner)/\(.repo)#\(.number)"
+        ) catch null
+      else
+        null
+      end;
+    def readable_node:
+      type == "object"
+      and (.id? != "")
+      and ((.number? | type) == "number" and .number > 0)
+      and ((.state? | type) == "string" and .state != "")
+      and (node_ref != null);
+    . as $connection
+    | (
+        if ($connection | type) == "object"
+           and (($connection.totalCount? | type) == "number")
+           and ($connection.totalCount >= 0)
+           and (($connection.totalCount | floor) == $connection.totalCount)
+           and (($connection.nodes? | type) == "array")
+        then $connection.nodes
+        else []
+        end
+      ) as $nodes
+    | [
+        $nodes[]
+        | if readable_node then
+            {readable: true, state: (.state | ascii_downcase), ref: node_ref}
+          else
+            {readable: false, state: "", ref: ""}
+          end
+      ] as $read_nodes
+    | [$read_nodes[] | select(.readable and .state == "open") | .ref] as $open
+    | (
+        ($connection | type) != "object"
+        or (($connection.totalCount? | type) != "number")
+        or ($connection.totalCount < 0)
+        or (($connection.totalCount | floor) != $connection.totalCount)
+        or (($connection.nodes? | type) != "array")
+        or ($read_nodes | length) != $connection.totalCount
+        or any($read_nodes[]; .readable | not)
+      ) as $unprovable
+    | if ($open | length) > 0 then
+        {
+          verdict: "blocked",
+          admissible: false,
+          skip_reason: "blocked_by_open_dependency",
+          blockers: $open
+        }
+      elif $unprovable then
+        {
+          verdict: "blocked",
+          admissible: false,
+          skip_reason: "readiness_unprovable",
+          blockers: []
+        }
+      else
+        {verdict: "ready", admissible: true, skip_reason: null, blockers: []}
+      end
+  ' <<<"$blocked_by"
 }
 
 # Reorders a shallow candidate array into Wrapper contract §3.2 order and
@@ -1776,44 +1890,79 @@ _git_loopy_publish_active_binding() {
 GIT_LOOPY_PICKUP_JSON='[]'
 _GIT_LOOPY_PICKUP_REF=""
 _GIT_LOOPY_PICKUP_AT=""
+GIT_LOOPY_PICKUP_SKIP_ONLY=0
 
 git_loopy_pick_serial() {
   local iteration="$1"
-  local head ref observed_at
+  local head ref observed_at readiness reason blockers event_reason label
+  local considered=0 position=0
   GIT_LOOPY_PICKUP_JSON='[]'
   _GIT_LOOPY_PICKUP_REF=""
   _GIT_LOOPY_PICKUP_AT=""
+  GIT_LOOPY_PICKUP_SKIP_ONLY=0
 
-  head="$(jq -c '.[0] // empty' <<<"$GIT_LOOPY_POOL_JSON")" || return 1
-  [[ -n "$head" ]] || return 1
-  ref="$(
-    jq -r 'if has("number") then .number else .ref end' <<<"$head"
-  )" || return 1
-  [[ -n "$ref" ]] || return 1
-
-  GIT_LOOPY_PICKUP_JSON="$(jq -c '[.]' <<<"$head")" || return 1
-  observed_at="$(git_loopy_iso_timestamp)" || return 1
-
-  local label="$ref"
-  [[ "$ref" =~ ^[0-9]+$ ]] && label="#$ref"
-  if ! _git_loopy_publish_active_binding \
-    "$iteration" "$ref" "serial_pickup" "$observed_at"; then
-    # The selection stands; the binding does not. Leaving the ref set would seed
-    # the turn with a binding no Event ever announced, so the Iteration goes in
-    # honestly unbound and `_git_loopy_bind_active_issue` may still bind it from
-    # the agent's own Working marker.
-    printf 'git-loopy: serial Pickup selected %s but could not publish its binding; the Iteration works that issue unbound.\n' \
-      "$label" >&2
-    return 1
-  fi
-  _GIT_LOOPY_PICKUP_REF="$ref"
-  _GIT_LOOPY_PICKUP_AT="$observed_at"
-  local considered
   considered="$(jq -r 'length' <<<"$GIT_LOOPY_POOL_JSON")" || return 1
-  _git_loopy_emit_pickup_bound "$iteration" "$ref" "$head" "$considered" \
-    "$observed_at" || return 1
-  printf 'git-loopy: serial Pickup bound %s (position 1 of %s)\n' \
-    "$label" "$considered" >&2
+  ((considered > 0)) || return 1
+
+  while IFS= read -r head; do
+    [[ -n "$head" ]] || continue
+    position=$((position + 1))
+    ref="$(
+      jq -r 'if has("number") then .number else .ref end' <<<"$head"
+    )" || return 1
+    [[ -n "$ref" ]] || return 1
+
+    if [[ "$GIT_LOOPY_ISSUE_SOURCE" == "github" ]]; then
+      readiness="$(git_loopy_decide_readiness "$(jq -c '.blocked_by' <<<"$head")")" ||
+        return 1
+    else
+      readiness='{"verdict":"ready","admissible":true,"skip_reason":null,"blockers":[]}'
+    fi
+    if ! jq -e '.admissible' <<<"$readiness" >/dev/null; then
+      reason="$(jq -r '.skip_reason' <<<"$readiness")" || return 1
+      label="$ref"
+      [[ "$ref" =~ ^[0-9]+$ ]] && label="#$ref"
+      blockers="$(jq -r '.blockers | join(", ")' <<<"$readiness")" || return 1
+      event_reason="$reason"
+      if [[ -n "$blockers" ]]; then
+        event_reason="$reason: $blockers"
+        printf 'git-loopy: serial Pickup skipped %s — %s: %s\n' \
+          "$label" "${reason//_/ }" "$blockers" >&2
+      else
+        printf 'git-loopy: serial Pickup skipped %s — %s\n' \
+          "$label" "${reason//_/ }" >&2
+      fi
+      _git_loopy_emit_pickup_skipped \
+        "$iteration" "$ref" "$event_reason" "$position" "$considered" ||
+        return 3
+      continue
+    fi
+
+    GIT_LOOPY_PICKUP_JSON="$(jq -c '[.]' <<<"$head")" || return 1
+    observed_at="$(git_loopy_iso_timestamp)" || return 1
+    label="$ref"
+    [[ "$ref" =~ ^[0-9]+$ ]] && label="#$ref"
+    if ! _git_loopy_publish_active_binding \
+      "$iteration" "$ref" "serial_pickup" "$observed_at"; then
+      # The selection stands; the binding does not. Leaving the ref set would seed
+      # the turn with a binding no Event ever announced, so the Iteration goes in
+      # honestly unbound and `_git_loopy_bind_active_issue` may still bind it from
+      # the agent's own Working marker.
+      printf 'git-loopy: serial Pickup selected %s but could not publish its binding; the Iteration works that issue unbound.\n' \
+        "$label" >&2
+      return 1
+    fi
+    _GIT_LOOPY_PICKUP_REF="$ref"
+    _GIT_LOOPY_PICKUP_AT="$observed_at"
+    _git_loopy_emit_pickup_bound "$iteration" "$ref" "$head" "$position" \
+      "$considered" "$observed_at" || return 1
+    printf 'git-loopy: serial Pickup bound %s (position %s of %s)\n' \
+      "$label" "$position" "$considered" >&2
+    return 0
+  done < <(jq -c '.[]' <<<"$GIT_LOOPY_POOL_JSON")
+
+  GIT_LOOPY_PICKUP_SKIP_ONLY=1
+  return 2
 }
 
 # One **Pickup** binding as an Event (#397): which issue, why it was chosen, and
@@ -1824,8 +1973,9 @@ _git_loopy_emit_pickup_bound() {
   local iteration="$1"
   local ref="$2"
   local head="$3"
-  local considered="$4"
-  local observed_at="$5"
+  local position="$4"
+  local considered="$5"
+  local observed_at="$6"
   local issue_arg reason payload
 
   if [[ "$ref" =~ ^[0-9]+$ ]]; then
@@ -1852,7 +2002,7 @@ _git_loopy_emit_pickup_bound() {
     jq -cn \
       --argjson issue "$issue_arg" \
       --arg reason "$reason" \
-      --argjson position 1 \
+      --argjson position "$position" \
       --argjson considered "$considered" \
       '{
         issue: $issue,
@@ -1866,6 +2016,38 @@ _git_loopy_emit_pickup_bound() {
     "$iteration" \
     "$payload" \
     "$observed_at"
+}
+
+_git_loopy_emit_pickup_skipped() {
+  local iteration="$1"
+  local ref="$2"
+  local reason="$3"
+  local position="$4"
+  local considered="$5"
+  local issue_arg payload
+
+  if [[ "$ref" =~ ^[0-9]+$ ]]; then
+    issue_arg="$ref"
+  else
+    issue_arg="$(jq -cn --arg ref "$ref" '$ref')" || return 1
+  fi
+  payload="$(
+    jq -cn \
+      --argjson issue "$issue_arg" \
+      --arg reason "$reason" \
+      --argjson position "$position" \
+      --argjson considered "$considered" \
+      '{
+        issue: $issue,
+        reason: $reason,
+        position: $position,
+        considered: $considered
+      }'
+  )" || return 1
+  git_loopy_emit_event \
+    "${GIT_LOOPY_EVENT_TYPES[WRAPPER_PICKUP_SKIPPED]}" \
+    "$iteration" \
+    "$payload"
 }
 
 _git_loopy_bind_active_issue() {
@@ -2838,7 +3020,24 @@ git_loopy_run_discovery() {
     # ADR-0032 §**Pickup**: the runner binds the Active issue *before* the
     # session starts, takes the head of the §3.2 order, and hands the agent
     # exactly that issue. The prompt is one issue, not a menu.
-    git_loopy_pick_serial "$iteration" || {
+    local pickup_status=0
+    git_loopy_pick_serial "$iteration" || pickup_status=$?
+    if ((pickup_status == 2)) && ((GIT_LOOPY_PICKUP_SKIP_ONLY == 1)); then
+      # A Pool of only Blocked candidates is waiting, not empty and not a
+      # no-progress attempt. Its next collection can promote one when its
+      # blocker closes, so no session or Strike is spent discovering the fact.
+      local iteration_end_payload
+      git_loopy_build_iteration_rollup 0 0 0 "$strikes" || return 1
+      iteration_end_payload="$GIT_LOOPY_ITERATION_ROLLUP_JSON"
+      git_loopy_emit_event \
+        "${GIT_LOOPY_EVENT_TYPES[WRAPPER_ITERATION_END]}" \
+        "$iteration" \
+        "$iteration_end_payload" || return 1
+      iterations_run="$iteration"
+      continue
+    fi
+    ((pickup_status == 3)) && return 1
+    if ((pickup_status != 0)); then
       printf 'git-loopy: serial Pickup did not bind an Active issue; the Iteration runs unbound.\n' >&2
       # The prompt keeps whatever the Pickup selected, which is one issue
       # whenever it got as far as reading a head. Restoring the whole Pool here
@@ -2847,7 +3046,7 @@ git_loopy_run_discovery() {
       # usable ref, which the empty-Pool branch above cannot catch.
       [[ "$(jq -r 'length' <<<"$GIT_LOOPY_PICKUP_JSON")" != "0" ]] ||
         GIT_LOOPY_PICKUP_JSON="$GIT_LOOPY_POOL_JSON"
-    }
+    fi
 
     # Assemble the same minimum context as the Python reference (last-5
     # commits + the bound issue's block + the resolved shared prompt) and

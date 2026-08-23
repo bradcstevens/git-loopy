@@ -55,6 +55,49 @@ while IFS= read -r case_json; do
     "discriminator exclusion reason: $case_id"
 done < <(jq -c '.cases[]' "$conformance_dir/discriminator.json")
 
+# Wrapper contract §3.3.1 — Readiness is decided at Pickup from the `blockedBy`
+# connection the collection already carried. Transform the language-neutral
+# fixture into the shape `gh issue list --json blockedBy` returns, then drive the
+# port's decision seam directly so the verdict cannot drift from the reference.
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  blocked_by="$(
+    jq -c '
+      .blocked_by
+      | {
+          totalCount: .total_count,
+          nodes: [
+            .nodes[]
+            | if .readable == false then
+                {id: "", number: 0, state: "", title: "", url: ""}
+              else
+                (.ref
+                 | capture("^(?<owner>[^/]+)/(?<repo>[^#]+)#(?<number>[0-9]+)$"))
+                as $ref
+                | {
+                    id: "fixture",
+                    number: ($ref.number | tonumber),
+                    state: (.state | ascii_upcase),
+                    title: "fixture",
+                    url: ("https://github.com/\($ref.owner)/\($ref.repo)/issues/\($ref.number)")
+                  }
+              end
+          ]
+        }
+    ' <<<"$case_json"
+  )"
+  actual="$(git_loopy_decide_readiness "$blocked_by")"
+  expected="$(
+    jq -c '.expected | {
+      verdict,
+      admissible,
+      skip_reason,
+      blockers: (.blockers // [])
+    }' <<<"$case_json"
+  )"
+  assert_equal "$expected" "$actual" "issue-readiness fixture: $case_id"
+done < <(jq -c '.cases[]' "$conformance_dir/issue-readiness.json")
+
 # Wrapper contract §3.2 — the total order over eligible issues (#391, ADR-0032).
 # The adapter drives the fixture through `git_loopy_order_issues` itself; a
 # reimplementation here would pass while the Orchestrator ordered a Pool
