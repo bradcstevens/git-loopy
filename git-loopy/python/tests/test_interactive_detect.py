@@ -1,7 +1,6 @@
-"""Tests for ``git_loopy.interactive.detect`` (issue #23 — interactive gating).
+"""Tests for ``git_loopy.interactive.detect`` (issue #503 — interactive gating).
 
-Pins the precedence (flag > env > TTY) and the warn-only-when-explicit
-fallback. Pure — no TTY required.
+Pins the flag > environment > TTY precedence. Pure — no TTY required.
 """
 
 from __future__ import annotations
@@ -22,17 +21,12 @@ def _resolve(
     flag: bool | None = None,
     env_value: str | None = None,
     isatty: bool = False,
-    textual_importable: bool = True,
-    warnings: list[str] | None = None,
 ) -> bool:
-    """resolve_interactive with sensible, overridable defaults + a warn sink."""
-    sink = warnings if warnings is not None else []
+    """Resolve with sensible, overridable defaults."""
     return resolve_interactive(
         flag=flag,
         env_value=env_value,
         isatty=isatty,
-        textual_importable=textual_importable,
-        warn=sink.append,
     )
 
 
@@ -41,7 +35,7 @@ def _resolve(
 # ---------------------------------------------------------------------------
 
 
-def test_tty_without_flags_is_interactive() -> None:
+def test_tty_defaults_to_dashboard_without_flag_or_environment() -> None:
     assert _resolve(isatty=True) is True
 
 
@@ -78,45 +72,6 @@ def test_env_zero_forces_non_interactive_on_tty() -> None:
 def test_blank_env_is_ignored_and_falls_back_to_tty() -> None:
     assert _resolve(env_value="   ", isatty=True) is True
     assert _resolve(env_value="", isatty=False) is False
-
-
-# ---------------------------------------------------------------------------
-# Textual availability requirement
-# ---------------------------------------------------------------------------
-
-
-def test_missing_textual_falls_back_even_on_tty() -> None:
-    warnings: list[str] = []
-    # Auto-detected intent (TTY) → silent fallback, no warning.
-    assert _resolve(isatty=True, textual_importable=False, warnings=warnings) is False
-    assert warnings == []
-
-
-def test_explicit_request_without_textual_warns_and_falls_back() -> None:
-    warnings: list[str] = []
-    assert (
-        _resolve(flag=True, textual_importable=False, warnings=warnings) is False
-    )
-    assert len(warnings) == 1
-    assert "textual" in warnings[0].lower()
-
-
-def test_env_request_without_textual_warns_and_falls_back() -> None:
-    warnings: list[str] = []
-    assert (
-        _resolve(env_value="1", textual_importable=False, warnings=warnings)
-        is False
-    )
-    assert len(warnings) == 1
-
-
-def test_non_interactive_intent_does_not_probe_or_warn_about_textual() -> None:
-    warnings: list[str] = []
-    # --no-interactive with Textual missing: no warning, just False.
-    assert (
-        _resolve(flag=False, textual_importable=False, warnings=warnings) is False
-    )
-    assert warnings == []
 
 
 # ---------------------------------------------------------------------------

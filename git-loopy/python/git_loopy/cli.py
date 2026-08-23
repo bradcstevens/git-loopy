@@ -1997,24 +1997,18 @@ def _should_run_interactive(interactive: bool | None) -> bool:
 
     Takes the merged interactive *intent* (already resolved across the flag /
     env / project / global chain by :func:`resolve_config`) and applies the live
-    gating — stdout TTY-ness and whether Textual
-    is importable — delegating the precedence to
+    gating — stdout TTY-ness — delegating the precedence to
     :func:`git_loopy.interactive.detect.resolve_interactive` (which stays
     unchanged: the merged intent is passed as its ``flag`` with no separate
     ``env_value``, since the env tier is already folded into ``intent``).
-    Imported lazily so a non-interactive invocation never pays the import.
+    Imported lazily so a non-interactive invocation never pays the import cost.
     """
-    from git_loopy.interactive.detect import (
-        resolve_interactive,
-        textual_available,
-    )
+    from git_loopy.interactive.detect import resolve_interactive
 
     return resolve_interactive(
         flag=interactive,
         env_value=None,
         isatty=sys.stdout.isatty(),
-        textual_importable=textual_available(),
-        warn=_warn,
     )
 
 
