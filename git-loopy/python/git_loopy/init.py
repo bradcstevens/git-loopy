@@ -713,6 +713,7 @@ def run_init(
         default_effort = _DEFAULT_REASONING_EFFORT
     if warn is None:
         warn = _warn
+    input_fn: Callable[[str], str] = input
     output_fn: Callable[[str], None] = print
 
     # Setup is where git-loopy acquires the Skills it runs on, and it happens
@@ -738,7 +739,10 @@ def run_init(
             raise _ScopeUnavailable(
                 "the project scope needs a git repository; run inside one or use --global."
             )
-        scope_options = (scope,) if scope is not None else ("project", "global")
+        scope_options = (
+            (scope,) if scope is not None else ("project", "global")
+            if repo_root is not None else ("global",)
+        )
         model_choices = (
             _load_model_choices(fetch_choices, warn=warn) if not assume_yes else []
         )
@@ -786,6 +790,8 @@ def run_init(
                     scope=selected_scope,
                     repo_root=repo_root,
                     env=env,
+                    input_fn=input_fn,
+                    output_fn=output_fn,
                     client_factory=client_factory,
                     discoverer=discoverer,
                     picker_runner=None,
