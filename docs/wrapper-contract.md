@@ -597,7 +597,7 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 | `GIT_LOOPY_ISSUE_SOURCE`       | 1     | `github`         | `github` or `prds` (legacy local-markdown mode).              |
 | `GIT_LOOPY_MAX_NMT_STRIKES`    | 1     | `3`              | Consecutive no-progress Iterations before abort.              |
 | `GIT_LOOPY_INCLUDE_PRS`        | 3     | off              | `1`/`true`/`yes` to also advance `ready-for-agent` PRs.       |
-| `GIT_LOOPY_INTERACTIVE`        | 2     | auto (TTY)       | MUST be honoured only by a member whose declared parallel capability manifest exposes this operator choice; Python refuses it because Dashboard availability follows the terminal. |
+| `GIT_LOOPY_INTERACTIVE`        | 2     | auto (TTY)       | MUST be honoured only by a member whose declared parallel capability manifest exposes this operator choice; Python still ignores it because terminal selection is structural: a TTY detaches the worker and keeps the parent as the attach client, while non-TTY stays on the direct line printer. |
 | `GIT_LOOPY_MODEL_SELECT`       | 3     | off              | `1` enters the startup model picker (**ModelSelectionMode**). |
 | `GIT_LOOPY_DENY_TOOLS`         | 1     | empty            | Denylist of tools (set *union* across config tiers).          |
 | `GIT_LOOPY_DENY_SKILLS`        | 1     | empty            | Deprecated denylist of skills (set *union* across config tiers); subtracts only (§16). |
@@ -638,21 +638,10 @@ contribution-scoped: it names work that never became a **Lane contribution**, so
 collecting Iteration's `iter` and no contribution identity.
 Dashboard Insight additions within compatibility schema 1 are `wrapper.issue.activated`,
 `agent.output`, and `usage.context_window`; `wrapper.skill_policy.resolved` is the redacted
-Run-scoped record of the frozen **Effective Skill policy** (§16). `wrapper.dashboard.fault` is
-the Run-scoped record of a **Dashboard fault** — a Dashboard that raised, either while running or
-while coming up, which the Run survives as an involuntary **Detach** (ADR-0024). One event covers
-both, because a replay needs to tell a fault from a voluntary Detach, not one fault from another.
-It carries `error_type` and the scrubbed `error` text,
-so a replay can tell a Run the operator walked away from apart from one whose live view crashed
-out from under them; a voluntary Detach records no fault, which is the distinction. It is
-Run-scoped in **Parallel mode** too, never contribution-scoped: the fault is a fact about the
-Dashboard, not about any **Lane**, and every in-flight Lane contribution — including one being
-integrated — runs on to its natural outcome and keeps emitting its own events, now to the line
-printer (#327). Only an
-Orchestrator that hosts a Dashboard can emit it — the shell and PowerShell Orchestrators host
-none and never do. Rolling-dispatch additions
+Run-scoped record of the frozen **Effective Skill policy** (§16). Rolling-dispatch additions
 within compatibility schema 1 are listed under *Rolling-dispatch contribution lifecycle* below.
-Producing these additive events is capability-dependent.
+Producing these additive events is capability-dependent. TTY attach-client failures are local UI
+failures only: they emit no special Event and do not change the worker's own Run record.
 
 Contract-2.4 puts **Wind-down** on the wire. A Run emits
 `wrapper.stop.requested` when it latches a drain or escalates it to cancellation:

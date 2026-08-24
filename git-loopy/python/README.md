@@ -33,10 +33,11 @@ persisted `config.toml` values.
 # From the repo root: install the runner's dependencies.
 uv sync --project git-loopy/python
 
+# Optional: install the startup-pickers extra (Textual).
+uv sync --project git-loopy/python --extra tui
+
 # Optional: install the OpenTelemetry extra to enable opt-in tracing.
 uv sync --project git-loopy/python --extra otel
-
-# Textual is installed as a base dependency (live dashboard + Stop).
 ```
 
 **Requires:** Python **≥ 3.11** on PATH, and either

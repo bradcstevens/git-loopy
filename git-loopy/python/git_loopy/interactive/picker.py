@@ -26,11 +26,9 @@ choice, not an error).
 Textual picker app (:mod:`git_loopy.interactive.picker_app`) is imported lazily
 inside the default ``run_app``, and the SDK ``CopilotClient`` lazily inside
 :func:`git_loopy.model_listing.fetch_live_models`. Together with the injectable
-``fetch`` / ``run_app`` seams this
-keeps :func:`resolve_run_model` — and crucially its fallback path — importable
-and unit-testable without importing Textual and without a live
-backend (mirrors how :mod:`git_loopy.interactive.driver` keeps Textual out of
-:mod:`git_loopy.loop`).
+``fetch`` / ``run_app`` seams this keeps :func:`resolve_run_model` — and crucially
+its fallback path — importable and unit-testable without importing Textual and
+without a live backend.
 """
 
 from __future__ import annotations
@@ -105,7 +103,14 @@ async def resolve_run_model(
         return config.model, config.reasoning_effort
 
     cursor = default_cursor_index(choices, preferred=config.model)
-    selection = await run_app(choices, cursor=cursor)
+    try:
+        selection = await run_app(choices, cursor=cursor)
+    except Exception as exc:
+        warn(
+            "could not start the live model picker "
+            f"({type(exc).__name__}: {exc}); using the configured model instead."
+        )
+        return config.model, config.reasoning_effort
     if selection is None:
         # The user quit the picker without choosing -> keep env/default.
         return config.model, config.reasoning_effort

@@ -80,6 +80,7 @@ import dataclasses
 import os
 import subprocess
 import sys
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
@@ -2420,7 +2421,15 @@ async def _notify_roster_drift(
         )
 
 
-async def _drive_line_printer(config: RunConfig) -> int:
+async def _drive_line_printer(
+    config: RunConfig,
+    *,
+    rate_card: "RateCard | None" = None,
+    staircase: "PriceStaircase | None" = None,
+    run_id: str | None = None,
+    started_at: datetime | None = None,
+    mirror_diagnostics_to_stderr: bool = True,
+) -> int:
     """Resolve the **Rate card**, then drive the line-printer loop (#331).
 
     The non-interactive path is what an unattended loop actually runs, and the
@@ -2433,40 +2442,25 @@ async def _drive_line_printer(config: RunConfig) -> int:
     # Keeps `git-loopy --help` snappy.
     from git_loopy import loop as _loop
 
-    listing = _make_model_listing()
-    rate_card = await resolve_rate_card(listing, warn=_warn)
-    await _notify_roster_drift(config, listing, rate_card)
+    if rate_card is None or staircase is None:
+        listing = _make_model_listing()
+        if rate_card is None:
+            rate_card = await resolve_rate_card(listing, warn=_warn)
+        await _notify_roster_drift(config, listing, rate_card)
+        if staircase is None:
+            staircase = await _resolve_staircase(config, listing, rate_card)
     return await _loop.run(
         config,
         rate_card=rate_card,
-        staircase=await _resolve_staircase(config, listing, rate_card),
+        staircase=staircase,
+        run_id=run_id,
+        started_at=started_at,
+        mirror_diagnostics_to_stderr=mirror_diagnostics_to_stderr,
     )
 
 
 async def _drive_interactive(config: RunConfig, *, select_model: bool) -> int:
-    """Optionally run the startup picker, then drive the observed loop (#23/#24/#31).
-
-    The interactive entrypoint runs inside one :func:`asyncio.run` so the
-    picker's **throwaway** ``list_models()`` client (an async SDK call) and the
-    peer-task loop share a single event loop:
-
-    1. When **ModelSelectionMode** is requested (``select_model`` — the opt-in
-       ``--select-model`` flag or ``GIT_LOOPY_MODEL_SELECT=1``),
-       :func:`git_loopy.interactive.picker.resolve_run_model` resolves the run's
-       model + reasoning effort via the live two-stage picker (issue #24),
-       falling back to the env/default already in ``config`` on any failure. By
-       default the picker is **skipped** and the configured model/effort are used
-       directly (issue #31).
-    2. The (possibly picked) choice is baked into a fresh frozen
-       :class:`RunConfig` (the loop still creates and owns its *own* run client).
-    3. The **Rate card** is resolved from the *same* listing the picker just
-       read (#331, ADR-0026), so it costs no additional round trip, and is held
-       fixed for the whole Run.
-    4. The interactive driver launches the loop as a peer of the observing app
-       (ADR-0001).
-    """
-    from git_loopy import loop as _loop
-
+    """Prepare the TTY Run, then hand off to the detached worker parent."""
     listing = _make_model_listing()
 
     if select_model:
@@ -2482,24 +2476,54 @@ async def _drive_interactive(config: RunConfig, *, select_model: bool) -> int:
     rate_card = await resolve_rate_card(listing, warn=_warn)
     await _notify_roster_drift(config, listing, rate_card)
     staircase = await _resolve_staircase(config, listing, rate_card)
+    return _run_tty_sidecar(
+        config,
+        repo_root=resolve_repo_root(),
+        rate_card=rate_card,
+        staircase=staircase,
+    )
 
-    # The Dashboard's own module is the earliest thing that can fail on the way
-    # up (#326). The [tui] gate probed Textual with ``find_spec``, which does
-    # not import it, so a present-but-broken Textual passes the gate and fails
-    # here. Observability is not a precondition for doing work: degrade to the
-    # line printer exactly as the extra being absent already does, and run.
+
+def _run_tty_sidecar(
+    config: RunConfig,
+    *,
+    repo_root: Path,
+    rate_card: "RateCard | None",
+    staircase: "PriceStaircase | None",
+) -> int:
+    """Start the detached worker, then keep the parent as the attach client."""
+    from git_loopy import run_sidecar
+    from git_loopy.persist import create_writers
+
+    writers = create_writers(repo_root)
+    spec = run_sidecar.DetachedRunSpec(
+        config=config,
+        run_id=writers.run_id,
+        started_at_epoch_ms=int(writers.started_at.timestamp() * 1000),
+        rate_card=rate_card,
+        staircase=staircase,
+    )
     try:
-        from git_loopy.interactive.driver import build_interactive_driver
-
-        driver = build_interactive_driver(config)
-    except Exception as exc:
+        release_version = read_runtime_release_version()
+    except ReleaseVersionError as exc:
         _warn(
-            "the live view could not start — the Dashboard failed to load "
-            f"({type(exc).__name__}: {exc}); falling back to the line printer."
+            "could not read this Runner's Release version "
+            f"({type(exc).__name__}: {exc}); using the line-printer client."
         )
-        return await _loop.run(config, rate_card=rate_card, staircase=staircase)
-    return await _loop.run(
-        config, driver=driver, rate_card=rate_card, staircase=staircase
+        release_version = ""
+    child = run_sidecar.spawn_detached_child(
+        spec,
+        diagnostics_path=writers.diagnostics_path,
+        cwd=Path.cwd(),
+    )
+    return run_sidecar.run_terminal_client(
+        repository_root=repo_root,
+        config=config,
+        trace_path=writers.event_log.path,
+        control_path=run_sidecar.control_path_for_trace(writers.event_log.path),
+        child=child,
+        release_version=release_version,
+        warn=_warn,
     )
 
 

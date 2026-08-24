@@ -132,12 +132,15 @@ scrolling the Run out of view. An *unknown* Event type is not a diagnostic: it
 decodes, reduces to nothing, and is simply skipped.
 
 `main.rs` supplies the real surface and the real readers: a dedicated thread
-owning standard input so a slow frame can never stall the Orchestrator's pipe, a
-second reading the *controlling terminal* (`/dev/tty`, or `CONOUT$` on Windows)
-so the keyboard and the trace never contend for a byte, and a half-second tick so
-elapsed timers keep moving through a quiet stretch. `crossterm` — raw mode, the
-alternate screen, the cursor — appears only there, guarded by a `Drop` **and** a
-panic hook, so raw mode never follows the operator out.
+owning standard input so a slow frame can never stall the Orchestrator's pipe,
+or an attach-mode follower that replays a local trace from byte zero and keeps
+polling it after temporary EOF until `wrapper.run.end` or control-lock release.
+A second thread reads the *controlling terminal* (`/dev/tty`, or `CONOUT$` on
+Windows) so the keyboard and the trace never contend for a byte, and a
+half-second tick keeps elapsed timers moving through a quiet stretch.
+`crossterm` — raw mode, the alternate screen, the cursor — appears only there,
+guarded by a `Drop` **and** a panic hook, so raw mode never follows the operator
+out.
 
 [ratatui]: https://ratatui.rs
 
@@ -148,13 +151,19 @@ git-loopy-tui [--render] [--render-at INSTANT] [--render-at-monotonic S] \
               [--utc-offset-minutes N] [--issue REF] [--model NAME] \
               [--reasoning-effort LEVEL] \
               < events.jsonl
+git-loopy-tui --attach TRACE --control CONTROL \
+              [--utc-offset-minutes N] [--issue REF] [--model NAME] \
+              [--reasoning-effort LEVEL]
 git-loopy-tui --schema-version
 ```
 
 Reads a JSONL Event trace and, **by default**, writes the projected semantic
 view as JSON. Rendering is opt-in through `--render`, which draws the live
 Dashboard on the controlling terminal instead and exits `0` at end of input or
-when the operator quits.
+when the operator quits. Attach mode (`--attach` + `--control`) draws that same
+client from a local trace file, replays from the start, ignores temporary EOF,
+and exits only when the trace records `wrapper.run.end`, the control lock
+releases, or the operator quits the client.
 The pipeline default is deliberate: a caller that only wants the view must not
 need a terminal, and the JSON path is the anti-drift control that proves the
 binary adds no behaviour of its own.
@@ -194,7 +203,7 @@ other's oracle, so the two cannot drift toward each other:
 | `tests/injected_environment.rs` | Capabilities are inert; the zone moves only rendering; elapsed comes from the injected instant |
 | `tests/additive_compatibility.rs` | An unmodelled Event type and unknown fields still reduce to the same view |
 | `tests/library_purity.rs` | The library reaches for nothing the caller did not supply |
-| `tests/binary_seam.rs` | The binary is a thin shell over the library, through the real process boundary |
+| `tests/binary_seam.rs` | The binary is a thin shell over the library, through the real process boundary, and malformed attach CLI usage still exits `2` |
 | `tests/dashboard_render.rs` | What each Dashboard band says, read back from the fixture; ASCII fallback; the end-of-input frame and single restoration; whole-frame layout snapshots |
 | `tests/drill_in_render.rs` | What each drill-in band says, read back from the fixture; the locked band order; ASCII fallback; whole-frame layout snapshot |
 | `tests/navigation.rs` | Moving, opening, returning, and quitting; selection held by issue rather than row |
@@ -202,6 +211,7 @@ other's oracle, so the two cannot drift toward each other:
 | `tests/bounded_input.rs` | Structural input is never dropped; only render-only deltas coalesce, to the newest value |
 | `tests/run_loop.rs` | Quitting, ticks, an unrecoverable read, bounded diagnostics, and restoration on every exit path |
 | `tests/log_guarantees.rs` | Logs are bounded per issue, retain pre-activation output with its own instants, and span Iterations |
+| `src/main.rs` unit tests | Attach parsing, replay from byte zero, temporary-EOF polling, run-end termination, and control-lock termination |
 | `tests/standalone_helper.rs` | `--schema-version` answers without reading stdin; `--render` selects the terminal; a mostly-unreadable trace still finishes, silently on stdout; the projection stays the default |
 
 The rendering tests draw through ratatui's `TestBackend` and normalize the

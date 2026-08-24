@@ -42,8 +42,8 @@ delivered in later phases, sequenced value-first
 ([ADR-0013](adr/0013-multi-language-runner-family.md#decision)):
 
 - **Phase 2 — live TUI + distribution.** The single shared `git-loopy-tui`
-  binary renders the Event schema for the shell and PowerShell ports (the Python
-  member already has its Textual Dashboard), plus prebuilt binaries and
+  binary renders the Event schema for every terminal-attached port, including the
+  Python member, plus prebuilt binaries and
   **package-manager distribution** (Homebrew, `winget`/`scoop`). The shell
   Orchestrator now **supervises** that helper — selection precedence, clone-local
   then `PATH` discovery, the `--schema-version` compatibility gate, and a
@@ -127,7 +127,7 @@ runner-authored work as agent progress.
 | Exit `0` — clean                 | empty ready-for-agent Pool **or** Iteration cap reached                                                                                         |
 | Exit `1` — aborted               | `GIT_LOOPY_MAX_NMT_STRIKES` tripped **or** preflight/setup failure (gh not authed, prompt file missing, etc.) |
 | Observability artefacts          | `.git-loopy/logs/<iso>-<run_id>.jsonl` (replay JSONL) + `.git-loopy/runs/<iso>-<run_id>.json` (per-iteration rollup) + `.git-loopy/logs/<iso>-<run_id>.log` (stderr mirror) |
-| Terminal UX                      | Rich-rendered iteration `Panel`s, per-iteration token + harness-billed **AI Credits** signal, run-end summary table                              |
+| Terminal UX                      | Detached TTY worker + `git-loopy-tui` attach client when available, line-printer fallback otherwise; Rich-rendered iteration `Panel`s, per-iteration token + harness-billed **AI Credits** signal, run-end summary table |
 | OpenTelemetry tracing            | opt-in via `uv sync --project git-loopy/python --extra otel` + `GIT_LOOPY_OTEL_ENABLED=1` (or `OTEL_EXPORTER_OTLP_ENDPOINT`)                            |
 | Prerequisites                    | `gh`, `git`, `copilot`, Python ≥ 3.11, `uv` (or `pip ≥ 24`)                                                                                    |
 

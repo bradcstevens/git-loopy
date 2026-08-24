@@ -35,13 +35,19 @@ keywords = ["github-copilot", "git-loopy", "autonomous", "agent", "afk"]
 dependencies = [
     "github-copilot-sdk==1.0.5",
     "rich>=13.7.0,<14",
+]
+
+[project.optional-dependencies]
+# Startup pickers and Skill-policy fullscreen editing. Detached TTY Runs now use
+# the external git-loopy-tui helper for the live view, so Textual is optional
+# again and only needed for the pre-detach picker surfaces.
+tui = [
     # Load-bearing cap: Textual 7.0.0 raises its floor to rich>=14.2.0,
     # while the Run renderer pins Rich 13 for its panels and tables. Textual
     # 6 and below require only rich>=13.3.3, so today's pins already agree.
     "textual>=0.86,<6",
 ]
 
-[project.optional-dependencies]
 # Optional OpenTelemetry export. Off by default so the base install stays
 # light. Operators who run an OTel collector flip it on by either setting
 # OTEL_EXPORTER_OTLP_ENDPOINT or GIT_LOOPY_OTEL_ENABLED=1 — see issue #12.

@@ -831,6 +831,11 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
     assert actual == _EVENT_SCHEMA["event_types"]
 
 
+def test_wrapper_dashboard_fault_is_retired_and_unreusable() -> None:
+    assert "WRAPPER_DASHBOARD_FAULT" not in events_module.__all__
+    assert "wrapper.dashboard.fault" not in _EVENT_SCHEMA["event_types"].values()
+
+
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """Two axes, and the literals are what keep them from being read as one.
 

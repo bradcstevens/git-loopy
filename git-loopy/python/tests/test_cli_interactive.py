@@ -1,4 +1,4 @@
-"""Tests for the interactive wiring in :mod:`git_loopy.cli` (issue #23)."""
+"""Tests for the TTY startup wiring in :mod:`git_loopy.cli`."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ import pytest
 
 from git_loopy import cli as cli_module
 from git_loopy.config import RunConfig
+from git_loopy.rate_card import RateCard
+from git_loopy.staircase import PriceStaircase
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +83,32 @@ def _install_fake_loop_run(
     monkeypatch.setattr(loop_module, "run", fake_run)
 
 
+def _install_fake_tty_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+    captured: list[dict[str, Any]],
+    *,
+    result: int = 0,
+) -> None:
+    def fake_run(
+        config: RunConfig,
+        *,
+        repo_root: Path,
+        rate_card: RateCard | None = None,
+        staircase: PriceStaircase | None = None,
+    ) -> int:
+        captured.append(
+            {
+                "config": config,
+                "repo_root": repo_root,
+                "rate_card": rate_card,
+                "staircase": staircase,
+            }
+        )
+        return result
+
+    monkeypatch.setattr(cli_module, "_run_tty_sidecar", fake_run, raising=False)
+
+
 def _install_fake_resolve_run_model(
     monkeypatch: pytest.MonkeyPatch,
     result: tuple[str | None, str | None] | None = None,
@@ -125,67 +153,49 @@ def test_main_non_interactive_passes_no_driver(
     assert driver is None
 
 
-def test_main_non_interactive_acquires_no_terminal_ownership(
+def test_main_non_interactive_never_calls_the_tty_sidecar(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The non-interactive path owns no terminal (issue #323, ADR-0024).
-
-    Piped, redirected and CI invocations put the terminal into no mode, so
-    there is nothing to capture and nothing to restore; the **Terminal owner**
-    lives entirely behind the interactive driver, which this path never builds.
-    """
-    from git_loopy.interactive import terminal as terminal_module
-
-    acquisitions: list[object] = []
-    monkeypatch.setattr(
-        terminal_module.TerminalOwner,
-        "acquire",
-        lambda self: acquisitions.append(self),
-    )
+    calls: list[dict[str, Any]] = []
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
+    _install_fake_tty_sidecar(monkeypatch, calls)
     captured: list[tuple[RunConfig, Any]] = []
     _install_fake_loop_run(monkeypatch, captured)
 
     rc = cli_module.main([])
 
     assert rc == 0
-    assert acquisitions == []
+    assert calls == []
 
 
-def test_main_interactive_default_skips_picker(
+def test_main_tty_default_skips_picker_and_detaches(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Issue #31: a default interactive run goes straight to the loop, no picker.
+    """A TTY run detaches; it does not keep the loop in the parent process.
 
-    With neither ``--select-model`` nor ``GIT_LOOPY_MODEL_SELECT`` set, the startup
-    picker is never opened and the driver is built from the configured model.
+    With neither ``--select-model`` nor ``GIT_LOOPY_MODEL_SELECT`` set, the
+    startup picker is never opened and the parent hands the frozen config to
+    the detached child seam instead of calling ``loop.run`` directly.
     """
     monkeypatch.delenv("GIT_LOOPY_MODEL_SELECT", raising=False)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: True)
     calls = _install_fake_resolve_run_model(monkeypatch)
-
-    sentinel = object()
-    import git_loopy.interactive.driver as driver_module
-
-    monkeypatch.setattr(
-        driver_module, "build_interactive_driver", lambda config: sentinel
-    )
-
-    captured: list[tuple[RunConfig, Any]] = []
-    _install_fake_loop_run(monkeypatch, captured)
+    captured: list[dict[str, Any]] = []
+    _install_fake_tty_sidecar(monkeypatch, captured)
+    direct_calls: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, direct_calls)
 
     rc = cli_module.main([])
 
     assert rc == 0
-    # The picker was opt-in and not requested → never opened.
     assert calls == []
-    _cfg, driver = captured[0]
-    assert driver is sentinel
+    assert direct_calls == []
+    assert captured[0]["config"].model == cli_module._DEFAULT_MODEL
 
 
-def test_main_interactive_select_model_opens_picker_and_bakes(
+def test_main_tty_select_model_opens_picker_and_bakes_before_detach(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """``--select-model`` enters ModelSelectionMode: the picker runs and its
@@ -195,61 +205,51 @@ def test_main_interactive_select_model_opens_picker_and_bakes(
     monkeypatch.delenv("GIT_LOOPY_MODEL_SELECT", raising=False)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: True)
-    # The operator picked a different model + effort than the kit default.
     calls = _install_fake_resolve_run_model(monkeypatch, result=("gpt-5.4", "high"))
-
-    captured: list[tuple[RunConfig, Any]] = []
-    _install_fake_loop_run(monkeypatch, captured)
+    captured: list[dict[str, Any]] = []
+    _install_fake_tty_sidecar(monkeypatch, captured)
 
     rc = cli_module.main(["--select-model"])
 
     assert rc == 0
-    assert len(calls) == 1  # the picker was opened
-    cfg, driver = captured[0]
+    assert len(calls) == 1
+    cfg = captured[0]["config"]
     assert cfg.model == "gpt-5.4"
     assert cfg.reasoning_effort == "high"
-    # The driver was built from the *baked* config (its observed state seeds
-    # from the chosen model/effort).
-    assert driver is not None
 
 
-def test_main_interactive_select_model_no_effort_selection_is_baked(
+def test_main_tty_select_model_no_effort_selection_is_baked_before_detach(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A reasoning-incapable pick bakes ``reasoning_effort=None`` into the config."""
     monkeypatch.delenv("GIT_LOOPY_MODEL_SELECT", raising=False)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: True)
     _install_fake_resolve_run_model(monkeypatch, result=("claude-sonnet-4.5", None))
-
-    captured: list[tuple[RunConfig, Any]] = []
-    _install_fake_loop_run(monkeypatch, captured)
+    captured: list[dict[str, Any]] = []
+    _install_fake_tty_sidecar(monkeypatch, captured)
 
     cli_module.main(["--select-model"])
 
-    cfg, _driver = captured[0]
+    cfg = captured[0]["config"]
     assert cfg.model == "claude-sonnet-4.5"
     assert cfg.reasoning_effort is None
 
 
-def test_main_interactive_env_select_model_opens_picker(
+def test_main_tty_env_select_model_opens_picker(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """``GIT_LOOPY_MODEL_SELECT=1`` is the second opt-in path into ModelSelectionMode."""
     monkeypatch.setenv("GIT_LOOPY_MODEL_SELECT", "1")
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: True)
     calls = _install_fake_resolve_run_model(monkeypatch, result=("gpt-5.4", "high"))
-
-    captured: list[tuple[RunConfig, Any]] = []
-    _install_fake_loop_run(monkeypatch, captured)
+    captured: list[dict[str, Any]] = []
+    _install_fake_tty_sidecar(monkeypatch, captured)
 
     rc = cli_module.main([])
 
     assert rc == 0
     assert len(calls) == 1
-    cfg, _driver = captured[0]
-    assert cfg.model == "gpt-5.4"
+    assert captured[0]["config"].model == "gpt-5.4"
 
 
 def test_main_non_interactive_select_model_warns_and_falls_back(
@@ -303,44 +303,15 @@ def test_main_non_interactive_without_select_model_is_silent(
     assert "ModelSelectionMode" not in capsys.readouterr().err
 
 
-# ---------------------------------------------------------------------------
-# A Dashboard that fails at startup degrades to the line printer (issue #326)
-# ---------------------------------------------------------------------------
-
-
-def test_main_interactive_unloadable_dashboard_falls_back_to_line_printer(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_main_tty_returns_the_client_outcome(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A Dashboard that cannot even be loaded still leaves the Run to run.
-
-    The Dashboard import can fail after the TTY gate succeeds. That startup
-    failure must degrade exactly like the extra being absent rather than abort
-    the Run.
-    """
-    import sys
-    import types
-
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: True)
     monkeypatch.delenv("GIT_LOOPY_MODEL_SELECT", raising=False)
 
-    # A driver module that imports but cannot supply the Dashboard entry point
-    # — what a half-loaded Textual leaves behind.
-    monkeypatch.setitem(
-        sys.modules,
-        "git_loopy.interactive.driver",
-        types.ModuleType("git_loopy.interactive.driver"),
-    )
+    captured: list[dict[str, Any]] = []
+    _install_fake_tty_sidecar(monkeypatch, captured, result=17)
 
-    captured: list[tuple[RunConfig, Any]] = []
-    _install_fake_loop_run(monkeypatch, captured)
-
-    rc = cli_module.main([])
-
-    assert rc == 0
+    assert cli_module.main([]) == 17
     assert len(captured) == 1
-    _cfg, driver = captured[0]
-    assert driver is None
-    warning = capsys.readouterr().err
-    assert "live view could not start" in warning
-    assert "line printer" in warning

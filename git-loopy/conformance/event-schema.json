@@ -527,7 +527,6 @@
     "WRAPPER_PR_ADVANCED": "wrapper.pr.advanced",
     "WRAPPER_STRIKE": "wrapper.strike",
     "WRAPPER_ASK_USER_ATTEMPTED": "wrapper.ask_user.attempted",
-    "WRAPPER_DASHBOARD_FAULT": "wrapper.dashboard.fault",
     "WRAPPER_POOL_REFRESHED": "wrapper.pool.refreshed",
     "WRAPPER_CONTRIBUTION_START": "wrapper.contribution.start",
     "WRAPPER_CONTRIBUTION_WORK_FINISHED": "wrapper.contribution.work_finished",

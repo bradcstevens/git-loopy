@@ -137,6 +137,19 @@ fn malformed_usage_exits_two() {
 
     let (code, _, _) = run(&["--render-at", "not-an-instant"], "");
     assert_eq!(code, 2, "an unparseable instant is malformed usage");
+
+    let (code, _, stderr) = run(&["--attach", "run.trace.jsonl"], "");
+    assert_eq!(
+        code, 2,
+        "attach mode without its control artifact is malformed usage"
+    );
+    assert!(
+        stderr.contains("--control"),
+        "the missing attach control path is named: {stderr}"
+    );
+
+    let (code, _, _) = run(&["--control", "run.control"], "");
+    assert_eq!(code, 2, "--control alone is malformed usage");
 }
 
 #[test]

@@ -11,6 +11,7 @@ starts with the capability declaring ``false``.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -20,6 +21,7 @@ from git_loopy.config import RunConfig
 from git_loopy.interactive.models import Selection
 from git_loopy.model_listing import LiveModelListing
 from git_loopy.rate_card import RateCard
+from git_loopy.staircase import PriceStaircase
 
 
 def _priced_model(identifier: str) -> Any:
@@ -72,8 +74,34 @@ def _reset_warnings() -> None:
     warnings.clear()
 
 
+@pytest.fixture
+def captured_tty_sidecar(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+
+    def fake_run(
+        config: RunConfig,
+        *,
+        repo_root: Any,
+        rate_card: RateCard | None = None,
+        staircase: PriceStaircase | None = None,
+    ) -> int:
+        calls.append(
+            {
+                "config": config,
+                "repo_root": repo_root,
+                "rate_card": rate_card,
+                "staircase": staircase,
+            }
+        )
+        return 0
+
+    monkeypatch.setattr(cli_module, "_run_tty_sidecar", fake_run, raising=False)
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: Path.cwd())
+    return calls
+
+
 def test_the_picker_and_the_card_share_one_round_trip(
-    monkeypatch: pytest.MonkeyPatch, captured_run: list[dict[str, Any]]
+    monkeypatch: pytest.MonkeyPatch, captured_tty_sidecar: list[dict[str, Any]]
 ) -> None:
     """A card nothing derives from must not cost a second startup call.
 
@@ -106,12 +134,6 @@ def test_the_picker_and_the_card_share_one_round_trip(
 
     monkeypatch.setattr(picker_module, "resolve_run_model", resolve)
 
-    import git_loopy.interactive.driver as driver_module
-
-    monkeypatch.setattr(
-        driver_module, "build_interactive_driver", lambda config: object()
-    )
-
     exit_code = asyncio.run(
         cli_module._drive_interactive(
             RunConfig(issue_source="github"), select_model=True
@@ -120,7 +142,7 @@ def test_the_picker_and_the_card_share_one_round_trip(
 
     assert exit_code == 0
     assert calls == 1
-    card = captured_run[0]["rate_card"]
+    card = captured_tty_sidecar[0]["rate_card"]
     assert isinstance(card, RateCard)
     assert card.models["claude-opus-4.8"].prices is not None
 

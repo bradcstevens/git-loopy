@@ -367,6 +367,7 @@ def _drive_main(
     tmp_path: Path,
     *,
     isatty: bool,
+    interactive: bool = False,
     argv: list[str] | None = None,
     migration: Any = None,
     extra_env: dict[str, str] | None = None,
@@ -385,7 +386,7 @@ def _drive_main(
     for name, value in (extra_env or {}).items():
         monkeypatch.setenv(name, value)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: interactive)
     monkeypatch.setattr("sys.stdin", _FakeStdin(isatty=isatty))
 
     order: list[str] = []
@@ -399,6 +400,12 @@ def _drive_main(
     from git_loopy import loop as loop_module
 
     monkeypatch.setattr(loop_module, "run", fake_run)
+    monkeypatch.setattr(
+        cli_module,
+        "_run_tty_sidecar",
+        lambda config, **_: order.append("detach") or ran.append(config) or 0,
+        raising=False,
+    )
 
     if migration is not None:
         def recording(**kwargs: Any) -> int:
@@ -439,6 +446,31 @@ def test_legacy_config_on_a_tty_migrates_before_any_work_starts(
     assert code == 0
     assert order == ["migration", "loop"]
     assert ran[0].skill_policy.global_.present is True
+    assert ran[0].skill_policy.global_.names == ("tdd",)
+
+
+def test_legacy_config_on_a_tty_migrates_before_detach(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    global_path = settings.global_config_path({"HOME": str(tmp_path / "home")})
+    settings.write_config(global_path, {"model": "gpt-5.4"})
+
+    def migrate(**kwargs: Any) -> int:
+        settings.write_config(
+            global_path, {"model": "gpt-5.4", "enabled_skills": ["tdd"]}
+        )
+        return 0
+
+    code, order, ran = _drive_main(
+        monkeypatch,
+        tmp_path,
+        isatty=True,
+        interactive=True,
+        migration=migrate,
+    )
+
+    assert code == 0
+    assert order == ["migration", "detach"]
     assert ran[0].skill_policy.global_.names == ("tdd",)
 
 

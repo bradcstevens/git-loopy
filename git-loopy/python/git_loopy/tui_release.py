@@ -16,7 +16,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -25,7 +27,7 @@ import tomllib
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from .events import EVENT_SCHEMA_VERSION
 from .release_version import ReleaseVersionError, is_prerelease, read_release_version
@@ -373,6 +375,108 @@ def helper_release_version(
     return authority
 
 
+def probe_runtime_helper(
+    helper: Path,
+    *,
+    event_schema_version: int = EVENT_SCHEMA_VERSION,
+    timeout: float = 5.0,
+) -> RuntimeHelperProbe:
+    """Read one installed helper's release + schema identity.
+
+    The runtime path is looser than publication smoke tests: it proves the helper
+    is executable, reports a Release version, and accepts this Event schema. It
+    deliberately does not drain a synthetic Run — an operator may have only the
+    already-installed helper the repository or PATH provides.
+    """
+    probe = _run_helper(helper, ["--schema-version"], timeout=timeout)
+    if probe.returncode != 0:
+        raise TuiReleaseError(
+            f"runtime helper {helper} exited {probe.returncode} for --schema-version"
+        )
+    try:
+        document = json.loads(probe.stdout)
+    except json.JSONDecodeError as exc:
+        raise TuiReleaseError(
+            f"runtime helper {helper} did not answer --schema-version with JSON: {exc}"
+        ) from exc
+    if not isinstance(document, dict):
+        raise TuiReleaseError(
+            f"runtime helper {helper} answered --schema-version with "
+            "something other than an object"
+        )
+    try:
+        minimum = int(document["min_event_schema_version"])
+        maximum = int(document["max_event_schema_version"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise TuiReleaseError(
+            f"runtime helper {helper} published no Event-schema range"
+        ) from exc
+    if not minimum <= event_schema_version <= maximum:
+        raise TuiReleaseError(
+            f"runtime helper {helper} decodes Event schemas "
+            f"{minimum}-{maximum}, not {event_schema_version}"
+        )
+    version = document.get("version")
+    if not isinstance(version, str) or not version.strip():
+        raise TuiReleaseError(f"runtime helper {helper} published no Release version")
+    return RuntimeHelperProbe(
+        path=helper,
+        reported_version=version,
+        event_schema_range=(minimum, maximum),
+    )
+
+
+def resolve_runtime_helper(
+    repository_root: Path,
+    *,
+    release_version: str,
+    warn: Callable[[str], None],
+    event_schema_version: int = EVENT_SCHEMA_VERSION,
+    timeout: float = 5.0,
+) -> Path | None:
+    """Find and validate the helper a TTY Run may attach with.
+
+    Discovery follows the shell family's runtime convention: a clone-local helper
+    at ``.git-loopy/bin/git-loopy-tui`` wins over ``PATH``. The clone-local helper
+    must prove it belongs to this same Release; a PATH helper may be newer or
+    older, but that drift is surfaced with a warning rather than blocking the Run.
+    Any probe failure or schema mismatch degrades to ``None``.
+    """
+    clone_local = repository_root / ".git-loopy" / "bin" / "git-loopy-tui"
+    path_helper = shutil.which("git-loopy-tui")
+    if clone_local.is_file() and os.access(clone_local, os.X_OK):
+        candidates: tuple[tuple[str, Path], ...] = (("clone-local", clone_local),)
+    elif path_helper:
+        candidates = (("PATH", Path(path_helper)),)
+    else:
+        candidates = ()
+    for origin, helper in candidates:
+        try:
+            probe = probe_runtime_helper(
+                helper,
+                event_schema_version=event_schema_version,
+                timeout=timeout,
+            )
+        except TuiReleaseError as exc:
+            warn(f"ignoring the {origin} git-loopy-tui helper ({exc}).")
+            continue
+        if origin == "clone-local" and probe.reported_version != release_version:
+            warn(
+                "ignoring the clone-local git-loopy-tui helper "
+                f"({helper}) because it reports Release {probe.reported_version!r}, "
+                f"not this Runner's {release_version!r}."
+            )
+            return None
+        if origin == "PATH" and probe.reported_version != release_version:
+            warn(
+                "the PATH git-loopy-tui helper "
+                f"({helper}) reports Release {probe.reported_version!r}, not "
+                f"this Runner's {release_version!r}; attaching anyway."
+            )
+        return probe.path
+    return None
+
+
 def _digest(path: Path) -> str:
     hasher = hashlib.sha256()
     try:
@@ -443,6 +547,15 @@ class SmokeTestResult:
     reported_version: str
     event_schema_range: tuple[int, int]
     events_delivered: int
+
+
+@dataclass(frozen=True)
+class RuntimeHelperProbe:
+    """What a runtime-discovered helper proved about itself."""
+
+    path: Path
+    reported_version: str
+    event_schema_range: tuple[int, int]
 
 
 def minimal_run_trace(run_id: str = "01HXR0000000000000000000AA") -> str:

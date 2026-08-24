@@ -99,6 +99,17 @@ def _install_fake_loop_run(
     monkeypatch.setattr(loop_module, "run", fake_run)
 
 
+def _install_fake_tty_sidecar(
+    monkeypatch: pytest.MonkeyPatch, captured: list[RunConfig]
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "_run_tty_sidecar",
+        lambda config, **_: captured.append(config) or 0,
+        raising=False,
+    )
+
+
 def _clear_run_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (
         "GIT_LOOPY_MODEL",
@@ -148,6 +159,35 @@ def test_bare_first_run_on_tty_runs_wizard_then_loop(
     assert len(captured) == 1
     cfg, _driver = captured[0]
     assert cfg.model == "gpt-5.4"  # the loop uses the wizard-written Config
+
+
+def test_bare_first_run_on_tty_runs_wizard_then_detaches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _clear_run_env(monkeypatch)
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: True)
+    monkeypatch.setattr("sys.stdin", _FakeStdin(isatty=True))
+
+    def fake_run_init(**kwargs: Any) -> int:
+        cfg_dir = tmp_path / "git-loopy"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "config.toml").write_text(
+            'model = "gpt-5.4"\nenabled_skills = ["tdd"]\n'
+        )
+        return 0
+
+    monkeypatch.setattr("git_loopy.init.run_init", fake_run_init)
+    sidecar_calls: list[RunConfig] = []
+    _install_fake_tty_sidecar(monkeypatch, sidecar_calls)
+    direct_calls: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, direct_calls)
+
+    rc = cli_module.main([])
+
+    assert rc == 0
+    assert direct_calls == []
+    assert sidecar_calls[0].model == "gpt-5.4"
 
 
 def test_bare_first_run_without_tty_uses_defaults_and_never_prompts(

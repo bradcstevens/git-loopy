@@ -1,8 +1,9 @@
 """``git_loopy.interactive.detect`` — terminal availability predicates.
 
-The Dashboard is not a mode choice: a terminal makes it available and every
-other output path uses the line printer. This pure predicate stays testable
-without a real terminal and imports no Textual code.
+A terminal still changes the startup path even after the Python Runner retired
+its in-process Dashboard: TTY Runs detach a worker and keep the parent as the
+attach client, while non-TTY Runs stay on the direct line printer. This pure
+predicate stays testable without a real terminal and imports no Textual code.
 
 A second, narrower gate lives here too: :func:`resolve_model_selection` decides
 whether the interactive run opens the one-time startup **ModelSelectionMode**
@@ -26,7 +27,7 @@ def _is_truthy(value: str | None) -> bool:
 
 
 def dashboard_available(*, isatty: bool) -> bool:
-    """Return whether this Run can attach the Dashboard."""
+    """Return whether this Run should take the TTY attach-client path."""
     return isatty
 
 

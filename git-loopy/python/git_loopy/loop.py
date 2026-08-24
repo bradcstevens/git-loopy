@@ -4768,13 +4768,12 @@ class _ParallelLoop:
 
 
 class InteractiveDriver(Protocol):
-    """Strategy that runs the loop as an *observed peer* of a Textual app.
+    """Observer seam used by tests that compare live versus replayed state.
 
-    The concrete implementation is
-    :class:`git_loopy.interactive.driver.InteractiveDriver`. It is referenced
-    here only as a **structural Protocol** so :mod:`git_loopy.loop` never
-    imports the interactive package — and therefore never imports Textual,
-    keeping the import-guard convention (ADR-0001) intact on the loop side.
+    The production TTY path detached from the Python process in issue #459, but
+    some tests still attach a pure observer to the live sink fan-out to compare
+    the written record with the state a live reader would have built. This stays
+    as a structural Protocol so :mod:`git_loopy.loop` itself remains import-light.
 
     The contract is deliberately tiny:
 
@@ -4783,17 +4782,10 @@ class InteractiveDriver(Protocol):
       :func:`run` as the primary sink on the interactive path.
     * :meth:`attach_panes` receives the loop-owned Summary/Log pane sources
       (issue #26) before :meth:`run` builds the app.
-    * :meth:`attach_detach` receives the exit-model handoff (issue #28): the
-      swappable :class:`~git_loopy.sinks.SinkFanout`, the parked line-printer
-      Renderer to swap in on a **Detach**, the stdout console for the **Stop**
-      scrollback record, and (#325) the **Run**'s durable record, into which a
-      **Dashboard fault** is written.
+    * :meth:`attach_detach` receives the legacy sink handoff used by those tests.
     * :meth:`run` is handed the loop's ``drive`` coroutine-function and is
       responsible for launching it and the Textual app as **peer asyncio
-      tasks** (not parent/child), returning the loop's process exit code. A
-      user **Stop** (``q`` / ``Ctrl+C``) cancels the loop task; a **Detach**
-      (``d``) swaps the sink to the line printer and lets the loop run on; a
-      **Dashboard fault** does the same and records why (ADR-0024).
+      tasks** (not parent/child), returning the loop's process exit code.
     """
 
     state: EventSink
@@ -4823,6 +4815,9 @@ async def run(
     driver: InteractiveDriver | None = None,
     rate_card: RateCard | None = None,
     staircase: "PriceStaircase | None" = None,
+    run_id: str | None = None,
+    started_at: datetime | None = None,
+    mirror_diagnostics_to_stderr: bool = True,
 ) -> int:
     """Drive one ``git-loopy`` invocation to completion.
 
@@ -4895,7 +4890,12 @@ async def run(
     # release and root resolution above intentionally remain outside its scope.
     # From here, every Run preflight and cleanup path remains liveness-visible.
     try:
-        writers = create_writers(repo_root)
+        writers = create_writers(
+            repo_root,
+            run_id=run_id,
+            started_at=started_at,
+            mirror_diagnostics_to_stderr=mirror_diagnostics_to_stderr,
+        )
         control = RunControlArtifact.acquire(writers.event_log.path)
     except Exception as exc:
         print(
@@ -5003,9 +5003,8 @@ async def run(
         # Hand the driver the exit-model seam (issue #28): the swappable sink
         # list, the parked stdout Renderer to swap in on Detach, the real
         # console for the Stop / natural-completion scrollback summary, and
-        # (#325) the run's own durable record, so a **Dashboard fault** is
-        # written into the same always-on replay JSONL as every other event
-        # rather than being discarded unread.
+        # The observer test seam receives the run's durable record too, so a
+        # custom driver can annotate the same JSONL stream if it needs to.
         driver.attach_detach(
             sinks=sinks,
             line_printer=renderer,

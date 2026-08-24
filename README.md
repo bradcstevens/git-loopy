@@ -88,7 +88,7 @@ work needs it.
 | **Task-type routing** | Seven task types (`planning`, `review`, `implementation`, `test`, `docs`, `chore`, `bugfix`) each route to their own model and reasoning effort, so a chore never pays feature prices | [customization](docs/customization.md) |
 | **Measured routing** *(in progress)* | Routes calibrated from what Runs actually cost and deliver, rather than from a static opinion | [ADR-0027](docs/adr/0027-routing-is-calibrated-by-measurement.md) |
 | **Parallel Lanes** | Opt-in worktree-isolated Lanes work several `parallel-safe` issues at once, with a serialized, bounded-green Integration stage | [parallel mode](docs/parallel-mode.md) |
-| **Live Dashboard** | Per-Iteration activity, context fill, observed tokens, and billed cost while the Run is happening | [runners](docs/runners.md) |
+| **Live interface** | Per-Iteration activity, context fill, observed tokens, and billed cost while the Run is happening — via the shared `git-loopy-tui` helper on a terminal, or the line printer everywhere else | [runners](docs/runners.md) |
 | **Closed-world Skill policy** | Exactly the Skills a Run may load — no ambient context bloat from whatever is installed on the host | [skill policy](docs/skill-policy.md) |
 
 ## Get started
@@ -112,8 +112,9 @@ git-loopy init
 git-loopy
 ```
 
-On a terminal, a Run opens the live **Dashboard**. A non-terminal Run uses the
-line printer.
+On a terminal, a Run detaches its worker and opens the live interface with the
+shared `git-loopy-tui` helper when available, falling back to the line printer.
+A non-terminal Run uses the line printer directly.
 
 Useful variations:
 
@@ -131,7 +132,7 @@ git-loopy config list             # the effective settings a Run would use
 
 Hosts without Python can run the [shell](git-loopy/shell/README.md) or
 [PowerShell](git-loopy/powershell/README.md) Orchestrator instead — same
-contract, same Dashboard.
+contract, same live helper.
 
 ### Installation identity and channels
 
@@ -250,8 +251,8 @@ this catalog; `npx skills find <query>` searches it.
 7. **Complete one Iteration.** The agent reads the issue and domain docs, works in
    vertical slices, and runs the repository's feedback loops. It commits with a
    close keyword and closes the issue. The Orchestrator captures leftover work in
-   a Checkpoint when necessary, pushes new commits, updates the Dashboard and
-   Summary, and records a Strike when no meaningful progress occurred.
+   a Checkpoint when necessary, pushes new commits, updates the live interface
+   and Summary, and records a Strike when no meaningful progress occurred.
 8. **Repeat, then judge.** The next Iteration receives a fresh Pool and context.
    The Run stops when work is exhausted, the configured limit is reached, or
    strikes trip the guardrail. The loop engineer reviews the pushed result against
