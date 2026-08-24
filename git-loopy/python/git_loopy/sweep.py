@@ -172,7 +172,13 @@ def _liveness_by_run(
                 except OSError:
                     states.append(None)
                     continue
-                states.extend(read(path) for path in matches)
+                if matches:
+                    states.extend(read(path) for path in matches)
+                else:
+                    # An absent artifact proves death only where the liveness
+                    # mechanism itself is available. Probe it so platforms
+                    # without advisory locks retain their explicit unknown.
+                    states.append(read(control_dir / f"{run_id}.control"))
             if any(state is True for state in states):
                 cache[run_id] = True
             elif any(state is None for state in states):

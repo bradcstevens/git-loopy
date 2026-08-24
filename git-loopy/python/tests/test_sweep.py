@@ -510,6 +510,38 @@ def test_sweep_treats_an_unreadable_control_artifact_as_unknown(
     assert not report.reclaimed_anything
 
 
+def test_sweep_treats_a_missing_artifact_as_unknown_without_advisory_locks(
+    tmp_path: Path,
+) -> None:
+    """A platform without advisory locks cannot prove an unrecorded Run dead.
+
+    ``is_run_alive`` reports ``None`` before it tries to open an artifact on
+    those platforms. The liveness composition must ask it even when no prior
+    Run left an artifact behind; otherwise the empty match set accidentally
+    becomes ``False`` and turns unknown into a destructive answer.
+    """
+    git = FakeGitClient(tmp_path, branch="main")
+    lane_path = tmp_path / ".git" / "git-loopy" / "RUNUNKNOWN" / "issue-9"
+    git.add_worktree(lane_path, branch=lane_branch_name("RUNUNKNOWN", 9), base="main")
+    github = FakeGitHubClient(
+        repo=Repo(owner="octo", name="kit", default_branch="main"),
+        issues=[_issue(9, state="CLOSED")],
+    )
+
+    report = sweep(
+        git=git,
+        github=github,
+        control_dir=tmp_path / ".git-loopy" / "logs",
+        base_branch="main",
+        dry_run=False,
+        liveness=lambda _path: None,
+    )
+
+    assert not report.reclaimed_anything
+    assert git.worktree_removes == []
+    assert git.branch_deletes == []
+
+
 def test_sweep_never_follows_or_removes_a_symlink(tmp_path: Path) -> None:
     """A link must not walk the reaper out of the subtree it was aimed at.
 
