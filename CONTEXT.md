@@ -1129,6 +1129,22 @@ sibling directory that an operator's own worktrees could share, so reclaiming by
 would take work git-loopy was never given.
 _Avoid_: branch prefix, runner branches, worktree directory.
 
+**Sweep**:
+Reclaiming residue **no live Run owns** — a dead Run's **Lane workspaces**, its resolved
+branches, and the empty directories every reclaimed worktree leaves behind. It runs at the
+start of every Run, for that Run's dead predecessors, and on demand as `git-loopy sweep`
+(with a dry run) for when nothing is running at all. Liveness needs no new mechanism: the
+per-Run control artifact's advisory lock already says *lock free ⇒ Run dead ⇒ its
+workspaces are reclaimable*, which is what covers the hard kill and the lost power cable
+that no in-process handler can. A dirty tree is **Salvaged** first. A branch is collected
+by **resolution** — merged into base, or its issue closed — never by merged-ness alone,
+which structurally cannot see a closed issue's unmerged branch. Resolution stops at a
+**Checkpoint** tip: a closed issue is evidence about the issue, not about work its author
+never chose to commit, so a salvaged branch outlives the sweep that rescued it. A sweep is
+invisible: it emits no **Event**, produces no **Strike**, never appears in a Run's
+**Summary**, and prints nothing when it reclaimed nothing.
+_Avoid_: cleanup, garbage collection, prune, reap (as the name for this step).
+
 **Integration**:
 The serialized **Parallel mode** stage that consumes the **Integration backlog** one
 contribution at a time. It merges each finished Lane branch into a private **Integration

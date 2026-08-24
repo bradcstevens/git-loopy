@@ -178,6 +178,54 @@ git-loopy to touch. A leftover from those Runs is still recognisable — it is o
 a `git-loopy/` branch, wherever it sits — while a worktree of yours next to it
 is not, and never will be.
 
+## Sweep: what happens to residue nobody is holding
+
+A workspace is torn down as soon as its contribution finishes, and again at the
+Run's own exit if an exception or a **Stop** ended it instead — but a hard kill
+or a lost power cable runs no code at all, so some residue survives every
+in-process handler. **Sweep** is what reclaims it.
+
+Every Run sweeps at startup, and `git-loopy sweep` does the same on demand for
+when nothing is running:
+
+```bash
+git-loopy sweep --dry-run   # report exactly what would be removed
+git-loopy sweep             # remove it
+```
+
+A sweep that reclaimed nothing prints nothing, so on a clean machine both
+commands are silent and any output at all is news.
+
+What a sweep is allowed to touch is decided by one thing at a time:
+
+- **Whose residue is it?** Only a Run that can be *proven* dead. Each Run holds
+  an OS advisory lock on its own control artifact for as long as it lives, so a
+  free lock means the Run is gone and its workspaces are reclaimable. A Run
+  still holding its lock is never touched — which is what lets two Runs share a
+  clone, including from *different worktrees* of it, since a sweep looks for
+  that lock in every worktree the clone registers. Where the lock cannot be
+  read at all, liveness is *unknown* rather than dead, and nothing is reclaimed.
+- **Is any of it unfinished work?** A dirty workspace is committed to its own
+  Lane branch as a Checkpoint — **salvaged** — before the directory goes. Work
+  is never destroyed, so the only workspace a sweep leaves behind is one whose
+  salvage failed. Salvaged work is recoverable, not resumable: a later Run cuts
+  a fresh Lane branch for the issue rather than continuing that one.
+- **Is the branch still worth anything?** A stage branch is always collected.
+  A Lane branch is collected once it is *resolved* — merged into the branch
+  you are on, or belonging to an issue that has since closed. An unmerged
+  branch for an issue still open stays, because it may be the only copy. So
+  does one whose last commit is a Checkpoint: an issue closing tells you the
+  issue was settled, not that anyone ever looked at work its author never
+  committed. That is what makes a salvage worth performing — it survives the
+  sweep that rescued it, and every sweep after.
+- **Is the directory empty?** `git worktree remove` takes only the leaf it is
+  given, so run and `integrate/` directories pile up empty forever. A sweep
+  removes a directory only when it is genuinely empty, which is why one shared
+  with your own worktrees is safe to point it at.
+
+A sweep is not work: it emits no events, produces no strikes, and never appears
+in a Run's summary. A Run that swept an issue's residue did not work that issue.
+
 ## Interleaving with serial work
 
 When the runner finds **Serial-required** work, serial demand latches: refill

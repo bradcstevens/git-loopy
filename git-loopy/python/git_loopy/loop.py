@@ -4744,28 +4744,26 @@ async def run(
 
     # A free control lock proves its Run cannot still own a Lane workspace.
     # This is intentionally Event-free: reclaiming someone else's residue is
-    # neither an Iteration nor a contribution of this Run.
-    sweep_github: gh_module.GitHubClient | None = None
-    base_branch = git.current_branch() or "HEAD"
+    # neither an Iteration nor a contribution of this Run, so it happens here —
+    # before the Run announces itself — and never reaches the wire.
     try:
-        if config.issue_source == "github":
-            sweep_github = _make_github_client()
-            base_branch = sweep_github.repo_view().default_branch
         sweep_report = sweep_module.sweep(
             git=git,
-            github=sweep_github,
+            github=_make_github_client() if config.issue_source == "github" else None,
             control_dir=repo_root / ".git-loopy" / "logs",
-            base_branch=base_branch,
+            base_branch=sweep_module.resolve_base_ref(git),
             dry_run=False,
         )
-    except (git_module.GitError, gh_module.GhError) as exc:
+    except (git_module.GitError, gh_module.GhError, OSError) as exc:
         diag.warning("start-of-Run sweep skipped: %s", exc)
     else:
         if sweep_report.reclaimed_anything:
             diag.info(
-                "start-of-Run sweep reclaimed %d worktree(s) and %d branch(es)",
+                "start-of-Run sweep reclaimed %d worktree(s), %d branch(es) "
+                "and %d director(ies)",
                 len(sweep_report.worktrees),
                 len(sweep_report.branches),
+                len(sweep_report.directories),
             )
 
     if config.execution_host not in events_module.PYTHON_EXECUTION_HOSTS:

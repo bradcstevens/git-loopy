@@ -102,7 +102,6 @@ from git_loopy.config import (
     gate_reasoning_effort,
     validate_task_type_key,
 )
-
 from git_loopy.model_listing import LiveModelListing
 from git_loopy.routing_scope import routing_in_force
 from git_loopy.rate_card import resolve_rate_card

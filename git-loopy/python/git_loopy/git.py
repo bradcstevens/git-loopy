@@ -186,10 +186,14 @@ class Worktree:
         branch: The branch it is checked out on, without a ``refs/heads/``
             prefix. ``None`` for a detached ``HEAD``, which is never
             git-loopy's own.
+        prunable: Whether git considers the registration stale — its directory
+            is gone, so the registration is all that is left of it. Nothing can
+            be opened in such a worktree and nothing in it can be lost.
     """
 
     path: Path
     branch: str | None
+    prunable: bool = False
 
 
 def _run(
@@ -529,6 +533,18 @@ class GitClient(Protocol):
 
     def is_merged_into(self, branch: str, base: str) -> bool:
         """Return whether ``branch`` is reachable from ``base``."""
+        ...
+
+    def branch_tip(self, branch: str) -> Commit:
+        """Return the commit ``branch`` points at.
+
+        Reclamation reads it to ask what the *last* thing that happened on a
+        branch was — a **Checkpoint** tip means work nobody has seen, which no
+        amount of evidence about the issue can overrule.
+
+        Raises:
+            GitError: If ``branch`` does not resolve.
+        """
         ...
 
     def abort_merge(self) -> None:
@@ -1196,6 +1212,20 @@ class SubprocessGitClient:
             return False
         raise GitError(args, completed.returncode, _stderr_tail(completed.stderr))
 
+    def branch_tip(self, branch: str) -> Commit:
+        """Return the commit ``branch`` points at via ``git log -1``.
+
+        Raises:
+            GitError: If ``git`` is not on PATH or ``branch`` does not resolve.
+        """
+        commits = _parse_log_z(
+            ["log", "-1", _LOG_FORMAT, "--date=short", "-z", branch],
+            cwd=self._root,
+        )
+        if not commits:
+            raise GitError(["git", "log", "-1", branch], 128, f"no commit on {branch!r}")
+        return commits[0]
+
     def abort_merge(self) -> None:
         """Abort an in-progress merge via ``git merge --abort``.
 
@@ -1216,7 +1246,9 @@ class SubprocessGitClient:
         not happen when the branch is what decides ownership. ``branch`` comes
         as a full ``refs/heads/<name>`` ref and is stripped back to the name
         :func:`is_reserved_branch` matches; a detached or bare record carries no
-        ``branch`` field at all and yields ``branch=None``.
+        ``branch`` field at all and yields ``branch=None``. A record carrying
+        ``prunable`` names a registration whose directory is gone, which the
+        sweep must be able to tell from a live worktree.
 
         Raises:
             GitError: If ``git`` is not on PATH, the root is not inside a git
@@ -1227,18 +1259,25 @@ class SubprocessGitClient:
         worktrees: list[Worktree] = []
         path: Path | None = None
         branch: str | None = None
+        prunable = False
         for field in out.split("\0"):
             if field.startswith("worktree "):
                 path = Path(field[len("worktree ") :])
                 branch = None
+                prunable = False
             elif field.startswith("branch ") and path is not None:
                 ref = field[len("branch ") :]
                 prefix = "refs/heads/"
                 branch = ref[len(prefix) :] if ref.startswith(prefix) else ref
+            elif field.split(" ", 1)[0] == "prunable" and path is not None:
+                prunable = True
             elif not field and path is not None:
-                worktrees.append(Worktree(path=path, branch=branch))
+                worktrees.append(
+                    Worktree(path=path, branch=branch, prunable=prunable)
+                )
                 path = None
                 branch = None
+                prunable = False
         return worktrees
 
 

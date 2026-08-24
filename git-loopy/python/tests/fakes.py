@@ -499,6 +499,16 @@ class FakeGitClient:
         base_shas = {commit.sha for commit in self._log}
         return all(commit.sha in base_shas for commit in candidate._log)
 
+    def branch_tip(self, branch: str) -> Commit:
+        """Return the newest commit on ``branch``'s own log."""
+        candidate = self._branches.get(branch)
+        log = self._log if candidate is None and branch == self.branch else None
+        if candidate is not None:
+            log = candidate._log
+        if not log:
+            raise GitError(["git", "log", "-1", branch], 128, f"unknown: {branch}")
+        return log[-1]
+
     # -- test scripting ----------------------------------------------------
 
     def simulate_agent_commit(
