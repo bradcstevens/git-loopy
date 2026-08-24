@@ -317,6 +317,11 @@ def _reclaim_dead_workspaces(
         residue = _parse_residue(worktree.branch or "")
         if residue is None or _same_directory(worktree.path, git.root):
             continue
+        if worktree.path.is_symlink():
+            # A registered symlink cannot be opened or removed safely. Withhold
+            # its branch too, matching the outcome a real removal would reach.
+            withheld.add(residue.branch)
+            continue
         if liveness(residue.run_id) is not False:
             continue
         try:

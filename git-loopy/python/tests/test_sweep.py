@@ -450,6 +450,39 @@ def test_sweep_never_opens_a_workspace_registered_through_a_symlink(
     ).stdout.strip() == "?? theirs.txt"
 
 
+def test_sweep_dry_run_does_not_report_a_symlinked_registered_workspace(
+    tmp_path: Path,
+) -> None:
+    """A plan preserves the workspace and branch an actual sweep must preserve.
+
+    Git's registration can point at a symlink, but opening or removing that path
+    is not safe. A dry run must not report a deletion that execution refuses.
+    """
+    git = _real_repo(tmp_path)
+    lane_path = git.common_git_dir() / "git-loopy" / "RUNGONE" / "issue-9"
+    branch = lane_branch_name("RUNGONE", 9)
+    git.add_worktree(lane_path, branch=branch, base="main")
+    victim = _real_repo(tmp_path / "victim").root
+    shutil.rmtree(lane_path)
+    lane_path.symlink_to(victim)
+    github = FakeGitHubClient(
+        repo=Repo(owner="octo", name="kit", default_branch="main"),
+        issues=[_issue(9, state="CLOSED")],
+    )
+
+    report = sweep(
+        git=git,
+        github=github,
+        control_dir=git.root / ".git-loopy" / "logs",
+        base_branch="main",
+        dry_run=True,
+    )
+
+    assert not report.reclaimed_anything
+    assert branch in git.list_branches()
+    assert victim.is_dir()
+
+
 def test_sweep_does_not_salvage_a_dead_integration_stage(tmp_path: Path) -> None:
     """A stage holds a half-finished merge, and its branch is always collected.
 
