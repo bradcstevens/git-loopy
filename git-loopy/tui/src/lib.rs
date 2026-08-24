@@ -34,7 +34,7 @@ pub use render::{
 pub use session::{
     drive_dashboard, DashboardFrame, DashboardSession, DashboardSurface, Diagnostics,
 };
-pub use state::{DashboardState, RunInputs};
+pub use state::{DashboardState, ExecutionHostProvenance, RunInputs};
 pub use timestamp::{Timestamp, Zone};
 pub use view::{
     project_run_view, Activity, ConsumptionView, ContextFill, ContributionRow, Dashboard,
@@ -46,4 +46,4 @@ pub use view::{
 pub const SUPPORTED_EVENT_SCHEMA_VERSION: u32 = 1;
 
 /// The Wrapper-contract version whose Dashboard seam this core implements.
-pub const WRAPPER_CONTRACT_VERSION: &str = "1.4";
+pub const WRAPPER_CONTRACT_VERSION: &str = "2.2";

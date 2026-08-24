@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.1",
+  "contract_version": "2.2",
   "event_schema_version": "1.1",
   "insight_capabilities": {
     "names": [
@@ -112,6 +112,20 @@
       }
     }
   },
+  "execution_host": {
+    "run_start_key": "execution_host",
+    "run_start_fields": [
+      "placement",
+      "isolation_grade",
+      "capacity",
+      "starting_lane_limit"
+    ],
+    "contribution_start_key": "host",
+    "producers": ["python"],
+    "non_producers": ["shell", "powershell"],
+    "legacy_value": "unknown",
+    "note": "Contract 2.2. Python announces the one Execution host selected for a rolling Run on wrapper.run.start and stamps its placement on every wrapper.contribution.start, including local. The isolation grade is Run-scoped and never repeated on a contribution. Shell and PowerShell emit neither Execution-host payload because they emit no contribution lifecycle records. An absent declaration or stamp is an old trace's unknown, never an inferred local placement."
+  },
   "payload_contracts": {
     "calibration.trial.start": {
       "required": ["calibration_id", "trial_id", "model", "effort", "issue", "base_commit", "oracle_commit", "slot"]
@@ -122,6 +136,7 @@
     },
     "wrapper.run.start": {
       "required": ["release_version", "schema_version", "insight_capabilities", "parallel_capabilities"],
+      "execution_host_optional": ["placement", "isolation_grade", "capacity", "starting_lane_limit"],
       "readback_optional": ["model", "effort", "context_tier", "escalation_rung", "routes", "unconfigured_task_type_keys", "routing_suppressed", "harness_version", "roster_cli_version", "roster_diverged"],
       "readback_pair_keys": ["model", "effort", "configured_effort", "gate_warnings"],
       "readback_route_keys": ["key", "model", "effort", "configured_effort", "gate_warnings"],
@@ -246,7 +261,8 @@
       "scope": "Run-scoped, for the same reason wrapper.pickup.bound is."
     },
     "wrapper.contribution.start": {
-      "required_when_present": ["contribution_id", "issue", "lane_id"]
+      "required_when_present": ["contribution_id", "issue", "lane_id"],
+      "execution_host_stamp": "host"
     },
     "wrapper.contribution.work_finished": {
       "required_when_present": ["contribution_id", "issue", "lane_id"]

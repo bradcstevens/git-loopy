@@ -866,6 +866,18 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
         "contribution_events": True,
         "execution_hosts": ["local"],
     }
+    assert run_start["execution_host"] == {
+        "placement": "local",
+        "isolation_grade": "workspace separation only",
+        "capacity": run_start["execution_host"]["capacity"],
+        "starting_lane_limit": 2,
+    }
+    assert run_start["execution_host"]["capacity"] >= 1
+    contribution_starts = [
+        event for event in events if event["type"] == "wrapper.contribution.start"
+    ]
+    assert contribution_starts
+    assert {event["host"] for event in contribution_starts} == {"local"}
     # No "round" exists under Rolling dispatch, so a Lane contribution never
     # emits `wrapper.iteration.start`/`.end` (see this test's docstring).
     assert [
@@ -3289,6 +3301,19 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     # No Agent session, on any path -- the seam is substitutable in fact.
     assert fake_client.created == []
     assert fake_git.active_worktrees == []
+    events = _logged_events(tmp_path)
+    run_start = next(event for event in events if event["type"] == "wrapper.run.start")
+    assert run_start["execution_host"] == {
+        "placement": "fake",
+        "isolation_grade": "workspace separation only",
+        "capacity": 4,
+        "starting_lane_limit": 2,
+    }
+    starts = [
+        event for event in events if event["type"] == "wrapper.contribution.start"
+    ]
+    assert starts
+    assert {event["host"] for event in starts} == {"fake"}
     # The placeholder each blameless failure left behind is reclaimed, which is
     # what lets the re-offer cut the same deterministic Lane branch again.
     run_id = _run_id(tmp_path)

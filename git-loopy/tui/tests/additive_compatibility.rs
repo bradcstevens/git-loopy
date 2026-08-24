@@ -97,6 +97,71 @@ fn an_unknown_event_type_and_unknown_fields_do_not_change_the_projection() {
     );
 }
 
+#[test]
+fn execution_host_silence_is_unknown_in_legacy_traces() {
+    let mut state = DashboardState::new(RunInputs::default());
+    let legacy_run_start = Event::from_json(&json!({
+        "ts": "2026-05-16T00:00:00.000Z",
+        "run_id": "legacy",
+        "iter": null,
+        "type": "wrapper.run.start"
+    }))
+    .expect("a legacy Run start decodes");
+    let legacy_contribution_start = Event::from_json(&json!({
+        "ts": "2026-05-16T00:00:01.000Z",
+        "run_id": "legacy",
+        "iter": null,
+        "type": "wrapper.contribution.start",
+        "contribution_id": "c-42",
+        "issue": 42,
+        "lane_id": "lane-1"
+    }))
+    .expect("a legacy contribution start decodes");
+
+    state.apply(&legacy_run_start);
+    state.apply(&legacy_contribution_start);
+
+    assert_eq!(state.execution_host().placement, "unknown");
+    assert_eq!(state.contribution_host("c-42"), "unknown");
+
+    let declared_run_start = Event::from_json(&json!({
+        "ts": "2026-05-16T00:00:02.000Z",
+        "run_id": "current",
+        "iter": null,
+        "type": "wrapper.run.start",
+        "execution_host": {
+            "placement": "local",
+            "isolation_grade": "workspace separation only",
+            "capacity": 8,
+            "starting_lane_limit": 2
+        }
+    }))
+    .expect("a current Run start decodes");
+    let stamped_contribution_start = Event::from_json(&json!({
+        "ts": "2026-05-16T00:00:03.000Z",
+        "run_id": "current",
+        "iter": null,
+        "type": "wrapper.contribution.start",
+        "contribution_id": "c-43",
+        "issue": 43,
+        "lane_id": "lane-2",
+        "host": "local"
+    }))
+    .expect("a current contribution start decodes");
+
+    state.apply(&declared_run_start);
+    state.apply(&stamped_contribution_start);
+
+    assert_eq!(state.execution_host().placement, "local");
+    assert_eq!(
+        state.execution_host().isolation_grade,
+        "workspace separation only"
+    );
+    assert_eq!(state.execution_host().capacity, Some(8));
+    assert_eq!(state.execution_host().starting_lane_limit, Some(2));
+    assert_eq!(state.contribution_host("c-43"), "local");
+}
+
 /// A **Calibration**'s records name no **Run** (#371, wrapper contract 1.16).
 ///
 /// A **Trial** is not an **Iteration** and a Calibration is not a Run: nothing it

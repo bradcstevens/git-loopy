@@ -9,8 +9,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::event::{
-    CommitRecorded, ContextWindowSample, Event, EventPayload, InsightCapabilities, IssueRef,
-    IterationEnd, IterationIssue, IterationSummary, Pickup,
+    CommitRecorded, ContextWindowSample, Event, EventPayload, ExecutionHostDeclaration,
+    InsightCapabilities, IssueRef, IterationEnd, IterationIssue, IterationSummary, Pickup,
 };
 use crate::timestamp::Timestamp;
 
@@ -43,6 +43,43 @@ pub struct RunInputs {
     pub model: Option<String>,
     /// The resolved reasoning effort for the Run.
     pub reasoning_effort: Option<String>,
+}
+
+/// Execution-host provenance folded from the Event stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecutionHostProvenance {
+    pub placement: String,
+    pub isolation_grade: String,
+    pub capacity: Option<i64>,
+    pub starting_lane_limit: Option<i64>,
+}
+
+impl Default for ExecutionHostProvenance {
+    fn default() -> Self {
+        Self {
+            placement: "unknown".to_string(),
+            isolation_grade: "unknown".to_string(),
+            capacity: None,
+            starting_lane_limit: None,
+        }
+    }
+}
+
+impl From<&ExecutionHostDeclaration> for ExecutionHostProvenance {
+    fn from(declaration: &ExecutionHostDeclaration) -> Self {
+        Self {
+            placement: declaration
+                .placement
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+            isolation_grade: declaration
+                .isolation_grade
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+            capacity: declaration.capacity,
+            starting_lane_limit: declaration.starting_lane_limit,
+        }
+    }
 }
 
 impl RunInputs {
@@ -256,6 +293,8 @@ pub struct DashboardState {
     iteration_started_monotonic: Option<f64>,
     pub(crate) iteration: i64,
     pub(crate) capabilities: InsightCapabilities,
+    execution_host: ExecutionHostProvenance,
+    contribution_hosts: BTreeMap<String, String>,
     pub(crate) context_window: Option<ContextWindowSample>,
     pub(crate) active_ref: Option<IssueRef>,
     /// Ledger entries keyed by identity, with first-seen order preserved.
@@ -304,6 +343,8 @@ impl DashboardState {
             iteration_started_monotonic: None,
             iteration: 0,
             capabilities: InsightCapabilities::default(),
+            execution_host: ExecutionHostProvenance::default(),
+            contribution_hosts: BTreeMap::new(),
             context_window: None,
             active_ref: None,
             order: Vec::new(),
@@ -330,6 +371,19 @@ impl DashboardState {
     /// The Run's resolved reasoning effort.
     pub fn reasoning_effort(&self) -> Option<&str> {
         self.inputs.reasoning_effort.as_deref()
+    }
+
+    /// The selected host, or `unknown` where a legacy trace did not declare one.
+    pub fn execution_host(&self) -> &ExecutionHostProvenance {
+        &self.execution_host
+    }
+
+    /// One contribution's placement, or `unknown` where its legacy stamp is absent.
+    pub fn contribution_host(&self, contribution_id: &str) -> &str {
+        self.contribution_hosts
+            .get(contribution_id)
+            .map(String::as_str)
+            .unwrap_or("unknown")
     }
 
     /// Fold one Event into the live model.
@@ -375,6 +429,17 @@ impl DashboardState {
                 }
                 if let Some(limit) = start.max_nmt_strikes {
                     self.max_strikes = limit;
+                }
+                if let Some(execution_host) = &start.execution_host {
+                    self.execution_host = ExecutionHostProvenance::from(execution_host);
+                }
+            }
+            EventPayload::ContributionStart(start) => {
+                if let Some(contribution_id) = &start.contribution_id {
+                    self.contribution_hosts.insert(
+                        contribution_id.clone(),
+                        start.host.clone().unwrap_or_else(|| "unknown".to_string()),
+                    );
                 }
             }
             EventPayload::IterationStart => {

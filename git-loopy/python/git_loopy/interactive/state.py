@@ -327,6 +327,16 @@ class ContextWindowSnapshot:
 
 
 @dataclass(frozen=True)
+class ExecutionHostSnapshot:
+    """The selected Execution host as the Run announced it."""
+
+    placement: str = "unknown"
+    isolation_grade: str = "unknown"
+    capacity: int | None = None
+    starting_lane_limit: int | None = None
+
+
+@dataclass(frozen=True)
 class ResolvedRoute:
     """The **Routing resolution** one **Pickup** reached (contract 1.21).
 
@@ -366,6 +376,31 @@ class IssueContribution:
 def _default_wall_clock() -> datetime:
     """Local wall-clock time, used for the human-readable run-start stamp."""
     return datetime.now().astimezone()
+
+
+def _execution_host_snapshot(value: object) -> ExecutionHostSnapshot:
+    """Decode the additive Run declaration without treating silence as local."""
+    if not isinstance(value, Mapping):
+        return ExecutionHostSnapshot()
+    placement = value.get("placement")
+    isolation_grade = value.get("isolation_grade")
+    capacity = value.get("capacity")
+    starting_lane_limit = value.get("starting_lane_limit")
+    return ExecutionHostSnapshot(
+        placement=placement if isinstance(placement, str) else "unknown",
+        isolation_grade=(
+            isolation_grade if isinstance(isolation_grade, str) else "unknown"
+        ),
+        capacity=(
+            capacity if isinstance(capacity, int) and not isinstance(capacity, bool) else None
+        ),
+        starting_lane_limit=(
+            starting_lane_limit
+            if isinstance(starting_lane_limit, int)
+            and not isinstance(starting_lane_limit, bool)
+            else None
+        ),
+    )
 
 
 @dataclass
@@ -445,6 +480,10 @@ class LiveRunState:
         #: that routes publishes a resolution on every bound Pickup, including
         #: the one an explicit ``--model`` pinned.
         self.routing_available: bool | None = None
+        # An absent declaration is historical silence, not evidence the Run used
+        # the local host.
+        self.execution_host = ExecutionHostSnapshot()
+        self._contribution_hosts: dict[str, str] = {}
         self.context_window: ContextWindowSnapshot | None = None
         self.peak_context_window: ContextWindowSnapshot | None = None
 
@@ -588,6 +627,12 @@ class LiveRunState:
             issue = event.get("issue")
             if issue is None:
                 return
+            contribution_id = event.get("contribution_id")
+            if isinstance(contribution_id, str):
+                host = event.get("host")
+                self._contribution_hosts[contribution_id] = (
+                    host if isinstance(host, str) else "unknown"
+                )
             self._mark_started()
             self.status = _STATUS_RUNNING
             self._begin_contribution(self._normalize_ref(issue), now)
@@ -601,6 +646,7 @@ class LiveRunState:
         if etype == _RUN_START:
             self._mark_started()
             self.status = _STATUS_RUNNING
+            self.execution_host = _execution_host_snapshot(event.get("execution_host"))
             capabilities = event.get("insight_capabilities")
             if isinstance(capabilities, Mapping):
                 available = capabilities.get("context_window")
@@ -1354,6 +1400,10 @@ class LiveRunState:
         self._lane_streams.pop(key, None)
         self._lane_commits.pop(key, None)
         self._lane_touch(key, now)
+
+    def contribution_host(self, contribution_id: str) -> str:
+        """Return the stamped placement, or ``unknown`` for legacy records."""
+        return self._contribution_hosts.get(contribution_id, "unknown")
 
     def _finalize_contribution(
         self, key: int | str, event: Mapping[str, Any], now: float

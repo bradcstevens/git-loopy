@@ -470,6 +470,42 @@ def _contribution_start(ref: int, *, lane: str) -> dict:
     )
 
 
+def test_execution_host_provenance_keeps_legacy_trace_silence_unknown() -> None:
+    """A missing host is unknown, never an inferred local placement (#453)."""
+    state = _make_state()
+    state.render(_ev(WRAPPER_RUN_START, run_id="legacy"))
+    state.render(_contribution_start(42, lane="lane-1"))
+
+    assert state.execution_host.placement == "unknown"
+    assert state.execution_host.isolation_grade == "unknown"
+    assert state.execution_host.capacity is None
+    assert state.execution_host.starting_lane_limit is None
+    assert state.contribution_host("c-42") == "unknown"
+
+    declared = _make_state()
+    declared.render(
+        _ev(
+            WRAPPER_RUN_START,
+            run_id="current",
+            execution_host={
+                "placement": "local",
+                "isolation_grade": "workspace separation only",
+                "capacity": 8,
+                "starting_lane_limit": 2,
+            },
+        )
+    )
+    start = _contribution_start(43, lane="lane-2")
+    start["host"] = "local"
+    declared.render(start)
+
+    assert declared.execution_host.placement == "local"
+    assert declared.execution_host.isolation_grade == "workspace separation only"
+    assert declared.execution_host.capacity == 8
+    assert declared.execution_host.starting_lane_limit == 2
+    assert declared.contribution_host("c-43") == "local"
+
+
 def _contribution_end(
     ref: int,
     *,

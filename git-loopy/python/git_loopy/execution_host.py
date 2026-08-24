@@ -89,8 +89,11 @@ __all__ = [
     "ContributionFailure",
     "ContributionOutcome",
     "ExecutionHost",
+    "LOCAL_EXECUTION_HOST_ISOLATION_GRADE",
+    "LOCAL_EXECUTION_HOST_PLACEMENT",
     "LocalRunResult",
     "LocalExecutionHost",
+    "local_execution_host_capacity",
 ]
 
 #: Placement names a host relative to the orchestrator. Only ``"local"``
@@ -104,6 +107,16 @@ Placement = str
 #: credentials and network — a workspace boundary, explicitly not a security
 #: boundary) and ``"machine boundary"`` (a future remote host).
 IsolationGrade = Literal["workspace separation only", "machine boundary"]
+
+#: Facts the local adapter declares for every Lane contribution it runs.
+LOCAL_EXECUTION_HOST_PLACEMENT: Placement = "local"
+LOCAL_EXECUTION_HOST_ISOLATION_GRADE: IsolationGrade = "workspace separation only"
+
+
+def local_execution_host_capacity() -> int:
+    """Return the local host's declared capacity, floored at one."""
+    return max(1, os.cpu_count() or 1)
+
 
 #: The closed facts a host can report for a terminal contribution failure.
 #: Only ``"breach"`` reached an Agent session ending; the other two mean no
@@ -369,15 +382,17 @@ class LocalExecutionHost:
 
     def __init__(self, runner: LocalRunner, *, capacity: int | None = None) -> None:
         self._runner = runner
-        self._capacity = capacity if capacity is not None else max(1, os.cpu_count() or 1)
+        self._capacity = (
+            capacity if capacity is not None else local_execution_host_capacity()
+        )
 
     @property
     def placement(self) -> Placement:
-        return "local"
+        return LOCAL_EXECUTION_HOST_PLACEMENT
 
     @property
     def isolation_grade(self) -> IsolationGrade:
-        return "workspace separation only"
+        return LOCAL_EXECUTION_HOST_ISOLATION_GRADE
 
     @property
     def capacity(self) -> int:

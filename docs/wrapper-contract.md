@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.1 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.2 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -796,7 +796,7 @@ with the preflight-failure code (§10). Accepting the cap and running serially i
 silently serial Run is byte-identical to a Parallel Run whose tracker carries no `parallel-safe`
 issue, so the operator cannot tell an unimplemented feature from an unlabelled backlog.
 
-**Execution hosts (phase 5, contract 2.1).** The same manifest MUST carry an
+**Execution hosts (phase 5, contract 2.2).** The same manifest MUST carry an
 `execution_hosts` list alongside its booleans. Its entries come from the closed
 family vocabulary of host placements relative to the Orchestrator; they never
 name an isolation grade. The list is present even when empty. A non-empty list
@@ -807,6 +807,17 @@ the shell and PowerShell Orchestrators declare `[]` because they schedule no
 at preflight with the preflight-failure exit code and a diagnostic naming
 `execution_hosts`, the distribution, and the setting an operator can change.
 This is a distribution capability refusal, not a Continuation capability path.
+
+An Orchestrator that emits **Lane contributions** MUST announce its selected
+**Execution host** on `wrapper.run.start` as an `execution_host` object carrying
+`placement`, `isolation_grade`, declared `capacity`, and `starting_lane_limit`.
+It MUST stamp the selected placement as `host` on every
+`wrapper.contribution.start`, including `local`; the isolation grade is announced
+once per Run and MUST NOT be repeated per contribution. Shell and PowerShell emit
+neither payload because they emit no contribution lifecycle Event. Consumers MUST
+read an absent declaration or stamp in a historical trace as `unknown`, never as
+an inferred local placement. These are additive payload fields within Event schema
+compatibility 1; no envelope key or Event-type literal is added.
 
 **A truthful `parallel_mode: true` can still yield a wholly serial Run, and it MUST say so
 (contract 1.28).** The rule above is about the *distribution*; an Orchestrator that declares

@@ -95,6 +95,8 @@ pub struct Event {
 pub enum EventPayload {
     /// `wrapper.run.start`
     RunStart(RunStart),
+    /// `wrapper.contribution.start`
+    ContributionStart(ContributionStart),
     /// `wrapper.iteration.start`
     IterationStart,
     /// `wrapper.afk_ready.collected`
@@ -132,6 +134,31 @@ pub struct RunStart {
     /// The configured consecutive-Strike limit.
     #[serde(default)]
     pub max_nmt_strikes: Option<i64>,
+    /// The selected Execution host, declared once for the Run.
+    #[serde(default)]
+    pub execution_host: Option<ExecutionHostDeclaration>,
+}
+
+/// The Execution host facts announced on `wrapper.run.start`.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ExecutionHostDeclaration {
+    #[serde(default)]
+    pub placement: Option<String>,
+    #[serde(default)]
+    pub isolation_grade: Option<String>,
+    #[serde(default)]
+    pub capacity: Option<i64>,
+    #[serde(default)]
+    pub starting_lane_limit: Option<i64>,
+}
+
+/// The placement stamp on one `wrapper.contribution.start`.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ContributionStart {
+    #[serde(default)]
+    pub contribution_id: Option<String>,
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 /// Per-Orchestrator Insight capabilities declared at Run start.
@@ -498,6 +525,7 @@ impl Event {
 fn decode_payload(kind: &str, value: &Value) -> EventPayload {
     match kind {
         "wrapper.run.start" => EventPayload::RunStart(decode_or_default(value)),
+        "wrapper.contribution.start" => EventPayload::ContributionStart(decode_or_default(value)),
         "wrapper.iteration.start" => EventPayload::IterationStart,
         "wrapper.afk_ready.collected" => EventPayload::AfkReadyCollected(decode_or_default(value)),
         "wrapper.issue.activated" => match serde_json::from_value(value.clone()) {

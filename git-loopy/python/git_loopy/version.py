@@ -10,6 +10,6 @@ from __future__ import annotations
 
 #: The Wrapper contract revision this distribution implements. `docs/wrapper-contract.md`
 #: carries the same number in its header; the two are changed together.
-WRAPPER_CONTRACT_VERSION = "2.1"
+WRAPPER_CONTRACT_VERSION = "2.2"
 
 __all__ = ["WRAPPER_CONTRACT_VERSION"]

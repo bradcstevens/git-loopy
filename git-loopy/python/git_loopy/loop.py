@@ -2526,32 +2526,37 @@ class _ParallelLoop:
         if rc is not None:
             return rc
 
-        self._serial._emit(
-            events_module.WRAPPER_RUN_START,
-            iter_num=None,
-            issue_source=self._config.issue_source,
-            release_version=self._release_version,
-            schema_version=events_module.EVENT_SCHEMA_VERSION,
-            insight_capabilities=events_module.python_insight_capabilities(
+        start_payload = {
+            "issue_source": self._config.issue_source,
+            "release_version": self._release_version,
+            "schema_version": events_module.EVENT_SCHEMA_VERSION,
+            "insight_capabilities": events_module.python_insight_capabilities(
                 rate_card=self._rate_card is not None
             ),
-            rate_card=(
+            "rate_card": (
                 None if self._rate_card is None else self._rate_card.to_payload()
             ),
-            parallel_capabilities=events_module.python_parallel_capabilities(),
-            max_iterations=self._config.max_iterations,
-            max_nmt_strikes=self._config.max_nmt_strikes,
+            "parallel_capabilities": events_module.python_parallel_capabilities(),
+            "max_iterations": self._config.max_iterations,
+            "max_nmt_strikes": self._config.max_nmt_strikes,
             # #410: what this Run parsed, gate-checked.
             **run_start_payload(self._config),
             # #304: only a Parallel-mode Run carries these, so a serial Run's
             # `wrapper.run.start` is byte-identical to what it always was.
-            parallel_mode=True,
-            lane_cap=self._config.parallel,
-            effective_lane_limit=(
+            "parallel_mode": True,
+            "lane_cap": self._config.parallel,
+            "effective_lane_limit": (
                 self._scheduler.effective_limit
                 if self._scheduler is not None
                 else None
             ),
+        }
+        if self._rolling_capable:
+            start_payload["execution_host"] = self._execution_host_payload()
+        self._serial._emit(
+            events_module.WRAPPER_RUN_START,
+            iter_num=None,
+            **start_payload,
         )
         self._report_parallel_degraded()
 
@@ -3219,7 +3224,8 @@ class _ParallelLoop:
         )
         self._lane_work[contribution.contribution_id] = lane_work
         self._open_lane_contributions[contribution.contribution_id] = contribution
-        self._open_contribution_accounting(contribution)
+        host = self._host_for_contribution(contribution, lane_work)
+        self._open_contribution_accounting(contribution, host=host)
 
         lane_binding = self._serial._new_active_issue_binding(
             None, allowed_refs=(ref,), lane_issue=ref
@@ -3255,7 +3261,6 @@ class _ParallelLoop:
         request = self._build_contribution_request(
             contribution, lane_work, commits_block, base_revision=base
         )
-        host = self._host_for_contribution(contribution, lane_work)
         outcome = await host.run_contribution(request)
         if isinstance(outcome, execution_host_module.ContributionFailure):
             self._diag.warning(
@@ -3891,7 +3896,10 @@ class _ParallelLoop:
             await self._integrate_contribution(admitted)
 
     def _open_contribution_accounting(
-        self, contribution: rolling_scheduler.Contribution
+        self,
+        contribution: rolling_scheduler.Contribution,
+        *,
+        host: execution_host_module.ExecutionHost,
     ) -> None:
         """Open one **Lane contribution**'s own accounting scope (#310).
 
@@ -3915,8 +3923,30 @@ class _ParallelLoop:
             )
         )
         self._emit_contribution_event(
-            contribution, events_module.WRAPPER_CONTRIBUTION_START
+            contribution,
+            events_module.WRAPPER_CONTRIBUTION_START,
+            host=host.placement,
         )
+
+    def _execution_host_payload(self) -> dict[str, object]:
+        """Describe the single host this rolling Run selected."""
+        assert self._scheduler is not None
+        if self._execution_host is None:
+            placement = execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT
+            isolation_grade = (
+                execution_host_module.LOCAL_EXECUTION_HOST_ISOLATION_GRADE
+            )
+            capacity = execution_host_module.local_execution_host_capacity()
+        else:
+            placement = self._execution_host.placement
+            isolation_grade = self._execution_host.isolation_grade
+            capacity = self._execution_host.capacity
+        return {
+            "placement": placement,
+            "isolation_grade": isolation_grade,
+            "capacity": capacity,
+            "starting_lane_limit": self._scheduler.effective_limit,
+        }
 
     def _emit_contribution_event(
         self,

@@ -25,6 +25,7 @@ from git_loopy.calibration_search import (
 from git_loopy.trial_concurrency import InlineTrialDispatcher
 from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import events as events_module
+from git_loopy import execution_host as execution_host_module
 from git_loopy import cli as cli_module
 from git_loopy import config as config_module
 from git_loopy import version as version_module
@@ -886,7 +887,7 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "2.1"
+    assert _EVENT_SCHEMA["contract_version"] == "2.2"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
@@ -950,6 +951,12 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "schema_version",
                 "insight_capabilities",
                 "parallel_capabilities",
+            ],
+            "execution_host_optional": [
+                "placement",
+                "isolation_grade",
+                "capacity",
+                "starting_lane_limit",
             ],
             # #410: the **Run readback**. Optional beside `required`, never in
             # it: a port that routes nothing has no Config to read back, and
@@ -1358,16 +1365,22 @@ def _execution_host_producers() -> tuple[str, ...]:
     source = (
         Path(events_module.__file__).parent / "execution_host.py"
     ).read_text(encoding="utf-8")
-    return tuple(
-        dict.fromkeys(
-            re.findall(
-                r"@property\s+def placement\(self\) -> Placement:.*?"
-                r'return "([^"]+)"',
-                source,
-                flags=re.DOTALL,
-            )
+    placements = re.findall(
+        r"@property\s+def placement\(self\) -> Placement:.*?"
+        r'return "([^"]+)"',
+        source,
+        flags=re.DOTALL,
+    )
+    placements.extend(
+        getattr(execution_host_module, name)
+        for name in re.findall(
+            r"@property\s+def placement\(self\) -> Placement:.*?"
+            r"return (LOCAL_EXECUTION_HOST_PLACEMENT)",
+            source,
+            flags=re.DOTALL,
         )
     )
+    return tuple(dict.fromkeys(placements))
 
 
 def test_event_fixture_pins_the_execution_host_declaration() -> None:
@@ -1384,6 +1397,34 @@ def test_event_fixture_pins_the_execution_host_declaration() -> None:
     manifest = events_module.python_parallel_capabilities()
     assert all(host in declaration["identifiers"] for host in manifest["execution_hosts"])
     assert not manifest["execution_hosts"] or manifest["parallel_mode"]
+
+
+def test_event_fixture_pins_execution_host_event_provenance() -> None:
+    """Only the Python producer announces and stamps an Execution host (#453)."""
+    provenance = _EVENT_SCHEMA["execution_host"]
+    assert provenance["run_start_key"] == "execution_host"
+    assert provenance["run_start_fields"] == [
+        "placement",
+        "isolation_grade",
+        "capacity",
+        "starting_lane_limit",
+    ]
+    assert provenance["contribution_start_key"] == "host"
+    assert provenance["producers"] == ["python"]
+    assert provenance["non_producers"] == ["shell", "powershell"]
+    assert provenance["legacy_value"] == "unknown"
+    assert (
+        _EVENT_SCHEMA["payload_contracts"]["wrapper.run.start"][
+            "execution_host_optional"
+        ]
+        == provenance["run_start_fields"]
+    )
+    assert (
+        _EVENT_SCHEMA["payload_contracts"]["wrapper.contribution.start"][
+            "execution_host_stamp"
+        ]
+        == provenance["contribution_start_key"]
+    )
 
 
 def test_python_parallel_manifest_matches_the_producers_it_has() -> None:
