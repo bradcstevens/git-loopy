@@ -1719,6 +1719,49 @@ def test_the_second_stop_cancels_the_serial_session_and_charges_no_strike(
     assert run_end["outcome"] == "operator_stop"
 
 
+def test_second_stop_before_serial_send_starts_no_agent_session(
+    tmp_path, monkeypatch
+) -> None:
+    """A cancellation request that wins setup must prevent the next agent turn."""
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_github_client",
+        lambda: FakeGitHubClient(
+            repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+            issues=[_make_issue(42)],
+        ),
+    )
+    built = _capture_serial_loops(monkeypatch)
+
+    class _StoppingBeforeSendClient(FakeCopilotClient):
+        async def create_session(self, **kwargs: Any) -> FakeCopilotSession:
+            session = await super().create_session(**kwargs)
+            assert built
+            built[0].request_stop_drain()
+            built[0].request_stop_cancel()
+            return session
+
+    fake_client = _StoppingBeforeSendClient(scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
+        )
+    )
+
+    assert exit_code == 1
+    assert fake_client.created[0].send_and_wait_calls == []
+    events = _read_events(tmp_path)
+    assert [event for event in events if event["type"] == "wrapper.strike"] == []
+    (run_end,) = [event for event in events if event["type"] == "wrapper.run.end"]
+    assert run_end["outcome"] == "operator_stop"
+
+
 # ---------------------------------------------------------------------------
 # OpenTelemetry span tree (issue #12)
 # ---------------------------------------------------------------------------

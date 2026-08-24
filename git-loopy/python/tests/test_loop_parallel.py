@@ -1794,6 +1794,138 @@ def test_parallel_operator_stop_drains_then_cancels_only_the_lane_agent(
     assert [event for event in events if event["type"] == "wrapper.strike"] == []
 
 
+def test_second_stop_before_lane_send_starts_no_agent_session(
+    tmp_path, monkeypatch
+) -> None:
+    """A cancellation request that wins Lane setup must prevent its agent turn."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_github_client",
+        lambda: FakeGitHubClient(
+            repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+            issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+        ),
+    )
+    built = _capture_parallel_loops(monkeypatch)
+
+    class _StoppingBeforeSendClient(_ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            if kwargs.get("working_directory") is not None:
+                assert built
+                built[0].request_stop_drain()
+                built[0].request_stop_cancel()
+            return session
+
+    fake_client = _StoppingBeforeSendClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == 1
+    assert fake_client.created[0].send_and_wait_calls == []
+    events = _logged_events(tmp_path)
+    assert [event for event in events if event["type"] == "wrapper.strike"] == []
+    (end,) = [event for event in events if event["type"] == "wrapper.contribution.end"]
+    assert end["reason"] == "operator_stop"
+
+
+def test_second_stop_before_host_dispatch_starts_no_host_contribution(
+    tmp_path, monkeypatch
+) -> None:
+    """A cancellation latch applies before every Execution-host dispatch."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_github_client",
+        lambda: FakeGitHubClient(
+            repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+            issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+        ),
+    )
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    class _NeverRunHost:
+        placement = "test-host"
+        isolation_grade = "machine boundary"
+        capacity = 1
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def run_contribution(
+            self, request: ContributionRequest
+        ) -> ContributionFailure:
+            self.calls += 1
+            return ContributionFailure(
+                reason="unexpected_dispatch",
+                classification="never_started",
+                ending=None,
+            )
+
+    host = _NeverRunHost()
+    real_parallel_loop = loop_module._ParallelLoop
+    real_request = real_parallel_loop._build_contribution_request
+
+    def inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, execution_host=host, **kwargs)
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", inject_host)
+
+    def stop_before_dispatch(
+        self: loop_module._ParallelLoop, *args: Any, **kwargs: Any
+    ) -> ContributionRequest:
+        request = real_request(self, *args, **kwargs)
+        self.request_stop_drain()
+        self.request_stop_cancel()
+        return request
+
+    monkeypatch.setattr(
+        real_parallel_loop, "_build_contribution_request", stop_before_dispatch
+    )
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                parallel=2,
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 1
+    assert host.calls == 0
+    events = _logged_events(tmp_path)
+    assert [event for event in events if event["type"] == "wrapper.strike"] == []
+    (end,) = [event for event in events if event["type"] == "wrapper.contribution.end"]
+    assert end["reason"] == "operator_stop"
+
+
 def test_parallel_the_first_stop_stops_refill_and_still_integrates_started_work(
     tmp_path, monkeypatch
 ) -> None:

@@ -1274,14 +1274,17 @@ class _Loop:
                         ),
                     ) as sdk_session:
                         try:
-                            agent_task = asyncio.create_task(
-                                sdk_session.send_and_wait(
-                                    prompt, timeout=send_timeout
-                                ),
-                                name=f"git-loopy-iteration-{iter_num}-agent",
-                            )
-                            self._active_agent_task = agent_task
-                            await agent_task
+                            if self._stop_cancel_requested:
+                                operator_cancelled = True
+                            else:
+                                agent_task = asyncio.create_task(
+                                    sdk_session.send_and_wait(
+                                        prompt, timeout=send_timeout
+                                    ),
+                                    name=f"git-loopy-iteration-{iter_num}-agent",
+                                )
+                                self._active_agent_task = agent_task
+                                await agent_task
                         except asyncio.TimeoutError:
                             termination = (
                                 session_outcome_module.SessionTermination.TIMED_OUT
@@ -3357,6 +3360,18 @@ class _ParallelLoop:
         request = self._build_contribution_request(
             contribution, lane_work, commits_block, base_revision=base
         )
+        if self._stop_cancel_requested:
+            self._salvage_and_reclaim_lane_workspace(lane_work)
+            disposition = scheduler.finish_terminal_failure(
+                contribution,
+                reoffer=False,
+                reason=rolling_scheduler.REASON_OPERATOR_STOP,
+            )
+            assert disposition == rolling_scheduler.TERMINAL
+            if lane_work.reclaimed:
+                self._lane_work.pop(contribution.contribution_id, None)
+            self._finalize_contribution(contribution, published=False)
+            return
         outcome = await host.run_contribution(request)
         if isinstance(outcome, execution_host_module.ContributionFailure):
             self._diag.warning(
@@ -3819,6 +3834,8 @@ class _ParallelLoop:
                 ),
             ) as sdk_session:
                 try:
+                    if self._stop_cancel_requested:
+                        raise asyncio.CancelledError
                     await self._await_agent(
                         sdk_session.send_and_wait(prompt, timeout=send_timeout),
                         name=(
