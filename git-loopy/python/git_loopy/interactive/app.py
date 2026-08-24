@@ -808,10 +808,11 @@ class GitLoopyApp(App[None]):
         #: Set when the user requests a Stop (``q`` / ``Ctrl+C``). Lets a Pilot
         #: test assert the binding fired, and documents the exit cause.
         self.stop_requested = False
-        #: Driver-owned control seam. The first Stop returns ``False`` and keeps
-        #: the Dashboard attached while live work drains; the second returns
-        #: ``True`` and lets the app exit.
-        self.stop_handler: Callable[[], bool] | None = None
+        #: Driver-owned control seam. A **Stop** is two stages driven by the
+        #: same gesture, so the meaning of a press belongs to the driver, not
+        #: to the key binding. ``None`` leaves the pre-two-stage meaning: the
+        #: app tears itself down and its exit *is* the Stop.
+        self.stop_handler: Callable[[], None] | None = None
         #: Set when the user requests a **Detach** (``d``): the TUI tears down
         #: but the run keeps going. The driver (the app's peer) reads this flag
         #: to swap the live sink back to the line printer instead of cancelling
@@ -842,10 +843,21 @@ class GitLoopyApp(App[None]):
     # -- Stop / Detach -----------------------------------------------------
 
     def action_stop(self) -> None:
-        """Request a two-stage Stop."""
+        """Request a **Stop**; the driver decides what this gesture means.
+
+        A Stop takes two stages (ADR-0043) and the same key press delivers
+        both, so the app cannot know from the gesture alone whether it is
+        latching the drain, cancelling the agent sessions, or being pressed a
+        third time to no effect. It hands the gesture over and stays up: the
+        wind-down is what the operator asked to watch, and the driver closes
+        the Dashboard when the Run itself ends. Without a handler (an injected
+        legacy Dashboard) the old "app exited = Stop" meaning is preserved.
+        """
         self.stop_requested = True
-        if self.stop_handler is None or self.stop_handler():
+        if self.stop_handler is None:
             self.exit()
+            return
+        self.stop_handler()
 
     def action_detach(self) -> None:
         """Detach: tear the app down but leave the run going (issue #28).

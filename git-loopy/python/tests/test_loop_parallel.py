@@ -415,6 +415,25 @@ def _lane_worktree_removes(fake_git: FakeGitClient) -> list[Path]:
     return [p for p in fake_git.worktree_removes if "integrate" not in p.parts]
 
 
+def _capture_parallel_loops(monkeypatch) -> list["loop_module._ParallelLoop"]:
+    """Hand a test the live Rolling driver, so it can gesture a **Stop** at it.
+
+    The two Stop stages are a control surface the Dashboard drives, not
+    something a Run reaches on its own, so a test that means to prove what a
+    Stop does has to be able to press the key.
+    """
+    built: list[loop_module._ParallelLoop] = []
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def capture(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        instance = real_parallel_loop(*args, **kwargs)
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", capture)
+    return built
+
+
 def _lane_branch_deletes(fake_git: FakeGitClient) -> list[str]:
     """The **Lane** branch deletions only (see :func:`_lane_worktree_adds`).
 
@@ -1741,15 +1760,7 @@ def test_parallel_operator_stop_drains_then_cancels_only_the_lane_agent(
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
-    built: list[loop_module._ParallelLoop] = []
-    real_parallel_loop = loop_module._ParallelLoop
-
-    def capture(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
-        instance = real_parallel_loop(*args, **kwargs)
-        built.append(instance)
-        return instance
-
-    monkeypatch.setattr(loop_module, "_ParallelLoop", capture)
+    built = _capture_parallel_loops(monkeypatch)
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
@@ -1775,14 +1786,181 @@ def test_parallel_operator_stop_drains_then_cancels_only_the_lane_agent(
     assert lane_git.commit_messages == [checkpoint_message(42)]
     assert bool(_lane_worktree_removes(fake_git))
     events = _logged_events(tmp_path)
-    assert [event["stage"] for event in events if event["type"] == "wrapper.stop.requested"] == [
-        "drain",
-        "cancel",
-    ]
+    stages = [e["stage"] for e in events if e["type"] == "wrapper.stop.requested"]
+    assert stages == ["drain", "cancel"]
     (end,) = [event for event in events if event["type"] == "wrapper.contribution.end"]
     assert end["reason"] == "operator_stop"
     assert end["summary"]["strike_reaction"] == "none"
     assert [event for event in events if event["type"] == "wrapper.strike"] == []
+
+
+def test_parallel_the_first_stop_stops_refill_and_still_integrates_started_work(
+    tmp_path, monkeypatch
+) -> None:
+    """Stage one is a latch, not an interruption (#454, ADR-0043).
+
+    Refill stops *at once* — the immediate, honest feedback the first stage
+    exists to buy — while every contribution that had already started runs to
+    completion and integrates. The third issue therefore never gets a Lane
+    even though a Lane frees and units remain, and both started contributions
+    publish and close.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    both_started = asyncio.Event()
+    release = asyncio.Event()
+    live = 0
+
+    class _HeldClient(_ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            if kwargs.get("working_directory") is None:
+                return session
+            work = session.send_and_wait
+
+            async def hold_until_stopped(
+                prompt: str, *, timeout: float = 60.0, **extra: Any
+            ) -> SessionEvent | None:
+                nonlocal live
+                live += 1
+                if live == 2:
+                    both_started.set()
+                await release.wait()
+                return await work(prompt, timeout=timeout, **extra)
+
+            session.send_and_wait = hold_until_stopped  # type: ignore[method-assign]
+            return session
+
+    fake_client = _HeldClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    built = _capture_parallel_loops(monkeypatch)
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=3,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+        await asyncio.wait_for(both_started.wait(), timeout=5)
+        assert built
+        built[0].request_stop_drain()
+        release.set()
+        return await asyncio.wait_for(run_task, timeout=5)
+
+    assert asyncio.run(scenario()) == 1
+
+    # The two started contributions finished and integrated in full.
+    assert sorted(n for (n, _c) in fake_gh.issue_close_calls) == [42, 43]
+    events = _logged_events(tmp_path)
+    ends = [e for e in events if e["type"] == "wrapper.contribution.end"]
+    assert sorted(e["issue"] for e in ends) == [42, 43]
+    assert {e["reason"] for e in ends} == {"published"}
+
+    # Refill stopped at the gesture: the third issue never got a Lane, and the
+    # Run never reached the second stage.
+    branches = [b for (_p, b, _base) in _lane_worktree_adds(fake_git)]
+    assert len(branches) == 2
+    assert not any(b.endswith("/issue-44") for b in branches)
+    assert fake_git.active_worktrees == []
+    stages = [e["stage"] for e in events if e["type"] == "wrapper.stop.requested"]
+    assert stages == ["drain"]
+    (run_end,) = [e for e in events if e["type"] == "wrapper.run.end"]
+    assert run_end["outcome"] == "operator_stop"
+
+
+def test_parallel_a_stop_never_interrupts_the_publish_transaction(
+    tmp_path, monkeypatch
+) -> None:
+    """Both gestures land mid-publish; base still advances and the issue closes.
+
+    The publish transaction — merging an already-verified stage, closing the
+    issue, deleting the branch — is the one genuinely destructive act a Stop
+    could interrupt, and ADR-0043 refuses it: a Run torn open mid-merge is the
+    state #419 records that *nothing* reconciles. Cancellation reaches agent
+    sessions at their round boundaries and nothing else, so a Stop issued
+    inside the transaction costs the operator the wait and nothing more.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    built = _capture_parallel_loops(monkeypatch)
+    stopped_during: list[str] = []
+    cancellation_requests: list[int] = []
+    publish_merge = fake_git.merge
+
+    def stop_mid_publish(branch: str) -> None:
+        """Both Stop gestures, delivered inside the transaction itself."""
+        if not stopped_during:
+            stopped_during.append(branch)
+            assert built
+            built[0].request_stop_drain()
+            built[0].request_stop_cancel()
+            owner = asyncio.current_task()
+            assert owner is not None
+            cancellation_requests.append(owner.cancelling())
+        publish_merge(branch)
+
+    monkeypatch.setattr(fake_git, "merge", stop_mid_publish)
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == 1
+
+    # The Stop really did land inside the transaction, and neither gesture
+    # asked the task that owns it to cancel: the second stage reaches agent
+    # sessions, never a Lane lifecycle.
+    assert stopped_during, "the Stop never reached the publish merge"
+    assert cancellation_requests == [0]
+
+    # The transaction still completed: base advanced past the merge, the issue
+    # closed, and the integrated Lane branch was reaped.
+    assert fake_git.merge_calls == stopped_during
+    assert fake_git.head_sha() != "0000000000000000000000000000000000000001"
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [42]
+    assert len(_lane_branch_deletes(fake_git)) == 1
+    assert fake_git.active_worktrees == []
+
+    events = _logged_events(tmp_path)
+    (end,) = [e for e in events if e["type"] == "wrapper.contribution.end"]
+    assert end["reason"] == "published"
+    assert end["summary"]["strike_reaction"] == "reset"
+    (run_end,) = [e for e in events if e["type"] == "wrapper.run.end"]
+    assert run_end["outcome"] == "operator_stop"
 
 
 def test_parallel_a_second_stop_gesture_still_reclaims_the_lane_workspace(

@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.2 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.3 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -536,6 +536,7 @@ error (exit `2`).
 | `1`  | Aborted — all skipped | A Pickup found the Pool non-empty and could bind none of it (§14.3). |
 | `1`  | Waiting — all blocked | Every Pickup refusal proved an open native blocker (§3.3.1).         |
 | `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1).      |
+| `1`  | Stopped — operator   | The operator ended the Run deliberately (§10.1, contract 2.3).       |
 | `2`  | Usage error          | Malformed invocation (e.g. non-numeric iteration cap, §9).           |
 
 A Runner with a **Pickup** (§14.3) MUST distinguish the two exit-`1` aborts by reason, and MUST
@@ -555,6 +556,34 @@ exit-`0` empty Pool; the distinct reason is the actionable branch for a caller t
 dependency closure instead of repairing a refusal. `all_blocked` applies only when every skipped
 candidate proves an open dependency. A mixed Pool remains `all_skipped`, so waiting never hides
 work an operator can fix.
+
+### 10.1 An operator Stop is a decided outcome (contract 2.3, MUST)
+
+An Orchestrator that offers the operator a **Stop** MUST terminate it under the `operator_stop`
+reason and its **non-zero** exit code. A Stop is a *decided* end to a Run — a human chose it, and
+work was left unfinished — so it MUST NOT be reported as the exit-`0` empty Pool, and it MUST NOT
+borrow the vocabulary of an exit nobody decided. A supervising script is never told everything was
+fine (ADR-0024). An Orchestrator that offers no Stop never reaches this reason and is not required
+to name it beyond mapping it, exactly as §10 requires of `all_skipped`.
+
+The Stop itself takes **two stages** (ADR-0043), driven by the same gesture repeated:
+
+1. The first latches a wind-down. Refill, new **Lane** reservations and new **Iterations** stop at
+   once; every started contribution and **Integration** operation runs to completion and
+   integrates. The latch is durable — a later publication MUST NOT resume refill, which is what
+   distinguishes it from the drain a spent **Strike** ceiling latches.
+2. The second cancels the agent sessions still running, **salvaging** each one's workspace as a
+   **Checkpoint** first. Cancellation is *requested*, never awaited.
+
+Cancellation stops at **round boundaries** — a Lane agent session, or a bounded auto-resolution
+session inside an Integration cascade — and MUST NOT interrupt a publish transaction: the merge of
+an already-verified stage, the issue closure, and the branch deletion. A Run torn open mid-publish
+manufactures the one state nothing reconciles, and the transaction is seconds long.
+
+A contribution or Iteration ended by the second stage is **visible and blameless**: it MUST produce
+a **Summary** row, and it MUST feed neither the **Strike** counter nor **Demotion**. A human
+pressing a key is not evidence against a **Routed pair**. No third, harder in-band verb exists; the
+operating system already provides one, and salvage is what makes it safe.
 
 ## 11. Environment-variable surface (MUST honour the phase-1 core)
 

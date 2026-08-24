@@ -62,19 +62,25 @@ class _SelfStoppingApp(_FakeApp):
 
 
 class _TwoStageStoppingApp(_FakeApp):
-    """Exercises the Dashboard's first and second Stop gestures."""
+    """Presses Stop three times, then blocks like a live Dashboard would.
+
+    The third press is the point: the app never tears itself down on a Stop
+    under the controlled path, so it is still there to receive one — and the
+    driver is what has to make it inert.
+    """
 
     def __init__(self, state: LiveRunState, **kwargs: object) -> None:
         super().__init__(state, **kwargs)
-        self.stop_handler: Callable[[], bool] | None = None
-        self.results: list[bool] = []
+        self.stop_handler: Callable[[], None] | None = None
+        self.exited_after_press: list[bool] = []
 
     async def run_async(self) -> None:
         assert self.stop_handler is not None
-        self.results.append(self.stop_handler())
-        await asyncio.sleep(0)
-        self.results.append(self.stop_handler())
-        self.exit()
+        for _ in range(3):
+            self.stop_handler()
+            self.exited_after_press.append(self.exited)
+            await asyncio.sleep(0)
+        await self._exit_event.wait()
 
 
 class _StopAwareDrive:
@@ -198,6 +204,13 @@ def test_stop_cancels_loop_and_returns_zero() -> None:
 
 
 def test_two_stage_stop_drains_then_requests_session_cancellation() -> None:
+    """Two gestures wind the Run down; a third is inert, and none tears down.
+
+    The Dashboard stays attached across both stages so the operator watches the
+    wind-down they asked for — the blameless **Summary** rows arrive *during*
+    it. The app closes when the loop does, which is also what leaves the OS
+    kill as the only harder Stop.
+    """
     state = LiveRunState()
     captured: list[_TwoStageStoppingApp] = []
     target = _StopAwareDrive()
@@ -213,8 +226,9 @@ def test_two_stage_stop_drains_then_requests_session_cancellation() -> None:
     assert exit_code == 1
     assert target.drain_requests == 1
     assert target.cancel_requests == 1
-    assert captured[0].results == [False, True]
-    assert state.status == "stopped"
+    assert captured[0].exited_after_press == [False, False, False]
+    assert captured[0].exited is True
+    assert state.status == "stopping"
 
 
 def test_natural_completion_closes_app_and_returns_loop_code() -> None:

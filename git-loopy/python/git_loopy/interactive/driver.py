@@ -374,20 +374,23 @@ class InteractiveDriver:
         controlled_stop = callable(request_drain) and callable(request_cancel)
         stop_stage = 0
 
-        def request_stop() -> bool:
-            """Translate the Dashboard's repeated gesture into loop control."""
+        def request_stop() -> None:
+            """Translate the Dashboard's repeated gesture into loop control.
+
+            A third gesture does nothing at all. Cancellation is requested and
+            not awaited (ADR-0043), so there is nothing further to ask for —
+            the operating system already supplies the only harder Stop, and
+            **Salvage** is what makes it safe.
+            """
             nonlocal stop_stage
             if stop_stage == 0:
                 stop_stage = 1
                 request_drain()
                 self.state.mark_draining()
-                return False
-            if stop_stage == 1:
+            elif stop_stage == 1:
                 stop_stage = 2
                 request_cancel()
-                self.state.mark_stopped()
-                return True
-            return False
+                self.state.mark_stopping()
 
         if controlled_stop:
             # Kept as an attribute rather than a factory argument so existing

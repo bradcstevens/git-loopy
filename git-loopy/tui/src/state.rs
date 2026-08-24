@@ -26,6 +26,9 @@ pub(crate) const STATUS_ADVANCED: &str = "advanced";
 pub(crate) const RUN_STARTING: &str = "starting";
 pub(crate) const RUN_RUNNING: &str = "running";
 pub(crate) const RUN_DRAINING: &str = "draining";
+/// The second operator Stop: cancellation requested, salvage and finalization
+/// still running. Not terminal — the Run's own outcome ends it.
+pub(crate) const RUN_STOPPING: &str = "stopping";
 
 /// The Log-line kind for a key structured Event (a commit, a tool call).
 const LOG_EVENT: &str = "event";
@@ -507,6 +510,9 @@ impl DashboardState {
             }
             EventPayload::StopRequested(stop) if stop.stage.as_deref() == Some("drain") => {
                 self.status = RUN_DRAINING.to_string();
+            }
+            EventPayload::StopRequested(stop) if stop.stage.as_deref() == Some("cancel") => {
+                self.status = RUN_STOPPING.to_string();
             }
             EventPayload::StopRequested(_) => {}
             EventPayload::Other => {}

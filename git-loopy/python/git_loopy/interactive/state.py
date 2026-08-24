@@ -196,6 +196,11 @@ _STATUS_STARTING = "starting"
 _STATUS_RUNNING = "running"
 #: Status after the first operator Stop: work is still draining.
 _STATUS_DRAINING = "draining"
+#: Status after the second operator Stop: cancellation has been requested and
+#: the Run is salvaging and finalizing what it interrupted. Deliberately not
+#: terminal — cancellation is requested, not awaited, so the header must keep
+#: ticking until the Run's own ``wrapper.run.end`` says it is over.
+_STATUS_STOPPING = "stopping"
 #: Terminal status when the user Stops (``q`` / ``Ctrl+C``) — distinct from the
 #: loop's own natural outcomes (``empty_pool`` / ``iteration_cap`` / ...), which
 #: arrive as the ``wrapper.run.end`` ``outcome``.
@@ -675,6 +680,8 @@ class LiveRunState:
         elif etype == _STOP_REQUESTED:
             if event.get("stage") == "drain":
                 self.mark_draining()
+            elif event.get("stage") == "cancel":
+                self.mark_stopping()
         elif etype == _AFK_READY_COLLECTED:
             self._record_pool(event.get("issues"), now)
         elif etype == _PICKUP_BOUND:
@@ -789,6 +796,17 @@ class LiveRunState:
     def mark_draining(self) -> None:
         """Record the first operator Stop while the Run finishes live work."""
         self.status = _STATUS_DRAINING
+
+    def mark_stopping(self) -> None:
+        """Record the second operator Stop while the Run winds itself down.
+
+        Deliberately **not** :meth:`mark_stopped`. Cancellation is requested
+        and not awaited (ADR-0043), so the Run is still salvaging workspaces
+        and cutting the blameless **Summary** rows for the contributions it
+        interrupted. Freezing the header here would report a Run as over while
+        the very record the second stage exists to produce is still arriving.
+        """
+        self.status = _STATUS_STOPPING
 
     def mark_stopped(self) -> None:
         """Record a user **Stop** (``q`` / ``Ctrl+C``) as the terminal status.

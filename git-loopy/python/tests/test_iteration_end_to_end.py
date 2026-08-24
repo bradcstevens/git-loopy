@@ -1583,6 +1583,143 @@ def test_loop_multiple_iterations_until_cap(tmp_path, monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# The two Stop stages on a serial Iteration (#454, ADR-0043)
+# ---------------------------------------------------------------------------
+
+
+class _HeldSerialClient(FakeCopilotClient):
+    """A client whose session parks until the test lets it go.
+
+    A serial **Iteration** has no **Execution host** at all, so the two Stop
+    stages have to reach it through the session itself: the first must let the
+    Iteration in flight run to completion, the second must cancel it.
+    """
+
+    def __init__(self, started: asyncio.Event, release: asyncio.Event) -> None:
+        super().__init__(scripted_events=[])
+        self._started = started
+        self._release = release
+
+    async def create_session(self, **kwargs: Any) -> FakeCopilotSession:
+        session = await super().create_session(**kwargs)
+        work = session.send_and_wait
+
+        async def hold_until_stopped(
+            prompt: str, *, timeout: float = 60.0, **extra: Any
+        ) -> SessionEvent | None:
+            self._started.set()
+            await self._release.wait()
+            return await work(prompt, timeout=timeout, **extra)
+
+        session.send_and_wait = hold_until_stopped  # type: ignore[method-assign]
+        return session
+
+
+def _capture_serial_loops(monkeypatch) -> list["loop_module._Loop"]:
+    """Hand a test the live serial loop, so it can gesture a **Stop** at it."""
+    built: list[loop_module._Loop] = []
+    real_loop = loop_module._Loop
+
+    def capture(*args: Any, **kwargs: Any) -> loop_module._Loop:
+        instance = real_loop(*args, **kwargs)
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr(loop_module, "_Loop", capture)
+    return built
+
+
+def _wire_serial_stop_run(
+    tmp_path: Path, monkeypatch, *, issues: list[int]
+) -> tuple[FakeGitClient, asyncio.Event, asyncio.Event, list["loop_module._Loop"]]:
+    """Wire a serial Run whose one live session parks on demand."""
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
+
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(n) for n in issues],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    started, release = asyncio.Event(), asyncio.Event()
+    fake_client = _HeldSerialClient(started, release)
+    fake_client.on_send = lambda: fake_git.simulate_agent_commit(subject="progress")
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    return fake_git, started, release, _capture_serial_loops(monkeypatch)
+
+
+def test_the_first_stop_finishes_the_serial_iteration_and_starts_no_more(
+    tmp_path, monkeypatch
+) -> None:
+    """Stage one on the path that has no Lane at all (#454, ADR-0043).
+
+    The Iteration in flight runs to completion — its commit still counts — and
+    the round after it never opens, even though the cap left room for two more.
+    """
+    fake_git, started, release, built = _wire_serial_stop_run(
+        tmp_path, monkeypatch, issues=[42, 43]
+    )
+    cfg = RunConfig(issue_source="github", max_iterations=3, max_nmt_strikes=3)
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        assert built
+        built[0].request_stop_drain()
+        release.set()
+        return await asyncio.wait_for(run_task, timeout=5)
+
+    assert asyncio.run(scenario()) == 1
+
+    events = _read_events(tmp_path)
+    stages = [e["stage"] for e in events if e["type"] == "wrapper.stop.requested"]
+    assert stages == ["drain"]
+    iteration_ends = [e for e in events if e["type"] == "wrapper.iteration.end"]
+    assert len(iteration_ends) == 1, "the started Iteration ran to completion"
+    assert [e["type"] for e in events].count("wrapper.commit.recorded") == 1
+    (run_end,) = [e for e in events if e["type"] == "wrapper.run.end"]
+    assert run_end["outcome"] == "operator_stop"
+    assert run_end["iterations_run"] == 1
+
+
+def test_the_second_stop_cancels_the_serial_session_and_charges_no_strike(
+    tmp_path, monkeypatch
+) -> None:
+    """Stage two on a serial Iteration: cancelled, recorded, and blameless.
+
+    The Iteration is ended by a human, so it is not evidence that the Run was
+    getting nowhere: the **Strike** counter must not move, exactly as a stopped
+    **Lane contribution**'s does not.
+    """
+    _fake_git, started, _release, built = _wire_serial_stop_run(
+        tmp_path, monkeypatch, issues=[42]
+    )
+    cfg = RunConfig(issue_source="github", max_iterations=3, max_nmt_strikes=3)
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        assert built
+        built[0].request_stop_drain()
+        await asyncio.sleep(0)
+        assert not run_task.done(), "the first Stop cancels nothing"
+        built[0].request_stop_cancel()
+        return await asyncio.wait_for(run_task, timeout=5)
+
+    assert asyncio.run(scenario()) == 1
+
+    events = _read_events(tmp_path)
+    stages = [e["stage"] for e in events if e["type"] == "wrapper.stop.requested"]
+    assert stages == ["drain", "cancel"]
+    assert [e for e in events if e["type"] == "wrapper.strike"] == []
+    (run_end,) = [e for e in events if e["type"] == "wrapper.run.end"]
+    assert run_end["outcome"] == "operator_stop"
+
+
+# ---------------------------------------------------------------------------
 # OpenTelemetry span tree (issue #12)
 # ---------------------------------------------------------------------------
 

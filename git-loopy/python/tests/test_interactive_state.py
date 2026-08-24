@@ -329,6 +329,35 @@ def test_mark_draining_keeps_the_run_live() -> None:
     assert state.ended is False
 
 
+def test_the_second_stop_is_still_a_live_run_until_it_ends() -> None:
+    """Cancellation is requested, not awaited: the wind-down is watchable.
+
+    The header has to say the Run is stopping without saying it stopped, or the
+    operator reads a frozen ``stopped`` while salvage is still running and the
+    Summary rows for what they interrupted are still arriving.
+    """
+    clock = _FakeClock()
+    state = _make_state(monotonic=clock)
+    state.render({"type": events_module.WRAPPER_RUN_START})
+    clock.advance(5)
+
+    state.render(
+        {"type": events_module.WRAPPER_STOP_REQUESTED, "stage": "cancel"}
+    )
+    clock.advance(3)
+
+    assert state.status == "stopping"
+    assert state.elapsed_seconds() == 8.0
+    assert state.ended is False
+
+    state.render(
+        {"type": events_module.WRAPPER_RUN_END, "outcome": "operator_stop"}
+    )
+
+    assert state.status == "operator_stop"
+    assert state.ended is True
+
+
 # ---------------------------------------------------------------------------
 # Protocol conformance + import guard
 # ---------------------------------------------------------------------------

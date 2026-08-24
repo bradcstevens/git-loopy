@@ -66,7 +66,7 @@ fn a_run_projects_the_canonical_band_inventory_before_any_event() {
 }
 
 #[test]
-fn a_stop_drain_is_live_until_the_run_records_its_operator_outcome() {
+fn a_two_stage_stop_stays_live_until_the_run_records_its_operator_outcome() {
     let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
     let start = Event::from_jsonl_line(
         r#"{"type":"wrapper.run.start","run_id":"run-1","ts":"2026-05-16T00:00:00.000Z"}"#,
@@ -87,6 +87,15 @@ fn a_stop_drain_is_live_until_the_run_records_its_operator_outcome() {
     assert_eq!(
         view(&state, &ctx, IssueRef::number(42))["dashboard"]["header"]["status"],
         "draining"
+    );
+    let cancel = Event::from_jsonl_line(
+        r#"{"type":"wrapper.stop.requested","stage":"cancel","run_id":"run-1","ts":"2026-05-16T00:00:01.500Z"}"#,
+    )
+    .expect("cancel event decodes");
+    state.apply(&cancel);
+    assert_eq!(
+        view(&state, &ctx, IssueRef::number(42))["dashboard"]["header"]["status"],
+        "stopping"
     );
     state.apply(&end);
     assert_eq!(

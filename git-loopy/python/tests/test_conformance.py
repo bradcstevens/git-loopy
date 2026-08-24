@@ -884,10 +884,19 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     consumer pinned to 1.1 already had to skip unknown types, so dropping them
     does not move the wire axis even though the obligation axis takes a major
     bump.
+
+    2.3 is the first bump where **both** axes move, and for unrelated reasons.
+    §10.1 gains the two-stage operator **Stop** and its own terminal reason,
+    which is an obligation; independently the wind-down adds the
+    ``wrapper.stop.requested`` type and widens ``wrapper.contribution.end``'s
+    ``reason`` and ``strike_reaction`` enums, and *that* is what moves
+    ``event_schema_version`` to 1.2 — a consumer switching on the old reason
+    set meets a value it has never seen, which is the one thing an additive
+    type never does.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
-    assert _EVENT_SCHEMA["contract_version"] == "2.2"
+    assert _EVENT_SCHEMA["contract_version"] == "2.3"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:

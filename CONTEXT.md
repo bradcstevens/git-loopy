@@ -375,7 +375,9 @@ wind-down — no new Iteration, Lane reservation, or refill starts, while every 
 contribution and Integration operation finishes. The second Stop cancels only active
 agent sessions at their round boundaries after salvage; it never interrupts a publish
 transaction. A stopped contribution remains visible in the **Summary** and is
-blameless. The Run exits with the decided non-zero `operator_stop` outcome.
+blameless. A third gesture does nothing: cancellation is requested rather than
+awaited, the operating system supplies the only harder stop, and **Salvage** is what
+makes that one safe. The Run exits with the decided non-zero `operator_stop` outcome.
 _Avoid_: quit, kill, abort.
 
 **Detach**:
