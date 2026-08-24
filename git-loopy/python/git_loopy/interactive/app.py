@@ -808,6 +808,10 @@ class GitLoopyApp(App[None]):
         #: Set when the user requests a Stop (``q`` / ``Ctrl+C``). Lets a Pilot
         #: test assert the binding fired, and documents the exit cause.
         self.stop_requested = False
+        #: Driver-owned control seam. The first Stop returns ``False`` and keeps
+        #: the Dashboard attached while live work drains; the second returns
+        #: ``True`` and lets the app exit.
+        self.stop_handler: Callable[[], bool] | None = None
         #: Set when the user requests a **Detach** (``d``): the TUI tears down
         #: but the run keeps going. The driver (the app's peer) reads this flag
         #: to swap the live sink back to the line printer instead of cancelling
@@ -838,9 +842,10 @@ class GitLoopyApp(App[None]):
     # -- Stop / Detach -----------------------------------------------------
 
     def action_stop(self) -> None:
-        """Stop: tear the app down. The driver then cancels the loop task."""
+        """Request a two-stage Stop."""
         self.stop_requested = True
-        self.exit()
+        if self.stop_handler is None or self.stop_handler():
+            self.exit()
 
     def action_detach(self) -> None:
         """Detach: tear the app down but leave the run going (issue #28).

@@ -173,6 +173,43 @@ def test_the_interrupt_outcome_literal_is_the_one_the_driver_publishes() -> None
 
 
 @pytest.mark.asyncio
+async def test_a_drained_operator_stop_is_a_decided_nonzero_outcome() -> None:
+    bare = _bare_loop(max_iterations=0)
+    bare._stop_drain_requested = True
+    bare._run_one_iteration = _scripted("advanced")
+
+    exit_code = await bare.drive()
+
+    end = _run_end(bare)
+    assert exit_code == 1
+    assert end["outcome"] == "operator_stop"
+    assert end["iterations_run"] == 0
+
+
+@pytest.mark.asyncio
+async def test_second_operator_stop_cancels_only_the_active_serial_agent_task() -> None:
+    bare = object.__new__(loop_module._Loop)
+    emitted: list[dict[str, object]] = []
+    bare._emit = lambda event_type, **payload: emitted.append(  # type: ignore[method-assign]
+        {"type": event_type, **payload}
+    )
+    bare._stop_drain_requested = False
+    bare._stop_cancel_requested = False
+
+    agent = asyncio.create_task(asyncio.Event().wait())
+    bare._active_agent_task = agent
+
+    bare.request_stop_drain()
+    assert not agent.done()
+    bare.request_stop_cancel()
+    bare.request_stop_cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await agent
+    assert [event["stage"] for event in emitted] == ["drain", "cancel"]
+
+
+@pytest.mark.asyncio
 async def test_a_capped_run_still_reports_the_cap_and_its_finished_rounds() -> None:
     """The outcome #398 made honest is still reported when it is true.
 

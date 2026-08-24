@@ -65,6 +65,36 @@ fn a_run_projects_the_canonical_band_inventory_before_any_event() {
     );
 }
 
+#[test]
+fn a_stop_drain_is_live_until_the_run_records_its_operator_outcome() {
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    let start = Event::from_jsonl_line(
+        r#"{"type":"wrapper.run.start","run_id":"run-1","ts":"2026-05-16T00:00:00.000Z"}"#,
+    )
+    .expect("start event decodes");
+    let drain = Event::from_jsonl_line(
+        r#"{"type":"wrapper.stop.requested","stage":"drain","run_id":"run-1","ts":"2026-05-16T00:00:01.000Z"}"#,
+    )
+    .expect("stop event decodes");
+    let end = Event::from_jsonl_line(
+        r#"{"type":"wrapper.run.end","outcome":"operator_stop","run_id":"run-1","ts":"2026-05-16T00:00:02.000Z"}"#,
+    )
+    .expect("end event decodes");
+
+    state.apply(&start);
+    state.apply(&drain);
+    let ctx = context("2026-05-16T00:00:01.000Z", 0);
+    assert_eq!(
+        view(&state, &ctx, IssueRef::number(42))["dashboard"]["header"]["status"],
+        "draining"
+    );
+    state.apply(&end);
+    assert_eq!(
+        view(&state, &ctx, IssueRef::number(42))["dashboard"]["header"]["status"],
+        "operator_stop"
+    );
+}
+
 /// Drive a fresh Run through a sequence of raw Events and project it.
 fn reduce(events: &[Value], drill_in: IssueRef) -> Value {
     let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));

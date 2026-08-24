@@ -1404,6 +1404,7 @@ function Get-GitLoopyExitCode {
         "all_skipped" { return 1 }
         "all_blocked" { return 1 }
         "preflight_failed" { return 1 }
+        "operator_stop" { return 1 }
         "usage_error" { return 2 }
         default { throw "Unknown Run exit reason: $Reason" }
     }

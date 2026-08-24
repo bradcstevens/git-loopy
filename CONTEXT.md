@@ -370,8 +370,12 @@ _Avoid_: active time, waiting time.
 ### Leaving a run
 
 **Stop**:
-Ending a run deliberately — the current iteration is wound down cleanly and the loop
-exits.
+Ending a Run deliberately in two stages. The first Stop immediately latches a
+wind-down — no new Iteration, Lane reservation, or refill starts, while every started
+contribution and Integration operation finishes. The second Stop cancels only active
+agent sessions at their round boundaries after salvage; it never interrupts a publish
+transaction. A stopped contribution remains visible in the **Summary** and is
+blameless. The Run exits with the decided non-zero `operator_stop` outcome.
 _Avoid_: quit, kill, abort.
 
 **Detach**:
@@ -422,8 +426,8 @@ The per-run accounting band of the **Dashboard**, with one row per serial
 tools, skill calls, skills consulted, commits, closures, and strikes), mirrored in
 the run-end table. A band of the **Dashboard**, not a separate screen. A row is cut
 only when its accounting unit **finalizes**, so work still parked, integrating, or in
-recovery has no partial row — under **Rolling dispatch** an unfinished **Lane
-contribution** is simply absent from the Summary, never half-counted in it.
+recovery has no partial row — except that a contribution stopped by the operator's
+second Stop finalizes a visible, blameless row after its workspace is salvaged.
 
 **Activity**:
 The **Dashboard** band that holds one **Activity window** per live **Agent**, always

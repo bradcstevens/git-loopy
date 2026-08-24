@@ -886,7 +886,7 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     bump.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
-    assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
+    assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
     assert _EVENT_SCHEMA["contract_version"] == "2.2"
 
 
@@ -935,6 +935,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
     scoped_elsewhere = (
         set(_EVENT_SCHEMA["contribution_identity"]["lifecycle_types"])
         | set(_EVENT_SCHEMA["contribution_identity"]["scheduler_scoped_types"])
+        | set(_EVENT_SCHEMA["run_control_types"])
         # Calibration lifecycle records are no **Run**'s Insight (#371): they
         # carry no ``run_id``, and nothing a Calibration buys is delivered work.
         | set(_EVENT_SCHEMA["calibration_identity"]["lifecycle_types"])
@@ -1172,6 +1173,7 @@ def test_event_fixture_pins_rolling_contribution_contract() -> None:
         identity["lifecycle_types"]
         + identity["stamped_types"]
         + identity["scheduler_scoped_types"]
+        + _EVENT_SCHEMA["run_control_types"]
         + identity["forbidden_types"]
     )
     assert len(grouped) == len(set(grouped)), "an event type is in two scopes"
@@ -1190,7 +1192,7 @@ def test_event_fixture_pins_rolling_contribution_contract() -> None:
 
     end = contracts["wrapper.contribution.end"]
     assert tuple(end["reason_values"]) == events_module.CONTRIBUTION_TERMINAL_REASONS
-    assert end["strike_reaction_values"] == ["reset", "+1"]
+    assert end["strike_reaction_values"] == ["reset", "+1", "none"]
     assert "strike_reaction" in end["summary_required"]
 
 

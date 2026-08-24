@@ -37,6 +37,7 @@ from git_loopy.measured_routing import (
 )
 from git_loopy.rolling_scheduler import (
     REASON_CHECKPOINT_FAILED,
+    REASON_OPERATOR_STOP,
     REASON_PUBLISHED,
     REASON_SERIAL_FALLBACK,
     REASON_UNCHANGED_BRANCH,
@@ -103,6 +104,15 @@ def test_a_pair_that_published_everything_is_absent_rather_than_zero() -> None:
     """Nothing to answer for is an absence, not a row reading ``0``."""
     tally = demotion.tally_no_progress(
         [_contribution(1, model="cheap", effort="low", reason=REASON_PUBLISHED)]
+    )
+
+    assert tally == {}
+
+
+def test_a_stopped_contribution_is_not_demotion_evidence() -> None:
+    """A human wind-down is not evidence that its Routed pair failed."""
+    tally = demotion.tally_no_progress(
+        [_contribution(1, model="cheap", effort="low", reason=REASON_OPERATOR_STOP)]
     )
 
     assert tally == {}

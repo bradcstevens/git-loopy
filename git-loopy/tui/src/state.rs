@@ -25,6 +25,7 @@ pub(crate) const STATUS_ADVANCED: &str = "advanced";
 /// Run statuses shown in the header band.
 pub(crate) const RUN_STARTING: &str = "starting";
 pub(crate) const RUN_RUNNING: &str = "running";
+pub(crate) const RUN_DRAINING: &str = "draining";
 
 /// The Log-line kind for a key structured Event (a commit, a tool call).
 const LOG_EVENT: &str = "event";
@@ -504,6 +505,10 @@ impl DashboardState {
                 self.ended_at = now.or(self.ended_at);
                 self.ended_monotonic = now_monotonic.or(self.ended_monotonic);
             }
+            EventPayload::StopRequested(stop) if stop.stage.as_deref() == Some("drain") => {
+                self.status = RUN_DRAINING.to_string();
+            }
+            EventPayload::StopRequested(_) => {}
             EventPayload::Other => {}
         }
     }

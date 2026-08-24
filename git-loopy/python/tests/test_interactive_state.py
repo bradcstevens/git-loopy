@@ -315,6 +315,20 @@ def test_context_window_capability_distinguishes_unavailable_from_no_sample() ->
     assert "context —" in format_header(state)
 
 
+def test_mark_draining_keeps_the_run_live() -> None:
+    clock = _FakeClock()
+    state = _make_state(monotonic=clock)
+    state.render({"type": events_module.WRAPPER_RUN_START})
+    clock.advance(5)
+
+    state.mark_draining()
+    clock.advance(3)
+
+    assert state.status == "draining"
+    assert state.elapsed_seconds() == 8.0
+    assert state.ended is False
+
+
 # ---------------------------------------------------------------------------
 # Protocol conformance + import guard
 # ---------------------------------------------------------------------------
@@ -329,6 +343,7 @@ def test_state_event_type_constants_match_events() -> None:
     """The locally re-declared literals must equal the events.py contract."""
     assert state_module._RUN_START == events_module.WRAPPER_RUN_START
     assert state_module._RUN_END == events_module.WRAPPER_RUN_END
+    assert state_module._STOP_REQUESTED == events_module.WRAPPER_STOP_REQUESTED
     assert state_module._ISSUE_ACTIVATED == events_module.WRAPPER_ISSUE_ACTIVATED
     assert state_module._ITERATION_START == events_module.WRAPPER_ITERATION_START
     assert state_module._STRIKE == events_module.WRAPPER_STRIKE

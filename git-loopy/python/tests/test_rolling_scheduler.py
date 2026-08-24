@@ -673,6 +673,23 @@ def test_strike_limit_latches_a_drain_confirmed_abort() -> None:
     assert scheduler.open_count == 1  # §7.7: started work still finishes
 
 
+def test_operator_stop_latches_a_drain_that_a_publication_cannot_resume() -> None:
+    """A deliberate Stop is final even when a Lane publishes while it drains."""
+    scheduler, source = _scheduler([11], lane_cap=1)
+    scheduler.start()
+    contribution = scheduler.start_session(scheduler.reserve()[0])
+    scheduler.finish_work(contribution, changed=True)
+
+    scheduler.request_stop_drain()
+    scheduler.finalize(contribution, published=True)
+
+    assert scheduler.phase == "draining_for_stop"
+    assert scheduler.refillable == 0
+    assert contribution.strike_reaction == "reset"
+    source.refs = [12]
+    assert scheduler.reserve() == ()
+
+
 def test_a_later_publication_cancels_the_pending_abort() -> None:
     scheduler, source = _scheduler([11], lane_cap=1)
     scheduler.start()

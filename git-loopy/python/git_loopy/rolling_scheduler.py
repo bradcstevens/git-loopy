@@ -68,11 +68,13 @@ __all__ = [
     "INTEGRATION_HIGH_WATER",
     "PARKED",
     "PHASE_DRAINING_FOR_ABORT",
+    "PHASE_DRAINING_FOR_STOP",
     "PHASE_DRAINING_FOR_SERIAL",
     "PHASE_ROLLING",
     "PHASE_ROLLING_REFILL_TURN",
     "PHASE_SERIAL_OWNERSHIP",
     "REASON_CHECKPOINT_FAILED",
+    "REASON_OPERATOR_STOP",
     "REASON_PUBLISHED",
     "REASON_SERIAL_FALLBACK",
     "REASON_UNCHANGED_BRANCH",
@@ -85,6 +87,7 @@ __all__ = [
     "SERIAL_LATCH_NOT_PARALLEL_SAFE",
     "SERIAL_LATCH_REASONS",
     "STRIKE_ADD",
+    "STRIKE_NONE",
     "STRIKE_RESET",
     "SerialFallback",
     "TERMINAL",
@@ -97,6 +100,7 @@ REASON_PUBLISHED = "published"
 REASON_UNCHANGED_BRANCH = "unchanged_branch"
 REASON_CHECKPOINT_FAILED = "checkpoint_failed"
 REASON_SERIAL_FALLBACK = "serial_fallback"
+REASON_OPERATOR_STOP = "operator_stop"
 
 # Why refill stopped (#219 §5.1-5.3, #356). Every latch has exactly one of
 # these causes, and the operator's reading of each differs: a serial-required
@@ -118,6 +122,7 @@ SERIAL_LATCH_REASONS: tuple[str, ...] = (
 # still owns the machine, because serial **Iterations** tick the same one.
 STRIKE_RESET = "reset"
 STRIKE_ADD = "+1"
+STRIKE_NONE = "none"
 
 # What finishing Lane work did with the contribution (#219 §3.8-3.9, §4.2-4.3).
 ADMITTED = "admitted"
@@ -138,6 +143,7 @@ PHASE_DRAINING_FOR_SERIAL = "draining_for_serial"
 PHASE_SERIAL_OWNERSHIP = "serial_ownership"
 PHASE_ROLLING_REFILL_TURN = "rolling_refill_turn"
 PHASE_DRAINING_FOR_ABORT = "draining_for_abort"
+PHASE_DRAINING_FOR_STOP = "draining_for_stop"
 
 # #304: why a **Parallel mode** Run is about to work a serial **Iteration**
 # instead of a **Lane**. A closed vocabulary — the operator's next move differs
@@ -251,8 +257,9 @@ class Contribution:
         published: ``True`` only after green publication *and* verified closure.
         reason: The terminal disposition, one of the ``REASON_*`` constants.
             ``None`` while the contribution is still open.
-        strike_reaction: :data:`STRIKE_RESET` or :data:`STRIKE_ADD`, recorded
-            once at finalization. ``None`` while open.
+        strike_reaction: :data:`STRIKE_RESET`, :data:`STRIKE_ADD`, or
+            :data:`STRIKE_NONE`, recorded once at finalization. ``None`` while
+            open.
     """
 
     contribution_id: str
@@ -299,6 +306,7 @@ class RollingScheduler:
         default_factory=list, init=False
     )
     _abort_latched: bool = field(default=False, init=False)
+    _stop_latched: bool = field(default=False, init=False)
     _phase: str = field(default=PHASE_ROLLING, init=False)
     _worked: set[int | str] = field(default_factory=set, init=False)
     _in_setup: set[int | str] = field(default_factory=set, init=False)
@@ -436,7 +444,7 @@ class RollingScheduler:
             # refill turn §5.9 grants after a serial Iteration is the deliberate
             # exception — it runs before any remaining demand may relatch.
             return 0
-        if self._abort_latched:
+        if self._abort_latched or self._stop_latched:
             # §7.7: drain-confirmed abort stops refill but cancels nothing.
             return 0
         if len(self._admitted) >= INTEGRATION_HIGH_WATER:
@@ -462,6 +470,8 @@ class RollingScheduler:
             return self._phase
         if self._serial_latched:
             return PHASE_DRAINING_FOR_SERIAL
+        if self._stop_latched:
+            return PHASE_DRAINING_FOR_STOP
         if self._abort_latched:
             return PHASE_DRAINING_FOR_ABORT
         return PHASE_ROLLING
@@ -728,7 +738,7 @@ class RollingScheduler:
             self._admitted.remove(contribution)
         terminal = REASON_PUBLISHED if published else (reason or REASON_SERIAL_FALLBACK)
         self._finalize(contribution, reason=terminal)
-        if published:
+        if published and not self._stop_latched:
             # §7.7: a green publication during an abort drain cancels it.
             self._abort_latched = False
         elif terminal == REASON_SERIAL_FALLBACK:
@@ -787,6 +797,15 @@ class RollingScheduler:
         """
         self._abort_latched = True
 
+    def request_stop_drain(self) -> None:
+        """Latch the operator's deliberate drain without cancelling live work."""
+        self._stop_latched = True
+
+    @property
+    def stop_latched(self) -> bool:
+        """Whether an operator Stop has stopped all future Lane reservations."""
+        return self._stop_latched
+
     @property
     def abort_latched(self) -> bool:
         """Whether a drain-confirmed abort is pending (#219 §7.7)."""
@@ -811,9 +830,12 @@ class RollingScheduler:
         """Close a contribution exactly once and record its Strike reaction."""
         contribution.published = reason == REASON_PUBLISHED
         contribution.reason = reason
-        contribution.strike_reaction = (
-            STRIKE_RESET if contribution.published else STRIKE_ADD
-        )
+        if reason == REASON_OPERATOR_STOP:
+            contribution.strike_reaction = STRIKE_NONE
+        else:
+            contribution.strike_reaction = (
+                STRIKE_RESET if contribution.published else STRIKE_ADD
+            )
         self._open.pop(contribution.contribution_id, None)
         self._release_lane(contribution)
         self._finalized.append(contribution)

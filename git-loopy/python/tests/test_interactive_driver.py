@@ -61,6 +61,42 @@ class _SelfStoppingApp(_FakeApp):
         self.exit()
 
 
+class _TwoStageStoppingApp(_FakeApp):
+    """Exercises the Dashboard's first and second Stop gestures."""
+
+    def __init__(self, state: LiveRunState, **kwargs: object) -> None:
+        super().__init__(state, **kwargs)
+        self.stop_handler: Callable[[], bool] | None = None
+        self.results: list[bool] = []
+
+    async def run_async(self) -> None:
+        assert self.stop_handler is not None
+        self.results.append(self.stop_handler())
+        await asyncio.sleep(0)
+        self.results.append(self.stop_handler())
+        self.exit()
+
+
+class _StopAwareDrive:
+    """Loop-shaped target whose controls are reachable through a bound drive."""
+
+    def __init__(self) -> None:
+        self.drain_requests = 0
+        self.cancel_requests = 0
+        self._cancelled = asyncio.Event()
+
+    def request_stop_drain(self) -> None:
+        self.drain_requests += 1
+
+    def request_stop_cancel(self) -> None:
+        self.cancel_requests += 1
+        self._cancelled.set()
+
+    async def drive(self) -> int:
+        await self._cancelled.wait()
+        return 1
+
+
 class _DetachingApp(_FakeApp):
     """Simulates the user pressing ``d`` (Detach) once the loop has emitted.
 
@@ -159,6 +195,26 @@ def test_stop_cancels_loop_and_returns_zero() -> None:
     assert tracker["cancelled"] is True
     assert state.status == "stopped"
     assert captured and captured[0].exited is True
+
+
+def test_two_stage_stop_drains_then_requests_session_cancellation() -> None:
+    state = LiveRunState()
+    captured: list[_TwoStageStoppingApp] = []
+    target = _StopAwareDrive()
+
+    def factory(s: LiveRunState, **kwargs: object) -> _TwoStageStoppingApp:
+        app = _TwoStageStoppingApp(s, **kwargs)
+        captured.append(app)
+        return app
+
+    driver = InteractiveDriver(state, app_factory=factory)  # type: ignore[arg-type]
+    exit_code = asyncio.run(driver.run(target.drive))
+
+    assert exit_code == 1
+    assert target.drain_requests == 1
+    assert target.cancel_requests == 1
+    assert captured[0].results == [False, True]
+    assert state.status == "stopped"
 
 
 def test_natural_completion_closes_app_and_returns_loop_code() -> None:

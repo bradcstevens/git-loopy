@@ -33,6 +33,11 @@
       "exit_code": 1
     },
     {
+      "id": "operator-stop-is-aborted",
+      "reason": "operator_stop",
+      "exit_code": 1
+    },
+    {
       "id": "malformed-invocation-is-usage-error",
       "reason": "usage_error",
       "exit_code": 2

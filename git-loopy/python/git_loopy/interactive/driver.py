@@ -368,6 +368,32 @@ class InteractiveDriver:
                 drive, DashboardFault(exc, at_startup=True)
             )
 
+        control_target = getattr(drive, "__self__", drive)
+        request_drain = getattr(control_target, "request_stop_drain", None)
+        request_cancel = getattr(control_target, "request_stop_cancel", None)
+        controlled_stop = callable(request_drain) and callable(request_cancel)
+        stop_stage = 0
+
+        def request_stop() -> bool:
+            """Translate the Dashboard's repeated gesture into loop control."""
+            nonlocal stop_stage
+            if stop_stage == 0:
+                stop_stage = 1
+                request_drain()
+                self.state.mark_draining()
+                return False
+            if stop_stage == 1:
+                stop_stage = 2
+                request_cancel()
+                self.state.mark_stopped()
+                return True
+            return False
+
+        if controlled_stop:
+            # Kept as an attribute rather than a factory argument so existing
+            # third-party Dashboard factories retain their narrow signature.
+            app.stop_handler = request_stop
+
         # Acquired here rather than around the whole peering: the terminal's
         # entry state has to be captured before the Dashboard starts, and the
         # Dashboard starts at ``run_async`` below. A startup failure therefore
@@ -417,9 +443,11 @@ class InteractiveDriver:
                 self._detach()
                 detached = True
             else:
-                # User Stopped from the TUI → wind the loop down cleanly.
-                self.state.mark_stopped()
-                loop_task.cancel()
+                if not controlled_stop:
+                    # Compatibility for an injected legacy Dashboard, which can
+                    # still only express "app exited = Stop".
+                    self.state.mark_stopped()
+                    loop_task.cancel()
 
         results = await asyncio.gather(
             loop_task, app_task, return_exceptions=True

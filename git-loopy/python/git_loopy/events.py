@@ -73,6 +73,7 @@ __all__ = [
     # Wrapper event-type constants
     "WRAPPER_RUN_START",
     "WRAPPER_RUN_END",
+    "WRAPPER_STOP_REQUESTED",
     "WRAPPER_ISSUE_ACTIVATED",
     "WRAPPER_SKILL_POLICY_RESOLVED",
     "WRAPPER_ITERATION_START",
@@ -247,6 +248,7 @@ _CONTEXT_WINDOW_SAFETY_PERCENT = 75
 # :func:`make_event`; they have no SDK equivalent.
 WRAPPER_RUN_START = "wrapper.run.start"
 WRAPPER_RUN_END = "wrapper.run.end"
+WRAPPER_STOP_REQUESTED = "wrapper.stop.requested"
 WRAPPER_ISSUE_ACTIVATED = "wrapper.issue.activated"
 WRAPPER_SKILL_POLICY_RESOLVED = "wrapper.skill_policy.resolved"
 WRAPPER_ITERATION_START = "wrapper.iteration.start"
@@ -376,12 +378,13 @@ CONTRIBUTION_SCOPED_EVENT_TYPES: frozenset[str] = frozenset(
 
 # The behaviourally distinct terminal dispositions a ``wrapper.contribution.end``
 # MUST be able to tell apart. ``published`` is the only Parallel progress; the
-# other three each add exactly one Strike.
+# three ordinary unpublished dispositions each add exactly one Strike.
 CONTRIBUTION_TERMINAL_REASONS: tuple[str, ...] = (
     "published",
     "unchanged_branch",
     "checkpoint_failed",
     "serial_fallback",
+    "operator_stop",
 )
 
 # Calibration events (#371, ADR-0027). A **Calibration** is not a **Run** and a

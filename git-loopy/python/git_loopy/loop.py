@@ -122,6 +122,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import (
     Any,
+    Awaitable,
     Callable,
     Coroutine,
     Iterable,
@@ -715,6 +716,7 @@ class _ChainedObserver:
 #: path the process never returns through, and would owe every other member of
 #: the Runner family a ``conformance/exit-codes.json`` case for it.
 RUN_OUTCOME_INTERRUPTED = "interrupted"
+RUN_OUTCOME_OPERATOR_STOP = "operator_stop"
 
 #: Outcomes whose Run stopped *during* iteration ``iter_num`` rather than after
 #: it, so the iteration in flight was never finished and must not be counted.
@@ -785,6 +787,12 @@ class _Loop:
         # ``drive`` only when PRs are in scope). ``None`` = unknown / detached
         # HEAD, which disables the defensive restore.
         self._base_branch: str | None = None
+        # Stop is deliberately a request, not cancellation of the orchestration
+        # task: a first gesture ends after this Iteration and a second one can
+        # interrupt only the agent task currently at its round boundary.
+        self._stop_drain_requested = False
+        self._stop_cancel_requested = False
+        self._active_agent_task: asyncio.Task[object] | None = None
         self._strike_machine = NMTStrikeStateMachine(
             max_strikes=config.max_nmt_strikes
         )
@@ -891,6 +899,23 @@ class _Loop:
         it lacks is the row to measure it on. Building one is its own slice.
         """
         return ()
+
+    def request_stop_drain(self) -> None:
+        """Latch a deliberate wind-down without interrupting started work."""
+        if self._stop_drain_requested:
+            return
+        self._stop_drain_requested = True
+        self._emit(events_module.WRAPPER_STOP_REQUESTED, iter_num=None, stage="drain")
+
+    def request_stop_cancel(self) -> None:
+        """Cancel the active serial agent task, if a Stop already drained."""
+        self.request_stop_drain()
+        if self._stop_cancel_requested:
+            return
+        self._stop_cancel_requested = True
+        self._emit(events_module.WRAPPER_STOP_REQUESTED, iter_num=None, stage="cancel")
+        if self._active_agent_task is not None and not self._active_agent_task.done():
+            self._active_agent_task.cancel()
 
     # -- event fan-out ------------------------------------------------------
 
@@ -1224,6 +1249,7 @@ class _Loop:
             send_timeout = self._config.send_timeout_seconds
             termination = session_outcome_module.SessionTermination.COMPLETED
             raised: session_outcome_module.SessionError | None = None
+            operator_cancelled = False
             # The harness reports a refused call on the Event stream and lets the
             # session finish politely, so the `except` clauses below see nothing
             # at all in exactly the case worth explaining. The watch is what
@@ -1247,13 +1273,22 @@ class _Loop:
                         ),
                     ) as sdk_session:
                         try:
-                            await sdk_session.send_and_wait(
-                                prompt, timeout=send_timeout
+                            agent_task = asyncio.create_task(
+                                sdk_session.send_and_wait(
+                                    prompt, timeout=send_timeout
+                                ),
+                                name=f"git-loopy-iteration-{iter_num}-agent",
                             )
+                            self._active_agent_task = agent_task
+                            await agent_task
                         except asyncio.TimeoutError:
                             termination = (
                                 session_outcome_module.SessionTermination.TIMED_OUT
                             )
+                        except asyncio.CancelledError:
+                            if not self._stop_cancel_requested:
+                                raise
+                            operator_cancelled = True
                         except Exception as exc:
                             # Contained exactly as before: the bookkeeping below
                             # still runs and the Iteration is accounted as
@@ -1265,6 +1300,8 @@ class _Loop:
                             raised = session_outcome_module.SessionError.from_exception(
                                 exc, origin="send"
                             )
+                        finally:
+                            self._active_agent_task = None
                 except Exception as exc:
                     termination = session_outcome_module.SessionTermination.CRASHED
                     raised = session_outcome_module.SessionError.from_exception(
@@ -1399,15 +1436,18 @@ class _Loop:
             # ending is now what charges the ceiling — through the **Attempt
             # lifecycle** it feeds — so a machine read first would report the
             # count as it stood before this Iteration's own defeat.
-            self._record_session_outcome(
-                active.ref, session_ending, iter_num=iter_num
-            )
-            outcome = self._strike_machine.tick(
-                commits_in_iter=commits_in_iter,
-                auto_closures_in_iter=auto_closures,
-                checkpoints_in_iter=checkpoints_in_iter,
-                pr_advances_in_iter=pr_advances,
-            )
+            if not operator_cancelled:
+                self._record_session_outcome(
+                    active.ref, session_ending, iter_num=iter_num
+                )
+                outcome = self._strike_machine.tick(
+                    commits_in_iter=commits_in_iter,
+                    auto_closures_in_iter=auto_closures,
+                    checkpoints_in_iter=checkpoints_in_iter,
+                    pr_advances_in_iter=pr_advances,
+                )
+            else:
+                outcome = "continue"
 
             # 11) Close the iteration snapshot, persist counters.
             self._finish_iteration(
@@ -2045,6 +2085,10 @@ class _Loop:
         try:
             try:
                 while True:
+                    if getattr(self, "_stop_drain_requested", False):
+                        outcome_label = RUN_OUTCOME_OPERATOR_STOP
+                        exit_code = exit_code_for(RUN_OUTCOME_OPERATOR_STOP)
+                        break
                     iter_num += 1
                     if (
                         self._config.max_iterations != 0
@@ -2427,6 +2471,11 @@ class _ParallelLoop:
         # preserve the "crashed" outcome / exit-code contract the retired
         # Wave's single `try/except` around the whole round loop gave.
         self._crash: BaseException | None = None
+        # Only these tasks are eligible for a second Stop.  Lifecycle tasks also
+        # own merge, close, branch deletion, and push transactions, which must
+        # be allowed to complete once they have begun.
+        self._active_agent_tasks: set[asyncio.Task[object]] = set()
+        self._stop_cancel_requested = False
 
         # Compose a serial `_Loop` for serial Iterations AND to share its
         # Strike machine / event emitter / summary counters / Checkpoint
@@ -2451,6 +2500,32 @@ class _ParallelLoop:
             classifier_pair=classifier_pair,
             task_type_client=task_type_client,
         )
+
+    def request_stop_drain(self) -> None:
+        """Stop refill and serial reservations while live work drains."""
+        self._serial.request_stop_drain()
+        if self._scheduler is not None:
+            self._scheduler.request_stop_drain()
+
+    def request_stop_cancel(self) -> None:
+        """Cancel agent sessions only; never their enclosing Lane lifecycle."""
+        if self._stop_cancel_requested:
+            return
+        self._serial.request_stop_cancel()
+        if self._scheduler is not None:
+            self._scheduler.request_stop_drain()
+        self._stop_cancel_requested = True
+        for task in tuple(self._active_agent_tasks):
+            task.cancel()
+
+    async def _await_agent(self, awaitable: Awaitable[object], *, name: str) -> object:
+        """Make an agent call, retaining the one task the second Stop may cancel."""
+        task = asyncio.create_task(awaitable, name=name)
+        self._active_agent_tasks.add(task)
+        try:
+            return await task
+        finally:
+            self._active_agent_tasks.discard(task)
 
     def _lane_candidate_cacheable(self, candidate: PoolCandidate) -> bool:
         """Whether this candidate belongs in the Rolling dispatch cache.
@@ -2651,6 +2726,12 @@ class _ParallelLoop:
         """
         iter_num = 0
         while True:
+            if self._serial._stop_drain_requested:
+                return (
+                    RUN_OUTCOME_OPERATOR_STOP,
+                    exit_code_for(RUN_OUTCOME_OPERATOR_STOP),
+                    iter_num,
+                )
             iter_num += 1
             if (
                 self._config.max_iterations != 0
@@ -2744,6 +2825,7 @@ class _ParallelLoop:
                 if (
                     scheduler.remaining_units != 0
                     and not scheduler.abort_latched
+                    and not scheduler.stop_latched
                     and scheduler.serial_turn()
                 ):
                     self._report_serial_fallback(scheduler)
@@ -2797,6 +2879,15 @@ class _ParallelLoop:
                 # parked contribution it admits from the FIFO) has finished
                 # (see `_integrate_contribution`) — so it is safe to ask the
                 # scheduler for a terminal outcome here.
+                if scheduler.stop_latched and (
+                    scheduler.quiescent
+                    or (self._stop_cancel_requested and not self._pending)
+                ):
+                    return (
+                        RUN_OUTCOME_OPERATOR_STOP,
+                        exit_code_for(RUN_OUTCOME_OPERATOR_STOP),
+                        scheduler._units_spent,
+                    )
                 if scheduler.abort_latched and scheduler.quiescent:
                     return "stuck", exit_code_for("stuck"), scheduler._units_spent
                 if scheduler.remaining_units == 0 and scheduler.quiescent:
@@ -2837,8 +2928,9 @@ class _ParallelLoop:
             # abandon the drain and the salvage with it (#452).
             try:
                 if self._pending:
-                    for task in self._pending:
-                        task.cancel()
+                    if not scheduler.stop_latched:
+                        for task in self._pending:
+                            task.cancel()
                     await asyncio.gather(*self._pending, return_exceptions=True)
                     self._pending.clear()
             finally:
@@ -3090,6 +3182,9 @@ class _ParallelLoop:
         """
         try:
             await self._run_lane_lifecycle(reservation)
+        except asyncio.CancelledError:
+            if not self._stop_cancel_requested:
+                raise
         except Exception as exc:  # pragma: no cover - defensive
             if self._crash is None:
                 self._crash = exc
@@ -3623,19 +3718,17 @@ class _ParallelLoop:
         Synchronous on purpose, and called from ``drive``'s ``finally`` behind
         no ``await``, so a second Stop gesture cannot abandon it.
 
-        Each still-open contribution is finalized with
-        :data:`~git_loopy.rolling_scheduler.REASON_UNCHANGED_BRANCH` — an
-        already-published terminal reason, deliberately not a new one. #445 §F
-        makes this whole path contract-invisible, so an interrupted
-        contribution reports the honest half of its state it *can* say on the
-        existing wire: it did not publish. The salvaged branch is not offered
-        as progress because nothing may resume it — a later Run mints a new
-        Lane branch for the issue — and ``reoffer=False`` keeps the unit spent,
-        since the Run that would re-offer it is the one exiting.
+        An involuntary interruption uses
+        :data:`~git_loopy.rolling_scheduler.REASON_UNCHANGED_BRANCH`, preserving
+        #452's contract.  An operator's second Stop instead uses
+        :data:`~git_loopy.rolling_scheduler.REASON_OPERATOR_STOP`, making the
+        salvaged, unintegrated work visible without treating it as failure.
 
-        Each one is also recorded as **abandoned**, which is what keeps it out
-        of **Demotion** (see :attr:`finalized_contributions`): a Run that was
-        interrupted learned nothing about the **Routed pair** it interrupted.
+        An involuntarily interrupted contribution is also recorded as
+        **abandoned**, which keeps it out of **Demotion** (see
+        :attr:`finalized_contributions`). An operator-stopped contribution stays
+        in that record and the explicit terminal-reason exclusion owns its
+        blamelessness.
         """
         for contribution_id, lane_work in tuple(self._lane_work.items()):
             self._salvage_and_reclaim_lane_workspace(lane_work)
@@ -3645,11 +3738,17 @@ class _ParallelLoop:
             if contribution.reason is not None:  # pragma: no cover - defensive
                 continue
             assert self._scheduler is not None
-            self._abandoned_at_exit.add(contribution.contribution_id)
+            reason = (
+                rolling_scheduler.REASON_OPERATOR_STOP
+                if self._stop_cancel_requested
+                else rolling_scheduler.REASON_UNCHANGED_BRANCH
+            )
+            if reason == rolling_scheduler.REASON_UNCHANGED_BRANCH:
+                self._abandoned_at_exit.add(contribution.contribution_id)
             self._scheduler.finish_terminal_failure(
                 contribution,
                 reoffer=False,
-                reason=rolling_scheduler.REASON_UNCHANGED_BRANCH,
+                reason=reason,
             )
             self._finalize_contribution(contribution, published=False)
 
@@ -3719,8 +3818,12 @@ class _ParallelLoop:
                 ),
             ) as sdk_session:
                 try:
-                    await sdk_session.send_and_wait(
-                        prompt, timeout=send_timeout
+                    await self._await_agent(
+                        sdk_session.send_and_wait(prompt, timeout=send_timeout),
+                        name=(
+                            "git-loopy-lane-"
+                            f"{contribution.contribution_id}-agent"
+                        ),
                     )
                 except asyncio.TimeoutError:
                     termination = session_outcome_module.SessionTermination.TIMED_OUT
@@ -4405,7 +4508,13 @@ class _ParallelLoop:
                 skill_exposure=self._skill_exposure,
             ) as sdk_session:
                 try:
-                    await sdk_session.send_and_wait(prompt, timeout=send_timeout)
+                    await self._await_agent(
+                        sdk_session.send_and_wait(prompt, timeout=send_timeout),
+                        name=(
+                            "git-loopy-resolution-"
+                            f"{contribution.contribution_id}-{attempt}"
+                        ),
+                    )
                 except asyncio.TimeoutError:
                     self._diag.warning(
                         "integration #%s: auto-resolution attempt %s timed out "

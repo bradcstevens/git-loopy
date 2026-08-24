@@ -121,6 +121,8 @@ pub enum EventPayload {
     IterationEnd(Box<IterationEnd>),
     /// `wrapper.run.end`
     RunEnd(RunEnd),
+    /// `wrapper.stop.requested`
+    StopRequested(StopRequested),
     /// Any other Event type in the supported schema.
     Other,
 }
@@ -488,6 +490,14 @@ pub struct RunEnd {
     pub outcome: Option<String>,
 }
 
+/// The two-stage operator Stop transition.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct StopRequested {
+    /// `drain` preserves all started work; `cancel` ends active agent sessions.
+    #[serde(default)]
+    pub stage: Option<String>,
+}
+
 impl Event {
     /// Decode one Event from its JSON representation.
     ///
@@ -552,6 +562,7 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.strike" => EventPayload::Strike(decode_or_default(value)),
         "wrapper.iteration.end" => EventPayload::IterationEnd(Box::new(decode_or_default(value))),
         "wrapper.run.end" => EventPayload::RunEnd(decode_or_default(value)),
+        "wrapper.stop.requested" => EventPayload::StopRequested(decode_or_default(value)),
         _ => EventPayload::Other,
     }
 }

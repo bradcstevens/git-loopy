@@ -176,6 +176,7 @@ ExitReason = Literal[
     "all_blocked",
     "preflight_failed",
     "usage_error",
+    "operator_stop",
 ]
 
 
@@ -183,7 +184,13 @@ def exit_code_for(reason: ExitReason) -> int:
     """Return the process exit code for a Wrapper-contract termination."""
     if reason in {"empty_pool", "iteration_cap"}:
         return 0
-    if reason in {"stuck", "all_skipped", "all_blocked", "preflight_failed"}:
+    if reason in {
+        "stuck",
+        "all_skipped",
+        "all_blocked",
+        "preflight_failed",
+        "operator_stop",
+    }:
         return 1
     if reason == "usage_error":
         return 2

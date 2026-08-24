@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "contract_version": "2.2",
-  "event_schema_version": "1.1",
+  "event_schema_version": "1.2",
   "insight_capabilities": {
     "names": [
       "agent_output",
@@ -147,6 +147,11 @@
     },
     "wrapper.issue.activated": {
       "required_when_present": ["issue", "activated_at", "binding_source"]
+    },
+    "wrapper.stop.requested": {
+      "required_when_present": ["stage"],
+      "stage_values": ["drain", "cancel"],
+      "emitted": "Each operator Stop gesture exactly once. drain stops refill and new work while started work drains; cancel requests cancellation only of active agent sessions and never interrupts publication."
     },
     "agent.output": {
       "required_when_present": ["text", "kind"],
@@ -310,7 +315,8 @@
         "published",
         "unchanged_branch",
         "checkpoint_failed",
-        "serial_fallback"
+        "serial_fallback",
+        "operator_stop"
       ],
       "summary_required": [
         "model",
@@ -327,7 +333,7 @@
         "peak_context_window",
         "strike_reaction"
       ],
-      "strike_reaction_values": ["reset", "+1"],
+      "strike_reaction_values": ["reset", "+1", "none"],
       "emitted": "The authoritative finalized Parallel row and Strike transition. A publication that has not yet verified its closure is not a contribution end.",
       "counted_once": "Lane-work and recovery Consumption and commits appear exactly once, in the originating contribution. Runner Checkpoint commits are excluded from the commit total.",
       "retired": ["cost_usd"],
@@ -449,6 +455,7 @@
     "lane_id": "The reusable Lane the contribution started in. It never changes, even after that Lane is refilled, so replay never needs a mutable Lane-to-issue lookup.",
     "legacy": "Historical Wave traces carry lane_issue and no contribution identity. They remain readable and MUST NOT be reinterpreted as contributions."
   },
+  "run_control_types": ["wrapper.stop.requested"],
   "calibration_identity": {
     "keys": ["calibration_id", "trial_id"],
     "run_id": null,
@@ -495,6 +502,7 @@
     "AGENT_OUTPUT": "agent.output",
     "WRAPPER_RUN_START": "wrapper.run.start",
     "WRAPPER_RUN_END": "wrapper.run.end",
+    "WRAPPER_STOP_REQUESTED": "wrapper.stop.requested",
     "WRAPPER_ISSUE_ACTIVATED": "wrapper.issue.activated",
     "WRAPPER_SKILL_POLICY_RESOLVED": "wrapper.skill_policy.resolved",
     "WRAPPER_ITERATION_START": "wrapper.iteration.start",

@@ -1699,6 +1699,92 @@ def test_parallel_a_cancelled_contribution_is_not_demotion_evidence(
     assert [e["issue"] for e in ends] == [42]
 
 
+def test_parallel_operator_stop_drains_then_cancels_only_the_lane_agent(
+    tmp_path, monkeypatch
+) -> None:
+    """The second Stop salvages an active Lane as a visible, blameless stop."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    started = asyncio.Event()
+    lane_git: FakeGitClient | None = None
+
+    class _StoppingClient(_ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            nonlocal lane_git
+            session = await super().create_session(**kwargs)
+            working_directory = kwargs.get("working_directory")
+            if working_directory is None:
+                return session
+
+            async def wait_for_stop(
+                prompt: str, *, timeout: float = 60.0, **extra: Any
+            ) -> SessionEvent | None:
+                nonlocal lane_git
+                lane_git = fake_git.worktree_client(Path(working_directory))
+                assert lane_git is not None
+                lane_git.dirty = True
+                started.set()
+                await asyncio.Event().wait()
+                return await session.send_and_wait(prompt, timeout=timeout, **extra)
+
+            session.send_and_wait = wait_for_stop  # type: ignore[method-assign]
+            return session
+
+    fake_client = _StoppingClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    built: list[loop_module._ParallelLoop] = []
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def capture(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        instance = real_parallel_loop(*args, **kwargs)
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", capture)
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        assert built
+        built[0].request_stop_drain()
+        await asyncio.sleep(0)
+        assert not run_task.done()
+        built[0].request_stop_cancel()
+        return await asyncio.wait_for(run_task, timeout=5)
+
+    assert asyncio.run(scenario()) == 1
+    assert lane_git is not None
+    assert lane_git.commit_messages == [checkpoint_message(42)]
+    assert bool(_lane_worktree_removes(fake_git))
+    events = _logged_events(tmp_path)
+    assert [event["stage"] for event in events if event["type"] == "wrapper.stop.requested"] == [
+        "drain",
+        "cancel",
+    ]
+    (end,) = [event for event in events if event["type"] == "wrapper.contribution.end"]
+    assert end["reason"] == "operator_stop"
+    assert end["summary"]["strike_reaction"] == "none"
+    assert [event for event in events if event["type"] == "wrapper.strike"] == []
+
+
 def test_parallel_a_second_stop_gesture_still_reclaims_the_lane_workspace(
     tmp_path, monkeypatch
 ) -> None:

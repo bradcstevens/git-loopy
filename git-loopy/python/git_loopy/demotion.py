@@ -77,7 +77,11 @@ from git_loopy.measured_routing import (
     measured_routing_path,
     write_measured_routing,
 )
-from git_loopy.rolling_scheduler import REASON_PUBLISHED, Contribution
+from git_loopy.rolling_scheduler import (
+    REASON_OPERATOR_STOP,
+    REASON_PUBLISHED,
+    Contribution,
+)
 from git_loopy.roster_preflight import RECALIBRATE_HINT
 from git_loopy.routing_scope import routing_in_force
 from git_loopy.settings import SettingsError
@@ -110,7 +114,8 @@ def tally_no_progress(contributions: Iterable[Contribution]) -> dict[Pair, int]:
     ``published`` is the only Parallel progress there is; ``unchanged_branch``,
     ``checkpoint_failed`` and ``serial_fallback`` are each a contribution that
     reached a terminal disposition without publishing, which is precisely the
-    experience Demotion acts on.
+    experience Demotion acts on. ``operator_stop`` records a human ending work
+    that was still running, not evidence against its Routed pair.
 
     Two rows are deliberately skipped rather than bucketed. A contribution that
     is still **open** carries ``reason is None``, which means "has not finished"
@@ -130,7 +135,11 @@ def tally_no_progress(contributions: Iterable[Contribution]) -> dict[Pair, int]:
     """
     tally: Counter[Pair] = Counter()
     for contribution in contributions:
-        if contribution.reason is None or contribution.reason == REASON_PUBLISHED:
+        if contribution.reason in {
+            None,
+            REASON_OPERATOR_STOP,
+            REASON_PUBLISHED,
+        }:
             continue
         if contribution.model is None:
             continue

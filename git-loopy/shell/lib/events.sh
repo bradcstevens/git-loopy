@@ -14,6 +14,7 @@ fi
 declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [WRAPPER_RUN_START]="wrapper.run.start"
   [WRAPPER_RUN_END]="wrapper.run.end"
+  [WRAPPER_STOP_REQUESTED]="wrapper.stop.requested"
   [WRAPPER_ISSUE_ACTIVATED]="wrapper.issue.activated"
   [WRAPPER_SKILL_POLICY_RESOLVED]="wrapper.skill_policy.resolved"
   [WRAPPER_ITERATION_START]="wrapper.iteration.start"

@@ -1,36 +1,24 @@
 # A Stop drains before it cancels
 
-**Status:** proposed
+**Status:** accepted
 
 Decided on [#358](https://github.com/bradcstevens/git-loopy/issues/358), under map
 [#342](https://github.com/bradcstevens/git-loopy/issues/342).
 
-git-loopy has shipped **two opposite wind-downs** without either being chosen against the
-other. A **Strike** abort drains: `strike_limit_reached()` "stops new reservations and
-refill, but cancels nothing: every started contribution and **Integration** operation
-finishes" (`rolling_scheduler.py:735-743`), with a `PHASE_DRAINING_FOR_ABORT` the Dashboard
-is required to expose. An operator **Stop** hard-cancels: `loop_task.cancel()`
-(`interactive/driver.py:422`) and then `task.cancel()` on every pending **Lane**
-(`loop.py:3222-3227`). The gentler path is the one taken when the Run is failing; the
-brutal one when a human politely asks.
-
-The brutal one is also lossy in a way nothing records. `_guarded_lane_lifecycle` catches
-`Exception`, not `BaseException`, so the `CancelledError` passes straight through
-(`loop.py:3459-3464`), and `_run_lane_lifecycle` has **no `finally`** — so a cancelled Lane
-takes no **Checkpoint**, removes no worktree and finalizes no contribution. N Lanes die
-mid-session, leave N worktrees and N unmerged branches, produce **no Summary row**, and the
-process exits `0`.
+git-loopy now distinguishes a **Strike** abort from an operator **Stop** while giving both a
+safe drain. A Strike abort can clear after publication; an operator Stop is a durable latch
+that never resumes refill. The second Stop targets only tracked agent-session tasks, while
+the rolling driver's synchronous reclamation salvages and closes any cancelled Lane.
 
 **A Stop therefore has two stages.** The first latches the drain — refill stops at once,
 started contributions run to completion and integrate. The second cancels the agent
 sessions still running, salvaging their work first. The gesture is the same one twice, which
-is the model `Ctrl+C` already established, and the first stage reuses the abort latch rather
-than adding a mechanism — so the Strike abort and the operator Stop stop being opposites and
-become the same primitive, entered for different reasons.
+is the model `Ctrl+C` already established. The operator latch is distinct from the Strike
+abort, because publication may clear the latter but must never resume a requested Stop.
 
-This does not redefine **Stop**. `CONTEXT.md` already says "the current iteration is wound
-down cleanly and the loop exits"; that sentence is false today. Two-stage makes it true, and
-extends it from the Iteration to the Lane.
+This does not redefine **Stop**. `CONTEXT.md` says "the current iteration is wound down
+cleanly and the loop exits"; two-stage makes that true and extends it from the Iteration to
+the Lane.
 
 ## Why the first stage is not merely politeness
 
@@ -147,9 +135,8 @@ thing by it — all to improve on an outcome that is already non-destructive.
   a behaviour of **Sweep**", Sweep being what a *later* Run does to a *dead* Run's residue.
   Salvage now also happens in-Run, at Stop time, performed by the live Run on its own
   workspaces. The term covers two actors.
-- **The wind-down owes the Event stream two things**, routed to
-  [#355](https://github.com/bradcstevens/git-loopy/issues/355), which owns Event-schema
-  additions for this seam. A wind-down transition must be **observable on the wire** — a
+- **The wind-down writes two Event-stream facts.** A `wrapper.stop.requested` transition
+  makes a
   draining Run distinguishable from a healthy one, and the second stage from the first —
   because #352 §4 lets a client attach mid-wind-down and `mark_stopped()` is local Dashboard
   state that never reaches the trace. And the blameless disposition is a fifth value in

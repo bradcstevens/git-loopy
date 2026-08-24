@@ -97,6 +97,7 @@ __all__ = [
 # lockstep by ``test_state_event_type_constants_match_events``.
 _RUN_START = "wrapper.run.start"
 _RUN_END = "wrapper.run.end"
+_STOP_REQUESTED = "wrapper.stop.requested"
 _ISSUE_ACTIVATED = "wrapper.issue.activated"
 _ITERATION_START = "wrapper.iteration.start"
 _STRIKE = "wrapper.strike"
@@ -193,6 +194,8 @@ RETROACTIVE_BINDING_SOURCES = frozenset({"closure", "commit", "single_member_poo
 _STATUS_STARTING = "starting"
 #: Status while the loop is driving iterations.
 _STATUS_RUNNING = "running"
+#: Status after the first operator Stop: work is still draining.
+_STATUS_DRAINING = "draining"
 #: Terminal status when the user Stops (``q`` / ``Ctrl+C``) — distinct from the
 #: loop's own natural outcomes (``empty_pool`` / ``iteration_cap`` / ...), which
 #: arrive as the ``wrapper.run.end`` ``outcome``.
@@ -669,6 +672,9 @@ class LiveRunState:
             self.iteration = _coerce_int(event.get("iter"), self.iteration)
             self.status = _STATUS_RUNNING
             self._begin_iteration(now)
+        elif etype == _STOP_REQUESTED:
+            if event.get("stage") == "drain":
+                self.mark_draining()
         elif etype == _AFK_READY_COLLECTED:
             self._record_pool(event.get("issues"), now)
         elif etype == _PICKUP_BOUND:
@@ -779,6 +785,10 @@ class LiveRunState:
         self._scan_for_marker(delta)
 
     # -- driver-facing controls --------------------------------------------
+
+    def mark_draining(self) -> None:
+        """Record the first operator Stop while the Run finishes live work."""
+        self.status = _STATUS_DRAINING
 
     def mark_stopped(self) -> None:
         """Record a user **Stop** (``q`` / ``Ctrl+C``) as the terminal status.

@@ -812,7 +812,7 @@ git_loopy_exit_code_for() {
     empty_pool | iteration_cap)
       printf '0\n'
       ;;
-    stuck | all_skipped | all_blocked | preflight_failed)
+    stuck | all_skipped | all_blocked | preflight_failed | operator_stop)
       printf '1\n'
       ;;
     usage_error)
