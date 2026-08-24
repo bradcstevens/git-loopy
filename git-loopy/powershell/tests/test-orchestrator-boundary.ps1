@@ -4581,9 +4581,17 @@ Start-Sleep -Seconds $Sleep
         }
     )
     foreach ($Row in $ReadinessRows) {
+        $MembershipRow = [ordered]@{}
+        foreach ($Entry in $Row.GetEnumerator()) {
+            $MembershipRow[$Entry.Key] = $Entry.Value
+        }
+        # The collection snapshot decides readiness at Pickup. A later membership
+        # read may observe a changed graph, but it must not replace that carried
+        # connection in the current Pool.
+        $MembershipRow["blockedBy"] = $ReadyBlockedBy
         [IO.File]::WriteAllText(
             (Join-Path $ReadinessViews "$($Row["number"]).json"),
-            ($Row | ConvertTo-Json -Depth 10)
+            ($MembershipRow | ConvertTo-Json -Depth 10)
         )
     }
     $ReadinessList = Join-Path $TempDir "readiness-pickup-list.json"

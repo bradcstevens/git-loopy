@@ -2401,9 +2401,10 @@ function Get-GitLoopyGitHubPool {
             state = [string]$Full["state"]
             url = [string]$Full["url"]
             created_at = [string]($Full["createdAt"] ?? $Full["created_at"] ?? "")
-            # The connection arrived on the existing membership read. Carry it
-            # forward for Pickup rather than opening a dependency-only request.
-            blocked_by = $Full["blockedBy"]
+            # The collection read carries the connection Pickup decides from.
+            # A later membership read can validate current state but cannot
+            # replace this Pool snapshot's readiness evidence.
+            blocked_by = $Candidate["blockedBy"]
             comments = [object[]]$Comments
         }
     }
