@@ -70,6 +70,12 @@ def test_subcommand_parser_parses_info_json() -> None:
     assert args.json is True
 
 
+def test_subcommand_parser_parses_sweep_dry_run() -> None:
+    args = cli_module.build_subcommand_parser().parse_args(["sweep", "--dry-run"])
+    assert args.command == "sweep"
+    assert args.dry_run is True
+
+
 def test_subcommand_parser_parses_skills_edit_scope() -> None:
     args = cli_module.build_subcommand_parser().parse_args(
         ["skills", "edit", "--global"]
@@ -215,6 +221,25 @@ def test_main_skills_list_routes_to_handler_no_loop(
 
     assert cli_module.main(["skills", "list"]) == 0
     assert seen == ["list"]
+    assert captured == []
+
+
+def test_main_sweep_routes_to_handler_no_loop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+    seen: list[bool] = []
+
+    def fake_run_sweep(args: Any) -> int:
+        seen.append(args.dry_run)
+        return 0
+
+    monkeypatch.setattr(cli_module, "_run_sweep", fake_run_sweep)
+
+    assert cli_module.main(["sweep", "--dry-run"]) == 0
+    assert seen == [True]
     assert captured == []
 
 

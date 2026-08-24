@@ -334,6 +334,13 @@ class FakeGitClient:
         self._branches[branch] = child
         return child
 
+    def open_worktree(self, path: Path) -> FakeGitClient:
+        """Return the live child worktree bound to ``path``."""
+        try:
+            return self._worktrees[Path(path)]
+        except KeyError as exc:
+            raise GitError(["git", "worktree", "list"], 128, f"not found: {path}") from exc
+
     def remove_worktree(self, path: Path, *, force: bool = False) -> None:
         """Model ``git worktree remove`` — drop the child, keep the branch.
 
@@ -474,6 +481,23 @@ class FakeGitClient:
             raise GitError(["git", "branch", "-D", branch], 1, f"not found: {branch}")
         del self._branches[branch]
         self.branch_deletes.append(branch)
+
+    def list_branches(self) -> list[str]:
+        """Return the fake's root branch and registered worktree branches."""
+        names = set(self._branches)
+        if self.branch is not None:
+            names.add(self.branch)
+        return sorted(names)
+
+    def is_merged_into(self, branch: str, base: str) -> bool:
+        """Model reachability by checking whether every branch commit is on base."""
+        candidate = self._branches.get(branch)
+        if candidate is None:
+            raise GitError(["git", "merge-base", branch, base], 128, f"unknown: {branch}")
+        if base != self.branch:
+            raise GitError(["git", "merge-base", branch, base], 128, f"unknown: {base}")
+        base_shas = {commit.sha for commit in self._log}
+        return all(commit.sha in base_shas for commit in candidate._log)
 
     # -- test scripting ----------------------------------------------------
 

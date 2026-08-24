@@ -465,6 +465,10 @@ class GitClient(Protocol):
         """
         ...
 
+    def open_worktree(self, path: Path) -> GitClient:
+        """Bind a client to an already-registered worktree at ``path``."""
+        ...
+
     def remove_worktree(self, path: Path, *, force: bool = False) -> None:
         """Remove the worktree at ``path`` at the Wave barrier.
 
@@ -517,6 +521,14 @@ class GitClient(Protocol):
         Raises:
             GitError: If the branch does not exist or ``git`` refuses to delete it.
         """
+        ...
+
+    def list_branches(self) -> list[str]:
+        """Return every local branch name in stable lexical order."""
+        ...
+
+    def is_merged_into(self, branch: str, base: str) -> bool:
+        """Return whether ``branch`` is reachable from ``base``."""
         ...
 
     def abort_merge(self) -> None:
@@ -1065,6 +1077,10 @@ class SubprocessGitClient:
         )
         return SubprocessGitClient(target)
 
+    def open_worktree(self, path: Path) -> SubprocessGitClient:
+        """Return a client bound to the existing registered worktree at ``path``."""
+        return SubprocessGitClient(Path(path))
+
     def remove_worktree(self, path: Path, *, force: bool = False) -> None:
         """Remove the worktree at ``path`` via ``git worktree remove``.
 
@@ -1145,6 +1161,40 @@ class SubprocessGitClient:
             GitError: If ``git`` is not on PATH or ``branch`` does not exist.
         """
         _run(["branch", "-D", branch], cwd=self._root)
+
+    def list_branches(self) -> list[str]:
+        """Return local branch names in stable lexical order."""
+        out = _run(
+            ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+            cwd=self._root,
+        )
+        return sorted(branch for branch in out.splitlines() if branch)
+
+    def is_merged_into(self, branch: str, base: str) -> bool:
+        """Return whether ``branch`` is an ancestor of ``base``.
+
+        ``git merge-base --is-ancestor`` uses exit ``1`` for the ordinary
+        "not merged" answer, which must remain distinct from a broken repository
+        or an unresolvable ref.
+        """
+        args = [_GIT_BIN, "merge-base", "--is-ancestor", branch, base]
+        try:
+            completed = subprocess.run(
+                args,
+                cwd=str(self._root),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise GitError(args, 127, "git not found on PATH") from exc
+        if completed.returncode == 0:
+            return True
+        if completed.returncode == 1:
+            return False
+        raise GitError(args, completed.returncode, _stderr_tail(completed.stderr))
 
     def abort_merge(self) -> None:
         """Abort an in-progress merge via ``git merge --abort``.

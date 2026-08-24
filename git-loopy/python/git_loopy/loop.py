@@ -142,6 +142,7 @@ from git_loopy import git as git_module
 from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
 from git_loopy import session_outcome as session_outcome_module
+from git_loopy import sweep as sweep_module
 from git_loopy.staircase import PriceStaircase, StaircaseRefusal
 from git_loopy import rollup as rollup_module
 from git_loopy import worktree as worktree_module
@@ -4740,6 +4741,32 @@ async def run(
         )
         return 1
     diag = writers.diagnostics
+
+    # A free control lock proves its Run cannot still own a Lane workspace.
+    # This is intentionally Event-free: reclaiming someone else's residue is
+    # neither an Iteration nor a contribution of this Run.
+    sweep_github: gh_module.GitHubClient | None = None
+    base_branch = git.current_branch() or "HEAD"
+    try:
+        if config.issue_source == "github":
+            sweep_github = _make_github_client()
+            base_branch = sweep_github.repo_view().default_branch
+        sweep_report = sweep_module.sweep(
+            git=git,
+            github=sweep_github,
+            control_dir=repo_root / ".git-loopy" / "logs",
+            base_branch=base_branch,
+            dry_run=False,
+        )
+    except (git_module.GitError, gh_module.GhError) as exc:
+        diag.warning("start-of-Run sweep skipped: %s", exc)
+    else:
+        if sweep_report.reclaimed_anything:
+            diag.info(
+                "start-of-Run sweep reclaimed %d worktree(s) and %d branch(es)",
+                len(sweep_report.worktrees),
+                len(sweep_report.branches),
+            )
 
     if config.execution_host not in events_module.PYTHON_EXECUTION_HOSTS:
         supported = ", ".join(events_module.PYTHON_EXECUTION_HOSTS) or "(none)"

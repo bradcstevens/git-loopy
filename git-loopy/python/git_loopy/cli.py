@@ -102,6 +102,7 @@ from git_loopy.config import (
     gate_reasoning_effort,
     validate_task_type_key,
 )
+
 from git_loopy.model_listing import LiveModelListing
 from git_loopy.routing_scope import routing_in_force
 from git_loopy.rate_card import resolve_rate_card
@@ -549,7 +550,7 @@ def build_parser() -> argparse.ArgumentParser:
 #: They are kept out of :func:`build_parser` because argparse cannot host an
 #: optional positional (``<max-iterations>``) alongside ``add_subparsers`` in one
 #: parser without misreading ``git-loopy 5`` as an invalid subcommand choice.
-_SUBCOMMANDS = ("init", "config", "skills", "labels", "calibrate", "info")
+_SUBCOMMANDS = ("init", "config", "skills", "labels", "calibrate", "info", "sweep")
 
 
 def _add_scope_flags(
@@ -594,14 +595,14 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="git-loopy",
         description=(
-            "git-loopy subcommands (setup, Config, Skill management, "
+            "git-loopy subcommands (setup, Config, Skill management, Sweep, "
             "Calibration, and installation identity)."
         ),
     )
     sub = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{init,config,skills,labels,calibrate,info}",
+        metavar="{init,config,skills,labels,calibrate,info,sweep}",
     )
 
     init = sub.add_parser(
@@ -718,6 +719,16 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Emit the stable installation-inventory JSON document.",
+    )
+
+    sweep = sub.add_parser(
+        "sweep",
+        help="Reclaim dead-Run Lane workspaces and resolved reserved branches.",
+    )
+    sweep.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report exactly what this sweep would remove without changing it.",
     )
 
     config = sub.add_parser(
@@ -967,6 +978,18 @@ def _run_labels(args: argparse.Namespace) -> int:
         client=_make_label_client(),
         apply=bool(args.apply),
     )
+
+
+def _run_sweep(args: argparse.Namespace) -> int:
+    """Dispatch the explicit residue-reclamation command."""
+    from git_loopy import sweepcmd
+
+    try:
+        repo_root = resolve_repo_root()
+    except RuntimeError as exc:
+        print(f"git-loopy: sweep requires a git repository: {exc}", file=sys.stderr)
+        return 1
+    return sweepcmd.run_sweep(repo_root=repo_root, dry_run=bool(args.dry_run))
 
 
 def _run_info(
@@ -2257,6 +2280,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_calibrate(sub_args)
         if sub_args.command == "info":
             return _run_info(sub_args)
+        if sub_args.command == "sweep":
+            return _run_sweep(sub_args)
         return _run_config(sub_args)
 
     parser = build_parser()
