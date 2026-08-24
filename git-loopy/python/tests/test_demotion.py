@@ -45,7 +45,6 @@ from git_loopy.rolling_scheduler import (
 )
 from git_loopy.git import GitError
 from git_loopy.roster_preflight import RECALIBRATE_HINT
-from git_loopy.routing_scope import SERIAL_PARALLELISM
 from git_loopy.staircase import Candidate, PriceStaircase, StaircaseRefusal
 
 
@@ -601,7 +600,6 @@ def _run_demotion(
     root: Path,
     *,
     contributions: list[Contribution],
-    parallel: int = 4,
     routing: dict[str, tuple[str, str | None]] | None = None,
     staircase: PriceStaircase = _STAIRCASE,
     git: _RecordingGit | None = None,
@@ -609,9 +607,7 @@ def _run_demotion(
 ) -> demotion.DemotionPlan:
     return demotion.demote_after_run(
         repo_root=root,
-        config=RunConfig(
-            parallel=parallel, routing=routing or {"bugfix": ("cheap", "low")}
-        ),
+        config=RunConfig(routing=routing or {"bugfix": ("cheap", "low")}),
         staircase=staircase,
         contributions=contributions,
         git=git if git is not None else _RecordingGit(root),
@@ -619,8 +615,8 @@ def _run_demotion(
     )
 
 
-def _config(*, parallel: int) -> RunConfig:
-    return RunConfig(parallel=parallel, routing={"bugfix": ("cheap", "low")})
+def _config() -> RunConfig:
+    return RunConfig(routing={"bugfix": ("cheap", "low")})
 
 
 def test_a_demotion_rewrites_and_commits_the_artifact_once(tmp_path: Path) -> None:
@@ -649,13 +645,12 @@ def test_a_demotion_rewrites_and_commits_the_artifact_once(tmp_path: Path) -> No
 def test_a_serial_run_is_no_longer_refused_a_demotion(tmp_path: Path) -> None:
     """Parallelism stopped being the question (#404, ADR-0037).
 
-    ``demote_after_run`` refused at ``parallel == 1`` because nothing routed
+    ``demote_after_run`` refused in the old serial mode because nothing routed
     there, so nothing measured was in force to be wrong. A serial **Iteration**
     now runs on the pair its **Pickup** resolved, so a failing pair *is* in force
     and rewriting it is exactly as correct as it is in Parallel mode. Read
-    through :func:`~git_loopy.routing_scope.routing_in_force` rather than
-    comparing ``parallel`` here, so the scope rule keeps one author across the
-    **Calibration**, the reporting surfaces and this.
+    through :func:`~git_loopy.routing_scope.routing_in_force`, so the scope rule
+    keeps one author across the **Calibration**, the reporting surfaces and this.
 
     What a serial Run still lacks is the **row**: it finalizes no **Lane
     contribution** (``_Loop.finalized_contributions``), so in production the
@@ -668,7 +663,6 @@ def test_a_serial_run_is_no_longer_refused_a_demotion(tmp_path: Path) -> None:
     plan = _run_demotion(
         tmp_path,
         contributions=_failing(("cheap", "low"), 99),
-        parallel=SERIAL_PARALLELISM,
         git=git,
     )
 
@@ -770,7 +764,7 @@ def test_demotion_off_a_repository_does_nothing(tmp_path: Path) -> None:
     assert (
         demotion.demote_after_run(
             repo_root=None,
-            config=RunConfig(parallel=4, routing={"bugfix": ("cheap", "low")}),
+            config=RunConfig(routing={"bugfix": ("cheap", "low")}),
             staircase=_STAIRCASE,
             contributions=_failing(("cheap", "low"), 9),
             git=_RecordingGit(tmp_path),
@@ -878,7 +872,7 @@ def test_a_run_hands_its_contributions_to_demotion_at_the_end(
         seen.update(kwargs)
 
     monkeypatch.setattr(demotion, "demote_after_run", _record)
-    config = _config(parallel=4)
+    config = _config()
     staircase = _STAIRCASE
 
     loop_module._demote_after_run(
@@ -913,7 +907,7 @@ def test_a_run_that_finalized_nothing_never_reaches_demotion(
     monkeypatch.setattr(demotion, "demote_after_run", _record)
 
     loop_module._demote_after_run(
-        _config(parallel=4),
+        _config(),
         SimpleNamespace(root=Path("/repo")),
         SimpleNamespace(finalized_contributions=()),
         _STAIRCASE,
@@ -943,7 +937,7 @@ def test_a_demotion_that_explodes_cannot_take_the_run_with_it(
 
     with caplog.at_level(logging.WARNING):
         loop_module._demote_after_run(
-            _config(parallel=4),
+            _config(),
             SimpleNamespace(root=Path("/repo")),
             SimpleNamespace(finalized_contributions=_failing(("cheap", "low"), 3)),
             _STAIRCASE,
@@ -967,7 +961,7 @@ def test_a_run_with_no_staircase_still_reaches_demotion(
     monkeypatch.setattr(demotion, "demote_after_run", lambda **kw: seen.update(kw))
 
     loop_module._demote_after_run(
-        _config(parallel=4),
+        _config(),
         SimpleNamespace(root=Path("/repo")),
         SimpleNamespace(finalized_contributions=_failing(("cheap", "low"), 3)),
         None,

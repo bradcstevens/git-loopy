@@ -169,7 +169,6 @@ def test_git_loopy_version_reports_shared_release_identity_outside_repository(
             "GH_TOKEN": "",
             "GITHUB_TOKEN": "",
             "GIT_LOOPY_ISSUE_SOURCE": "unavailable",
-            "GIT_LOOPY_INTERACTIVE": "1",
             "GIT_LOOPY_ENABLED_SKILLS": "unavailable",
             "GIT_LOOPY_MAX_NMT_STRIKES": "not-an-integer",
             "GIT_LOOPY_MODEL_SELECT": "1",

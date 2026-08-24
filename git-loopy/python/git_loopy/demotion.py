@@ -441,7 +441,7 @@ def demote_after_run(
     Returns:
         What was decided, so a caller can assert on it without parsing prose.
     """
-    if repo_root is None or not routing_in_force(config.parallel):
+    if repo_root is None or not routing_in_force():
         return DemotionPlan()
     try:
         artifact = load_measured_routing(measured_routing_path(repo_root))

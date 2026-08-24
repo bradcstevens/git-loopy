@@ -25,7 +25,6 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "GIT_LOOPY_REASONING_EFFORT",
         "GIT_LOOPY_ISSUE_SOURCE",
         "GIT_LOOPY_MAX_NMT_STRIKES",
-        "GIT_LOOPY_MAX_PARALLEL",
     ):
         monkeypatch.delenv(name, raising=False)
 

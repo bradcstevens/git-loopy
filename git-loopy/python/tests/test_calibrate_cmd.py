@@ -577,20 +577,16 @@ def test_dry_run_reports_the_concurrency_the_operator_set_and_where_it_came_from
     assert "probe run alone" in out.text
 
 
-def test_dry_run_falls_back_to_the_lane_cap_and_names_it(tmp_path: Path) -> None:
-    """An operator in Parallel mode has already said what this host can take.
-
-    Calibration is a Parallel-mode feature (#379), so asking a second time by
-    default would be asking twice — and the report names which knob answered so
-    the operator is not left guessing.
-    """
+def test_dry_run_ignores_the_retired_lane_cap_environment(tmp_path: Path) -> None:
+    """The retired Lane cap must not influence Calibration concurrency."""
     github = _five_bugfixes(tmp_path)
     env = _hermetic_env(tmp_path) | {"GIT_LOOPY_MAX_PARALLEL": "2"}
 
     _code, out, _err = _dry_run(tmp_path, github, env=env)
 
-    assert "2 Trials at a time" in out.text
-    assert "From GIT_LOOPY_MAX_PARALLEL." in out.text
+    assert "1 Trial at a time (serial)." in out.text
+    assert "From GIT_LOOPY_MAX_PARALLEL." not in out.text
+    assert "GIT_LOOPY_CALIBRATE_CONCURRENCY=N" in out.text
 
 
 def test_dry_run_says_when_a_width_is_wider_than_a_rung_can_use(

@@ -177,8 +177,8 @@ leaving existing labels untouched; an unreachable tracker skips the step rather
 than failing setup.
 You rarely run it by hand: the **first** bare `git-loopy` with no Config in
 either scope auto-runs it on a TTY, then continues into the loop; with no TTY
-(or `GIT_LOOPY_INTERACTIVE=0`) it is skipped and the run falls back to the
-built-in defaults, so CI never hangs on a prompt. See the
+it is skipped and the run falls back to the built-in defaults, so CI never
+hangs on a prompt. See the
 [`git-loopy init` reference](../git-loopy/python/README.md#first-run-setup-git-loopy-init)
 and the [recommended workflow skill catalog install path](skills-setup.md).
 

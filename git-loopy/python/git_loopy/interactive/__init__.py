@@ -1,4 +1,4 @@
-"""``git_loopy.interactive`` — the opt-in, TTY-gated interactive runtime.
+"""``git_loopy.interactive`` — the terminal-attached interactive runtime.
 
 Introduced by issue #23 as an **additive** layer over the line-printer runner
 (design decisions D0/D3, ADR-0001 — the *observer* control model). The autonomous
@@ -19,8 +19,8 @@ touches the screen.
   **deep + pure** (stdlib + ``typing`` only) and unit-testable without a TTY.
 * :mod:`git_loopy.interactive.app` and :mod:`git_loopy.interactive.driver` import
   Textual and are imported **lazily**, only once
-  :func:`git_loopy.interactive.detect.resolve_interactive` has confirmed the
-  interactive path (an interactive TTY plus importable Textual).
+  :func:`git_loopy.interactive.detect.dashboard_available` has confirmed that
+  stdout is a terminal.
 """
 
 from __future__ import annotations

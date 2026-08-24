@@ -966,7 +966,7 @@ def _run(
 def test_calibrate_measures_for_a_serial_run_too(tmp_path: Path) -> None:
     """A serial Run applies what a Calibration measured, so it must be buyable.
 
-    ``calibrate`` used to refuse outright at ``parallel == 1``, and the refusal
+    ``calibrate`` used to refuse outright for a serial run, and the refusal
     was correct on its own terms: the **Routed pair** it measured would have been
     discarded and the **AI Credits** spent for no change. ADR-0037 inverted the
     premise — a serial **Iteration** runs on the pair its **Pickup** resolved —
@@ -975,10 +975,9 @@ def test_calibrate_measures_for_a_serial_run_too(tmp_path: Path) -> None:
     """
     github = _corpus(tmp_path)
 
-    code, out, _err, runner = _run(tmp_path, github, env={
-        "XDG_CONFIG_HOME": str(tmp_path / "xdg"),
-        "GIT_LOOPY_MAX_PARALLEL": "1",
-    })
+    code, out, _err, runner = _run(
+        tmp_path, github, env={"XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+    )
 
     assert code == 0
     assert runner.requests != []
@@ -1231,12 +1230,9 @@ def test_a_bare_calibrate_dispatches_to_the_spending_path(
     )
     monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
 
-    assert cli.main(["calibrate", "docs", "--yes", "--parallel", "3"]) == 0
+    assert cli.main(["calibrate", "docs", "--yes"]) == 0
     assert seen[0]["task_type"] == "docs"
     assert seen[0]["assume_yes"] is True
-    # `--parallel` is *not* forwarded (ADR-0037): a Calibration measures a pair
-    # that takes effect at every width, so the width is none of its business.
-    assert "parallel" not in seen[0]
 
 
 def test_a_task_type_argument_is_refused_beside_a_reporting_flag(

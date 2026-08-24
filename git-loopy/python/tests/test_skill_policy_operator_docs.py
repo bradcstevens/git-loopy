@@ -478,9 +478,9 @@ def test_operator_reference_covers_the_unattended_migration_path() -> None:
     assert re.search(r"cancel\w*", doc, re.IGNORECASE), (
         f"{OPERATOR_DOC} must say what cancelling the one-time migration does"
     )
-    assert "--no-interactive" in doc, (
-        f"{OPERATOR_DOC} must document the non-interactive path that falls "
-        "back to the Minimal Skill policy rather than prompting"
+    assert "no tty" in doc.lower(), (
+        f"{OPERATOR_DOC} must document the TTY-less path that falls back to "
+        "the Minimal Skill policy rather than prompting"
     )
 
 

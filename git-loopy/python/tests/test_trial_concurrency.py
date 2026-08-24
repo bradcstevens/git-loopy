@@ -21,7 +21,6 @@ from git_loopy.measured_routing import ProvingTask
 from git_loopy.staircase import Candidate
 from git_loopy.trial_concurrency import (
     CONCURRENCY_ENV,
-    LANE_CAP_ENV,
     InlineTrialDispatcher,
     ThreadedTrialDispatcher,
     TrialConcurrency,
@@ -342,41 +341,26 @@ def test_the_default_is_serial() -> None:
     assert resolved.source == "default"
 
 
-def test_the_calibration_knob_wins_over_the_lane_cap() -> None:
+def test_the_calibration_knob_sets_trial_concurrency() -> None:
     """A Trial is heavier than a Lane, so it gets a knob of its own."""
-    resolved = resolve_trial_concurrency(
-        env={CONCURRENCY_ENV: "3", LANE_CAP_ENV: "6"}, ceiling=5
-    )
+    resolved = resolve_trial_concurrency(env={CONCURRENCY_ENV: "3"}, ceiling=5)
 
     assert resolved.effective == 3
     assert resolved.source == CONCURRENCY_ENV
-
-
-def test_the_lane_cap_is_the_fallback() -> None:
-    """An operator in Parallel mode has already said what this host can take.
-
-    Calibration is a Parallel-mode feature (#379), so reaching it at all means
-    the Lane cap was set; asking a second time by default would be asking twice.
-    """
-    resolved = resolve_trial_concurrency(env={LANE_CAP_ENV: "4"}, ceiling=5)
-
-    assert resolved.effective == 4
-    assert resolved.source == LANE_CAP_ENV
 
 
 @pytest.mark.parametrize("raw", ["", "   ", "not-a-number", "0", "-2"])
 def test_a_malformed_setting_degrades_rather_than_aborting(raw: str) -> None:
     """A stray env value costs concurrency, never the Calibration itself.
 
-    The same degradation ``GIT_LOOPY_MAX_PARALLEL`` already performs, for the
-    same reason: an unattended run should not fail to launch over a typo.
+    An unattended run should not fail to launch over a typo.
     """
     resolved = resolve_trial_concurrency(
-        env={CONCURRENCY_ENV: raw, LANE_CAP_ENV: "3"}, ceiling=5
+        env={CONCURRENCY_ENV: raw}, ceiling=5
     )
 
-    assert resolved.effective == 3
-    assert resolved.source == LANE_CAP_ENV
+    assert resolved.effective == 1
+    assert resolved.source == "default"
 
 
 def test_a_request_wider_than_a_rung_is_capped_and_says_so() -> None:

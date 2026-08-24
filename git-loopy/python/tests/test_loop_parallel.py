@@ -433,7 +433,6 @@ def test_run_refuses_the_retired_lane_adaptation_environment_variable(
     config = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=1,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -505,7 +504,7 @@ def test_parallel_run_dispatches_two_lanes(tmp_path, monkeypatch) -> None:
     """Two eligible Lanes run concurrently; Integration lands + closes both.
 
     Both issues carry ``ready-for-agent`` + ``parallel-safe``, so with
-    ``parallel=2`` both start a Lane (#219 §1.4 — no "wait for a second
+    host capacity 2, both start a Lane (#219 §1.4 — no "wait for a second
     issue" threshold; see also
     :func:`test_parallel_single_eligible_issue_starts_lane_immediately`).
     Asserts (observable effects only): one worktree + Lane branch per issue
@@ -542,7 +541,6 @@ def test_parallel_run_dispatches_two_lanes(tmp_path, monkeypatch) -> None:
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -648,7 +646,6 @@ def test_parallel_lanes_open_sessions_with_per_issue_routed_model(
         reasoning_effort="max",
         routing={"docs": ("gpt-5-mini", "medium")},
         issue_source="github",
-        parallel=2,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -717,7 +714,6 @@ def test_parallel_auto_resolution_session_reuses_lane_routed_model(
         reasoning_effort="max",
         routing={"docs": ("gpt-5-mini", "medium")},
         issue_source="github",
-        parallel=2,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -780,7 +776,6 @@ def test_parallel_lane_with_an_unconfigured_canonical_task_type_uses_default(
         reasoning_effort="max",
         routing={"docs": ("gpt-5-mini", "medium")},
         issue_source="github",
-        parallel=2,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -842,7 +837,6 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -972,7 +966,6 @@ def test_parallel_single_eligible_issue_starts_lane_immediately(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=3,
         max_iterations=0,  # unlimited: drive until the pool drains
         max_nmt_strikes=3,
         verbosity=0,
@@ -1093,7 +1086,6 @@ def test_parallel_lane_refills_without_waiting_for_sibling(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -1124,11 +1116,11 @@ def test_parallel_lane_refills_without_waiting_for_sibling(
 def test_parallel_lane_cap_never_exceeded_under_bursty_refill(
     tmp_path, monkeypatch
 ) -> None:
-    """Concurrent Lane worktrees never exceed ``config.parallel``, even transiently.
+    """Concurrent Lane worktrees never exceed declared host capacity, even transiently.
 
     Direct proof of #219 criterion #5: four ``parallel-safe`` issues are all
     eligible at once (a "bursty" pool -- everything ready simultaneously) but
-    ``config.parallel=2`` caps Lane concurrency at 2. Each Lane's simulated
+    The test host declares capacity 2, which caps Lane concurrency at 2. Each Lane's simulated
     session is gated on its own :class:`asyncio.Event`, held until this test
     explicitly releases it, so genuine overlap (not just fast sequential
     completion) is forced and observable. This instruments
@@ -1220,7 +1212,6 @@ def test_parallel_lane_cap_never_exceeded_under_bursty_refill(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=0,  # unlimited: drive until the pool drains
         max_nmt_strikes=3,
         verbosity=0,
@@ -1283,7 +1274,7 @@ def test_parallel_contribution_survives_lane_reuse(
 ) -> None:
     """A contribution's accounting survives its Lane slot being reused (#219 §criterion #7).
 
-    Three ``parallel-safe`` issues, ``config.parallel=2``: issues 42 and 43
+    Three ``parallel-safe`` issues on a host with capacity 2: issues 42 and 43
     take the two Lane slots first; issue 44 can only start once one of them
     frees up. Issue 42's Lane worktree is torn down (and its slot freed for
     reuse) as soon as its own commit is checkpointed -- well before its
@@ -1319,7 +1310,6 @@ def test_parallel_contribution_survives_lane_reuse(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=0,  # unlimited: drive until the pool drains
         max_nmt_strikes=3,
         verbosity=0,
@@ -1437,7 +1427,6 @@ def test_parallel_stale_candidate_never_consumes_a_lane(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=3,
         # Exactly one unit for the whole Run: a stale candidate that consumed
         # one would strand issue 43 entirely.
         max_iterations=1,
@@ -1525,7 +1514,6 @@ def test_parallel_lane_checkpoint_commits_in_its_own_worktree(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -1622,7 +1610,6 @@ def test_parallel_cancellation_salvages_a_dirty_lane_workspace_before_reclaim(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -1720,7 +1707,6 @@ def test_parallel_a_cancelled_contribution_is_not_demotion_evidence(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -1792,7 +1778,6 @@ def test_parallel_operator_stop_drains_then_cancels_only_the_lane_agent(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -1862,7 +1847,6 @@ def test_second_stop_before_lane_send_starts_no_agent_session(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -1945,7 +1929,6 @@ def test_second_stop_before_host_dispatch_starts_no_host_contribution(
             RunConfig(
                 model="claude-opus-4.8-max",
                 issue_source="github",
-                parallel=2,
                 max_iterations=1,
                 max_nmt_strikes=3,
                 verbosity=0,
@@ -2016,7 +1999,6 @@ def test_parallel_the_first_stop_stops_refill_and_still_integrates_started_work(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=3,
         max_nmt_strikes=3,
         verbosity=0,
@@ -2101,7 +2083,6 @@ def test_parallel_a_stop_never_interrupts_the_publish_transaction(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -2193,7 +2174,6 @@ def test_parallel_a_second_stop_gesture_still_reclaims_the_lane_workspace(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -2254,7 +2234,6 @@ def test_parallel_exception_salvages_and_reclaims_a_dirty_lane_workspace(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -2328,7 +2307,6 @@ def test_parallel_workspace_root_failure_refuses_the_run_at_preflight(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -2360,7 +2338,6 @@ def test_unsupported_execution_host_refuses_the_run_at_preflight(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         execution_host=execution_host,
         max_iterations=2,
         max_nmt_strikes=3,
@@ -2440,7 +2417,6 @@ def test_parallel_lane_checkpoint_failure_keeps_its_terminal_reason(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -2535,7 +2511,6 @@ def test_parallel_inline_reclaim_salvages_a_lane_its_checkpoint_left_dirty(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -2593,7 +2568,6 @@ def test_parallel_integration_lands_and_closes_both_lanes(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -2691,7 +2665,6 @@ def test_parallel_integration_gates_privately_before_publishing(
             RunConfig(
                 model="claude-opus-4.8-max",
                 issue_source="github",
-                parallel=2,
                 max_iterations=1,
                 max_nmt_strikes=3,
                 verbosity=0,
@@ -2778,7 +2751,6 @@ def test_parallel_rollup_distinguishes_published_unclosed_and_noop_contributions
             RunConfig(
                 model="claude-opus-4.8-max",
                 issue_source="github",
-                parallel=2,
                 max_iterations=2,
                 max_nmt_strikes=3,
                 verbosity=0,
@@ -2859,7 +2831,6 @@ def test_parallel_integration_red_gate_keeps_branch_and_publishes_nothing(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -2956,7 +2927,6 @@ def test_parallel_integration_auto_resolves_red_lane_then_lands(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -3086,7 +3056,6 @@ def test_parallel_auto_resolution_does_not_consume_the_lane_cap(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=0,  # unbounded: drive until the pool drains
         max_nmt_strikes=3,
         verbosity=0,
@@ -3222,7 +3191,6 @@ def test_parallel_integration_never_overlaps_another_contribution(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=0,
         max_nmt_strikes=3,
         verbosity=0,
@@ -3298,7 +3266,6 @@ def test_parallel_integration_aborts_conflicting_merge_then_auto_resolves(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -3392,7 +3359,6 @@ def test_parallel_integration_falls_back_to_serial_after_k_attempts(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=0,  # unlimited: drive until the pool drains
         max_nmt_strikes=3,
         verbosity=0,
@@ -3509,7 +3475,6 @@ def test_parallel_run_drains_lanes_then_serial_in_one_run(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=0,  # unlimited: drive until the pool drains
         max_nmt_strikes=3,
         verbosity=0,
@@ -3644,7 +3609,6 @@ def _wire_two_lane_rolling(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -4346,7 +4310,6 @@ def test_parallel_run_start_reports_parallel_mode_and_lane_cap(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=5,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -4361,56 +4324,6 @@ def test_parallel_run_start_reports_parallel_mode_and_lane_cap(
     assert run_start["parallel_mode"] is True
     assert run_start["lane_cap"] == 2
     assert run_start["effective_lane_limit"] == 2
-
-
-def test_serial_run_start_carries_no_parallel_mode_report(
-    tmp_path, monkeypatch
-) -> None:
-    """A serial Run says nothing about Parallel mode (#304).
-
-    The visibility slice is additive: a Run that did not request Parallel mode
-    keeps the ``wrapper.run.start`` payload it always had, so nothing on the
-    default path changed.
-    """
-    fake_git = _wire_repo(tmp_path)
-    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
-
-    fake_gh = FakeGitHubClient(
-        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
-    )
-    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
-    monkeypatch.setattr(
-        loop_module,
-        "_make_client",
-        lambda: _ParallelFakeClient(
-            fake_git=fake_git,
-            scripted_events=[_usage_event("claude-opus-4.8-max")],
-            serial_closes=True,
-        ),
-    )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
-
-    cfg = RunConfig(
-        model="claude-opus-4.8-max",
-        issue_source="github",
-        parallel=1,
-        max_iterations=1,
-        max_nmt_strikes=3,
-        verbosity=0,
-        render_reasoning=False,
-    )
-
-    asyncio.run(loop_module.run(cfg))
-
-    events = _logged_events(tmp_path)
-    run_start = next(e for e in events if e["type"] == "wrapper.run.start")
-    assert "parallel_mode" not in run_start
-    assert "lane_cap" not in run_start
-    assert "effective_lane_limit" not in run_start
-    assert [
-        e for e in events if e["type"] == "wrapper.parallel.serial_fallback"
-    ] == []
 
 
 def test_parallel_over_a_non_rolling_source_reports_the_degrade(
@@ -4442,7 +4355,6 @@ def test_parallel_over_a_non_rolling_source_reports_the_degrade(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="prds",
-        parallel=4,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -4496,7 +4408,6 @@ def test_parallel_over_a_rolling_source_reports_no_degrade(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=4,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -4544,7 +4455,6 @@ def test_parallel_reports_serial_fallback_when_nothing_carries_parallel_safe(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=3,
         max_iterations=0,
         max_nmt_strikes=3,
         verbosity=0,
@@ -4612,7 +4522,6 @@ def test_parallel_serial_fallback_separates_already_worked_from_unlabelled(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=3,
         max_iterations=0,
         max_nmt_strikes=3,
         verbosity=0,
@@ -4672,7 +4581,6 @@ def test_parallel_reports_latched_serial_demand_when_it_latches(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=0,
         max_nmt_strikes=3,
         verbosity=0,
@@ -4746,7 +4654,6 @@ def test_parallel_latched_serial_demand_is_visible_even_when_stranded(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -4842,7 +4749,6 @@ def test_parallel_never_ends_empty_on_a_partial_pool_read(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=0,
         max_nmt_strikes=3,
         verbosity=0,
@@ -4954,7 +4860,6 @@ def test_parallel_lanes_resume_refilling_after_an_interleaved_serial_iteration(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,  # two Lanes: #44 has nowhere to start before the latch
         max_iterations=0,
         max_nmt_strikes=3,
         verbosity=0,
@@ -5091,7 +4996,6 @@ def test_parallel_serial_iteration_strike_abort_stops_the_run_stuck(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=0,  # unbounded: only the Strike limit can stop this Run
         max_nmt_strikes=1,
         verbosity=0,
@@ -5164,7 +5068,6 @@ def test_parallel_serial_iteration_that_binds_nothing_ends_the_run_all_skipped(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=0,  # unbounded: only the all-skipped outcome can stop this
         max_nmt_strikes=9,  # deliberately out of reach
         verbosity=0,
@@ -5253,6 +5156,11 @@ def _wire_pressure(
 
 def _run_under_pressure(tmp_path, monkeypatch) -> int:
     """One two-issue Parallel Run, with every seam but pressure left alone."""
+    monkeypatch.setattr(
+        loop_module.execution_host_module,
+        "local_execution_host_capacity",
+        lambda: 6,
+    )
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
     fake_gh = FakeGitHubClient(
@@ -5276,7 +5184,6 @@ def _run_under_pressure(tmp_path, monkeypatch) -> int:
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=6,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -5341,6 +5248,11 @@ def test_parallel_narrows_lane_concurrency_under_sustained_rate_limits(
     ``parallel-safe`` half free to keep working, so the throttle is the only
     thing under test.
     """
+    monkeypatch.setattr(
+        loop_module.execution_host_module,
+        "local_execution_host_capacity",
+        lambda: 6,
+    )
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
     fake_gh = FakeGitHubClient(
@@ -5374,7 +5286,6 @@ def test_parallel_narrows_lane_concurrency_under_sustained_rate_limits(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=6,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -5389,10 +5300,10 @@ def test_parallel_narrows_lane_concurrency_under_sustained_rate_limits(
     assert first["pressure"] == "rate_limit"
     run_start = next(e for e in _logged_events(tmp_path) if e["type"] == "wrapper.run.start")
     assert first["configured_lane_limit"] == run_start["execution_host"]["capacity"]
-    # 429 is the -2 reaction from the static-safe limit while this injected
-    # telemetry has no host-observability declaration.
+    # 429 is the -2 reaction from the declared host capacity while this
+    # injected telemetry has no host-observability declaration.
     assert first["effective_lane_limit"] == max(
-        0, min(run_start["execution_host"]["capacity"], 3) - 2
+        0, run_start["execution_host"]["capacity"] - 2
     )
     assert first["rate_limit_state"] >= 3
     # Run-scoped, like every other scheduler-level record: it names the Run's
@@ -5790,7 +5701,6 @@ def test_parallel_dashboard_fault_mid_integration_lets_auto_resolution_finish(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -5911,7 +5821,7 @@ def test_parallel_dashboard_fault_keeps_refill_within_the_lane_cap(
 ) -> None:
     """Refill and the **Lane cap** behave normally after the swap (#327).
 
-    Four eligible ``parallel-safe`` issues against ``parallel=2``: the Dashboard
+    Four eligible ``parallel-safe`` issues against host capacity 2: the Dashboard
     dies with both slots occupied, and the scheduler carries on exactly as it
     would have — no third Lane while the cap is full, prompt refill the moment a
     slot frees, and the whole **Pool** drained to a truthful ``empty_pool``.
@@ -5973,7 +5883,6 @@ def test_parallel_dashboard_fault_keeps_refill_within_the_lane_cap(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=0,  # unlimited: drive until the pool drains
         max_nmt_strikes=3,
         verbosity=0,
@@ -6183,7 +6092,6 @@ def test_parallel_dashboard_fault_never_masks_a_stuck_run(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=0,  # unbounded: only the Strike limit can stop this Run
         max_nmt_strikes=2,
         verbosity=0,
@@ -6253,7 +6161,6 @@ def test_a_lane_pickup_records_what_it_bound_and_where(tmp_path, monkeypatch) ->
             RunConfig(
                 model="claude-opus-4.8-max",
                 issue_source="github",
-                parallel=2,
                 max_iterations=2,
                 max_nmt_strikes=3,
                 verbosity=0,
@@ -6361,7 +6268,6 @@ def test_parallel_dispatch_waits_for_a_blocker_to_close_before_reserving_a_lane(
             RunConfig(
                 model="claude-opus-4.8-max",
                 issue_source="github",
-                parallel=2,
                 max_iterations=2,
                 max_nmt_strikes=3,
                 verbosity=0,
@@ -6448,7 +6354,6 @@ def test_parallel_serial_fallback_skips_a_candidate_rolling_dispatch_refused(
             RunConfig(
                 model="claude-opus-4.8-max",
                 issue_source="github",
-                parallel=2,
                 max_iterations=2,
                 max_nmt_strikes=3,
                 verbosity=0,
@@ -6524,7 +6429,6 @@ def test_a_lane_refuses_an_issue_a_serial_iteration_already_found_blocked(
             RunConfig(
                 model="claude-opus-4.8-max",
                 issue_source="github",
-                parallel=2,
                 max_iterations=2,
                 max_nmt_strikes=3,
                 verbosity=0,
@@ -6589,7 +6493,6 @@ def test_a_lane_whose_routing_is_refused_leaves_a_skip_behind(
             RunConfig(
                 model="claude-opus-4.8-max",
                 issue_source="github",
-                parallel=2,
                 max_iterations=1,
                 max_nmt_strikes=3,
                 verbosity=0,
@@ -6664,7 +6567,6 @@ def test_parallel_lane_records_its_session_ending_and_error_identity(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -6743,7 +6645,6 @@ def test_parallel_lane_ending_is_content_filtered_when_its_calls_were(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=1,
         max_nmt_strikes=3,
         verbosity=0,
@@ -6840,7 +6741,6 @@ def test_a_rolling_run_replays_from_its_own_record_to_the_same_dashboard(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=3,
         max_nmt_strikes=3,
         verbosity=0,
@@ -6902,7 +6802,6 @@ def test_parallel_accounts_consumption_per_contribution_end_to_end(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=3,
         max_nmt_strikes=3,
         verbosity=0,
@@ -6999,7 +6898,6 @@ def test_parallel_summary_carries_no_row_for_an_in_flight_contribution(
     cfg = RunConfig(
         model="claude-opus-4.8-max",
         issue_source="github",
-        parallel=2,
         max_iterations=2,
         max_nmt_strikes=3,
         verbosity=0,
@@ -7084,7 +6982,6 @@ def test_a_lane_binding_publishes_the_same_routing_record_serial_does(
         loop_module.run(
             RunConfig(
                 issue_source="github",
-                parallel=2,
                 max_iterations=1,
                 max_nmt_strikes=3,
                 verbosity=0,
@@ -7141,7 +7038,6 @@ def test_a_lane_that_stalled_escalates_at_its_next_pickup(
                 model="claude-sonnet-5",
                 reasoning_effort="low",
                 issue_source="github",
-                parallel=2,
                 max_iterations=2,
                 max_nmt_strikes=9,
                 verbosity=0,
@@ -7201,7 +7097,6 @@ def test_a_lane_stall_and_a_serial_stall_defeat_one_issue_between_them(
                 model="claude-sonnet-5",
                 reasoning_effort="low",
                 issue_source="github",
-                parallel=2,
                 max_iterations=3,
                 max_nmt_strikes=9,
                 verbosity=0,
@@ -7472,7 +7367,6 @@ def test_a_lane_classifies_its_unlabelled_issue_before_it_routes(
                 model="claude-sonnet-5",
                 reasoning_effort="low",
                 issue_source="github",
-                parallel=2,
                 max_iterations=1,
                 max_nmt_strikes=3,
                 routing={"bugfix": ("claude-opus-4.7", "high")},
@@ -7538,7 +7432,6 @@ def test_a_parallel_run_start_reads_back_the_routing_it_parsed(
         loop_module.run(
             RunConfig(
                 issue_source="github",
-                parallel=2,
                 max_iterations=1,
                 max_nmt_strikes=3,
                 routing={

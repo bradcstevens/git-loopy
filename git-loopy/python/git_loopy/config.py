@@ -610,13 +610,6 @@ class RunConfig:
             (either ``GIT_LOOPY_OTEL_ENABLED=1`` or
             ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set). The OTel wiring
             itself lands in issue #12; this slice just plumbs the flag.
-        parallel: Opt-in **Parallel mode** cap (ADR-0008). ``1`` (the
-            default) is serial — :func:`git_loopy.loop.run` drives the
-            existing single-worktree loop byte-for-byte unchanged. ``> 1``
-            requests up to that many concurrent **Lanes** per **Wave**;
-            :mod:`git_loopy.cli` resolves it from ``--parallel N`` /
-            ``GIT_LOOPY_MAX_PARALLEL`` (defaulting to ``N=3`` when Parallel
-            mode is requested without an explicit cap). Must be ≥ 1.
         execution_host: The requested **Execution host** placement for this
             Run. ``"local"`` is the default; a distribution refuses an
             unsupported placement during preflight rather than silently falling
@@ -700,7 +693,6 @@ class RunConfig:
     verbosity: int = 0
     render_reasoning: bool = True
     otel_enabled: bool = False
-    parallel: int = 1
     execution_host: str = "local"
     send_timeout_seconds: float = DEFAULT_SEND_TIMEOUT_SECONDS
     routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)
@@ -734,10 +726,6 @@ class RunConfig:
         if self.verbosity < 0 or self.verbosity > 3:
             raise ValueError(
                 f"verbosity must be in 0..3, got {self.verbosity}"
-            )
-        if self.parallel < 1:
-            raise ValueError(
-                f"parallel must be ≥ 1 (1 = serial), got {self.parallel}"
             )
         if self.issue_pin is not None and self.issue_pin < 1:
             raise ValueError(

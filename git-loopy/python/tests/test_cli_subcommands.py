@@ -150,7 +150,7 @@ def test_main_bare_positional_runs_loop(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda intent: False)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
     captured: list[tuple[RunConfig, Any]] = []
     _install_fake_loop_run(monkeypatch, captured)
 

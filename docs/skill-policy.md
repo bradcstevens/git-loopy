@@ -395,7 +395,7 @@ when the repository carries Config, otherwise global.
 | --- | --- |
 | Confirm | the selection is saved; the Run continues on it and is never asked again |
 | Cancel | **nothing is written and nothing is started** — the Run exits non-zero so no Iteration proceeds on a policy you declined to choose |
-| No TTY, or `--no-interactive` | nothing is prompted or persisted; the Run proceeds on the Minimal Skill policy and warns, naming `git-loopy skills edit` as the fix |
+| No TTY | nothing is prompted or persisted; the Run proceeds on the Minimal Skill policy and warns, naming `git-loopy skills edit` as the fix |
 
 Automation therefore never blocks on the question, and never answers it either.
 

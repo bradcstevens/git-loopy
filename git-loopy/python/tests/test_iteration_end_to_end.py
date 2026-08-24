@@ -2945,7 +2945,7 @@ def test_the_routed_pair_is_resolved_at_pickup(tmp_path, monkeypatch) -> None:
     )
 
     assert fake_client.create_calls[0]["model"] == "gpt-5-mini"
-    assert routing_scope.routing_in_force(1)
+    assert routing_scope.routing_in_force()
 
 
 def test_a_working_marker_naming_another_issue_does_not_rebind(

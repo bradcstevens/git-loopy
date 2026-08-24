@@ -1,13 +1,13 @@
 # Parallel mode
 
-By default a Run works **one issue at a time**. **Parallel mode** is the opt-in
-execution mode in which the runner works several independent issues at once,
-each isolated in its own git worktree. This page is the operator's guide to
-turning it on and reading what it does. [ADR-0020](adr/0020-rolling-dispatch-with-bounded-green-integration.md)
+The Python Runner always uses **rolling dispatch**: it works independent issues
+in isolated git worktrees whenever its Pool has **Lane** work. The bound
+**Execution host** declares the Lane ceiling. This page is the operator's guide
+to reading that behavior. [ADR-0020](adr/0020-rolling-dispatch-with-bounded-green-integration.md)
 records the design; §12 of the [Wrapper contract](wrapper-contract.md) defines
 the Events; [`CONTEXT.md`](../CONTEXT.md) defines every term in bold below.
 
-## Before you turn it on: does your distribution have it?
+## Does your distribution have it?
 
 Parallel mode is a **scheduling** capability, and not every member of the
 **Runner family** has one. Every Run declares what it can schedule on its
@@ -24,14 +24,16 @@ Parallel mode is a **scheduling** capability, and not every member of the
 ```
 
 Today the **Python Orchestrator** is the only member that schedules **Lanes**.
-The shell and PowerShell Orchestrators declare every key `false`. A distribution
-that declares `parallel_mode: false` will **refuse** a **Lane cap** above 1 at
-preflight rather than accept it and run serially:
+It has no operator-selected Lane count: the Execution host declares the
+ceiling. The shell and PowerShell Orchestrators declare every key `false`; their
+own READMEs retain their flags and environment-variable precedence. A native
+distribution that declares `parallel_mode: false` refuses a **Lane cap** above
+1 at preflight rather than accepting it and running serially:
 
 ```
 git-loopy: a Lane cap of 3 was requested, but the shell Orchestrator declares parallel_mode unsupported.
 git-loopy: this distribution has no Rolling dispatch scheduler, so it cannot fill a second Lane.
-git-loopy: unset GIT_LOOPY_MAX_PARALLEL or set it to 1 to run serially, or use a distribution whose parallel_capabilities.parallel_mode is true.
+git-loopy: use a distribution whose parallel_capabilities.parallel_mode is true.
 ```
 
 That refusal is deliberate. A silently serial Run looks exactly like a Parallel
@@ -44,23 +46,18 @@ producer yet, so a Parallel Run still writes legacy **Wave**-shaped rows. Nothin
 about how the Run *behaves* depends on that key — it tells you what a replay log
 will contain.
 
-## Turning it on
+## Starting a Run
 
-Set the **Lane cap**:
-
-```bash
-GIT_LOOPY_MAX_PARALLEL=3 git-loopy
-```
-
-Optionally give each worktree a setup command — dependency installation, a
+Run `git-loopy`. Optionally give each worktree a setup command — dependency installation, a
 virtualenv, whatever a fresh checkout of your repository needs before the
 feedback loops can run:
 
 ```bash
-GIT_LOOPY_MAX_PARALLEL=3 GIT_LOOPY_WORKTREE_SETUP='npm ci' git-loopy
+GIT_LOOPY_WORKTREE_SETUP='npm ci' git-loopy
 ```
 
-A cap of `1` (or unset) is the ordinary serial loop, unchanged.
+When no issue is Lane-eligible, the serial **Iteration driver** reaches the
+same outcomes and emits the existing degraded or serial-fallback Event.
 
 ## Eligibility is yours to assert: `parallel-safe`
 
@@ -88,9 +85,9 @@ not only in the Event stream — because you are the only one who can fix it. Th
 other two reasons it can give are that every `parallel-safe` issue it found was
 already worked this Run, and that a candidate could not be read.
 
-## The Lane cap is a ceiling, not a target
+## The host capacity is a ceiling, not a target
 
-`GIT_LOOPY_MAX_PARALLEL` is a safety and resource bound. **Rolling dispatch**
+The bound **Execution host** is the safety and resource bound. **Rolling dispatch**
 fills **Lanes** continuously — a Lane is refilled the moment its work is handed
 off, with no barrier round waiting for its neighbours — but it will deliberately
 leave capacity idle. A Run that sits at two Lanes under a cap of five is not
@@ -104,15 +101,16 @@ malfunctioning. The reasons it holds back:
   mid-Run, with nothing restarted.
 - **Integration backpressure** (below).
 - **A contracted Effective Lane limit.** The number of Lanes the runner may fill
-  *right now* starts below your cap and moves against **Pressure signals**:
+  *right now* starts at the host ceiling only when host load is observable and
+  otherwise uses its static-safe limit. It moves against **Pressure signals**:
   sustained API rate limiting, AI-credit burn against a configured ceiling, host
   or worktree-setup load, and the **Integration backlog**. It contracts quickly
   and expands one Lane at a time against sustained evidence of health, and never
-  above your cap, which never moves. A signal the Run cannot observe is reported
+  above host capacity. A signal the Run cannot observe is reported
   *unknown* — never estimated, and never used as evidence that expanding is safe.
 
 Each authoritative change emits `wrapper.concurrency.changed` carrying both the
-immutable configured cap and the current effective limit.
+immutable host-declared cap and the current effective limit.
 
 ## Integration: the serialized stage, and its backpressure
 
@@ -136,9 +134,7 @@ instant a slot frees. It exists to stop unbounded branch staleness — the furth
 a Lane's branch drifts from a moving base, the more of its verified result is
 wasted re-verifying.
 
-Practically: raising `GIT_LOOPY_MAX_PARALLEL` past the point where Integration
-saturates buys nothing. Integration, not the Lane count, is the governing
-resource.
+Integration, not an operator-set Lane count, is the governing resource.
 
 ## Where the workspaces live, and which branches are ours
 

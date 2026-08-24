@@ -120,7 +120,7 @@ you:
 
 | | Full-screen picker | Plain picker |
 | --- | --- | --- |
-| Used when | stdout is a terminal | anywhere else — a pipe, CI, or `--no-interactive` |
+| Used when | stdout is a terminal | anywhere else — a pipe or CI |
 | Search | type to filter, live | type the text, then Enter |
 | Toggle | `Space` on the highlighted row | the row's number |
 | Clear the filter | delete the search text | an empty line |
@@ -198,7 +198,7 @@ asked again.
   established; later Runs see a configured Config and are never asked again.
 - Cancelling writes nothing **and starts nothing** — the Run exits non-zero so
   no Iteration silently proceeds on a policy you declined to choose.
-- Without a TTY, or with `--no-interactive`, nothing is prompted or persisted:
+- Without a TTY, nothing is prompted or persisted:
   the Run proceeds on the Minimal Skill policy and prints a warning naming
   `git-loopy skills edit` as the fix. Automation therefore never blocks.
 - A Config with `enabled_skills = []` is a real policy — a deliberately empty

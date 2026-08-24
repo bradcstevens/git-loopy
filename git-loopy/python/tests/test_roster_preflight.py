@@ -123,7 +123,6 @@ _UNSET: Any = object()
 def _notify(
     repo_root: Path | None,
     *,
-    parallel: int = 5,
     listing: LiveModelListing | None = None,
     rate_card: RateCard | None = _UNSET,
     configured_classifier: tuple[str, str | None] | None = None,
@@ -132,7 +131,6 @@ def _notify(
     found = asyncio.run(
         roster_preflight.notify_roster_drift(
             repo_root=repo_root,
-            parallel=parallel,
             listing=listing if listing is not None else _listing(_roster()),
             rate_card=_card() if rate_card is _UNSET else rate_card,
             warn=warnings.append,
@@ -341,21 +339,19 @@ def test_a_dearer_new_model_notifies_nothing(tmp_path: Path) -> None:
 
 
 def test_serial_mode_is_notified_like_any_other(tmp_path: Path) -> None:
-    """Routing is in force at ``parallel == 1``, so the news is actionable (#404).
+    """Routing is in force in the default mode, so the news is actionable (#404).
 
     This preflight stayed silent in serial because a re-calibration recommended
     there would have changed nothing an operator could observe. ADR-0037 made a
     **Routed pair** take effect in every mode, so withholding it would now hide
-    a saving from the *default* mode. ``routing_scope.routing_in_force`` is
-    still the one place ``parallel`` is asked a routing question, and this is
-    the fourth asker of it rather than a fourth comparison.
+    a saving from the *default* mode.
     """
     _write_artifact(
         tmp_path,
         {"docs": _measured("synth-cheap-1", "high", walked=[("synth-cheap-1", "high")])},
     )
 
-    warnings, found = _notify(tmp_path, parallel=1)
+    warnings, found = _notify(tmp_path)
 
     assert [notification.drift for notification in found] == [
         RosterDrift.CHEAPER_UNMEASURED_PAIR
@@ -559,7 +555,7 @@ def test_both_drive_paths_ask_before_the_run_starts(
     from git_loopy.config import RunConfig
 
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    config = RunConfig(issue_source="github", parallel=4)
+    config = RunConfig(issue_source="github")
 
     if path == "_drive_line_printer":
         asyncio.run(cli_module._drive_line_printer(config))
@@ -568,7 +564,6 @@ def test_both_drive_paths_ask_before_the_run_starts(
 
     assert wiring.events == ["notify", "run"]
     assert wiring.notify_kwargs[0]["repo_root"] == tmp_path
-    assert wiring.notify_kwargs[0]["parallel"] == 4
 
 
 def test_the_operators_classifier_knob_is_what_the_pin_is_compared_against(

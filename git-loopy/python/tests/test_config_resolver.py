@@ -12,9 +12,9 @@ so no test here touches a real TTY, ``os.environ``, or the developer's ``~/.conf
 
 The persisted (config-tiered) knobs are: ``model``, ``reasoning_effort``,
 ``max_nmt_strikes``, ``issue_source``, ``include_prs``, ``deny_tools``,
-``deny_skills``, ``otel_enabled``, ``interactive``, and ``send_timeout_seconds``.
-The per-run-only knobs (``max_iterations``, ``verbosity``, ``render_reasoning``,
-``parallel``) are NEVER read from a config file — they resolve from flags/env only.
+``deny_skills``, ``otel_enabled``, and ``send_timeout_seconds``.
+The per-run-only knobs (``max_iterations``, ``verbosity``, ``render_reasoning``)
+are NEVER read from a config file — they resolve from flags/env only.
 """
 
 from __future__ import annotations
@@ -77,9 +77,7 @@ def test_resolve_all_empty_yields_builtin_defaults() -> None:
     assert run.verbosity == 0
     assert run.render_reasoning is True
     assert run.otel_enabled is False
-    assert run.parallel == 1
     assert run.send_timeout_seconds == DEFAULT_SEND_TIMEOUT_SECONDS
-    assert resolved.interactive is None
     assert resolved.run.skill_policy.project.present is False
     assert resolved.run.skill_policy.global_.present is False
 
@@ -151,41 +149,7 @@ def test_project_overrides_global_key_by_key() -> None:
 
 # ---------------------------------------------------------------------------
 # Full precedence ladder: CLI flag > env > project > global > default.
-# `interactive` is the one persisted knob with a real CLI flag this slice.
 # ---------------------------------------------------------------------------
-
-
-def test_interactive_flag_beats_every_lower_tier() -> None:
-    resolved = _resolve(
-        ["--interactive"],
-        env={"GIT_LOOPY_INTERACTIVE": "0"},
-        project={"interactive": False},
-        global_={"interactive": False},
-    )
-    assert resolved.interactive is True
-
-
-def test_interactive_env_beats_project_and_global() -> None:
-    resolved = _resolve(
-        env={"GIT_LOOPY_INTERACTIVE": "1"},
-        project={"interactive": False},
-        global_={"interactive": False},
-    )
-    assert resolved.interactive is True
-
-
-def test_interactive_project_beats_global() -> None:
-    resolved = _resolve(project={"interactive": True}, global_={"interactive": False})
-    assert resolved.interactive is True
-
-
-def test_interactive_global_only() -> None:
-    resolved = _resolve(global_={"interactive": True})
-    assert resolved.interactive is True
-
-
-def test_interactive_unset_everywhere_is_none() -> None:
-    assert _resolve().interactive is None
 
 
 # ---------------------------------------------------------------------------
@@ -225,27 +189,24 @@ def test_per_run_only_knobs_ignore_config_tables() -> None:
             "max_iterations": 99,
             "verbosity": 3,
             "render_reasoning": False,
-            "parallel": 5,
         },
-        global_={"max_iterations": 42, "parallel": 8},
+        global_={"max_iterations": 42},
     )
     run = resolved.run
     assert run.max_iterations == 0  # from args default, not config
     assert run.verbosity == 0
     assert run.render_reasoning is True
-    assert run.parallel == 1
 
 
 def test_per_run_only_knobs_still_come_from_args() -> None:
     resolved = _resolve(
-        ["3", "-vv", "--no-reasoning", "--parallel", "4"],
-        project={"max_iterations": 99, "parallel": 8},
+        ["3", "-vv", "--no-reasoning"],
+        project={"max_iterations": 99},
     )
     run = resolved.run
     assert run.max_iterations == 3
     assert run.verbosity == 2
     assert run.render_reasoning is False
-    assert run.parallel == 4
 
 
 # ---------------------------------------------------------------------------
@@ -553,7 +514,7 @@ def test_main_reads_project_config_into_run(monkeypatch, tmp_path) -> None:
     # A value set ONLY in the project config.toml must reach the RunConfig the
     # loop receives (end-to-end: load_configs -> resolve_config -> loop.run).
     monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli, "_should_run_interactive", lambda intent: False)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "config.toml").write_text(
         'max_nmt_strikes = 9\nissue_source = "prds"\n', encoding="utf-8"
@@ -561,7 +522,7 @@ def test_main_reads_project_config_into_run(monkeypatch, tmp_path) -> None:
     captured: list = []
     _fake_loop_run(monkeypatch, captured)
 
-    rc = cli.main(["--no-interactive"])
+    rc = cli.main([])
 
     assert rc == 0
     assert len(captured) == 1
@@ -578,7 +539,7 @@ def test_main_reports_malformed_config_and_exits_one(
         'issue_source = "prds\n', encoding="utf-8"  # unterminated string
     )
 
-    rc = cli.main(["--no-interactive"])
+    rc = cli.main([])
 
     assert rc == 1
     err = capsys.readouterr().err

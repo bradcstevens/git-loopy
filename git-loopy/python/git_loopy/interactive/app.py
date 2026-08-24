@@ -33,8 +33,8 @@ Textual's :meth:`~textual.widget.Widget.anchor` plus a "new lines below"
 indicator.
 
 This module imports Textual, so it is imported **only on the interactive path**,
-after :func:`git_loopy.interactive.detect.resolve_interactive` has confirmed the
-Textual is importable. The pure model lives in
+after :func:`git_loopy.interactive.detect.dashboard_available` has confirmed
+that stdout is a terminal. The pure model lives in
 :mod:`git_loopy.interactive.state`; everything here is presentation.
 """
 

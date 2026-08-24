@@ -458,12 +458,9 @@ def _make_issue_source(
             gh=_make_github_client(),
             include_prs=include_prs,
             pin=config.issue_pin,
-            # A **Lane** Pool is `ready-for-agent` *and* `parallel-safe`, so a
-            # Parallel invocation must refuse a pin lacking the second — else
-            # the pinned issue never enters the Pool, the promotion finds
-            # nothing to promote, and the Run silently works the head of the
-            # order instead (#396).
-            pin_requires_parallel_safe=config.parallel > 1,
+            # A Pin keeps its serial-driver eligibility. Rolling dispatch then
+            # decides whether the selected issue can occupy a Lane.
+            pin_requires_parallel_safe=False,
         )
     if config.issue_source == "prds":
         return PrdsIssueSource(repo_root, diag)
@@ -2350,7 +2347,7 @@ class _ParallelLoop:
     contribution finalizing and a serial Iteration tick the same Strike
     machine and write one consistent event / counter stream. The serial path
     is unaffected: :func:`run` only builds a ``_ParallelLoop`` when
-    ``config.parallel > 1``.
+    rolling dispatch.
     """
 
     def __init__(
@@ -2433,8 +2430,7 @@ class _ParallelLoop:
         # the terminal classifier can honestly report all_skipped.
         self._rolling_refused: set[int | str] = set()
         # Bounded adaptive Lane concurrency (#219 §6, #309). The bound
-        # **Execution host** declares the safety ceiling; config only chooses
-        # Parallel mode. Under sustained
+        # **Execution host** declares the safety ceiling. Under sustained
         # **Integration** backpressure, 429s, AI-credit or host/setup pressure,
         # running at the cap wastes capacity and money. The monitor owns the
         # observation cadence and the operator's budgets; the policy it builds
@@ -2871,6 +2867,12 @@ class _ParallelLoop:
             while True:
                 if self._crash is not None:
                     raise self._crash
+                if self._serial._stop_drain_requested:
+                    return (
+                        RUN_OUTCOME_OPERATOR_STOP,
+                        exit_code_for(RUN_OUTCOME_OPERATOR_STOP),
+                        scheduler._units_spent,
+                    )
 
                 # Cleared before the decision it feeds, never after: a slot
                 # freed after `reserve()` has read the bounds must still earn
@@ -2920,6 +2922,12 @@ class _ParallelLoop:
                     # Iteration's unit is folded in here rather than tracked
                     # by a second, divergeable counter.
                     scheduler._units_spent += 1
+                    if self._serial._stop_drain_requested:
+                        return (
+                            RUN_OUTCOME_OPERATOR_STOP,
+                            exit_code_for(RUN_OUTCOME_OPERATOR_STOP),
+                            scheduler._units_spent,
+                        )
                     if outcome == "aborted" and not scheduler.stop_latched:
                         # §7.4, §7.7: the Strike machine is shared, so a serial
                         # Iteration reaching its limit latches the same
@@ -2995,6 +3003,35 @@ class _ParallelLoop:
                     else None
                 )
                 if terminal_outcome is not None:
+                    # The serial driver owns the Run-level collection and
+                    # accounting outcomes, including exclusions. A Rolling
+                    # Pool can prove there is no Lane work before that driver
+                    # has run at all, so give it the first turn rather than
+                    # ending with a scheduler-only outcome.
+                    if terminal_outcome == "empty_pool" and scheduler._units_spent == 0:
+                        self._report_serial_fallback(scheduler)
+                        outcome, _commits, _closures = (
+                            await self._serial._run_one_iteration(
+                                self._alloc_iter_num()
+                            )
+                        )
+                        scheduler._units_spent += 1
+                        if self._serial._stop_drain_requested:
+                            return (
+                                RUN_OUTCOME_OPERATOR_STOP,
+                                exit_code_for(RUN_OUTCOME_OPERATOR_STOP),
+                                scheduler._units_spent,
+                            )
+                        if outcome == "aborted":
+                            return "stuck", exit_code_for("stuck"), scheduler._units_spent
+                        if outcome in {"empty_pool", "all_skipped", "all_blocked"}:
+                            return (
+                                outcome,
+                                exit_code_for(outcome),
+                                scheduler._units_spent,
+                            )
+                        scheduler.serial_finished()
+                        continue
                     return (
                         terminal_outcome,
                         exit_code_for(terminal_outcome),
@@ -5116,11 +5153,8 @@ async def run(
         # happens to equal it today.
         return exit_code_for("preflight_failed")
 
-    # Dispatch: Parallel mode (opt-in, config.parallel > 1) drives the
-    # Rolling-dispatch orchestrator (#219, ADR-0020) with the injected
-    # runner-side Integration gate (#60); serial (the default, parallel == 1)
-    # drives the existing loop byte-for-byte unchanged. Both expose the same
-    # ``drive()`` contract.
+    # Dispatch always builds the Rolling-dispatch orchestrator (#219, ADR-0020).
+    # Its embedded serial driver owns Runs whose Pool offers no Lane work.
     #
     # The **Task-type classifier**'s pair (#409, ADR-0029) is resolved once here,
     # from the same staircase **Demotion** steps, and handed to whichever
@@ -5132,57 +5166,9 @@ async def run(
         config, staircase, warn=lambda message: diag.warning("%s", message)
     )
     task_type_client = _make_task_type_label_client()
-    loop: _Loop | _ParallelLoop
-    if config.parallel > 1:
-        try:
-            loop = _ParallelLoop(
-                config=config,
-                release_version=release_version,
-                git=git,
-                prompt_text=prompt_text,
-                denomination=denomination,
-                writers=writers,
-                sinks=sinks,
-                summary=summary,
-                client=client,
-                skill_preflight=skill_preflight,
-                source=source,
-                diag=diag,
-                gate_runner=_make_gate_runner(),
-                worktree_setup=_make_worktree_setup(),
-                include_prs=include_prs,
-                rate_card=rate_card,
-                classifier_pair=classifier_pair,
-                task_type_client=task_type_client,
-            )
-        except git_module.GitError as exc:
-            # Parallel mode resolves where its **Lane workspaces** live up
-            # front (#449). A clone that cannot name its own git directory has
-            # nowhere to put them, and would fail identically for every Lane —
-            # so this is preflight, refused before any work starts, and never a
-            # tracebacked exit. The cleanup mirrors the Skill-preflight
-            # refusals above: this is the last point before the `finally` that
-            # would otherwise release the SDK subprocess.
-            diag.error("Lane workspace preflight failed: %s", exc)
-            print(
-                f"git-loopy: Parallel mode could not resolve this repository's "
-                f"git directory, so it has nowhere to place a Lane workspace: "
-                f"{exc}",
-                file=sys.stderr,
-            )
-            try:
-                writers.run_summary.flush()
-            except Exception as flush_exc:
-                diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
-            try:
-                await client.stop()
-            except Exception as stop_exc:
-                diag.warning("CopilotClient.stop() failed: %s", stop_exc)
-            skill_workspace.cleanup()
-            control.close()
-            return exit_code_for("preflight_failed")
-    else:
-        loop = _Loop(
+    loop: _ParallelLoop
+    try:
+        loop = _ParallelLoop(
             config=config,
             release_version=release_version,
             git=git,
@@ -5195,11 +5181,34 @@ async def run(
             skill_preflight=skill_preflight,
             source=source,
             diag=diag,
+            gate_runner=_make_gate_runner(),
+            worktree_setup=_make_worktree_setup(),
             include_prs=include_prs,
             rate_card=rate_card,
             classifier_pair=classifier_pair,
             task_type_client=task_type_client,
         )
+    except git_module.GitError as exc:
+        # Rolling dispatch resolves where its **Lane workspaces** live up front
+        # (#449). A clone that cannot name its git directory has nowhere to
+        # place them, so this is a preflight refusal before work starts.
+        diag.error("Lane workspace preflight failed: %s", exc)
+        print(
+            f"git-loopy: rolling dispatch could not resolve this repository's "
+            f"git directory, so it has nowhere to place a Lane workspace: {exc}",
+            file=sys.stderr,
+        )
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        try:
+            await client.stop()
+        except Exception as stop_exc:
+            diag.warning("CopilotClient.stop() failed: %s", stop_exc)
+        skill_workspace.cleanup()
+        control.close()
+        return exit_code_for("preflight_failed")
 
     exit_code = 1
     try:

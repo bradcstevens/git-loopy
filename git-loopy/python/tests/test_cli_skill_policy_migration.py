@@ -375,7 +375,6 @@ def _drive_main(
     for name in (
         "GIT_LOOPY_MODEL",
         "GIT_LOOPY_REASONING_EFFORT",
-        "GIT_LOOPY_INTERACTIVE",
         "GIT_LOOPY_MODEL_SELECT",
         "GIT_LOOPY_ENABLED_SKILLS",
         "GIT_LOOPY_DENY_SKILLS",
@@ -386,7 +385,7 @@ def _drive_main(
     for name, value in (extra_env or {}).items():
         monkeypatch.setenv(name, value)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda intent: False)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
     monkeypatch.setattr("sys.stdin", _FakeStdin(isatty=isatty))
 
     order: list[str] = []
@@ -512,28 +511,6 @@ def test_legacy_config_without_a_tty_runs_minimal_and_says_so(
     assert "enabled_skills" not in settings.load_config_table(global_path)
     stderr = capsys.readouterr().err
     assert "git-loopy skills" in stderr and "git-loopy init" in stderr
-
-
-def test_explicit_interactivity_opt_out_takes_the_unattended_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """``--no-interactive`` on a TTY is still an instruction not to prompt."""
-    settings.write_config(
-        settings.global_config_path({"HOME": str(tmp_path / "home")}),
-        {"model": "gpt-5.4"},
-    )
-
-    code, order, _ran = _drive_main(
-        monkeypatch,
-        tmp_path,
-        isatty=True,
-        argv=["--no-interactive"],
-        migration=lambda **_: pytest.fail("an opted-out run must never prompt"),
-    )
-
-    assert code == 0
-    assert order == ["loop"]
-    assert "Skill policy" in capsys.readouterr().err
 
 
 def test_a_configured_policy_never_migrates_again(

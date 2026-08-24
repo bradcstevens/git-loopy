@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 import sys
 from dataclasses import dataclass, replace
@@ -266,12 +267,12 @@ def _stdout_isatty() -> bool:
 def _textual_importable() -> bool:
     """Probe Textual availability without importing it.
 
-    Reuses the interactive path's pure probe (``importlib.util.find_spec``), so
-    checking costs no Textual import and no screen side effects.
+    ``find_spec`` costs no Textual import and no screen side effects.
     """
-    from .interactive.detect import textual_available
-
-    return textual_available()
+    try:
+        return importlib.util.find_spec("textual") is not None
+    except (ImportError, ValueError):  # pragma: no cover - defensive
+        return False
 
 
 def _resolve_picker_runner(picker_runner: PickerRunner | None) -> PickerRunner:

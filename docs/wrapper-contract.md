@@ -597,14 +597,14 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 | `GIT_LOOPY_ISSUE_SOURCE`       | 1     | `github`         | `github` or `prds` (legacy local-markdown mode).              |
 | `GIT_LOOPY_MAX_NMT_STRIKES`    | 1     | `3`              | Consecutive no-progress Iterations before abort.              |
 | `GIT_LOOPY_INCLUDE_PRS`        | 3     | off              | `1`/`true`/`yes` to also advance `ready-for-agent` PRs.       |
-| `GIT_LOOPY_INTERACTIVE`        | 2     | auto (TTY)       | `0` disables the live interface (CI-safe).                     |
+| `GIT_LOOPY_INTERACTIVE`        | 2     | auto (TTY)       | MUST be honoured only by a member whose declared parallel capability manifest exposes this operator choice; Python refuses it because Dashboard availability follows the terminal. |
 | `GIT_LOOPY_MODEL_SELECT`       | 3     | off              | `1` enters the startup model picker (**ModelSelectionMode**). |
 | `GIT_LOOPY_DENY_TOOLS`         | 1     | empty            | Denylist of tools (set *union* across config tiers).          |
 | `GIT_LOOPY_DENY_SKILLS`        | 1     | empty            | Deprecated denylist of skills (set *union* across config tiers); subtracts only (§16). |
 | `GIT_LOOPY_ENABLED_SKILLS`     | 3     | unset            | Exact replacement of the configured base **Skill policy** for one Run; an explicit empty value is a real empty policy (§16). |
 | `GIT_LOOPY_SEND_TIMEOUT_SECONDS`| 1    | impl default     | Per-iteration agent send timeout.                             |
 | `GIT_LOOPY_OTEL_ENABLED`       | 4     | off              | `1` enables OTLP export (or `OTEL_EXPORTER_OTLP_ENDPOINT`).    |
-| `GIT_LOOPY_MAX_PARALLEL`       | 5     | `1`              | **Lane** count in **Parallel mode**.                          |
+| `GIT_LOOPY_MAX_PARALLEL`       | 5     | `1`              | MUST be honoured only by a member whose declared parallel capability manifest exposes an operator-selected Lane count; Python refuses it because its Execution host declares the ceiling. |
 | `GIT_LOOPY_WORKTREE_SETUP`     | 5     | none             | Per-worktree setup command for **Parallel mode**.             |
 
 ## 12. Event schema (phase 1, MUST)

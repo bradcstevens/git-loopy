@@ -1,7 +1,4 @@
-"""Tests for ``git_loopy.interactive.detect`` (issue #503 — interactive gating).
-
-Pins the flag > environment > TTY precedence. Pure — no TTY required.
-"""
+"""Tests for ``git_loopy.interactive.detect`` (issue #503 — interactive gating)."""
 
 from __future__ import annotations
 
@@ -10,24 +7,9 @@ from pathlib import Path
 
 from git_loopy.interactive import detect as detect_module
 from git_loopy.interactive.detect import (
-    resolve_interactive,
+    dashboard_available,
     resolve_model_selection,
-    textual_available,
 )
-
-
-def _resolve(
-    *,
-    flag: bool | None = None,
-    env_value: str | None = None,
-    isatty: bool = False,
-) -> bool:
-    """Resolve with sensible, overridable defaults."""
-    return resolve_interactive(
-        flag=flag,
-        env_value=env_value,
-        isatty=isatty,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -35,43 +17,12 @@ def _resolve(
 # ---------------------------------------------------------------------------
 
 
-def test_tty_defaults_to_dashboard_without_flag_or_environment() -> None:
-    assert _resolve(isatty=True) is True
+def test_dashboard_is_available_on_a_tty() -> None:
+    assert dashboard_available(isatty=True) is True
 
 
-def test_non_tty_without_flags_is_not_interactive() -> None:
-    assert _resolve(isatty=False) is False
-
-
-# ---------------------------------------------------------------------------
-# Explicit flag wins over everything
-# ---------------------------------------------------------------------------
-
-
-def test_no_interactive_flag_overrides_tty_and_env() -> None:
-    assert _resolve(flag=False, isatty=True, env_value="1") is False
-
-
-def test_interactive_flag_overrides_non_tty_and_env() -> None:
-    assert _resolve(flag=True, isatty=False, env_value="0") is True
-
-
-# ---------------------------------------------------------------------------
-# Env override sits between flag and TTY
-# ---------------------------------------------------------------------------
-
-
-def test_env_one_forces_interactive_on_non_tty() -> None:
-    assert _resolve(env_value="1", isatty=False) is True
-
-
-def test_env_zero_forces_non_interactive_on_tty() -> None:
-    assert _resolve(env_value="0", isatty=True) is False
-
-
-def test_blank_env_is_ignored_and_falls_back_to_tty() -> None:
-    assert _resolve(env_value="   ", isatty=True) is True
-    assert _resolve(env_value="", isatty=False) is False
+def test_dashboard_is_unavailable_without_a_tty() -> None:
+    assert dashboard_available(isatty=False) is False
 
 
 # ---------------------------------------------------------------------------
@@ -112,15 +63,8 @@ def test_blank_env_is_ignored_and_stays_off() -> None:
 
 
 # ---------------------------------------------------------------------------
-# textual_available probe + import guard
+# import guard
 # ---------------------------------------------------------------------------
-
-
-def test_textual_available_returns_bool() -> None:
-    import textual
-
-    assert textual is not None
-    assert textual_available() is True
 
 
 def test_detect_module_imports_are_constrained() -> None:

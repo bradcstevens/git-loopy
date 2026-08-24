@@ -1,10 +1,4 @@
-"""Tests for the interactive wiring in :mod:`git_loopy.cli` (issue #23).
-
-Covers the ``--interactive`` / ``--no-interactive`` tri-state flag and that
-:func:`git_loopy.cli.main` dispatches to ``loop.run`` with a driver on the
-interactive path and without one otherwise. ``loop.run`` and the driver builder
-are faked so no SDK client or Textual app is constructed.
-"""
+"""Tests for the interactive wiring in :mod:`git_loopy.cli` (issue #23)."""
 
 from __future__ import annotations
 
@@ -15,26 +9,6 @@ import pytest
 
 from git_loopy import cli as cli_module
 from git_loopy.config import RunConfig
-
-
-# ---------------------------------------------------------------------------
-# Flag parsing (tri-state)
-# ---------------------------------------------------------------------------
-
-
-def test_interactive_flag_defaults_to_none() -> None:
-    args = cli_module.build_parser().parse_args([])
-    assert args.interactive is None
-
-
-def test_interactive_flag_true() -> None:
-    args = cli_module.build_parser().parse_args(["--interactive"])
-    assert args.interactive is True
-
-
-def test_no_interactive_flag_false() -> None:
-    args = cli_module.build_parser().parse_args(["--no-interactive"])
-    assert args.interactive is False
 
 
 # ---------------------------------------------------------------------------
@@ -91,30 +65,6 @@ def test_should_select_model_flag_wins_over_env(
 
 
 # ---------------------------------------------------------------------------
-# _should_run_interactive wiring (delegates to detect.resolve_interactive)
-# ---------------------------------------------------------------------------
-
-
-def test_should_run_interactive_false_intent_is_off() -> None:
-    # A resolved-false interactive intent takes the non-interactive path.
-    assert cli_module._should_run_interactive(False) is False
-
-
-def test_should_run_interactive_none_intent_without_tty_is_off() -> None:
-    # Under pytest stdout is captured (not a TTY), so a None intent (no explicit
-    # preference anywhere) resolves to the non-interactive line-printer path.
-    assert cli_module._should_run_interactive(None) is False
-
-
-def test_no_interactive_flag_resolves_to_false_intent() -> None:
-    # The flag → intent merge now lives in resolve_config; the gate then honors it.
-    args = cli_module.build_parser().parse_args(["--no-interactive"])
-    resolved = cli_module.resolve_config(args, {}, project={}, global_={})
-    assert resolved.interactive is False
-    assert cli_module._should_run_interactive(resolved.interactive) is False
-
-
-# ---------------------------------------------------------------------------
 # main() dispatch
 # ---------------------------------------------------------------------------
 
@@ -163,7 +113,7 @@ def test_main_non_interactive_passes_no_driver(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda args: False)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
     captured: list[tuple[RunConfig, Any]] = []
     _install_fake_loop_run(monkeypatch, captured)
 
@@ -193,7 +143,7 @@ def test_main_non_interactive_acquires_no_terminal_ownership(
         lambda self: acquisitions.append(self),
     )
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda args: False)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
     captured: list[tuple[RunConfig, Any]] = []
     _install_fake_loop_run(monkeypatch, captured)
 
@@ -213,7 +163,7 @@ def test_main_interactive_default_skips_picker(
     """
     monkeypatch.delenv("GIT_LOOPY_MODEL_SELECT", raising=False)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda args: True)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: True)
     calls = _install_fake_resolve_run_model(monkeypatch)
 
     sentinel = object()
@@ -244,7 +194,7 @@ def test_main_interactive_select_model_opens_picker_and_bakes(
     """
     monkeypatch.delenv("GIT_LOOPY_MODEL_SELECT", raising=False)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda args: True)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: True)
     # The operator picked a different model + effort than the kit default.
     calls = _install_fake_resolve_run_model(monkeypatch, result=("gpt-5.4", "high"))
 
@@ -269,7 +219,7 @@ def test_main_interactive_select_model_no_effort_selection_is_baked(
     """A reasoning-incapable pick bakes ``reasoning_effort=None`` into the config."""
     monkeypatch.delenv("GIT_LOOPY_MODEL_SELECT", raising=False)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda args: True)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: True)
     _install_fake_resolve_run_model(monkeypatch, result=("claude-sonnet-4.5", None))
 
     captured: list[tuple[RunConfig, Any]] = []
@@ -288,7 +238,7 @@ def test_main_interactive_env_select_model_opens_picker(
     """``GIT_LOOPY_MODEL_SELECT=1`` is the second opt-in path into ModelSelectionMode."""
     monkeypatch.setenv("GIT_LOOPY_MODEL_SELECT", "1")
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda args: True)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: True)
     calls = _install_fake_resolve_run_model(monkeypatch, result=("gpt-5.4", "high"))
 
     captured: list[tuple[RunConfig, Any]] = []
@@ -316,7 +266,7 @@ def test_main_non_interactive_select_model_warns_and_falls_back(
     monkeypatch.delenv("GIT_LOOPY_REASONING_EFFORT", raising=False)
     monkeypatch.delenv("GIT_LOOPY_MODEL_SELECT", raising=False)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda args: False)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
     calls = _install_fake_resolve_run_model(monkeypatch)
 
     captured: list[tuple[RunConfig, Any]] = []
@@ -344,7 +294,7 @@ def test_main_non_interactive_without_select_model_is_silent(
     """An ordinary non-interactive run emits no ModelSelectionMode warning."""
     monkeypatch.delenv("GIT_LOOPY_MODEL_SELECT", raising=False)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda args: False)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
     captured: list[tuple[RunConfig, Any]] = []
     _install_fake_loop_run(monkeypatch, captured)
 
@@ -363,17 +313,15 @@ def test_main_interactive_unloadable_dashboard_falls_back_to_line_printer(
 ) -> None:
     """A Dashboard that cannot even be loaded still leaves the Run to run.
 
-    The Textual availability probe uses ``find_spec``, which does not import it
-    — so a Textual that is present but broken (a partial install, an
-    incompatible dependency) passes the probe and then fails on the real import.
-    That is the earliest possible startup failure, and it must degrade exactly
-    like the extra being absent rather than abort the Run.
+    The Dashboard import can fail after the TTY gate succeeds. That startup
+    failure must degrade exactly like the extra being absent rather than abort
+    the Run.
     """
     import sys
     import types
 
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda args: True)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: True)
     monkeypatch.delenv("GIT_LOOPY_MODEL_SELECT", raising=False)
 
     # A driver module that imports but cannot supply the Dashboard entry point

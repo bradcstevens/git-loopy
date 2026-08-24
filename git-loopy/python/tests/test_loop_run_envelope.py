@@ -61,7 +61,6 @@ def _bare_loop(*, max_iterations: int) -> Any:
         issue_source="github",
         max_iterations=max_iterations,
         max_nmt_strikes=3,
-        parallel=1,
     )
     bare._release_version = "0.0.0-test"
     bare._rate_card = None

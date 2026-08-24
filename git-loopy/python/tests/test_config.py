@@ -30,7 +30,6 @@ def test_run_config_defaults_are_safe() -> None:
     assert cfg.verbosity == 0
     assert cfg.render_reasoning is True
     assert cfg.otel_enabled is False
-    assert cfg.parallel == 1
     assert cfg.send_timeout_seconds == 7200.0
 
 
@@ -45,12 +44,6 @@ def test_run_config_accepts_custom_send_timeout() -> None:
     """A resolved per-run timeout is preserved verbatim (now flows from the resolver)."""
     cfg = RunConfig(send_timeout_seconds=3600.0)
     assert cfg.send_timeout_seconds == 3600.0
-
-
-def test_run_config_accepts_parallel_cap() -> None:
-    """``parallel`` opts into Parallel mode with N concurrent Lanes (ADR-0008)."""
-    cfg = RunConfig(parallel=3)
-    assert cfg.parallel == 3
 
 
 def test_run_config_is_frozen() -> None:
@@ -100,8 +93,6 @@ def test_run_config_satisfies_session_config_protocol() -> None:
         ("issue_source", "gitlab"),
         ("max_iterations", -1),
         ("max_nmt_strikes", 0),
-        ("parallel", 0),
-        ("parallel", -1),
         ("send_timeout_seconds", 0),
         ("send_timeout_seconds", -1.0),
         ("verbosity", 4),
