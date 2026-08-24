@@ -2117,6 +2117,13 @@ class _LaneWork:
     :class:`~git_loopy.rolling_scheduler.Contribution` itself, not here, since
     the scheduler is the authority that minted it at
     :meth:`~git_loopy.rolling_scheduler.RollingScheduler.start_session`.
+
+    ``reclaimed`` is what makes the layered reclamation actors (#452, #445 §F)
+    idempotent and lets an *un*reclaimed workspace be retried. An entry is kept
+    in ``_lane_work`` until its workspace is actually gone — including past the
+    contribution finalizing — so a workspace salvage could not capture is
+    offered to the next actor rather than forgotten with the contribution that
+    owned it.
     """
 
     item: AfkReadyItem
@@ -2372,6 +2379,11 @@ class _ParallelLoop:
         # reclamation needs this alongside the workspace to close interrupted
         # accounting after salvaging the branch.
         self._open_lane_contributions: dict[str, rolling_scheduler.Contribution] = {}
+        # The contributions Run-exit reclamation closed out rather than the
+        # work boundary doing it (#452).  Kept so **Demotion** can tell an
+        # interrupted contribution from a failed one — see
+        # :attr:`finalized_contributions`.
+        self._abandoned_at_exit: set[str] = set()
         # The accounting-scope number each open **Lane contribution** was
         # opened with (#310), keyed the same way and for the same reason: a
         # contribution's Consumption, timing, and Summary row belong to the
@@ -2814,12 +2826,18 @@ class _ParallelLoop:
                     )
                 await asyncio.sleep(_ROLLING_EMPTY_POLL_INTERVAL)
         finally:
-            if self._pending:
-                for task in self._pending:
-                    task.cancel()
-                await asyncio.gather(*self._pending, return_exceptions=True)
-                self._pending.clear()
-            self._reclaim_open_lane_workspaces()
+            # Reclamation is synchronous and must stay the last thing that
+            # happens, *behind* no await: a second Stop gesture landing while
+            # the driver drains its cancelled Lane tasks would otherwise
+            # abandon the drain and the salvage with it (#452).
+            try:
+                if self._pending:
+                    for task in self._pending:
+                        task.cancel()
+                    await asyncio.gather(*self._pending, return_exceptions=True)
+                    self._pending.clear()
+            finally:
+                self._reclaim_open_lane_workspaces()
 
     @property
     def finalized_contributions(self) -> tuple[rolling_scheduler.Contribution, ...]:
@@ -2836,10 +2854,23 @@ class _ParallelLoop:
         still running and no row can arrive after the count was taken. ``()``
         when a Parallel Run never built a scheduler, because a Run must not fail
         at its last step over having had nothing to demote.
+
+        A contribution the Run **abandoned at exit** (#452) is excluded. It was
+        interrupted, not defeated, and ADR-0043 §J makes a stopped contribution
+        *visible and blameless* — Summary row yes, demotion no.
+        :func:`~git_loopy.demotion.tally_no_progress` used to deliver that for
+        free, by skipping a row whose ``reason`` is still ``None`` as "has not
+        finished" rather than "did not publish". That only held while an
+        interrupted contribution stayed open, which is the very residue #452
+        removes — so closing it out means saying this here instead.
         """
         if self._scheduler is None:
             return ()
-        return self._scheduler.finalized
+        return tuple(
+            contribution
+            for contribution in self._scheduler.finalized
+            if contribution.contribution_id not in self._abandoned_at_exit
+        )
 
     def _report_concurrency_change(self) -> None:
         """Announce an effective-Lane-limit transition, if this turn caused one.
@@ -3437,9 +3468,10 @@ class _ParallelLoop:
         :class:`~git_loopy.execution_host.LocalExecutionHost` rather than
         called directly, so every Lane contribution now travels through the
         seam with today's behaviour otherwise unchanged. The session ending
-        travels back on the outcome itself. The local runner also
-        retains the existing worktree cleanup rule immediately after its
-        Checkpoint result is known.
+        travels back on the outcome itself. The local runner is also the
+        **inline reclaim** actor (#452): once the Checkpoint result is known
+        and the worktree state is read for the host's verification, it hands
+        the workspace to salvage.
         """
         signals = await self._run_lane_session(
             contribution, lane_work, request.prompt
@@ -3463,7 +3495,7 @@ class _ParallelLoop:
         except git_module.GitError as exc:
             dirty, untracked = False, False
             verification_error = f"could not verify worktree state: {exc}"
-        self._cleanup_lane_worktree(lane_work, checkpoint_ok)
+        self._salvage_and_reclaim_lane_workspace(lane_work)
         return execution_host_module.LocalRunResult(
             branch=lane_work.branch,
             sha=sha,
@@ -3486,32 +3518,48 @@ class _ParallelLoop:
         reach it, since it is neither merged into base nor named by the closing
         issue. ``discard_branch`` is how the caller says so; a placeholder the
         host *did* contribute on is the contribution's own branch and is kept.
+
+        **Salvage** runs first all the same, because this method cannot know
+        the tree is clean — but a salvage commit does not buy a declined
+        placeholder a reprieve. Retaining it would strand the deterministic
+        branch that the very re-offer a blameless failure asks for needs to cut
+        again. So the branch goes whenever the workspace was reclaimed; the one
+        case that keeps it is the one case salvage keeps the workspace for.
         """
         if self._execution_host is not None:
-            preserve_branch = self._salvage_and_reclaim_lane_workspace(lane_work)
-            if discard_branch and not preserve_branch:
+            self._salvage_and_reclaim_lane_workspace(lane_work)
+            if discard_branch and lane_work.reclaimed:
                 self._delete_branch_safely(lane_work.item.ref, lane_work.branch)
 
-    def _cleanup_lane_worktree(
-        self, lane_work: _LaneWork, checkpoint_ok: bool
-    ) -> None:
-        """Apply the existing Checkpoint-owned worktree retention rule."""
-        if checkpoint_ok:
-            self._remove_lane_workspace(lane_work)
-            return
-        self._diag.warning(
-            "lane #%s checkpoint failed; preserving worktree %s",
-            lane_work.item.ref, lane_work.path,
-        )
+    def _salvage_and_reclaim_lane_workspace(self, lane_work: _LaneWork) -> None:
+        """**Salvage** a **Lane workspace**, then reclaim it (#452, #445 §F).
 
-    def _salvage_and_reclaim_lane_workspace(self, lane_work: _LaneWork) -> bool:
-        """Checkpoint a dirty Lane workspace without emitting an Event, then reclaim it.
+        The one rule every reclamation actor applies, so that no actor has to
+        know whether some earlier step happened to capture the tree: a dirty
+        workspace is committed to its own Lane branch as a **Checkpoint** —
+        the same message and trailer an ordinary Checkpoint uses, and so
+        close-keyword-free — and only then is the directory reclaimed.
 
-        Returns whether the Lane branch must be retained because it contains
-        salvaged work, or salvage itself failed.
+        Because nothing is destroyed, reclamation needs no retention policy.
+        A workspace is preserved on exactly one condition: salvage itself
+        failed, which is the one case where reclaiming would lose work. That
+        is why the inline reclaim on a normal finish comes here too rather
+        than reading its caller's Checkpoint outcome — a Checkpoint that
+        failed leaves the tree dirty, and salvage is what decides.
+
+        Deliberately **Event-free**, including no ``wrapper.checkpoint.recorded``
+        (#445 §F): a Run that was interrupted did not work this issue, and a
+        Checkpoint Event would light a **Queue** row for it in a trace that has
+        no contribution to attach it to. Salvage makes cancelled work
+        *recoverable*, not resumable — a later Run mints a new Lane branch for
+        the issue rather than continuing this one.
+
+        The outcome is read off ``lane_work.reclaimed`` rather than returned,
+        so a caller cannot act on "salvage said so" while the workspace is
+        still on disk.
         """
         if lane_work.reclaimed:
-            return False
+            return
         try:
             dirty = lane_work.git.is_dirty() or lane_work.git.has_untracked()
         except git_module.GitError as exc:
@@ -3521,7 +3569,7 @@ class _ParallelLoop:
                 lane_work.path,
                 exc,
             )
-            return True
+            return
         if dirty:
             try:
                 lane_work.git.add_all()
@@ -3533,12 +3581,19 @@ class _ParallelLoop:
                     lane_work.path,
                     exc,
                 )
-                return True
+                return
         self._remove_lane_workspace(lane_work)
-        return dirty
 
     def _remove_lane_workspace(self, lane_work: _LaneWork) -> None:
-        """Remove a Lane workspace after its durable work has been preserved."""
+        """Reclaim one **Lane workspace** whose work is already durable.
+
+        Only ever reached from :meth:`_salvage_and_reclaim_lane_workspace`,
+        which is what makes "nothing is destroyed" true of the reclaim rather
+        than of any individual caller. A failed removal leaves ``reclaimed``
+        false so a later actor tries again; it is never fatal, because a
+        leftover directory is residue and losing the Run over it would trade a
+        recoverable problem for an unrecoverable one.
+        """
         if lane_work.reclaimed:
             return
         try:
@@ -3551,17 +3606,41 @@ class _ParallelLoop:
             lane_work.reclaimed = True
 
     def _reclaim_open_lane_workspaces(self) -> None:
-        """Salvage every Lane still live when the Rolling driver exits."""
+        """Close out every Lane still live when the Rolling driver exits (#452).
+
+        The **Run-exit** reclamation actor, and the one that covers the exits
+        nobody planned: an exception out of the driver, and the cancellation a
+        **Stop** performs. The inline reclaim only runs when a Lane returns
+        through its own work boundary, which a cancelled Lane never does — so
+        without this path an abnormally terminated Run stranded both the
+        workspace *and* the contribution's accounting.
+
+        Synchronous on purpose, and called from ``drive``'s ``finally`` behind
+        no ``await``, so a second Stop gesture cannot abandon it.
+
+        Each still-open contribution is finalized with
+        :data:`~git_loopy.rolling_scheduler.REASON_UNCHANGED_BRANCH` — an
+        already-published terminal reason, deliberately not a new one. #445 §F
+        makes this whole path contract-invisible, so an interrupted
+        contribution reports the honest half of its state it *can* say on the
+        existing wire: it did not publish. The salvaged branch is not offered
+        as progress because nothing may resume it — a later Run mints a new
+        Lane branch for the issue — and ``reoffer=False`` keeps the unit spent,
+        since the Run that would re-offer it is the one exiting.
+
+        Each one is also recorded as **abandoned**, which is what keeps it out
+        of **Demotion** (see :attr:`finalized_contributions`): a Run that was
+        interrupted learned nothing about the **Routed pair** it interrupted.
+        """
         for contribution_id, lane_work in tuple(self._lane_work.items()):
             self._salvage_and_reclaim_lane_workspace(lane_work)
             if lane_work.reclaimed:
                 self._lane_work.pop(contribution_id, None)
-        for contribution_id, contribution in tuple(
-            self._open_lane_contributions.items()
-        ):
-            if contribution.reason is not None:
+        for contribution in tuple(self._open_lane_contributions.values()):
+            if contribution.reason is not None:  # pragma: no cover - defensive
                 continue
             assert self._scheduler is not None
+            self._abandoned_at_exit.add(contribution.contribution_id)
             self._scheduler.finish_terminal_failure(
                 contribution,
                 reoffer=False,

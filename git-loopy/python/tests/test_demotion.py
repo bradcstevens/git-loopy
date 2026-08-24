@@ -790,9 +790,30 @@ def test_the_parallel_loop_hands_demotion_the_finalized_contributions() -> None:
 
     class _Scheduled:
         _scheduler = SimpleNamespace(finalized=finalized)
+        _abandoned_at_exit: set[str] = set()
 
     fget = loop_module._ParallelLoop.finalized_contributions.fget
     assert fget(_Scheduled()) == finalized
+
+
+def test_a_contribution_abandoned_at_run_exit_is_not_counted() -> None:
+    """An interrupted contribution teaches Demotion nothing (#452, ADR-0043 §J).
+
+    A **Stop** or a crash finalizes whatever Lane work was still open, so the
+    Run leaves no unfinalized contribution behind. That closure is bookkeeping,
+    not a verdict: the pair was still working when the Run ended, and
+    :func:`tally_no_progress` would otherwise read the terminal reason as a
+    failure to publish. A stopped contribution keeps its **Summary** row and
+    its ``wrapper.contribution.end`` and stops here.
+    """
+    interrupted, failed = _failing(("cheap", "low"), 2)
+
+    class _Interrupted:
+        _scheduler = SimpleNamespace(finalized=(interrupted, failed))
+        _abandoned_at_exit = {interrupted.contribution_id}
+
+    fget = loop_module._ParallelLoop.finalized_contributions.fget
+    assert fget(_Interrupted()) == (failed,)
 
 
 def test_a_run_that_never_built_a_scheduler_counts_nothing() -> None:

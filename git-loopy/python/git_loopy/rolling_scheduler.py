@@ -653,7 +653,13 @@ class RollingScheduler:
     def finish_terminal_failure(
         self, contribution: Contribution, *, reoffer: bool, reason: str
     ) -> str:
-        """Finalize a host-reported terminal failure without local work signals.
+        """Finalize a contribution terminally without local work signals.
+
+        Two callers reach a terminal disposition without passing the Lane-work
+        boundary: a host-reported terminal failure, and the Run-exit
+        reclamation that closes out whatever an abnormally terminated Run left
+        open (#452). Both know the contribution is over and neither has a
+        ``changed`` / ``checkpoint_ok`` pair to resolve it with.
 
         The host failure's three-class vocabulary is intentionally not emitted
         here: #453 owns widening the contribution-end event reasons. Until then,
@@ -664,6 +670,11 @@ class RollingScheduler:
         A host that never started or stalled did not start an Agent session.
         Undo the provisional session claim so the Pool can offer its issue again;
         a breach keeps the claim because that Agent session did run.
+
+        The contribution is withdrawn from the **Integration backlog** and the
+        parked FIFO first. A contribution interrupted after admission is still
+        held by both, and leaving it there would keep the pipeline reading
+        un-drained after every Lane it can still account for has been closed.
 
         Args:
             reoffer: Whether the issue returns to the **Pool** unspent.

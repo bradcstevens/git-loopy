@@ -303,6 +303,34 @@ def test_a_host_failure_finalizes_with_the_reason_the_run_chose() -> None:
     assert contribution.reason == "checkpoint_failed"
 
 
+def test_a_terminal_finalization_withdraws_admitted_and_parked_contributions() -> None:
+    """An interrupted Run leaves nothing holding the pipeline open (#452).
+
+    The Run-exit reclaim closes out contributions that were still admitted to
+    the **Integration backlog**, or parked behind it, when the driver exited.
+    Finalizing one therefore has to withdraw it from both, or the pipeline
+    reads un-drained after every Lane it can account for has been closed — and
+    full quiescence is the precondition a valid ``wrapper.run.end`` is written
+    against.
+    """
+    scheduler, _source = _scheduler([11, 12, 13], lane_cap=3)
+    scheduler.start()
+    contributions = [
+        scheduler.start_session(reservation) for reservation in scheduler.reserve()
+    ]
+    assert [
+        scheduler.finish_work(contribution, changed=True)
+        for contribution in contributions
+    ] == ["admitted", "admitted", "parked"]
+
+    for contribution in contributions:
+        scheduler.finish_terminal_failure(
+            contribution, reoffer=False, reason=REASON_UNCHANGED_BRANCH
+        )
+
+    assert scheduler.quiescent is True
+
+
 # --------------------------------------------------------------------------- #
 # §3.8-3.11, §7.6 — the terminal dispositions at the Lane-work boundary
 # --------------------------------------------------------------------------- #

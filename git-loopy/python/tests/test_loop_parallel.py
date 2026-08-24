@@ -93,6 +93,7 @@ aborting the Lane: see the ``test_parallel_*worktree_setup*`` tests.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import re
 from collections.abc import Sequence
@@ -142,7 +143,11 @@ from git_loopy.session_outcome import (
 from git_loopy.skill_catalog import build_skill_catalog
 from git_loopy.sources import GitHubIssueSource, PoolCandidate
 from git_loopy.staircase import Candidate, PriceStaircase
-from git_loopy.wrapper import checkpoint_message
+from git_loopy.wrapper import (
+    CHECKPOINT_TRAILER_KEY,
+    CLOSE_KEYWORD_RE,
+    checkpoint_message,
+)
 from git_loopy.worktree import SetupResult
 from tests.fakes import FakeGateRunner, FakeGitClient, FakeGitHubClient
 from tests.test_interactive_terminal import FakeTerminal
@@ -1488,11 +1493,20 @@ def test_parallel_lane_checkpoint_commits_in_its_own_worktree(
 
 
 @pytest.mark.parametrize(
-    ("commit_fails", "reclaimed"),
-    [(False, True), (True, False)],
+    ("dirty", "commit_fails", "salvaged", "reclaimed"),
+    [
+        pytest.param(True, False, True, True, id="dirty-is-salvaged"),
+        pytest.param(True, True, True, False, id="failed-salvage-preserves"),
+        pytest.param(False, False, False, True, id="clean-needs-no-salvage"),
+    ],
 )
 def test_parallel_cancellation_salvages_a_dirty_lane_workspace_before_reclaim(
-    tmp_path, monkeypatch, commit_fails: bool, reclaimed: bool
+    tmp_path,
+    monkeypatch,
+    dirty: bool,
+    commit_fails: bool,
+    salvaged: bool,
+    reclaimed: bool,
 ) -> None:
     """Cancelling a Lane saves its dirty work without leaking its workspace (#452).
 
@@ -1501,6 +1515,11 @@ def test_parallel_cancellation_salvages_a_dirty_lane_workspace_before_reclaim(
     the ordinary Checkpoint commit message but emits no Checkpoint Event: the
     Run did not finish the contribution, and a later Run must not inherit a
     trace row for work it never touched.
+
+    Salvage is also what retires the retention policy.  A workspace is preserved
+    on exactly one condition -- the salvage commit itself failing, the one case
+    where reclaiming would destroy work -- so a clean workspace is reclaimed
+    without a commit and a salvaged one is reclaimed with it.
     """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -1521,18 +1540,18 @@ def test_parallel_cancellation_salvages_a_dirty_lane_workspace_before_reclaim(
             if working_directory is None:
                 return session
 
-            async def wait_while_dirty(
+            async def wait_at_the_session(
                 prompt: str, *, timeout: float = 60.0, **extra: Any
             ) -> SessionEvent | None:
                 nonlocal lane_git
                 lane_git = fake_git.worktree_client(Path(working_directory))
                 assert lane_git is not None
-                lane_git.dirty = True
+                lane_git.dirty = dirty
                 started.set()
                 await hold.wait()
                 return await session.send_and_wait(prompt, timeout=timeout, **extra)
 
-            session.send_and_wait = wait_while_dirty  # type: ignore[method-assign]
+            session.send_and_wait = wait_at_the_session  # type: ignore[method-assign]
             return session
 
     fake_client = _CancellableClient(
@@ -1566,14 +1585,191 @@ def test_parallel_cancellation_salvages_a_dirty_lane_workspace_before_reclaim(
     asyncio.run(scenario())
 
     assert lane_git is not None
-    assert lane_git.commit_messages == [checkpoint_message(42)]
+    # Indistinguishable from an ordinary Checkpoint: the same message builder,
+    # so the same subject, body and `GitLoopy-Checkpoint` trailer -- and, like
+    # every Checkpoint, no close keyword for the auto-close backstop to fire on.
+    assert lane_git.commit_messages == ([checkpoint_message(42)] if salvaged else [])
+    assert lane_git.add_all_calls == (1 if salvaged else 0)
+    for message in lane_git.commit_messages:
+        assert f"{CHECKPOINT_TRAILER_KEY}: 42" in message
+        assert CLOSE_KEYWORD_RE.search(message) is None
     assert bool(_lane_worktree_removes(fake_git)) is reclaimed
     assert bool(fake_git.active_worktrees) is not reclaimed
-    assert not [
-        event
-        for event in _logged_events(tmp_path)
-        if event["type"] == "wrapper.checkpoint.recorded"
+    events = _logged_events(tmp_path)
+    assert not [e for e in events if e["type"] == "wrapper.checkpoint.recorded"]
+    # Interrupted, not stranded: the contribution the Run cancelled is closed
+    # out on the way past, unpublished, exactly once.
+    ends = [e for e in events if e["type"] == "wrapper.contribution.end"]
+    assert len(ends) == 1
+    assert ends[0]["published"] is False
+
+
+def test_parallel_a_cancelled_contribution_is_not_demotion_evidence(
+    tmp_path, monkeypatch
+) -> None:
+    """A Run cancelled mid-Lane demotes nobody for the Lane it interrupted (#452).
+
+    ADR-0043 §J: a stopped contribution is *visible and blameless* — Summary row
+    yes, **demotion no**. Before this path existed that fell out for free:
+    :func:`~git_loopy.demotion.tally_no_progress` skips a row whose ``reason``
+    is still ``None`` because that reads "has not finished" rather than "did not
+    publish", and an interrupted contribution was never finalized at all. But
+    the unfinalized contribution *is* the residue #452 removes, so once the Run
+    closes it out the exclusion has to become deliberate — otherwise pressing
+    Stop becomes evidence against the **Routed pair** that was still working.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    started = asyncio.Event()
+    hold = asyncio.Event()
+
+    class _CancellableClient(_ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            if kwargs.get("working_directory") is None:
+                return session
+
+            async def wait_at_the_session(
+                prompt: str, *, timeout: float = 60.0, **extra: Any
+            ) -> SessionEvent | None:
+                started.set()
+                await hold.wait()
+                return await session.send_and_wait(prompt, timeout=timeout, **extra)
+
+            session.send_and_wait = wait_at_the_session  # type: ignore[method-assign]
+            return session
+
+    fake_client = _CancellableClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    evidence: list[tuple[Any, ...]] = []
+
+    def spy_on_demotion(
+        config: Any, git: Any, loop: Any, staircase: Any, diag: Any
+    ) -> None:
+        evidence.append(loop.finalized_contributions)
+
+    monkeypatch.setattr(loop_module, "_demote_after_run", spy_on_demotion)
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def scenario() -> None:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+
+    asyncio.run(scenario())
+
+    assert evidence == [()]
+    # Visible, though: the contribution is still closed out on the wire.
+    ends = [
+        e
+        for e in _logged_events(tmp_path)
+        if e["type"] == "wrapper.contribution.end"
     ]
+    assert [e["issue"] for e in ends] == [42]
+
+
+def test_parallel_a_second_stop_gesture_still_reclaims_the_lane_workspace(
+    tmp_path, monkeypatch
+) -> None:
+    """A repeated Stop must not strand the work the first one was salvaging (#452).
+
+    Reclamation is the last thing a Run does, so it must not sit behind an
+    ``await``.  The driver drains its cancelled Lane tasks first, and a second
+    cancellation landing during that drain would otherwise abandon the drain
+    *and* the salvage behind it -- re-creating, from the one gesture an operator
+    is most likely to repeat, exactly the abnormal-termination residue this path
+    exists to remove.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    started = asyncio.Event()
+    draining = asyncio.Event()
+    hold = asyncio.Event()
+    lane_git: FakeGitClient | None = None
+
+    class _SlowToCancelClient(_ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            working_directory = kwargs.get("working_directory")
+            if working_directory is None:
+                return session
+
+            async def wait_then_drain_slowly(
+                prompt: str, *, timeout: float = 60.0, **extra: Any
+            ) -> SessionEvent | None:
+                nonlocal lane_git
+                lane_git = fake_git.worktree_client(Path(working_directory))
+                assert lane_git is not None
+                lane_git.dirty = True
+                started.set()
+                try:
+                    await hold.wait()
+                except asyncio.CancelledError:
+                    # The Lane task takes long enough to unwind that the driver
+                    # is parked on its drain when the second Stop arrives.
+                    draining.set()
+                    await asyncio.sleep(0.05)
+                    raise
+                return await session.send_and_wait(prompt, timeout=timeout, **extra)
+
+            session.send_and_wait = wait_then_drain_slowly  # type: ignore[method-assign]
+            return session
+
+    fake_client = _SlowToCancelClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def scenario() -> None:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        run_task.cancel()
+        await asyncio.wait_for(draining.wait(), timeout=5)
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+
+    asyncio.run(scenario())
+
+    assert lane_git is not None
+    assert lane_git.commit_messages == [checkpoint_message(42)]
+    assert bool(_lane_worktree_removes(fake_git))
+    assert fake_git.active_worktrees == []
 
 
 def test_parallel_exception_salvages_and_reclaims_a_dirty_lane_workspace(
@@ -1817,6 +2013,100 @@ def test_parallel_lane_checkpoint_failure_keeps_its_terminal_reason(
     # §3.10's retention rule is untouched: the dirty worktree is preserved.
     assert fake_git.worktree_removes == []
     assert fake_git.merge_calls == []
+
+
+def test_parallel_inline_reclaim_salvages_a_lane_its_checkpoint_left_dirty(
+    tmp_path, monkeypatch
+) -> None:
+    """The inline reclaim reclaims whenever salvage succeeds (#452).
+
+    §3.10's retention rule and salvage are the same rule stated twice, so the
+    inline reclaim on a normal finish asks salvage rather than asking whether
+    the Lane's ordinary Checkpoint happened to succeed.  A workspace is kept
+    only when committing its tree fails -- so a Checkpoint that failed for a
+    reason that has since cleared leaves nothing behind, and the work is on the
+    Lane branch either way.
+
+    The terminal reason is deliberately *not* revised by the retry: the Run's
+    own Checkpoint did fail, that failure is already on the wire, and salvage is
+    Event-free by design.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    lane_git: FakeGitClient | None = None
+
+    class _FlakyCheckpointClient(_ParallelFakeClient):
+        """Fails the Lane's own Checkpoint once, then lets the retry through."""
+
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            working_directory = kwargs.get("working_directory")
+            if working_directory is None:
+                return session
+            real_send_and_wait = session.send_and_wait
+
+            async def dirty_send_and_wait(
+                prompt: str, *, timeout: float = 60.0, **extra: Any
+            ) -> SessionEvent | None:
+                nonlocal lane_git
+                result = await real_send_and_wait(prompt, timeout=timeout, **extra)
+                lane_git = fake_git.worktree_client(Path(working_directory))
+                assert lane_git is not None, "Lane worktree must still be live"
+                lane_git.dirty = True
+                real_commit = lane_git.commit
+                attempts = itertools.count()
+
+                def commit_once_contended(message: str) -> str:
+                    if next(attempts) == 0:
+                        # Mirrors the fake's own commit: the attempt is recorded
+                        # before it fails, so both attempts are observable.
+                        assert lane_git is not None
+                        lane_git.commit_messages.append(message)
+                        raise git_module.GitError(
+                            ["git", "commit", "-m", "checkpoint"],
+                            1,
+                            "index.lock exists",
+                        )
+                    return real_commit(message)
+
+                lane_git.commit = commit_once_contended  # type: ignore[method-assign]
+                return result
+
+            session.send_and_wait = dirty_send_and_wait  # type: ignore[method-assign]
+            return session
+
+    fake_client = _FlakyCheckpointClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=2,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    asyncio.run(loop_module.run(cfg))
+
+    assert lane_git is not None
+    assert lane_git.commit_messages == [checkpoint_message(42)] * 2
+    assert bool(_lane_worktree_removes(fake_git))
+    assert fake_git.active_worktrees == []
+    events = _logged_events(tmp_path)
+    assert not [e for e in events if e["type"] == "wrapper.checkpoint.recorded"]
+    ends = [e for e in events if e["type"] == "wrapper.contribution.end"]
+    assert [e["reason"] for e in ends] == ["checkpoint_failed"]
 
 
 def test_parallel_integration_lands_and_closes_both_lanes(
@@ -3089,6 +3379,73 @@ def test_parallel_loop_reclaims_the_placeholder_a_substituted_host_did_not_use(
     )
     assert fake_git.active_worktrees == []
     assert fake_client.created == []
+
+
+@pytest.mark.parametrize("salvage_fails", [False, True], ids=["salvaged", "unsalvaged"])
+def test_parallel_loop_discards_a_dirty_placeholder_branch_the_host_declined(
+    tmp_path, monkeypatch, salvage_fails: bool
+) -> None:
+    """Salvage must not strand the deterministic Lane branch (#452, #447).
+
+    **Salvage** exists so no reclamation destroys work, and it commits a dirty
+    tree before reclaiming it. A placeholder a substituted host declined holds
+    no work to protect — setup residue at most — so the salvage commit does not
+    buy the branch a reprieve. Retaining it would be actively harmful: the
+    re-offer that a blameless failure asks for cuts the *same* deterministic
+    branch, and a survivor makes that dispatch fail for the rest of the Run,
+    passing the issue over every time it comes up.
+
+    So the branch goes whenever the workspace was reclaimed. The one case that
+    keeps it is the one case salvage keeps the workspace for — a salvage that
+    failed, where the branch is still checked out and still holds the work.
+    """
+    fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    real_add_worktree = fake_git.add_worktree
+    lanes: list[FakeGitClient] = []
+
+    def _dirty_worktree(path, *, branch: str, base: str) -> FakeGitClient:
+        child = real_add_worktree(path, branch=branch, base=base)
+        child.dirty = True
+        if salvage_fails:
+            child.commit_error = git_module.GitError(
+                ["git", "commit", "-m", "checkpoint"], 1, "index.lock exists"
+            )
+        lanes.append(child)
+        return child
+
+    monkeypatch.setattr(fake_git, "add_worktree", _dirty_worktree)
+    host = _ForeignBranchExecutionHost()
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, execution_host=host, **kwargs)
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == 0
+    run_id = _run_id(tmp_path)
+    placeholders = {git_module.lane_branch_name(run_id, ref) for ref in (42, 43)}
+    if salvage_fails:
+        # Nothing is discarded while the work is still only on disk, and the
+        # workspace stays claimable, so the Run-exit actor retries the salvage.
+        assert set(_lane_branch_deletes(fake_git)) == set()
+        assert sorted(fake_git.active_worktrees) == sorted(
+            add[0] for add in _lane_worktree_adds(fake_git)
+        )
+        assert [lane.commit_messages for lane in lanes] == [
+            [checkpoint_message(ref)] * 2 for ref in (42, 43)
+        ]
+    else:
+        # Salvaged once, then the placeholder and its branch both go.
+        assert [lane.commit_messages for lane in lanes] == [
+            [checkpoint_message(ref)] for ref in (42, 43)
+        ]
+        assert set(_lane_branch_deletes(fake_git)) == placeholders
+        assert fake_git.active_worktrees == []
 
 
 @dataclass

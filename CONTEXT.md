@@ -1035,9 +1035,24 @@ directory, under the **Reserved branch namespace**'s subtree and keyed by run an
 it is never *content* in any working tree: no status, staging, or clean operation in the
 repository can see, capture, or destroy a live workspace, and no ignore entry is needed to
 keep it that way. It is per-clone, so two clones never share one, and it is removed with
-the clone. Torn down as soon as its **Lane contribution** finishes.
+the clone. **Ephemeral by policy**: it exists only while its **Lane contribution** is in
+flight and is reclaimed on every exit path — inline when that contribution finishes, and at
+the Run's own exit when an exception or a **Stop** ends it instead — always after
+**Salvage**, and preserved only when salvage fails.
 _Avoid_: sandbox, checkout, scratch directory; worktree alone (the **Integration stage** is
 one too).
+
+**Salvage**:
+Committing a **Lane workspace**'s dirty tree to its own Lane branch as a **Checkpoint** —
+the existing message and trailer verbatim, so close-keyword-free — before the directory is
+reclaimed. It is what lets reclamation carry no retention policy: nothing is destroyed, so a
+workspace is preserved on exactly one condition, salvage itself failing, which is the one
+case where reclaiming would lose work. Salvage emits no **Event**, not even a Checkpoint
+one, because a Run that was interrupted never worked that issue and a **Queue** row for it
+would trace work that did not happen. It makes cancelled work *recoverable, not resumable*:
+a later Run mints a new Lane branch for the issue rather than continuing the salvaged one,
+which is what lets a Stop cancel safely without pretending the work will be picked up.
+_Avoid_: stash, rescue, auto-commit, recovery, resume.
 
 **Lane contribution**:
 One **Parallel-safe** issue's end-to-end unit of **Parallel mode** work, beginning
