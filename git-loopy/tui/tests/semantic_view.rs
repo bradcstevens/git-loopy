@@ -73,7 +73,7 @@ fn a_two_stage_stop_stays_live_until_the_run_records_its_operator_outcome() {
     )
     .expect("start event decodes");
     let drain = Event::from_jsonl_line(
-        r#"{"type":"wrapper.stop.requested","stage":"drain","run_id":"run-1","ts":"2026-05-16T00:00:01.000Z"}"#,
+        r#"{"type":"wrapper.stop.requested","cause":"operator_stop","stage":"drain","draining":0,"run_id":"run-1","ts":"2026-05-16T00:00:01.000Z"}"#,
     )
     .expect("stop event decodes");
     let end = Event::from_jsonl_line(
@@ -89,7 +89,7 @@ fn a_two_stage_stop_stays_live_until_the_run_records_its_operator_outcome() {
         "draining"
     );
     let cancel = Event::from_jsonl_line(
-        r#"{"type":"wrapper.stop.requested","stage":"cancel","run_id":"run-1","ts":"2026-05-16T00:00:01.500Z"}"#,
+        r#"{"type":"wrapper.stop.requested","cause":"operator_stop","stage":"cancel","draining":0,"run_id":"run-1","ts":"2026-05-16T00:00:01.500Z"}"#,
     )
     .expect("cancel event decodes");
     state.apply(&cancel);
@@ -102,6 +102,45 @@ fn a_two_stage_stop_stays_live_until_the_run_records_its_operator_outcome() {
         view(&state, &ctx, IssueRef::number(42))["dashboard"]["header"]["status"],
         "operator_stop"
     );
+}
+
+#[test]
+fn a_strike_wind_down_lifts_only_when_the_trace_says_so() {
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    let ctx = context("2026-05-16T00:00:01.000Z", 0);
+
+    // A legacy interruption is not an operator Stop or a Wind-down.
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"type":"wrapper.run.end","outcome":"interrupted","run_id":"run-1"}"#,
+        )
+        .expect("legacy end decodes"),
+    );
+    assert!(state.wind_down().is_none());
+    assert!(!state.wind_down_observed());
+
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"type":"wrapper.stop.requested","cause":"strike_limit","stage":"drain","draining":2,"run_id":"run-2"}"#,
+        )
+        .expect("strike drain decodes"),
+    );
+    assert_eq!(
+        view(&state, &ctx, IssueRef::number(42))["dashboard"]["header"]["status"],
+        "draining"
+    );
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"type":"wrapper.stop.lifted","cause":"strike_limit","draining":1,"run_id":"run-2"}"#,
+        )
+        .expect("lift decodes"),
+    );
+    assert_eq!(
+        view(&state, &ctx, IssueRef::number(42))["dashboard"]["header"]["status"],
+        "running"
+    );
+    assert!(state.wind_down().is_none());
+    assert!(state.wind_down_observed());
 }
 
 /// Drive a fresh Run through a sequence of raw Events and project it.

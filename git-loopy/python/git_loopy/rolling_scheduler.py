@@ -786,7 +786,7 @@ class RollingScheduler:
         """Whether validated serial demand has stopped refill (#219 §5.3)."""
         return self._serial_latched
 
-    def strike_limit_reached(self) -> None:
+    def strike_limit_reached(self) -> bool:
         """Latch the drain-confirmed abort (#219 §7.7).
 
         Stops new reservations and refill, but cancels nothing: every started
@@ -795,7 +795,10 @@ class RollingScheduler:
         The Run exits stuck only at full quiescence with the limit still
         reached, which is why this is a latch rather than an immediate exit.
         """
+        if self._abort_latched:
+            return False
         self._abort_latched = True
+        return True
 
     def request_stop_drain(self) -> None:
         """Latch the operator's deliberate drain without cancelling live work."""

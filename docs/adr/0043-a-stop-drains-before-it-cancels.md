@@ -135,12 +135,14 @@ thing by it — all to improve on an outcome that is already non-destructive.
   a behaviour of **Sweep**", Sweep being what a *later* Run does to a *dead* Run's residue.
   Salvage now also happens in-Run, at Stop time, performed by the live Run on its own
   workspaces. The term covers two actors.
-- **The wind-down writes two Event-stream facts.** A `wrapper.stop.requested` transition
-  makes a
-  draining Run distinguishable from a healthy one, and the second stage from the first —
-  because #352 §4 lets a client attach mid-wind-down and `mark_stopped()` is local Dashboard
-  state that never reaches the trace. And the blameless disposition is a fifth value in
-  `wrapper.contribution.end`'s existing `reason` field, not a new event.
+- **The Wind-down latch is shared but its exit is asymmetric.** A
+  `wrapper.stop.requested` transition makes a draining Run distinguishable from a healthy
+  one, and the second stage from the first — because #352 §4 lets a client attach
+  mid-wind-down and local Dashboard state never reaches the trace. A Strike drain may lift
+  when publication makes its abort condition false, recorded as `wrapper.stop.lifted`; an
+  operator Stop and an iteration cap are durable and never lift. And the blameless
+  disposition is a fifth value in `wrapper.contribution.end`'s existing `reason` field, not
+  a new event.
 - **Two stages apply to serial Iterations too**, which have no Execution host at all
   (#343 §5): the first finishes the current Iteration and starts no more, the second cancels
   its session.

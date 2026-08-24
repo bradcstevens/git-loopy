@@ -386,11 +386,9 @@ class InteractiveDriver:
             if stop_stage == 0:
                 stop_stage = 1
                 request_drain()
-                self.state.mark_draining()
             elif stop_stage == 1:
                 stop_stage = 2
                 request_cancel()
-                self.state.mark_stopping()
 
         if controlled_stop:
             # Kept as an attribute rather than a factory argument so existing
@@ -449,7 +447,6 @@ class InteractiveDriver:
                 if not controlled_stop:
                     # Compatibility for an injected legacy Dashboard, which can
                     # still only express "app exited = Stop".
-                    self.state.mark_stopped()
                     loop_task.cancel()
 
         results = await asyncio.gather(

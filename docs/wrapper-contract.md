@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.3 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.4 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -653,6 +653,18 @@ Orchestrator that hosts a Dashboard can emit it — the shell and PowerShell Orc
 none and never do. Rolling-dispatch additions
 within compatibility schema 1 are listed under *Rolling-dispatch contribution lifecycle* below.
 Producing these additive events is capability-dependent.
+
+Contract-2.4 puts **Wind-down** on the wire. A Run emits
+`wrapper.stop.requested` when it latches a drain or escalates it to cancellation:
+`cause` is one of `operator_stop`, `strike_limit`, or `iteration_cap`; `stage` is
+the ordered ladder `drain`, then `cancel`; and `draining` is the observed number
+of contributions still in flight (`0` for a serial Run). Only `operator_stop` may
+emit `cancel`. The Event records the true latch, not an input gesture, so each
+transition emits once and a third Stop gesture emits nothing. A green publication
+may clear only a Strike drain; that transition emits `wrapper.stop.lifted` with
+`cause: "strike_limit"` and its observed `draining` count. Dashboard consumers
+derive their stopped state from these Events: a trace that predates them is
+unknown, and `wrapper.run.end` with `outcome: "interrupted"` is not a Stop.
 Note the shape: each is dotted `wrapper.<noun>.<verb>`, with underscores used only *within* a
 segment (`afk_ready`, `auto_close`, `ask_user`, `pr`, `work_finished`,
 `branch_observed`, `recovery_started`, `refill_turn`), and two that are

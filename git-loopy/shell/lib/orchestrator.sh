@@ -3265,6 +3265,16 @@ git_loopy_run_discovery() {
     fi
   done
 
+  if [[ "$outcome" == "iteration_cap" || "$outcome" == "stuck" ]]; then
+    local wind_down_cause="iteration_cap"
+    [[ "$outcome" == "stuck" ]] && wind_down_cause="strike_limit"
+    git_loopy_emit_event \
+      "${GIT_LOOPY_EVENT_TYPES[WRAPPER_STOP_REQUESTED]}" \
+      "null" \
+      "$(jq -cn --arg cause "$wind_down_cause" \
+        '{cause: $cause, stage: "drain", draining: 0}')" || return 1
+  fi
+
   local run_end_payload
   run_end_payload="$(
     jq -cn \

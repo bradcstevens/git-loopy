@@ -74,6 +74,7 @@ __all__ = [
     "WRAPPER_RUN_START",
     "WRAPPER_RUN_END",
     "WRAPPER_STOP_REQUESTED",
+    "WRAPPER_STOP_LIFTED",
     "WRAPPER_ISSUE_ACTIVATED",
     "WRAPPER_SKILL_POLICY_RESOLVED",
     "WRAPPER_ITERATION_START",
@@ -249,6 +250,7 @@ _CONTEXT_WINDOW_SAFETY_PERCENT = 75
 WRAPPER_RUN_START = "wrapper.run.start"
 WRAPPER_RUN_END = "wrapper.run.end"
 WRAPPER_STOP_REQUESTED = "wrapper.stop.requested"
+WRAPPER_STOP_LIFTED = "wrapper.stop.lifted"
 WRAPPER_ISSUE_ACTIVATED = "wrapper.issue.activated"
 WRAPPER_SKILL_POLICY_RESOLVED = "wrapper.skill_policy.resolved"
 WRAPPER_ITERATION_START = "wrapper.iteration.start"

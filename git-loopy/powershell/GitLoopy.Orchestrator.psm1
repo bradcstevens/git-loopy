@@ -4498,6 +4498,23 @@ function Invoke-GitLoopyDiscoveryLoop {
         }
     }
 
+    if ($Outcome -ceq "iteration_cap" -or $Outcome -ceq "stuck") {
+        $WindDownCause = if ($Outcome -ceq "stuck") {
+            "strike_limit"
+        }
+        else {
+            "iteration_cap"
+        }
+        Write-GitLoopyEvent `
+            -Context $Context `
+            -Type $EventTypes["WRAPPER_STOP_REQUESTED"] `
+            -Payload ([ordered]@{
+                cause = $WindDownCause
+                stage = "drain"
+                draining = 0
+            })
+    }
+
     Write-GitLoopyEvent `
         -Context $Context `
         -Type $EventTypes["WRAPPER_RUN_END"] `

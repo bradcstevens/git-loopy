@@ -1580,6 +1580,12 @@ def test_loop_multiple_iterations_until_cap(tmp_path, monkeypatch) -> None:
     json_files = list((tmp_path / ".git-loopy" / "runs").glob("*.json"))
     payload = json.loads(json_files[0].read_text(encoding="utf-8"))
     assert len(payload["iterations"]) == 3
+    events = _read_events(tmp_path)
+    assert [
+        (event["cause"], event["stage"], event["draining"])
+        for event in events
+        if event["type"] == "wrapper.stop.requested"
+    ] == [("iteration_cap", "drain", 0)]
 
 
 # ---------------------------------------------------------------------------
@@ -1675,8 +1681,11 @@ def test_the_first_stop_finishes_the_serial_iteration_and_starts_no_more(
     assert asyncio.run(scenario()) == 1
 
     events = _read_events(tmp_path)
-    stages = [e["stage"] for e in events if e["type"] == "wrapper.stop.requested"]
-    assert stages == ["drain"]
+    assert [
+        (event["cause"], event["stage"], event["draining"])
+        for event in events
+        if event["type"] == "wrapper.stop.requested"
+    ] == [("operator_stop", "drain", 0)]
     iteration_ends = [e for e in events if e["type"] == "wrapper.iteration.end"]
     assert len(iteration_ends) == 1, "the started Iteration ran to completion"
     assert [e["type"] for e in events].count("wrapper.commit.recorded") == 1
@@ -1712,8 +1721,14 @@ def test_the_second_stop_cancels_the_serial_session_and_charges_no_strike(
     assert asyncio.run(scenario()) == 1
 
     events = _read_events(tmp_path)
-    stages = [e["stage"] for e in events if e["type"] == "wrapper.stop.requested"]
-    assert stages == ["drain", "cancel"]
+    assert [
+        (event["cause"], event["stage"], event["draining"])
+        for event in events
+        if event["type"] == "wrapper.stop.requested"
+    ] == [
+        ("operator_stop", "drain", 0),
+        ("operator_stop", "cancel", 0),
+    ]
     assert [e for e in events if e["type"] == "wrapper.strike"] == []
     (run_end,) = [e for e in events if e["type"] == "wrapper.run.end"]
     assert run_end["outcome"] == "operator_stop"

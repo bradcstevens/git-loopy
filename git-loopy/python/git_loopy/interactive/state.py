@@ -98,6 +98,7 @@ __all__ = [
 _RUN_START = "wrapper.run.start"
 _RUN_END = "wrapper.run.end"
 _STOP_REQUESTED = "wrapper.stop.requested"
+_STOP_LIFTED = "wrapper.stop.lifted"
 _ISSUE_ACTIVATED = "wrapper.issue.activated"
 _ITERATION_START = "wrapper.iteration.start"
 _STRIKE = "wrapper.strike"
@@ -345,6 +346,15 @@ class ExecutionHostSnapshot:
 
 
 @dataclass(frozen=True)
+class WindDownSnapshot:
+    """The active Run-scoped **Wind-down**, as the trace announced it."""
+
+    cause: str
+    stage: str
+    draining: int
+
+
+@dataclass(frozen=True)
 class ResolvedRoute:
     """The **Routing resolution** one **Pickup** reached (contract 1.21).
 
@@ -384,6 +394,31 @@ class IssueContribution:
 def _default_wall_clock() -> datetime:
     """Local wall-clock time, used for the human-readable run-start stamp."""
     return datetime.now().astimezone()
+
+
+def _observed_count(value: object) -> int | None:
+    """Return a non-negative count, never mistaking a boolean for one."""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def _wind_down_snapshot(event: Mapping[str, object]) -> WindDownSnapshot | None:
+    """Decode only a legal Wind-down latch from an additive Event stream."""
+    cause = event.get("cause")
+    stage = event.get("stage")
+    draining = _observed_count(event.get("draining"))
+    if (
+        cause not in {"operator_stop", "strike_limit", "iteration_cap"}
+        or stage not in {"drain", "cancel"}
+        or draining is None
+        or (stage == "cancel" and cause != "operator_stop")
+    ):
+        return None
+    return WindDownSnapshot(cause=cause, stage=stage, draining=draining)
+
+
+_WIND_DOWN_STAGE_ORDER = {"drain": 0, "cancel": 1}
 
 
 def _execution_host_snapshot(value: object) -> ExecutionHostSnapshot:
@@ -491,6 +526,10 @@ class LiveRunState:
         # An absent declaration is historical silence, not evidence the Run used
         # the local host.
         self.execution_host = ExecutionHostSnapshot()
+        # None is historical silence: a trace that predates Wind-down says
+        # neither that the Run was healthy nor that it was stopped.
+        self.wind_down: WindDownSnapshot | None = None
+        self.wind_down_observed = False
         self._contribution_hosts: dict[str, str] = {}
         self.context_window: ContextWindowSnapshot | None = None
         self.peak_context_window: ContextWindowSnapshot | None = None
@@ -678,10 +717,31 @@ class LiveRunState:
             self.status = _STATUS_RUNNING
             self._begin_iteration(now)
         elif etype == _STOP_REQUESTED:
-            if event.get("stage") == "drain":
+            wind_down = _wind_down_snapshot(event)
+            if wind_down is None:
+                return
+            if (
+                self.wind_down is not None
+                and _WIND_DOWN_STAGE_ORDER[wind_down.stage]
+                < _WIND_DOWN_STAGE_ORDER[self.wind_down.stage]
+            ):
+                return
+            self.wind_down = wind_down
+            self.wind_down_observed = True
+            if wind_down.stage == "drain":
                 self.mark_draining()
-            elif event.get("stage") == "cancel":
+            elif wind_down.stage == "cancel":
                 self.mark_stopping()
+        elif etype == _STOP_LIFTED:
+            if (
+                self.wind_down is not None
+                and self.wind_down.cause == "strike_limit"
+                and event.get("cause") == "strike_limit"
+                and _observed_count(event.get("draining")) is not None
+            ):
+                self.wind_down = None
+                self.wind_down_observed = True
+                self.status = _STATUS_RUNNING
         elif etype == _AFK_READY_COLLECTED:
             self._record_pool(event.get("issues"), now)
         elif etype == _PICKUP_BOUND:

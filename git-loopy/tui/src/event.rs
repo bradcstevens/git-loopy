@@ -123,6 +123,8 @@ pub enum EventPayload {
     RunEnd(RunEnd),
     /// `wrapper.stop.requested`
     StopRequested(StopRequested),
+    /// `wrapper.stop.lifted`
+    StopLifted(StopLifted),
     /// Any other Event type in the supported schema.
     Other,
 }
@@ -493,9 +495,24 @@ pub struct RunEnd {
 /// The two-stage operator Stop transition.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct StopRequested {
+    /// Why this Run stopped starting new work.
+    #[serde(default)]
+    pub cause: Option<String>,
     /// `drain` preserves all started work; `cancel` ends active agent sessions.
     #[serde(default)]
     pub stage: Option<String>,
+    /// Contributions still in flight when the latch became true.
+    #[serde(default)]
+    pub draining: Option<i64>,
+}
+
+/// A revocable Strike drain clearing after a green publication.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct StopLifted {
+    #[serde(default)]
+    pub cause: Option<String>,
+    #[serde(default)]
+    pub draining: Option<i64>,
 }
 
 impl Event {
@@ -563,6 +580,7 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.iteration.end" => EventPayload::IterationEnd(Box::new(decode_or_default(value))),
         "wrapper.run.end" => EventPayload::RunEnd(decode_or_default(value)),
         "wrapper.stop.requested" => EventPayload::StopRequested(decode_or_default(value)),
+        "wrapper.stop.lifted" => EventPayload::StopLifted(decode_or_default(value)),
         _ => EventPayload::Other,
     }
 }

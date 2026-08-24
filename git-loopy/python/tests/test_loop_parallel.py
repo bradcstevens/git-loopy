@@ -1814,8 +1814,14 @@ def test_parallel_operator_stop_drains_then_cancels_only_the_lane_agent(
     assert lane_git.commit_messages == [checkpoint_message(42)]
     assert bool(_lane_worktree_removes(fake_git))
     events = _logged_events(tmp_path)
-    stages = [e["stage"] for e in events if e["type"] == "wrapper.stop.requested"]
-    assert stages == ["drain", "cancel"]
+    assert [
+        (event["cause"], event["stage"], event["draining"])
+        for event in events
+        if event["type"] == "wrapper.stop.requested"
+    ] == [
+        ("operator_stop", "drain", 1),
+        ("operator_stop", "cancel", 1),
+    ]
     (end,) = [event for event in events if event["type"] == "wrapper.contribution.end"]
     assert end["reason"] == "operator_stop"
     assert end["summary"]["strike_reaction"] == "none"
@@ -2040,8 +2046,11 @@ def test_parallel_the_first_stop_stops_refill_and_still_integrates_started_work(
     assert len(branches) == 2
     assert not any(b.endswith("/issue-44") for b in branches)
     assert fake_git.active_worktrees == []
-    stages = [e["stage"] for e in events if e["type"] == "wrapper.stop.requested"]
-    assert stages == ["drain"]
+    assert [
+        (event["cause"], event["stage"], event["draining"])
+        for event in events
+        if event["type"] == "wrapper.stop.requested"
+    ] == [("operator_stop", "drain", 2)]
     (run_end,) = [e for e in events if e["type"] == "wrapper.run.end"]
     assert run_end["outcome"] == "operator_stop"
 
@@ -5099,6 +5108,11 @@ def test_parallel_serial_iteration_strike_abort_stops_the_run_stuck(
     assert [s["outcome"] for s in strikes] == ["abort"], (
         f"expected the issue's defeat to be the abort, got {strikes}"
     )
+    assert [
+        (event["cause"], event["stage"], event["draining"])
+        for event in events
+        if event["type"] == "wrapper.stop.requested"
+    ] == [("strike_limit", "drain", 0)]
 
     # --- The abort ends the Run, and no further serial Iteration is granted
     #     after it: §7.7 drains started work, it does not start new work.

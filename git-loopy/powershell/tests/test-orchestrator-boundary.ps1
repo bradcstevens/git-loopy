@@ -1576,7 +1576,7 @@ exit 97
         "wrapper.afk_ready.collected,wrapper.issue.activated," +
         "wrapper.pickup.bound,agent.output," +
         "wrapper.commit.recorded,wrapper.commit.recorded," +
-        "wrapper.iteration.end,wrapper.run.end"
+        "wrapper.iteration.end,wrapper.stop.requested,wrapper.run.end"
     ) ([string]::Join(",", @($CommitsEvents | ForEach-Object { $_["type"] }))) (
         "commit events precede the Iteration end that closes their Iteration"
     )

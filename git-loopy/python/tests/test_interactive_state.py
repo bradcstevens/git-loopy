@@ -140,6 +140,86 @@ def test_strike_updates_count_and_max() -> None:
     assert state.max_strikes == 5
 
 
+def test_wind_down_is_folded_from_the_trace_and_a_strike_lift_clears_it() -> None:
+    """A Dashboard learns a revocable Strike drain only from Run Events."""
+    state = _make_state()
+    state.render({"type": events_module.WRAPPER_RUN_START})
+
+    # A trace from before Wind-down existed says nothing about why a Run later
+    # interrupted; it is not silently upgraded into an operator Stop.
+    assert state.wind_down is None
+
+    state.render(
+        {
+            "type": events_module.WRAPPER_STOP_REQUESTED,
+            "cause": "strike_limit",
+            "stage": "drain",
+            "draining": 2,
+        }
+    )
+
+    assert state.status == "draining"
+    assert state.wind_down is not None
+    assert state.wind_down.cause == "strike_limit"
+    assert state.wind_down.stage == "drain"
+    assert state.wind_down.draining == 2
+
+    state.render(
+        {
+            "type": events_module.WRAPPER_STOP_LIFTED,
+            "cause": "strike_limit",
+            "draining": 1,
+        }
+    )
+
+    assert state.status == "running"
+    assert state.wind_down is None
+
+    state.render({"type": events_module.WRAPPER_RUN_END, "outcome": "interrupted"})
+    assert state.status == "interrupted"
+    assert state.wind_down is None
+
+
+def test_wind_down_never_regresses_or_lifts_an_operator_stop() -> None:
+    state = _make_state()
+    state.render(
+        {
+            "type": events_module.WRAPPER_STOP_REQUESTED,
+            "cause": "strike_limit",
+            "stage": "drain",
+            "draining": 2,
+        }
+    )
+    state.render(
+        {
+            "type": events_module.WRAPPER_STOP_REQUESTED,
+            "cause": "operator_stop",
+            "stage": "cancel",
+            "draining": 2,
+        }
+    )
+    state.render(
+        {
+            "type": events_module.WRAPPER_STOP_REQUESTED,
+            "cause": "iteration_cap",
+            "stage": "drain",
+            "draining": 0,
+        }
+    )
+    state.render(
+        {
+            "type": events_module.WRAPPER_STOP_LIFTED,
+            "cause": "strike_limit",
+            "draining": 1,
+        }
+    )
+
+    assert state.wind_down is not None
+    assert state.wind_down.cause == "operator_stop"
+    assert state.wind_down.stage == "cancel"
+    assert state.status == "stopping"
+
+
 def test_run_end_sets_terminal_status_from_outcome() -> None:
     state = _make_state()
     state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
@@ -342,7 +422,12 @@ def test_the_second_stop_is_still_a_live_run_until_it_ends() -> None:
     clock.advance(5)
 
     state.render(
-        {"type": events_module.WRAPPER_STOP_REQUESTED, "stage": "cancel"}
+        {
+            "type": events_module.WRAPPER_STOP_REQUESTED,
+            "cause": "operator_stop",
+            "stage": "cancel",
+            "draining": 1,
+        }
     )
     clock.advance(3)
 

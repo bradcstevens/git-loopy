@@ -917,22 +917,37 @@ class _Loop:
         """
         return ()
 
-    def request_stop_drain(self) -> None:
+    def request_stop_drain(self, *, draining: int = 0) -> None:
         """Latch a deliberate wind-down without interrupting started work."""
-        if self._stop_drain_requested:
+        if getattr(self, "_stop_drain_requested", False):
             return
         self._stop_drain_requested = True
-        self._emit(events_module.WRAPPER_STOP_REQUESTED, iter_num=None, stage="drain")
+        self._announce_wind_down(cause="operator_stop", stage="drain", draining=draining)
 
-    def request_stop_cancel(self) -> None:
+    def request_stop_cancel(
+        self, *, drain_already_announced: bool = False, draining: int = 0
+    ) -> None:
         """Cancel the active serial agent task, if a Stop already drained."""
-        self.request_stop_drain()
+        if drain_already_announced:
+            self._stop_drain_requested = True
+        else:
+            self.request_stop_drain(draining=draining)
         if self._stop_cancel_requested:
             return
         self._stop_cancel_requested = True
-        self._emit(events_module.WRAPPER_STOP_REQUESTED, iter_num=None, stage="cancel")
+        self._announce_wind_down(cause="operator_stop", stage="cancel", draining=draining)
         if self._active_agent_task is not None and not self._active_agent_task.done():
             self._active_agent_task.cancel()
+
+    def _announce_wind_down(self, *, cause: str, stage: str, draining: int) -> None:
+        """Write the current, Run-scoped Wind-down transition once it is latched."""
+        self._emit(
+            events_module.WRAPPER_STOP_REQUESTED,
+            iter_num=None,
+            cause=cause,
+            stage=stage,
+            draining=draining,
+        )
 
     # -- event fan-out ------------------------------------------------------
 
@@ -2114,12 +2129,19 @@ class _Loop:
                         self._config.max_iterations != 0
                         and iter_num > self._config.max_iterations
                     ):
+                        self._announce_wind_down(
+                            cause="iteration_cap", stage="drain", draining=0
+                        )
                         outcome_label = "iteration_cap"
                         break
 
                     outcome, _commits, _closures = await self._run_one_iteration(
                         iter_num
                     )
+                    if getattr(self, "_stop_drain_requested", False):
+                        outcome_label = RUN_OUTCOME_OPERATOR_STOP
+                        exit_code = exit_code_for(RUN_OUTCOME_OPERATOR_STOP)
+                        break
                     if outcome == "empty_pool":
                         outcome_label = "empty_pool"
                         exit_code = exit_code_for("empty_pool")
@@ -2135,6 +2157,9 @@ class _Loop:
                         exit_code = exit_code_for(outcome)
                         break
                     if outcome == "aborted":
+                        self._announce_wind_down(
+                            cause="strike_limit", stage="drain", draining=0
+                        )
                         outcome_label = "stuck"
                         exit_code = exit_code_for("stuck")
                         break
@@ -2402,6 +2427,7 @@ class _ParallelLoop:
         # Parallel mode degrades entirely to the serial path (`drive`).
         self._pool: RollingPool | None = None
         self._scheduler: rolling_scheduler.RollingScheduler | None = None
+        self._iteration_cap_announced = False
         # A Lane routing refusal is a **Pickup skip**, not a fatal worker
         # exception. Keep the candidate cached but ineligible for this Run so
         # the terminal classifier can honestly report all_skipped.
@@ -2525,20 +2551,45 @@ class _ParallelLoop:
 
     def request_stop_drain(self) -> None:
         """Stop refill and serial reservations while live work drains."""
-        self._serial.request_stop_drain()
+        if self._scheduler is not None and self._scheduler.abort_latched:
+            # A Strike drain is already the first stage. The operator's first
+            # gesture escalates it rather than inventing a second drain event.
+            self.request_stop_cancel()
+            return
         if self._scheduler is not None:
             self._scheduler.request_stop_drain()
+        self._serial.request_stop_drain(draining=self._draining_count())
 
     def request_stop_cancel(self) -> None:
         """Cancel agent sessions only; never their enclosing Lane lifecycle."""
         if self._stop_cancel_requested:
             return
-        self._serial.request_stop_cancel()
+        drain_already_announced = (
+            self._scheduler is not None
+            and (self._scheduler.stop_latched or self._scheduler.abort_latched)
+        )
         if self._scheduler is not None:
             self._scheduler.request_stop_drain()
+        self._serial.request_stop_cancel(
+            drain_already_announced=drain_already_announced,
+            draining=self._draining_count(),
+        )
         self._stop_cancel_requested = True
         for task in tuple(self._active_agent_tasks):
             task.cancel()
+
+    def _draining_count(self) -> int:
+        """The observed open-contribution count, or serial's observed zero."""
+        return self._scheduler.open_count if self._scheduler is not None else 0
+
+    def _announce_iteration_cap(self, draining: int) -> None:
+        """Record the one cap latch when the scheduler exhausts its budget."""
+        if self._iteration_cap_announced:
+            return
+        self._iteration_cap_announced = True
+        self._serial._announce_wind_down(
+            cause="iteration_cap", stage="drain", draining=draining
+        )
 
     async def _await_agent(self, awaitable: Awaitable[object], *, name: str) -> object:
         """Make an agent call, retaining the one task the second Stop may cancel."""
@@ -2759,10 +2810,19 @@ class _ParallelLoop:
                 self._config.max_iterations != 0
                 and iter_num > self._config.max_iterations
             ):
+                self._serial._announce_wind_down(
+                    cause="iteration_cap", stage="drain", draining=0
+                )
                 return "iteration_cap", exit_code_for("iteration_cap"), iter_num - 1
             outcome, _commits, _closures = await self._serial._run_one_iteration(
                 iter_num
             )
+            if self._serial._stop_drain_requested:
+                return (
+                    RUN_OUTCOME_OPERATOR_STOP,
+                    exit_code_for(RUN_OUTCOME_OPERATOR_STOP),
+                    iter_num,
+                )
             if outcome == "empty_pool":
                 return "empty_pool", exit_code_for("empty_pool"), iter_num
             if outcome in {"all_skipped", "all_blocked"}:
@@ -2860,14 +2920,19 @@ class _ParallelLoop:
                     # Iteration's unit is folded in here rather than tracked
                     # by a second, divergeable counter.
                     scheduler._units_spent += 1
-                    if outcome == "aborted":
+                    if outcome == "aborted" and not scheduler.stop_latched:
                         # §7.4, §7.7: the Strike machine is shared, so a serial
                         # Iteration reaching its limit latches the same
                         # drain-confirmed abort a finalized Lane contribution
                         # does (`_apply_strike_reaction`). Discarding it here
                         # let a Parallel-mode Run emit the abort Event and then
                         # grant itself serial Iterations forever.
-                        scheduler.strike_limit_reached()
+                        if scheduler.strike_limit_reached():
+                            self._serial._announce_wind_down(
+                                cause="strike_limit",
+                                stage="drain",
+                                draining=scheduler.open_count,
+                            )
                     if outcome in {"all_skipped", "all_blocked"}:
                         # #413, and terminal *here* rather than latched for the
                         # idle-check, because the scheduler grants a serial turn
@@ -2912,12 +2977,14 @@ class _ParallelLoop:
                     )
                 if scheduler.abort_latched and scheduler.quiescent:
                     return "stuck", exit_code_for("stuck"), scheduler._units_spent
-                if scheduler.remaining_units == 0 and scheduler.quiescent:
-                    return (
-                        "iteration_cap",
-                        exit_code_for("iteration_cap"),
-                        scheduler._units_spent,
-                    )
+                if scheduler.remaining_units == 0:
+                    self._announce_iteration_cap(scheduler.open_count)
+                    if scheduler.quiescent:
+                        return (
+                            "iteration_cap",
+                            exit_code_for("iteration_cap"),
+                            scheduler._units_spent,
+                        )
                 # The terminal read is authoritative for the Lane half. A
                 # candidate that became Ready while another Lane ran makes its
                 # classifier return ``None``, so the driver reserves it rather
@@ -3300,6 +3367,9 @@ class _ParallelLoop:
         item, resolution = await self._serial._classify_at_pickup(
             item, routed=resolution
         )
+        if scheduler.stop_latched or scheduler.abort_latched:
+            scheduler.release(reservation)
+            return
 
         model = resolution.model
         reasoning_effort = resolution.reasoning_effort
@@ -3997,6 +4067,7 @@ class _ParallelLoop:
         assert self._scheduler is not None
         async with self._integration_lock:
             latched_before = self._scheduler.serial_latched
+            abort_latched_before = self._scheduler.abort_latched
             lane_work = self._lane_work.get(contribution.contribution_id)
             if lane_work is None:  # pragma: no cover - defensive
                 self._diag.error(
@@ -4009,6 +4080,13 @@ class _ParallelLoop:
             newly_admitted = self._scheduler.finalize(
                 contribution, published=published
             )
+            if abort_latched_before and not self._scheduler.abort_latched:
+                self._serial._emit(
+                    events_module.WRAPPER_STOP_LIFTED,
+                    iter_num=None,
+                    cause="strike_limit",
+                    draining=self._scheduler.open_count,
+                )
             if latched_before != self._scheduler.serial_latched:
                 # §5.2: an unpublished contribution requests serial service of
                 # its own. Reported on the same terms as the peek's latch —
@@ -4024,8 +4102,8 @@ class _ParallelLoop:
                     reason=rolling_scheduler.REASON_SERIAL_FALLBACK,
                     serial_required=None,
                 )
-            # `_finalize_contribution` applies the strike reaction itself, so it
-            # is not applied again here (#310).
+            # A green publication is the only thing that can lift a Strike
+            # drain; it must not immediately re-latch from stale Strike state.
             self._finalize_contribution(contribution, published=published)
         # §4.4: this finalize freed an **Integration backlog** slot, lifting
         # backpressure, and each contribution it admitted from the parked FIFO
@@ -4138,7 +4216,8 @@ class _ParallelLoop:
         committed; only a published one is progress (``advanced``, or
         ``closed`` once its ``wrapper.auto_close`` lands).
         """
-        self._apply_strike_reaction(contribution)
+        if not published:
+            self._apply_strike_reaction(contribution)
         self._open_lane_contributions.pop(contribution.contribution_id, None)
         lane_work = self._lane_work.get(contribution.contribution_id)
         if lane_work is not None and lane_work.reclaimed:
@@ -4207,8 +4286,15 @@ class _ParallelLoop:
         would go missing whenever they were not the same one.
         """
         assert self._scheduler is not None
-        if self._serial._strike_machine.outcome == "aborted":
-            self._scheduler.strike_limit_reached()
+        if (
+            self._serial._strike_machine.outcome == "aborted"
+            and self._scheduler.strike_limit_reached()
+        ):
+            self._serial._announce_wind_down(
+                cause="strike_limit",
+                stage="drain",
+                draining=self._scheduler.open_count,
+            )
 
     async def _integrate_lane(
         self,

@@ -893,10 +893,13 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     ``event_schema_version`` to 1.2 — a consumer switching on the old reason
     set meets a value it has never seen, which is the one thing an additive
     type never does.
+    2.4 adds the remaining Wind-down causes and the Strike-only lift Event. Both
+    literals ride the existing 1.2 step because that step already made the
+    Stop-event family a schema-visible change.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
-    assert _EVENT_SCHEMA["contract_version"] == "2.3"
+    assert _EVENT_SCHEMA["contract_version"] == "2.4"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:

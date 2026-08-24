@@ -1058,6 +1058,7 @@ expected_commit_seq="$(
     "wrapper.commit.recorded",
     "wrapper.commit.recorded",
     "wrapper.iteration.end",
+    "wrapper.stop.requested",
     "wrapper.run.end"
   ]'
 )"

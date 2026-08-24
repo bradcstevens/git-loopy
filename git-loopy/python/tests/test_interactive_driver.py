@@ -199,7 +199,8 @@ def test_stop_cancels_loop_and_returns_zero() -> None:
 
     assert exit_code == 0
     assert tracker["cancelled"] is True
-    assert state.status == "stopped"
+    # The driver requests control only; the Run's Wind-down Event owns state.
+    assert state.status == "starting"
     assert captured and captured[0].exited is True
 
 
@@ -228,7 +229,8 @@ def test_two_stage_stop_drains_then_requests_session_cancellation() -> None:
     assert target.cancel_requests == 1
     assert captured[0].exited_after_press == [False, False, False]
     assert captured[0].exited is True
-    assert state.status == "stopping"
+    # The test double emits no trace, so it cannot make the Dashboard stopping.
+    assert state.status == "starting"
 
 
 def test_natural_completion_closes_app_and_returns_loop_code() -> None:
@@ -394,7 +396,7 @@ def test_stop_prints_run_end_summary_to_scrollback() -> None:
     exit_code = asyncio.run(driver.run(_drive_forever(tracker)))
 
     assert exit_code == 0
-    assert state.status == "stopped"
+    assert state.status == "starting"
     assert tracker["cancelled"] is True
     # The permanent textual record: the run-end summary table in scrollback.
     assert _MarkerSummary.RUN_END_MARKER in buf.getvalue()
@@ -541,7 +543,7 @@ def test_stop_restores_the_terminal() -> None:
     exit_code = asyncio.run(driver.run(_drive_forever(tracker)))
 
     assert exit_code == 0
-    assert state.status == "stopped"
+    assert state.status == "starting"
     assert terminal.restored is True
 
 
