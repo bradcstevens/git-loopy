@@ -1,14 +1,13 @@
 """``git_loopy.rolling_concurrency`` — bounded adaptive Lane concurrency.
 
-Under **Rolling dispatch** the configured **Lane cap** stops being a promise of
-utilization and becomes a strict upper bound (PRD #219 §6, ADR-0020). What
-actually governs refill is the *effective* Lane limit this module owns: a
-number that starts safe, contracts under authoritative pressure, and expands
-again only against evidence of health. The reaction table it implements was
-confirmed by the #199 prototype (``prototype/rolling-concurrency-control`` @
-``df21f52``), which measured it against a fixed cap and found it cut simulated
-credit burn 14%, p95 **Integration** wait 62%, and 429 throttles to zero while
-*improving* makespan.
+Under **Rolling dispatch**, a bound **Execution host** declares the strict
+upper bound. What actually governs refill is the *effective* Lane limit this
+module owns: a number that starts at that capacity when host load is
+observable, contracts under authoritative pressure, and otherwise holds at the
+static-safe limit. The reaction table it implements was confirmed by the #199
+prototype (``prototype/rolling-concurrency-control`` @ ``df21f52``), which
+measured it against a fixed cap and found it cut simulated credit burn 14%, p95
+**Integration** wait 62%, and 429 throttles to zero while *improving* makespan.
 
 Like :mod:`git_loopy.rolling_pool` and :mod:`git_loopy.rolling_scheduler` this
 is deliberately **pure** — stdlib only, no wall clock, no telemetry client, no
@@ -30,20 +29,13 @@ Design notes:
   :class:`LimitChange`, and :meth:`ConcurrencyController._contract` is an
   ordered chain that returns on its first match. So a window in which every
   signal fires still moves the limit once.
-* **Unknown is not zero, and unknown cannot prove anything.** #219 §11 forbids
-  estimating a missing pressure input. An unavailable signal therefore fires
-  no contraction and can never justify climbing above the static-safe
-  ``min(cap, 3)``, which is #219 §6's "freeze at ``min(configured Lane cap,
-  3)``" row: a Run that cannot see every budget may still contract on what it
-  *can* observe — the **Integration backlog** is its own state and always
-  authoritative — but may never climb past the safe default. That row names a
-  *level*, though, not merely a lid, so an unknown signal does not veto
-  recovering capacity a *visible* signal took away; vetoing it would leave a
-  Run that contracted on an observable spike stalled near zero forever,
-  frozen nowhere near the limit the row names. It also keeps the pinned
-  ``concurrency-changed-unknown-and-observed-none`` conformance case
-  reachable, since that case is a contraction reported next to two unknown
-  budgets.
+* **Unknown is not zero, and host observability gates expansion.** #219 §11
+  forbids estimating a missing pressure input. An unavailable signal therefore
+  fires no contraction. Credit and rate limiting remain valid contraction
+  signals, but only host-load observability determines whether the Run may
+  carry its declared capacity. A host without load telemetry remains at the
+  static-safe ``min(capacity, 3)`` level, while a Run that contracted below it
+  may still recover capacity a visible signal took away.
 * **A transition resets the evidence.** Every rule is stated over observations
   *of the current limit*, so :meth:`ConcurrencyController._change` clears the
   window and the healthy streak. Carrying either across would judge a new limit
@@ -210,8 +202,11 @@ class ConcurrencyController:
     """The bounded adaptive Lane-concurrency policy (#219 §6).
 
     Args:
-        configured_lane_cap: The operator's **Lane cap**. Immutable for the
-            Run — only :attr:`effective_limit` moves.
+        configured_lane_cap: The bound **Execution host**'s declared capacity.
+            Immutable for the Run — only :attr:`effective_limit` moves.
+        host_load_observable: Whether the host's load is observable at Run
+            startup. An observable host starts at its declared capacity;
+            otherwise the controller starts at the static-safe limit.
         credit_target: The explicitly configured AI-credit ceiling per
             observation. ``None`` (the default) means the operator configured
             none, which makes credit pressure *unavailable* however good the
@@ -220,11 +215,16 @@ class ConcurrencyController:
 
     configured_lane_cap: int
     credit_target: float | None = None
+    host_load_observable: bool = False
 
     _window: deque[Observation] = field(init=False)
 
     def __post_init__(self) -> None:
-        self._effective = min(self.configured_lane_cap, STATIC_SAFE_LANE_LIMIT)
+        self._effective = (
+            self.configured_lane_cap
+            if self.host_load_observable
+            else min(self.configured_lane_cap, STATIC_SAFE_LANE_LIMIT)
+        )
         self._window = deque(maxlen=OBSERVATION_WINDOW)
         # A Run has not just changed its limit, so the first observation that
         # earns a reaction gets one.
@@ -306,39 +306,27 @@ class ConcurrencyController:
         return self._change(self._effective + 1, pressure=None)
 
     def _expansion_ceiling(self) -> int:
-        """The highest limit the *evidence available* can justify (#219 §6).
+        """The highest limit host-load observability can justify.
 
-        Two different ceilings, and the difference is what a Run can prove.
-        With every signal observable, the configured **Lane cap** is the strict
-        upper bound and nothing the controller sees may raise it. With one
-        missing, #219 §6's "freeze at ``min(configured Lane cap, 3)``" applies:
-        the static-safe value is where a Run that cannot see belongs — which is
-        a *ceiling* it may not climb past, and equally a level it must be able
-        to climb back **to**. A Run that contracted on a signal it can see and
-        was then held at zero by a budget it cannot see would be neither frozen
-        at the static-safe limit nor able to recover, which is the one reading
-        of that row that leaves a Parallel Run permanently stalled.
+        The bound **Execution host**'s capacity is the strict upper bound. Its
+        load is the one signal that determines whether the controller may use
+        that bound. It is a Run-start fact: a host that could not report load
+        then stays at the static-safe level for that Run. Rate-limit and credit
+        observations still contract the effective limit, but their absence must
+        not block recovery on an observable host.
         """
-        if self._signals_complete():
+        if self.host_load_observable and self._host_state() is not None:
             return self.configured_lane_cap
         return min(self.configured_lane_cap, STATIC_SAFE_LANE_LIMIT)
-
-    def _signals_complete(self) -> bool:
-        """Whether every external pressure input is currently observable."""
-        return (
-            self._rate_limit_state() is not None
-            and self._credit_state() is not None
-            and self._host_state() is not None
-        )
 
     def _healthy(self) -> bool:
         """Whether the latest observation shows genuine slack (#219 §6).
 
-        Stated over what the Run can *see*. An unobservable budget is not
-        evidence of health — :meth:`_expansion_ceiling` is what stops a blind
-        Run climbing on the absence of bad news — but neither is it evidence of
-        harm, so it does not veto the recovery of capacity a *visible* signal
-        took away.
+        Stated over what the Run can *see*. An unobservable rate-limit or credit
+        signal is neither evidence of health nor evidence of harm, so it does
+        not veto recovery of capacity a visible signal took away. Missing host
+        load is different: :meth:`_expansion_ceiling` keeps that host at the
+        static-safe level.
         """
         latest = self._window[-1]
         if latest.rate_limits or latest.parked > 0 or not latest.demand:
@@ -346,10 +334,7 @@ class ConcurrencyController:
         full = sum(1 for o in self._window if o.integration_full)
         if full > HEALTHY_INTEGRATION_FULL_ALLOWANCE:
             return False
-        credit = self._credit_state()
         host = self._host_state()
-        if credit is not None and credit >= HEALTHY_RATIO:
-            return False
         return not (host is not None and host >= HEALTHY_RATIO)
 
     def _rate_pressure(self) -> bool:

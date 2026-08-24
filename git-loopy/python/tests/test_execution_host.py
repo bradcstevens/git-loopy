@@ -120,6 +120,16 @@ def test_local_host_capacity_explicit_override() -> None:
     assert host.capacity == 3
 
 
+@pytest.mark.parametrize("capacity", [0, -1, float("inf"), True])
+def test_local_host_refuses_an_unbounded_or_invalid_capacity(capacity: object) -> None:
+    """#456: every host has to name a finite positive Lane ceiling."""
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        raise AssertionError("not exercised")
+
+    with pytest.raises(ValueError, match="finite positive integer"):
+        LocalExecutionHost(runner=runner, capacity=capacity)  # type: ignore[arg-type]
+
+
 def test_local_host_satisfies_execution_host_protocol() -> None:
     async def runner(request: ContributionRequest) -> LocalRunResult:
         raise AssertionError("not exercised")

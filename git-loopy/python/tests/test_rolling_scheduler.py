@@ -980,4 +980,4 @@ def test_only_a_pool_with_work_left_earns_a_lane_back() -> None:
     changes = [
         c for _ in range(30) if (c := busy.observe_pressure(**calm)) is not None
     ]
-    assert [c.effective_lane_limit for c in changes] == [2, 3, 4]
+    assert [c.effective_lane_limit for c in changes] == [2, 3]

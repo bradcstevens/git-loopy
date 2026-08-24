@@ -55,10 +55,20 @@ def _controller(cap: int = 6) -> ConcurrencyController:
     return ConcurrencyController(configured_lane_cap=cap, credit_target=10.0)
 
 
-def test_a_run_starts_at_the_static_safe_lane_limit() -> None:
-    """#219 §6: startup is ``min(configured Lane cap, 3)``, never the cap."""
+def test_a_run_without_observable_host_load_starts_at_the_static_safe_lane_limit() -> None:
+    """A host whose load cannot be observed stays at the static-safe limit."""
     assert ConcurrencyController(configured_lane_cap=6).effective_limit == 3
     assert ConcurrencyController(configured_lane_cap=2).effective_limit == 2
+
+
+def test_a_run_with_observable_host_load_starts_at_host_capacity() -> None:
+    """#456: host capacity is trusted at startup when its load is observable."""
+    assert (
+        ConcurrencyController(
+            configured_lane_cap=6, host_load_observable=True
+        ).effective_limit
+        == 6
+    )
 
 
 def test_three_429s_in_six_observations_contract_two_lanes() -> None:
@@ -155,9 +165,45 @@ def test_credit_pressure_needs_an_explicitly_configured_ceiling() -> None:
     unknown rather than inventing a target to compare against.
     """
     controller = ConcurrencyController(configured_lane_cap=6)
-    for _ in range(OBSERVATION_WINDOW * 3):
+    for _ in range(OBSERVATION_WINDOW):
         assert controller.observe(_calm(credit_burn=999.0)) is None
     assert controller.effective_limit == 3
+
+
+def test_missing_credit_telemetry_does_not_block_recovery_on_an_observable_host() -> None:
+    """#456: credit remains a contraction signal, never an expansion gate."""
+    controller = ConcurrencyController(
+        configured_lane_cap=6, host_load_observable=True
+    )
+    for _ in range(3):
+        controller.observe(_calm(rate_limits=1, credit_burn=None))
+
+    assert controller.effective_limit == 4
+    changes = [
+        controller.observe(
+            _calm(rate_limits=None, credit_burn=None, host_pressure=0.5)
+        )
+        for _ in range(HEALTHY_OBSERVATIONS * 3)
+    ]
+
+    assert [change.effective_lane_limit for change in changes if change] == [5, 6]
+
+
+def test_credit_below_its_contraction_threshold_does_not_block_recovery() -> None:
+    """#456: observed credit is contraction-only, even below its budget."""
+    controller = ConcurrencyController(
+        configured_lane_cap=6, credit_target=10.0, host_load_observable=True
+    )
+    for _ in range(3):
+        controller.observe(_calm(rate_limits=1, credit_burn=1.0))
+
+    assert controller.effective_limit == 4
+    changes = [
+        controller.observe(_calm(rate_limits=None, credit_burn=9.0))
+        for _ in range(HEALTHY_OBSERVATIONS * 3)
+    ]
+
+    assert [change.effective_lane_limit for change in changes if change] == [5, 6]
 
 
 def _every_signal_straining() -> Observation:
@@ -249,14 +295,16 @@ def test_ten_healthy_observations_recover_one_lane() -> None:
     assert change.pressure is None
 
 
-def test_a_healthy_run_expands_one_lane_at_a_time_up_to_its_cap() -> None:
-    """#219 §6: recovery is +1 per healthy streak and "never above configured cap"."""
-    controller = _controller(cap=5)
+def test_an_observable_host_starts_at_its_capacity_without_a_gradual_ramp() -> None:
+    """#456: healthy evidence does not earn capacity the host already declared."""
+    controller = ConcurrencyController(
+        configured_lane_cap=5, credit_target=10.0, host_load_observable=True
+    )
     changes = [
         controller.observe(_calm()) for _ in range(HEALTHY_OBSERVATIONS * 4)
     ]
-    assert [c.effective_lane_limit for c in changes if c is not None] == [4, 5]
-    assert controller.configured_lane_cap == 5
+    assert [c for c in changes if c is not None] == []
+    assert controller.effective_limit == 5
 
 
 def test_a_zero_effective_limit_recovers_to_one_lane() -> None:
@@ -369,16 +417,12 @@ def test_a_limit_change_renders_the_pinned_concurrency_payload() -> None:
     assert payload["host_state"] == 0.5
 
 
-def test_a_partly_blind_run_still_climbs_back_to_the_static_safe_limit() -> None:
-    """#219 §6: "freeze at ``min(cap, 3)``" is a level, not just a lid.
+def test_a_blind_start_remains_at_the_static_safe_limit_when_load_appears_later() -> None:
+    """#456: a host that cannot prove load at startup never expands this Run.
 
-    An operator who budgets the host but not AI credits gets a Run that can
-    prove host pressure and cannot prove credit burn. Letting the unknown
-    signal veto recovery would mean a single host spike contracts the Run
-    towards zero and it never comes back — frozen, but nowhere near the
-    static-safe limit that row names. So the visible signals earn the capacity
-    a visible signal took away, and the unknown one still bars any climb past
-    the static-safe ceiling.
+    A later sample cannot revise the Run's startup ceiling. Otherwise one
+    transiently unavailable load probe would turn a no-load-average platform
+    into a host allowed to expand above the static-safe limit.
     """
     controller = ConcurrencyController(configured_lane_cap=6)
     strained = Observation(rate_limits=0, host_pressure=1.5, demand=True)

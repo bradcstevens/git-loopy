@@ -153,6 +153,16 @@ from tests.fakes import FakeGateRunner, FakeGitClient, FakeGitHubClient
 from tests.test_interactive_terminal import FakeTerminal
 
 
+@pytest.fixture(autouse=True)
+def _declare_two_local_lane_slots(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep local-host capacity explicit in tests that exercise scheduler shape."""
+    monkeypatch.setattr(
+        loop_module.execution_host_module,
+        "local_execution_host_capacity",
+        lambda: 2,
+    )
+
+
 EXPECTED_RELEASE_VERSION = json.loads(
     (
         Path(__file__).parents[2] / "conformance" / "release-version.json"
@@ -413,6 +423,24 @@ def _lane_worktree_adds(fake_git: FakeGitClient) -> list[tuple[Path, str, str]]:
 def _lane_worktree_removes(fake_git: FakeGitClient) -> list[Path]:
     """The **Lane** worktree teardowns only (see :func:`_lane_worktree_adds`)."""
     return [p for p in fake_git.worktree_removes if "integrate" not in p.parts]
+
+
+def test_run_refuses_the_retired_lane_adaptation_environment_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#456: the removed toggle cannot silently become an ineffective no-op."""
+    monkeypatch.setenv("GIT_LOOPY_LANE_ADAPT", "0")
+    config = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        parallel=1,
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(config)) == 1
 
 
 def _capture_parallel_loops(monkeypatch) -> list["loop_module._ParallelLoop"]:
@@ -889,7 +917,7 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
         "placement": "local",
         "isolation_grade": "workspace separation only",
         "capacity": run_start["execution_host"]["capacity"],
-        "starting_lane_limit": 2,
+        "starting_lane_limit": run_start["execution_host"]["capacity"],
     }
     assert run_start["execution_host"]["capacity"] >= 1
     contribution_starts = [
@@ -3703,7 +3731,7 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
         "placement": "fake",
         "isolation_grade": "workspace separation only",
         "capacity": 4,
-        "starting_lane_limit": 2,
+        "starting_lane_limit": 4,
     }
     starts = [
         event for event in events if event["type"] == "wrapper.contribution.start"
@@ -4322,8 +4350,8 @@ def test_parallel_run_start_reports_parallel_mode_and_lane_cap(
         e for e in _logged_events(tmp_path) if e["type"] == "wrapper.run.start"
     )
     assert run_start["parallel_mode"] is True
-    assert run_start["lane_cap"] == 5
-    assert run_start["effective_lane_limit"] == 3
+    assert run_start["lane_cap"] == 2
+    assert run_start["effective_lane_limit"] == 2
 
 
 def test_serial_run_start_carries_no_parallel_mode_report(
@@ -4418,7 +4446,7 @@ def test_parallel_over_a_non_rolling_source_reports_the_degrade(
     degrades = [e for e in events if e["type"] == "wrapper.parallel.degraded"]
     assert len(degrades) == 1
     assert degrades[0]["reason"] == "source_not_rolling_capable"
-    assert degrades[0]["lane_cap"] == 4
+    assert degrades[0]["lane_cap"] == 2
     assert degrades[0]["issue_source"] == "prds"
     assert degrades[0]["iter"] is None
     # Immediately after the banner it qualifies, and before any Iteration.
@@ -5345,9 +5373,13 @@ def test_parallel_narrows_lane_concurrency_under_sustained_rate_limits(
     assert changes, "expected the throttled Run to narrow its Lane concurrency"
     first = changes[0]
     assert first["pressure"] == "rate_limit"
-    assert first["configured_lane_limit"] == 6
-    # 429 is the -2 reaction, from the static-safe 3 a Run starts at.
-    assert first["effective_lane_limit"] == 1
+    run_start = next(e for e in _logged_events(tmp_path) if e["type"] == "wrapper.run.start")
+    assert first["configured_lane_limit"] == run_start["execution_host"]["capacity"]
+    # 429 is the -2 reaction from the static-safe limit while this injected
+    # telemetry has no host-observability declaration.
+    assert first["effective_lane_limit"] == max(
+        0, min(run_start["execution_host"]["capacity"], 3) - 2
+    )
     assert first["rate_limit_state"] >= 3
     # Run-scoped, like every other scheduler-level record: it names the Run's
     # capacity, not any one contribution's work.
@@ -5381,33 +5413,6 @@ def test_parallel_concurrency_change_matches_the_pinned_wire_shape(
     for key in contract["required_when_present"]:
         assert key in change, f"{key} missing from {change}"
     assert change["pressure"] in contract["pressure_values"]
-
-
-def test_parallel_with_adaptation_disabled_never_moves_the_lane_limit(
-    tmp_path, monkeypatch
-) -> None:
-    """#219 §6: adaptation off is static **Lane cap** behaviour, not a failure.
-
-    An operator who turns the controller off keeps exactly the Run they had
-    before it existed — the static-safe ``min(cap, 3)`` and no concurrency
-    Events at all — however hard the same telemetry is being throttled.
-    """
-    telemetry = _ThrottledTelemetry()
-    _wire_pressure(
-        monkeypatch,
-        telemetry,
-        budgets=rolling_pressure.PressureBudgets(adaptive=False),
-    )
-
-    assert _run_under_pressure(tmp_path, monkeypatch) == 0
-
-    events = _logged_events(tmp_path)
-    assert [e for e in events if e["type"] == "wrapper.concurrency.changed"] == []
-    run_start = next(e for e in events if e["type"] == "wrapper.run.start")
-    assert run_start["effective_lane_limit"] == 3
-    # Disabled costs no telemetry read either: an unobserved controller cannot
-    # move, so there is nothing to read *for*.
-    assert telemetry.rate_limited_calls == 0
 
 
 # ---------------------------------------------------------------------------

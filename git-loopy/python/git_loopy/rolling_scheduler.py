@@ -279,8 +279,8 @@ class RollingScheduler:
     Args:
         diag: Diagnostics logger.
         pool: The **Pool** candidate cache and pickup seam.
-        lane_cap: The configured **Lane cap** — a strict upper bound for the
-            whole Run, never mutated (#219 §6).
+        lane_cap: The bound **Execution host**'s declared capacity — a strict
+            upper bound for the whole Run, never mutated (#219 §6).
         max_iterations: The Run's iteration cap; ``0`` means unbounded.
         concurrency: The bounded adaptive policy that owns the *effective* Lane
             limit. Defaults to one with no operator budgets configured, which
@@ -344,10 +344,10 @@ class RollingScheduler:
         """The current effective Lane concurrency (#219 §6).
 
         The number :attr:`refillable` is bounded by, and the only Lane limit
-        that moves: the configured :attr:`lane_cap` is a strict upper bound for
-        the whole Run. A Run starts at the static-safe ``min(lane_cap, 3)`` and
-        stays there unless :meth:`observe_pressure` gives the controller
-        authoritative evidence to contract or expand.
+        that moves: the host-declared :attr:`lane_cap` is a strict upper bound
+        for the whole Run. A load-observable host starts at that capacity;
+        otherwise the controller starts at the static-safe
+        ``min(lane_cap, 3)``.
         """
         return self._controller.effective_limit
 

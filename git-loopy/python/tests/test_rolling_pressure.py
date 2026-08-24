@@ -135,24 +135,6 @@ def test_observations_are_paced_by_the_injected_clock() -> None:
     assert len(observer.seen) == 1
 
 
-def test_a_disabled_run_never_observes_at_all() -> None:
-    """#219 §6: adaptation off leaves the static-safe limit exactly where it is.
-
-    Not a separate frozen code path — an unobserved controller cannot move,
-    so "disabled" costs no telemetry read either.
-    """
-    clock, telemetry = Clock(), ScriptedTelemetry()
-    observer = RecordingObserver()
-    monitor = _monitor(telemetry, clock, PressureBudgets(adaptive=False))
-
-    for _ in range(20):
-        monitor.observe(observer)
-        clock.tick(OBSERVATION_INTERVAL_SECONDS)
-
-    assert observer.seen == []
-    assert telemetry.reads == 0
-
-
 # --------------------------------------------------------------------------- #
 # Deltas — a window's worth of burn, not a Run's                               #
 # --------------------------------------------------------------------------- #
@@ -202,25 +184,18 @@ def test_an_unobservable_counter_stays_unknown_rather_than_zero() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_budgets_default_to_unconfigured_and_adaptive() -> None:
-    """No environment is not a broken environment.
-
-    Adaptation stays on so the Run still reacts to its own authoritative
-    **Integration backlog**, while the two external budgets stay unknown so
-    nothing invents a target the operator never set.
-    """
+def test_budgets_default_to_unconfigured_credit_and_observable_host_load() -> None:
+    """A Run has host-load observability without an operator-only budget."""
     budgets = PressureBudgets.from_env({})
 
-    assert budgets.adaptive is True
     assert budgets.credit_usd_per_hour is None
-    assert budgets.host_load_per_cpu is None
+    assert budgets.host_load_per_cpu == 1.0
 
 
-def test_the_operator_can_switch_adaptation_off() -> None:
-    """#219 §6's disabled mode is a configured fact, not an inferred one."""
-    assert PressureBudgets.from_env({"GIT_LOOPY_LANE_ADAPT": "0"}).adaptive is False
-    assert PressureBudgets.from_env({"GIT_LOOPY_LANE_ADAPT": "off"}).adaptive is False
-    assert PressureBudgets.from_env({"GIT_LOOPY_LANE_ADAPT": "1"}).adaptive is True
+def test_the_retired_adaptation_switch_is_refused() -> None:
+    """#456: operators must not mistake the retired switch for a capacity cap."""
+    with pytest.raises(ValueError, match="GIT_LOOPY_LANE_ADAPT is no longer supported"):
+        PressureBudgets.from_env({"GIT_LOOPY_LANE_ADAPT": "0"})
 
 
 def test_an_unusable_budget_reads_as_unconfigured() -> None:
@@ -238,7 +213,7 @@ def test_an_unusable_budget_reads_as_unconfigured() -> None:
     )
 
     assert budgets.credit_usd_per_hour is None
-    assert budgets.host_load_per_cpu is None
+    assert budgets.host_load_per_cpu == 1.0
 
 
 def test_a_credit_budget_is_prorated_onto_the_observation_window() -> None:
@@ -281,17 +256,27 @@ def test_host_pressure_is_the_run_queue_against_the_configured_budget() -> None:
     assert telemetry.read().host_pressure == 2.0
 
 
-def test_host_pressure_is_unknown_without_a_configured_budget() -> None:
-    """#219 §6: "maximum normalized ratio across *configured* budgets".
+def test_an_observable_host_starts_at_its_declared_capacity() -> None:
+    """#456: visible host load lets the controller trust host capacity immediately."""
+    monitor = PressureMonitor.for_run(
+        budgets=PressureBudgets(),
+        lane_cap=6,
+        telemetry=RunPressureTelemetry(
+            budgets=PressureBudgets(), load_average=lambda: 2.0, cpu_count=4
+        ),
+        clock=Clock(),
+    )
 
-    A run queue with nothing to compare it to is a number, not a judgement —
-    and a machine the operator is happy to saturate is a legitimate choice.
-    """
+    assert monitor.controller.effective_limit == 6
+
+
+def test_host_pressure_uses_the_default_budget_without_configuration() -> None:
+    """#456: host load is observable by default when the platform supplies it."""
     telemetry = RunPressureTelemetry(
         budgets=PressureBudgets(), load_average=lambda: 99.0, cpu_count=2
     )
 
-    assert telemetry.read().host_pressure is None
+    assert telemetry.read().host_pressure == 49.5
 
 
 def test_a_platform_without_a_run_queue_reports_host_pressure_unknown() -> None:
@@ -303,6 +288,25 @@ def test_a_platform_without_a_run_queue_reports_host_pressure_unknown() -> None:
     )
 
     assert telemetry.read().host_pressure is None
+
+
+def test_a_failed_startup_load_probe_uses_the_static_safe_limit() -> None:
+    """#456: unavailable load telemetry never aborts a Run before it starts."""
+    def unavailable_load_average() -> float | None:
+        raise RuntimeError("load average unavailable")
+
+    monitor = PressureMonitor.for_run(
+        budgets=PressureBudgets(),
+        lane_cap=6,
+        telemetry=RunPressureTelemetry(
+            budgets=PressureBudgets(),
+            load_average=unavailable_load_average,
+            cpu_count=4,
+        ),
+        clock=Clock(),
+    )
+
+    assert monitor.controller.effective_limit == STATIC_SAFE_LANE_LIMIT
 
 
 def test_rate_limited_reads_are_read_off_the_source(tmp_path) -> None:

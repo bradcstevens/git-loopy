@@ -385,6 +385,12 @@ class LocalExecutionHost:
         self._capacity = (
             capacity if capacity is not None else local_execution_host_capacity()
         )
+        if (
+            isinstance(self._capacity, bool)
+            or not isinstance(self._capacity, int)
+            or self._capacity < 1
+        ):
+            raise ValueError("execution host capacity must be a finite positive integer")
 
     @property
     def placement(self) -> Placement:

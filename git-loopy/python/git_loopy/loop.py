@@ -387,24 +387,40 @@ def _make_pressure_monitor(
     drive the reaction table with an injected clock and scripted telemetry
     instead of real time and a live API, which #219 §6 requires.
 
-    Production wires the three injected halves the PRD names: budgets from the
-    operator's environment (:meth:`~git_loopy.rolling_pressure.PressureBudgets.from_env`,
-    where an unconfigured budget leaves its signal *unknown* rather than
-    inventing a threshold), the process run queue for host/setup pressure, this
-    Run's own priced Consumption for AI-credit burn, and the ``gh`` seam's
-    count of the reads GitHub throttled for the 429 **Pressure signal**.
+    Production wires the three injected halves the PRD names: pressure budgets
+    from the operator's environment, the process run queue for host/setup
+    pressure, this Run's own priced Consumption for AI-credit burn, and the
+    ``gh`` seam's count of the reads GitHub throttled for the 429 **Pressure
+    signal**.
     """
+    budgets = rolling_pressure.PressureBudgets.from_env(os.environ)
     return rolling_pressure.PressureMonitor.for_run(
-        budgets=rolling_pressure.PressureBudgets.from_env(os.environ),
+        budgets=budgets,
         lane_cap=lane_cap,
         telemetry=rolling_pressure.RunPressureTelemetry(
-            budgets=rolling_pressure.PressureBudgets.from_env(os.environ),
+            budgets=budgets,
             credit_spent=credit_spent,
             rate_limits=rate_limits,
         ),
         clock=time.monotonic,
         diag=diag,
     )
+
+
+def _execution_host_capacity(
+    host: execution_host_module.ExecutionHost | None,
+) -> int:
+    """Return the finite positive capacity the bound Execution host declared."""
+    capacity = (
+        execution_host_module.local_execution_host_capacity()
+        if host is None
+        else host.capacity
+    )
+    if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 1:
+        raise ValueError(
+            "execution host capacity must be a finite positive integer"
+        )
+    return capacity
 
 
 def _make_issue_source(
@@ -2377,6 +2393,7 @@ class _ParallelLoop:
         # built for each contribution below so its runner can close over the
         # concrete Lane state without smuggling that state through the request.
         self._execution_host = execution_host
+        self._host_capacity = _execution_host_capacity(execution_host)
 
         # Rolling dispatch (#219, ADR-0020) needs the two extra Pool
         # operations `RollingIssueSource` defines. Only the GitHub backend
@@ -2389,8 +2406,9 @@ class _ParallelLoop:
         # exception. Keep the candidate cached but ineligible for this Run so
         # the terminal classifier can honestly report all_skipped.
         self._rolling_refused: set[int | str] = set()
-        # Bounded adaptive Lane concurrency (#219 §6, #309). The **Lane cap**
-        # is a safety ceiling, not a utilization promise: under sustained
+        # Bounded adaptive Lane concurrency (#219 §6, #309). The bound
+        # **Execution host** declares the safety ceiling; config only chooses
+        # Parallel mode. Under sustained
         # **Integration** backpressure, 429s, AI-credit or host/setup pressure,
         # running at the cap wastes capacity and money. The monitor owns the
         # observation cadence and the operator's budgets; the policy it builds
@@ -2398,7 +2416,7 @@ class _ParallelLoop:
         # observation from its own state.
         self._cost_meter = rolling_pressure.RunCostMeter(denomination=denomination)
         self._pressure = _make_pressure_monitor(
-            lane_cap=config.parallel,
+            lane_cap=self._host_capacity,
             diag=diag,
             credit_spent=self._cost_meter,
             rate_limits=rolling_pressure.rate_limit_reader(source),
@@ -2414,7 +2432,7 @@ class _ParallelLoop:
             self._scheduler = rolling_scheduler.RollingScheduler(
                 diag=diag,
                 pool=self._pool,
-                lane_cap=config.parallel,
+                lane_cap=self._host_capacity,
                 max_iterations=config.max_iterations,
                 concurrency=self._pressure.controller,
             )
@@ -2623,7 +2641,7 @@ class _ParallelLoop:
             # #304: only a Parallel-mode Run carries these, so a serial Run's
             # `wrapper.run.start` is byte-identical to what it always was.
             "parallel_mode": True,
-            "lane_cap": self._config.parallel,
+            "lane_cap": self._host_capacity,
             "effective_lane_limit": (
                 self._scheduler.effective_limit
                 if self._scheduler is not None
@@ -2711,7 +2729,7 @@ class _ParallelLoop:
             events_module.WRAPPER_PARALLEL_DEGRADED,
             iter_num=None,
             reason=events_module.PARALLEL_DEGRADE_SOURCE_NOT_ROLLING,
-            lane_cap=self._config.parallel,
+            lane_cap=self._host_capacity,
             issue_source=self._config.issue_source,
         )
 
@@ -3047,7 +3065,7 @@ class _ParallelLoop:
             unavailable=fallback.unavailable,
             worked=fallback.worked,
             reason=fallback.reason,
-            lane_cap=self._config.parallel,
+            lane_cap=self._host_capacity,
         )
 
     def _service_serial_required_work(self) -> bool:
@@ -4057,11 +4075,11 @@ class _ParallelLoop:
             isolation_grade = (
                 execution_host_module.LOCAL_EXECUTION_HOST_ISOLATION_GRADE
             )
-            capacity = execution_host_module.local_execution_host_capacity()
+            capacity = self._host_capacity
         else:
             placement = self._execution_host.placement
             isolation_grade = self._execution_host.isolation_grade
-            capacity = self._execution_host.capacity
+            capacity = self._host_capacity
         return {
             "placement": placement,
             "isolation_grade": isolation_grade,
@@ -4726,6 +4744,12 @@ async def run(
         * ``1`` — abort (NMT strike threshold or
           preflight / setup failure).
     """
+    try:
+        rolling_pressure.PressureBudgets.from_env(os.environ)
+    except ValueError as exc:
+        print(f"git-loopy: {exc}", file=sys.stderr)
+        return 1
+
     try:
         release_version = read_runtime_release_version()
     except ReleaseVersionError as exc:

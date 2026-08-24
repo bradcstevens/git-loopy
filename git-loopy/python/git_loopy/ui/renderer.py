@@ -389,8 +389,8 @@ class Renderer:
     def _on_concurrency_changed(self, event: dict[str, Any]) -> None:
         """Name the signal that moved the effective **Lane** limit (#219 §6, #309).
 
-        The configured **Lane cap** is a safety ceiling, not a utilization
-        promise, so a Run narrowing itself is correct behaviour — but a Run
+        The bound **Execution host**'s capacity is a safety ceiling, not a
+        utilization promise, so a Run narrowing itself is correct behaviour — but a Run
         that narrows *silently* is indistinguishable from Parallel mode being
         broken, which is the same reporting failure #304 fixed for a Run that
         never engaged a Lane at all. Each pressure gets its own words because
