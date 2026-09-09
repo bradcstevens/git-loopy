@@ -201,6 +201,28 @@ def test_every_channel_resolves_one_artifact_url_for_one_release() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "case", FIXTURE["release_resolution_cases"], ids=lambda case: case["id"]
+)
+def test_a_helper_resolves_the_release_the_artifact_fixture_names(
+    case: dict[str, Any],
+) -> None:
+    if case["resolved_version"] is None:
+        with pytest.raises(tui_release.TuiReleaseError) as raised:
+            tui_release.resolve_published_release(
+                case["declared_version"], case["published_versions"]
+            )
+        assert case["error"] in str(raised.value)
+        return
+
+    assert (
+        tui_release.resolve_published_release(
+            case["declared_version"], case["published_versions"]
+        )
+        == case["resolved_version"]
+    )
+
+
 def test_the_download_url_cannot_drift_from_the_repository_it_publishes_from() -> None:
     """One repository, declared once in the helper manifest.
 
@@ -216,6 +238,10 @@ def test_the_download_url_cannot_drift_from_the_repository_it_publishes_from() -
 
     repository = manifest["package"]["repository"]
     assert metadata.release_download_url_template.startswith(f"{repository}/releases/")
+    assert FIXTURE["release_index_url_template"].startswith(
+        repository.replace("https://github.com/", "https://api.github.com/repos/")
+        + "/releases?"
+    )
 
 
 def _write_artifact(directory: Path, name: str, payload: bytes) -> Path:

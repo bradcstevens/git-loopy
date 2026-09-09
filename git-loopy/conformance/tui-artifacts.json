@@ -6,6 +6,7 @@
   "checksum_name_template": "{archive}.sha256",
   "checksum_algorithm": "sha256",
   "release_download_url_template": "https://github.com/bradcstevens/git-loopy/releases/download/v{version}/{artifact}",
+  "release_index_url_template": "https://api.github.com/repos/bradcstevens/git-loopy/releases?per_page=100&page={page}",
   "archive_formats": {
     "macos": {
       "extension": "tar.xz",
@@ -235,6 +236,36 @@
       "libc": "gnu",
       "target": null,
       "error": "no git-loopy-tui artifact is published"
+    }
+  ],
+  "release_resolution_cases": [
+    {
+      "id": "an-exact-published-release-wins",
+      "declared_version": "4.5.6",
+      "published_versions": ["4.5.5", "4.5.6", "4.5.7"],
+      "resolved_version": "4.5.6",
+      "error": null
+    },
+    {
+      "id": "a-development-line-falls-back-to-the-last-published-helper",
+      "declared_version": "4.5.7-dev.9",
+      "published_versions": ["4.5.5", "4.5.6", "4.5.7"],
+      "resolved_version": "4.5.6",
+      "error": null
+    },
+    {
+      "id": "a-newer-release-is-never-selected",
+      "declared_version": "4.5.6",
+      "published_versions": ["4.5.5", "4.5.7"],
+      "resolved_version": "4.5.5",
+      "error": null
+    },
+    {
+      "id": "no-eligible-published-release-is-named",
+      "declared_version": "4.5.5",
+      "published_versions": ["4.5.6", "4.5.7"],
+      "resolved_version": null,
+      "error": "no published git-loopy-tui Release is at or below"
     }
   ]
 }

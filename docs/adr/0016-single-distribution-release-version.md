@@ -3,6 +3,13 @@
 > **Note (superseded in part by [ADR-0046](0046-continuation-is-decommissioned.md)):**
 > This decision references Workflow Continuation, which has since been decommissioned.
 > The reasoning below is preserved as the record of what was decided at the time.
+>
+> **Note (one sentence superseded by [#492](https://github.com/bradcstevens/git-loopy/issues/492)):**
+> The sentence “Artifacts selected as one packaged distribution require exact
+> Release-version equality” is superseded only for installed TUI helpers. Their
+> installer resolves the newest published Release at or below the tree's
+> declared Release version, then verifies the helper's identity against that
+> resolved version. No other part of this ADR changes.
 
 
 Git-loopy publishes one shared Semantic Versioning Release version for every

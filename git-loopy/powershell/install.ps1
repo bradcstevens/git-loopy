@@ -143,7 +143,7 @@ else {
     }
 
     try {
-        $HelperPath = Install-GitLoopyTuiHelper `
+        $HelperInstallation = Install-GitLoopyTuiHelper `
             -Metadata $ArtifactMetadata `
             -RepositoryRoot $RepositoryRoot `
             -ReleaseVersion $ReleaseVersion `
@@ -152,7 +152,7 @@ else {
             -Archive $TuiArchive `
             -Checksum $TuiChecksum
         [Console]::Out.WriteLine(
-            "Installed git-loopy-tui ${ReleaseVersion}: $HelperPath")
+            "Installed git-loopy-tui $($HelperInstallation.ReleaseVersion): $($HelperInstallation.Path)")
     }
     catch {
         [Console]::Error.WriteLine("install.ps1: $($_.Exception.Message)")

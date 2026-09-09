@@ -182,6 +182,26 @@ Assert-Equal (
         -Artifact git-loopy-tui-aarch64-apple-darwin.tar.xz
 ) "artifact URL resolves against the published Release tag"
 
+# --- Release resolution -----------------------------------------------------
+#
+# The shared fixture pins the four outcomes in both installer families. The
+# selected version is later passed to the staged helper identity probe.
+foreach ($Case in @($Metadata["release_resolution_cases"])) {
+    if ($null -eq $Case["resolved_version"]) {
+        Assert-Contains (Get-RefusalMessage {
+                Resolve-GitLoopyTuiRelease -Metadata $ArtifactMetadata `
+                    -DeclaredVersion $Case["declared_version"] `
+                    -PublishedVersions @($Case["published_versions"])
+            }) ([string]$Case["error"]) "release-resolution fixture error: $($Case["id"])"
+        continue
+    }
+    Assert-Equal $Case["resolved_version"] (
+        Resolve-GitLoopyTuiRelease -Metadata $ArtifactMetadata `
+            -DeclaredVersion $Case["declared_version"] `
+            -PublishedVersions @($Case["published_versions"])
+    ) "release-resolution fixture result: $($Case["id"])"
+}
+
 # --- Checksum verification --------------------------------------------------
 #
 # Both halves are load-bearing. A digest that matches proves nothing if it was

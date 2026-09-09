@@ -205,6 +205,169 @@ function Get-GitLoopyTuiArtifactUrl {
     return $Template.Replace("{version}", $ReleaseVersion).Replace("{artifact}", $Artifact)
 }
 
+function ConvertTo-GitLoopyTuiSemanticVersion {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Version,
+        [Parameter(Mandatory)]
+        [string]$Label
+    )
+
+    $Pattern = "^(?<major>0|[1-9][0-9]*)\.(?<minor>0|[1-9][0-9]*)\." +
+        "(?<patch>0|[1-9][0-9]*)(?:-(?<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?" +
+        "(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+    $Match = [regex]::Match($Version, $Pattern)
+    if (-not $Match.Success) {
+        throw (New-GitLoopyTuiInstallError -Message (
+                "$Label $Version is not valid Semantic Versioning"
+            ))
+    }
+    $Prerelease = if ($Match.Groups["prerelease"].Success) {
+        @($Match.Groups["prerelease"].Value.Split("."))
+    }
+    else {
+        $null
+    }
+    foreach ($Identifier in @($Prerelease)) {
+        if ($Identifier -match "^[0-9]+$" -and
+            $Identifier.Length -gt 1 -and $Identifier.StartsWith("0")) {
+            throw (New-GitLoopyTuiInstallError -Message (
+                    "$Label $Version is not valid Semantic Versioning"
+                ))
+        }
+    }
+    return [pscustomobject]@{
+        Value = $Version
+        Core = @(
+            [bigint]$Match.Groups["major"].Value,
+            [bigint]$Match.Groups["minor"].Value,
+            [bigint]$Match.Groups["patch"].Value
+        )
+        Prerelease = $Prerelease
+    }
+}
+
+function Compare-GitLoopyTuiSemanticVersion {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Left,
+        [Parameter(Mandatory)]
+        [object]$Right
+    )
+
+    for ($Index = 0; $Index -lt 3; $Index++) {
+        if ($Left.Core[$Index] -lt $Right.Core[$Index]) { return -1 }
+        if ($Left.Core[$Index] -gt $Right.Core[$Index]) { return 1 }
+    }
+    if ($null -eq $Left.Prerelease -or $null -eq $Right.Prerelease) {
+        if ($null -eq $Left.Prerelease -and $null -eq $Right.Prerelease) { return 0 }
+        if ($null -eq $Left.Prerelease) { return 1 }
+        return -1
+    }
+
+    $Limit = [Math]::Min($Left.Prerelease.Count, $Right.Prerelease.Count)
+    for ($Index = 0; $Index -lt $Limit; $Index++) {
+        $LeftIdentifier = $Left.Prerelease[$Index]
+        $RightIdentifier = $Right.Prerelease[$Index]
+        if ($LeftIdentifier -ceq $RightIdentifier) { continue }
+        $LeftNumeric = $LeftIdentifier -match "^[0-9]+$"
+        $RightNumeric = $RightIdentifier -match "^[0-9]+$"
+        if ($LeftNumeric -and $RightNumeric) {
+            if ([bigint]$LeftIdentifier -lt [bigint]$RightIdentifier) { return -1 }
+            return 1
+        }
+        if ($LeftNumeric) { return -1 }
+        if ($RightNumeric) { return 1 }
+        if ([string]::CompareOrdinal($LeftIdentifier, $RightIdentifier) -lt 0) { return -1 }
+        return 1
+    }
+    if ($Left.Prerelease.Count -lt $Right.Prerelease.Count) { return -1 }
+    if ($Left.Prerelease.Count -gt $Right.Prerelease.Count) { return 1 }
+    return 0
+}
+
+function Resolve-GitLoopyTuiRelease {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Metadata,
+        [Parameter(Mandatory)]
+        [string]$DeclaredVersion,
+        [Parameter(Mandatory)]
+        [string[]]$PublishedVersions
+    )
+
+    $Meta = Read-GitLoopyTuiMetadata -Metadata $Metadata
+    $Command = Get-GitLoopyTuiCommandName -Meta $Meta
+    $Declared = ConvertTo-GitLoopyTuiSemanticVersion `
+        -Version $DeclaredVersion -Label "declared Release version"
+    $Selected = $null
+    foreach ($PublishedVersion in $PublishedVersions) {
+        $Published = ConvertTo-GitLoopyTuiSemanticVersion `
+            -Version $PublishedVersion -Label "published $Command Release"
+        if ((Compare-GitLoopyTuiSemanticVersion -Left $Published -Right $Declared) -gt 0) {
+            continue
+        }
+        if ($null -eq $Selected -or
+            (Compare-GitLoopyTuiSemanticVersion -Left $Published -Right $Selected) -gt 0) {
+            $Selected = $Published
+        }
+    }
+    if ($null -eq $Selected) {
+        throw (New-GitLoopyTuiInstallError -Message (
+                "no published $Command Release is at or below declared Release version $DeclaredVersion"
+            ))
+    }
+    return $Selected.Value
+}
+
+function Get-GitLoopyTuiPublishedReleases {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Metadata
+    )
+
+    $Meta = Read-GitLoopyTuiMetadata -Metadata $Metadata
+    $Template = $Meta["release_index_url_template"]
+    if ($Template -isnot [string] -or [string]::IsNullOrEmpty($Template)) {
+        throw (New-GitLoopyTuiInstallError -Message (
+                "helper artifact metadata $Metadata declares no Release index URL"
+            ))
+    }
+    $Versions = [Collections.Generic.List[string]]::new()
+    for ($Page = 1; ; $Page++) {
+        $Uri = $Template.Replace("{page}", [string]$Page)
+        try {
+            $Response = Invoke-WebRequest -Uri $Uri -ErrorAction Stop
+            $PageReleases = @($Response.Content | ConvertFrom-Json -AsHashtable)
+        }
+        catch {
+            throw (New-GitLoopyTuiInstallError -Message (
+                    "cannot read published helper Releases from $Uri"
+                ))
+        }
+        if ($PageReleases.Count -eq 1 -and $null -eq $PageReleases[0]) {
+            $PageReleases = @()
+        }
+        if ($PageReleases -isnot [Array]) {
+            throw (New-GitLoopyTuiInstallError -Message (
+                    "cannot read published helper Releases from $Uri"
+                ))
+        }
+        foreach ($Release in $PageReleases) {
+            if ($Release -is [Collections.IDictionary] -and
+                $Release["draft"] -ne $true -and
+                $Release["tag_name"] -is [string] -and
+                $Release["tag_name"].StartsWith("v")) {
+                $Versions.Add($Release["tag_name"].Substring(1))
+            }
+        }
+        if ($PageReleases.Count -lt 100) { break }
+    }
+    return @($Versions)
+}
+
 function Get-GitLoopyTuiDigest {
     [CmdletBinding()]
     param(
@@ -733,12 +896,13 @@ function Save-GitLoopyTuiArtifact {
 # Install one verified helper into `<RepositoryRoot>/.git-loopy/bin/`.
 #
 # The order is the whole contract, and it is the order a failure is cheapest in:
-# pick the artifact this host publishes, obtain it and its published checksum,
-# prove the checksum over both filename and digest, unpack it, prove it reports
-# this clone's Release and decodes this Orchestrator's Event schema — and only
-# then rename it into the slot a Run discovers. Everything before the rename
-# happens inside a scratch directory that is removed either way, so a prior
-# verified helper survives every failure above untouched.
+# pick the artifact this host publishes, resolve the newest published helper no
+# newer than this clone, obtain its checksum, prove the checksum over both
+# filename and digest, unpack it, prove it reports that resolved Release and
+# decodes this Orchestrator's Event schema — and only then rename it into the
+# slot a Run discovers. Everything before the rename happens inside a scratch
+# directory that is removed either way, so a prior verified helper survives
+# every failure above untouched.
 #
 # `Archive` / `Checksum` are the air-gapped path: a host with no network hands
 # over files it already has, and they face exactly the same proofs as a download.
@@ -769,6 +933,12 @@ function Install-GitLoopyTuiHelper {
 
     $Triple = Get-GitLoopyTuiHostTarget -Metadata $Metadata
     $Names = Get-GitLoopyTuiArtifactName -Metadata $Metadata -Triple $Triple
+    $ResolvedReleaseVersion = $ReleaseVersion
+    if ([string]::IsNullOrEmpty($Archive) -and [string]::IsNullOrEmpty($BaseUrl)) {
+        $ResolvedReleaseVersion = Resolve-GitLoopyTuiRelease -Metadata $Metadata `
+            -DeclaredVersion $ReleaseVersion `
+            -PublishedVersions @(Get-GitLoopyTuiPublishedReleases -Metadata $Metadata)
+    }
 
     $Destination = Join-Path (
         Join-Path $RepositoryRoot $Script:TuiInstallRelativeDirectory
@@ -803,9 +973,9 @@ function Install-GitLoopyTuiHelper {
             }
             else {
                 (Get-GitLoopyTuiArtifactUrl -Metadata $Metadata `
-                    -ReleaseVersion $ReleaseVersion -Artifact $Names.Archive),
+                    -ReleaseVersion $ResolvedReleaseVersion -Artifact $Names.Archive),
                 (Get-GitLoopyTuiArtifactUrl -Metadata $Metadata `
-                    -ReleaseVersion $ReleaseVersion -Artifact $Names.Checksum)
+                    -ReleaseVersion $ResolvedReleaseVersion -Artifact $Names.Checksum)
             }
             Save-GitLoopyTuiArtifact -Uri $ArchiveUrl -Destination $StagedArchive
             Save-GitLoopyTuiArtifact -Uri $ChecksumUrl -Destination $StagedChecksum
@@ -815,7 +985,7 @@ function Install-GitLoopyTuiHelper {
         $Staged = Expand-GitLoopyTuiArchive -Archive $StagedArchive `
             -Destination (Join-Path $Workspace "unpacked") `
             -ExecutableName $Names.Executable
-        Test-GitLoopyTuiStagedHelper -Helper $Staged -ReleaseVersion $ReleaseVersion `
+        Test-GitLoopyTuiStagedHelper -Helper $Staged -ReleaseVersion $ResolvedReleaseVersion `
             -SchemaVersion $SchemaVersion -CommandName $Command
         Move-GitLoopyTuiHelper -Verified $Staged -Destination $Destination
     }
@@ -824,13 +994,18 @@ function Install-GitLoopyTuiHelper {
         # discoverable debris in the directory a Run searches.
         Remove-Item -LiteralPath $Workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
-    return $Destination
+    return [pscustomobject]@{
+        Path = $Destination
+        ReleaseVersion = $ResolvedReleaseVersion
+    }
 }
 
 Export-ModuleMember -Function @(
     "Select-GitLoopyTuiTarget",
     "Get-GitLoopyTuiArtifactName",
     "Get-GitLoopyTuiArtifactUrl",
+    "Resolve-GitLoopyTuiRelease",
+    "Get-GitLoopyTuiPublishedReleases",
     "Get-GitLoopyTuiDigest",
     "Test-GitLoopyTuiChecksum",
     "Expand-GitLoopyTuiArchive",
