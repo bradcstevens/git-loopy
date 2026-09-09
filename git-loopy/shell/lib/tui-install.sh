@@ -243,7 +243,8 @@ _git_loopy_tui_compare_release_versions() {
       comparison='-1'
     elif [[ "$right_identifier" =~ ^[0-9]+$ ]]; then
       comparison='1'
-    elif [[ "$left_identifier" < "$right_identifier" ]]; then
+    elif [[ "$(printf '%s\n%s\n' "$left_identifier" "$right_identifier" |
+      LC_ALL=C sort | sed -n '1p')" == "$left_identifier" ]]; then
       comparison='-1'
     else
       comparison='1'
@@ -340,6 +341,8 @@ git_loopy_tui_resolve_release() {
 # helper remains resolvable after the release history grows beyond one page.
 git_loopy_tui_published_releases() {
   local metadata="${1:?artifact metadata path is required}"
+  local archive_name="${2:?archive name is required}"
+  local checksum_name="${3:?checksum name is required}"
   local template
   if ! template="$(jq -r '.release_index_url_template // empty' "$metadata" 2>/dev/null)" ||
     [[ -z "$template" ]]; then
@@ -362,10 +365,13 @@ git_loopy_tui_published_releases() {
     }
     page_releases="$(jq -ce '
       if type != "array" then error("releases") else
-        [.[] | select(.draft != true) | .tag_name
-          | select(type == "string" and startswith("v")) | .[1:]]
+        [.[] | select(
+          .draft != true
+          and ([.assets[]?.name] | index($archive) != null)
+          and ([.assets[]?.name] | index($checksum) != null)
+        ) | .tag_name | select(type == "string" and startswith("v")) | .[1:]]
       end
-    ' <<<"$document")" || {
+    ' --arg archive "$archive_name" --arg checksum "$checksum_name" <<<"$document")" || {
       _git_loopy_tui_install_error "cannot read published helper Releases from $url"
       return 1
     }
@@ -704,7 +710,10 @@ git_loopy_tui_install() {
   local resolved_release_version="$release_version"
   if [[ -z "$archive_override" && -z "$base_url" ]]; then
     local published_releases
-    published_releases="$(git_loopy_tui_published_releases "$metadata")" || return 1
+    published_releases="$(
+      git_loopy_tui_published_releases \
+        "$metadata" "$archive_name" "$checksum_name"
+    )" || return 1
     resolved_release_version="$(
       git_loopy_tui_resolve_release \
         "$metadata" "$release_version" "$published_releases"

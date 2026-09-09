@@ -265,10 +265,12 @@ function Compare-GitLoopyTuiSemanticVersion {
         return -1
     }
 
-    $Limit = [Math]::Min($Left.Prerelease.Count, $Right.Prerelease.Count)
+    $LeftPrerelease = @($Left.Prerelease)
+    $RightPrerelease = @($Right.Prerelease)
+    $Limit = [Math]::Min($LeftPrerelease.Count, $RightPrerelease.Count)
     for ($Index = 0; $Index -lt $Limit; $Index++) {
-        $LeftIdentifier = $Left.Prerelease[$Index]
-        $RightIdentifier = $Right.Prerelease[$Index]
+        $LeftIdentifier = $LeftPrerelease[$Index]
+        $RightIdentifier = $RightPrerelease[$Index]
         if ($LeftIdentifier -ceq $RightIdentifier) { continue }
         $LeftNumeric = $LeftIdentifier -match "^[0-9]+$"
         $RightNumeric = $RightIdentifier -match "^[0-9]+$"
@@ -281,8 +283,8 @@ function Compare-GitLoopyTuiSemanticVersion {
         if ([string]::CompareOrdinal($LeftIdentifier, $RightIdentifier) -lt 0) { return -1 }
         return 1
     }
-    if ($Left.Prerelease.Count -lt $Right.Prerelease.Count) { return -1 }
-    if ($Left.Prerelease.Count -gt $Right.Prerelease.Count) { return 1 }
+    if ($LeftPrerelease.Count -lt $RightPrerelease.Count) { return -1 }
+    if ($LeftPrerelease.Count -gt $RightPrerelease.Count) { return 1 }
     return 0
 }
 
@@ -294,6 +296,7 @@ function Resolve-GitLoopyTuiRelease {
         [Parameter(Mandatory)]
         [string]$DeclaredVersion,
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [string[]]$PublishedVersions
     )
 
@@ -325,7 +328,11 @@ function Get-GitLoopyTuiPublishedReleases {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [string]$Metadata
+        [string]$Metadata,
+        [Parameter(Mandatory)]
+        [string]$ArchiveName,
+        [Parameter(Mandatory)]
+        [string]$ChecksumName
     )
 
     $Meta = Read-GitLoopyTuiMetadata -Metadata $Metadata
@@ -356,10 +363,15 @@ function Get-GitLoopyTuiPublishedReleases {
                 ))
         }
         foreach ($Release in $PageReleases) {
+            $AssetNames = @($Release["assets"] | Where-Object {
+                    $_ -is [Collections.IDictionary] -and $_["name"] -is [string]
+                } | ForEach-Object { $_["name"] })
             if ($Release -is [Collections.IDictionary] -and
                 $Release["draft"] -ne $true -and
                 $Release["tag_name"] -is [string] -and
-                $Release["tag_name"].StartsWith("v")) {
+                $Release["tag_name"].StartsWith("v") -and
+                $AssetNames -contains $ArchiveName -and
+                $AssetNames -contains $ChecksumName) {
                 $Versions.Add($Release["tag_name"].Substring(1))
             }
         }
@@ -937,7 +949,8 @@ function Install-GitLoopyTuiHelper {
     if ([string]::IsNullOrEmpty($Archive) -and [string]::IsNullOrEmpty($BaseUrl)) {
         $ResolvedReleaseVersion = Resolve-GitLoopyTuiRelease -Metadata $Metadata `
             -DeclaredVersion $ReleaseVersion `
-            -PublishedVersions @(Get-GitLoopyTuiPublishedReleases -Metadata $Metadata)
+            -PublishedVersions @(Get-GitLoopyTuiPublishedReleases -Metadata $Metadata `
+                -ArchiveName $Names.Archive -ChecksumName $Names.Checksum)
     }
 
     $Destination = Join-Path (
