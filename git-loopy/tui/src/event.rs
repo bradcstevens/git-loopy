@@ -151,15 +151,16 @@ impl ContributionIdentity {
     /// work, which `event-schema.json`'s stamped-existing-records rule
     /// forbids.
     ///
-    /// An absent Iteration key reads the same as an explicit `null`, matching
-    /// the producer this mirrors, whose rule is `iter is None`
-    /// (`git_loopy.events._require_contribution_identity`). An Iteration key
-    /// present but unreadable is refused rather than assumed absent: a record
-    /// whose scope cannot be read is exactly the doubtful one that must not
-    /// be admitted to the rolling path, and the serial arm below already
-    /// handles it.
+    /// An Iteration key must be *present and null*, not merely unreadable as
+    /// a number. The envelope is on every line, and a contribution-scoped
+    /// record's `iter` MUST be `null` (`docs/wrapper-contract.md`, "Identity,
+    /// not Lane"), so scope is a fact the record states rather than one this
+    /// consumer infers from a missing key — the same reason a Calibration
+    /// record carries `run_id: null` instead of dropping it. A record whose
+    /// Iteration key is absent or unreadable is malformed, and the serial arm
+    /// below already handles it.
     fn from_object(object: &serde_json::Map<String, Value>) -> Option<Self> {
-        if object.get("iter").is_some_and(|iter| !iter.is_null()) {
+        if !matches!(object.get("iter"), Some(Value::Null)) {
             return None;
         }
         Some(Self {

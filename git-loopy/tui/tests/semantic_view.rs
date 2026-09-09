@@ -681,23 +681,29 @@ fn an_identity_key_present_but_empty_is_not_a_whole_identity() {
 }
 
 #[test]
-fn an_unreadable_iteration_key_keeps_a_record_off_the_rolling_path() {
-    // A record whose scope cannot be read is the doubtful one that must not
-    // be admitted: an Iteration key that is present but not a number is
-    // refused rather than assumed absent.
-    let projected = reduce(
-        &[serde_json::json!({
-            "ts": "2026-05-16T00:00:18.000Z", "run_id": "r1", "iter": "1",
-            "type": "wrapper.contribution.end",
-            "contribution_id": "c-0001", "issue": 42, "lane_id": "lane-1",
-            "reason": "published",
-            "summary": {"closure_outcome": "closed", "lifecycle_seconds": 94.25}
-        })],
-        IssueRef::number(42),
-    );
+fn an_iteration_key_absent_or_unreadable_keeps_a_record_off_the_rolling_path() {
+    // A contribution states its scope: the envelope is on every line and a
+    // contribution-scoped record's `iter` MUST be `null`, so a missing key is
+    // a malformed record rather than an implied Run scope. Reading the
+    // absence as a contribution would be exactly the inference the contract
+    // forbids.
+    let whole_but_for_iter = serde_json::json!({
+        "ts": "2026-05-16T00:00:18.000Z", "run_id": "r1",
+        "type": "wrapper.contribution.end",
+        "contribution_id": "c-0001", "issue": 42, "lane_id": "lane-1",
+        "reason": "published",
+        "summary": {"closure_outcome": "closed", "lifecycle_seconds": 94.25}
+    });
+    let absent = whole_but_for_iter.clone();
+    let mut unreadable = whole_but_for_iter;
+    unreadable["iter"] = serde_json::json!("1");
 
-    assert_eq!(
-        projected["dashboard"]["summary"]["rows"],
-        serde_json::json!([])
-    );
+    for record in [absent, unreadable] {
+        let projected = reduce(&[record], IssueRef::number(42));
+
+        assert_eq!(
+            projected["dashboard"]["summary"]["rows"],
+            serde_json::json!([])
+        );
+    }
 }
