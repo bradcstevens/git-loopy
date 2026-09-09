@@ -138,6 +138,7 @@ from git_loopy import contribution_materialization as materialization_module
 from git_loopy import execution_host as execution_host_module
 from git_loopy import gate as gate_module
 from git_loopy import gh as gh_module
+from git_loopy import github_actions_host as actions_host_module
 from git_loopy import git as git_module
 from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
@@ -302,6 +303,20 @@ def _make_github_client() -> gh_module.SubprocessGitHubClient:
     ``prds`` backend has no GitHub dependency.
     """
     return gh_module.SubprocessGitHubClient()
+
+
+def _make_execution_host(
+    placement: str,
+) -> execution_host_module.ExecutionHost | None:
+    """Construct the selected non-local Execution host, if any."""
+    if placement == "local":
+        return None
+    if placement == "github-actions":
+        return actions_host_module.GitHubActionsExecutionHost(
+            client=actions_host_module.SubprocessActionsClient.discover(),
+            capacity=actions_host_module.github_actions_capacity(),
+        )
+    raise ValueError(f"unsupported execution host {placement!r}")
 
 
 def _make_task_type_label_client() -> gh_module.SubprocessTaskTypeLabelClient:
@@ -3543,6 +3558,7 @@ class _ParallelLoop:
             outcome = dataclass_replace(
                 outcome, branch=materialized.branch, remote=None, ref=None
             )
+            self._ingest_remote_events(contribution, outcome.events)
 
         # Reclaim the local placeholder *before* adopting the host's branch: a
         # host that contributed on a branch of its own leaves the deterministic
@@ -3771,6 +3787,21 @@ class _ParallelLoop:
             self._salvage_and_reclaim_lane_workspace(lane_work)
             if discard_branch and lane_work.reclaimed:
                 self._delete_branch_safely(lane_work.item.ref, lane_work.branch)
+
+    def _ingest_remote_events(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        remote_events: Iterable[Mapping[str, Any]],
+    ) -> None:
+        """Append the host artifact's original, backdated event envelopes."""
+        for remote_event in remote_events:
+            envelope = dict(remote_event)
+            envelope.update(
+                contribution_id=contribution.contribution_id,
+                issue=contribution.ref,
+                lane_id=contribution.lane_id,
+            )
+            self._serial._emitter.dispatch(envelope)
 
     def _salvage_and_reclaim_lane_workspace(self, lane_work: _LaneWork) -> None:
         """**Salvage** a **Lane workspace**, then reclaim it (#452, #445 §F).
@@ -4930,7 +4961,7 @@ async def run(
                 len(sweep_report.directories),
             )
 
-    if config.execution_host not in events_module.PYTHON_EXECUTION_HOSTS:
+    if config.execution_host not in (*events_module.PYTHON_EXECUTION_HOSTS, "github-actions"):
         supported = ", ".join(events_module.PYTHON_EXECUTION_HOSTS) or "(none)"
         print(
             f"git-loopy: Execution host {config.execution_host!r} is unsupported: "
@@ -4939,6 +4970,17 @@ async def run(
             "Set GIT_LOOPY_EXECUTION_HOST to a declared placement.",
             file=sys.stderr,
         )
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
+        return exit_code_for("preflight_failed")
+
+    try:
+        selected_execution_host = _make_execution_host(config.execution_host)
+    except (actions_host_module.ActionsError, ValueError) as exc:
+        print(f"git-loopy: Execution host preflight failed: {exc}", file=sys.stderr)
         try:
             writers.run_summary.flush()
         except Exception as flush_exc:
@@ -5166,6 +5208,9 @@ async def run(
         config, staircase, warn=lambda message: diag.warning("%s", message)
     )
     task_type_client = _make_task_type_label_client()
+    execution_host_args: dict[str, execution_host_module.ExecutionHost] = {}
+    if selected_execution_host is not None:
+        execution_host_args["execution_host"] = selected_execution_host
     loop: _ParallelLoop
     try:
         loop = _ParallelLoop(
@@ -5187,6 +5232,7 @@ async def run(
             rate_card=rate_card,
             classifier_pair=classifier_pair,
             task_type_client=task_type_client,
+            **execution_host_args,
         )
     except git_module.GitError as exc:
         # Rolling dispatch resolves where its **Lane workspaces** live up front

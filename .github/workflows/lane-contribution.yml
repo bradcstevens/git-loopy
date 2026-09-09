@@ -1,0 +1,73 @@
+name: Lane contribution
+
+on:
+  workflow_dispatch:
+    inputs:
+      request:
+        description: Serialized GitHub Actions Execution host request
+        required: true
+        type: string
+
+run-name: git-loopy ${{ fromJSON(inputs.request).run_id }} issue ${{ fromJSON(inputs.request).issue_ref }}
+
+permissions:
+  contents: write
+  # actionlint: ignore
+  copilot-requests: write
+
+jobs:
+  contribution:
+    name: contribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      REQUEST: ${{ inputs.request }}
+      COPILOT_GITHUB_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJSON(inputs.request).base_revision }}
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-lane-contribution
+
+      - name: Create the contribution branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          issue="$(jq -er '.issue_ref | tonumber' <<<"$REQUEST")"
+          run_id="$(jq -er '.run_id' <<<"$REQUEST")"
+          git switch --create "git-loopy/${run_id}/issue-${issue}"
+
+      - name: Run contribution
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.github_actions_worker
+
+      - name: Push contribution and record completion
+        shell: bash
+        run: |
+          set -euo pipefail
+          issue="$(jq -er '.issue_ref | tonumber' <<<"$REQUEST")"
+          run_id="$(jq -er '.run_id' <<<"$REQUEST")"
+          branch="git-loopy/${run_id}/issue-${issue}"
+          git push --set-upstream origin "$branch"
+          jq -n \
+            --arg remote "$(git remote get-url origin)" \
+            --arg ref "refs/heads/${branch}" \
+            --arg sha "$(git rev-parse HEAD)" \
+            --argjson ending "$(cat "$RUNNER_TEMP/git-loopy-ending.json")" \
+            '{remote: $remote, ref: $ref, sha: $sha, ending: $ending}' \
+            > "$RUNNER_TEMP/completion.json"
+
+      - name: Upload contribution result
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-loopy-${{ fromJSON(inputs.request).run_id }}-issue-${{ fromJSON(inputs.request).issue_ref }}
+          path: |
+            ${{ runner.temp }}/completion.json
+            ${{ runner.temp }}/git-loopy-events.jsonl
+          if-no-files-found: error

@@ -1,0 +1,4 @@
+paths:
+  .github/workflows/lane-contribution.yml:
+    ignore:
+      - 'unknown permission scope "copilot-requests"'

@@ -2324,7 +2324,7 @@ def test_parallel_workspace_root_failure_refuses_the_run_at_preflight(
     assert fake_client.stop_call_count == 1
 
 
-@pytest.mark.parametrize("execution_host", ["github-actions", ""])
+@pytest.mark.parametrize("execution_host", ["not-a-host", ""])
 def test_unsupported_execution_host_refuses_the_run_at_preflight(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3935,6 +3935,57 @@ def test_parallel_loop_materializes_remote_contributions_before_integration(
     assert {branch for _remote, _sha, branch in fake_git.fetch_calls} == materialized
     assert materialized <= set(fake_git.branch_deletes)
     assert fake_client.created == []
+
+
+@dataclass
+class _EventfulRemoteExecutionHost(_RemoteBranchExecutionHost):
+    """A remote host whose artifact carries backdated agent output."""
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        outcome = await super().run_contribution(request)
+        assert isinstance(outcome, ContributionSuccess)
+        return replace(
+            outcome,
+            events=(
+                {
+                    "ts": "2026-09-09T20:00:00.000Z",
+                    "run_id": request.run_id,
+                    "iter": None,
+                    "type": "assistant.message",
+                    "content": "completed remotely",
+                },
+            ),
+        )
+
+
+def test_parallel_loop_ingests_backdated_remote_artifact_events(
+    tmp_path, monkeypatch
+) -> None:
+    fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _EventfulRemoteExecutionHost(fake_git)
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, execution_host=host, **kwargs)
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    remote_events = [
+        event
+        for event in _logged_events(tmp_path)
+        if event.get("content") == "completed remotely"
+    ]
+    assert len(remote_events) == 2
+    assert {event["ts"] for event in remote_events} == {"2026-09-09T20:00:00.000Z"}
+    assert {event["issue"] for event in remote_events} == {42, 43}
+    assert all(event["contribution_id"] for event in remote_events)
+    assert all(event["lane_id"] for event in remote_events)
 
 
 @dataclass
