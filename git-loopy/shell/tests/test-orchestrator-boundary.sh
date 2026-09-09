@@ -2588,6 +2588,33 @@ assert_equal \
 grep -q '"type": "wrapper.run.end"' "$FAKE_TUI_STDIN" ||
   fail "helper never received the final Run event"
 
+# A helper resolved from an earlier published Release carries the installer's
+# identity record. The Run still verifies the helper's probe against that
+# record; an unrecorded clone-local helper from another Release remains refused.
+tui_repo="$temp_dir/tui-resolved-release"
+tui_bin="$temp_dir/tui-resolved-release-bin"
+make_repo "$tui_repo"
+write_fake_tools "$tui_bin"
+resolved_helper="$tui_repo/.git-loopy/bin/git-loopy-tui"
+write_fake_tui "$resolved_helper" "clone-local"
+printf '0.8.9\n' >"$resolved_helper.release"
+setup_tui_env "resolved-release"
+export FAKE_TUI_VERSION="0.8.9"
+export FAKE_GH_LOG="$temp_dir/tui-resolved-release-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/tui-resolved-release-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/empty-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/empty-views"
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-resolved-release.stdout" "$temp_dir/tui-resolved-release.stderr" \
+  --interactive
+status=$?
+set -e
+assert_equal "0" "$status" "resolved-release interactive empty-pool Run exit"
+assert_equal "clone-local" "$(<"$FAKE_TUI_STARTED")" \
+  "a resolved clone-local helper is accepted by a Run"
+
 # Discovery falls through to PATH only when the clone has no pinned helper. The
 # two fakes label themselves, so "which one ran" is observed rather than assumed.
 tui_repo="$temp_dir/tui-path"

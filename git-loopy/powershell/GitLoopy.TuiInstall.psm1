@@ -312,7 +312,9 @@ function Resolve-GitLoopyTuiRelease {
             continue
         }
         if ($null -eq $Selected -or
-            (Compare-GitLoopyTuiSemanticVersion -Left $Published -Right $Selected) -gt 0) {
+            (Compare-GitLoopyTuiSemanticVersion -Left $Published -Right $Selected) -gt 0 -or
+            ((Compare-GitLoopyTuiSemanticVersion -Left $Published -Right $Selected) -eq 0 -and
+                $PublishedVersion -ceq $DeclaredVersion)) {
             $Selected = $Published
         }
     }
@@ -745,6 +747,28 @@ function Move-GitLoopyTuiHelper {
     }
 }
 
+function Set-GitLoopyTuiResolvedRelease {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Helper,
+        [Parameter(Mandatory)]
+        [string]$ResolvedReleaseVersion
+    )
+
+    $Record = "$Helper.release"
+    $Staging = "$Record.$PID"
+    try {
+        [IO.File]::WriteAllText($Staging, "$ResolvedReleaseVersion`n")
+        Move-Item -LiteralPath $Staging -Destination $Record -Force -ErrorAction Stop
+    }
+    catch {
+        Remove-Item -LiteralPath $Staging -Force -ErrorAction SilentlyContinue
+        throw (New-GitLoopyTuiInstallError -Message (
+                "cannot record the resolved helper Release"
+            ))
+    }
+}
+
 # Which C library a Linux host links against — the one selection input the
 # runtime cannot answer, and the reason two Linux artifacts exist per
 # architecture.
@@ -1001,6 +1025,8 @@ function Install-GitLoopyTuiHelper {
         Test-GitLoopyTuiStagedHelper -Helper $Staged -ReleaseVersion $ResolvedReleaseVersion `
             -SchemaVersion $SchemaVersion -CommandName $Command
         Move-GitLoopyTuiHelper -Verified $Staged -Destination $Destination
+        Set-GitLoopyTuiResolvedRelease -Helper $Destination `
+            -ResolvedReleaseVersion $ResolvedReleaseVersion
     }
     finally {
         # The workspace is a sibling of the destination, so it would otherwise be
@@ -1025,6 +1051,7 @@ Export-ModuleMember -Function @(
     "Test-GitLoopyTuiStagedHelper",
     "New-GitLoopyTuiWorkspace",
     "Move-GitLoopyTuiHelper",
+    "Set-GitLoopyTuiResolvedRelease",
     "ConvertFrom-GitLoopyLddReport",
     "ConvertFrom-GitLoopyRuntimeArchitecture",
     "Get-GitLoopyTuiHostLibc",

@@ -122,20 +122,37 @@ git_loopy_tui_probe() {
     <<<"$probe" 2>/dev/null
 }
 
+# The installer records the resolved Release only after the staged helper proves
+# that identity. A clone-local helper that differs from the tree may use that
+# record, while an arbitrary stale helper still fails closed.
+git_loopy_tui_installed_release() {
+  local helper="${1:?helper path is required}"
+  local record="$helper.release"
+  [[ -r "$record" ]] || return 1
+
+  local resolved_release_version
+  IFS= read -r resolved_release_version <"$record" || return 1
+  [[ -n "$resolved_release_version" ]] || return 1
+  printf '%s\n' "$resolved_release_version"
+}
+
 # Contract §16: Release equality is product identity, never a compatibility
-# authority. A helper staged as part of *this* distribution must match exactly
-# and fails closed on drift; an externally discovered one may still run on the
-# strength of the schema probe, but the operator is told the Releases differ.
+# authority. An installed helper may instead match the Release its installer
+# resolved; an externally discovered helper may still run on the strength of
+# the schema probe, but the operator is told the Releases differ.
 git_loopy_tui_check_release_identity() {
   local source="${1:?helper source is required}"
   local helper_version="${2-}"
   local release_version="${3-}"
+  local resolved_release_version="${4-}"
 
   [[ -n "$helper_version" && -n "$release_version" ]] || return 0
   [[ "$helper_version" != "$release_version" ]] || return 0
 
   if [[ "$source" == "clone-local" ]]; then
-    return 1
+    [[ -n "$resolved_release_version" &&
+      "$helper_version" == "$resolved_release_version" ]]
+    return
   fi
   _git_loopy_tui_warn \
     "the $GIT_LOOPY_TUI_COMMAND_NAME helper on PATH reports Release version $helper_version, not $release_version; its Event-schema support is compatible, so the live interface continues"
@@ -326,8 +343,13 @@ git_loopy_tui_begin() {
     return 0
   fi
 
+  local resolved_release_version=""
+  if [[ "$helper_source" == "clone-local" ]]; then
+    resolved_release_version="$(git_loopy_tui_installed_release "$helper" 2>/dev/null)" ||
+      resolved_release_version=""
+  fi
   if ! git_loopy_tui_check_release_identity \
-    "$helper_source" "$helper_version" "$release_version"; then
+    "$helper_source" "$helper_version" "$release_version" "$resolved_release_version"; then
     _git_loopy_tui_warn \
       "the pinned $helper reports Release version $helper_version, not $release_version; reinstall it to match this clone. Continuing with raw JSONL output on stdout"
     return 0
