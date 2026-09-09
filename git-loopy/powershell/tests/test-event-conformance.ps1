@@ -226,15 +226,10 @@ Assert-True ($RefusalText -match "GIT_LOOPY_MAX_PARALLEL") (
     "refusal must name the setting the operator can change"
 )
 
-$RunStartCase = @(
-    $Fixture["serialization_cases"] |
-        Where-Object { $_["id"] -ceq "run-start-insight-capabilities" }
-)
-Assert-Equal 1 $RunStartCase.Count "Run-start serialization case count"
 Assert-Equal (
     $ReleaseFixture["expected_release_version"]
-) $RunStartCase[0]["event"]["release_version"] (
-    "Run-start Event Release version"
+) (Get-GitLoopyReleaseVersion) (
+    "PowerShell release-version decision seam matches release-version.json authority"
 )
 
 foreach ($Case in $Fixture["serialization_cases"]) {

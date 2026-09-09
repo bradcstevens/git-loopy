@@ -230,3 +230,24 @@ def test_locked_python_distribution_metadata_matches_release_version() -> None:
         git_loopy_packages[0]["version"]
         == RELEASE_VERSION_FIXTURE["expected_python_distribution_version"]
     )
+
+
+def test_no_fixture_other_than_release_version_contains_live_release_version() -> None:
+    """The live Release version is named by exactly one fixture: release-version.json.
+
+    Every other fixture uses synthetic version literals (e.g. "1.2.3") so that bumping
+    the repository VERSION file causes no fixture diffs in the family oracle.
+    """
+    live_version = (REPOSITORY_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    offending: dict[str, list[str]] = {}
+    for path in sorted(CONFORMANCE_DIR.glob("*.json")):
+        if path.name == "release-version.json":
+            continue
+        text = path.read_text(encoding="utf-8")
+        if live_version in text:
+            offending[path.name] = [
+                line for line in text.splitlines() if live_version in line
+            ]
+    assert offending == {}, (
+        f"Fixture(s) other than release-version.json contain the live Release version string {live_version!r}: {offending}"
+    )
