@@ -70,6 +70,11 @@ def test_subcommand_parser_parses_info_json() -> None:
     assert args.json is True
 
 
+def test_subcommand_parser_parses_doctor() -> None:
+    args = cli_module.build_subcommand_parser().parse_args(["doctor"])
+    assert args.command == "doctor"
+
+
 def test_subcommand_parser_parses_sweep_dry_run() -> None:
     args = cli_module.build_subcommand_parser().parse_args(["sweep", "--dry-run"])
     assert args.command == "sweep"
@@ -240,6 +245,25 @@ def test_main_sweep_routes_to_handler_no_loop(
 
     assert cli_module.main(["sweep", "--dry-run"]) == 0
     assert seen == [True]
+    assert captured == []
+
+
+def test_main_doctor_routes_to_reporter_without_starting_the_loop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+    seen: list[str] = []
+
+    def fake_run_doctor(args: Any) -> int:
+        seen.append(args.command)
+        return 0
+
+    monkeypatch.setattr(cli_module, "_run_doctor", fake_run_doctor)
+
+    assert cli_module.main(["doctor"]) == 0
+    assert seen == ["doctor"]
     assert captured == []
 
 

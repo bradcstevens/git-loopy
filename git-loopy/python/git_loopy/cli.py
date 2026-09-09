@@ -35,6 +35,7 @@ old bash launcher is retired):
 * ``--version`` — print the distribution Release version and exit before Run
   discovery, configuration, dependencies, or services.
 * ``info`` — describe the installation identity and exit successfully.
+* ``doctor`` — report Skill-policy blockers without starting a Run.
 * Positional ``<max-iterations>`` — ``0`` (or omitted) means unlimited.
 * ``--model ID`` — per-run model override (top of the precedence chain).
 * ``--reasoning-effort EFFORT`` — per-run reasoning-effort override.
@@ -533,7 +534,16 @@ def build_parser() -> argparse.ArgumentParser:
 #: They are kept out of :func:`build_parser` because argparse cannot host an
 #: optional positional (``<max-iterations>``) alongside ``add_subparsers`` in one
 #: parser without misreading ``git-loopy 5`` as an invalid subcommand choice.
-_SUBCOMMANDS = ("init", "config", "skills", "labels", "calibrate", "info", "sweep")
+_SUBCOMMANDS = (
+    "init",
+    "config",
+    "skills",
+    "labels",
+    "calibrate",
+    "info",
+    "doctor",
+    "sweep",
+)
 
 
 def _add_scope_flags(
@@ -585,7 +595,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{init,config,skills,labels,calibrate,info,sweep}",
+        metavar="{init,config,skills,labels,calibrate,info,doctor,sweep}",
     )
 
     init = sub.add_parser(
@@ -702,6 +712,17 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Emit the stable installation-inventory JSON document.",
+    )
+
+    sub.add_parser(
+        "doctor",
+        help="Report Skill-policy blockers before starting a Run.",
+        description=(
+            "Resolve the same Skill policy a Run preflight resolves and report "
+            "every blocker. This report-only command never starts a Run, opens "
+            "a picker, writes Config, changes Copilot settings, or refreshes "
+            "the installed Skill catalog."
+        ),
     )
 
     sweep = sub.add_parser(
@@ -1016,6 +1037,36 @@ def _run_info(
         output_fn(f"Published Release: {_display_identity(inventory.published)}")
         output_fn(f"Edge install: {_display_identity(inventory.edge_install)}")
     return 0
+
+
+def _run_doctor(args: argparse.Namespace) -> int:
+    """Dispatch the read-only Skill-policy preflight report."""
+    del args
+    from git_loopy import doctorcmd
+
+    try:
+        repo_root = resolve_repo_root()
+    except RuntimeError as exc:
+        print(f"git-loopy: doctor requires a git repository: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        tables = settings.load_configs(repo_root, os.environ)
+        config = resolve_config(
+            build_parser().parse_args([]),
+            os.environ,
+            project=tables.project,
+            global_=tables.global_,
+            measured=tables.measured,
+            measured_provisional=tables.measured_provisional,
+        ).run
+    except TaskTypeError as exc:
+        print(f"git-loopy: error: {task_type_refusal(exc)}", file=sys.stderr)
+        return 1
+    except settings.SettingsError as exc:
+        print(f"git-loopy: error: {exc}", file=sys.stderr)
+        return 1
+    return doctorcmd.run_doctor(config=config, repo_root=repo_root, env=os.environ)
 
 
 def _display_identity(value: object) -> str:
@@ -2199,6 +2250,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_calibrate(sub_args)
         if sub_args.command == "info":
             return _run_info(sub_args)
+        if sub_args.command == "doctor":
+            return _run_doctor(sub_args)
         if sub_args.command == "sweep":
             return _run_sweep(sub_args)
         return _run_config(sub_args)

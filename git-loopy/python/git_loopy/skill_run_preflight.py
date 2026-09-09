@@ -16,8 +16,11 @@ from .skill_catalog import (
 )
 from .skill_exposure import SkillExposure, build_skill_exposure
 from .skill_policy import (
+    EffectiveSkillPolicy,
     SkillCatalog,
+    SkillPolicyResolutionError,
     collect_project_skill_tracking,
+    find_skill_policy_blockers,
     resolve_skill_policy,
 )
 
@@ -45,6 +48,16 @@ class RunSkillPreflight:
         }
 
 
+@dataclass(frozen=True)
+class RunSkillPolicyPreflight:
+    """The report-safe policy result shared by Run and ``git-loopy doctor``."""
+
+    policy: EffectiveSkillPolicy | None
+    catalog: SkillCatalog
+    blockers: tuple[SkillPolicyResolutionError, ...]
+    migration_warning: bool
+
+
 def _minimal_catalog(installed_skills_dir: Path, workspace: Path) -> SkillCatalog:
     root = workspace / "minimal-catalog-root"
     root.mkdir(parents=True, exist_ok=True)
@@ -66,11 +79,98 @@ async def resolve_run_skill_preflight(
     workspace: Path,
     discoverer: CatalogDiscoverer = discover_skill_catalog,
 ) -> RunSkillPreflight:
-    """Resolve Required Skills, policy, tracking, and one Run-scoped exposure."""
+    """Resolve the shared policy preflight, then materialize one Run exposure."""
+    resolution = await resolve_run_skill_policy_preflight(
+        client,
+        config=config,
+        git=git,
+        prompt_text=prompt_text,
+        repo_root=repo_root,
+        installed_skills_dir=installed_skills_dir,
+        workspace=workspace,
+        discoverer=discoverer,
+    )
+    if resolution.blockers:
+        raise resolution.blockers[0]
+    assert resolution.policy is not None
+    exposure = build_skill_exposure(
+        resolution.policy,
+        resolution.catalog,
+        directory=workspace / "exposure",
+    )
+    return RunSkillPreflight(
+        exposure=exposure,
+        migration_warning=resolution.migration_warning,
+    )
+
+
+async def resolve_run_skill_policy_preflight(
+    client: Any,
+    *,
+    config: RunConfig,
+    git: Any,
+    prompt_text: str,
+    repo_root: Path,
+    installed_skills_dir: Path,
+    workspace: Path,
+    discoverer: CatalogDiscoverer = discover_skill_catalog,
+) -> RunSkillPolicyPreflight:
+    """Resolve all Skill-policy blockers without materializing a Run exposure."""
     required = resolve_required_skills(prompt_text)
     workspace.mkdir(parents=True, exist_ok=True)
+    inputs = config.skill_policy
+    configured = (
+        inputs.project.present
+        or inputs.global_.present
+        or inputs.environment.present
+        or bool(inputs.enable_skills)
+    )
+    catalog = await _catalog_for_policy(
+        client,
+        configured=configured,
+        repo_root=repo_root,
+        installed_skills_dir=installed_skills_dir,
+        workspace=workspace,
+        discoverer=discoverer,
+    )
+    tracked = collect_project_skill_tracking(catalog, git)
+    blockers = find_skill_policy_blockers(
+        inputs,
+        catalog=catalog,
+        required_skills=required.required_skills,
+        legacy_denied=config.deny_skills,
+        tracked_project_skills=tracked,
+    )
+    return RunSkillPolicyPreflight(
+        policy=(
+            None
+            if blockers
+            else resolve_skill_policy(
+                inputs,
+                catalog=catalog,
+                required_skills=required.required_skills,
+                legacy_denied=config.deny_skills,
+                tracked_project_skills=tracked,
+            )
+        ),
+        catalog=catalog,
+        blockers=blockers,
+        migration_warning=required.migration_warning,
+    )
+
+
+async def _catalog_for_policy(
+    client: Any,
+    *,
+    configured: bool,
+    repo_root: Path,
+    installed_skills_dir: Path,
+    workspace: Path,
+    discoverer: CatalogDiscoverer,
+) -> SkillCatalog:
+    """Discover the catalog a policy resolves against, with the Run fallback."""
     discovery_directory = workspace / "discovery"
-    discovery_directory.mkdir()
+    discovery_directory.mkdir(exist_ok=True)
     try:
         discovered = await discoverer(
             client,
@@ -91,28 +191,4 @@ async def resolve_run_skill_preflight(
             inventory_available=False,
         )
 
-    inputs = config.skill_policy
-    configured = (
-        inputs.project.present
-        or inputs.global_.present
-        or inputs.environment.present
-        or bool(inputs.enable_skills)
-    )
-    catalog = discovered if configured else _minimal_catalog(installed_skills_dir, workspace)
-    tracked = collect_project_skill_tracking(catalog, git)
-    policy = resolve_skill_policy(
-        inputs,
-        catalog=catalog,
-        required_skills=required.required_skills,
-        legacy_denied=config.deny_skills,
-        tracked_project_skills=tracked,
-    )
-    exposure = build_skill_exposure(
-        policy,
-        catalog,
-        directory=workspace / "exposure",
-    )
-    return RunSkillPreflight(
-        exposure=exposure,
-        migration_warning=required.migration_warning,
-    )
+    return discovered if configured else _minimal_catalog(installed_skills_dir, workspace)
