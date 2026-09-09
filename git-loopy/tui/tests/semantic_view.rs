@@ -1,8 +1,8 @@
 //! Semantic-Dashboard tests driven through the public library boundary.
 
 use git_loopy_tui::{
-    project_run_view, DashboardState, Event, IssueRef, RunInputs, TerminalCapabilities, Timestamp,
-    ViewContext, Zone,
+    project_run_view, DashboardState, Event, EventPayload, IssueRef, RunInputs,
+    TerminalCapabilities, Timestamp, ViewContext, Zone,
 };
 use serde_json::Value;
 
@@ -514,4 +514,140 @@ fn a_pickup_record_missing_its_order_still_names_the_issue() {
     );
 
     assert_eq!(log_texts(&projected), ["Pickup: bound #7 (order)"]);
+}
+
+// A Contribution requires a whole identity, not an issue alone (#475).
+//
+// `event-schema.json`'s `contribution_identity` names the whole thing: the
+// `contribution_id` / `issue` / `lane_id` triple *and* a null Iteration key.
+// A record naming an issue alone is an ordinary serial record, so it must
+// keep the serial or additive handling it has always had rather than being
+// admitted to the rolling attribution path.
+
+fn queue_issues(projected: &Value) -> Vec<Value> {
+    projected["dashboard"]["queue"]["rows"]
+        .as_array()
+        .expect("rows is a list")
+        .iter()
+        .map(|row| row["issue"].clone())
+        .collect()
+}
+
+#[test]
+fn a_whole_identity_with_a_null_iteration_key_is_recognised_as_a_contribution() {
+    let projected = reduce(
+        &[
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:03.000Z", "run_id": "r1", "iter": null,
+                "type": "wrapper.contribution.start",
+                "contribution_id": "c-0001", "issue": 42, "lane_id": "lane-1"
+            }),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:18.000Z", "run_id": "r1", "iter": null,
+                "type": "wrapper.contribution.end",
+                "contribution_id": "c-0001", "issue": 42, "lane_id": "lane-1",
+                "reason": "published",
+                "summary": {
+                    "model": "claude-opus-4.8-max", "tokens_in": 1200, "tokens_out": 340,
+                    "closure_outcome": "closed", "agent_seconds": 61.5,
+                    "lifecycle_seconds": 94.25
+                }
+            }),
+        ],
+        IssueRef::number(42),
+    );
+
+    let row = &projected["drill_in"]["iteration_breakdown"]["rows"][0];
+    assert_eq!(row["kind"], serde_json::json!("contribution"));
+    assert_eq!(row["lane"], serde_json::json!("lane-1"));
+    assert_eq!(row["outcome"], serde_json::json!("published"));
+    assert_eq!(
+        projected["dashboard"]["summary"]["rows"][0]["kind"],
+        serde_json::json!("contribution")
+    );
+}
+
+#[test]
+fn an_issue_alone_is_not_a_contribution_and_never_reaches_the_rolling_path() {
+    // An auto-close is a `contribution_identity.stamped_types` member, so an
+    // issue-only one is exactly the serial record a decode keyed on `issue`
+    // alone would misread as a Contribution and attribute a Lane of its own.
+    let projected = reduce(
+        &[
+            serde_json::json!({"type": "wrapper.iteration.start", "iter": 1}),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:02.000Z", "run_id": "r1", "iter": 1,
+                "type": "wrapper.issue.activated", "issue": 42,
+                "activated_at": "2026-05-16T00:00:02.000Z", "binding_source": "working_marker"
+            }),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:04.000Z", "run_id": "r1", "iter": 1,
+                "type": "wrapper.auto_close", "issue": 99,
+                "closed_at": "2026-05-16T00:00:04.000Z"
+            }),
+        ],
+        IssueRef::number(42),
+    );
+
+    assert_eq!(
+        queue_issues(&projected),
+        [serde_json::json!(42)],
+        "an issue-only auto-close opens no Lane of its own"
+    );
+}
+
+#[test]
+fn an_iteration_scoped_record_is_not_a_contribution_however_whole_its_triple() {
+    // A Wave trace's records carry an Iteration number, so they stay on the
+    // serial arm: this usage lands on the Active issue, not on the issue the
+    // triple names.
+    let projected = reduce(
+        &[
+            serde_json::json!({"type": "wrapper.iteration.start", "iter": 1}),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:02.000Z", "run_id": "r1", "iter": 1,
+                "type": "wrapper.issue.activated", "issue": 42,
+                "activated_at": "2026-05-16T00:00:02.000Z", "binding_source": "working_marker"
+            }),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:05.000Z", "run_id": "r1", "iter": 1,
+                "type": "usage.tokens", "input": 100, "output": 50,
+                "contribution_id": "c-0001", "issue": 99, "lane_id": "lane-1"
+            }),
+        ],
+        IssueRef::number(42),
+    );
+
+    assert_eq!(queue_issues(&projected), [serde_json::json!(42)]);
+    assert_eq!(
+        queue_row(&projected, 42)["tokens_in"],
+        serde_json::json!(100)
+    );
+}
+
+#[test]
+fn an_unmodelled_event_type_still_degrades_to_the_additive_fallback() {
+    // Tightening the identity must not turn a record this core does not model
+    // into a decode failure: an unreadable line is a diagnostic, and an
+    // additive schema extension is not.
+    let partial = serde_json::json!({
+        "ts": "2026-05-16T00:00:06.000Z", "run_id": "r1", "iter": null,
+        "type": "wrapper.integration.parked", "issue": 42
+    });
+    let decoded = Event::from_json(&partial).expect("an unmodelled type still decodes");
+    assert!(matches!(decoded.payload, EventPayload::Other));
+
+    let without = reduce(
+        &[serde_json::json!({"type": "wrapper.iteration.start", "run_id": "r1", "iter": 1})],
+        IssueRef::number(42),
+    );
+    let with = reduce(
+        &[
+            serde_json::json!({"type": "wrapper.iteration.start", "run_id": "r1", "iter": 1}),
+            partial,
+        ],
+        IssueRef::number(42),
+    );
+
+    assert_eq!(with, without, "an additive record changes no projection");
 }

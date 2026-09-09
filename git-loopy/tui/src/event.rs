@@ -116,35 +116,52 @@ impl<'de> Deserialize<'de> for LaneSlot {
     }
 }
 
-/// The `contribution_id` / `issue` / `lane_id` triple a rolling-dispatch
+/// The whole `contribution_id` / `issue` / `lane_id` triple a rolling-dispatch
 /// Event carries (ADR-0044).
 ///
 /// `issue` is the ledger's own key, so a stamped record needs no lookup to
 /// attribute itself. `contribution_id` distinguishes two contributions on the
 /// same issue, a shape a Wave stream could not produce, and earns its place
-/// only in the drill-in.
+/// only in the drill-in. `lane_id` names the reusable slot the work ran in.
+///
+/// Every field is required because the identity is only ever whole: the type
+/// cannot represent the partial form an ordinary serial record carries, so a
+/// record naming an issue alone can never be mistaken for a Contribution.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContributionIdentity {
     /// The contribution this Event belongs to.
-    pub contribution_id: Option<String>,
+    pub contribution_id: String,
     /// The issue the ledger keys on.
     pub issue: IssueRef,
     /// The reusable Lane slot the contribution started in.
-    pub lane_id: Option<LaneSlot>,
+    pub lane_id: LaneSlot,
 }
 
 impl ContributionIdentity {
-    /// Read a triple off an Event's JSON object, or `None` when it names no
-    /// usable issue.
+    /// Read a whole triple off an Event's JSON object, or `None` when the
+    /// record is not a contribution-stamped one.
+    ///
+    /// `event-schema.json`'s `contribution_identity` states the rule this
+    /// enforces: the `keys` triple *and* `"iter": null`. Both halves matter.
+    /// Without the triple, an ordinary serial record — an issue activation, a
+    /// Pickup binding, an auto-close — names an `issue` and nothing else, and
+    /// admitting it to the rolling attribution path would handle it as though
+    /// it belonged to a Lane contribution. Without the Iteration check, a
+    /// Wave trace's Iteration-scoped record would be reinterpreted as rolling
+    /// work, which `event-schema.json`'s stamped-existing-records rule
+    /// forbids. An Iteration key that names no number — absent, `null`, or
+    /// unreadable — is the Run-scoped form a rolling record carries.
     fn from_object(object: &serde_json::Map<String, Value>) -> Option<Self> {
-        let issue = object.get("issue").and_then(IssueRef::from_value)?;
+        if object.get("iter").and_then(Value::as_i64).is_some() {
+            return None;
+        }
         Some(Self {
             contribution_id: object
                 .get("contribution_id")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            issue,
-            lane_id: object.get("lane_id").and_then(LaneSlot::from_value),
+                .and_then(Value::as_str)?
+                .to_string(),
+            issue: object.get("issue").and_then(IssueRef::from_value)?,
+            lane_id: object.get("lane_id").and_then(LaneSlot::from_value)?,
         })
     }
 }
@@ -171,12 +188,13 @@ pub struct Event {
     /// triple.
     pub lane_issue: Option<IssueRef>,
     /// The rolling **Lane contribution** identity triple this Event carries
-    /// (ADR-0044), when it names one.
+    /// (ADR-0044), when it carries a whole one.
     ///
     /// Every `contribution_identity.stamped_types` and lifecycle Event
     /// carries its own `issue`, so attribution reads this instead of
     /// resolving `contribution_id` to an issue: the short-circuit is a
-    /// near-exact mirror of the `lane_issue` arm it joins.
+    /// near-exact mirror of the `lane_issue` arm it joins. `None` for every
+    /// serial record, which names an issue without the rest of the triple.
     pub contribution: Option<ContributionIdentity>,
     /// The exact Event type literal.
     pub kind: String,

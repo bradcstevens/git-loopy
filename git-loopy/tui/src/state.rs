@@ -438,7 +438,10 @@ impl DashboardState {
         // `contribution_identity`-stamped or lifecycle record carries its own
         // `issue`, so attribution reads it directly — no `contribution_id` →
         // issue lookup is needed, and the ledger stays keyed by issue exactly
-        // as the legacy `lane_issue` arm above leaves it.
+        // as the legacy `lane_issue` arm above leaves it. A record reaches
+        // this arm only by carrying the whole identity, so an ordinary serial
+        // record naming an issue alone falls through to the serial path
+        // below, unchanged.
         if let Some(contribution) = event.contribution.clone() {
             match &event.payload {
                 EventPayload::ContributionStart => {
@@ -534,7 +537,7 @@ impl DashboardState {
                 self.ended_monotonic = now_monotonic.or(self.ended_monotonic);
             }
             EventPayload::ContributionStart | EventPayload::ContributionEnd(_) => {
-                // Reached only when the record carries no usable `issue`
+                // Reached only when the record carries no whole identity
                 // (`event.contribution` was `None` above); nothing to fold.
             }
             EventPayload::ConcurrencyChanged(changed) => {
@@ -1183,7 +1186,7 @@ fn contribution_from_rolling(
     IssueContribution {
         kind: "contribution",
         iteration: None,
-        lane: contribution.lane_id.clone(),
+        lane: Some(contribution.lane_id.clone()),
         outcome: end.reason.clone(),
         duration_seconds: summary.lifecycle_seconds.map(|value| value.max(0.0)),
         status: summary
@@ -1222,7 +1225,7 @@ fn contribution_summary_entry(
 ) -> ContributionSummaryEntry {
     let summary = end.summary.clone().unwrap_or_default();
     ContributionSummaryEntry {
-        lane: contribution.lane_id.clone(),
+        lane: Some(contribution.lane_id.clone()),
         outcome: end.reason.clone(),
         duration_seconds: summary.lifecycle_seconds.map(|value| value.max(0.0)),
         model: summary.model.clone().filter(|model| !model.is_empty()),
