@@ -201,6 +201,11 @@ foreach ($Case in @($Metadata["release_resolution_cases"])) {
             -PublishedVersions @($Case["published_versions"])
     ) "release-resolution fixture result: $($Case["id"])"
 }
+Assert-Contains (Get-RefusalMessage {
+        Resolve-GitLoopyTuiRelease -Metadata $ArtifactMetadata `
+            -DeclaredVersion 4.5.5 -PublishedVersions @()
+    }) "no published git-loopy-tui Release is at or below" `
+    "an empty published-release index has the named refusal"
 
 # --- Checksum verification --------------------------------------------------
 #

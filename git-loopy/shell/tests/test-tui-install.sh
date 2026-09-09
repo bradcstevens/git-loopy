@@ -411,7 +411,12 @@ fallback_clone="$cli_dir/fallback"
 make_fake_clone "$fallback_clone" 4.5.7-dev.9
 fallback_releases="$cli_dir/fallback-releases"
 publish_fake_release "$fallback_releases/v4.5.6" 4.5.6
-printf '[{"draft":false,"tag_name":"v4.5.6"}]\n' >"$fallback_releases/releases-1.json"
+jq -n \
+  --arg archive "$host_archive" \
+  --arg checksum "$host_checksum" \
+  '[{"draft": false, "tag_name": "v4.5.7", "assets": []},
+    {"draft": false, "tag_name": "v4.5.6", "assets": [{"name": $archive}, {"name": $checksum}]}]' \
+  >"$fallback_releases/releases-1.json"
 fallback_metadata="$fallback_clone/git-loopy/conformance/tui-artifacts.json"
 fallback_metadata_tmp="$fallback_metadata.tmp"
 jq \
