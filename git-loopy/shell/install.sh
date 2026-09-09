@@ -166,7 +166,7 @@ if ((install_tui == 1)); then
     exit 1
   }
 
-  if helper_path="$(
+  if helper_install="$(
     git_loopy_tui_install \
       "$artifact_metadata" \
       "$repository_root" \
@@ -176,7 +176,8 @@ if ((install_tui == 1)); then
       "$tui_archive" \
       "$tui_checksum"
   )"; then
-    printf 'Installed git-loopy-tui %s: %s\n' "$release_version" "$helper_path"
+    IFS=$'\t' read -r helper_path resolved_release_version <<<"$helper_install"
+    printf 'Installed git-loopy-tui %s: %s\n' "$resolved_release_version" "$helper_path"
   else
     printf '%s\n' \
       "install.sh: could not install the git-loopy-tui $release_version helper." \

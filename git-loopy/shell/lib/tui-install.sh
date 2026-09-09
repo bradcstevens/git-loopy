@@ -180,6 +180,204 @@ git_loopy_tui_artifact_url() {
   printf '%s\n' "$url"
 }
 
+# Compare two strict Semantic Versioning values, ignoring build metadata as
+# SemVer precedence requires. The result is -1, 0, or 1.
+_git_loopy_tui_compare_release_versions() {
+  local left="${1:?left Release version is required}"
+  local right="${2:?right Release version is required}"
+  local semver_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+  [[ "$left" =~ $semver_pattern && "$right" =~ $semver_pattern ]] || return 1
+
+  local left_without_build="${left%%+*}" right_without_build="${right%%+*}"
+  local left_core="${left_without_build%%-*}" right_core="${right_without_build%%-*}"
+  local left_prerelease="" right_prerelease=""
+  [[ "$left_without_build" == *-* ]] && left_prerelease="${left_without_build#*-}"
+  [[ "$right_without_build" == *-* ]] && right_prerelease="${right_without_build#*-}"
+
+  local identifier
+  for identifier in ${left_prerelease//./ } ${right_prerelease//./ }; do
+    [[ "$identifier" =~ ^[0-9]+$ &&
+      ${#identifier} -gt 1 && "${identifier:0:1}" == "0" ]] && return 1
+  done
+
+  local -a left_core_parts right_core_parts left_pre_parts right_pre_parts
+  IFS=. read -r -a left_core_parts <<<"$left_core"
+  IFS=. read -r -a right_core_parts <<<"$right_core"
+  local index comparison
+  for index in 0 1 2; do
+    comparison="$(
+      _git_loopy_tui_compare_release_integers \
+        "${left_core_parts[$index]}" "${right_core_parts[$index]}"
+    )" || return 1
+    [[ "$comparison" == "0" ]] || {
+      printf '%s\n' "$comparison"
+      return 0
+    }
+  done
+
+  if [[ -z "$left_prerelease" || -z "$right_prerelease" ]]; then
+    if [[ -z "$left_prerelease" && -z "$right_prerelease" ]]; then
+      printf '0\n'
+    elif [[ -z "$left_prerelease" ]]; then
+      printf '1\n'
+    else
+      printf '%s\n' '-1'
+    fi
+    return 0
+  fi
+
+  IFS=. read -r -a left_pre_parts <<<"$left_prerelease"
+  IFS=. read -r -a right_pre_parts <<<"$right_prerelease"
+  local limit="${#left_pre_parts[@]}"
+  ((${#right_pre_parts[@]} < limit)) && limit="${#right_pre_parts[@]}"
+  for ((index = 0; index < limit; index++)); do
+    local left_identifier="${left_pre_parts[$index]}"
+    local right_identifier="${right_pre_parts[$index]}"
+    [[ "$left_identifier" == "$right_identifier" ]] && continue
+    if [[ "$left_identifier" =~ ^[0-9]+$ && "$right_identifier" =~ ^[0-9]+$ ]]; then
+      comparison="$(
+        _git_loopy_tui_compare_release_integers \
+          "$left_identifier" "$right_identifier"
+      )" || return 1
+    elif [[ "$left_identifier" =~ ^[0-9]+$ ]]; then
+      comparison='-1'
+    elif [[ "$right_identifier" =~ ^[0-9]+$ ]]; then
+      comparison='1'
+    elif [[ "$left_identifier" < "$right_identifier" ]]; then
+      comparison='-1'
+    else
+      comparison='1'
+    fi
+    printf '%s\n' "$comparison"
+    return 0
+  done
+
+  if ((${#left_pre_parts[@]} == ${#right_pre_parts[@]})); then
+    printf '0\n'
+  elif ((${#left_pre_parts[@]} < ${#right_pre_parts[@]})); then
+    printf '%s\n' '-1'
+  else
+    printf '1\n'
+  fi
+}
+
+_git_loopy_tui_compare_release_integers() {
+  local left="${1:?left integer is required}" right="${2:?right integer is required}"
+  if ((${#left} < ${#right})); then
+    printf '%s\n' '-1'
+  elif ((${#left} > ${#right})); then
+    printf '1\n'
+  elif [[ "$left" < "$right" ]]; then
+    printf '%s\n' '-1'
+  elif [[ "$left" > "$right" ]]; then
+    printf '1\n'
+  else
+    printf '0\n'
+  fi
+}
+
+# Pick the newest completed helper Release that does not exceed the tree's
+# declared Release version. The result, rather than the declaration, is the
+# identity the staged helper must prove.
+git_loopy_tui_resolve_release() {
+  local metadata="${1:?artifact metadata path is required}"
+  local declared_version="${2:?declared Release version is required}"
+  local published_versions="${3:?published Release versions JSON is required}"
+  local command_name
+  command_name="$(jq -r '.command_name' "$metadata" 2>/dev/null)" ||
+    command_name="git-loopy-tui"
+
+  local comparison
+  comparison="$(
+    _git_loopy_tui_compare_release_versions "$declared_version" "$declared_version"
+  )" || {
+    _git_loopy_tui_install_error \
+      "declared Release version $declared_version is not valid Semantic Versioning"
+    return 1
+  }
+
+  local versions
+  if ! versions="$(jq -ce '
+    if type == "array" and all(.[]; type == "string") then . else error("versions") end
+  ' <<<"$published_versions")"; then
+    _git_loopy_tui_install_error "cannot read published $command_name Release versions"
+    return 1
+  fi
+
+  local selected="" published_version
+  while IFS= read -r published_version; do
+    [[ -n "$published_version" ]] || continue
+    comparison="$(
+      _git_loopy_tui_compare_release_versions "$published_version" "$published_version"
+    )" || {
+      _git_loopy_tui_install_error \
+        "published $command_name Release $published_version is not valid Semantic Versioning"
+      return 1
+    }
+    comparison="$(
+      _git_loopy_tui_compare_release_versions "$published_version" "$declared_version"
+    )" || return 1
+    [[ "$comparison" != "1" ]] || continue
+    if [[ -z "$selected" ]]; then
+      selected="$published_version"
+      continue
+    fi
+    comparison="$(
+      _git_loopy_tui_compare_release_versions "$published_version" "$selected"
+    )" || return 1
+    [[ "$comparison" == "1" ]] && selected="$published_version"
+  done < <(jq -r '.[]' <<<"$versions")
+
+  if [[ -z "$selected" ]]; then
+    _git_loopy_tui_install_error \
+      "no published $command_name Release is at or below declared Release version $declared_version"
+    return 1
+  fi
+  printf '%s\n' "$selected"
+}
+
+# Read every non-draft GitHub Release, not just the first page, so an older
+# helper remains resolvable after the release history grows beyond one page.
+git_loopy_tui_published_releases() {
+  local metadata="${1:?artifact metadata path is required}"
+  local template
+  if ! template="$(jq -r '.release_index_url_template // empty' "$metadata" 2>/dev/null)" ||
+    [[ -z "$template" ]]; then
+    _git_loopy_tui_install_error \
+      "helper artifact metadata $metadata declares no Release index URL"
+    return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    _git_loopy_tui_install_error \
+      "curl is required to resolve a published helper Release"
+    return 1
+  fi
+
+  local page=1 releases='[]' url document page_releases count
+  while :; do
+    url="${template//\{page\}/$page}"
+    document="$(curl --fail --silent --show-error --location "$url" 2>/dev/null)" || {
+      _git_loopy_tui_install_error "cannot read published helper Releases from $url"
+      return 1
+    }
+    page_releases="$(jq -ce '
+      if type != "array" then error("releases") else
+        [.[] | select(.draft != true) | .tag_name
+          | select(type == "string" and startswith("v")) | .[1:]]
+      end
+    ' <<<"$document")" || {
+      _git_loopy_tui_install_error "cannot read published helper Releases from $url"
+      return 1
+    }
+    count="$(jq -r 'length' <<<"$document")" || return 1
+    releases="$(jq -cn --argjson prior "$releases" --argjson next "$page_releases" '$prior + $next')" ||
+      return 1
+    ((count < 100)) && break
+    ((page++))
+  done
+  printf '%s\n' "$releases"
+}
+
 # The SHA-256 of one file, from whichever of the two standard tools this host
 # carries. Linux distributions ship `sha256sum`; macOS ships `shasum`. Neither is
 # guaranteed, so a host with neither is told what is missing rather than being
@@ -471,11 +669,12 @@ git_loopy_tui_download() {
 #
 # The order is the whole contract, and it is the order a failure is cheapest in:
 # pick the artifact this host publishes, obtain it and its published checksum,
-# prove the checksum over both filename and digest, unpack it, prove it reports
-# this clone's Release and decodes this Orchestrator's Event schema — and only
-# then rename it into the slot a Run discovers. Everything before the rename
-# happens inside a scratch directory that is removed either way, so a prior
-# verified helper survives every failure above untouched.
+# resolve the newest published helper no newer than this clone, prove the
+# checksum over both filename and digest, unpack it, prove it reports that
+# resolved Release and decodes this Orchestrator's Event schema — and only then
+# rename it into the slot a Run discovers. Everything before the rename happens
+# inside a scratch directory that is removed either way, so a prior verified
+# helper survives every failure above untouched.
 #
 # `archive_override` / `checksum_override` are the air-gapped path: a host with
 # no network hands over files it already has, and they face exactly the same
@@ -501,6 +700,16 @@ git_loopy_tui_install() {
   local names archive_name checksum_name executable_name
   names="$(git_loopy_tui_artifact_names "$metadata" "$triple")" || return 1
   read -r archive_name checksum_name executable_name <<<"$names"
+
+  local resolved_release_version="$release_version"
+  if [[ -z "$archive_override" && -z "$base_url" ]]; then
+    local published_releases
+    published_releases="$(git_loopy_tui_published_releases "$metadata")" || return 1
+    resolved_release_version="$(
+      git_loopy_tui_resolve_release \
+        "$metadata" "$release_version" "$published_releases"
+    )" || return 1
+  fi
 
   local destination="$repository_root/$GIT_LOOPY_TUI_INSTALL_RELATIVE_PATH"
   local workspace
@@ -532,10 +741,12 @@ git_loopy_tui_install() {
       checksum_url="${base_url%/}/$checksum_name"
     else
       archive_url="$(
-        git_loopy_tui_artifact_url "$metadata" "$release_version" "$archive_name"
+        git_loopy_tui_artifact_url \
+          "$metadata" "$resolved_release_version" "$archive_name"
       )" || return 1
       checksum_url="$(
-        git_loopy_tui_artifact_url "$metadata" "$release_version" "$checksum_name"
+        git_loopy_tui_artifact_url \
+          "$metadata" "$resolved_release_version" "$checksum_name"
       )" || return 1
     fi
     git_loopy_tui_download "$archive_url" "$archive" || return 1
@@ -548,9 +759,9 @@ git_loopy_tui_install() {
   staged="$(
     git_loopy_tui_extract "$archive" "$workspace/unpacked" "$executable_name"
   )" || return 1
-  git_loopy_tui_verify_helper "$staged" "$release_version" "$schema_version" ||
+  git_loopy_tui_verify_helper "$staged" "$resolved_release_version" "$schema_version" ||
     return 1
   git_loopy_tui_activate "$staged" "$destination" || return 1
 
-  printf '%s\n' "$destination"
+  printf '%s\t%s\n' "$destination" "$resolved_release_version"
 }

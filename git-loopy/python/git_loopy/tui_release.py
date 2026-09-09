@@ -34,6 +34,12 @@ from .release_version import ReleaseVersionError, is_prerelease, read_release_ve
 ARTIFACT_METADATA_PATH = Path("git-loopy/conformance/tui-artifacts.json")
 HELPER_MANIFEST_PATH = Path("git-loopy/tui/Cargo.toml")
 _HEX_DIGEST = re.compile("[0-9a-fA-F]{64}")
+_SEMVER = re.compile(
+    r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\."
+    r"(?P<patch>0|[1-9][0-9]*)(?:-(?P<prerelease>"
+    r"[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
 
 
 class TuiReleaseError(ValueError):
@@ -191,6 +197,84 @@ def release_artifact_url(
         version=release_version,
         artifact=artifact,
     )
+
+
+def resolve_published_release(
+    declared_version: str,
+    published_versions: Sequence[str],
+) -> str:
+    """Resolve the newest published helper Release no newer than the tree.
+
+    A Release line advances on every issue, while the cross-platform helper is
+    only present on completed GitHub Releases. The selected version remains the
+    helper's identity: callers must verify its ``--version`` output against this
+    result, not against the tree's possibly newer declaration.
+    """
+    declared = _parse_semver(declared_version, "declared Release version")
+    selected: tuple[str, tuple[int, int, int], tuple[str, ...] | None] | None = None
+    for published_version in published_versions:
+        published = _parse_semver(published_version, "published helper Release")
+        if _compare_semver(published, declared) > 0:
+            continue
+        if selected is None or _compare_semver(published, selected) > 0:
+            selected = published
+
+    if selected is None:
+        raise TuiReleaseError(
+            "no published git-loopy-tui Release is at or below declared Release "
+            f"version {declared_version!r}"
+        )
+    return selected[0]
+
+
+def _parse_semver(
+    version: str,
+    label: str,
+) -> tuple[str, tuple[int, int, int], tuple[str, ...] | None]:
+    match = _SEMVER.fullmatch(version)
+    if match is None:
+        raise TuiReleaseError(f"{label} {version!r} is not valid Semantic Versioning")
+    prerelease = (
+        tuple(match.group("prerelease").split("."))
+        if match.group("prerelease") is not None
+        else None
+    )
+    if prerelease is not None and any(
+        identifier.isdigit() and len(identifier) > 1 and identifier.startswith("0")
+        for identifier in prerelease
+    ):
+        raise TuiReleaseError(f"{label} {version!r} is not valid Semantic Versioning")
+    return (
+        version,
+        (int(match.group("major")), int(match.group("minor")), int(match.group("patch"))),
+        prerelease,
+    )
+
+
+def _compare_semver(
+    left: tuple[str, tuple[int, int, int], tuple[str, ...] | None],
+    right: tuple[str, tuple[int, int, int], tuple[str, ...] | None],
+) -> int:
+    if left[1] != right[1]:
+        return -1 if left[1] < right[1] else 1
+    if left[2] is None or right[2] is None:
+        if left[2] is None and right[2] is None:
+            return 0
+        return 1 if left[2] is None else -1
+
+    for left_identifier, right_identifier in zip(left[2], right[2]):
+        if left_identifier == right_identifier:
+            continue
+        left_numeric = left_identifier.isdigit()
+        right_numeric = right_identifier.isdigit()
+        if left_numeric and right_numeric:
+            return -1 if int(left_identifier) < int(right_identifier) else 1
+        if left_numeric != right_numeric:
+            return -1 if left_numeric else 1
+        return -1 if left_identifier < right_identifier else 1
+    if len(left[2]) == len(right[2]):
+        return 0
+    return -1 if len(left[2]) < len(right[2]) else 1
 
 
 def require_stable_release(
