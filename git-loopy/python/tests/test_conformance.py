@@ -49,6 +49,7 @@ from git_loopy.attempt_lifecycle import AttemptLedger, AttemptState
 from git_loopy.escalation import EscalationLedger
 from git_loopy.session_outcome import SessionOutcome
 from git_loopy.interactive.state import RETROACTIVE_BINDING_SOURCES, LiveRunState
+from git_loopy.release_version import read_runtime_release_version
 from git_loopy.run_readback import run_start_payload
 from git_loopy.gh import (
     LIST_MAX_LIMIT,
@@ -2410,13 +2411,8 @@ _RELEASE_VERSION = _load_fixture("release-version.json")
 
 
 def test_run_start_fixture_pins_exact_release_identity() -> None:
-    run_start = next(
-        case
-        for case in _EVENT_SCHEMA["serialization_cases"]
-        if case["id"] == "run-start-insight-capabilities"
-    )
     assert (
-        run_start["event"]["release_version"]
+        read_runtime_release_version()
         == _RELEASE_VERSION["expected_release_version"]
     )
 

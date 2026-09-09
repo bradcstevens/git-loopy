@@ -155,15 +155,10 @@ for rejected in "-1" "1.5" "two" " 2"; do
     ! git_loopy_assert_parallel_supported 2>/dev/null
   ) || fail "a malformed Lane cap of '$rejected' must be rejected"
 done
-jq -e \
-  --arg release_version "$(jq -r '.expected_release_version' "$release_fixture")" \
-  '
-    first(
-      .serialization_cases[]
-      | select(.id == "run-start-insight-capabilities")
-    ).event.release_version == $release_version
-  ' "$fixture" >/dev/null ||
-  fail "Run-start Event drifted from the shared Release version"
+actual_release_version="$(git_loopy_read_release_version "$port_dir/../../VERSION")"
+expected_release_version="$(jq -r '.expected_release_version' "$release_fixture")"
+assert_equal "$expected_release_version" "$actual_release_version" \
+  "shell release-version decision seam matches release-version.json authority"
 
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"
