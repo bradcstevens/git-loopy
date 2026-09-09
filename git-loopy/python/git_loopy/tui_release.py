@@ -216,7 +216,14 @@ def resolve_published_release(
         published = _parse_semver(published_version, "published helper Release")
         if _compare_semver(published, declared) > 0:
             continue
-        if selected is None or _compare_semver(published, selected) > 0:
+        if (
+            selected is None
+            or _compare_semver(published, selected) > 0
+            or (
+                _compare_semver(published, selected) == 0
+                and published_version == declared_version
+            )
+        ):
             selected = published
 
     if selected is None:

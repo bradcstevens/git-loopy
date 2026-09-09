@@ -432,6 +432,9 @@ fallback_out="$(
 assert_equal "git-loopy-tui 4.5.6" \
   "$("$fallback_clone/.git-loopy/bin/git-loopy-tui" --version)" \
   "the fallback helper proves its resolved Release version"
+assert_equal "4.5.6" \
+  "$(<"$fallback_clone/.git-loopy/bin/git-loopy-tui.release")" \
+  "the fallback helper records the Release its installer verified"
 assert_contains "$fallback_out" "Installed git-loopy-tui 4.5.6" \
   "the fallback install reports the helper Release it resolved"
 

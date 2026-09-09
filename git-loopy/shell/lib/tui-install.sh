@@ -326,7 +326,10 @@ git_loopy_tui_resolve_release() {
     comparison="$(
       _git_loopy_tui_compare_release_versions "$published_version" "$selected"
     )" || return 1
-    [[ "$comparison" == "1" ]] && selected="$published_version"
+    if [[ "$comparison" == "1" ||
+      ( "$comparison" == "0" && "$published_version" == "$declared_version" ) ]]; then
+      selected="$published_version"
+    fi
   done < <(jq -r '.[]' <<<"$versions")
 
   if [[ -z "$selected" ]]; then
@@ -614,6 +617,23 @@ git_loopy_tui_activate() {
   }
 }
 
+git_loopy_tui_record_resolved_release() {
+  local helper="${1:?helper path is required}"
+  local resolved_release_version="${2:?resolved Release version is required}"
+  local record="$helper.release"
+  local staging="$record.$$"
+
+  printf '%s\n' "$resolved_release_version" >"$staging" || {
+    _git_loopy_tui_install_error "cannot record the resolved helper Release"
+    return 1
+  }
+  mv -f "$staging" "$record" || {
+    rm -f "$staging"
+    _git_loopy_tui_install_error "cannot record the resolved helper Release"
+    return 1
+  }
+}
+
 # Which C library a Linux host links against — the one selection input `uname`
 # cannot answer, and the reason two Linux artifacts exist per architecture.
 #
@@ -771,6 +791,8 @@ git_loopy_tui_install() {
   git_loopy_tui_verify_helper "$staged" "$resolved_release_version" "$schema_version" ||
     return 1
   git_loopy_tui_activate "$staged" "$destination" || return 1
+  git_loopy_tui_record_resolved_release "$destination" "$resolved_release_version" ||
+    return 1
 
   printf '%s\t%s\n' "$destination" "$resolved_release_version"
 }

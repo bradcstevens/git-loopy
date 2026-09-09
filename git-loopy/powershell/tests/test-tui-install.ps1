@@ -806,6 +806,8 @@ if ($CanRunFabricatedHelper) {
         "the launcher shim was not installed"
     Assert-Equal "git-loopy-tui 4.5.6" ((& $Helper --version | Out-String).Trim()) `
         "the staged helper is the Release this clone pins"
+    Assert-Equal "4.5.6" ([IO.File]::ReadAllText("$Helper.release").Trim()) `
+        "the staged helper records the Release its installer verified"
     Assert-Contains $Installed.Output $Helper "the installation reports where the helper landed"
 
     # 7. An air-gapped host installs from local files and never reaches for a URL.

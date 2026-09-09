@@ -3480,7 +3480,17 @@ Start-Sleep -Seconds $Sleep
             Source = "clone-local"
             HelperVersion = "1.2.2"
             ReleaseVersion = "1.2.3"
+            ResolvedReleaseVersion = ""
             Trusted = $false
+            Warns = $false
+        },
+        @{
+            Id = "a pinned helper with the installer's resolved Release is trusted"
+            Source = "clone-local"
+            HelperVersion = "1.2.2"
+            ReleaseVersion = "1.2.3"
+            ResolvedReleaseVersion = "1.2.2"
+            Trusted = $true
             Warns = $false
         },
         @{
@@ -3511,7 +3521,8 @@ Start-Sleep -Seconds $Sleep
         $Identity = Test-GitLoopyTuiReleaseIdentity `
             -Source $Case["Source"] `
             -HelperVersion $Case["HelperVersion"] `
-            -ReleaseVersion $Case["ReleaseVersion"]
+            -ReleaseVersion $Case["ReleaseVersion"] `
+            -ResolvedReleaseVersion $Case["ResolvedReleaseVersion"]
         Assert-Equal $Case["Trusted"] $Identity.Trusted (
             "TUI Release identity: $($Case["Id"])"
         )
@@ -3529,10 +3540,12 @@ Start-Sleep -Seconds $Sleep
     $TuiBin = Join-Path $TempDir "$TuiLabel-bin"
     New-TestRepo -Root $TuiRepo
     Write-FakeTools -BinDir $TuiBin
-    New-FakeTuiHelper `
+    $ResolvedHelper = New-FakeTuiHelper `
         -Directory (Join-Path $TuiRepo ".git-loopy/bin") `
-        -Label "clone-local" | Out-Null
+        -Label "clone-local"
     Set-FakeTuiEnv -Prefix $TuiLabel
+    [IO.File]::WriteAllText("$ResolvedHelper.release", "0.8.9`n")
+    $env:FAKE_TUI_VERSION = "0.8.9"
     Set-EmptyPoolEnv -Prefix $TuiLabel
 
     $Status = Invoke-Entrypoint `

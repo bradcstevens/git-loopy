@@ -242,7 +242,7 @@
     {
       "id": "an-exact-published-release-wins",
       "declared_version": "4.5.6",
-      "published_versions": ["4.5.5", "4.5.6-A", "4.5.6-a", "4.5.6", "4.5.7"],
+      "published_versions": ["4.5.5", "4.5.6-A", "4.5.6-a", "4.5.6+other", "4.5.6", "4.5.7"],
       "resolved_version": "4.5.6",
       "error": null
     },
