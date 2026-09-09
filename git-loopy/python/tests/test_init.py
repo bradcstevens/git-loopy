@@ -893,6 +893,53 @@ def test_run_init_rescaffold_replaces_provenance_with_current_content(
         assert asset.sha256 == _asset_digest(scope / name)
 
 
+def test_run_init_invalidates_stale_provenance_when_recording_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed record write leaves the supported unrecorded state, never a lie."""
+    assert (
+        init_module.run_init(
+            wizard_runner=_runner("1", "4", "n", "y"),
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            **_packaged(tmp_path),
+        )
+        == 0
+    )
+    scope = tmp_path / "git-loopy"
+    config_before = scope.joinpath("config.toml").read_text(encoding="utf-8")
+
+    def fail_record(_scope_dir: Path, **_kwargs: object) -> Path:
+        raise scaffold_provenance.ScaffoldProvenanceError("injected write failure")
+
+    monkeypatch.setattr(init_module, "record_scaffolded_assets", fail_record)
+    warnings: list[str] = []
+    assert (
+        init_module.run_init(
+            wizard_runner=_runner(out=_Output()),
+            scope="project",
+            assume_yes=True,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            default_model="gpt-5.4",
+            default_effort="high",
+            warn=warnings.append,
+            **_packaged(tmp_path),
+        )
+        == 1
+    )
+
+    assert scope.joinpath("config.toml").read_text(encoding="utf-8") != config_before
+    assert scaffold_provenance.read_scaffold_provenance(scope) is None
+    assert warnings == [
+        "cannot record scaffold provenance: injected write failure; "
+        "assets were written without scaffold provenance."
+    ]
+
+
 def test_read_scaffold_provenance_accepts_an_absent_record(tmp_path: Path) -> None:
     """An unrecorded installation is a normal, readable state."""
     assert scaffold_provenance.read_scaffold_provenance(tmp_path / "git-loopy") is None

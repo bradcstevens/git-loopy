@@ -65,6 +65,7 @@ from git_loopy.prompt import PromptMetadataError, resolve_required_skills
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
 from git_loopy.scaffold_provenance import (
     ScaffoldProvenanceError,
+    invalidate_scaffold_provenance,
     read_scaffold_provenance,
     record_scaffolded_assets,
 )
@@ -943,6 +944,8 @@ def run_init(
     try:
         release_version = read_runtime_release_version()
         previous_provenance = read_scaffold_provenance(targets.config_path.parent)
+        if previous_provenance is not None:
+            invalidate_scaffold_provenance(targets.config_path.parent)
     except (ReleaseVersionError, ScaffoldProvenanceError) as exc:
         warn(f"cannot record scaffold provenance: {exc}; nothing was written.")
         return 1
@@ -973,12 +976,19 @@ def run_init(
         _scaffold_prompt(targets.prompt_path, prompt_source)
         scaffolded_assets["PROMPT.md"] = targets.prompt_path
         output_fn(f"Wrote {targets.prompt_path}")
-    record_path = record_scaffolded_assets(
-        targets.config_path.parent,
-        release_version=release_version,
-        assets=scaffolded_assets,
-        previous=previous_provenance,
-    )
+    try:
+        record_path = record_scaffolded_assets(
+            targets.config_path.parent,
+            release_version=release_version,
+            assets=scaffolded_assets,
+            previous=previous_provenance,
+        )
+    except ScaffoldProvenanceError as exc:
+        warn(
+            f"cannot record scaffold provenance: {exc}; "
+            "assets were written without scaffold provenance."
+        )
+        return 1
     output_fn(f"Wrote {record_path}")
 
     _bootstrap_tracker_labels(

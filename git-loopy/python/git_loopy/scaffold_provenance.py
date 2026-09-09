@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -13,6 +15,7 @@ __all__ = [
     "ScaffoldProvenance",
     "ScaffoldProvenanceError",
     "ScaffoldedAsset",
+    "invalidate_scaffold_provenance",
     "read_scaffold_provenance",
     "record_scaffolded_assets",
     "scaffold_provenance_path",
@@ -83,6 +86,21 @@ def read_scaffold_provenance(scope_dir: Path) -> ScaffoldProvenance | None:
     return ScaffoldProvenance(assets=assets)
 
 
+def invalidate_scaffold_provenance(scope_dir: Path) -> None:
+    """Remove an old record before changing the assets it describes.
+
+    A record with a digest for superseded content is less safe than no record:
+    the latter is explicitly interpreted as unrecorded by later consumers.
+    """
+    path = scaffold_provenance_path(scope_dir)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise ScaffoldProvenanceError(f"cannot remove {path}: {exc}") from exc
+
+
 def record_scaffolded_assets(
     scope_dir: Path,
     *,
@@ -118,9 +136,25 @@ def record_scaffolded_assets(
             for name, asset in sorted(recorded.items())
         },
     }
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    except OSError as exc:
-        raise ScaffoldProvenanceError(f"cannot write {path}: {exc}") from exc
+    _write_record(path, json.dumps(payload, indent=2) + "\n")
     return path
+
+
+def _write_record(path: Path, content: str) -> None:
+    """Atomically publish a complete record, leaving no partial record on failure."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}")
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o666,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise ScaffoldProvenanceError(f"cannot write {path}: {exc}") from exc
