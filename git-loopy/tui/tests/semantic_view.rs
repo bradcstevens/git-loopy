@@ -651,3 +651,53 @@ fn an_unmodelled_event_type_still_degrades_to_the_additive_fallback() {
 
     assert_eq!(with, without, "an additive record changes no projection");
 }
+
+#[test]
+fn an_identity_key_present_but_empty_is_not_a_whole_identity() {
+    // The reference Runner's producer refuses to emit an empty identity key,
+    // listing it alongside a missing one, so a record carrying one is not a
+    // Contribution any member of the family could have produced.
+    for (key, empty) in [
+        ("contribution_id", serde_json::json!("")),
+        ("issue", serde_json::json!("")),
+        ("lane_id", serde_json::json!("")),
+    ] {
+        let mut end = serde_json::json!({
+            "ts": "2026-05-16T00:00:18.000Z", "run_id": "r1", "iter": null,
+            "type": "wrapper.contribution.end",
+            "contribution_id": "c-0001", "issue": 42, "lane_id": "lane-1",
+            "reason": "published",
+            "summary": {"closure_outcome": "closed", "lifecycle_seconds": 94.25}
+        });
+        end[key] = empty;
+        let projected = reduce(&[end], IssueRef::number(42));
+
+        assert_eq!(
+            projected["dashboard"]["summary"]["rows"],
+            serde_json::json!([]),
+            "an empty {key} names no contribution"
+        );
+    }
+}
+
+#[test]
+fn an_unreadable_iteration_key_keeps_a_record_off_the_rolling_path() {
+    // A record whose scope cannot be read is the doubtful one that must not
+    // be admitted: an Iteration key that is present but not a number is
+    // refused rather than assumed absent.
+    let projected = reduce(
+        &[serde_json::json!({
+            "ts": "2026-05-16T00:00:18.000Z", "run_id": "r1", "iter": "1",
+            "type": "wrapper.contribution.end",
+            "contribution_id": "c-0001", "issue": 42, "lane_id": "lane-1",
+            "reason": "published",
+            "summary": {"closure_outcome": "closed", "lifecycle_seconds": 94.25}
+        })],
+        IssueRef::number(42),
+    );
+
+    assert_eq!(
+        projected["dashboard"]["summary"]["rows"],
+        serde_json::json!([])
+    );
+}

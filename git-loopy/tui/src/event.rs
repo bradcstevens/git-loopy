@@ -149,20 +149,41 @@ impl ContributionIdentity {
     /// it belonged to a Lane contribution. Without the Iteration check, a
     /// Wave trace's Iteration-scoped record would be reinterpreted as rolling
     /// work, which `event-schema.json`'s stamped-existing-records rule
-    /// forbids. An Iteration key that names no number — absent, `null`, or
-    /// unreadable — is the Run-scoped form a rolling record carries.
+    /// forbids.
+    ///
+    /// An absent Iteration key reads the same as an explicit `null`, matching
+    /// the producer this mirrors, whose rule is `iter is None`
+    /// (`git_loopy.events._require_contribution_identity`). An Iteration key
+    /// present but unreadable is refused rather than assumed absent: a record
+    /// whose scope cannot be read is exactly the doubtful one that must not
+    /// be admitted to the rolling path, and the serial arm below already
+    /// handles it.
     fn from_object(object: &serde_json::Map<String, Value>) -> Option<Self> {
-        if object.get("iter").and_then(Value::as_i64).is_some() {
+        if object.get("iter").is_some_and(|iter| !iter.is_null()) {
             return None;
         }
         Some(Self {
-            contribution_id: object
-                .get("contribution_id")
+            contribution_id: identity_key(object, "contribution_id")
                 .and_then(Value::as_str)?
                 .to_string(),
-            issue: object.get("issue").and_then(IssueRef::from_value)?,
-            lane_id: object.get("lane_id").and_then(LaneSlot::from_value)?,
+            issue: identity_key(object, "issue").and_then(IssueRef::from_value)?,
+            lane_id: identity_key(object, "lane_id").and_then(LaneSlot::from_value)?,
         })
+    }
+}
+
+/// One identity key's value, or `None` when it is absent or names an empty
+/// string.
+///
+/// Present-but-empty is not a usable identity, and the family agrees: the
+/// reference Runner's producer lists an empty key alongside a missing one
+/// (`git_loopy.events._require_contribution_identity`), so a consumer that
+/// accepted `""` would build a Contribution out of a record no Orchestrator
+/// in the family can emit.
+fn identity_key<'a>(object: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a Value> {
+    match object.get(key)? {
+        Value::String(text) if text.is_empty() => None,
+        value => Some(value),
     }
 }
 
