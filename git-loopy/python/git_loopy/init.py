@@ -62,6 +62,12 @@ from git_loopy.config import (
     gate_reasoning_effort,
 )
 from git_loopy.prompt import PromptMetadataError, resolve_required_skills
+from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
+from git_loopy.scaffold_provenance import (
+    ScaffoldProvenanceError,
+    read_scaffold_provenance,
+    record_scaffolded_assets,
+)
 from git_loopy.skill_install import (
     SkillInstallError,
     describe_refresh,
@@ -934,6 +940,13 @@ def run_init(
         warn(f"{exc}; nothing was written.")
         return 1
 
+    try:
+        release_version = read_runtime_release_version()
+        previous_provenance = read_scaffold_provenance(targets.config_path.parent)
+    except (ReleaseVersionError, ScaffoldProvenanceError) as exc:
+        warn(f"cannot record scaffold provenance: {exc}; nothing was written.")
+        return 1
+
     # Commit phase — every decision is in hand, so nothing above wrote anything.
     # The wizard owns only the keys it collected: everything else in an existing
     # Config at this scope (including a routing table the operator declined to
@@ -955,9 +968,18 @@ def run_init(
     writer(targets.config_path, values)
     output_fn(f"Wrote {targets.config_path}")
 
+    scaffolded_assets = {"config.toml": targets.config_path}
     if scaffold:
         _scaffold_prompt(targets.prompt_path, prompt_source)
+        scaffolded_assets["PROMPT.md"] = targets.prompt_path
         output_fn(f"Wrote {targets.prompt_path}")
+    record_path = record_scaffolded_assets(
+        targets.config_path.parent,
+        release_version=release_version,
+        assets=scaffolded_assets,
+        previous=previous_provenance,
+    )
+    output_fn(f"Wrote {record_path}")
 
     _bootstrap_tracker_labels(
         repo_root=repo_root,

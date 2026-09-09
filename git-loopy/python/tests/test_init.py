@@ -9,6 +9,7 @@ and a fake ``fetch_choices`` model seam — so no test touches the real TTY,
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import inspect
 
 import tomllib
@@ -18,6 +19,7 @@ from typing import Any, Mapping, Sequence
 import pytest
 
 from git_loopy import init as init_module
+from git_loopy import scaffold_provenance
 from git_loopy import settings
 from git_loopy import skill_install
 from git_loopy.interactive.models import ModelChoice
@@ -817,6 +819,85 @@ def test_run_init_project_scaffolds_the_prompt_but_never_a_skill(
     assert not (tmp_path / ".copilot").exists()
 
 
+def _asset_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_run_init_records_provenance_for_every_scaffolded_asset(
+    tmp_path: Path,
+) -> None:
+    """A fresh scaffold records the exact Config and prompt it wrote."""
+    rc = init_module.run_init(
+        wizard_runner=_runner("1", "4", "n", "y"),
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **_packaged(tmp_path),
+    )
+
+    assert rc == 0
+    scope = tmp_path / "git-loopy"
+    record = scaffold_provenance.read_scaffold_provenance(scope)
+    assert record is not None
+    assert set(record.assets) == {"config.toml", "PROMPT.md"}
+    for name, asset in record.assets.items():
+        assert asset.release_version == init_module.read_runtime_release_version()
+        assert asset.sha256 == _asset_digest(scope / name)
+
+
+def test_run_init_rescaffold_replaces_provenance_with_current_content(
+    tmp_path: Path,
+) -> None:
+    """A later scaffold replaces each entry with the content it just wrote."""
+    first = _packaged(tmp_path)
+    assert (
+        init_module.run_init(
+            wizard_runner=_runner("1", "4", "n", "y"),
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            **first,
+        )
+        == 0
+    )
+
+    replacement = tmp_path / "replacement" / "PROMPT.md"
+    replacement.parent.mkdir(parents=True)
+    replacement.write_text("REPLACEMENT PROMPT\n", encoding="utf-8")
+    second = _packaged(tmp_path)
+    second["packaged_prompt"] = replacement
+    assert (
+        init_module.run_init(
+            wizard_runner=_runner(out=_Output()),
+            scope="project",
+            assume_yes=True,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            default_model="gpt-5.4",
+            default_effort="high",
+            **second,
+        )
+        == 0
+    )
+
+    scope = tmp_path / "git-loopy"
+    record = scaffold_provenance.read_scaffold_provenance(scope)
+    assert record is not None
+    assert scope.joinpath("PROMPT.md").read_text(encoding="utf-8") == "REPLACEMENT PROMPT\n"
+    for name, asset in record.assets.items():
+        assert asset.release_version == init_module.read_runtime_release_version()
+        assert asset.sha256 == _asset_digest(scope / name)
+
+
+def test_read_scaffold_provenance_accepts_an_absent_record(tmp_path: Path) -> None:
+    """An unrecorded installation is a normal, readable state."""
+    assert scaffold_provenance.read_scaffold_provenance(tmp_path / "git-loopy") is None
+
+
 def test_run_init_global_scope_targets_config_home(tmp_path: Path) -> None:
     env = _env(tmp_path)
     out = _Output()
@@ -943,6 +1024,9 @@ def test_run_init_yes_writes_defaults_without_fetch(tmp_path: Path) -> None:
     # --yes scaffolds the prompt override by default, and still no Skill.
     assert (tmp_path / "git-loopy" / "PROMPT.md").exists()
     assert not (tmp_path / ".copilot").exists()
+    record = scaffold_provenance.read_scaffold_provenance(tmp_path / "git-loopy")
+    assert record is not None
+    assert set(record.assets) == {"config.toml", "PROMPT.md"}
 
 
 def test_run_init_yes_gates_effort_for_reasoning_incapable_default(

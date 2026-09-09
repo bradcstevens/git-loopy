@@ -181,6 +181,10 @@ The wizard:
   `~/.config/git-loopy/PROMPT.md`. Nothing is written into `.copilot/skills/`,
   in this repository or any other: a project Skill tree is not a Skill source a
   Run reads. See [`docs/skills-setup.md`](../../docs/skills-setup.md).
+- **Records scaffold provenance** in `scaffold-provenance.json` beside the
+  scope's editable assets. Each Config and prompt that this invocation writes
+  records its Release version and SHA-256 digest; a later init preserves an
+  entry for an existing prompt it leaves untouched.
 - **Cancelling** (`q`, `quit`, or EOF / Ctrl-C at any prompt) writes **no Config
   and no prompt**, runs nothing, and exits non-zero. The Skill install above has
   already happened by then — it is the wizard's first act, before anything is
