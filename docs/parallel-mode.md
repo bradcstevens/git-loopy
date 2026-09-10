@@ -101,13 +101,14 @@ malfunctioning. The reasons it holds back:
   mid-Run, with nothing restarted.
 - **Integration backpressure** (below).
 - **A contracted Effective Lane limit.** The number of Lanes the runner may fill
-  *right now* starts at the host ceiling only when host load is observable and
-  otherwise uses its static-safe limit. It moves against **Pressure signals**:
-  sustained API rate limiting, AI-credit burn against a configured ceiling, host
-  or worktree-setup load, and the **Integration backlog**. It contracts quickly
-  and expands one Lane at a time against sustained evidence of health, and never
-  above host capacity. A signal the Run cannot observe is reported
-  *unknown* — never estimated, and never used as evidence that expanding is safe.
+  *right now* starts at `min(Lane cap, 3)`. A Lane cap of 10 opens three Lanes
+  at first when eligible work is available; that is normal startup, not a
+  fault. It moves against **Pressure signals**: sustained API rate limiting,
+  AI-credit burn against a configured ceiling, host or worktree-setup load, and
+  the **Integration backlog**. It contracts quickly and expands one Lane at a
+  time against sustained evidence of health, and never above host capacity. A
+  signal the Run cannot observe is reported *unknown* — never estimated, and
+  never used as evidence that expanding is safe.
 
 Each authoritative change emits `wrapper.concurrency.changed` carrying both the
 immutable host-declared cap and the current effective limit.
@@ -236,7 +237,10 @@ interleaving, not a fallback, and is reported as neither.
 
 - Each Lane is one active row in the **Dashboard**, with its own timer and
   **Log**.
-- The **Queue** accounts for an issue across every contribution it took.
+- The **Queue** accounts for every issue the Run has read, filling as it reads
+  membership, across every contribution an issue took. It can therefore be
+  deeper than the number of running Lanes; Queue rows are not a count of Lanes
+  the Run started.
 - Per-Lane records in `.git-loopy/logs/<iso>-<run_id>.jsonl` are attributed to
   their contribution, so a Lane being refilled never reattributes earlier work.
 
