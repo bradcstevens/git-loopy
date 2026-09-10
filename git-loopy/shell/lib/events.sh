@@ -34,10 +34,6 @@ declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [WRAPPER_PR_ADVANCED]="wrapper.pr.advanced"
   [WRAPPER_STRIKE]="wrapper.strike"
   [WRAPPER_ASK_USER_ATTEMPTED]="wrapper.ask_user.attempted"
-  # Run-scoped record of a **Dashboard fault** (ADR-0024). Only an Orchestrator
-  # that hosts a Dashboard can emit it; this port hosts none, so it carries the
-  # literal for vocabulary parity and never produces the Event.
-  [WRAPPER_DASHBOARD_FAULT]="wrapper.dashboard.fault"
   [WRAPPER_POOL_REFRESHED]="wrapper.pool.refreshed"
   [WRAPPER_CONTRIBUTION_START]="wrapper.contribution.start"
   [WRAPPER_CONTRIBUTION_WORK_FINISHED]="wrapper.contribution.work_finished"
