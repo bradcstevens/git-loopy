@@ -66,6 +66,16 @@ is the only Skill source a Run reads (ADR-0025). To type the same commands
 yourself in `copilot`, install them into Copilot CLI as well:
 `npx skills add bradcstevens/git-loopy-skills -g -a github-copilot`.
 
+### Chain hook
+
+`.github/hooks/git-loopy-chain.json` registers the `subagentStop` hook used by
+`/next` to run `chain.sh complete`, closing the finished chain hop in the
+per-clone `.git-loopy/` ledger. The committed hook resolves the `/next` script
+from `$HOME/.copilot/skills/next/chain.sh`; operators with a different install
+location can set `GIT_LOOPY_NEXT_CHAIN`. If the script is missing, the hook
+fails with an actionable diagnostic instead of silently leaving the ledger row
+open.
+
 ### Issue tracker
 
 Issues live in this repo's GitHub Issues (managed via the `gh` CLI). See `docs/agents/issue-tracker.md`.
