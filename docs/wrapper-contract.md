@@ -1008,13 +1008,17 @@ The `contribution_identity` and `payload_contracts` sections of
 [`event-schema.json`](../git-loopy/conformance/event-schema.json) pin this vocabulary, its
 `rolling_stream_cases` pin whole ordered streams — Lane refill after admission, parking against a
 full backlog, bounded recovery, the serial latch, and a Parallel Run that never engaged — and the
-serialization cases pin the wire form. Every family member drives those streams through its own
-production serializer, including the members that schedule no Lane: an Orchestrator that cannot
-*produce* a rolling record must still read and write the same bytes. Its `parallel_capabilities`
-section pins each Orchestrator's manifest. As with the other reserved Insight shapes above,
-producing these records is capability-dependent and the rolling-dispatch Orchestrator tickets own
-enabling the producers; the Event-schema fixture revision advances with the first Orchestrator that
-emits them, since that revision is what a distribution's capability manifest advertises.
+serialization cases pin the wire form. A distribution named on a stream's `distributions` list is
+obliged by that stream according to its role: a producer MUST drive the stream through its own
+production serializer and match the pinned lines; a consumer MUST fold the stream without
+diagnostics. The three Orchestrator suites carry their unchanged producer obligation, including
+when an Orchestrator cannot *produce* a rolling record and must still read and write the same
+bytes. The Dashboard core carries the consumer obligation and emits no Event. Its
+`parallel_capabilities` section pins each Orchestrator's manifest. As with the other reserved
+Insight shapes above, producing these records is capability-dependent and the rolling-dispatch
+Orchestrator tickets own enabling the producers; the Event-schema fixture revision advances with
+the first Orchestrator that emits them, since that revision is what a distribution's capability
+manifest advertises.
 [`docs/parallel-mode.md`](parallel-mode.md) is the operator-facing companion to this section.
 
 ### Calibration records (contract 1.16, Python-only)
