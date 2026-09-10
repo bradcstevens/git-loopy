@@ -240,12 +240,20 @@ class ContributionFailure:
             started the contribution, or stalled without proving an ending.
         ending: The Agent session ending for a ``"breach"``. It is absent for
             ``"never_started"`` and ``"stall"``.
+        events: This contribution's Events, where the host has them. A failing
+            contribution can still have produced a complete stream --- a remote
+            host reads its artifact before it discovers the branch it names is
+            unreachable --- and discarding it would leave the operator a
+            terminal failure with no account of the hours that preceded it.
+            Empty for the local placement, which emits onto the Run's shared
+            trace as it works and so has no separate stream to hand back.
     """
 
     reason: str
     classification: ContributionFailureClass
     ending: session_outcome_module.SessionOutcomeRecord | None
     detail: str = ""
+    events: tuple[Mapping[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         if self.classification not in _CONTRIBUTION_FAILURE_CLASSES:

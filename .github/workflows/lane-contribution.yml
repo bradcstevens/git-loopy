@@ -1,0 +1,152 @@
+name: Lane contribution
+
+# One **Lane contribution**, on a machine that is not the operator's (#460).
+#
+# The GitHub Actions Execution host dispatches exactly one run of this workflow
+# as the scheduler reserves a Lane slot, and then supervises it from the
+# operator's machine. That division is deliberate, and the shape of this file
+# is what enforces it:
+#
+# * There is **no matrix**. A matrix's legs are fixed at run start, so it could
+#   only express the Wave that ADR-0020 retired; rolling dispatch survives only
+#   if a reservation becomes a dispatch.
+# * There is **no container image**. The standard runner already carries git,
+#   `gh`, Node, Python, `jq`, `pwsh` and Docker, and an image could never hold
+#   the *target* repository's toolchain anyway -- which is exactly the
+#   toolchain a contribution needs. The per-job setup step below is the honest
+#   version of that cost, and it is factored into a composite action so the
+#   next non-local host reuses it rather than copying it.
+# * The six-hour job cap is **plan-independent and hard**, so it bounds one
+#   contribution rather than a whole Run. That is why the orchestrator stays on
+#   the operator's machine: a Run outlives this ceiling, a contribution should
+#   not.
+# * Nothing is streamed. The platform offers no live log streaming -- its own
+#   CLI refuses to tail a running job -- so liveness is the coarse job/step
+#   status the host polls, and the contribution's complete Event stream arrives
+#   late, as the artifact uploaded at the end of the job.
+# * No credential is transported here. `github.token` is minted by the platform
+#   for this run alone and dies with it. There is no `secrets.` reference in
+#   this file, and there must never be one.
+#
+# The shape of this file is pinned by
+# git-loopy/python/tests/test_lane_contribution_workflow.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      request:
+        description: The Execution host seam's serialized ContributionRequest.
+        required: true
+        type: string
+      dispatch_token:
+        description: >-
+          The correlation token the orchestrator derived for this contribution.
+          `workflow_dispatch` answers 204 with no run id, so echoing the token
+          into `run-name` below is the only way the dispatcher can recognise
+          the run it just started.
+        required: true
+        type: string
+
+run-name: ${{ inputs.dispatch_token }}
+
+permissions:
+  contents: write
+  # A host never writes to the issue tracker, so it asks for no `issues` or
+  # `pull-requests` scope: contents to push its branch, and the Copilot-requests
+  # scope to run the Agent on the built-in job token.
+  copilot-requests: write
+
+jobs:
+  contribution:
+    name: Lane contribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      REQUEST: ${{ inputs.request }}
+      COPILOT_GITHUB_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # Pinned to the revision the orchestrator reserved this Lane against.
+      # Defaulting to the branch tip would silently rebase the contribution
+      # onto whatever landed between reservation and dispatch.
+      - name: Check out the reserved base revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJSON(inputs.request).base_revision }}
+          fetch-depth: 0
+
+      - name: Set up the contribution toolchain
+        uses: ./.github/actions/setup-lane-contribution
+
+      # A hosted runner carries no Git identity, and Git refuses to commit
+      # without one rather than inventing it. The Checkpoint that captures
+      # whatever the agent left uncommitted (ADR-0004) is a commit, so without
+      # this the one step whose whole job is to stop work being lost is the
+      # step that loses it.
+      - name: Give the runner a committer identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create the contribution branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          issue="$(jq -er '.issue_ref' <<<"$REQUEST")"
+          run_id="$(jq -er '.run_id' <<<"$REQUEST")"
+          branch="git-loopy/${run_id}/issue-${issue}"
+          echo "CONTRIBUTION_BRANCH=${branch}" >> "$GITHUB_ENV"
+          git switch --create "$branch"
+
+      # The one step whose conclusion the host reads to tell *never started*
+      # from *went dark* (ADR-0050), so its name is part of the contract.
+      - name: Run contribution
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.github_actions_worker
+
+      # Split from the push on purpose. The push is the step that can fail for
+      # reasons the session knows nothing about (a protected ref, a vanished
+      # remote), and if that failure also swallowed the ending and the Events
+      # then an explicable contribution would reach the orchestrator as a
+      # blameless stall with no account of itself at all.
+      - name: Push the contribution
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push --set-upstream origin "$CONTRIBUTION_BRANCH"
+
+      - name: Record the completion triple
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg remote "$(git remote get-url origin)" \
+            --arg ref "refs/heads/${CONTRIBUTION_BRANCH}" \
+            --arg sha "$(git rev-parse HEAD)" \
+            --argjson ending "$(jq -c .ending "${RUNNER_TEMP}/result.json")" \
+            --argjson checkpoint_failed "$(jq -c .checkpoint_failed "${RUNNER_TEMP}/result.json")" \
+            '{remote: $remote, ref: $ref, sha: $sha, ending: $ending,
+              checkpoint_failed: $checkpoint_failed}' \
+            > "${RUNNER_TEMP}/completion.json"
+
+      # API-readable the moment it is uploaded, which is what makes the Event
+      # stream complete-and-late rather than complete-and-lost. `always()` and
+      # the standalone `ending.json` are both there so a job that failed after
+      # the session still hands back everything it observed.
+      - name: Upload the completion artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-loopy-${{ fromJSON(inputs.request).run_id }}-issue-${{ fromJSON(inputs.request).issue_ref }}
+          path: |
+            ${{ runner.temp }}/completion.json
+            ${{ runner.temp }}/result.json
+            ${{ runner.temp }}/events.jsonl
+          if-no-files-found: error

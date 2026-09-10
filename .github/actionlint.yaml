@@ -1,0 +1,13 @@
+paths:
+  # `copilot-requests` is a real permission scope --- it is what lets a job
+  # authenticate to Copilot with the built-in job token instead of a stored
+  # secret, which is the whole point of the GitHub Actions Execution host
+  # (#460). actionlint validates `permissions:` against a hard-coded roster
+  # that this scope is not yet in, so the check is suppressed for the one
+  # workflow that needs it rather than repository-wide.
+  #
+  # Suppressed narrowly and by exact message: any *other* unknown scope in
+  # this file --- a typo'd `content: write`, say --- still fails the gate.
+  .github/workflows/lane-contribution.yml:
+    ignore:
+      - 'unknown permission scope "copilot-requests"'

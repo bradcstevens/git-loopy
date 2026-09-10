@@ -230,9 +230,12 @@ PYTHON_PARALLEL_CAPABILITIES: dict[str, bool] = {
     "contribution_events": True,
 }
 # Placement is relative to the Orchestrator, never an isolation grade. The
-# manifest is intentionally a list: a future host extends this declaration
-# without adding a boolean to every Runner-family member.
-PYTHON_EXECUTION_HOSTS: tuple[str, ...] = ("local",)
+# manifest is intentionally a list, and #460 is what it was made a list for:
+# the GitHub Actions host extends this declaration without adding a boolean to
+# every Runner-family member. Declaring a placement is a claim about this
+# distribution's own adapters -- a Run naming an undeclared one is refused at
+# preflight rather than downgraded to local.
+PYTHON_EXECUTION_HOSTS: tuple[str, ...] = ("local", "github-actions")
 
 
 def python_parallel_capabilities() -> dict[str, bool | list[str]]:

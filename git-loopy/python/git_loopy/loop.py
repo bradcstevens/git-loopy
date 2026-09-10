@@ -139,6 +139,7 @@ from git_loopy import execution_host as execution_host_module
 from git_loopy import gate as gate_module
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
+from git_loopy import github_actions_host as actions_host_module
 from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
 from git_loopy import session_outcome as session_outcome_module
@@ -303,6 +304,44 @@ def _make_github_client() -> gh_module.SubprocessGitHubClient:
     ``prds`` backend has no GitHub dependency.
     """
     return gh_module.SubprocessGitHubClient()
+
+
+def _make_execution_host(
+    placement: str,
+    *,
+    send_timeout_seconds: float,
+) -> execution_host_module.ExecutionHost | None:
+    """Construct the **Execution host** the operator named, or ``None`` for local.
+
+    ``None`` is the local placement, and it means "let each Lane build its own
+    :class:`~git_loopy.execution_host.LocalExecutionHost` bound to its own
+    worktree" — a local host is per-contribution by construction, so there is
+    nothing Run-scoped to build here.
+
+    A non-local placement is built once, at preflight, precisely so it fails
+    *there*: a host that cannot name the account's concurrency ceiling, or
+    cannot resolve the repository it dispatches into, must refuse the Run
+    rather than discover it at the first reservation, by which point Lanes are
+    already open and the failure looks like a contribution's rather than the
+    environment's.
+
+    Raises:
+        ValueError: the placement is undeclared, or its host cannot be built.
+        github_actions_host.ActionsError: the Actions repository could not be
+            resolved by the authenticated CLI.
+    """
+    if placement == execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT:
+        return None
+    if placement == actions_host_module.GITHUB_ACTIONS_PLACEMENT:
+        client = actions_host_module.SubprocessActionsClient.discover()
+        actions_host_module.assert_workflow_installed(client)
+        return actions_host_module.GitHubActionsExecutionHost(
+            client=client,
+            capacity=actions_host_module.github_actions_capacity(),
+            workflow_ref=actions_host_module.workflow_ref(client),
+            send_timeout_seconds=send_timeout_seconds,
+        )
+    raise ValueError(f"no adapter exists for execution host {placement!r}")
 
 
 def _make_task_type_label_client() -> gh_module.SubprocessTaskTypeLabelClient:
@@ -802,6 +841,7 @@ class _Loop:
         # *current Iteration* slot, so it cannot answer "what has this whole
         # Run spent" — which is what AI-credit pressure is measured against.
         # Chained rather than replacing, so the serial Summary is untouched.
+        self._usage_observer = usage_observer
         self._session_observer: _EventObserver = (
             self._rollup
             if usage_observer is None
@@ -2042,6 +2082,24 @@ class _Loop:
         self._last_session_outcome = record
         self._observe_session_ending(ref, record, iter_num=iter_num)
         _report_session_outcome(self._diag, ref=ref, record=record)
+
+    def _observe_ingested_consumption(self, event: Mapping[str, Any]) -> None:
+        """Charge the Run's AI-credit meter for one **ingested** remote Event.
+
+        A local session's Events reach two accountants: the Iteration rollup
+        that fills the Summary, and the Run-scoped cost meter that AI-credit
+        pressure is judged against (#309). A remote contribution's Events reach
+        only the first, because they arrive through the emitter --- whose
+        observer is the rollup alone --- rather than through a session this
+        process is running.
+
+        So this is the second half, and only the second half: the emitter has
+        already fed the rollup, and feeding it again here would double-count
+        every remote token in the Summary while fixing the meter.
+        """
+        if self._usage_observer is None:
+            return
+        self._usage_observer.observe(event)
 
     def _observe_session_ending(
         self,
@@ -3577,7 +3635,11 @@ class _ParallelLoop:
                 self._lane_work.pop(contribution.contribution_id, None)
             self._finalize_contribution(contribution, published=False)
             return
+        supervision_started = time.monotonic()
         outcome = await host.run_contribution(request)
+        self._account_supervised_contribution(
+            contribution, host, since=supervision_started
+        )
         if isinstance(outcome, execution_host_module.ContributionFailure):
             self._diag.warning(
                 "lane #%s execution host (%s) %s: %s (%s)",
@@ -3594,6 +3656,13 @@ class _ParallelLoop:
 
         if outcome.remote is not None:
             assert outcome.ref is not None
+            # Ingested *before* materialization is attempted, because the
+            # artifact has already been read and every failure path below
+            # returns. A fetch that cannot reach the remote says nothing about
+            # what the session did, and erasing hours of Events over it would
+            # leave the operator a terminal failure with no account of the work
+            # that preceded it.
+            self._ingest_contribution_events(contribution, outcome.events)
             materialized = self._materializer.materialize(
                 remote=outcome.remote,
                 ref=outcome.ref,
@@ -3757,6 +3826,11 @@ class _ParallelLoop:
     ) -> None:
         """Finalize a host failure before it can reach Integration."""
         assert self._scheduler is not None
+        # Whatever the host managed to observe reaches the Run's stream even
+        # though the contribution is lost: a terminal failure with no account
+        # of the work that preceded it is the one thing an operator cannot
+        # debug afterwards, because the machine that held the logs is gone.
+        self._ingest_contribution_events(contribution, outcome.events)
         if outcome.classification == "breach":
             ending = outcome.ending
             assert ending is not None
@@ -3851,6 +3925,86 @@ class _ParallelLoop:
             self._salvage_and_reclaim_lane_workspace(lane_work)
             if discard_branch and lane_work.reclaimed:
                 self._delete_branch_safely(lane_work.item.ref, lane_work.branch)
+
+    def _ingest_contribution_events(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        remote_events: Iterable[Mapping[str, Any]],
+    ) -> None:
+        """Put a remote contribution's batched, late Events on the Run's stream.
+
+        A local contribution emits onto the shared trace as it works, so there
+        is nothing to ingest. A remote one cannot: GitHub Actions publishes no
+        supported live log stream, so its Events arrive together, after the
+        fact, as an end-of-job artifact — **backdated**, and that is the point.
+        Their wall-clock ``ts`` is the only honest timing a batched stream
+        still carries, so nothing here re-stamps it. The host has already
+        stripped the monotonic observation field (a remote machine's monotonic
+        clock shares no origin with this one), and re-stamping *that* would
+        collapse a six-hour contribution onto the instant its artifact was
+        read.
+
+        What ingest does add is the identity triple, exactly as
+        :meth:`_emit_contribution_event` does for a locally-produced record:
+        without it the Dashboard and a replaying reader would have a stream
+        belonging to no issue, arriving long after the Lane slot that started
+        it was reused.
+        """
+        for remote_event in remote_events:
+            envelope = dict(remote_event)
+            envelope.update(
+                contribution_id=contribution.contribution_id,
+                lane_id=contribution.lane_id,
+                issue=contribution.ref,
+                # The key the rollup selects a contribution's scope on. A
+                # conforming host is not obliged to have stamped it --- the
+                # seam's contract is "this contribution's Events, in whatever
+                # form the host produced them" --- so an unstamped stream would
+                # be logged and then quietly omitted from the accounting.
+                lane_issue=contribution.ref,
+                iter=None,
+            )
+            self._serial._emitter.dispatch(envelope)
+            # The Run-scoped Consumption observer, which the emitter does not
+            # carry (#309): its own observer is the rollup alone, while
+            # AI-credit pressure is measured by the cost meter chained into
+            # `_session_observer`. A local session reaches that meter through
+            # its event observer; a remote one has no session here to reach it
+            # with, so ingest is where its tokens have to land -- otherwise a
+            # Run could spend its whole allowance remotely and still believe
+            # credit pressure was unknown.
+            self._serial._observe_ingested_consumption(envelope)
+
+    def _account_supervised_contribution(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        host: execution_host_module.ExecutionHost,
+        *,
+        since: float,
+    ) -> None:
+        """Charge a non-local contribution the time the orchestrator supervised it.
+
+        ``agent_seconds`` is accumulated inside
+        :meth:`_run_local_agent_session`, which only the ``local`` placement
+        reaches. A contribution that ran on another machine would therefore
+        report **zero** agent time for work that took hours, and the Summary
+        and the Dashboard would render a six-hour remote contribution as
+        instantaneous.
+
+        The orchestrator cannot observe a remote session directly — liveness is
+        coarse and the Events are late — but it *can* honestly measure the span
+        it held the contribution's handle across, which is bounded by the same
+        six-hour job cap the session is. So that span is what a non-local
+        placement reports. The local placement is untouched: its measurement is
+        strictly better, and widening it to the whole seam call would fold
+        worktree setup and the **Checkpoint** into agent time.
+        """
+        if host.placement == execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT:
+            return
+        scope = self._contribution_iter.get(contribution.contribution_id)
+        if scope is None:  # pragma: no cover - defensive
+            return
+        scope.agent_seconds += max(0.0, time.monotonic() - since)
 
     def _salvage_and_reclaim_lane_workspace(self, lane_work: _LaneWork) -> None:
         """**Salvage** a **Lane workspace**, then reclaim it (#452, #445 §F).
@@ -5024,6 +5178,29 @@ async def run(
         control.close()
         return exit_code_for("preflight_failed")
 
+    # A declared placement still has to be *buildable* here, at preflight. The
+    # Actions host needs the account's concurrency ceiling and the repository it
+    # dispatches into; discovering either is missing at the first reservation
+    # would strand Lanes that are already open and dress an environment failure
+    # up as a contribution's.
+    try:
+        selected_execution_host = _make_execution_host(
+            config.execution_host,
+            send_timeout_seconds=config.send_timeout_seconds,
+        )
+    except (ValueError, actions_host_module.ActionsError) as exc:
+        print(
+            f"git-loopy: Execution host {config.execution_host!r} could not be "
+            f"prepared: {exc}",
+            file=sys.stderr,
+        )
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
+        return exit_code_for("preflight_failed")
+
     try:
         prompt_text = _read_prompt(repo_root, os.environ)
     except FileNotFoundError as exc:
@@ -5287,6 +5464,7 @@ async def run(
             rate_card=rate_card,
             classifier_pair=classifier_pair,
             task_type_client=task_type_client,
+            execution_host=selected_execution_host,
         )
     except git_module.GitError as exc:
         # Rolling dispatch resolves where its **Lane workspaces** live up front

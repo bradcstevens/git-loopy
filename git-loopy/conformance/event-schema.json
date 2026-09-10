@@ -84,7 +84,7 @@
     },
     "unsupported": "An Orchestrator that declares parallel_mode false MUST declare every other parallel capability false, and MUST refuse a requested Lane cap above 1 at preflight, naming the capability and the distribution. Accepting the request and running serially is the obscure failure this manifest exists to prevent.",
     "execution_hosts": {
-      "identifiers": ["local"],
+      "identifiers": ["local", "github-actions"],
       "meaning": "Execution-host placement relative to the Orchestrator. A list is additive so a future host does not add a boolean to every Runner-family manifest.",
       "unsupported": "A requested identifier that the distribution does not declare MUST be refused at preflight, naming execution_hosts, the distribution, and the setting the operator can change."
     },

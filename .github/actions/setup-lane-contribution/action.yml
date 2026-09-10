@@ -1,0 +1,37 @@
+name: Set up a git-loopy Lane contribution
+description: >-
+  Install the runner toolchain a Lane contribution needs on a machine that is
+  not the operator's: uv, the pinned Copilot CLI, the Python Runner, and the
+  pinned Skill catalog.
+
+# Deliberately a composite action rather than a container image (#460).
+#
+# An image is the obvious answer and the wrong one here: it could hold *this*
+# repository's toolchain but never the **target** repository's, which is the
+# toolchain the contribution's own feedback loops actually run. So the image
+# would buy a slower cold start and still leave a per-job setup step to write.
+#
+# Factoring it out here is what makes the *next* non-local Execution host --- a
+# self-hosted runner, another CI --- cheap: it reuses these four installs
+# instead of copying them.
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+    - name: Install the pinned Copilot CLI
+      shell: bash
+      run: npm install --global @github/copilot@1.0.75
+
+    - name: Install the Python Runner
+      shell: bash
+      run: uv sync --project git-loopy/python --all-extras
+
+    # ADR-0025: a Run reads Skills only from the install `git-loopy init`
+    # refreshes. Without this the job would run every contribution against an
+    # empty catalog and never say so.
+    - name: Install the pinned Skill catalog
+      shell: bash
+      run: uv run --project git-loopy/python --all-extras git-loopy init --global --yes

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -25,7 +26,6 @@ from git_loopy.calibration_search import (
 from git_loopy.trial_concurrency import InlineTrialDispatcher
 from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import events as events_module
-from git_loopy import execution_host as execution_host_module
 from git_loopy import cli as cli_module
 from git_loopy import config as config_module
 from git_loopy import version as version_module
@@ -1419,25 +1419,33 @@ def test_event_fixture_pins_the_parallel_capability_manifest() -> None:
 
 
 def _execution_host_producers() -> tuple[str, ...]:
-    """Execution host placements with a production adapter in this distribution."""
-    source = (
-        Path(events_module.__file__).parent / "execution_host.py"
-    ).read_text(encoding="utf-8")
-    placements = re.findall(
+    """Execution host placements with a production adapter in this distribution.
+
+    Derived from the source of *every* host module rather than from
+    ``execution_host.py`` alone: the seam's whole point is that a second
+    placement lands in its own module (#460's
+    :mod:`git_loopy.github_actions_host`), and a derivation that only looked at
+    the seam's own file would silently stop noticing new adapters — the exact
+    drift this guard exists to catch.
+    """
+    package = Path(events_module.__file__).parent
+    # The returned expression must be a statement -- a line-start ``return``,
+    # not the word inside a docstring's prose.
+    pattern = (
         r"@property\s+def placement\(self\) -> Placement:.*?"
-        r'return "([^"]+)"',
-        source,
-        flags=re.DOTALL,
+        r"\n[ \t]+return (\"[^\"]+\"|[A-Za-z_][A-Za-z0-9_]*)[ \t]*\n"
     )
-    placements.extend(
-        getattr(execution_host_module, name)
-        for name in re.findall(
-            r"@property\s+def placement\(self\) -> Placement:.*?"
-            r"return (LOCAL_EXECUTION_HOST_PLACEMENT)",
-            source,
-            flags=re.DOTALL,
-        )
-    )
+    placements: list[str] = []
+    for path in sorted(package.glob("*host*.py")):
+        module = importlib.import_module(f"{events_module.__package__}.{path.stem}")
+        for returned in re.findall(
+            pattern, path.read_text(encoding="utf-8"), flags=re.DOTALL
+        ):
+            placements.append(
+                returned[1:-1]
+                if returned.startswith('"')
+                else getattr(module, returned)
+            )
     return tuple(dict.fromkeys(placements))
 
 
@@ -1449,7 +1457,7 @@ def test_event_fixture_pins_the_execution_host_declaration() -> None:
     declaration from the hosts it actually implements.
     """
     declaration = _EVENT_SCHEMA["parallel_capabilities"]["execution_hosts"]
-    assert declaration["identifiers"] == ["local"]
+    assert declaration["identifiers"] == ["local", "github-actions"]
     assert tuple(events_module.PYTHON_EXECUTION_HOSTS) == _execution_host_producers()
 
     manifest = events_module.python_parallel_capabilities()

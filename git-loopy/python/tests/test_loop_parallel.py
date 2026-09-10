@@ -99,6 +99,7 @@ import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -904,7 +905,7 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
         "integration_backlog": True,
         "adaptive_lane_limit": True,
         "contribution_events": True,
-        "execution_hosts": ["local"],
+        "execution_hosts": ["local", "github-actions"],
     }
     assert run_start["execution_host"] == {
         "placement": "local",
@@ -1907,7 +1908,7 @@ def test_second_stop_before_host_dispatch_starts_no_host_contribution(
     real_request = real_parallel_loop._build_contribution_request
 
     def inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
-        return real_parallel_loop(*args, execution_host=host, **kwargs)
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
 
     monkeypatch.setattr(loop_module, "_ParallelLoop", inject_host)
 
@@ -2391,14 +2392,20 @@ def test_parallel_workspace_root_failure_refuses_the_run_at_preflight(
     assert fake_client.stop_call_count == 1
 
 
-@pytest.mark.parametrize("execution_host", ["github-actions", ""])
+@pytest.mark.parametrize("execution_host", ["kubernetes", "GitHub-Actions", ""])
 def test_unsupported_execution_host_refuses_the_run_at_preflight(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     execution_host: str,
 ) -> None:
-    """A host placement this distribution cannot drive is never downgraded."""
+    """A host placement this distribution cannot drive is never downgraded.
+
+    ``github-actions`` left this list when #460 gave it a production adapter,
+    which is the point: the refusal is derived from the declared manifest, so
+    it narrows exactly as the distribution grows and never guesses. A near-miss
+    spelling is refused like any other undeclared identifier.
+    """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
@@ -3746,7 +3753,7 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     real_parallel_loop = loop_module._ParallelLoop
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
-        instance = real_parallel_loop(*args, execution_host=host, **kwargs)
+        instance = real_parallel_loop(*args, **{**kwargs, "execution_host": host})
         built.append(instance)
         return instance
 
@@ -3909,7 +3916,7 @@ def test_a_green_publication_lifts_the_strike_drain_on_the_wire(
     real_parallel_loop = loop_module._ParallelLoop
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
-        instance = real_parallel_loop(*args, execution_host=host, **kwargs)
+        instance = real_parallel_loop(*args, **{**kwargs, "execution_host": host})
         built.append(instance)
         return instance
 
@@ -4002,7 +4009,7 @@ def test_parallel_loop_reclaims_the_placeholder_a_substituted_host_did_not_use(
     real_parallel_loop = loop_module._ParallelLoop
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
-        return real_parallel_loop(*args, execution_host=host, **kwargs)
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
 
     monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
 
@@ -4061,7 +4068,7 @@ def test_parallel_loop_discards_a_dirty_placeholder_branch_the_host_declined(
     real_parallel_loop = loop_module._ParallelLoop
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
-        return real_parallel_loop(*args, execution_host=host, **kwargs)
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
 
     monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
 
@@ -4140,7 +4147,7 @@ def test_parallel_loop_materializes_remote_contributions_before_integration(
     real_parallel_loop = loop_module._ParallelLoop
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
-        return real_parallel_loop(*args, execution_host=host, **kwargs)
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
 
     monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
 
@@ -4194,7 +4201,7 @@ def test_parallel_loop_treats_a_proven_missing_remote_ref_as_a_breach(
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
         instance = real_parallel_loop(
-            *args, execution_host=_AbsentRemoteExecutionHost(), **kwargs
+            *args, **{**kwargs, "execution_host": _AbsentRemoteExecutionHost()}
         )
         built.append(instance)
         return instance
@@ -4267,7 +4274,7 @@ def test_parallel_loop_reoffers_an_unreachable_remote_without_a_strike(
     real_parallel_loop = loop_module._ParallelLoop
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
-        instance = real_parallel_loop(*args, execution_host=host, **kwargs)
+        instance = real_parallel_loop(*args, **{**kwargs, "execution_host": host})
         built.append(instance)
         return instance
 
@@ -4334,7 +4341,7 @@ def test_parallel_contribution_disposition_agrees_with_the_ending_it_reports(
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
         instance = real_parallel_loop(
-            *args, execution_host=_NoProgressEndingExecutionHost(), **kwargs
+            *args, **{**kwargs, "execution_host": _NoProgressEndingExecutionHost()}
         )
         built.append(instance)
         return instance
@@ -6326,3 +6333,345 @@ def test_a_parallel_run_start_reads_back_the_routing_it_parsed(
     assert refused["configured_effort"] == "high"
     assert refused["effort"] is None
     assert refused["gate_warnings"] == ["incapable_model"]
+
+
+class _SupervisionClock:
+    """A monotonic clock a host double can advance to model a long remote job."""
+
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
+
+
+@dataclass
+class _BackdatedEventExecutionHost(_RemoteBranchExecutionHost):
+    """A remote host whose Events arrive batched, late and backdated (#460).
+
+    Actions publishes no supported live log stream, so a remote contribution's
+    Events cannot arrive as it works: they are uploaded as an end-of-job
+    artifact and read in one go once the job completes. The host double
+    reproduces exactly that — a whole stream, produced hours before the
+    orchestrator ever sees it, on a machine whose own clock the orchestrator
+    cannot read.
+    """
+
+    clock: _SupervisionClock | None = None
+    remote_seconds: float = 0.0
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        outcome = await super().run_contribution(request)
+        if self.clock is not None:
+            self.clock.value += self.remote_seconds
+        assert isinstance(outcome, ContributionSuccess)
+        return dataclass_replace(
+            outcome,
+            events=(
+                {
+                    "ts": "2026-09-09T18:00:00.000Z",
+                    "run_id": request.run_id,
+                    "iter": None,
+                    "type": "assistant.message",
+                    "text": f"remote work on {request.issue_ref}",
+                },
+                {
+                    "ts": "2026-09-09T21:45:00.000Z",
+                    "run_id": request.run_id,
+                    "iter": None,
+                    "type": "assistant.message",
+                    "text": f"remote finish on {request.issue_ref}",
+                },
+            ),
+        )
+
+
+def test_remote_contribution_events_reach_the_runs_stream_backdated(
+    tmp_path, monkeypatch
+) -> None:
+    """A remote contribution's Events are the Run's Events, late but attributed.
+
+    Ingest re-stamps nothing: the backdated wall clock the remote machine wrote
+    survives, and the identity triple is added so the Dashboard and a replaying
+    reader attribute the stream to the issue that produced it rather than to
+    whichever Lane slot is free by the time the artifact is read.
+    """
+    fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _BackdatedEventExecutionHost(fake_git)
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    ingested = [
+        event
+        for event in _logged_events(tmp_path)
+        if event.get("type") == "assistant.message"
+    ]
+    assert len(ingested) == 4
+    assert {event["ts"] for event in ingested} == {
+        "2026-09-09T18:00:00.000Z",
+        "2026-09-09T21:45:00.000Z",
+    }
+    for event in ingested:
+        assert event["iter"] is None
+        assert event["run_id"] == _run_id(tmp_path)
+        assert event["issue"] in (42, 43)
+        assert isinstance(event["contribution_id"], str) and event["contribution_id"]
+        assert "observed_monotonic" not in event
+    assert {event["issue"] for event in ingested} == {42, 43}
+
+
+def test_a_remote_contributions_duration_is_never_rendered_as_near_zero(
+    tmp_path, monkeypatch
+) -> None:
+    """Local agent time is measured in-process, and a remote session is not.
+
+    ``agent_seconds`` is accumulated by the local agent-session path, so a
+    contribution that ran on another machine would report zero for work that
+    took hours — the Summary and the Dashboard would then render a six-hour
+    remote contribution as instantaneous. What the orchestrator *can* honestly
+    measure is the span it supervised the host across, so that is what a
+    non-local placement reports.
+    """
+    fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+
+    clock = _SupervisionClock()
+    monkeypatch.setattr(loop_module.time, "monotonic", clock)
+    host = _BackdatedEventExecutionHost(
+        fake_git, clock=clock, remote_seconds=6 * 60 * 60
+    )
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    ends = [
+        event
+        for event in _logged_events(tmp_path)
+        if event.get("type") == "wrapper.contribution.end"
+    ]
+    assert len(ends) == 2
+    assert [end["summary"]["agent_seconds"] for end in ends] == [6 * 60 * 60.0] * 2
+
+
+def test_the_run_builds_the_github_actions_host_the_operator_named(
+    tmp_path, monkeypatch
+) -> None:
+    """A declared placement is *constructed*, never merely tolerated at preflight."""
+    built: list[tuple[str, int]] = []
+    timeouts: list[float] = []
+
+    class _RecordingHost(_RemoteBranchExecutionHost):
+        pass
+
+    def _fake_factory(placement: str, *, send_timeout_seconds: float) -> Any:
+        assert placement == "github-actions"
+        # The Run's own send timeout has to cross the machine boundary on the
+        # request: the job is a fresh process elsewhere and inherits none of
+        # this Run's configuration, so a host built without it would leave the
+        # SDK's one-minute default standing over an hours-long contribution.
+        timeouts.append(send_timeout_seconds)
+        host = _RecordingHost(fake_git)
+        built.append((host.placement, host.capacity))
+        return host
+
+    fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    cfg = dataclass_replace(cfg, execution_host="github-actions")
+    monkeypatch.setattr(loop_module, "_make_execution_host", _fake_factory)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    assert built == [("github-actions", 4)]
+    assert timeouts == [cfg.send_timeout_seconds]
+    run_start = next(
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.run.start"
+    )
+    assert run_start["execution_host"] == {
+        "placement": "github-actions",
+        "isolation_grade": "machine boundary",
+        "capacity": 4,
+        "starting_lane_limit": run_start["execution_host"]["starting_lane_limit"],
+    }
+    assert all(
+        event["host"] == "github-actions"
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.contribution.start"
+    )
+
+
+def test_an_execution_host_that_cannot_be_built_refuses_the_run_at_preflight(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """A declared host with no account ceiling is refused, never downgraded."""
+    _fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    cfg = dataclass_replace(cfg, execution_host="github-actions")
+
+    def _refuse(placement: str, *, send_timeout_seconds: float) -> Any:
+        del send_timeout_seconds
+        raise ValueError(
+            "GIT_LOOPY_GITHUB_ACTIONS_CAPACITY must be a finite positive integer"
+        )
+
+    monkeypatch.setattr(loop_module, "_make_execution_host", _refuse)
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == loop_module.exit_code_for("preflight_failed")
+    error = capsys.readouterr().err
+    assert "github-actions" in error
+    assert "GIT_LOOPY_GITHUB_ACTIONS_CAPACITY" in error
+
+
+@dataclass
+class _UnfetchableRemoteHost(_BackdatedEventExecutionHost):
+    """A host whose branch cannot be fetched, but whose Events already arrived.
+
+    The two facts are independent: the artifact is read in full before any
+    fetch is attempted, so a remote that has gone away afterwards says nothing
+    about what the session did.
+    """
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        outcome = await super().run_contribution(request)
+        assert isinstance(outcome, ContributionSuccess)
+        return dataclass_replace(outcome, remote="https://example.test/gone.git")
+
+
+def test_a_contribution_whose_branch_cannot_be_fetched_keeps_its_events(
+    tmp_path, monkeypatch
+) -> None:
+    """Materialization failing must not erase the account of the work it failed on.
+
+    The host has already read the complete artifact by the time the fetch is
+    attempted --- Events, ending and all. Ingesting only after a successful
+    fetch means a remote that has gone away takes hours of observable Events
+    with it, leaving the operator a terminal failure with nothing preceding it
+    on the stream and no way to tell a stall from real work that could not be
+    collected.
+    """
+    fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _UnfetchableRemoteHost(fake_git)
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    asyncio.run(loop_module.run(cfg))
+
+    messages = [
+        event
+        for event in _logged_events(tmp_path)
+        if event.get("type") == "assistant.message"
+        and str(event.get("text", "")).startswith("remote ")
+    ]
+    assert messages, "a failed fetch discarded the contribution's whole Event stream"
+    assert {message["issue"] for message in messages} == {42, 43}
+
+
+def test_remote_consumption_reaches_the_runs_ai_credit_meter(
+    tmp_path, monkeypatch
+) -> None:
+    """A Run that spends its allowance remotely must still feel the pressure.
+
+    Consumption has two accountants: the Iteration rollup that fills the
+    Summary, and the Run-scoped cost meter AI-credit pressure is judged
+    against. Ingest reaches the first through the emitter; if it does not also
+    reach the second, a Run could burn every credit it has on remote
+    contributions while reporting credit pressure as unknown --- and keep
+    opening Lanes on the strength of that.
+
+    Asserted on the meter's own billed total rather than on the fact that an
+    observer was called, because the payload has to survive the meter's
+    *parsing* too: a Consumption Event whose token fields are misspelled is
+    observed just as dutifully and bills nothing.
+    """
+    fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _ConsumingRemoteHost(fake_git)
+    meters: list[Any] = []
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        loop = real_parallel_loop(*args, **{**kwargs, "execution_host": host})
+        meters.append(loop._cost_meter)
+        return loop
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    assert meters, "the parallel loop was never constructed"
+    billed = meters[0]()
+    assert billed == pytest.approx(1.5), (
+        "each remote contribution's billed Credits must reach the Run's meter"
+    )
+
+    # And the *same* Events reach the Iteration rollup exactly once. The
+    # emitter already fed it on the way to the log, so an ingest that fed it
+    # again would double every remote token in the Summary while fixing the
+    # meter --- which the per-contribution accrual is what shows.
+    ends = [
+        event
+        for event in _logged_events(tmp_path)
+        if event.get("type") == "wrapper.contribution.end"
+    ]
+    assert ends, "expected a finalized row per Lane contribution"
+    for end in ends:
+        consumption = end["issues"][0]["consumption"]
+        assert consumption["tokens_in"] == 1000, (
+            "the remote accrual is counted once, on its canonical field names"
+        )
+        assert consumption["tokens_out"] == 500
+
+
+@dataclass
+class _ConsumingRemoteHost(_RemoteBranchExecutionHost):
+    """A remote host whose contribution spent real tokens on another machine."""
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        outcome = await super().run_contribution(request)
+        assert isinstance(outcome, ContributionSuccess)
+        return dataclass_replace(
+            outcome,
+            events=(
+                {
+                    "ts": "2026-09-09T18:00:00.000Z",
+                    "run_id": request.run_id,
+                    "iter": None,
+                    "type": "usage.tokens",
+                    "input": 1000,
+                    "output": 500,
+                    "credits": "0.75",
+                },
+            ),
+        )
