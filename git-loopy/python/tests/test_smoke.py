@@ -304,6 +304,13 @@ def test_git_loopy_prds_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
     which the loop treats as the empty-pool fast path → exit 0.
     """
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "AGENTS.md").write_text(
+        "## Feedback loops\n\n"
+        "| Loop | Command |\n"
+        "| --- | --- |\n"
+        "| Tests | `uv run pytest` |\n",
+        encoding="utf-8",
+    )
     # Provide a prompt file so we don't fail on prompt resolution.
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
@@ -367,6 +374,13 @@ def test_git_loopy_no_git_loopy_folder_runs_off_packaged_prompt(
     resolution succeeded off the packaged default with zero setup.
     """
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "AGENTS.md").write_text(
+        "## Feedback loops\n\n"
+        "| Loop | Command |\n"
+        "| --- | --- |\n"
+        "| Tests | `uv run pytest` |\n",
+        encoding="utf-8",
+    )
     # Deliberately no git-loopy/ directory: force the packaged-default fallback.
     monkeypatch.setenv("GIT_LOOPY_ISSUE_SOURCE", "prds")
     result = subprocess.run(

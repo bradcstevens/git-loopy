@@ -729,25 +729,7 @@ class GitHubIssueSource:
         return None
 
     def preflight(self) -> int | None:
-        """Verify ``gh`` is on PATH, authenticated, and resolves a repo.
-
-        GitHub mode requires ``gh`` to be available, authenticated, and repo-scoped.
-        """
-        try:
-            authed = self._gh.auth_status()
-        except gh_module.GhError as exc:
-            self._diag.error(
-                "gh preflight failed: %s. Install `gh` from "
-                "https://cli.github.com/.",
-                exc,
-            )
-            return exit_code_for("preflight_failed")
-        if not authed:
-            self._diag.error(
-                "gh is not authenticated. Run `gh auth login` and re-run "
-                "git_loopy."
-            )
-            return exit_code_for("preflight_failed")
+        """Verify the authenticated GitHub source resolves this repository."""
         try:
             repo = self._gh.repo_view()
         except gh_module.GhError as exc:
