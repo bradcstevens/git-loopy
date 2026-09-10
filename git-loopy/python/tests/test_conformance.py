@@ -3286,6 +3286,19 @@ def test_the_python_capability_manifest_declares_the_written_contract() -> None:
     assert version_module.WRAPPER_CONTRACT_VERSION == _written_contract_version()
 
 
+def test_the_contract_distinguishes_producer_and_consumer_stream_obligations() -> None:
+    """A distribution list obliges each role without making the Dashboard an emitter."""
+    contract = " ".join(_written_contract_text().split())
+
+    assert "producer" in contract
+    assert "drive the stream through its own production serializer" in contract
+    assert "match the pinned lines" in contract
+    assert "consumer" in contract
+    assert "fold the stream without diagnostics" in contract
+    assert "three Orchestrator suites" in contract
+    assert "unchanged" in contract
+
+
 def _selection_order_section() -> str:
     """The written §3.2, so a coincidence elsewhere in the contract cannot pass."""
     contract = _written_contract_text()
