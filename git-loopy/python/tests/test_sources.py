@@ -355,16 +355,12 @@ class TestGitHubPreflight:
         impl = GitHubIssueSource(_silent_logger(), gh=gh)
         assert impl.preflight() is None
 
-    def test_returns_one_when_gh_not_authed(self) -> None:
-        impl = GitHubIssueSource(_silent_logger(), gh=FakeGitHubClient(authed=False))
-        assert impl.preflight() == 1
-
-    def test_returns_one_when_auth_status_raises(self) -> None:
+    def test_does_not_repeat_the_run_environment_authentication_check(self) -> None:
         gh = FakeGitHubClient(
             auth_status_error=gh_module.GhError(["gh", "auth", "status"], 127, "missing")
         )
         impl = GitHubIssueSource(_silent_logger(), gh=gh)
-        assert impl.preflight() == 1
+        assert impl.preflight() is None
 
     def test_returns_one_when_repo_view_raises(self) -> None:
         gh = FakeGitHubClient(
