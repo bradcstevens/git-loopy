@@ -3285,6 +3285,108 @@ def _declared_fixture_contract_versions() -> dict[str, str]:
     return declared
 
 
+_FIXTURE_CLAIMS_FILENAME = "fixture-claims.json"
+_FIXTURE_CLAIM_MEMBERS = ("python", "shell", "powershell", "rust")
+_FIXTURE_CLAIM_KINDS = frozenset(
+    {"claimed", "waived_out_of_scope", "waived_owed"}
+)
+
+
+def _assert_fixture_claims_are_complete(
+    conformance_dir: Path, manifest: Mapping[str, Any]
+) -> None:
+    """Assert the Fixture-claim register accounts for the fixture directory."""
+    assert manifest.get("schema_version") == 1
+    assert re.fullmatch(r"\d+\.\d+", str(manifest.get("contract_version")))
+    assert manifest["members"] == list(_FIXTURE_CLAIM_MEMBERS)
+
+    fixture_names = {
+        path.name
+        for path in conformance_dir.glob("*.json")
+        if path.name != _FIXTURE_CLAIMS_FILENAME
+    }
+    claims = manifest.get("fixtures")
+    assert isinstance(claims, Mapping)
+    assert fixture_names == set(claims), (
+        "fixture claims do not match the Conformance directory: "
+        f"missing={sorted(fixture_names - set(claims))}, "
+        f"unknown={sorted(set(claims) - fixture_names)}"
+    )
+
+    for fixture_name, member_claims in claims.items():
+        assert isinstance(member_claims, Mapping), (
+            f"{fixture_name} does not account for every Runner-family member"
+        )
+        assert set(member_claims) == set(_FIXTURE_CLAIM_MEMBERS), (
+            f"{fixture_name} does not account for every Runner-family member"
+        )
+        for member, claim in member_claims.items():
+            assert isinstance(claim, Mapping), (
+                f"{fixture_name}/{member} is not a Fixture claim or waiver"
+            )
+            kind = claim.get("kind")
+            assert kind in _FIXTURE_CLAIM_KINDS, (
+                f"{fixture_name}/{member} has an unknown Fixture-claim kind"
+            )
+            reason = claim.get("reason")
+            assert isinstance(reason, str) and reason.strip(), (
+                f"{fixture_name}/{member} has no reason"
+            )
+            if kind == "waived_owed":
+                issue = claim.get("issue")
+                assert isinstance(issue, int) and issue > 0, (
+                    f"{fixture_name}/{member} owes a tracking issue"
+                )
+            else:
+                assert "issue" not in claim, (
+                    f"{fixture_name}/{member} has an issue without owed work"
+                )
+
+
+def test_fixture_claims_gate_discovers_an_unaccounted_fixture(tmp_path: Path) -> None:
+    """A fixture added to disk cannot bypass the family-accounting ratchet."""
+    (tmp_path / "added-after-manifest.json").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(AssertionError, match="added-after-manifest.json"):
+        _assert_fixture_claims_are_complete(
+            tmp_path,
+            {
+                "schema_version": 1,
+                "contract_version": "2.0",
+                "members": ["python", "shell", "powershell", "rust"],
+                "fixtures": {},
+            },
+        )
+
+
+def test_fixture_claims_gate_rejects_a_waiver_without_a_reason(tmp_path: Path) -> None:
+    """A waiver records the decision behind it rather than silent missing work."""
+    (tmp_path / "waived-fixture.json").write_text("{}\n", encoding="utf-8")
+    claims = {
+        member: {"kind": "claimed", "reason": "test fixture"}
+        for member in _FIXTURE_CLAIM_MEMBERS
+    }
+    claims["rust"] = {"kind": "waived_out_of_scope", "reason": ""}
+
+    with pytest.raises(AssertionError, match="waived-fixture.json/rust has no reason"):
+        _assert_fixture_claims_are_complete(
+            tmp_path,
+            {
+                "schema_version": 1,
+                "contract_version": "2.0",
+                "members": list(_FIXTURE_CLAIM_MEMBERS),
+                "fixtures": {"waived-fixture.json": claims},
+            },
+        )
+
+
+def test_fixture_claims_manifest_accounts_for_the_conformance_directory() -> None:
+    """The Integration gate accepts only a complete family decision register."""
+    _assert_fixture_claims_are_complete(
+        CONFORMANCE_DIR, _load_fixture(_FIXTURE_CLAIMS_FILENAME)
+    )
+
+
 def test_no_fixture_claims_a_contract_version_the_contract_has_not_reached() -> None:
     """AC3's together-bump is mechanical, not a reviewer's memory.
 

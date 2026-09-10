@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.0",
+  "members": ["python", "shell", "powershell", "rust"],
+  "fixtures": {
+    "attempt-lifecycle.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives AttemptLedger and EscalationLedger with fixture cases."},
+      "shell": {"kind": "waived_owed", "reason": "The shell Orchestrator owns the contract Attempt lifecycle but its suite does not exercise this fixture.", "issue": 553},
+      "powershell": {"kind": "waived_owed", "reason": "The PowerShell Orchestrator owns the contract Attempt lifecycle but its suite does not exercise this fixture.", "issue": 554},
+      "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard renders Orchestrator state and does not own Pickup or Attempt lifecycle transitions."}
+    },
+    "calibration-search.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives the production calibration search with fixture scripts."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "The written contract assigns measured routing and calibration search to the Python reference Orchestrator only."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "The written contract assigns measured routing and calibration search to the Python reference Orchestrator only."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard only renders calibration facts emitted by an Orchestrator; it does not run Trials or searches."}
+    },
+    "checkpoint-messages.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py asserts fixture messages through the production Checkpoint-message functions."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh asserts fixture cases through the Checkpoint-message functions."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 asserts fixture cases through the Checkpoint-message functions."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Checkpoint commit-message authorship belongs to an Orchestrator; the Dashboard only consumes emitted Run facts."}
+    },
+    "close-references.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py asserts fixture cases through the production close-reference parser."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh asserts fixture cases through the close-reference functions."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 asserts fixture cases through the close-reference functions."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Commit-message closure parsing is an Orchestrator backstop; the Dashboard neither writes commits nor closes issues."}
+    },
+    "dashboard-insights.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py projects fixture Event streams through the production live-run view model."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-event-conformance.sh projects fixture producer rollups through production event seams."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-event-conformance.ps1 projects fixture producer rollups through production event seams."},
+      "rust": {"kind": "claimed", "reason": "tui/tests/dashboard_conformance.rs projects fixture Event streams through the production Dashboard view model."}
+    },
+    "discriminator.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py supplies fixture issue bodies to the production readiness discriminator."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh supplies fixture cases to the production readiness discriminator."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 supplies fixture cases to the production readiness discriminator."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard consumes Run Events and never reads an issue body to decide Pickup eligibility."}
+    },
+    "effort-gate.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py compares fixture expectations with the production reasoning-effort gate."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "The written contract keeps model routing and its effort gate Python-only pending Config parity."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "The written contract keeps model routing and its effort gate Python-only pending Config parity."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard renders the selected model facts but does not validate a model or reasoning effort."}
+    },
+    "event-schema.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py serializes fixture Event cases through the production event seam."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-event-conformance.sh serializes fixture Event cases through production event seams."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-event-conformance.ps1 serializes fixture Event cases through production event seams."},
+      "rust": {"kind": "waived_owed", "reason": "The Dashboard is assigned the consumer Event-stream fold but its suite does not exercise this fixture.", "issue": 557}
+    },
+    "exit-codes.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py compares fixture exit-code cases with the production exit-code function."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh compares fixture cases with the production exit-code function."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 compares fixture cases with the production exit-code function."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Process exit disposition belongs to an Orchestrator; the Dashboard core does not own a Run's exit code."}
+    },
+    "homebrew-tap.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_homebrew.py drives Homebrew fixture cases through the production formula verifier."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "Homebrew publication is a packaging channel, not an Orchestrator responsibility."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "Homebrew publication is a packaging channel, not an Orchestrator responsibility."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Homebrew publication is a packaging channel, not a Dashboard-core responsibility."}
+    },
+    "issue-ordering.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py compares fixture ordering and read schedules with production issue ordering."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh drives production issue ordering and reads with fixture cases."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 drives production issue ordering and reads with fixture cases."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Issue collection and ordering are Orchestrator tracker reads; the Dashboard consumes their resulting Events."}
+    },
+    "issue-readiness.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives production readiness decisions with fixture candidates."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh drives the production readiness decision with fixture candidates."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 drives the production readiness decision with fixture candidates."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Issue readiness is an Orchestrator admission decision; the Dashboard never reads tracker dependencies."}
+    },
+    "model-roster.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py compares fixture roster facts with production model-roster constants."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "The written contract keeps model-roster resolution Python-only pending Config parity."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "The written contract keeps model-roster resolution Python-only pending Config parity."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard receives configured model facts in Events and does not resolve the model roster."}
+    },
+    "progress-strikes.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives production progress and Strike accounting with fixture steps."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh drives production progress and Strike accounting with fixture steps."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 drives production progress and Strike accounting with fixture steps."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Strike accounting belongs to an Orchestrator; the Dashboard displays emitted progress without calculating it."}
+    },
+    "release-trust.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_release_trust.py drives fixture publication cases through production trust verification."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "Release signing and attestation verification belong to distribution tooling, not an Orchestrator."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "Release signing and attestation verification belong to distribution tooling, not an Orchestrator."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Release signing and attestation verification belong to distribution tooling, not the Dashboard core."}
+    },
+    "release-version.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_release_trust.py drives fixture publication cases through production release-version policy."},
+      "shell": {"kind": "claimed", "reason": "shell Event and boundary Conformance suites drive production release-version behavior with fixture cases."},
+      "powershell": {"kind": "claimed", "reason": "powershell Event and boundary Conformance suites drive production release-version behavior with fixture cases."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Release-line publication and artifact identity are distribution concerns, not Dashboard semantic reduction."}
+    },
+    "routing-resolution.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py compares fixture routing cases with the production routing resolver."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "The written contract keeps routing resolution Python-only pending Config parity."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "The written contract keeps routing resolution Python-only pending Config parity."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard renders a Routed pair emitted by an Orchestrator and does not resolve routing."}
+    },
+    "skill-consultation.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py compares fixture Skill-consultation expectations with production summaries."},
+      "shell": {"kind": "waived_owed", "reason": "The shell Orchestrator performs per-Iteration Skill consultation but its suite does not exercise this fixture.", "issue": 555},
+      "powershell": {"kind": "waived_owed", "reason": "The PowerShell Orchestrator performs per-Iteration Skill consultation but its suite does not exercise this fixture.", "issue": 556},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Skill consultation is an Orchestrator action; the Dashboard only renders facts that an Orchestrator emits."}
+    },
+    "skill-policy.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives production Skill-policy resolution with fixture cases."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh drives production Skill-policy detection with fixture cases."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 drives production Skill-policy resolution with fixture cases."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Skill-catalog policy constrains an Orchestrator's agent invocation and is not Dashboard-core behavior."}
+    },
+    "tui-artifacts.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_tui_release.py drives fixture selection cases through the production artifact selector."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-tui-install.sh drives fixture selection cases through production installer functions."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-tui-install.ps1 drives fixture selection cases through production installer functions."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Release artifact selection belongs to installation and distribution tooling, not Dashboard-core behavior."}
+    },
+    "windows-channels.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_windows_channels.py drives fixture publication cases through production channel rendering."},
+      "shell": {"kind": "waived_out_of_scope", "reason": "Windows package publication is a distribution channel, not an Orchestrator responsibility."},
+      "powershell": {"kind": "waived_out_of_scope", "reason": "Windows package publication is a distribution channel, not an Orchestrator responsibility."},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Windows package publication is a distribution channel, not Dashboard-core behavior."}
+    }
+  }
+}
