@@ -690,6 +690,17 @@ def _read_events(tmp_path: Path) -> list[dict[str, Any]]:
     ]
 
 
+def _write_runnable_feedback_loop(repo_root: Path) -> None:
+    """Declare the minimum valid Integration gate for a synthetic Run repository."""
+    (repo_root / "AGENTS.md").write_text(
+        "## Feedback loops\n\n"
+        "| Loop | Command |\n"
+        "| --- | --- |\n"
+        "| Tests | `uv run pytest` |\n",
+        encoding="utf-8",
+    )
+
+
 def test_loop_reports_pool_exclusions_as_events(tmp_path, monkeypatch) -> None:
     """A ``ready-for-agent`` issue the discriminator drops is named, with a reason.
 
@@ -1359,6 +1370,34 @@ def test_loop_preflight_failure_when_gh_not_authed(tmp_path, monkeypatch) -> Non
 
     assert exit_code == 1
     assert len(fake_client.created) == 0
+
+
+def test_loop_refuses_a_repository_without_runnable_feedback_loops(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A Run stops before its first session when Integration could never gate."""
+    (tmp_path / "AGENTS.md").unlink()
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
+
+    fake_git = FakeGitClient(tmp_path)
+    fake_client = FakeCopilotClient(scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_github_client",
+        lambda: FakeGitHubClient(
+            repo=gh_module.Repo(owner="x", name="y", default_branch="main")
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    assert asyncio.run(loop_module.run(RunConfig(issue_source="github"))) == 1
+    assert fake_client.start_call_count == 0
+    assert fake_client.created == []
+    assert "Add AGENTS.md with at least one runnable command" in capsys.readouterr().err
 
 
 def test_loop_aborts_after_max_nmt_strikes(tmp_path, monkeypatch) -> None:
@@ -2552,6 +2591,7 @@ def _wire_multi_issue_github(
     issues: list[gh_module.Issue],
 ) -> tuple[FakeCopilotClient, FakeGitHubClient]:
     """Wire a Run whose Pool holds several candidates, so selection is visible."""
+    _write_runnable_feedback_loop(tmp_path)
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
     monkeypatch.setattr(
@@ -4173,6 +4213,7 @@ def _wire_classifier_run(
     label_client: _RecordingTaskTypeLabelClient | None = None,
 ) -> tuple[_ClassifyingCopilotClient, _RecordingTaskTypeLabelClient]:
     """One unlabelled issue, one scriptable harness, one watchable tracker write."""
+    _write_runnable_feedback_loop(tmp_path)
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
     monkeypatch.setattr(

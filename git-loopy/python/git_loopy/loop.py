@@ -170,6 +170,7 @@ from git_loopy.prompt import PromptMetadataError, load_prompt
 from git_loopy.rate_card import RateCard
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
 from git_loopy.run_control import RunControlArtifact
+from git_loopy.run_environment_preflight import resolve_run_environment_preflight
 from git_loopy.skill_install import (
     SkillInstallError,
     describe_refresh,
@@ -429,6 +430,7 @@ def _make_issue_source(
     diag: logging.Logger,
     *,
     include_prs: bool = False,
+    github_client: gh_module.GitHubClient | None = None,
 ) -> IssueSource:
     """Construct the per-invocation :class:`IssueSource`.
 
@@ -455,7 +457,7 @@ def _make_issue_source(
     if config.issue_source == "github":
         return GitHubIssueSource(
             diag,
-            gh=_make_github_client(),
+            gh=github_client if github_client is not None else _make_github_client(),
             include_prs=include_prs,
             pin=config.issue_pin,
             # A Pin keeps its serial-driver eligibility. Rolling dispatch then
@@ -5021,9 +5023,32 @@ async def run(
     #    doesn't recognise — surface a clean exit 1 rather than letting
     #    the exception escape.
     include_prs = _resolve_include_prs(config, repo_root)
+    github_client = (
+        _make_github_client() if config.issue_source == "github" else None
+    )
+    environment_preflight = resolve_run_environment_preflight(
+        repo_root=repo_root,
+        issue_source=config.issue_source,
+        github_auth_status=(
+            None if github_client is None else github_client.auth_status
+        ),
+    )
+    if not environment_preflight.passed:
+        for failure in environment_preflight.failures:
+            diag.error("%s", failure.message)
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
+        return exit_code_for("preflight_failed")
     try:
         source = _make_issue_source(
-            config, repo_root, diag, include_prs=include_prs
+            config,
+            repo_root,
+            diag,
+            include_prs=include_prs,
+            github_client=github_client,
         )
     except ValueError as exc:
         diag.error("issue source construction failed: %s", exc)
