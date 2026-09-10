@@ -740,6 +740,14 @@ RUN_OUTCOME_OPERATOR_STOP = "operator_stop"
 #: cap, before it runs; an interrupt lands inside one.
 _RUN_OUTCOMES_MID_ITERATION = frozenset({"iteration_cap", RUN_OUTCOME_INTERRUPTED})
 
+#: The **Wind-down** ladder as a rung lookup, derived from the family's ordered
+#: wire vocabulary so the order lives in one place (``events.WIND_DOWN_STAGES``)
+#: and this is only the index into it.
+_WIND_DOWN_STAGE_ORDER: dict[str, int] = {
+    stage: rung for rung, stage in enumerate(events_module.WIND_DOWN_STAGES)
+}
+_WIND_DOWN_CAUSES: frozenset[str] = frozenset(events_module.WIND_DOWN_CAUSES)
+
 
 class _Loop:
     """Stateful orchestrator for one ``git-loopy`` invocation.
@@ -808,6 +816,16 @@ class _Loop:
         # interrupt only the agent task currently at its round boundary.
         self._stop_drain_requested = False
         self._stop_cancel_requested = False
+        #: The **Wind-down** rung this Run has announced, or ``None`` before it
+        #: latches one. Held beside the two gesture flags because the ladder is
+        #: a fact about the *Run*, not about the operator's input: the rolling
+        #: driver latches the same ladder for a spent iteration cap and for a
+        #: drain-confirmed **Strike** abort, neither of which is a gesture.
+        self._wind_down_stage: str | None = None
+        #: The cause the announced rung was latched for. Held beside the rung
+        #: because only a ``strike_limit`` drain is revocable, so the clearing
+        #: Event has to know *which* cause the Run is currently draining for.
+        self._wind_down_cause: str | None = None
         self._active_agent_task: asyncio.Task[object] | None = None
         self._strike_machine = NMTStrikeStateMachine(
             max_strikes=config.max_nmt_strikes
@@ -939,12 +957,72 @@ class _Loop:
             self._active_agent_task.cancel()
 
     def _announce_wind_down(self, *, cause: str, stage: str, draining: int) -> None:
-        """Write the current, Run-scoped Wind-down transition once it is latched."""
+        """Write the current, Run-scoped Wind-down transition once it is latched.
+
+        The one seam that writes ``wrapper.stop.requested``, and therefore the
+        one place the two axes #445 §J closed are enforced. ``stage`` is an
+        ordered, non-decreasing ladder and ``cancel`` is legal only with
+        ``operator_stop``, so a descent or a mis-caused cancellation is refused
+        *here* rather than left to each announcing site to remember. The rolling
+        driver announces the iteration cap and the drain-confirmed Strike abort
+        from paths that never consult the operator's own latch, so without this
+        a Run cancelled while either was pending would tell a Dashboard it had
+        climbed back down to ``drain``.
+
+        Refusing a transition loses no fact: a Run already at ``cancel`` has
+        said the strongest thing the ladder can say, and the Event records the
+        **latch** rather than the request that reached it.
+        """
+        if stage not in _WIND_DOWN_STAGE_ORDER or cause not in _WIND_DOWN_CAUSES:
+            return
+        if (
+            stage == events_module.WIND_DOWN_STAGES[-1]
+            and cause != events_module.WIND_DOWN_CANCEL_CAUSE
+        ):
+            return
+        latched = self._wind_down_stage
+        if (
+            latched is not None
+            and _WIND_DOWN_STAGE_ORDER[stage] <= _WIND_DOWN_STAGE_ORDER[latched]
+        ):
+            return
+        self._wind_down_stage = stage
+        self._wind_down_cause = cause
         self._emit(
             events_module.WRAPPER_STOP_REQUESTED,
             iter_num=None,
             cause=cause,
             stage=stage,
+            draining=draining,
+        )
+
+    def _announce_wind_down_lifted(self, *, cause: str, draining: int) -> None:
+        """Write the Run-scoped clearing of a **revocable** Wind-down.
+
+        The other half of :meth:`_announce_wind_down`, and here for the same
+        reason: the legality rule belongs to the seam, not to the one call site
+        that happens to observe the transition today. Only ``strike_limit`` is
+        revocable — a contribution publishing green makes the abort condition
+        false — while an operator Stop and a spent iteration cap are durable,
+        so neither may ever reach this Event (ADR-0043's asymmetry).
+
+        Lifting resets the ladder, which is what lets a *second* abort later in
+        the same Run announce itself: the Run is genuinely healthy again, so
+        the next drain is a new transition rather than a repeat of one.
+        """
+        if cause not in events_module.WIND_DOWN_LIFTABLE_CAUSES:
+            return
+        if (
+            self._wind_down_stage != events_module.WIND_DOWN_STAGES[0]
+            or self._wind_down_cause != cause
+        ):
+            return
+        self._wind_down_stage = None
+        self._wind_down_cause = None
+        self._emit(
+            events_module.WRAPPER_STOP_LIFTED,
+            iter_num=None,
+            cause=cause,
             draining=draining,
         )
 
@@ -4120,9 +4198,7 @@ class _ParallelLoop:
                 contribution, published=published
             )
             if abort_latched_before and not self._scheduler.abort_latched:
-                self._serial._emit(
-                    events_module.WRAPPER_STOP_LIFTED,
-                    iter_num=None,
+                self._serial._announce_wind_down_lifted(
                     cause="strike_limit",
                     draining=self._scheduler.open_count,
                 )

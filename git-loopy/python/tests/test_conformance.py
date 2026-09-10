@@ -598,6 +598,41 @@ def test_python_normalized_rollup_fixture(case: dict[str, Any]) -> None:
     assert actual == case["expected"]
 
 
+def test_wind_down_vocabulary_has_one_declaration() -> None:
+    """#457: the two **Wind-down** axes are declared once and pinned here.
+
+    ``cause``, the ordered ``stage`` ladder, the cancel rung's sole cause and
+    the single liftable cause all live in ``events`` beside the two literals
+    that carry them, so a port copying the family's vocabulary copies the
+    constraints with it. Before this they were fixture-only prose, pinned
+    against nothing — which is how a producer drifts from the schema a
+    Dashboard reads without any suite noticing.
+
+    The ``stage`` assertion is on a *list*, not a set: the ladder's order is
+    the contract that makes "non-decreasing" mean anything, and a set would
+    let ``cancel`` and ``drain`` swap places silently.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"]["wrapper.stop.requested"]
+    assert tuple(contract["cause_values"]) == events_module.WIND_DOWN_CAUSES
+    assert tuple(contract["stage_order"]) == events_module.WIND_DOWN_STAGES
+    assert set(contract["stage_values"]) == set(events_module.WIND_DOWN_STAGES)
+    assert contract["cancel_cause"] == events_module.WIND_DOWN_CANCEL_CAUSE
+
+    # The clearing Event's vocabulary is a strict subset of the same causes:
+    # only a Strike drain is revocable, so nothing else may ever lift.
+    lifted = _EVENT_SCHEMA["payload_contracts"]["wrapper.stop.lifted"]
+    assert tuple(lifted["cause_values"]) == events_module.WIND_DOWN_LIFTABLE_CAUSES
+    assert set(events_module.WIND_DOWN_LIFTABLE_CAUSES) < set(
+        events_module.WIND_DOWN_CAUSES
+    )
+
+    # Both are Run control, never Insight and never contribution-scoped.
+    assert set(_EVENT_SCHEMA["run_control_types"]) == {
+        events_module.WRAPPER_STOP_REQUESTED,
+        events_module.WRAPPER_STOP_LIFTED,
+    }
+
+
 def test_pickup_reason_vocabulary_has_one_declaration() -> None:
     """#397: the reason an operator reads is the reason the runner produced.
 
@@ -817,6 +852,10 @@ _NOT_EVENT_TYPES = frozenset(
         "REDACTED_SECRET",
         "CALIBRATION_EVENT_PREFIX",
         "PARALLEL_DEGRADE_SOURCE_NOT_ROLLING",
+        # A **Wind-down** payload value, not a type literal: the one ``cause``
+        # the cancel rung admits. Pinned instead by
+        # ``test_wind_down_vocabulary_has_one_declaration``.
+        "WIND_DOWN_CANCEL_CAUSE",
     }
 )
 

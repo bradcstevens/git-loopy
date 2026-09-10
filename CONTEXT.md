@@ -380,6 +380,27 @@ awaited, the operating system supplies the only harder stop, and **Salvage** is 
 makes that one safe. The Run exits with the decided non-zero `operator_stop` outcome.
 _Avoid_: quit, kill, abort.
 
+**Wind-down**:
+The Run-scoped state in which no new work starts, announced on the trace so a client
+attaching to a draining Run is never shown a healthy one. It has two independent axes.
+Its **cause** is closed — an operator **Stop**, the **Strike** ceiling, or a spent
+iteration cap — and a **Pool** that simply ran out is *not* one: a Run that finished the
+work it had is not winding down. Its **stage** is an ordered, non-decreasing ladder:
+`drain` stops refill while started contributions finish and integrate, then `cancel`
+cancels the agent sessions still running, and only an operator Stop ever reaches
+`cancel`, because nothing cancels a spent cap or a Strike drain. The Run announces the
+**latch** rather than the gesture that asked for it, once per transition — so a third
+gesture announces nothing, and a Stop pressed during a Strike drain escalates rather
+than re-latching. The latch is shared but its exit is asymmetric: a green publication
+makes a Strike abort's condition false and lifts that drain, which is announced too,
+while an operator Stop and a spent cap are durable and never lift. The count of
+contributions still in flight travels with it, and a serial Run's `0` is an observed
+none rather than an unknown. A trace carrying no Wind-down says nothing about whether
+its Run was stopped, and the `interrupted` outcome is never read as one — it also covers
+a closed terminal and a dead driver.
+_Avoid_: shutdown, teardown, quiescing, stopping (**Stop** is the gesture; this is the
+state it latches).
+
 **Detach**:
 Leaving the live interface while the run keeps going unattended, falling back to the
 line-by-line scrollback output. It has two forms: the **voluntary** one the operator

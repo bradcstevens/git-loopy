@@ -95,6 +95,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
+import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -134,7 +135,8 @@ from git_loopy.session_outcome import (
     SessionTermination,
 )
 from git_loopy.skill_catalog import build_skill_catalog
-from git_loopy.sources import PoolCandidate
+from git_loopy.rolling_pool import RollingPool
+from git_loopy.sources import MembershipSnapshot, PoolCandidate
 from git_loopy.staircase import Candidate, PriceStaircase
 from git_loopy.wrapper import (
     CHECKPOINT_TRAILER_KEY,
@@ -1940,6 +1942,74 @@ def test_second_stop_before_host_dispatch_starts_no_host_contribution(
     assert end["reason"] == "operator_stop"
 
 
+class _EmptyRollingSource:
+    """A membership seam that never offers a candidate.
+
+    The **Wind-down** ladder is a fact about latches, not about refill, so a
+    Pool the scheduler can never draw from keeps the test on the one axis it
+    is about.
+    """
+
+    def shallow_membership(self) -> MembershipSnapshot:
+        return MembershipSnapshot(candidates=(), complete=True)
+
+
+def test_a_stop_pressed_during_a_strike_drain_escalates_to_cancel(
+    monkeypatch,
+) -> None:
+    """One latch, two causes — so the operator's gesture climbs it (#457).
+
+    ADR-0043 makes the **Strike** abort and the operator **Stop** the *same*
+    primitive entered for different reasons, and #445 §J spells out what that
+    costs on the wire: a Stop pressed while a Strike drain is already in force
+    escalates rather than re-latching, and emits exactly one Event. Re-latching
+    would put a second ``drain`` on the trace that stopped nothing which was not
+    already stopped, and would leave the operator's *second* gesture as the
+    first thing that ever cancelled anything — one press behind the model
+    ``Ctrl+C`` established.
+
+    The scheduler here is the real one, because the whole decision is read off
+    its abort latch; a double would be asserting that the test knows what
+    ``abort_latched`` means.
+    """
+    diag = logging.getLogger("test.loop.parallel.escalation")
+    scheduler = loop_module.rolling_scheduler.RollingScheduler(
+        diag=diag,
+        pool=RollingPool(diag=diag, source=_EmptyRollingSource(), clock=lambda: 0.0),
+        lane_cap=2,
+        max_iterations=0,
+    )
+    parallel = object.__new__(loop_module._ParallelLoop)
+    parallel._scheduler = scheduler
+    parallel._stop_cancel_requested = False
+    parallel._active_agent_tasks = set()
+    parallel._serial = object.__new__(loop_module._Loop)
+    emitted: list[dict[str, Any]] = []
+    parallel._serial._emit = lambda event_type, **payload: emitted.append(
+        {"type": event_type, **payload}
+    )
+    parallel._serial._stop_drain_requested = False
+    parallel._serial._stop_cancel_requested = False
+    parallel._serial._wind_down_stage = None
+    parallel._serial._wind_down_cause = None
+    parallel._serial._active_agent_task = None
+
+    scheduler.start()
+    assert scheduler.strike_limit_reached()
+    parallel._serial._announce_wind_down(
+        cause="strike_limit", stage="drain", draining=scheduler.open_count
+    )
+    emitted.clear()
+
+    parallel.request_stop_drain()
+
+    assert [
+        (event["cause"], event["stage"], event["draining"]) for event in emitted
+    ] == [("operator_stop", "cancel", 0)]
+    assert parallel._serial._stop_drain_requested is True
+    assert parallel._stop_cancel_requested is True
+
+
 def test_parallel_the_first_stop_stops_refill_and_still_integrates_started_work(
     tmp_path, monkeypatch
 ) -> None:
@@ -3726,6 +3796,158 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     assert len(reasons) == 4
     assert reasons[:2] == ["unchanged_branch", "unchanged_branch"]
     assert len(fake_git.merge_calls) == 2
+
+
+@dataclass
+class _StrikeThenPublishExecutionHost:
+    """One issue defeated outright, and one held until the abort latches.
+
+    The **Execution host** seam is the deterministic way to stage the one
+    ordering this test is about: the drain-confirmed **Strike** abort has to be
+    latched *while another contribution is still in flight*, so the green
+    publication that follows has something to revoke. A timeout ending defeats
+    its issue in a single attempt (it is outside the two retryable endings), so
+    the ceiling is reached without waiting on a **Pool** re-offer.
+    """
+
+    git: FakeGitClient
+    loops: list[Any]
+    held_ref: int
+    placement: Placement = "fake"
+    isolation_grade: IsolationGrade = "workspace separation only"
+    capacity: int = 4
+    #: Bound on the hold, so a Run that never latches the abort fails as a
+    #: readable assertion rather than as a test-suite timeout.
+    hold_limit: int = 5000
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        branch = git_module.lane_branch_name(request.run_id, request.issue_ref)
+        if request.issue_ref != self.held_ref:
+            return ContributionSuccess(
+                branch=branch,
+                sha=request.base_revision,
+                events=(),
+                placement=self.placement,
+                isolation_grade=self.isolation_grade,
+                ending=SessionOutcomeRecord(
+                    outcome=SessionOutcome.TIMEOUT,
+                    progressed=False,
+                    termination=SessionTermination.COMPLETED,
+                ),
+            )
+        for _ in range(self.hold_limit):
+            if any(
+                loop._scheduler is not None and loop._scheduler.abort_latched
+                for loop in self.loops
+            ):
+                break
+            await asyncio.sleep(0.001)
+        else:  # pragma: no cover - only on a regression that never latches
+            raise AssertionError("the Strike abort never latched while work was open")
+        source = self.git.add_worktree(
+            self.git.root / f"host-source-{request.issue_ref}",
+            branch=branch,
+            base=request.base_revision,
+        )
+        source.simulate_agent_commit(
+            subject=f"feat: issue {request.issue_ref}",
+            body=f"Closes #{request.issue_ref}",
+        )
+        self.git.remove_worktree(source.root)
+        return ContributionSuccess(
+            branch=branch,
+            sha=source.head_sha(),
+            events=(),
+            placement=self.placement,
+            isolation_grade=self.isolation_grade,
+            ending=SessionOutcomeRecord(
+                outcome=None,
+                progressed=True,
+                termination=SessionTermination.COMPLETED,
+            ),
+        )
+
+
+def test_a_green_publication_lifts_the_strike_drain_on_the_wire(
+    tmp_path, monkeypatch
+) -> None:
+    """The revocable half of the shared latch, end to end (#457, ADR-0043).
+
+    §7.7 has always let a green publication cancel a pending abort inside the
+    scheduler; what #457 adds is that the Run *says so*. A client that attached
+    while the drain was in force otherwise keeps rendering a draining Run
+    forever, because the fact that un-latched it never reached the trace.
+
+    One issue is defeated while another is still in flight, so the abort latches
+    with work outstanding; releasing that work publishes green and clears it.
+    Both Events are asserted in order, with their observed in-flight counts.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    built: list[loop_module._ParallelLoop] = []
+    host = _StrikeThenPublishExecutionHost(git=fake_git, loops=built, held_ref=42)
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        instance = real_parallel_loop(*args, execution_host=host, **kwargs)
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    async def _bounded() -> int:
+        return await asyncio.wait_for(
+            loop_module.run(
+                RunConfig(
+                    model="claude-opus-4.8-max",
+                    issue_source="github",
+                    max_iterations=0,
+                    max_nmt_strikes=1,
+                    verbosity=0,
+                    render_reasoning=False,
+                )
+            ),
+            timeout=60,
+        )
+
+    asyncio.run(_bounded())
+
+    events = _logged_events(tmp_path)
+    wind_down = [
+        (
+            event["type"],
+            event.get("cause"),
+            event.get("stage"),
+        )
+        for event in events
+        if event["type"]
+        in {"wrapper.stop.requested", "wrapper.stop.lifted"}
+    ]
+    assert wind_down == [
+        ("wrapper.stop.requested", "strike_limit", "drain"),
+        ("wrapper.stop.lifted", "strike_limit", None),
+    ]
+    assert 42 in [ref for ref, _ in fake_gh.issue_close_calls]
 
 
 @dataclass

@@ -113,6 +113,11 @@ __all__ = [
     "CONTRIBUTION_IDENTITY_KEYS",
     "CONTRIBUTION_SCOPED_EVENT_TYPES",
     "CONTRIBUTION_TERMINAL_REASONS",
+    # Wind-down vocabulary
+    "WIND_DOWN_CAUSES",
+    "WIND_DOWN_STAGES",
+    "WIND_DOWN_CANCEL_CAUSE",
+    "WIND_DOWN_LIFTABLE_CAUSES",
     # Calibration event-type constants
     "CALIBRATION_TRIAL_START",
     "CALIBRATION_TRIAL_END",
@@ -379,6 +384,39 @@ CONTRIBUTION_TERMINAL_REASONS: tuple[str, ...] = (
     "serial_fallback",
     "operator_stop",
 )
+
+# The **Wind-down** vocabulary (#445 §J, ADR-0043), carried on
+# :data:`WRAPPER_STOP_REQUESTED` and :data:`WRAPPER_STOP_LIFTED`. Both axes are
+# closed, because a **Wind-down** is the one thing a client attaching to a
+# draining Run reads to tell it apart from a healthy one, and an open vocabulary
+# there is a cause no consumer can render.
+#
+# ``cause`` names why refill stopped. A **Pool** that simply ran out is not a
+# cause: the Run finished the work it had, which is not a Wind-down.
+WIND_DOWN_CAUSES: tuple[str, ...] = (
+    "operator_stop",
+    "strike_limit",
+    "iteration_cap",
+)
+
+# ``stage`` is an *ordered* ladder, listed weakest-first, and a Run's announced
+# stage never decreases. A tuple rather than a set because the order is the
+# contract: ``drain`` stops refill while started work finishes, ``cancel``
+# additionally cancels the agent sessions still running.
+WIND_DOWN_STAGES: tuple[str, ...] = ("drain", "cancel")
+
+# Only the operator's own Stop may reach the cancel rung. Nothing cancels a
+# spent iteration cap or a Strike drain — both are latches the Run entered on
+# its own, and neither has a second gesture behind it to escalate.
+WIND_DOWN_CANCEL_CAUSE = "operator_stop"
+
+# The only revocable cause, and therefore the only one
+# :data:`WRAPPER_STOP_LIFTED` may name: a contribution publishing green during
+# an abort drain makes the Strike condition false and un-latches it. An operator
+# Stop and an iteration cap are durable, and a third ``stage`` value for
+# "cleared" was refused because a cleared operator Stop is representable
+# nonsense.
+WIND_DOWN_LIFTABLE_CAUSES: tuple[str, ...] = ("strike_limit",)
 
 # Calibration events (#371, ADR-0027). A **Calibration** is not a **Run** and a
 # **Trial** is not an **Iteration**, so its records get a type prefix of their own

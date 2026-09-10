@@ -67,6 +67,8 @@ def _bare_loop(*, max_iterations: int) -> Any:
     bare._skill_preflight = SimpleNamespace(
         migration_warning=False, event_payload={"policy": "closed-world"}
     )
+    bare._wind_down_stage = None
+    bare._wind_down_cause = None
     return bare
 
 
@@ -194,6 +196,8 @@ async def test_second_operator_stop_cancels_only_the_active_serial_agent_task() 
     )
     bare._stop_drain_requested = False
     bare._stop_cancel_requested = False
+    bare._wind_down_stage = None
+    bare._wind_down_cause = None
 
     agent = asyncio.create_task(asyncio.Event().wait())
     bare._active_agent_task = agent
@@ -206,6 +210,150 @@ async def test_second_operator_stop_cancels_only_the_active_serial_agent_task() 
     with pytest.raises(asyncio.CancelledError):
         await agent
     assert [event["stage"] for event in emitted] == ["drain", "cancel"]
+
+
+def test_the_wind_down_ladder_never_decreases_and_only_a_stop_cancels() -> None:
+    """The two **Wind-down** axes are invariants of the Run, not of its callers.
+
+    ``stage`` is an ordered, non-decreasing ladder and ``cancel`` is legal only
+    with ``operator_stop``, so both are refused *here* — at the one seam that
+    writes the Event — rather than left to each announcing site to remember.
+    Both violations are reachable today: the iteration cap and the drain-
+    confirmed Strike abort are announced from the rolling driver on paths that
+    do not consult the operator's latch, so a Run cancelled while either was
+    still pending would tell a Dashboard it had climbed back down to ``drain``.
+
+    Refusing a transition is not the same as losing a fact. A Run already at
+    ``cancel`` has said the strongest thing the ladder can say, and #445 §J
+    makes the Event the record of the **latch** rather than of the request.
+    """
+    bare = object.__new__(loop_module._Loop)
+    emitted: list[dict[str, object]] = []
+    bare._emit = lambda event_type, **payload: emitted.append(  # type: ignore[method-assign]
+        {"type": event_type, **payload}
+    )
+    bare._stop_drain_requested = False
+    bare._stop_cancel_requested = False
+    bare._wind_down_stage = None
+    bare._wind_down_cause = None
+    bare._active_agent_task = None
+
+    bare.request_stop_drain(draining=2)
+    bare.request_stop_cancel(draining=2)
+
+    # A cap or a Strike abort latched behind the operator's cancellation never
+    # walks the ladder back down.
+    bare._announce_wind_down(cause="iteration_cap", stage="drain", draining=2)
+    bare._announce_wind_down(cause="strike_limit", stage="drain", draining=2)
+    # And no cause but the operator's may ever reach the cancel rung.
+    bare._announce_wind_down(cause="strike_limit", stage="cancel", draining=2)
+
+    assert [(event["cause"], event["stage"]) for event in emitted] == [
+        ("operator_stop", "drain"),
+        ("operator_stop", "cancel"),
+    ]
+
+
+def test_a_strike_drain_still_escalates_to_the_operators_cancel() -> None:
+    """The ladder guard must not swallow the one transition that matters.
+
+    A Strike drain and an operator Stop are the *same* latch entered for two
+    reasons (ADR-0043), so a Stop pressed while the Strike drain is in force
+    climbs the ladder rather than re-latching it — and the guard has to let
+    that through while refusing every descent.
+    """
+    bare = object.__new__(loop_module._Loop)
+    emitted: list[dict[str, object]] = []
+    bare._emit = lambda event_type, **payload: emitted.append(  # type: ignore[method-assign]
+        {"type": event_type, **payload}
+    )
+    bare._stop_drain_requested = False
+    bare._stop_cancel_requested = False
+    bare._wind_down_stage = None
+    bare._wind_down_cause = None
+    bare._active_agent_task = None
+
+    bare._announce_wind_down(cause="strike_limit", stage="drain", draining=1)
+    bare.request_stop_cancel(drain_already_announced=True, draining=1)
+
+    assert [(event["cause"], event["stage"]) for event in emitted] == [
+        ("strike_limit", "drain"),
+        ("operator_stop", "cancel"),
+    ]
+
+
+def test_only_a_strike_drain_lifts_and_a_lifted_run_can_latch_again() -> None:
+    """The **Wind-down** latch is shared; its exit is not (ADR-0043).
+
+    A contribution publishing green makes a Strike abort's condition false, so
+    that drain un-latches and the Run is healthy again. An operator Stop and a
+    spent iteration cap are durable: nothing a later contribution does revokes
+    a human's request or refunds a spent budget, so neither may ever emit the
+    clearing Event — the asymmetry ADR-0043 originally omitted.
+
+    The re-latch is the half that is easy to lose. A lifted drain returns the
+    ladder to its starting state, so a *second* Strike abort later in the same
+    Run announces itself exactly as the first did; a Run that only ever climbed
+    would silently swallow it.
+    """
+    bare = object.__new__(loop_module._Loop)
+    emitted: list[dict[str, object]] = []
+    bare._emit = lambda event_type, **payload: emitted.append(  # type: ignore[method-assign]
+        {"type": event_type, **payload}
+    )
+    bare._stop_drain_requested = False
+    bare._stop_cancel_requested = False
+    bare._wind_down_stage = None
+    bare._wind_down_cause = None
+    bare._active_agent_task = None
+
+    # Nothing to lift yet, and a cap can never be lifted at all.
+    bare._announce_wind_down_lifted(cause="strike_limit", draining=0)
+    bare._announce_wind_down(cause="iteration_cap", stage="drain", draining=0)
+    bare._announce_wind_down_lifted(cause="iteration_cap", draining=0)
+    assert [event["type"] for event in emitted] == [events.WRAPPER_STOP_REQUESTED]
+
+    emitted.clear()
+    bare._wind_down_stage = None
+    bare._wind_down_cause = None
+
+    bare._announce_wind_down(cause="strike_limit", stage="drain", draining=2)
+    bare._announce_wind_down_lifted(cause="strike_limit", draining=1)
+    bare._announce_wind_down_lifted(cause="strike_limit", draining=1)
+    bare._announce_wind_down(cause="strike_limit", stage="drain", draining=1)
+
+    assert [
+        (event["type"], event.get("cause"), event.get("stage"), event["draining"])
+        for event in emitted
+    ] == [
+        (events.WRAPPER_STOP_REQUESTED, "strike_limit", "drain", 2),
+        (events.WRAPPER_STOP_LIFTED, "strike_limit", None, 1),
+        (events.WRAPPER_STOP_REQUESTED, "strike_limit", "drain", 1),
+    ]
+
+
+def test_an_operator_stop_is_durable_and_never_lifts() -> None:
+    """The one asymmetry the shared latch has to preserve.
+
+    A Stop latched at either rung outlives every green publication that follows
+    it, so the clearing Event must not be reachable from an operator drain even
+    when the Strike condition it shares a latch with goes false.
+    """
+    bare = object.__new__(loop_module._Loop)
+    emitted: list[dict[str, object]] = []
+    bare._emit = lambda event_type, **payload: emitted.append(  # type: ignore[method-assign]
+        {"type": event_type, **payload}
+    )
+    bare._stop_drain_requested = False
+    bare._stop_cancel_requested = False
+    bare._wind_down_stage = None
+    bare._wind_down_cause = None
+    bare._active_agent_task = None
+
+    bare.request_stop_drain(draining=1)
+    bare._announce_wind_down_lifted(cause="strike_limit", draining=0)
+
+    assert [event["type"] for event in emitted] == [events.WRAPPER_STOP_REQUESTED]
 
 
 @pytest.mark.asyncio
