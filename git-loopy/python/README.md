@@ -166,6 +166,10 @@ The wizard:
 - **Always writes `config.toml`** to that scope with your chosen `model` /
   `reasoning_effort`, seeded from the same live model list the `--select-model`
   picker uses, rendered as a plain numbered list by the current setup flow.
+- **Keeps the numbered setup flow as the default runner.** An alternate
+  Textual wizard is available to callers of the injected setup-runner seam; it
+  keeps choices in one continuous flow with Back, Cancel, and a final review
+  before anything is written.
 - **Installs the workflow Skill catalog first**, before collecting anything —
   because the **Skill policy** you are about to choose is a choice among the
   installed catalog. It clones
