@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.0",
+  "bump_class_taxonomy": [
+    "major",
+    "minor",
+    "patch",
+    "none"
+  ],
+  "cases": [
+    {
+      "id": "major-bump",
+      "labels": ["ready-for-agent", "semver:major"],
+      "bump_class": "major"
+    },
+    {
+      "id": "minor-bump",
+      "labels": ["semver:minor"],
+      "bump_class": "minor"
+    },
+    {
+      "id": "patch-bump",
+      "labels": ["task-type:bugfix", "semver:patch"],
+      "bump_class": "patch"
+    },
+    {
+      "id": "none-is-a-deliberate-no-bump",
+      "labels": ["semver:none"],
+      "bump_class": "none"
+    }
+  ],
+  "refusal_cases": [
+    {
+      "id": "unknown-key-is-refused",
+      "labels": ["semver:prepatch"],
+      "reason": "unknown_semver_key",
+      "key": "prepatch"
+    },
+    {
+      "id": "unknown-key-beside-a-known-key-is-still-refused",
+      "labels": ["semver:patch", "semver:prepatch"],
+      "reason": "unknown_semver_key",
+      "key": "prepatch"
+    },
+    {
+      "id": "recased-key-is-refused",
+      "labels": ["semver:Minor"],
+      "reason": "unknown_semver_key",
+      "key": "Minor"
+    },
+    {
+      "id": "bare-prefix-is-refused",
+      "labels": ["semver:"],
+      "reason": "unknown_semver_key",
+      "key": ""
+    },
+    {
+      "id": "missing-label-is-unclassified",
+      "labels": ["ready-for-agent"],
+      "reason": "unclassified_bump_class"
+    },
+    {
+      "id": "two-known-labels-are-conflicting",
+      "labels": ["semver:major", "semver:minor"],
+      "reason": "conflicting_semver_labels",
+      "keys": ["major", "minor"]
+    },
+    {
+      "id": "none-beside-a-bump-is-conflicting",
+      "labels": ["semver:none", "semver:patch"],
+      "reason": "conflicting_semver_labels",
+      "keys": ["none", "patch"]
+    }
+  ]
+}
