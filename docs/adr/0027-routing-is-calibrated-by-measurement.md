@@ -2,6 +2,12 @@
 
 **Status:** accepted
 
+**Accepted-design amendment:** [ADR-0057](0057-live-evidence-guides-per-issue-routing.md)
+makes bounded, evidence-grounded per-issue forecasting the default for unpinned work and
+optimizes predicted successful completion time. Calibration remains an explicit experiment
+and optional evidence, not the mandatory routing authority. That policy is not yet
+implemented; this entry records the original cost-first experimental decision.
+
 `[routing]` is hand-authored from `RECOMMENDED_ROUTING` (`config.py:131-166`), seven task
 types pointing at seven models nobody measured. The proposal was that git-loopy conduct
 "an extremely deep review and analysis of the project" and conclude which model each task

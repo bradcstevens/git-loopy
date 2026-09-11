@@ -7,6 +7,11 @@
 
 **Status:** accepted
 
+**Accepted-design amendment:** [ADR-0057](0057-live-evidence-guides-per-issue-routing.md)
+keeps the separate classifier and closed taxonomy but moves missing-label classification to
+eligible proposal preparation, before checking for a static route. This timing change is
+not yet implemented; the original Pickup-only reasoning remains below.
+
 Accepted at [#409](https://github.com/bradcstevens/git-loopy/issues/409), under the per-issue
 routing spec [#400](https://github.com/bradcstevens/git-loopy/issues/400), which is also where
 the classifier reached its first production call site. Two amendments were made on acceptance

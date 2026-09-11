@@ -1232,6 +1232,40 @@ the ordering constraint is the **Integration backlog**.
 _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap**, or
 **Rolling dispatch** instead.
 
+### Live routing (accepted design)
+
+These terms belong to the accepted design in
+[ADR-0057](docs/adr/0057-live-evidence-guides-per-issue-routing.md), not yet to shipped
+behavior. The existing routing entries above continue to describe the current Runner.
+
+**Dynamic routing**:
+Evidence-grounded choice of an issue's model, reasoning effort, and context tier,
+aimed at the shortest predicted time to an acceptance-passing result.
+_Avoid_: Calibration (an experiment), auto (the harness's own model choice).
+
+**Static route**:
+An operator-authored model, effort, and context choice for a **Task type**, taking
+precedence over **Dynamic routing**. It remains fixed across attempts unless an
+explicit operator choice authorizes a change.
+_Avoid_: recommended default, machine recommendation.
+
+**Routing proposal**:
+A nonbinding recommendation for one eligible **Pool** candidate, together with the
+evidence and input identity it depends on. It is revalidated or superseded before
+**Pickup** reaches a **Routing resolution**, and reserves no work.
+_Avoid_: Routing resolution (binding), Lease (authority), assignment.
+
+**Route selector**:
+The agent call that assesses an issue against currently eligible, evidenced model
+configurations and proposes its route. Distinct from the **Task-type classifier**:
+it chooses execution settings, not a Task type.
+_Avoid_: classifier, Calibration, model picker.
+
+**Route label**:
+The observational tracker label representing an issue's latest final **Routing
+resolution**. It is a projection, never authority to choose, override, or pin a route.
+_Avoid_: model pin, routing input.
+
 ## Relationships
 
 - A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not

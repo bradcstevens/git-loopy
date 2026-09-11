@@ -7,6 +7,13 @@
 
 **Status:** accepted
 
+**Accepted-design amendment:** [ADR-0057](0057-live-evidence-guides-per-issue-routing.md)
+treats Calibration results as evidence for dynamic choices, permits concise forecast
+rationales in canonical Run events, and authorizes bounded automatic selection explicitly.
+Its reusable local records are not another committed routing table or machine writes into
+human Config. The new policy is not yet implemented; the original artifact's meaning and
+this decision's rationale are preserved below.
+
 Once **Calibration** ([ADR-0027](0027-routing-is-calibrated-by-measurement.md)) produces a
 better **Routed pair**, something has to own it. The proposal was that git-loopy write the
 result into `config.toml`, keep a log of the models available at each run, re-calibrate
