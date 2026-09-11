@@ -2,6 +2,11 @@
 
 **Status:** accepted
 
+**Accepted-design amendment:** [ADR-0057](0057-live-evidence-guides-per-issue-routing.md)
+does not use this pair as a fallback for unavailable dynamic routing. It records a new,
+not-yet-implemented default policy, without retuning the values or rewriting this entry's
+historical rationale.
+
 Supersedes [ADR-0036](0036-the-default-pair-reserves-the-ceiling.md), which set the same model
 one effort rung lower and named the reservation as its whole point. The model is unchanged and
 every argument ADR-0036 gives for `claude-opus-5` stands. Only the effort moves: **`xhigh` →

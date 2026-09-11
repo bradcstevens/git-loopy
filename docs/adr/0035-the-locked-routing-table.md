@@ -6,6 +6,11 @@ reasoning-incapable model is unroutable, `review` is never `gpt-5.6-sol`, and cr
 review holds by construction — stand, and ADR-0048 keeps them. The **values** in the table are
 history: read them as what the design once locked, not as what ships.
 
+**Accepted-design amendment:** [ADR-0057](0057-live-evidence-guides-per-issue-routing.md)
+allows verified effort-not-configurable models and does not carry historical model/vendor
+restrictions into dynamic defaults. The optional recommended static recipe is retained.
+That policy is not yet implemented; the table and its original grounds remain history.
+
 Implemented by [#401](https://github.com/bradcstevens/git-loopy/issues/401), under the
 per-issue routing spec [#400](https://github.com/bradcstevens/git-loopy/issues/400). Locks the
 values decided on [#285](https://github.com/bradcstevens/git-loopy/issues/285) and

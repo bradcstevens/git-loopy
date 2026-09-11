@@ -2,6 +2,11 @@
 
 **Status:** accepted
 
+**Accepted-design amendment:** [ADR-0057](0057-live-evidence-guides-per-issue-routing.md)
+replaces the run-level-only tier rule and warn-and-downgrade routing gates for the new
+per-issue policy. Live capacity reporting and the working-budget/compaction policy remain.
+That amendment is not yet implemented; the original decision is preserved below.
+
 Copilot exposes a third model dial alongside model and reasoning effort: a
 **context tier** (`default` or `long_context`) that selects the prompt-token budget a
 session is given. git-loopy modelled neither the dial nor its consequences, so the tier

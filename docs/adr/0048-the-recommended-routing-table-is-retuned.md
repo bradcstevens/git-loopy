@@ -2,6 +2,11 @@
 
 **Status:** accepted
 
+**Accepted-design amendment:** [ADR-0057](0057-live-evidence-guides-per-issue-routing.md)
+permits `max` on a dynamic first attempt and reselects on eligible retries rather than
+reserving a fixed rung. Dynamic defaults do not inherit this table's historical model/vendor
+preferences; the optional static recipe is unchanged. The amendment is not yet implemented.
+
 Supersedes the **values** in [ADR-0035](0035-the-locked-routing-table.md). Every **rule**
 ADR-0035 established stands unchanged, including the MUST it put in §14 of the Wrapper
 contract.
