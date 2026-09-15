@@ -1378,7 +1378,13 @@ def test_loop_refuses_a_repository_without_runnable_feedback_loops(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A Run stops before its first session when Integration could never gate."""
-    (tmp_path / "AGENTS.md").unlink()
+    (tmp_path / "AGENTS.md").write_text(
+        "## Feedback loops\n\n"
+        "| Loop | Command |\n"
+        "| --- | --- |\n"
+        "| Placeholder | `<TEST_COMMAND>` |\n",
+        encoding="utf-8",
+    )
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
 
@@ -1397,7 +1403,7 @@ def test_loop_refuses_a_repository_without_runnable_feedback_loops(
     assert asyncio.run(loop_module.run(RunConfig(issue_source="github"))) == 1
     assert fake_client.start_call_count == 0
     assert fake_client.created == []
-    assert "Add AGENTS.md with at least one runnable command" in capsys.readouterr().err
+    assert "Add at least one runnable command" in capsys.readouterr().err
 
 
 def test_loop_aborts_after_max_nmt_strikes(tmp_path, monkeypatch) -> None:
