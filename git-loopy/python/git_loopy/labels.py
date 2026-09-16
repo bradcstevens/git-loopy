@@ -442,7 +442,7 @@ class LabelDifference:
     @property
     def can_apply(self) -> bool:
         """Whether ``--apply`` can resolve this difference without a rename."""
-        return self.differs != ("name",)
+        return "name" not in self.differs
 
 
 @dataclass(frozen=True)

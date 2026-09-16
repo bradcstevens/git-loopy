@@ -926,14 +926,14 @@ def test_reconcile_reports_a_recased_bump_class_label_as_noncanonical(
     vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
     minor = next(spec for spec in vocabulary if spec.name == "semver:minor")
     client = _FakeReconcileClient(
-        labels_module.TrackerLabel("semver:Minor", minor.color, minor.description),
+        labels_module.TrackerLabel("semver:Minor", minor.color, "Outdated description"),
         *_carrying(*(spec for spec in vocabulary if spec is not minor)),
     )
 
     result = labels_module.reconcile_labels(vocabulary, client)
 
     assert [(difference.spec.name, difference.differs) for difference in result.drifted] == [
-        ("semver:minor", ("name",))
+        ("semver:minor", ("name", "description"))
     ]
 
 
@@ -944,7 +944,7 @@ def test_reconcile_does_not_reapply_an_unfixable_bump_class_name_mismatch(
     vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
     minor = next(spec for spec in vocabulary if spec.name == "semver:minor")
     client = _FakeReconcileClient(
-        labels_module.TrackerLabel("semver:Minor", minor.color, minor.description),
+        labels_module.TrackerLabel("semver:Minor", minor.color, "Outdated description"),
         *_carrying(*(spec for spec in vocabulary if spec is not minor)),
     )
 
@@ -954,7 +954,7 @@ def test_reconcile_does_not_reapply_an_unfixable_bump_class_name_mismatch(
     assert client.updated == []
     assert result.applied == ()
     assert [(difference.spec.name, difference.differs) for difference in result.drifted] == [
-        ("semver:minor", ("name",))
+        ("semver:minor", ("name", "description"))
     ]
 
 
