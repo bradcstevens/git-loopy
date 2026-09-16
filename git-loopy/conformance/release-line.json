@@ -1,6 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "contract_version": "2.0",
+  "distributions": ["python", "shell", "powershell"],
   "bump_class_taxonomy": [
     "major",
     "minor",
@@ -11,22 +12,26 @@
     {
       "id": "major-bump",
       "labels": ["ready-for-agent", "semver:major"],
-      "bump_class": "major"
+      "bump_class": "major",
+      "distributions": ["python"]
     },
     {
       "id": "minor-bump",
       "labels": ["semver:minor"],
-      "bump_class": "minor"
+      "bump_class": "minor",
+      "distributions": ["python"]
     },
     {
       "id": "patch-bump",
       "labels": ["task-type:bugfix", "semver:patch"],
-      "bump_class": "patch"
+      "bump_class": "patch",
+      "distributions": ["python"]
     },
     {
       "id": "none-is-a-deliberate-no-bump",
       "labels": ["semver:none"],
-      "bump_class": "none"
+      "bump_class": "none",
+      "distributions": ["python"]
     }
   ],
   "refusal_cases": [
@@ -34,42 +39,147 @@
       "id": "unknown-key-is-refused",
       "labels": ["semver:prepatch"],
       "reason": "unknown_semver_key",
-      "key": "prepatch"
+      "key": "prepatch",
+      "distributions": ["python"]
     },
     {
       "id": "unknown-key-beside-a-known-key-is-still-refused",
       "labels": ["semver:patch", "semver:prepatch"],
       "reason": "unknown_semver_key",
-      "key": "prepatch"
+      "key": "prepatch",
+      "distributions": ["python"]
     },
     {
       "id": "recased-key-is-refused",
       "labels": ["semver:Minor"],
       "reason": "unknown_semver_key",
-      "key": "Minor"
+      "key": "Minor",
+      "distributions": ["python"]
     },
     {
       "id": "bare-prefix-is-refused",
       "labels": ["semver:"],
       "reason": "unknown_semver_key",
-      "key": ""
+      "key": "",
+      "distributions": ["python"]
     },
     {
       "id": "missing-label-is-unclassified",
       "labels": ["ready-for-agent"],
-      "reason": "unclassified_bump_class"
+      "reason": "unclassified_bump_class",
+      "distributions": ["python"]
     },
     {
       "id": "two-known-labels-are-conflicting",
       "labels": ["semver:major", "semver:minor"],
       "reason": "conflicting_semver_labels",
-      "keys": ["major", "minor"]
+      "keys": ["major", "minor"],
+      "distributions": ["python"]
     },
     {
       "id": "none-beside-a-bump-is-conflicting",
       "labels": ["semver:none", "semver:patch"],
       "reason": "conflicting_semver_labels",
-      "keys": ["none", "patch"]
+      "keys": ["none", "patch"],
+      "distributions": ["python"]
+    }
+  ],
+  "ratchet_cases": [
+    {
+      "id": "minor-raises-a-release-line-without-resetting-its-counter",
+      "last_stable_version": "0.9.1",
+      "current_target": "0.9.1",
+      "current_counter": 2,
+      "bump_class": "minor",
+      "new_target": "0.10.0",
+      "new_counter": 3,
+      "resulting_version": "0.10.0-dev.3",
+      "distributions": ["python"]
+    },
+    {
+      "id": "major-raises-the-target-from-the-last-stable-version",
+      "last_stable_version": "0.9.1",
+      "current_target": "0.9.1",
+      "current_counter": 0,
+      "bump_class": "major",
+      "new_target": "1.0.0",
+      "new_counter": 1,
+      "resulting_version": "1.0.0-dev.1",
+      "distributions": ["python"]
+    },
+    {
+      "id": "patch-raises-the-target-from-the-last-stable-version",
+      "last_stable_version": "0.9.1",
+      "current_target": "0.9.1",
+      "current_counter": 0,
+      "bump_class": "patch",
+      "new_target": "0.9.2",
+      "new_counter": 1,
+      "resulting_version": "0.9.2-dev.1",
+      "distributions": ["python"]
+    },
+    {
+      "id": "larger-bump-preserves-the-running-counter",
+      "last_stable_version": "0.9.1",
+      "current_target": "0.9.2",
+      "current_counter": 2,
+      "bump_class": "minor",
+      "new_target": "0.10.0",
+      "new_counter": 3,
+      "resulting_version": "0.10.0-dev.3",
+      "distributions": ["python"]
+    },
+    {
+      "id": "smaller-bump-never-lowers-an-existing-target",
+      "last_stable_version": "0.9.1",
+      "current_target": "0.10.0",
+      "current_counter": 3,
+      "bump_class": "patch",
+      "new_target": "0.10.0",
+      "new_counter": 4,
+      "resulting_version": "0.10.0-dev.4",
+      "distributions": ["python"]
+    }
+  ],
+  "counter_cases": [
+    {
+      "id": "a-bump-increments-the-existing-counter-once",
+      "last_stable_version": "0.9.1",
+      "current_target": "0.9.1",
+      "current_counter": 7,
+      "bump_class": "patch",
+      "new_target": "0.9.2",
+      "new_counter": 8,
+      "resulting_version": "0.9.2-dev.8",
+      "distributions": ["python"]
+    },
+    {
+      "id": "none-advances-neither-target-nor-counter",
+      "last_stable_version": "0.9.1",
+      "current_target": "0.10.0",
+      "current_counter": 3,
+      "bump_class": "none",
+      "new_target": "0.10.0",
+      "new_counter": 3,
+      "resulting_version": "0.10.0-dev.3",
+      "distributions": ["python"]
+    }
+  ],
+  "order_independence_cases": [
+    {
+      "id": "one-minor-and-two-patches-produce-one-release-line",
+      "last_stable_version": "0.9.1",
+      "current_target": "0.9.1",
+      "current_counter": 0,
+      "integration_orders": [
+        ["patch", "patch", "minor"],
+        ["minor", "patch", "patch"],
+        ["patch", "minor", "patch"]
+      ],
+      "resulting_target": "0.10.0",
+      "resulting_counter": 3,
+      "resulting_version": "0.10.0-dev.3",
+      "distributions": ["python"]
     }
   ]
 }
