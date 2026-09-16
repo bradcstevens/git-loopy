@@ -597,6 +597,42 @@ fn an_issue_alone_is_not_a_contribution_and_never_reaches_the_rolling_path() {
 }
 
 #[test]
+fn a_stamped_type_naming_an_issue_alone_lands_on_the_active_issue() {
+    // The shape only the triple can refuse: a `stamped_types` member that
+    // states Run scope with `"iter": null` and names an issue, but carries
+    // neither a `contribution_id` nor a Lane slot — the serial form
+    // `rolling_stream_cases` really contains. The Iteration gate cannot
+    // exclude it, so without the whole-triple rule this usage would open a
+    // Lane for the issue it names instead of landing on the Active issue.
+    let projected = reduce(
+        &[
+            serde_json::json!({"type": "wrapper.iteration.start", "iter": 1}),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:02.000Z", "run_id": "r1", "iter": 1,
+                "type": "wrapper.issue.activated", "issue": 42,
+                "activated_at": "2026-05-16T00:00:02.000Z", "binding_source": "working_marker"
+            }),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:05.000Z", "run_id": "r1", "iter": null,
+                "type": "usage.tokens", "input": 100, "output": 50, "issue": 99
+            }),
+        ],
+        IssueRef::number(42),
+    );
+
+    assert_eq!(
+        queue_issues(&projected),
+        [serde_json::json!(42)],
+        "an issue alone opens no Lane of its own"
+    );
+    assert_eq!(
+        queue_row(&projected, 42)["tokens_in"],
+        serde_json::json!(100),
+        "the usage stays on the serial arm's Active issue"
+    );
+}
+
+#[test]
 fn an_iteration_scoped_record_is_not_a_contribution_however_whole_its_triple() {
     // A Wave trace's records carry an Iteration number, so they stay on the
     // serial arm: this usage lands on the Active issue, not on the issue the
@@ -628,28 +664,39 @@ fn an_iteration_scoped_record_is_not_a_contribution_however_whole_its_triple() {
 #[test]
 fn an_unmodelled_event_type_still_degrades_to_the_additive_fallback() {
     // Tightening the identity must not turn a record this core does not model
-    // into a decode failure: an unreadable line is a diagnostic, and an
-    // additive schema extension is not.
-    let partial = serde_json::json!({
+    // into a decode failure: an unreadable line is a diagnostic — a record
+    // `Event::from_json` refuses outright — and an additive schema extension
+    // is not. Every shape below is one the whole-identity rule *refuses* an
+    // identity for, so the guard runs through the refusal itself: a refused
+    // identity must leave the record decodable and additive, never unreadable.
+    let opening = serde_json::json!({"type": "wrapper.iteration.start", "run_id": "r1", "iter": 1});
+    let without = reduce(std::slice::from_ref(&opening), IssueRef::number(42));
+
+    let issue_alone = serde_json::json!({
         "ts": "2026-05-16T00:00:06.000Z", "run_id": "r1", "iter": null,
         "type": "wrapper.integration.parked", "issue": 42
     });
-    let decoded = Event::from_json(&partial).expect("an unmodelled type still decodes");
-    assert!(matches!(decoded.payload, EventPayload::Other));
+    let mut empty_key = issue_alone.clone();
+    empty_key["contribution_id"] = serde_json::json!("");
+    empty_key["lane_id"] = serde_json::json!("lane-1");
+    let mut absent_iteration = issue_alone.clone();
+    absent_iteration
+        .as_object_mut()
+        .expect("object")
+        .remove("iter");
 
-    let without = reduce(
-        &[serde_json::json!({"type": "wrapper.iteration.start", "run_id": "r1", "iter": 1})],
-        IssueRef::number(42),
-    );
-    let with = reduce(
-        &[
-            serde_json::json!({"type": "wrapper.iteration.start", "run_id": "r1", "iter": 1}),
-            partial,
-        ],
-        IssueRef::number(42),
-    );
+    for refused in [issue_alone, empty_key, absent_iteration] {
+        let decoded = Event::from_json(&refused).expect("an unmodelled type still decodes");
+        assert!(matches!(decoded.payload, EventPayload::Other));
+        assert!(
+            decoded.contribution.is_none(),
+            "the identity is refused: {refused}"
+        );
 
-    assert_eq!(with, without, "an additive record changes no projection");
+        let with = reduce(&[opening.clone(), refused], IssueRef::number(42));
+
+        assert_eq!(with, without, "an additive record changes no projection");
+    }
 }
 
 #[test]
