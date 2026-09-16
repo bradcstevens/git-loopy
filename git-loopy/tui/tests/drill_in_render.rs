@@ -72,6 +72,57 @@ fn drill_in_frame(case_id: &str, issue: &str) -> DashboardFrame {
     session.frame()
 }
 
+/// A frame showing the rolling-dispatch case's drill-in, at its final snapshot.
+///
+/// The rolling stream is pinned under the same fixture's own
+/// `rolling_dashboard_cases` key rather than the shared `cases` array
+/// (ADR-0051), because only the Rust core folds it. It is still the same
+/// oracle, reached by a second key.
+fn rolling_drill_in_frame(case_id: &str) -> DashboardFrame {
+    let fixture = fixture();
+    let case = fixture["rolling_dashboard_cases"]
+        .as_array()
+        .expect("rolling_dashboard_cases is a list")
+        .iter()
+        .find(|case| case["id"] == case_id)
+        .unwrap_or_else(|| panic!("the fixture carries a `{case_id}` rolling case"))
+        .clone();
+    let mut session = DashboardSession::new(
+        RunInputs {
+            model: case["inputs"]["model"].as_str().map(str::to_string),
+            reasoning_effort: case["inputs"]["reasoning_effort"]
+                .as_str()
+                .map(str::to_string),
+        },
+        Zone::from_offset_minutes(
+            case["inputs"]["local_utc_offset_minutes"]
+                .as_i64()
+                .expect("an offset in minutes") as i32,
+        ),
+        IssueRef::from_value(&case["inputs"]["drill_in_issue"])
+            .expect("a drill-in target names an issue"),
+    );
+    let snapshot = case["snapshots"]
+        .as_array()
+        .expect("snapshots is a list")
+        .last()
+        .expect("a case has a final snapshot")
+        .clone();
+    session.render_at(
+        Timestamp::parse_rfc3339(
+            snapshot["render_at_utc"]
+                .as_str()
+                .expect("an instant is a string"),
+        )
+        .expect("the fixture's instant parses"),
+    );
+    for event in case["events"].as_array().expect("events is a list") {
+        session.ingest(&event.to_string());
+    }
+    session.handle_key(Key::Open);
+    session.frame()
+}
+
 /// The drill-in the fixture pins for a case, as the oracle for what is drawn.
 fn expected_drill_in(case_id: &str) -> Value {
     let fixture = fixture();
@@ -298,6 +349,42 @@ fn a_contribution_declares_every_measurement_its_orchestrator_cannot_take() {
              placeholder with the measurements that merely have not arrived"
         );
     }
+}
+
+/// Two **Contributions** on one issue are told apart in the band an operator
+/// opens a Queue row for.
+///
+/// ADR-0044 gives `contribution_id` exactly one render surface — the drill-in,
+/// *"where it separates two contributions on the same issue"*. Under rolling
+/// dispatch a **Lane** slot is refilled and reused, so the slot alone draws a
+/// re-pickup and the attempt before it as the same row, and the operator cannot
+/// tell which of the two a figure belongs to.
+#[test]
+fn the_drill_in_separates_two_contributions_on_one_issue() {
+    let frame = rolling_drill_in_frame("rolling-dispatch-attributes-by-the-contribution-triple");
+    let lines = render_lines(&frame, 184, 40);
+    let breakdown = band(&lines, "Iteration breakdown");
+
+    let labels = cells(&breakdown[0]);
+    let at = |label: &str| {
+        labels
+            .iter()
+            .position(|heading| heading == label)
+            .expect("the contract names the column")
+    };
+    let drawn: Vec<String> = breakdown[1..]
+        .iter()
+        .map(|row| cells(row)[at("Contribution")].clone())
+        .collect();
+
+    // Both contributions reused `lane-1`, which is the whole point: the slot is
+    // the one part of the identity a refill repeats.
+    assert_eq!(
+        drawn,
+        ["c-0001 lane-1", "c-0004 lane-1"],
+        "each row names the contribution that produced it beside the slot it \
+         ran in, and the identifier is what separates the two"
+    );
 }
 
 #[test]

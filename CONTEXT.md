@@ -518,7 +518,9 @@ issue, including its **Consumption**, Cost, available peak **Context fill**, and
 **Escalation rung** reads as a change between two rows and a contribution no **Pickup**
 record reached claims no pair at all. In **Parallel mode**, the row is the issue's
 **Lane contribution** — attributed to the issue that produced it, never to whichever
-issue its **Lane** slot went on to work.
+issue its **Lane** slot went on to work. Under **Rolling dispatch** the row also names
+that contribution, because a refilled slot puts two of one issue's contributions in this
+band and the slot alone draws them identically (ADR-0044).
 _Avoid_: session breakdown, history table.
 
 **ModelSelectionMode**:

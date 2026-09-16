@@ -94,3 +94,30 @@ fn the_rust_core_matches_every_rolling_dashboard_fixture_snapshot() {
         }
     }
 }
+
+#[test]
+fn the_rolling_case_distinguishes_two_contributions_on_one_issue() {
+    let fixture = fixture();
+    let case = fixture["rolling_dashboard_cases"]
+        .as_array()
+        .expect("rolling_dashboard_cases is a list")
+        .iter()
+        .find(|case| case["id"] == "rolling-dispatch-attributes-by-the-contribution-triple")
+        .expect("the rolling attribution case is present");
+    let rows = case["snapshots"]
+        .as_array()
+        .expect("snapshots are a list")
+        .last()
+        .expect("the rolling case has a final snapshot")["expected"]["drill_in"]
+        ["iteration_breakdown"]["rows"]
+        .as_array()
+        .expect("the final drill-in has contribution rows");
+
+    assert_eq!(rows.len(), 2, "the drill-in contains both contributions");
+    assert_eq!(rows[0]["contribution_id"], "c-0001");
+    assert_eq!(rows[1]["contribution_id"], "c-0004");
+    assert_ne!(
+        rows[0]["contribution_id"], rows[1]["contribution_id"],
+        "contribution identity separates retries and re-pickups on one issue"
+    );
+}

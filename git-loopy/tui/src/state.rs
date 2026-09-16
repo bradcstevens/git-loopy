@@ -149,6 +149,7 @@ impl ResolvedRoute {
 #[derive(Clone, Debug)]
 pub(crate) struct IssueContribution {
     pub(crate) kind: &'static str,
+    pub(crate) contribution_id: String,
     pub(crate) iteration: Option<i64>,
     pub(crate) lane: Option<LaneSlot>,
     pub(crate) outcome: Option<String>,
@@ -1136,6 +1137,7 @@ fn contribution_from(
         // A Lane's work is named by the Lane it ran in, not by the serial
         // Iteration number it happened to share with its siblings.
         kind: if is_lane { "lane" } else { "iteration" },
+        contribution_id: String::new(),
         iteration: if is_lane { None } else { iteration },
         lane: is_lane.then(|| LaneSlot::from(row.issue.clone())),
         outcome: rollup.outcome.clone(),
@@ -1187,6 +1189,7 @@ fn contribution_from_rolling(
     let usage_observed = summary.tokens_in.is_some() || summary.tokens_out.is_some();
     IssueContribution {
         kind: "contribution",
+        contribution_id: contribution.contribution_id.clone(),
         iteration: None,
         lane: Some(contribution.lane_id.clone()),
         outcome: end.reason.clone(),

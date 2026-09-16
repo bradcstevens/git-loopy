@@ -307,6 +307,7 @@ pub struct IterationBreakdown {
 #[derive(Clone, Debug, Serialize)]
 pub struct ContributionRow {
     pub kind: &'static str,
+    pub contribution_id: String,
     pub iteration: Option<i64>,
     pub lane: Option<LaneSlot>,
     pub outcome: Option<String>,
@@ -622,6 +623,7 @@ fn contribution_count(entry: &IssueLedgerEntry) -> usize {
 fn contribution_row(contribution: &IssueContribution) -> ContributionRow {
     ContributionRow {
         kind: contribution.kind,
+        contribution_id: contribution.contribution_id.clone(),
         iteration: contribution.iteration,
         lane: contribution.lane.clone(),
         outcome: contribution.outcome.clone(),

@@ -307,6 +307,7 @@ def _contribution_row(
     peak = contribution.peak_context_window
     return {
         "kind": contribution.kind,
+        "contribution_id": contribution.contribution_id,
         "iteration": contribution.iteration,
         "lane": contribution.lane,
         "outcome": contribution.outcome,

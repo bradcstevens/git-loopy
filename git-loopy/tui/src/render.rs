@@ -935,13 +935,18 @@ fn draw_breakdown(
     );
 }
 
-/// One contribution's identity: the serial Iteration that produced it, or the
-/// Lane it ran in once Parallel contributions reach this band.
+/// One contribution's identity: its identifier where rolling dispatch gave it
+/// one, plus the serial Iteration or Lane slot that produced it.
 fn contribution_label(row: &ContributionRow, glyphs: &Glyphs) -> String {
-    match (&row.lane, row.iteration) {
-        (Some(lane), _) => format!("lane {}", lane_slot_label(lane)),
+    let slot = match (&row.lane, row.iteration) {
+        (Some(lane), _) => lane_slot_label(lane),
         (None, Some(iteration)) => format!("iter {iteration}"),
         (None, None) => glyphs.unknown.to_string(),
+    };
+    if row.contribution_id.is_empty() {
+        slot
+    } else {
+        format!("{} {slot}", row.contribution_id)
     }
 }
 
@@ -1067,9 +1072,14 @@ fn issue_label(issue: &crate::event::IssueRef) -> String {
     }
 }
 
+/// A **Lane** slot as the operator reads it.
+///
+/// A named slot (`lane-1`) already carries its own noun, so prefixing one would
+/// stutter and cost width the identifier beside it now needs; a legacy Wave
+/// trace's numeric slot carries nothing and is given one.
 fn lane_slot_label(lane: &crate::event::LaneSlot) -> String {
     match lane {
-        crate::event::LaneSlot::Number(number) => format!("#{number}"),
+        crate::event::LaneSlot::Number(number) => format!("lane #{number}"),
         crate::event::LaneSlot::Name(name) => name.clone(),
     }
 }

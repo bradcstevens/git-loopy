@@ -111,6 +111,7 @@
         "scope": "issue_contribution_identity",
         "fields": [
           "kind",
+          "contribution_id",
           "iteration",
           "lane"
         ]
@@ -305,6 +306,7 @@
       ],
       "iteration_breakdown_row": [
         "kind",
+        "contribution_id",
         "iteration",
         "lane",
         "outcome",
@@ -741,6 +743,7 @@
                 "rows": [
                   {
                     "kind": "iteration",
+                    "contribution_id": "",
                     "iteration": 1,
                     "lane": null,
                     "outcome": "closed",
@@ -1245,6 +1248,7 @@
                 "rows": [
                   {
                     "kind": "iteration",
+                    "contribution_id": "",
                     "iteration": 1,
                     "lane": null,
                     "outcome": "advanced",
@@ -1265,6 +1269,7 @@
                   },
                   {
                     "kind": "iteration",
+                    "contribution_id": "",
                     "iteration": 2,
                     "lane": null,
                     "outcome": "closed",
@@ -1811,6 +1816,7 @@
                 "rows": [
                   {
                     "kind": "iteration",
+                    "contribution_id": "",
                     "iteration": 1,
                     "lane": null,
                     "outcome": "closed",
@@ -2549,6 +2555,7 @@
                 "rows": [
                   {
                     "kind": "lane",
+                    "contribution_id": "",
                     "iteration": null,
                     "lane": 310,
                     "outcome": "advanced",
@@ -2755,6 +2762,7 @@
                 "rows": [
                   {
                     "kind": "lane",
+                    "contribution_id": "",
                     "iteration": null,
                     "lane": 310,
                     "outcome": "advanced",
@@ -3029,6 +3037,7 @@
                 "rows": [
                   {
                     "kind": "lane",
+                    "contribution_id": "",
                     "iteration": null,
                     "lane": 310,
                     "outcome": "advanced",
@@ -3479,6 +3488,7 @@
                 "rows": [
                   {
                     "kind": "iteration",
+                    "contribution_id": "",
                     "iteration": 1,
                     "lane": null,
                     "outcome": "gone",
@@ -3969,6 +3979,7 @@
                 "rows": [
                   {
                     "kind": "lane",
+                    "contribution_id": "",
                     "iteration": null,
                     "lane": 601,
                     "outcome": "advanced",
@@ -4380,6 +4391,7 @@
                 "rows": [
                   {
                     "kind": "iteration",
+                    "contribution_id": "",
                     "iteration": 1,
                     "lane": null,
                     "outcome": "closed",
@@ -5353,6 +5365,7 @@
                 "rows": [
                   {
                     "kind": "iteration",
+                    "contribution_id": "",
                     "iteration": 1,
                     "lane": null,
                     "outcome": "no-progress",
@@ -5520,6 +5533,7 @@
                 "rows": [
                   {
                     "kind": "iteration",
+                    "contribution_id": "",
                     "iteration": 1,
                     "lane": null,
                     "outcome": "no-progress",
@@ -5713,6 +5727,7 @@
                 "rows": [
                   {
                     "kind": "iteration",
+                    "contribution_id": "",
                     "iteration": 1,
                     "lane": null,
                     "outcome": "no-progress",
@@ -5737,6 +5752,7 @@
                   },
                   {
                     "kind": "iteration",
+                    "contribution_id": "",
                     "iteration": 2,
                     "lane": null,
                     "outcome": "closed",
@@ -6080,6 +6096,7 @@
                 "rows": [
                   {
                     "kind": "iteration",
+                    "contribution_id": "",
                     "iteration": 1,
                     "lane": null,
                     "outcome": "advanced",
@@ -6263,6 +6280,7 @@
                 "rows": [
                   {
                     "kind": "iteration",
+                    "contribution_id": "",
                     "iteration": 1,
                     "lane": null,
                     "outcome": "advanced",
@@ -6287,6 +6305,7 @@
                   },
                   {
                     "kind": "iteration",
+                    "contribution_id": "",
                     "iteration": 2,
                     "lane": null,
                     "outcome": "closed",
@@ -6330,7 +6349,7 @@
   "rolling_dashboard_cases": [
     {
       "id": "rolling-dispatch-attributes-by-the-contribution-triple",
-      "description": "A rolling-dispatch Run (ADR-0044): two Lanes fill, Lane 1 refills the moment its first contribution is admitted so its second contribution for a different issue reuses the same lane_id, a wrapper.commit.recorded stamped with the contribution triple attributes to the issue that triple names rather than through lane_issue or the serial single-Active inference, Integration narrows the effective Lane limit and later asks for Serial and stops refill, and every wrapper.contribution.end reaches its issue's Queue row, that issue's drill-in contribution row, and its own Summary row -- the only three render surfaces this issue owns (the six wrapper.integration.* types and wrapper.contribution.work_finished carried in the same stream are additive-tolerant Other, per #435 and ADR-0044's own scope).",
+      "description": "A rolling-dispatch Run (ADR-0044): two Lanes fill, Lane 1 refills for a different issue so the same lane_id proves attribution follows each contribution triple, then contributes to the drilled-in issue again with a distinct contribution_id; every wrapper.contribution.end reaches the corresponding issue Queue row, drill-in contribution row, and Summary row.",
       "inputs": {
         "model": "claude-opus-4.8-max",
         "reasoning_effort": "max",
@@ -6736,6 +6755,42 @@
             "peak_context_window": 41000,
             "strike_reaction": "reset"
           }
+        },
+        {
+          "ts": "2026-05-16T00:00:31.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.start",
+          "contribution_id": "c-0004",
+          "issue": 42,
+          "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-16T00:00:32.000Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.contribution.end",
+          "contribution_id": "c-0004",
+          "issue": 42,
+          "lane_id": "lane-1",
+          "published": true,
+          "reason": "published",
+          "summary": {
+            "model": "claude-opus-4.8-max",
+            "effort": "max",
+            "tokens_in": 1200,
+            "tokens_out": 340,
+            "observed_tokens": 1540,
+            "cost_usd": 0.42,
+            "commits": 1,
+            "closures": 1,
+            "closure_outcome": "closed",
+            "recovery_attempts": 0,
+            "agent_seconds": 61.5,
+            "lifecycle_seconds": 94.25,
+            "peak_context_window": 41000,
+            "strike_reaction": "reset"
+          }
         }
       ],
       "snapshots": [
@@ -6886,6 +6941,7 @@
                 "rows": [
                   {
                     "kind": "contribution",
+                    "contribution_id": "c-0001",
                     "iteration": null,
                     "lane": "lane-1",
                     "outcome": "published",
@@ -6925,8 +6981,8 @@
           }
         },
         {
-          "after_event_count": 34,
-          "render_at_utc": "2026-05-16T00:00:30.000Z",
+          "after_event_count": 36,
+          "render_at_utc": "2026-05-16T00:00:32.000Z",
           "expected": {
             "dashboard": {
               "header": {
@@ -6934,7 +6990,7 @@
                 "model": "claude-opus-4.8-max",
                 "reasoning_effort": "max",
                 "started_at": "2026-05-15T18:00:00-06:00",
-                "elapsed_seconds": 30.0,
+                "elapsed_seconds": 32.0,
                 "status": "running",
                 "strikes": {
                   "current": 0,
@@ -6991,11 +7047,11 @@
                     "status": "closed",
                     "started_at": "2026-05-15T18:00:03-06:00",
                     "active_seconds": 15.0,
-                    "closed_at": "2026-05-15T18:00:18-06:00",
-                    "iteration_count": 1,
+                    "closed_at": "2026-05-15T18:00:32-06:00",
+                    "iteration_count": 2,
                     "route": null,
-                    "tokens_in": 1200,
-                    "tokens_out": 340,
+                    "tokens_in": 2400,
+                    "tokens_out": 680,
                     "credits": null,
                     "premium_requests": null
                   },
@@ -7095,6 +7151,27 @@
                     "pr_advances": 0,
                     "strikes": 0,
                     "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "model": "claude-opus-4.8-max",
+                    "tokens_in": 1200,
+                    "tokens_out": 340,
+                    "observed_tokens": 1540,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": null,
+                    "skill_call_count": null,
+                    "skills_consulted": null,
+                    "commits": 1,
+                    "auto_closures": 1,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
                   }
                 ]
               }
@@ -7104,15 +7181,37 @@
                 "issue": 42,
                 "status": "closed",
                 "started_at": "2026-05-15T18:00:03-06:00",
-                "closed_at": "2026-05-15T18:00:18-06:00",
+                "closed_at": "2026-05-15T18:00:32-06:00",
                 "issue_elapsed_seconds": null,
                 "active_seconds": 15.0,
-                "iteration_count": 1
+                "iteration_count": 2
               },
               "iteration_breakdown": {
                 "rows": [
                   {
                     "kind": "contribution",
+                    "contribution_id": "c-0001",
+                    "iteration": null,
+                    "lane": "lane-1",
+                    "outcome": "published",
+                    "duration_seconds": 94.25,
+                    "status": "closed",
+                    "active_seconds": 61.5,
+                    "route": null,
+                    "consumption": {
+                      "model": "claude-opus-4.8-max",
+                      "tokens_in": 1200,
+                      "tokens_out": 340,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "contribution",
+                    "contribution_id": "c-0004",
                     "iteration": null,
                     "lane": "lane-1",
                     "outcome": "published",

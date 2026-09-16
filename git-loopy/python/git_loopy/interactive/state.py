@@ -348,6 +348,7 @@ class IssueContribution:
     """One finalized Iteration or Lane contribution for an Active issue."""
 
     kind: str
+    contribution_id: str
     iteration: int | None
     lane: int | str | None
     outcome: str | None
@@ -1646,6 +1647,7 @@ class LiveRunState:
             route = self._iter_routes.get(key)
             contribution = IssueContribution(
                 kind="lane" if is_lane else "iteration",
+                contribution_id="",
                 iteration=None if is_lane else iter_num,
                 lane=key if is_lane else None,
                 outcome=outcome,
