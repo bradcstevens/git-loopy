@@ -10,11 +10,16 @@
 //! This lives in its own top-level `rolling_dashboard_cases` key rather than
 //! `dashboard-insights.json`'s shared `cases` array (which
 //! `test_python_semantic_view_matches_every_dashboard_fixture_snapshot`
-//! iterates unconditionally): the Python Runner does not yet project a
-//! `parallel` Header field, so folding this case into `cases` would make that
-//! Python suite fail for a gap this issue does not own. `rolling_stream_cases`
-//! already models this per-key/per-distribution split (ADR-0045), so the same
-//! shape is reused here instead of inventing a new one.
+//! iterates unconditionally). The Header `parallel` field itself *is* shared
+//! family vocabulary — every shared snapshot carries it and Python projects it
+//! (ADR-0051) — but the rolling *stream* is a Rust obligation: replaying
+//! thirty-four Events with a live posture through Python would demand the
+//! posture reducer #312 owns, which is exactly why ADR-0051 rejects folding
+//! this case into `cases`. Keeping it out is also what keeps Python's
+//! undeclared constant truthful. `rolling_stream_cases` already models this
+//! per-key/per-distribution split (ADR-0045), so the same shape is reused here
+//! instead of inventing a new one, and the fixture's own projection-field
+//! inventory sweep covers this case so private never means unasserted.
 
 use git_loopy_tui::{
     project_run_view, DashboardState, Event, IssueRef, RunInputs, TerminalCapabilities, Timestamp,

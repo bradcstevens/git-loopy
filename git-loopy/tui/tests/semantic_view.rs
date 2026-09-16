@@ -294,6 +294,68 @@ fn a_resolved_rate_card_and_an_undeclared_one_are_different_facts() {
 }
 
 #[test]
+fn a_parallel_capable_orchestrator_running_serially_declares_no_posture() {
+    // The Header's `parallel` posture answers *what is this Run doing*, not
+    // *what could this Orchestrator do* (ADR-0052), so a Run-start manifest
+    // that declares Parallel mode leaves the posture undeclared on its own: a
+    // Wave trace from a Parallel-capable Runner never filled a second Lane,
+    // and a Header that announced one would be describing the product rather
+    // than the Run.
+    let capable_but_serial = reduce(
+        &[
+            serde_json::json!({
+                "type": "wrapper.run.start",
+                "parallel_capabilities": {"parallel_mode": true}
+            }),
+            serde_json::json!({"type": "wrapper.iteration.start", "iter": 1}),
+        ],
+        IssueRef::number(42),
+    );
+    assert_eq!(
+        capable_but_serial["dashboard"]["header"]["parallel"]["availability"],
+        serde_json::json!("not_declared")
+    );
+
+    // ...and an Orchestrator that declares it cannot fill a second Lane reads
+    // the same way, rather than as a third state: there is no posture either
+    // way, and `unavailable` would put a fact in the Header that no Lane, cap
+    // or pressure stands behind.
+    let incapable = reduce(
+        &[serde_json::json!({
+            "type": "wrapper.run.start",
+            "parallel_capabilities": {"parallel_mode": false}
+        })],
+        IssueRef::number(42),
+    );
+    assert_eq!(
+        incapable["dashboard"]["header"]["parallel"]["availability"],
+        serde_json::json!("not_declared")
+    );
+
+    // One posture Event is what declares it, and it carries the Lane ceilings
+    // the manifest never could.
+    let running_parallel = reduce(
+        &[
+            serde_json::json!({
+                "type": "wrapper.run.start",
+                "parallel_capabilities": {"parallel_mode": true}
+            }),
+            serde_json::json!({
+                "type": "wrapper.concurrency.changed",
+                "configured_lane_limit": 3,
+                "effective_lane_limit": 2,
+                "pressure": "integration_backlog"
+            }),
+        ],
+        IssueRef::number(42),
+    );
+    let posture = &running_parallel["dashboard"]["header"]["parallel"];
+    assert_eq!(posture["availability"], serde_json::json!("available"));
+    assert_eq!(posture["configured_lane_limit"], serde_json::json!(3));
+    assert_eq!(posture["effective_lane_limit"], serde_json::json!(2));
+}
+
+#[test]
 fn one_issue_the_harness_could_not_price_leaves_every_other_row_reported() {
     // The all-or-nothing latch is per row, never per Run. #335 asks it of a
     // model the **Rate card** does not list; ADR-0026 removed the card from the

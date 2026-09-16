@@ -91,15 +91,6 @@ fn the_rust_core_matches_every_dashboard_fixture_snapshot() {
             };
             let projected = serde_json::to_value(project_run_view(&state, &context, &drill_in))
                 .expect("the view serializes");
-            // The Header `parallel` Declaration (ADR-0044) is Rust-only: this
-            // shared fixture also feeds Python's own conformance suite, which
-            // does not yet project it, so this comparison looks past it and
-            // the field's own correctness is instead pinned by
-            // `rolling_dashboard_conformance.rs`.
-            let mut projected = projected;
-            if let Some(header) = projected["dashboard"]["header"].as_object_mut() {
-                header.remove("parallel");
-            }
 
             assert_eq!(
                 band_names(&projected["dashboard"]),

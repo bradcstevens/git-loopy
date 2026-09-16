@@ -160,10 +160,12 @@ impl Declaration {
 /// into the one place an operator learns whether, and why, a Run is not
 /// filling the Lane cap it was configured with.
 ///
-/// Follows the same **Insight capability** device as [`Declaration`]:
-/// `availability` distinguishes an Orchestrator that never fills a second
-/// Lane (declared `false`) from one that has not yet emitted a concurrency
-/// signal (`not_declared`) from one currently running Parallel (`available`).
+/// Follows the same **Insight capability** device as [`Declaration`] in shape,
+/// but not in what gates it: `availability` reports whether this Run has a
+/// posture *at all* — `not_declared` until one of the four posture Events
+/// arrives, `available` from then on (ADR-0052). The Run-start manifest is a
+/// producer's statement of what it could do, which is a different question
+/// from what this Run is doing.
 #[derive(Clone, Debug, Serialize)]
 pub struct ParallelDeclaration {
     pub availability: &'static str,
@@ -404,10 +406,10 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
 fn parallel_declaration(state: &DashboardState) -> ParallelDeclaration {
     let posture = &state.parallel;
     ParallelDeclaration {
-        availability: match posture.declared {
-            Some(true) => "available",
-            Some(false) => "unavailable",
-            None => "not_declared",
+        availability: if posture.observed {
+            "available"
+        } else {
+            "not_declared"
         },
         configured_lane_limit: posture.configured_lane_limit,
         effective_lane_limit: posture.effective_lane_limit,

@@ -285,10 +285,11 @@ pub struct RunStart {
 
 /// Per-Orchestrator **Parallel mode** capabilities declared at Run start.
 ///
-/// Only `parallel_mode` feeds the Header's `parallel` Declaration: it is what
-/// tells an Orchestrator that never fills a second Lane (`not_declared` would
-/// be wrong; it *is* declared, as `false`) apart from a Parallel-mode Run this
-/// core has not yet seen a concurrency signal from.
+/// A capability declared `false` is the difference between "this Orchestrator
+/// cannot do it" and "it has not happened yet". The Header's `parallel`
+/// posture does *not* read this manifest — it reports what this Run is doing,
+/// not what its Orchestrator could do (ADR-0052) — so the manifest is decoded
+/// here as the Run-start contract declares it and projected by nothing yet.
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 pub struct ParallelCapabilities {
     /// Whether this Orchestrator can fill more than one Lane at a time.

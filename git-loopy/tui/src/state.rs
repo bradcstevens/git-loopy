@@ -175,8 +175,9 @@ pub(crate) struct IssueContribution {
 /// fields or a band of its own.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ParallelPosture {
-    /// What this Orchestrator's manifest declared at Run start.
-    pub(crate) declared: Option<bool>,
+    /// Whether any of the four posture Events has been folded yet, which is
+    /// what the Header's `availability` gate reports (ADR-0052).
+    pub(crate) observed: bool,
     /// The immutable configured Lane cap, once a signal has named one.
     pub(crate) configured_lane_limit: Option<i64>,
     /// The Lane limit currently in effect.
@@ -467,9 +468,6 @@ impl DashboardState {
                 if let Some(capabilities) = start.insight_capabilities {
                     self.capabilities = capabilities;
                 }
-                if let Some(parallel) = start.parallel_capabilities {
-                    self.parallel.declared = parallel.parallel_mode;
-                }
                 if let Some(limit) = start.max_nmt_strikes {
                     self.max_strikes = limit;
                 }
@@ -541,6 +539,7 @@ impl DashboardState {
                 // (`event.contribution` was `None` above); nothing to fold.
             }
             EventPayload::ConcurrencyChanged(changed) => {
+                self.parallel.observed = true;
                 self.parallel.configured_lane_limit = changed
                     .configured_lane_limit
                     .or(self.parallel.configured_lane_limit);
@@ -552,17 +551,20 @@ impl DashboardState {
                 }
             }
             EventPayload::ParallelDegraded(degraded) => {
+                self.parallel.observed = true;
                 self.parallel.degraded = true;
                 self.parallel.degraded_reason = degraded.reason.clone();
                 self.parallel.configured_lane_limit =
                     degraded.lane_cap.or(self.parallel.configured_lane_limit);
             }
             EventPayload::ParallelSerialFallback(fallback) => {
+                self.parallel.observed = true;
                 self.parallel.serial_fallback_reason = fallback.reason.clone();
                 self.parallel.configured_lane_limit =
                     fallback.lane_cap.or(self.parallel.configured_lane_limit);
             }
             EventPayload::SerialRequested(requested) => {
+                self.parallel.observed = true;
                 if let Some(refill_stopped) = requested.refill_stopped {
                     self.parallel.refill_stopped = refill_stopped;
                 }

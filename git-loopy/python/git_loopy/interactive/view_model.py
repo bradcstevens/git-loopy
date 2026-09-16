@@ -127,6 +127,39 @@ def _header(state: LiveRunState) -> dict[str, Any]:
         # Runner that routes, and "this Runner prices every issue the same" on
         # one that does not, and only the Run-start manifest tells them apart.
         "routing": _declaration(state.routing_available),
+        # The Parallel posture (ADR-0051). Unlike the three Declarations above
+        # it is a composite: `availability` gates eight further facts about the
+        # Lane ceilings, the pressure narrowing them, and whether the Run
+        # degraded to serial.
+        "parallel": _undeclared_parallel(),
+    }
+
+
+def _undeclared_parallel() -> dict[str, Any]:
+    """The Header's Parallel posture, for a Run that has declared none.
+
+    The posture is folded from the four Run-scoped posture Events, and this
+    Dashboard reduces none of them: the Textual renderer has no Parallel
+    surface to feed, so #312 owns the reducer that will replace this. Until
+    then the constant is truthful for every trace the shared Conformance
+    fixture holds -- none of its cases carries a posture Event, and a Run that
+    emits none has no posture, which is what `not_declared` with every detail
+    absent says.
+
+    It becomes a lie the first time this Dashboard projects a live **Parallel**
+    Run, which is the moment #312 must replace it rather than extend it
+    (ADR-0051 records the debt and its successor).
+    """
+    return {
+        "availability": "not_declared",
+        "configured_lane_limit": None,
+        "effective_lane_limit": None,
+        "pressure": None,
+        "degraded": False,
+        "degraded_reason": None,
+        "serial_fallback_reason": None,
+        "serial_required": None,
+        "refill_stopped": False,
     }
 
 

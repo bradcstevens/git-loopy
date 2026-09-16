@@ -51,16 +51,8 @@ fn reduce(events: &[Value], case: &Value) -> Value {
     };
     let drill_in =
         IssueRef::from_value(&inputs["drill_in_issue"]).expect("a drill-in target names an issue");
-    let mut actual = serde_json::to_value(project_run_view(&state, &context, &drill_in))
-        .expect("the view serializes");
-    // The Header `parallel` Declaration (ADR-0044) is Rust-only: this shared
-    // fixture also feeds Python's own conformance suite, which does not yet
-    // project it, so this file's comparisons look past it and the field's own
-    // correctness is instead pinned by `rolling_dashboard_conformance.rs`.
-    if let Some(header) = actual["dashboard"]["header"].as_object_mut() {
-        header.remove("parallel");
-    }
-    actual
+    serde_json::to_value(project_run_view(&state, &context, &drill_in))
+        .expect("the view serializes")
 }
 
 #[test]

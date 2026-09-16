@@ -15,7 +15,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits — including the `all_skipped` abort (§10, #413) a Pickup owes when the Pool is non-empty and it could bind none of it |
 | `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, exact Run-start Release identity, per-Orchestrator Insight and **Parallel mode** capability manifests, production-seam normalized rollup cases, payload contracts, the rolling-dispatch **Lane contribution** identity and lifecycle vocabulary, whole ordered rolling Event streams every member serializes through its own seam, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
-| `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.2): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, per-band projection field inventory and per-column field mapping, Queue and Iteration-breakdown columns and scopes, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, the activation `binding_source` vocabulary, and expected semantic view models consumed by Python and the Rust Dashboard core |
+| `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.5): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, per-band projection field inventory — including the Header's **Parallel** posture composite — and per-column field mapping, Queue and Iteration-breakdown columns and scopes, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, the activation `binding_source` vocabulary, and expected semantic view models consumed by Python and the Rust Dashboard core |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
 | `skill-policy.json` | Closed-world **Skill policy** (§17): base-scope selection, explicit empty policy, exact environment replacement, Run overlays with disable-wins, deprecated legacy subtraction, Minimal fallback and its reason, the four validation failures, startup classification, and the redacted `wrapper.skill_policy.resolved` projection |
 | `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set, stamped with the `cli_version` the content was captured against because effort capability is a function of Copilot CLI version (§14, ADR-0019), plus `context_tiers` — the tier half of the same roster (ADR-0017), which carries a row only for a model whose tiers were captured for that stamp and is empty until they are |
@@ -491,6 +491,15 @@ not pin a fractional `duration_seconds`, because shell rollup arithmetic is
 integral. The probe's depth is the rollup seam, so it proves a payload is
 producible rather than that today's native Run loop reaches every input the seam
 accepts.
+
+One case sits outside `cases`, under `rolling_dashboard_cases`, and is replayed by
+the Rust Dashboard core alone. A rolling-dispatch stream is the one trace whose
+Header carries a declared **Parallel** posture, and replaying it through Python
+would demand a posture reducer the Textual Dashboard has no surface for (ADR-0051
+defers that to #312). Keeping it out of `cases` is therefore what lets every shared
+snapshot carry the one undeclared posture truthfully — but it is not exempt from the
+contract: the projection-field inventory sweep covers it alongside the shared cases,
+so a private case cannot be an unasserted one.
 
 The **Activity** band's sizing gestures — the drag, the click and `shift+↑` / `shift+↓`
 (ADR-0038) — are deliberately **not** in this fixture set, now that both renderers

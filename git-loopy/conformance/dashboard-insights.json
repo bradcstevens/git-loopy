@@ -1,5 +1,5 @@
 {
-  "fixture_schema_version": "1.4",
+  "fixture_schema_version": "1.5",
   "wrapper_contract_version": "2.0",
   "event_schema_version": "1.1",
   "semantic_contract": {
@@ -226,7 +226,8 @@
         "context_fill",
         "cost",
         "rate_card",
-        "routing"
+        "routing",
+        "parallel"
       ],
       "context_fill": [
         "availability",
@@ -238,6 +239,17 @@
       ],
       "declaration": [
         "availability"
+      ],
+      "parallel": [
+        "availability",
+        "configured_lane_limit",
+        "effective_lane_limit",
+        "pressure",
+        "degraded",
+        "degraded_reason",
+        "serial_fallback_reason",
+        "serial_required",
+        "refill_stopped"
       ],
       "queue_row": [
         "issue",
@@ -520,6 +532,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -626,6 +649,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -959,6 +993,17 @@
                 },
                 "routing": {
                   "availability": "unavailable"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -1079,6 +1124,17 @@
                 },
                 "routing": {
                   "availability": "unavailable"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -1500,6 +1556,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -1639,6 +1706,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -2242,6 +2320,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -2360,6 +2449,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -2521,6 +2621,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -2716,6 +2827,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -3142,6 +3264,17 @@
                 },
                 "routing": {
                   "availability": "unavailable"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -3259,6 +3392,17 @@
                 },
                 "routing": {
                   "availability": "unavailable"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -3601,6 +3745,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -3714,6 +3869,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -4005,6 +4171,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -4111,6 +4288,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -4422,6 +4610,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -4550,6 +4749,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -4921,6 +5131,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -5041,6 +5262,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -5197,6 +5429,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -5358,6 +5601,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -5735,6 +5989,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {
@@ -5886,6 +6151,17 @@
                 },
                 "routing": {
                   "availability": "available"
+                },
+                "parallel": {
+                  "availability": "not_declared",
+                  "configured_lane_limit": null,
+                  "effective_lane_limit": null,
+                  "pressure": null,
+                  "degraded": false,
+                  "degraded_reason": null,
+                  "serial_fallback_reason": null,
+                  "serial_required": null,
+                  "refill_stopped": false
                 }
               },
               "queue": {

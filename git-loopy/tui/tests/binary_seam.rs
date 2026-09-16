@@ -83,16 +83,7 @@ fn the_binary_projects_the_same_view_as_the_embedded_library() {
 
         let (code, stdout, stderr) = run(&arguments, &trace);
         assert_eq!(code, 0, "{id}: exit status (stderr: {stderr})");
-        let mut projected: Value =
-            serde_json::from_str(&stdout).expect("stdout is one JSON document");
-        // The Header `parallel` Declaration (ADR-0044) is Rust-only: this
-        // shared fixture also feeds Python's own conformance suite, which
-        // does not yet project it, so this comparison looks past it and the
-        // field's own correctness is instead pinned by
-        // `rolling_dashboard_conformance.rs`.
-        if let Some(header) = projected["dashboard"]["header"].as_object_mut() {
-            header.remove("parallel");
-        }
+        let projected: Value = serde_json::from_str(&stdout).expect("stdout is one JSON document");
         assert_eq!(projected, snapshot["expected"], "{id}: projected view");
     }
 }
@@ -130,10 +121,7 @@ fn an_unreadable_trace_line_never_derails_the_projection() {
         &trace,
     );
     assert_eq!(code, 0, "unreadable telemetry must never fail the render");
-    let mut projected: Value = serde_json::from_str(&stdout).expect("stdout is one JSON document");
-    if let Some(header) = projected["dashboard"]["header"].as_object_mut() {
-        header.remove("parallel");
-    }
+    let projected: Value = serde_json::from_str(&stdout).expect("stdout is one JSON document");
     assert_eq!(projected, snapshot["expected"]);
 }
 
