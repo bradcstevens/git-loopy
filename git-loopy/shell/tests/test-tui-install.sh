@@ -404,7 +404,31 @@ assert_equal "git-loopy-tui 4.5.6" \
 assert_contains "$install_out" "$clone/.git-loopy/bin/git-loopy-tui" \
   "the installation reports where the helper landed"
 
-# 2. A development tree downloads the latest helper that has actually
+# 2. A failure to record the verified Release leaves the active helper alone.
+# The record's staging path is a directory, so its real filesystem write fails
+# before the installation can change what a Run discovers.
+record_failure_clone="$cli_dir/record-failure"
+make_fake_clone "$record_failure_clone" 4.5.6
+record_failure_helper="$record_failure_clone/.git-loopy/bin/$host_executable"
+mkdir -p "$(dirname -- "$record_failure_helper")"
+printf 'previously installed helper\n' >"$record_failure_helper"
+mkdir "$record_failure_helper.release.$$"
+set +e
+git_loopy_tui_install \
+  "$artifact_metadata" "$record_failure_clone" 4.5.6 \
+  "$GIT_LOOPY_EVENT_SCHEMA_VERSION" "file://$release" \
+  >"$cli_dir/record-failure.out" 2>&1
+record_failure_status=$?
+set -e
+rmdir "$record_failure_helper.release.$$"
+((record_failure_status != 0)) ||
+  fail "an installation with no resolved-Release record succeeded"
+assert_contains "$(<"$cli_dir/record-failure.out")" "cannot record the resolved helper Release" \
+  "a failed resolved-Release record names the failure"
+assert_equal "previously installed helper" "$(<"$record_failure_helper")" \
+  "a failed resolved-Release record leaves the installed helper untouched"
+
+# 3. A development tree downloads the latest helper that has actually
 # published, then verifies that helper against its resolved rather than
 # declared version.
 fallback_clone="$cli_dir/fallback"
@@ -438,7 +462,7 @@ assert_equal "4.5.6" \
 assert_contains "$fallback_out" "Installed git-loopy-tui 4.5.6" \
   "the fallback install reports the helper Release it resolved"
 
-# 3. The opt-out keeps the Phase 1 launcher-only behaviour.
+# 4. The opt-out keeps the Phase 1 launcher-only behaviour.
 opt_out_clone="$cli_dir/opt-out"
 make_fake_clone "$opt_out_clone" 4.5.6
 "$BASH" "$opt_out_clone/git-loopy/shell/install.sh" \
@@ -448,7 +472,7 @@ make_fake_clone "$opt_out_clone" 4.5.6
 [[ ! -e "$opt_out_clone/.git-loopy/bin/git-loopy-tui" ]] ||
   fail "--no-tui staged a helper anyway"
 
-# 4. An air-gapped host installs from local files and never reaches for a URL.
+# 5. An air-gapped host installs from local files and never reaches for a URL.
 airgap_clone="$cli_dir/airgap"
 make_fake_clone "$airgap_clone" 4.5.6
 "$BASH" "$airgap_clone/git-loopy/shell/install.sh" \
@@ -461,14 +485,14 @@ assert_equal "git-loopy-tui 4.5.6" \
   "$("$airgap_clone/.git-loopy/bin/git-loopy-tui" --version)" \
   "a local artifact installs when its published checksum matches"
 
-# 5. A local artifact without its matching checksum manifest is refused.
+# 6. A local artifact without its matching checksum manifest is refused.
 if "$BASH" "$airgap_clone/git-loopy/shell/install.sh" \
   --bin-dir "$cli_dir/airgap-bin" \
   --tui-archive "$release/$host_archive" >/dev/null 2>&1; then
   fail "a local artifact was accepted with no checksum manifest"
 fi
 
-# 6. Checksum drift is refused, and the installation that already succeeded is
+# 7. Checksum drift is refused, and the installation that already succeeded is
 #    left exactly as it was.
 tampered="$cli_dir/tampered"
 publish_fake_release "$tampered" 4.5.6
@@ -492,7 +516,7 @@ assert_equal "git-loopy-tui 4.5.6" \
 [[ -z "$(find "$clone/.git-loopy/bin" -maxdepth 1 -name '.git-loopy-tui-staging.*' -print -quit)" ]] ||
   fail "a failed installation left staging debris beside the helper"
 
-# 7. A helper from another Release is refused before it is activated.
+# 8. A helper from another Release is refused before it is activated.
 foreign="$cli_dir/foreign"
 publish_fake_release "$foreign" 9.9.9
 set +e
@@ -508,7 +532,7 @@ assert_equal "git-loopy-tui 4.5.6" \
   "$("$clone/.git-loopy/bin/git-loopy-tui" --version)" \
   "a refused Release leaves the installed helper untouched"
 
-# 8. A helper that cannot decode this Event schema is refused too.
+# 9. A helper that cannot decode this Event schema is refused too.
 incapable="$cli_dir/incapable"
 publish_fake_release "$incapable" 4.5.6 0
 set +e
@@ -522,7 +546,7 @@ set -e
 assert_contains "$incapable_out" "Event schema" \
   "an incapable helper is refused by capability"
 
-# 9. A download that cannot be fetched fails loudly and changes nothing.
+# 10. A download that cannot be fetched fails loudly and changes nothing.
 set +e
 missing_out="$(
   "$BASH" "$clone/git-loopy/shell/install.sh" \
@@ -537,7 +561,7 @@ assert_equal "git-loopy-tui 4.5.6" \
   "$("$clone/.git-loopy/bin/git-loopy-tui" --version)" \
   "an unreachable Release leaves the installed helper untouched"
 
-# 10. PATH guidance is printed exactly when the shim is not discoverable.
+# 11. PATH guidance is printed exactly when the shim is not discoverable.
 guidance_clone="$cli_dir/guidance"
 make_fake_clone "$guidance_clone" 4.5.6
 guidance_out="$(

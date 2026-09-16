@@ -724,9 +724,9 @@ function New-GitLoopyTuiWorkspace {
     return $Workspace
 }
 
-# The one operation that changes what a Run will discover. Everything before it is
-# reversible by deleting a scratch directory; this is not, which is why it happens
-# last and happens once.
+# The one operation that installs a newly verified helper into the slot a Run
+# discovers. It follows the resolved-Release record, so a failed record write
+# cannot replace an active helper.
 function Move-GitLoopyTuiHelper {
     [CmdletBinding()]
     param(
@@ -1024,9 +1024,9 @@ function Install-GitLoopyTuiHelper {
             -ExecutableName $Names.Executable
         Test-GitLoopyTuiStagedHelper -Helper $Staged -ReleaseVersion $ResolvedReleaseVersion `
             -SchemaVersion $SchemaVersion -CommandName $Command
-        Move-GitLoopyTuiHelper -Verified $Staged -Destination $Destination
         Set-GitLoopyTuiResolvedRelease -Helper $Destination `
             -ResolvedReleaseVersion $ResolvedReleaseVersion
+        Move-GitLoopyTuiHelper -Verified $Staged -Destination $Destination
     }
     finally {
         # The workspace is a sibling of the destination, so it would otherwise be

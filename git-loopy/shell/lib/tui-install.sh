@@ -697,10 +697,11 @@ git_loopy_tui_download() {
 # pick the artifact this host publishes, obtain it and its published checksum,
 # resolve the newest published helper no newer than this clone, prove the
 # checksum over both filename and digest, unpack it, prove it reports that
-# resolved Release and decodes this Orchestrator's Event schema — and only then
-# rename it into the slot a Run discovers. Everything before the rename happens
-# inside a scratch directory that is removed either way, so a prior verified
-# helper survives every failure above untouched.
+# resolved Release and decodes this Orchestrator's Event schema, record that
+# resolved Release, and only then rename it into the slot a Run discovers.
+# Everything before the rename happens inside a scratch directory that is
+# removed either way, so a prior verified helper survives every failure above
+# untouched.
 #
 # `archive_override` / `checksum_override` are the air-gapped path: a host with
 # no network hands over files it already has, and they face exactly the same
@@ -790,9 +791,9 @@ git_loopy_tui_install() {
   )" || return 1
   git_loopy_tui_verify_helper "$staged" "$resolved_release_version" "$schema_version" ||
     return 1
-  git_loopy_tui_activate "$staged" "$destination" || return 1
   git_loopy_tui_record_resolved_release "$destination" "$resolved_release_version" ||
     return 1
+  git_loopy_tui_activate "$staged" "$destination" || return 1
 
   printf '%s\t%s\n' "$destination" "$resolved_release_version"
 }

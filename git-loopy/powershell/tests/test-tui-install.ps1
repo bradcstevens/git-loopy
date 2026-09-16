@@ -810,7 +810,31 @@ if ($CanRunFabricatedHelper) {
         "the staged helper records the Release its installer verified"
     Assert-Contains $Installed.Output $Helper "the installation reports where the helper landed"
 
-    # 7. An air-gapped host installs from local files and never reaches for a URL.
+    # 7. A failure to persist the resolved Release leaves the active helper alone.
+    # The record's staging path is a directory, so its real filesystem write
+    # fails before the installation can change what a Run discovers.
+    $RecordFailureClone = Join-Path $CliDir "record-failure"
+    [void](New-FakeClone -Root $RecordFailureClone -Version 4.5.6)
+    $RecordFailureHelper = Join-Path (
+        Join-Path $RecordFailureClone ".git-loopy/bin"
+    ) $HostNames.Executable
+    [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $RecordFailureHelper))
+    [IO.File]::WriteAllText($RecordFailureHelper, "previously installed helper")
+    [void](New-Item -ItemType Directory -Path "$RecordFailureHelper.release.$PID")
+    $RecordFailure = Get-RefusalMessage {
+        Install-GitLoopyTuiHelper -Metadata $ArtifactMetadata `
+            -RepositoryRoot $RecordFailureClone `
+            -ReleaseVersion 4.5.6 `
+            -SchemaVersion $SchemaVersion `
+            -Archive (Join-Path $ReleaseDir $HostNames.Archive) `
+            -Checksum (Join-Path $ReleaseDir $HostNames.Checksum)
+    }
+    Assert-Contains $RecordFailure "cannot record the resolved helper Release" `
+        "a failed resolved-Release record names the failure"
+    Assert-Equal "previously installed helper" ([IO.File]::ReadAllText($RecordFailureHelper)) `
+        "a failed resolved-Release record leaves the installed helper untouched"
+
+    # 8. An air-gapped host installs from local files and never reaches for a URL.
     $Airgap = Invoke-Installer -Installer $AirgapInstaller -Arguments @(
         "-BinDir", (Join-Path $CliDir "airgap-bin"),
         "-TuiArchive", (Join-Path $ReleaseDir $HostNames.Archive),
@@ -822,7 +846,7 @@ if ($CanRunFabricatedHelper) {
     Assert-Equal "git-loopy-tui 4.5.6" ((& $AirgapHelper --version | Out-String).Trim()) `
         "a local artifact installs when its published checksum matches"
 
-    # 8. A helper from another Release is refused before it is activated.
+    # 9. A helper from another Release is refused before it is activated.
     $Foreign = Join-Path $CliDir "foreign"
     [void](Publish-FakeRelease -Into $Foreign -ReportedVersion 9.9.9)
     $ForeignResult = Invoke-Installer -Installer $Installer -Arguments @(
@@ -833,7 +857,7 @@ if ($CanRunFabricatedHelper) {
     Assert-Equal "git-loopy-tui 4.5.6" ((& $Helper --version | Out-String).Trim()) `
         "a refused Release leaves the installed helper untouched"
 
-    # 9. A helper that cannot decode this Event schema is refused too.
+    # 10. A helper that cannot decode this Event schema is refused too.
     $Incapable = Join-Path $CliDir "incapable"
     [void](Publish-FakeRelease -Into $Incapable -ReportedVersion 4.5.6 -Maximum 0)
     $IncapableResult = Invoke-Installer -Installer $Installer -Arguments @(
