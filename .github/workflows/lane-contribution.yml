@@ -49,6 +49,12 @@ on:
 
 run-name: ${{ inputs.dispatch_token }}
 
+# This host-level key survives a dead orchestrator: dispatching the next Run's
+# contribution for an issue cancels any orphaned contribution for that issue.
+concurrency:
+  group: git-loopy-issue-${{ fromJSON(inputs.request).issue_ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
   # A host never writes to the issue tracker, so it asks for no `issues` or

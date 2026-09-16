@@ -88,6 +88,7 @@ __all__ = [
     "ContributionSuccess",
     "ContributionFailure",
     "ContributionOutcome",
+    "HostPreflight",
     "ExecutionHost",
     "LOCAL_EXECUTION_HOST_ISOLATION_GRADE",
     "LOCAL_EXECUTION_HOST_PLACEMENT",
@@ -278,6 +279,19 @@ class ContributionFailure:
 ContributionOutcome = Union[ContributionSuccess, ContributionFailure]
 
 
+@dataclass(frozen=True)
+class HostPreflight:
+    """A Run-scoped host readiness result before any contribution dispatches.
+
+    A failed preflight reports an environment failure. It deliberately carries
+    no Agent ending, so it cannot enter an issue's Attempt, Strike, or Demotion
+    ledger.
+    """
+
+    passed: bool
+    detail: str = ""
+
+
 @runtime_checkable
 class ExecutionHost(Protocol):
     """*Where one Lane contribution executes* — the seam's Protocol.
@@ -291,7 +305,9 @@ class ExecutionHost(Protocol):
     :class:`LocalExecutionHost` is the production adapter; a test substitutes
     an in-memory fake satisfying this Protocol structurally — no subclassing
     required, but ``isinstance(host, ExecutionHost)`` works because the
-    decorator marks it ``@runtime_checkable``.
+    decorator marks it ``@runtime_checkable``. Every host must also ensure
+    that at most one live contribution exists for an issue; the Run relies on
+    that guarantee when a restarted Run supersedes prior work.
     """
 
     @property
@@ -321,6 +337,12 @@ class ExecutionHost(Protocol):
         branch is a value, not an exception, so callers (and tests) can
         branch on the outcome without a ``try``/``except``.
         """
+        ...
+
+    async def run_preflight(
+        self, *, run_id: str, base_revision: str
+    ) -> HostPreflight:
+        """Check host readiness once before this Run dispatches any Lane."""
         ...
 
 
@@ -417,6 +439,13 @@ class LocalExecutionHost:
     @property
     def capacity(self) -> int:
         return self._capacity
+
+    async def run_preflight(
+        self, *, run_id: str, base_revision: str
+    ) -> HostPreflight:
+        """Local Lanes need no remote-host preflight."""
+        del run_id, base_revision
+        return HostPreflight(passed=True)
 
     async def run_contribution(
         self, request: ContributionRequest

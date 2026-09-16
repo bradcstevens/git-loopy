@@ -124,6 +124,7 @@ from git_loopy.execution_host import (
     ContributionOutcome,
     ContributionRequest,
     ContributionSuccess,
+    HostPreflight,
     IsolationGrade,
     Placement,
 )
@@ -3733,6 +3734,81 @@ class _TerminalFailureExecutionHost:
         )
 
 
+@dataclass
+class _RepeatedDispatchFailureHost(_TerminalFailureExecutionHost):
+    """A remote host that refuses enough dispatches to strain its capacity."""
+
+    failures_remaining: int = 14
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            return ContributionFailure(
+                reason="fake_dispatch_refused",
+                classification="never_started",
+                ending=None,
+            )
+        self.calls.append(request)
+        return await super().run_contribution(request)
+
+
+def test_repeated_never_started_dispatches_narrow_the_existing_host_pressure(
+    tmp_path, monkeypatch
+) -> None:
+    """Dispatch refusal reuses host/setup pressure; it is not a Strike signal."""
+    _fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _RepeatedDispatchFailureHost()
+    built: list[loop_module._ParallelLoop] = []
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        instance = real_parallel_loop(*args, **{**kwargs, "execution_host": host})
+        built.append(instance)
+        return instance
+
+    _wire_production_pressure(monkeypatch)
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    assert built[0]._scheduler is not None
+    assert built[0]._scheduler.effective_limit < host.capacity
+    assert built[0]._serial._strike_machine.strikes == 0
+    assert any(
+        event["pressure"] == "host"
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.concurrency.changed"
+    )
+
+
+def test_sustained_dispatch_refusal_ends_the_run_as_an_environment_failure(
+    tmp_path, monkeypatch
+) -> None:
+    """A host that cannot start work must not keep a zero-Lane Run alive."""
+    _fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _RepeatedDispatchFailureHost(failures_remaining=15)
+    built: list[loop_module._ParallelLoop] = []
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        instance = real_parallel_loop(*args, **{**kwargs, "execution_host": host})
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    assert asyncio.run(loop_module.run(cfg)) == loop_module.exit_code_for(
+        "preflight_failed"
+    )
+    assert built[0]._serial._strike_machine.strikes == 0
+
+
 def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     tmp_path, monkeypatch
 ) -> None:
@@ -4104,6 +4180,13 @@ class _RemoteBranchExecutionHost:
     placement: Placement = "github-actions"
     isolation_grade: IsolationGrade = "machine boundary"
     capacity: int = 4
+    preflight_calls: list[tuple[str, str]] = field(default_factory=list)
+
+    async def run_preflight(
+        self, *, run_id: str, base_revision: str
+    ) -> HostPreflight:
+        self.preflight_calls.append((run_id, base_revision))
+        return HostPreflight(passed=True)
 
     async def run_contribution(
         self, request: ContributionRequest
@@ -6475,6 +6558,7 @@ def test_the_run_builds_the_github_actions_host_the_operator_named(
     """A declared placement is *constructed*, never merely tolerated at preflight."""
     built: list[tuple[str, int]] = []
     timeouts: list[float] = []
+    hosts: list[_RemoteBranchExecutionHost] = []
 
     class _RecordingHost(_RemoteBranchExecutionHost):
         pass
@@ -6487,12 +6571,14 @@ def test_the_run_builds_the_github_actions_host_the_operator_named(
         # SDK's one-minute default standing over an hours-long contribution.
         timeouts.append(send_timeout_seconds)
         host = _RecordingHost(fake_git)
+        hosts.append(host)
         built.append((host.placement, host.capacity))
         return host
 
     fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
         tmp_path, monkeypatch
     )
+    initial_base = fake_git.head_sha()
     cfg = dataclass_replace(cfg, execution_host="github-actions")
     monkeypatch.setattr(loop_module, "_make_execution_host", _fake_factory)
 
@@ -6500,6 +6586,7 @@ def test_the_run_builds_the_github_actions_host_the_operator_named(
 
     assert built == [("github-actions", 4)]
     assert timeouts == [cfg.send_timeout_seconds]
+    assert hosts[0].preflight_calls == [(_run_id(tmp_path), initial_base)]
     run_start = next(
         event
         for event in _logged_events(tmp_path)
@@ -6516,6 +6603,43 @@ def test_the_run_builds_the_github_actions_host_the_operator_named(
         for event in _logged_events(tmp_path)
         if event["type"] == "wrapper.contribution.start"
     )
+
+
+def test_a_failed_remote_green_base_preflight_starts_no_lane_or_strike(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """A broken remote environment ends the Run before issue accounting begins."""
+    fake_git, fake_gh, fake_client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    initial_base = fake_git.head_sha()
+
+    @dataclass
+    class _FailingPreflightHost(_RemoteBranchExecutionHost):
+        async def run_preflight(
+            self, *, run_id: str, base_revision: str
+        ) -> HostPreflight:
+            self.preflight_calls.append((run_id, base_revision))
+            return HostPreflight(passed=False, detail="target toolchain is unavailable")
+
+        async def run_contribution(
+            self, request: ContributionRequest
+        ) -> ContributionOutcome:
+            raise AssertionError(f"preflight should have blocked {request.issue_ref}")
+
+    host = _FailingPreflightHost(fake_git)
+    cfg = dataclass_replace(cfg, execution_host="github-actions")
+    monkeypatch.setattr(
+        loop_module, "_make_execution_host", lambda *_args, **_kwargs: host
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == loop_module.exit_code_for(
+        "preflight_failed"
+    )
+
+    assert len(host.preflight_calls) == 1
+    assert host.preflight_calls[0][1] == initial_base
+    assert fake_client.created == []
+    assert fake_gh.issue_close_calls == []
+    assert "green-base preflight failed" in capsys.readouterr().err
 
 
 def test_an_execution_host_that_cannot_be_built_refuses_the_run_at_preflight(

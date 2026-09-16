@@ -417,6 +417,7 @@ def _make_pressure_monitor(
     diag: logging.Logger,
     credit_spent: Callable[[], float | None],
     rate_limits: Callable[[], int | None],
+    host_setup_pressure: Callable[[], float | None] = lambda: None,
 ) -> rolling_pressure.PressureMonitor:
     """Construct the bounded adaptive Lane-concurrency seam (#219 §6, #309).
 
@@ -441,6 +442,7 @@ def _make_pressure_monitor(
             budgets=budgets,
             credit_spent=credit_spent,
             rate_limits=rate_limits,
+            host_setup_pressure=host_setup_pressure,
         ),
         clock=time.monotonic,
         diag=diag,
@@ -2577,11 +2579,14 @@ class _ParallelLoop:
         # is handed to the scheduler, which supplies the pipeline half of every
         # observation from its own state.
         self._cost_meter = rolling_pressure.RunCostMeter(denomination=denomination)
+        self._host_setup_pressure = rolling_pressure.HostSetupPressure()
+        self._dispatch_failures_exhausted = False
         self._pressure = _make_pressure_monitor(
             lane_cap=self._host_capacity,
             diag=diag,
             credit_spent=self._cost_meter,
             rate_limits=rolling_pressure.rate_limit_reader(source),
+            host_setup_pressure=self._host_setup_pressure,
         )
         if isinstance(source, RollingIssueSource):
             self._pool = RollingPool(
@@ -3007,6 +3012,15 @@ class _ParallelLoop:
             while True:
                 if self._crash is not None:
                     raise self._crash
+                if self._dispatch_failures_exhausted:
+                    if self._pending:
+                        await self._await_capacity()
+                        continue
+                    return (
+                        "preflight_failed",
+                        exit_code_for("preflight_failed"),
+                        scheduler._units_spent,
+                    )
                 if self._serial._stop_drain_requested:
                     return (
                         RUN_OUTCOME_OPERATOR_STOP,
@@ -3660,6 +3674,7 @@ class _ParallelLoop:
             )
             return
 
+        self._host_setup_pressure.record_successful_dispatch()
         if outcome.remote is not None:
             assert outcome.ref is not None
             # Ingested *before* materialization is attempted, because the
@@ -3838,7 +3853,16 @@ class _ParallelLoop:
         # of the work that preceded it is the one thing an operator cannot
         # debug afterwards, because the machine that held the logs is gone.
         self._ingest_contribution_events(contribution, outcome.events)
+        if outcome.classification == "never_started":
+            self._host_setup_pressure.record_dispatch_failure()
+            if self._host_setup_pressure.exhausted:
+                self._dispatch_failures_exhausted = True
+                self._diag.error(
+                    "execution host repeatedly refused Lane dispatch; "
+                    "ending the Run as an environment failure"
+                )
         if outcome.classification == "breach":
+            self._host_setup_pressure.record_successful_dispatch()
             ending = outcome.ending
             assert ending is not None
             self._serial._observe_session_ending(lane_work.item.ref, ending)
@@ -5209,6 +5233,37 @@ async def run(
             diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
         control.close()
         return exit_code_for("preflight_failed")
+
+    if selected_execution_host is not None:
+        try:
+            base_revision = git.head_sha()
+        except git_module.GitError as exc:
+            print(
+                "git-loopy: remote host preflight could not resolve the clean "
+                f"base revision: {exc}",
+                file=sys.stderr,
+            )
+            try:
+                writers.run_summary.flush()
+            except Exception as flush_exc:
+                diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+            control.close()
+            return exit_code_for("preflight_failed")
+        host_preflight = await selected_execution_host.run_preflight(
+            run_id=writers.run_id, base_revision=base_revision
+        )
+        if not host_preflight.passed:
+            print(
+                "git-loopy: remote host green-base preflight failed: "
+                f"{host_preflight.detail}",
+                file=sys.stderr,
+            )
+            try:
+                writers.run_summary.flush()
+            except Exception as flush_exc:
+                diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+            control.close()
+            return exit_code_for("preflight_failed")
 
     try:
         prompt_text = _read_prompt(repo_root, os.environ)

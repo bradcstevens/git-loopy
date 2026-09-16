@@ -49,6 +49,7 @@ from typing import Protocol, runtime_checkable
 from git_loopy.denomination import CostDenomination
 from git_loopy.gh import RateLimitReporting
 from git_loopy.rolling_concurrency import (
+    HOST_PRESSURE_RATIO,
     OBSERVATION_WINDOW,
     ConcurrencyController,
     LimitChange,
@@ -60,6 +61,7 @@ __all__ = [
     "ENV_HOST_LOAD_BUDGET",
     "OBSERVATION_INTERVAL_SECONDS",
     "PressureBudgets",
+    "HostSetupPressure",
     "PressureMonitor",
     "PressureObserver",
     "PressureReading",
@@ -109,6 +111,36 @@ class PressureTelemetry(Protocol):
     def read(self) -> PressureReading:
         """Read the current Run-to-date counters and host ratio."""
         ...
+
+
+@dataclass
+class HostSetupPressure:
+    """Expose repeated never-started dispatches through host/setup pressure.
+
+    The counter is private to producing a normalized host-pressure reading; it
+    never reaches the Attempt, Strike, or Demotion ledgers. Two refusals are
+    enough to distinguish a repeated host/setup condition from one transient
+    dispatch error.
+    """
+
+    dispatch_failures: int = 0
+
+    def record_dispatch_failure(self) -> None:
+        self.dispatch_failures += 1
+
+    def record_successful_dispatch(self) -> None:
+        """A contribution that started proves the dispatch condition recovered."""
+        self.dispatch_failures = 0
+
+    @property
+    def exhausted(self) -> bool:
+        """Whether the repeated failure condition can no longer make progress."""
+        return self.dispatch_failures >= 15
+
+    def __call__(self) -> float | None:
+        if self.dispatch_failures < 2:
+            return None
+        return HOST_PRESSURE_RATIO + 0.01
 
 
 @runtime_checkable
@@ -304,6 +336,9 @@ class RunPressureTelemetry:
             platform has none.
         cpu_count: CPUs the run queue is spread across. ``None`` leaves host
             pressure unknown rather than assuming one.
+        host_setup_pressure: A normalized reading from host/setup failures,
+            when one is observable. It joins the existing host-pressure input
+            instead of becoming a second scheduling signal.
     """
 
     budgets: PressureBudgets
@@ -313,6 +348,7 @@ class RunPressureTelemetry:
         lambda: _load_average()
     )
     cpu_count: int | None = field(default_factory=os.cpu_count)
+    host_setup_pressure: Callable[[], float | None] = lambda: None
 
     def read(self) -> PressureReading:
         """Read every available signal, reporting the rest unknown."""
@@ -335,11 +371,15 @@ class RunPressureTelemetry:
         slice measures, and a maximum over one configured budget is that same
         rule with the others left unconfigured.
         """
+        readings: list[float] = []
         budget = self.budgets.host_load_per_cpu
         load = self.load_average()
-        if budget is None or load is None or not self.cpu_count:
-            return None
-        return round(load / self.cpu_count / budget, 3)
+        if budget is not None and load is not None and self.cpu_count:
+            readings.append(round(load / self.cpu_count / budget, 3))
+        host_setup = self.host_setup_pressure()
+        if host_setup is not None:
+            readings.append(host_setup)
+        return max(readings, default=None)
 
 
 def _load_average() -> float | None:

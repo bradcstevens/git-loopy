@@ -31,6 +31,7 @@ from git_loopy.execution_host import (
     ContributionRequest,
     ContributionSuccess,
     ExecutionHost,
+    HostPreflight,
 )
 from git_loopy.github_actions_host import (
     ACTIONS_CAPACITY_ENV,
@@ -44,9 +45,11 @@ from git_loopy.github_actions_host import (
     ActionsStep,
     DispatchHandle,
     GitHubActionsExecutionHost,
+    RUN_PREFLIGHT_WORKFLOW,
     SubprocessActionsClient,
     dispatch_token,
     github_actions_capacity,
+    preflight_token,
     read_completion_artifact,
 )
 from git_loopy.session_outcome import SessionTermination
@@ -292,6 +295,30 @@ def test_one_reservation_becomes_exactly_one_dispatch_for_that_issue() -> None:
     assert payload["model"] == "gpt-5.6-terra"
     assert payload["reasoning_effort"] == "high"
     assert inputs["dispatch_token"] == dispatch_token(make_request())
+
+
+def test_the_actions_host_preflights_the_clean_base_once_per_run() -> None:
+    """The Run owns this once-only gate; no Lane contribution has begun yet."""
+    client = _FakeActionsClient(
+        sightings=[_completed_run()],
+        polls=[_completed_run()],
+    )
+    host = _host(client)
+
+    outcome = asyncio.run(host.run_preflight(run_id=RUN_ID, base_revision=BASE))
+
+    assert outcome == HostPreflight(passed=True)
+    assert client.dispatched == [
+        (
+            RUN_PREFLIGHT_WORKFLOW,
+            "main",
+            {
+                "base_revision": BASE,
+                "gate_timeout_seconds": "3600",
+                "preflight_token": preflight_token(RUN_ID),
+            },
+        )
+    ]
 
 
 def test_the_orchestrator_holds_the_handle_from_dispatch() -> None:
@@ -1349,7 +1376,7 @@ def test_a_host_without_a_send_timeout_is_refused_at_construction() -> None:
         )
 
 
-def test_a_repository_without_the_contribution_workflow_is_refused_at_preflight(
+def test_a_repository_without_a_required_workflow_is_refused_at_preflight(
 ) -> None:
     """The host dispatches into the *target* repository, which must carry it.
 
@@ -1362,22 +1389,24 @@ def test_a_repository_without_the_contribution_workflow_is_refused_at_preflight(
     """
 
     class _Bare:
-        def workflow_installed(self, workflow: str) -> bool:
-            assert workflow == LANE_CONTRIBUTION_WORKFLOW
+        def workflow_installed(self, _workflow: str) -> bool:
             return False
 
-    with pytest.raises(ActionsError, match="no lane-contribution.yml workflow"):
+    with pytest.raises(ActionsError, match="no run-preflight.yml workflow"):
         host_module.assert_workflow_installed(_Bare())
 
 
 def test_an_installed_workflow_passes_preflight_silently() -> None:
-    """The check is a refusal, not a ceremony: an installed workflow says nothing."""
+    """Both required workflows must be present before the Run can dispatch."""
+    checked: list[str] = []
 
     class _Installed:
-        def workflow_installed(self, _workflow: str) -> bool:
+        def workflow_installed(self, workflow: str) -> bool:
+            checked.append(workflow)
             return True
 
     host_module.assert_workflow_installed(_Installed())
+    assert checked == [RUN_PREFLIGHT_WORKFLOW, LANE_CONTRIBUTION_WORKFLOW]
 
 
 def test_a_missing_workflow_is_an_answer_but_a_broken_api_is_still_an_error() -> None:

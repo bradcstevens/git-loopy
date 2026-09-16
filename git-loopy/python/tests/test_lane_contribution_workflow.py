@@ -48,6 +48,7 @@ from git_loopy import github_actions_worker as worker_module
 REPOSITORY_ROOT = Path(__file__).parents[3]
 WORKFLOW_DIR = REPOSITORY_ROOT / ".github/workflows"
 WORKFLOW_PATH = WORKFLOW_DIR / host_module.LANE_CONTRIBUTION_WORKFLOW
+PREFLIGHT_WORKFLOW_PATH = WORKFLOW_DIR / host_module.RUN_PREFLIGHT_WORKFLOW
 SETUP_ACTION_DIR = REPOSITORY_ROOT / ".github/actions/setup-lane-contribution"
 SETUP_ACTION_PATH = SETUP_ACTION_DIR / "action.yml"
 
@@ -106,6 +107,35 @@ def _step_named(job: dict[str, Any], name: str) -> dict[str, Any]:
 # --- One workflow run per issue, dispatched on demand -------------------
 
 
+def test_remote_preflight_checks_the_clean_base_before_any_lane_dispatches() -> None:
+    """The preflight has its own Run-scoped job, never a per-Lane setup step."""
+    workflow = _load(PREFLIGHT_WORKFLOW_PATH)
+    triggers = workflow.get("on", workflow.get(True))
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    job = next(iter(workflow["jobs"].values()))
+    steps = _steps(job)
+
+    assert set(triggers) == {"workflow_dispatch"}
+    assert set(inputs) == {
+        "base_revision",
+        "gate_timeout_seconds",
+        "preflight_token",
+    }
+    assert workflow["run-name"] == "${{ inputs.preflight_token }}"
+    assert _step_named(job, "Check out the clean base")["with"]["ref"] == (
+        "${{ inputs.base_revision }}"
+    )
+    assert any(
+        step.get("uses") == "./.github/actions/setup-lane-contribution" for step in steps
+    )
+    assert job["env"]["GIT_LOOPY_GATE_TIMEOUT_SECONDS"] == (
+        "${{ inputs.gate_timeout_seconds }}"
+    )
+    assert _step_named(job, "Run declared feedback loops")["run"] == (
+        "uv run --project git-loopy/python --all-extras python -m git_loopy.gate"
+    )
+
+
 def test_the_workflow_is_dispatched_on_demand_and_by_nothing_else(
     workflow: dict[Any, Any],
 ) -> None:
@@ -154,6 +184,16 @@ def test_the_workflow_holds_exactly_one_job_for_one_contribution(
     six-hour caps that the orchestrator polls as one liveness signal.
     """
     assert len(workflow["jobs"]) == 1
+
+
+def test_each_issue_has_one_live_contribution_and_a_restart_supersedes_it(
+    workflow: dict[Any, Any],
+) -> None:
+    """The host, not the scheduler, owns cross-Run issue exclusion."""
+    assert workflow["concurrency"] == {
+        "group": "git-loopy-issue-${{ fromJSON(inputs.request).issue_ref }}",
+        "cancel-in-progress": True,
+    }
 
 
 def test_no_matrix_appears_anywhere_in_the_workflow() -> None:
