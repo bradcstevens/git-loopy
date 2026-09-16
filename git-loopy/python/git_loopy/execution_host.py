@@ -240,12 +240,16 @@ class ContributionFailure:
             started the contribution, or stalled without proving an ending.
         ending: The Agent session ending for a ``"breach"``. It is absent for
             ``"never_started"`` and ``"stall"``.
+        events: Events the host recovered before the terminal failure. Local
+            failures have no separate stream; a remote host may recover its
+            completed artifact despite a later workflow-step failure.
     """
 
     reason: str
     classification: ContributionFailureClass
     ending: session_outcome_module.SessionOutcomeRecord | None
     detail: str = ""
+    events: tuple[Mapping[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         if self.classification not in _CONTRIBUTION_FAILURE_CLASSES:

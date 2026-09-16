@@ -347,7 +347,7 @@ class GitHubActionsExecutionHost:
         if run.conclusion != "success":
             try:
                 artifact = self._client.get_artifact(run.database_id, artifact_name)
-                ending = _read_failure_ending(artifact)
+                ending, events = _read_failure_artifact(artifact)
             except (
                 ActionsError,
                 OSError,
@@ -366,6 +366,7 @@ class GitHubActionsExecutionHost:
                 classification="breach",
                 ending=ending,
                 detail=_liveness_detail(run),
+                events=events,
             )
         try:
             artifact = self._client.get_artifact(run.database_id, artifact_name)
@@ -469,6 +470,13 @@ def _read_artifact(
     if not isinstance(completion, dict):
         raise ValueError("completion artifact must be a JSON object")
     remote, ref, sha, ending = _parse_completion(completion)
+    return (
+        {"remote": remote, "ref": ref, "sha": sha, "ending": ending},
+        _parse_events(events_raw),
+    )
+
+
+def _parse_events(events_raw: bytes) -> tuple[Mapping[str, Any], ...]:
     events: list[Mapping[str, Any]] = []
     for line in events_raw.decode("utf-8").splitlines():
         if not line.strip():
@@ -478,10 +486,7 @@ def _read_artifact(
             raise ValueError("event artifact lines must be JSON objects")
         event.pop("observed_monotonic", None)
         events.append(event)
-    return (
-        {"remote": remote, "ref": ref, "sha": sha, "ending": ending},
-        tuple(events),
-    )
+    return tuple(events)
 
 
 def _parse_completion(
@@ -495,20 +500,23 @@ def _parse_completion(
     return remote, ref, sha, _parse_ending(completion.get("ending"))
 
 
-def _read_failure_ending(artifact: ActionsArtifact) -> SessionOutcomeRecord:
+def _read_failure_artifact(
+    artifact: ActionsArtifact,
+) -> tuple[SessionOutcomeRecord, tuple[Mapping[str, Any], ...]]:
     with zipfile.ZipFile(io.BytesIO(artifact.archive)) as zipped:
         names = {name.rsplit("/", 1)[-1]: name for name in zipped.namelist()}
         try:
             ending_raw = zipped.read(names["ending.json"])
+            events_raw = zipped.read(names["events.jsonl"])
         except KeyError as exc:
             raise ValueError(
-                f"artifact {artifact.name!r} must contain ending.json"
+                f"artifact {artifact.name!r} must contain ending.json and events.jsonl"
             ) from exc
     try:
         ending = json.loads(ending_raw)
     except json.JSONDecodeError as exc:
         raise ValueError("ending artifact is not JSON") from exc
-    return _parse_ending(ending)
+    return _parse_ending(ending), _parse_events(events_raw)
 
 
 def _parse_ending(ending: Any) -> SessionOutcomeRecord:

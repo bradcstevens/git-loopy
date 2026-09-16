@@ -4006,7 +4006,16 @@ class _AbsentRemoteExecutionHost:
             remote="https://example.test/owner/repo.git",
             ref=f"refs/heads/host/contribution/issue-{request.issue_ref}",
             sha="a" * 40,
-            events=(),
+            events=(
+                {
+                    "ts": "2026-09-09T20:00:00.000Z",
+                    "run_id": request.run_id,
+                    "iter": None,
+                    "type": "assistant.message",
+                    "content": "remote materialization failed",
+                    "observed_monotonic": 123.0,
+                },
+            ),
             placement=self.placement,
             isolation_grade=self.isolation_grade,
             ending=SessionOutcomeRecord(
@@ -4042,6 +4051,13 @@ def test_parallel_loop_treats_a_proven_missing_remote_ref_as_a_breach(
     assert fake_client.created == []
     assert len(built) == 1
     assert built[0]._serial._strike_machine.strikes == 2
+    remote_events = [
+        event
+        for event in _logged_events(tmp_path)
+        if event.get("content") == "remote materialization failed"
+    ]
+    assert len(remote_events) == 2
+    assert all("observed_monotonic" not in event for event in remote_events)
 
 
 @dataclass

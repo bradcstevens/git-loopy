@@ -3514,6 +3514,7 @@ class _ParallelLoop:
             return
         outcome = await host.run_contribution(request)
         if isinstance(outcome, execution_host_module.ContributionFailure):
+            self._ingest_remote_events(contribution, outcome.events)
             self._diag.warning(
                 "lane #%s execution host (%s) %s: %s (%s)",
                 ref, host.placement, outcome.classification, outcome.reason, outcome.detail,
@@ -3545,6 +3546,7 @@ class _ParallelLoop:
                         classification="breach",
                         ending=outcome.ending,
                         detail=materialized.detail,
+                        events=outcome.events,
                     )
                 else:
                     failure = execution_host_module.ContributionFailure(
@@ -3552,7 +3554,9 @@ class _ParallelLoop:
                         classification="stall",
                         ending=None,
                         detail=materialized.detail,
+                        events=outcome.events,
                     )
+                self._ingest_remote_events(contribution, failure.events)
                 self._finish_terminal_host_failure(contribution, lane_work, failure)
                 return
             outcome = dataclass_replace(
@@ -3663,7 +3667,7 @@ class _ParallelLoop:
             base_revision=base_revision,
             model=contribution.model,
             reasoning_effort=contribution.reasoning_effort,
-            skill_policy=self._skill_exposure,
+            skill_policy=self._skill_exposure.policy,
             run_id=self._run_id,
         )
 

@@ -208,6 +208,15 @@ def test_actions_host_returns_a_breach_when_a_post_session_step_fails() -> None:
     assert outcome.classification == "breach"
     assert outcome.ending is not None
     assert outcome.ending.progressed is True
+    assert outcome.events == (
+        {
+            "ts": "2026-09-09T20:00:00.000Z",
+            "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "iter": None,
+            "type": "assistant.message",
+            "content": "done",
+        },
+    )
 
 
 def test_subprocess_actions_client_dispatches_through_gh_api(
