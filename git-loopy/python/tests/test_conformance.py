@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 import re
@@ -28,6 +29,8 @@ from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import events as events_module
 from git_loopy import cli as cli_module
 from git_loopy import config as config_module
+from git_loopy import gh as gh_module
+from git_loopy import loop as loop_module
 from git_loopy import version as version_module
 from git_loopy import wrapper as wrapper_module
 from git_loopy.release_version import read_runtime_release_version
@@ -4303,3 +4306,156 @@ def test_readiness_fixture_drives_the_python_readiness_seam(
     assert verdict.admissible is expected["admissible"], case["id"]
     assert verdict.skip_reason == expected["skip_reason"], case["id"]
     assert list(verdict.blockers) == expected.get("blockers", []), case["id"]
+
+
+# ---------------------------------------------------------------------------
+# #482: a scheduling distribution is obliged to emit the Membership read.
+# ---------------------------------------------------------------------------
+
+
+def _distributions_that_schedule_lanes() -> set[str]:
+    """Distributions this Run obliges to emit ``wrapper.pool.refreshed``.
+
+    Derived from ``parallel_capabilities`` -- the manifest every distribution
+    already declares under #311 AC3 -- rather than from a second,
+    hand-maintained list that could silently drift from it. A distribution
+    that cannot fill a second Lane (``parallel_mode: false``) collapses the
+    whole manifest false with it (pinned by
+    ``test_event_fixture_pins_the_parallel_capability_manifest``), so
+    ``parallel_mode`` alone is the obligation.
+    """
+    return {
+        name
+        for name, manifest in _EVENT_SCHEMA["parallel_capabilities"][
+            "orchestrators"
+        ].items()
+        if manifest["parallel_mode"]
+    }
+
+
+def test_membership_read_obligation_selects_at_least_one_distribution() -> None:
+    """#482: the gate cannot pass by sweeping an empty set.
+
+    If no distribution ever declared ``parallel_mode: true``, the obligation
+    below would vacuously hold whether or not the Membership read was ever
+    wired -- exactly the hole #481 fell through, where every encoding
+    assertion passed over an Event nothing produced.
+    """
+    assert _distributions_that_schedule_lanes(), (
+        "no distribution declares parallel_mode: true, so the Membership "
+        "read obligation would sweep nothing"
+    )
+
+
+def test_membership_read_obligation_excludes_non_scheduling_distributions() -> None:
+    """A distribution that does not schedule Lanes is not obliged to read it.
+
+    Both non-Python Orchestrators declare ``parallel_mode: false`` (they take
+    no rolling read at all), so getting this condition wrong in the
+    permissive direction would make the gate below false-positive the moment
+    either grows *any* scheduler-shaped code that happens to mention the
+    literal.
+    """
+    obliged = _distributions_that_schedule_lanes()
+    for name, manifest in _EVENT_SCHEMA["parallel_capabilities"][
+        "orchestrators"
+    ].items():
+        if not manifest["parallel_mode"]:
+            assert name not in obliged, name
+
+
+def test_a_lane_scheduling_distribution_emits_the_membership_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#482: obliges the Membership read to *happen*, not merely encode.
+
+    ``wrapper.pool.refreshed`` was pinned with a payload contract, a
+    source-order case, and a rolling-stream case -- and #481 found it emitted
+    by nothing, because every one of those assertions reads a fixture record
+    rather than this distribution's own runtime. This drives a real Parallel
+    Run end to end (the same harness :mod:`test_loop_parallel` uses) and
+    fails if no ``wrapper.pool.refreshed`` reaches the log, whichever
+    distribution the fixture obliges: today that is Python alone, and this
+    test would have failed against #481's silenced producer or before it
+    existed.
+    """
+    obliged = _distributions_that_schedule_lanes()
+    assert "python" in obliged, (
+        "the reference Runner no longer declares parallel_mode: true, so "
+        "this test's own harness would not exercise the obligation"
+    )
+
+    from tests.fakes import FakeGateRunner, FakeGitHubClient
+    from tests.test_loop_parallel import (
+        _ParallelFakeClient,
+        _logged_events,
+        _make_issue,
+        _usage_event,
+        _wire_repo,
+    )
+    from git_loopy.skill_catalog import build_skill_catalog
+
+    async def _stub_discover_skill_catalog(_client: object, **kwargs: object):
+        return build_skill_catalog(
+            (),
+            repo_root=Path(str(kwargs["repo_root"])),
+            installed_skills_dir=Path(str(kwargs["installed_skills_dir"])),
+        )
+
+    monkeypatch.setattr(
+        loop_module, "_discover_skill_catalog", _stub_discover_skill_catalog
+    )
+    monkeypatch.setattr(
+        loop_module.execution_host_module,
+        "local_execution_host_capacity",
+        lambda: 2,
+    )
+
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(
+        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    events = _logged_events(tmp_path)
+    membership_reads = [
+        event
+        for event in events
+        if event["type"] == events_module.WRAPPER_POOL_REFRESHED
+    ]
+    assert membership_reads, (
+        "python declares parallel_mode: true and scheduled Lanes here, so "
+        "it is obliged to emit wrapper.pool.refreshed -- none was observed"
+    )
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_POOL_REFRESHED
+    ]
+    for key in contract["required_when_present"]:
+        assert key in membership_reads[0], key

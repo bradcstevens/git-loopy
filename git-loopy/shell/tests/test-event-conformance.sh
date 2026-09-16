@@ -118,6 +118,19 @@ if [[ "$(jq -r '.contribution_events' <<<"$GIT_LOOPY_PARALLEL_CAPABILITIES_JSON"
   )
 fi
 
+# #482: `parallel_mode` obliges the Membership read (`wrapper.pool.refreshed`,
+# #481's producer) rather than a hand-maintained list -- a distribution that
+# cannot fill a second Lane takes no rolling read at all, so it must name no
+# producer for the literal either. Getting this wrong in the permissive
+# direction is exactly the hole #481 fell through: every encoding assertion
+# passing over an Event nothing emits.
+if [[ "$(jq -r '.parallel_mode' <<<"$GIT_LOOPY_PARALLEL_CAPABILITIES_JSON")" == "false" ]]; then
+  if grep -rqE 'GIT_LOOPY_EVENT_TYPES\[WRAPPER_POOL_REFRESHED\]' \
+    "$port_dir/lib" "$port_dir/git-loopy.sh"; then
+    fail "parallel_mode is declared false but wrapper.pool.refreshed has a producer"
+  fi
+fi
+
 # A refusal an operator can act on, instead of a Lane cap accepted and ignored.
 # Without this the flag is a silent no-op: the Run is byte-identical to a serial
 # Run, so "Parallel mode is unimplemented here" and "nothing carries

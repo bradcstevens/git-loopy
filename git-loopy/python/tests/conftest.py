@@ -37,6 +37,7 @@ from git_loopy.skill_source import SkillSourceError, SkillSourcePin
 
 _RUN_TEST_MODULES = frozenset(
     {
+        "test_conformance.py",
         "test_iteration_end_to_end.py",
         "test_loop_parallel.py",
         "test_rate_card_run_start.py",

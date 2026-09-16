@@ -181,6 +181,24 @@ if (-not $ActualParallel["contribution_events"]) {
     }
 }
 
+# #482: `parallel_mode` obliges the Membership read (`wrapper.pool.refreshed`,
+# #481's producer) rather than a hand-maintained list -- a distribution that
+# cannot fill a second Lane takes no rolling read at all, so it must name no
+# producer for the literal either. Getting this wrong in the permissive
+# direction is exactly the hole #481 fell through: every encoding assertion
+# passing over an Event nothing emits.
+if (-not $ActualParallel["parallel_mode"]) {
+    $ModuleSource = (
+        Get-ChildItem -LiteralPath $PortDir -Filter "*.psm1" |
+            ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }
+    ) -join "`n"
+    Assert-True (
+        -not (
+            $ModuleSource -match [regex]::Escape('EventTypes["WRAPPER_POOL_REFRESHED"]')
+        )
+    ) "parallel_mode is declared false but wrapper.pool.refreshed has a producer"
+}
+
 # A refusal an operator can act on, instead of a Lane cap accepted and ignored.
 $CapturedError = [IO.StringWriter]::new()
 $OriginalError = [Console]::Error
