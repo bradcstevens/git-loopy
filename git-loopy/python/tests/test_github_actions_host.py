@@ -11,13 +11,14 @@ import io
 import json
 import subprocess
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from git_loopy.execution_host import (
     ContributionFailure,
     ContributionRequest,
     ContributionSuccess,
+    HostPreflightRequest,
 )
 from git_loopy import github_actions_host
 from git_loopy.github_actions_host import (
@@ -107,16 +108,37 @@ class _FakeActionsClient:
         ]
     )
     artifact: bytes = field(default_factory=_artifact)
+    preflight_runs: list[ActionsRun] = field(
+        default_factory=lambda: [
+            ActionsRun(
+                database_id=18,
+                display_title="git-loopy preflight 01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                status="completed",
+                conclusion="success",
+            )
+        ]
+    )
 
     def dispatch(self, workflow: str, ref: str, inputs: dict[str, str]) -> None:
         self.dispatched.append((workflow, ref, inputs))
 
     def find_run(self, display_title: str) -> ActionsRun | None:
-        return next((run for run in self.runs if run.display_title == display_title), None)
+        return next(
+            (
+                run
+                for run in (*self.runs, *self.preflight_runs)
+                if run.display_title == display_title
+            ),
+            None,
+        )
 
     def get_run(self, database_id: int) -> ActionsRun:
         self.get_run_calls.append(database_id)
-        return next(run for run in self.runs if run.database_id == database_id)
+        return next(
+            run
+            for run in (*self.runs, *self.preflight_runs)
+            if run.database_id == database_id
+        )
 
     def get_artifact(self, database_id: int, name: str) -> ActionsArtifact:
         assert database_id == 17
@@ -130,6 +152,59 @@ def test_actions_host_declares_remote_machine_capacity() -> None:
     assert host.placement == "github-actions"
     assert host.isolation_grade == "machine boundary"
     assert host.capacity == 6
+
+
+def test_actions_host_runs_the_green_base_preflight_before_contributions() -> None:
+    client = _FakeActionsClient()
+    host = GitHubActionsExecutionHost(client=client, capacity=2)
+
+    result = asyncio.run(
+        host.preflight(
+            HostPreflightRequest(
+                base_revision="a" * 40,
+                run_id="01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            )
+        )
+    )
+
+    assert result.passed is True
+    assert client.dispatched == [
+        (
+            "lane-preflight.yml",
+            "main",
+            {
+                "preflight": json.dumps(
+                    {
+                        "base_revision": "a" * 40,
+                        "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    },
+                    separators=(",", ":"),
+                )
+            },
+        )
+    ]
+    assert client.get_run_calls == [18]
+
+
+def test_actions_host_reports_a_red_green_base_preflight() -> None:
+    client = _FakeActionsClient()
+    client.preflight_runs[0] = replace(
+        client.preflight_runs[0],
+        conclusion="failure",
+    )
+    host = GitHubActionsExecutionHost(client=client, capacity=2)
+
+    result = asyncio.run(
+        host.preflight(
+            HostPreflightRequest(
+                base_revision="a" * 40,
+                run_id="01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            )
+        )
+    )
+
+    assert result.passed is False
+    assert "concluded 'failure'" in result.detail
 
 
 def test_actions_host_dispatches_one_named_workflow_for_the_reserved_issue() -> None:
@@ -277,3 +352,13 @@ def test_lane_workflow_uses_the_job_token_and_uploads_only_completion_artifacts(
     assert "${{ runner.temp }}/ending.json" in workflow
     assert "${{ runner.temp }}/events.jsonl" in workflow
     assert "secrets." not in workflow
+
+
+def test_green_base_workflow_checks_out_base_and_runs_declared_feedback_loops() -> None:
+    workflow = (
+        Path(__file__).parents[3] / ".github/workflows/lane-preflight.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "ref: ${{ fromJSON(inputs.preflight).base_revision }}" in workflow
+    assert "./.github/actions/setup-lane-contribution" in workflow
+    assert "python -m git_loopy.github_actions_preflight" in workflow

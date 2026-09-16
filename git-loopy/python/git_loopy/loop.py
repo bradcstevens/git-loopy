@@ -142,6 +142,7 @@ from git_loopy import github_actions_host as actions_host_module
 from git_loopy import git as git_module
 from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
+from git_loopy.rolling_concurrency import HOST_PRESSURE_RATIO
 from git_loopy import session_outcome as session_outcome_module
 from git_loopy import sweep as sweep_module
 from git_loopy.staircase import PriceStaircase, StaircaseRefusal
@@ -697,6 +698,12 @@ def _terminal_reason_for(
     if outcome.reason == execution_host_module.REASON_CHECKPOINT_FAILED:
         return rolling_scheduler.REASON_CHECKPOINT_FAILED
     return rolling_scheduler.REASON_UNCHANGED_BRANCH
+
+
+# A failed dispatch is an unavailable host, not an observed calm.  The value is
+# a normalized host/setup ratio and deliberately crosses the existing policy's
+# threshold without introducing another pressure signal.
+_DISPATCH_FAILURE_HOST_PRESSURE = HOST_PRESSURE_RATIO + 1.0
 
 
 class _EventObserver(Protocol):
@@ -2530,6 +2537,12 @@ class _ParallelLoop:
         # preserve the "crashed" outcome / exit-code contract the retired
         # Wave's single `try/except` around the whole round loop gave.
         self._crash: BaseException | None = None
+        # A green-base failure ends before any contribution exists. A repeated
+        # never-started failure reaches the same environment disposition after
+        # the existing host/setup pressure controller contracts the Lane limit.
+        self._environment_failure = False
+        # Contributions with no Agent-session ending must not reach Demotion.
+        self._blameless_contribution_ids: set[str] = set()
         # Only these tasks are eligible for a second Stop.  Lifecycle tasks also
         # own merge, close, branch deletion, and push transactions, which must
         # be allowed to complete once they have begun.
@@ -2684,6 +2697,8 @@ class _ParallelLoop:
         rc = self._source.preflight()
         if rc is not None:
             return rc
+        if not await self._preflight_execution_host():
+            return exit_code_for("preflight_failed")
 
         start_payload = {
             "issue_source": self._config.issue_source,
@@ -2757,6 +2772,32 @@ class _ParallelLoop:
             except Exception as exc:  # pragma: no cover - defensive
                 self._diag.warning("wrapper.run.end emit failed: %s", exc)
         return exit_code
+
+    async def _preflight_execution_host(self) -> bool:
+        """Run a selected remote host's green-base check exactly once per Run."""
+        if self._execution_host is None:
+            return True
+        try:
+            base_revision = self._git.head_sha()
+        except git_module.GitError as exc:
+            self._diag.error(
+                "Execution host preflight could not resolve the base revision: %s", exc
+            )
+            return False
+        result = await self._execution_host.preflight(
+            execution_host_module.HostPreflightRequest(
+                base_revision=base_revision,
+                run_id=self._run_id,
+            )
+        )
+        if result.passed:
+            return True
+        self._diag.error(
+            "Execution host preflight failed on %s: %s",
+            self._execution_host.placement,
+            result.detail,
+        )
+        return False
 
     def _report_parallel_degraded(self) -> None:
         """Say that Parallel mode degraded entirely to the serial path (#414).
@@ -2882,6 +2923,15 @@ class _ParallelLoop:
             while True:
                 if self._crash is not None:
                     raise self._crash
+                if self._environment_failure:
+                    if self._pending:
+                        await self._await_capacity()
+                        continue
+                    return (
+                        "preflight_failed",
+                        exit_code_for("preflight_failed"),
+                        scheduler._units_spent,
+                    )
                 if self._serial._stop_drain_requested:
                     return (
                         RUN_OUTCOME_OPERATOR_STOP,
@@ -3108,6 +3158,15 @@ class _ParallelLoop:
             contribution
             for contribution in self._scheduler.finalized
             if contribution.contribution_id not in self._abandoned_at_exit
+        )
+
+    @property
+    def demotion_contributions(self) -> tuple[rolling_scheduler.Contribution, ...]:
+        """Return finalized work that reached an Agent-session ending."""
+        return tuple(
+            contribution
+            for contribution in self.finalized_contributions
+            if contribution.contribution_id not in self._blameless_contribution_ids
         )
 
     def _report_concurrency_change(self) -> None:
@@ -3711,9 +3770,34 @@ class _ParallelLoop:
             reason=_terminal_reason_for(outcome),
         )
         assert disposition == rolling_scheduler.TERMINAL
+        if outcome.classification != "breach":
+            contribution.strike_reaction = rolling_scheduler.STRIKE_NONE
+            self._blameless_contribution_ids.add(contribution.contribution_id)
         if lane_work.reclaimed:
             self._lane_work.pop(contribution.contribution_id, None)
         self._finalize_contribution(contribution, published=False)
+        if outcome.classification == "never_started":
+            self._record_dispatch_failure_pressure()
+
+    def _record_dispatch_failure_pressure(self) -> None:
+        """Feed a never-started dispatch into host/setup pressure.
+
+        The controller's full observation window is the bounded definition of
+        "repeated".  Once it contracts, no new Lane is reserved and the Run
+        drains to the same environment-failure exit used by a red base.
+        """
+        assert self._scheduler is not None
+        change = self._scheduler.observe_pressure(
+            host_pressure=_DISPATCH_FAILURE_HOST_PRESSURE
+        )
+        if change is None:
+            return
+        self._serial._emit(
+            events_module.WRAPPER_CONCURRENCY_CHANGED,
+            iter_num=None,
+            **change.payload,
+        )
+        self._environment_failure = True
 
     async def _run_local_contribution(
         self,
@@ -5348,7 +5432,11 @@ def _demote_after_run(
     precondition for the work a Run has already finished, and this runs after the
     exit code has been decided, so nothing here can change it.
     """
-    contributions = loop.finalized_contributions
+    contributions = (
+        loop.demotion_contributions
+        if hasattr(loop, "demotion_contributions")
+        else loop.finalized_contributions
+    )
     if not contributions:
         return
     try:

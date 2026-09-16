@@ -1,0 +1,32 @@
+name: Green-base preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      preflight:
+        description: Serialized GitHub Actions green-base preflight request
+        required: true
+        type: string
+
+run-name: git-loopy preflight ${{ fromJSON(inputs.preflight).run_id }}
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJSON(inputs.preflight).base_revision }}
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-lane-contribution
+
+      - name: Run declared feedback loops
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.github_actions_preflight

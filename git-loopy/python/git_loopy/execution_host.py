@@ -84,6 +84,8 @@ __all__ = [
     "IsolationGrade",
     "ContributionFailureClass",
     "REASON_CHECKPOINT_FAILED",
+    "HostPreflightRequest",
+    "HostPreflightResult",
     "ContributionRequest",
     "ContributionSuccess",
     "ContributionFailure",
@@ -135,6 +137,22 @@ _CONTRIBUTION_FAILURE_CLASSES = frozenset(
 #: mapping from host reason to terminal reason is the Run's, and it needs
 #: something stable to key on.
 REASON_CHECKPOINT_FAILED = "checkpoint_failed"
+
+
+@dataclass(frozen=True)
+class HostPreflightRequest:
+    """The immutable base revision a remote host must gate before dispatching."""
+
+    base_revision: str
+    run_id: str
+
+
+@dataclass(frozen=True)
+class HostPreflightResult:
+    """The remote host's green-base verdict for one Run."""
+
+    passed: bool
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -299,6 +317,15 @@ class ExecutionHost(Protocol):
         """This host's declared capacity (never a utilization decision)."""
         ...
 
+    async def preflight(self, request: HostPreflightRequest) -> HostPreflightResult:
+        """Gate the clean base once before this host accepts contributions.
+
+        Every host guarantees at most one live contribution per issue. Remote
+        hosts additionally run the target repository's declared feedback loops
+        on ``request.base_revision`` and return their environment verdict.
+        """
+        ...
+
     async def run_contribution(
         self, request: ContributionRequest
     ) -> ContributionOutcome:
@@ -407,6 +434,11 @@ class LocalExecutionHost:
     @property
     def capacity(self) -> int:
         return self._capacity
+
+    async def preflight(self, request: HostPreflightRequest) -> HostPreflightResult:
+        """Local placement has no remote-host environment to verify."""
+        del request
+        return HostPreflightResult(passed=True)
 
     async def run_contribution(
         self, request: ContributionRequest

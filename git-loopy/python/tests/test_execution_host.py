@@ -23,6 +23,8 @@ from git_loopy.execution_host import (
     ContributionRequest,
     ContributionSuccess,
     ExecutionHost,
+    HostPreflightRequest,
+    HostPreflightResult,
     IsolationGrade,
     LocalExecutionHost,
     LocalRunResult,
@@ -351,6 +353,9 @@ class FakeExecutionHost:
     isolation_grade: IsolationGrade = "workspace separation only"
     capacity: int = 4
     calls: list[ContributionRequest] = field(default_factory=list)
+
+    async def preflight(self, request: HostPreflightRequest) -> HostPreflightResult:
+        return HostPreflightResult(passed=True)
 
     async def run_contribution(
         self, request: ContributionRequest

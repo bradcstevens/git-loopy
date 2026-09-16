@@ -123,6 +123,8 @@ from git_loopy.execution_host import (
     ContributionOutcome,
     ContributionRequest,
     ContributionSuccess,
+    HostPreflightRequest,
+    HostPreflightResult,
     IsolationGrade,
     Placement,
 )
@@ -1893,6 +1895,11 @@ def test_second_stop_before_host_dispatch_starts_no_host_contribution(
         def __init__(self) -> None:
             self.calls = 0
 
+        async def preflight(
+            self, request: HostPreflightRequest
+        ) -> HostPreflightResult:
+            return HostPreflightResult(passed=True)
+
         async def run_contribution(
             self, request: ContributionRequest
         ) -> ContributionFailure:
@@ -3617,14 +3624,73 @@ def _wire_two_lane_rolling(
     return fake_git, fake_gh, fake_client, cfg
 
 
+class _GreenHostPreflight:
+    """A complete host double's once-per-Run green-base preflight."""
+
+    preflight_requests: list[HostPreflightRequest]
+
+    async def preflight(self, request: HostPreflightRequest) -> HostPreflightResult:
+        self.preflight_requests.append(request)
+        return HostPreflightResult(passed=True)
+
+
 @dataclass
-class _TerminalFailureExecutionHost:
+class _RedHostPreflight:
+    """A remote host whose base cannot pass its declared feedback loops."""
+
+    placement: Placement = "github-actions"
+    isolation_grade: IsolationGrade = "machine boundary"
+    capacity: int = 4
+    preflight_requests: list[HostPreflightRequest] = field(default_factory=list)
+
+    async def preflight(self, request: HostPreflightRequest) -> HostPreflightResult:
+        self.preflight_requests.append(request)
+        return HostPreflightResult(passed=False, detail="Python suite exited 1")
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        raise AssertionError(f"red base must not dispatch issue {request.issue_ref}")
+
+
+def test_parallel_run_stops_before_dispatch_when_remote_base_is_red(
+    tmp_path, monkeypatch
+) -> None:
+    """A remote green-base failure is environment-only: no Lane and no Strike."""
+    fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _RedHostPreflight()
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, execution_host=host, **kwargs)
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    assert asyncio.run(loop_module.run(cfg)) == 1
+    assert host.preflight_requests == [
+        HostPreflightRequest(
+            base_revision=fake_git.head_sha(),
+            run_id=_run_id(tmp_path),
+        )
+    ]
+    assert fake_client.created == []
+    events = _logged_events(tmp_path)
+    assert not [event for event in events if event["type"] == "wrapper.run.start"]
+    assert not [event for event in events if event["type"] == "wrapper.contribution.start"]
+    assert not [event for event in events if event["type"] == "wrapper.strike"]
+
+
+@dataclass
+class _TerminalFailureExecutionHost(_GreenHostPreflight):
     """A complete host double that never starts an Agent session."""
 
     placement: Placement = "fake"
     isolation_grade: IsolationGrade = "workspace separation only"
     capacity: int = 4
     calls: list[ContributionRequest] = field(default_factory=list)
+    preflight_requests: list[HostPreflightRequest] = field(default_factory=list)
 
     async def run_contribution(
         self, request: ContributionRequest
@@ -3657,6 +3723,64 @@ class _TerminalFailureExecutionHost:
             classification="stall",
             ending=None,
         )
+
+
+@dataclass
+class _NeverStartedExecutionHost(_GreenHostPreflight):
+    """A host whose dispatches all fail before an Agent session exists."""
+
+    placement: Placement = "github-actions"
+    isolation_grade: IsolationGrade = "machine boundary"
+    capacity: int = 1
+    calls: list[ContributionRequest] = field(default_factory=list)
+    preflight_requests: list[HostPreflightRequest] = field(default_factory=list)
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionFailure:
+        self.calls.append(request)
+        return ContributionFailure(
+            reason="workflow_dispatch_failed",
+            classification="never_started",
+            ending=None,
+        )
+
+
+def test_repeated_dispatch_failures_contract_then_end_as_an_environment_failure(
+    tmp_path, monkeypatch
+) -> None:
+    """Never-started work feeds host pressure, never Strike or Demotion."""
+    _fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _NeverStartedExecutionHost()
+    built: list[loop_module._ParallelLoop] = []
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        instance = real_parallel_loop(*args, execution_host=host, **kwargs)
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+    cfg = replace(cfg, max_iterations=0)
+
+    async def _bounded() -> int:
+        return await asyncio.wait_for(loop_module.run(cfg), timeout=1)
+
+    assert asyncio.run(_bounded()) == 1
+    assert len(host.preflight_requests) == 1
+    assert len(host.calls) == 6
+    assert fake_client.created == []
+    assert len(built) == 1
+    assert built[0].demotion_contributions == ()
+    events = _logged_events(tmp_path)
+    assert not [event for event in events if event["type"] == "wrapper.strike"]
+    assert [
+        event["effective_lane_limit"]
+        for event in events
+        if event["type"] == "wrapper.concurrency.changed"
+    ] == [0]
 
 
 def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
@@ -3699,6 +3823,16 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     assert fake_client.created == []
     assert fake_git.active_worktrees == []
     events = _logged_events(tmp_path)
+    terminal_endings = [
+        event
+        for event in events
+        if event["type"] == "wrapper.contribution.end"
+        and event["reason"] == "unchanged_branch"
+    ]
+    assert len(terminal_endings) == 2
+    assert {
+        event["summary"]["strike_reaction"] for event in terminal_endings
+    } == {"none"}
     run_start = next(event for event in events if event["type"] == "wrapper.run.start")
     assert run_start["execution_host"] == {
         "placement": "fake",
@@ -3732,13 +3866,14 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
 
 
 @dataclass
-class _ForeignBranchExecutionHost:
+class _ForeignBranchExecutionHost(_GreenHostPreflight):
     """A host double that contributes on a branch it named itself."""
 
     placement: Placement = "fake"
     isolation_grade: IsolationGrade = "workspace separation only"
     capacity: int = 4
     calls: list[ContributionRequest] = field(default_factory=list)
+    preflight_requests: list[HostPreflightRequest] = field(default_factory=list)
 
     def contributed_branch(self, issue_ref: int | str) -> str:
         return f"host/contributed/issue-{issue_ref}"
@@ -3871,13 +4006,14 @@ def test_parallel_loop_discards_a_dirty_placeholder_branch_the_host_declined(
 
 
 @dataclass
-class _RemoteBranchExecutionHost:
+class _RemoteBranchExecutionHost(_GreenHostPreflight):
     """A host double whose completed branches must be fetched before Integration."""
 
     git: FakeGitClient
     placement: Placement = "github-actions"
     isolation_grade: IsolationGrade = "machine boundary"
     capacity: int = 4
+    preflight_requests: list[HostPreflightRequest] = field(default_factory=list)
 
     async def run_contribution(
         self, request: ContributionRequest
@@ -3935,6 +4071,12 @@ def test_parallel_loop_materializes_remote_contributions_before_integration(
     assert {branch for _remote, _sha, branch in fake_git.fetch_calls} == materialized
     assert materialized <= set(fake_git.branch_deletes)
     assert fake_client.created == []
+    assert host.preflight_requests == [
+        HostPreflightRequest(
+            base_revision="0000000000000000000000000000000000000001",
+            run_id=_run_id(tmp_path),
+        )
+    ]
 
 
 @dataclass
@@ -3991,12 +4133,13 @@ def test_parallel_loop_ingests_backdated_remote_artifact_events(
 
 
 @dataclass
-class _AbsentRemoteExecutionHost:
+class _AbsentRemoteExecutionHost(_GreenHostPreflight):
     """A host double that promises a remote ref it never published."""
 
     placement: Placement = "github-actions"
     isolation_grade: IsolationGrade = "machine boundary"
     capacity: int = 4
+    preflight_requests: list[HostPreflightRequest] = field(default_factory=list)
 
     async def run_contribution(
         self, request: ContributionRequest
@@ -4061,13 +4204,14 @@ def test_parallel_loop_treats_a_proven_missing_remote_ref_as_a_breach(
 
 
 @dataclass
-class _RemoteStallThenLocalExecutionHost:
+class _RemoteStallThenLocalExecutionHost(_GreenHostPreflight):
     """A remote host whose unresponsive first attempt is retried by the Run."""
 
     placement: Placement = "github-actions"
     isolation_grade: IsolationGrade = "machine boundary"
     capacity: int = 4
     calls: list[ContributionRequest] = field(default_factory=list)
+    preflight_requests: list[HostPreflightRequest] = field(default_factory=list)
 
     async def run_contribution(
         self, request: ContributionRequest
@@ -4134,12 +4278,13 @@ def test_parallel_loop_reoffers_an_unreachable_remote_without_a_strike(
 
 
 @dataclass
-class _NoProgressEndingExecutionHost:
+class _NoProgressEndingExecutionHost(_GreenHostPreflight):
     """A host whose branch head moved but whose ending reports no progress."""
 
     placement: Placement = "fake"
     isolation_grade: IsolationGrade = "workspace separation only"
     capacity: int = 4
+    preflight_requests: list[HostPreflightRequest] = field(default_factory=list)
 
     async def run_contribution(
         self, request: ContributionRequest

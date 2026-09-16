@@ -23,6 +23,8 @@ from git_loopy.execution_host import (
     ContributionOutcome,
     ContributionRequest,
     ContributionSuccess,
+    HostPreflightRequest,
+    HostPreflightResult,
     IsolationGrade,
     Placement,
 )
@@ -45,6 +47,7 @@ __all__ = [
 ]
 
 _WORKFLOW = "lane-contribution.yml"
+_PREFLIGHT_WORKFLOW = "lane-preflight.yml"
 _MAX_CONTRIBUTION_SECONDS = 6 * 60 * 60
 _CAPACITY_ENV = "GIT_LOOPY_GITHUB_ACTIONS_CAPACITY"
 
@@ -294,6 +297,48 @@ class GitHubActionsExecutionHost:
     def capacity(self) -> int:
         return self._capacity
 
+    async def preflight(self, request: HostPreflightRequest) -> HostPreflightResult:
+        """Run the target repository's declared feedback loops at clean base."""
+        title = _preflight_title(request)
+        try:
+            self._client.dispatch(
+                _PREFLIGHT_WORKFLOW,
+                self._client.workflow_ref,
+                {"preflight": _preflight_request_json(request)},
+            )
+        except ActionsError as exc:
+            return HostPreflightResult(passed=False, detail=str(exc))
+
+        started = self._clock()
+        run: ActionsRun | None = None
+        try:
+            while self._clock() - started < self._timeout_seconds:
+                if run is None:
+                    discovered = self._client.find_run(title)
+                    if discovered is not None:
+                        run = self._client.get_run(discovered.database_id)
+                else:
+                    run = self._client.get_run(run.database_id)
+                if run is not None and run.status == "completed":
+                    break
+                await self._sleep(self._poll_interval_seconds)
+        except ActionsError as exc:
+            return HostPreflightResult(passed=False, detail=str(exc))
+
+        if run is None:
+            return HostPreflightResult(
+                passed=False,
+                detail=f"Actions preflight {title!r} did not become observable",
+            )
+        if run.status != "completed":
+            return HostPreflightResult(
+                passed=False,
+                detail=f"Actions preflight {run.database_id} exceeded six hours",
+            )
+        if run.conclusion != "success":
+            return HostPreflightResult(passed=False, detail=_liveness_detail(run))
+        return HostPreflightResult(passed=True)
+
     async def run_contribution(self, request: ContributionRequest) -> ContributionOutcome:
         title = _run_title(request)
         artifact_name = _artifact_name(request)
@@ -430,6 +475,13 @@ def _request_json(request: ContributionRequest) -> str:
     )
 
 
+def _preflight_request_json(request: HostPreflightRequest) -> str:
+    return json.dumps(
+        {"base_revision": request.base_revision, "run_id": request.run_id},
+        separators=(",", ":"),
+    )
+
+
 def _skill_policy_payload(policy: object) -> dict[str, object]:
     if not isinstance(policy, EffectiveSkillPolicy):
         raise ActionsError("Actions contribution requires an Effective Skill policy")
@@ -445,6 +497,10 @@ def _skill_policy_payload(policy: object) -> dict[str, object]:
 
 def _run_title(request: ContributionRequest) -> str:
     return f"git-loopy {request.run_id} issue {request.issue_ref}"
+
+
+def _preflight_title(request: HostPreflightRequest) -> str:
+    return f"git-loopy preflight {request.run_id}"
 
 
 def _artifact_name(request: ContributionRequest) -> str:
