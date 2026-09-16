@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PROTOTYPE: remote host preflight</title>
+  <style>
+    body { max-width: 50rem; margin: 3rem auto; font: 16px/1.5 system-ui, sans-serif; color: #172033; }
+    h1 { color: #2446a8; }
+    section { margin: 1.5rem 0; padding: 1rem; border: 1px solid #cbd5e1; border-radius: .5rem; }
+    button { margin: .25rem; padding: .5rem .75rem; border: 0; border-radius: .25rem; background: #2446a8; color: white; cursor: pointer; }
+    pre { overflow: auto; padding: 1rem; background: #f1f5f9; }
+  </style>
+</head>
+<body>
+  <h1>Remote-host Run preflight</h1>
+  <p><strong>PROTOTYPE — not production code.</strong> Does a once-per-Run green-base check keep an
+    unavailable remote host from dispatching a Lane, while dispatch refusals remain blameless and
+    narrow the existing Lane limit only after repetition?</p>
+  <section>
+    <h2>Current Run state</h2>
+    <pre id="state"></pre>
+  </section>
+  <section>
+    <h2>Free play</h2>
+    <button data-action="green">Remote base is green</button>
+    <button data-action="red">Remote base is red</button>
+    <button data-action="dispatch">Dispatch a Lane</button>
+    <button data-action="refuse">Refuse dispatch</button>
+    <button data-action="reset">Reset Run</button>
+  </section>
+  <section>
+    <h2>Guided walkthroughs</h2>
+    <p><strong>Broken host:</strong> Reset, then mark the remote base red. Notice that no Lane is
+      dispatched, no Agent ending exists, and Strikes remain zero.</p>
+    <p><strong>Repeated refusal:</strong> Reset, mark the remote base green, then refuse dispatch
+      twice. Notice that the issue remains eligible and the pre-existing host/setup pressure
+      contracts the Lane limit without a Strike or demotion.</p>
+  </section>
+  <script>
+    // Pure state machine that production code can lift from this throwaway shell.
+    const initial = () => ({
+      preflight: "pending", preflightRuns: 0, dispatches: 0, dispatchFailures: 0,
+      issueEligible: true, strikes: 0, demotions: 0, laneLimit: 3, pressure: 0,
+      outcome: "Run has not contacted the remote host."
+    });
+    let state = initial();
+    function reduce(previous, action) {
+      const next = { ...previous };
+      if (action === "reset") return initial();
+      if (action === "green" && next.preflight === "pending") {
+        next.preflight = "green"; next.preflightRuns++; next.outcome = "Remote base passed its declared feedback loops.";
+      } else if (action === "red" && next.preflight === "pending") {
+        next.preflight = "environment failure"; next.preflightRuns++; next.outcome = "Run ends before dispatch; no Agent ending, Strike, or demotion.";
+      } else if (action === "dispatch" && next.preflight === "green") {
+        next.dispatches++; next.issueEligible = false; next.outcome = "A Lane contribution started.";
+      } else if (action === "refuse" && next.preflight === "green") {
+        next.dispatchFailures++; next.issueEligible = true; next.pressure = 1.03;
+        if (next.dispatchFailures >= 2) next.laneLimit = 2;
+        next.outcome = "Contribution never started; issue is re-offered with no Strike or demotion.";
+      } else {
+        next.outcome = "That action is not available from this Run state.";
+      }
+      return next;
+    }
+    function render() { document.querySelector("#state").textContent = JSON.stringify(state, null, 2); }
+    document.querySelectorAll("button").forEach(button => button.addEventListener("click", () => {
+      state = reduce(state, button.dataset.action); render();
+    }));
+    render();
+  </script>
+</body>
+</html>
