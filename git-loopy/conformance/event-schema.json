@@ -126,6 +126,13 @@
     "legacy_value": "unknown",
     "note": "Contract 2.2. Python announces the one Execution host selected for a rolling Run on wrapper.run.start and stamps its placement on every wrapper.contribution.start, including local. The isolation grade is Run-scoped and never repeated on a contribution. Shell and PowerShell emit neither Execution-host payload because they emit no contribution lifecycle records. An absent declaration or stamp is an old trace's unknown, never an inferred local placement."
   },
+  "run_start_disclosures": {
+    "keys": ["host_metering", "ci_trigger_identity"],
+    "host_metering_states": ["not_applicable", "free", "metered"],
+    "producers": ["python"],
+    "non_producers": ["shell", "powershell"],
+    "note": "Contract 2.2. Host metering and CI-trigger identity are siblings of execution_host on wrapper.run.start, because where the orchestrator publishes is a deployment fact, not an Execution-host fact. host_metering declares no meter for local work as not applicable, a free standard GitHub Actions runner on a public target, or metered GitHub Actions work. It is a disclosure, never host-compute Cost: no number, unit, Dashboard column, or Consumption entry follows from it. ci_trigger_identity names the GitHub Actions deployment route whose existing job identity cannot trigger downstream CI; git-loopy never selects, transports, or upgrades a credential to change that behaviour. An absent disclosure is unknown on an old trace."
+  },
   "payload_contracts": {
     "calibration.trial.start": {
       "required": ["calibration_id", "trial_id", "model", "effort", "issue", "base_commit", "oracle_commit", "slot"]
@@ -137,6 +144,7 @@
     "wrapper.run.start": {
       "required": ["release_version", "schema_version", "insight_capabilities", "parallel_capabilities"],
       "execution_host_optional": ["placement", "isolation_grade", "capacity", "starting_lane_limit"],
+      "run_start_disclosures_optional": ["host_metering", "ci_trigger_identity"],
       "readback_optional": ["model", "effort", "context_tier", "escalation_rung", "routes", "unconfigured_task_type_keys", "routing_suppressed", "harness_version", "roster_cli_version", "roster_diverged"],
       "readback_pair_keys": ["model", "effort", "configured_effort", "gate_warnings"],
       "readback_route_keys": ["key", "model", "effort", "configured_effort", "gate_warnings"],

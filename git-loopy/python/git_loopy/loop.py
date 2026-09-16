@@ -142,6 +142,7 @@ from git_loopy import github_actions_host as actions_host_module
 from git_loopy import git as git_module
 from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
+from git_loopy import sources as sources_module
 from git_loopy.rolling_concurrency import HOST_PRESSURE_RATIO
 from git_loopy import session_outcome as session_outcome_module
 from git_loopy import sweep as sweep_module
@@ -181,6 +182,7 @@ from git_loopy.skill_install import (
 from git_loopy.rolling_pool import RollingPool, is_parallel_safe
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.run_readback import run_start_payload
+from git_loopy.run_start_disclosures import run_start_disclosures
 from git_loopy.serial_pickup import (
     AdmissionRefusal,
     SerialPickup,
@@ -484,6 +486,18 @@ def _make_issue_source(
         f"unknown issue_source {config.issue_source!r}; expected "
         f"'github' or 'prds'"
     )
+
+
+def _repository_visibility(source: IssueSource) -> str | None:
+    """Read the visibility already captured by a source's successful preflight."""
+    if isinstance(source, sources_module.RepositoryVisibilityReporting):
+        return source.repository_visibility
+    return None
+
+
+def _publishing_from_ci(env: Mapping[str, str]) -> bool:
+    """Whether this GitHub Actions deployment uses its non-triggering job identity."""
+    return env.get("GITHUB_ACTIONS", "").lower() == "true"
 
 
 # Matches the PR-surface flag ``/setup-git-loopy-skills`` writes into
@@ -2124,6 +2138,11 @@ class _Loop:
             parallel_capabilities=events_module.python_parallel_capabilities(),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
+            **run_start_disclosures(
+                host_placement=execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT,
+                repository_visibility=_repository_visibility(self._source),
+                inside_ci=_publishing_from_ci(os.environ),
+            ),
             # #410: what this Run parsed, gate-checked.
             **run_start_payload(self._config),
         )
@@ -2724,7 +2743,22 @@ class _ParallelLoop:
             ),
         }
         if self._rolling_capable:
-            start_payload["execution_host"] = self._execution_host_payload()
+            execution_host_payload = self._execution_host_payload()
+            start_payload["execution_host"] = execution_host_payload
+            host_placement = (
+                execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT
+                if self._execution_host is None
+                else self._execution_host.placement
+            )
+        else:
+            host_placement = execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT
+        start_payload.update(
+            run_start_disclosures(
+                host_placement=host_placement,
+                repository_visibility=_repository_visibility(self._source),
+                inside_ci=_publishing_from_ci(os.environ),
+            )
+        )
         self._serial._emit(
             events_module.WRAPPER_RUN_START,
             iter_num=None,

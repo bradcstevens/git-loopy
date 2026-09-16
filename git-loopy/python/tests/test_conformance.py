@@ -971,6 +971,10 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "capacity",
                 "starting_lane_limit",
             ],
+            "run_start_disclosures_optional": [
+                "host_metering",
+                "ci_trigger_identity",
+            ],
             # #410: the **Run readback**. Optional beside `required`, never in
             # it: a port that routes nothing has no Config to read back, and
             # obliging it to publish one would make it fabricate a table.
@@ -1438,6 +1442,25 @@ def test_event_fixture_pins_execution_host_event_provenance() -> None:
             "execution_host_stamp"
         ]
         == provenance["contribution_start_key"]
+    )
+
+
+def test_event_fixture_pins_run_start_host_disclosures() -> None:
+    """Host metering and CI identity are Run facts, not host-object members."""
+    disclosures = _EVENT_SCHEMA["run_start_disclosures"]
+    assert disclosures["keys"] == ["host_metering", "ci_trigger_identity"]
+    assert disclosures["host_metering_states"] == [
+        "not_applicable",
+        "free",
+        "metered",
+    ]
+    assert disclosures["producers"] == ["python"]
+    assert disclosures["non_producers"] == ["shell", "powershell"]
+    assert (
+        _EVENT_SCHEMA["payload_contracts"]["wrapper.run.start"][
+            "run_start_disclosures_optional"
+        ]
+        == disclosures["keys"]
     )
 
 

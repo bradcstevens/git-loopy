@@ -3787,6 +3787,38 @@ class _NeverStartedExecutionHost(_GreenHostPreflight):
         )
 
 
+def test_run_start_discloses_host_metering_and_ci_identity_once(
+    tmp_path, monkeypatch
+) -> None:
+    """Run-start retains the source's visibility without another GitHub read."""
+    _fake_git, fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    fake_gh.repo = gh_module.Repo(
+        owner="x", name="y", default_branch="main", visibility="PUBLIC"
+    )
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    host = _NeverStartedExecutionHost()
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, execution_host=host, **kwargs)
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    assert asyncio.run(loop_module.run(cfg)) == 1
+
+    starts = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.run.start"
+    ]
+    assert len(starts) == 1
+    assert starts[0]["execution_host"]["placement"] == "github-actions"
+    assert starts[0]["host_metering"]["state"] == "free"
+    assert starts[0]["ci_trigger_identity"]["can_trigger_downstream_ci"] is False
+
+
 def test_repeated_dispatch_failures_narrow_the_lane_count_then_end_the_run(
     tmp_path, monkeypatch
 ) -> None:
