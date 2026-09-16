@@ -376,6 +376,7 @@ def bootstrap_labels(
                 created=tuple(created),
                 existing=tuple(existing),
                 unavailable=_reason(exc),
+                noncanonical_semver=tuple(noncanonical_semver),
             )
         created.append(spec.name)
     if noncanonical_semver:

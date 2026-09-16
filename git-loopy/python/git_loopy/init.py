@@ -844,5 +844,9 @@ def _missing(
     vocabulary: Sequence[labels.LabelSpec], result: labels.LabelBootstrap
 ) -> list[str]:
     """Names the bootstrap neither found nor created, in vocabulary order."""
-    accounted = {*result.created, *result.existing}
+    accounted = {
+        *result.created,
+        *result.existing,
+        *(expected for _, expected in result.noncanonical_semver),
+    }
     return [spec.name for spec in vocabulary if spec.name not in accounted]
