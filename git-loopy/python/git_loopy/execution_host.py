@@ -153,6 +153,11 @@ class ContributionRequest:
             backend default remains in force.
         reasoning_effort: The resolved reasoning effort paired with
             ``model``, or ``None`` when the backend chooses it.
+        context_tier: The run-level context tier (ADR-0017) the pair was
+            gated against, or ``None`` to leave the tier unsent. Carried
+            across the seam because ADR-0037 makes a resolved route take
+            effect wherever it is resolved, and a remote host that drops it
+            runs the contribution on no tier at all (#560).
         skill_policy: The Effective Skill policy in force for this
             contribution.
         run_id: The Run's ``run_id`` — handed to the host, never minted by
@@ -164,6 +169,7 @@ class ContributionRequest:
     base_revision: str
     model: str | None
     reasoning_effort: str | None
+    context_tier: str | None
     skill_policy: Any
     run_id: str
 

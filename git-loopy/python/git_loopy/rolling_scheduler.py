@@ -254,6 +254,10 @@ class Contribution:
         model: The model resolved once at pickup and reused for recovery (#147,
             #148).
         reasoning_effort: The effort resolved alongside :attr:`model`.
+        context_tier: The run-level context tier (ADR-0017) resolved alongside
+            :attr:`model` and gated against it, bound here for the same reason
+            the pair is — this Lane's work *and* its later recovery must run on
+            the settings its Pickup resolved (#560).
         published: ``True`` only after green publication *and* verified closure.
         reason: The terminal disposition, one of the ``REASON_*`` constants.
             ``None`` while the contribution is still open.
@@ -267,6 +271,7 @@ class Contribution:
     lane_id: str
     model: str | None = None
     reasoning_effort: str | None = None
+    context_tier: str | None = None
     published: bool = False
     reason: str | None = None
     strike_reaction: str | None = None
@@ -598,6 +603,7 @@ class RollingScheduler:
         *,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        context_tier: str | None = None,
     ) -> Contribution:
         """Turn a provisional reservation into an open **Lane contribution**.
 
@@ -605,7 +611,8 @@ class RollingScheduler:
         everything real at once: one ``max_iterations`` unit is spent (§7.9), a
         stable ``contribution_id`` is minted (§7.2), the issue latches into the
         Run-scoped worked guard for good (§1.7), and the resolved model/effort
-        pair binds for both this Lane's work and its later recovery (#148).
+        pair binds for both this Lane's work and its later recovery (#148),
+        together with the run-level context tier that pair was gated against.
         """
         self._next_contribution += 1
         contribution = Contribution(
@@ -614,6 +621,7 @@ class RollingScheduler:
             lane_id=reservation.lane_id,
             model=model,
             reasoning_effort=reasoning_effort,
+            context_tier=context_tier,
         )
         self._units_spent += 1
         self._in_setup.discard(contribution.ref)

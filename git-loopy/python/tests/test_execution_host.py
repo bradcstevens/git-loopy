@@ -41,6 +41,7 @@ def _request(**overrides: object) -> ContributionRequest:
         base_revision="deadbeef",
         model="gpt-5",
         reasoning_effort="medium",
+        context_tier="default",
         skill_policy={"skills": ()},
         run_id="01ARZ3NDEKTSV4RRFFQ69G5FAV",
     )

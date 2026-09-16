@@ -75,6 +75,7 @@ def make_request(**overrides: Any) -> ContributionRequest:
         "base_revision": BASE,
         "model": "gpt-5.6-terra",
         "reasoning_effort": "high",
+        "context_tier": "default",
         "skill_policy": ("code-review", "tdd"),
         "run_id": RUN_ID,
     }
@@ -1002,6 +1003,7 @@ def test_the_dispatch_carries_no_credential_across_the_machine_boundary() -> Non
     assert set(inputs) == {"request", "dispatch_token"}
     assert set(json.loads(inputs["request"])) == {
         "base_revision",
+        "context_tier",
         "disabled_skills",
         "issue_ref",
         "model",

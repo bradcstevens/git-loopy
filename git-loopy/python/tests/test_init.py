@@ -686,7 +686,7 @@ def test_run_init_accepts_all_recommended_routes_in_selected_scope(
         "planning": {"model": "claude-opus-5", "effort": "xhigh"},
         "review": {"model": "claude-opus-5", "effort": "high"},
         "implementation": {"model": "gpt-5.6-terra", "effort": "high"},
-        "test": {"model": "gemini-3.6-flash", "effort": "high"},
+        "test": {"model": "claude-sonnet-5", "effort": "high"},
         "docs": {"model": "gpt-5.6-terra", "effort": "low"},
         "chore": {"model": "gpt-5.6-luna", "effort": "medium"},
         "bugfix": {"model": "claude-opus-5", "effort": "xhigh"},

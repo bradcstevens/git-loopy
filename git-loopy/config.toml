@@ -30,7 +30,7 @@ model = "gpt-5.6-terra"
 effort = "high"
 
 [routing.test]
-model = "gemini-3.6-flash"
+model = "claude-sonnet-5"
 effort = "high"
 
 [routing.docs]

@@ -1346,6 +1346,7 @@ class _Loop:
             active = pickup.item
             resolution = self._routes[active.ref]
             model, reasoning_effort = resolution.model, resolution.reasoning_effort
+            context_tier = resolution.context_tier
             iteration_span.set_attribute("issue", active.ref)
             issue_binding = self._new_active_issue_binding(
                 iter_num, allowed_refs=(item.ref for item in pool)
@@ -1415,6 +1416,7 @@ class _Loop:
                         iter_num=iter_num,
                         model=model,
                         reasoning_effort=reasoning_effort,
+                        context_tier=context_tier,
                         issue_binding=issue_binding,
                         skill_exposure=self._skill_exposure,
                         event_observer=_ChainedObserver(
@@ -3548,6 +3550,7 @@ class _ParallelLoop:
 
         model = resolution.model
         reasoning_effort = resolution.reasoning_effort
+        context_tier = resolution.context_tier
         try:
             base = self._git.head_sha()
         except git_module.GitError as exc:
@@ -3582,7 +3585,10 @@ class _ParallelLoop:
         self._setup_lane_worktree(lane_work)
 
         contribution = scheduler.start_session(
-            reservation, model=model, reasoning_effort=reasoning_effort
+            reservation,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            context_tier=context_tier,
         )
         self._lane_work[contribution.contribution_id] = lane_work
         self._open_lane_contributions[contribution.contribution_id] = contribution
@@ -3796,6 +3802,7 @@ class _ParallelLoop:
             base_revision=base_revision,
             model=contribution.model,
             reasoning_effort=contribution.reasoning_effort,
+            context_tier=contribution.context_tier,
             skill_policy=self._skill_exposure,
             run_id=self._run_id,
         )
@@ -4185,6 +4192,7 @@ class _ParallelLoop:
                 iter_num=scope.iter_num if scope is not None else 0,
                 model=contribution.model,
                 reasoning_effort=contribution.reasoning_effort,
+                context_tier=contribution.context_tier,
                 working_directory=str(lane_work.git.root),
                 issue_ref=lane_work.item.ref,
                 skill_exposure=self._skill_exposure,
@@ -4894,6 +4902,7 @@ class _ParallelLoop:
                 iter_num=self._alloc_iter_num(),
                 model=contribution.model,
                 reasoning_effort=contribution.reasoning_effort,
+                context_tier=contribution.context_tier,
                 working_directory=str(stage.git.root),
                 issue_ref=contribution.ref,
                 skill_exposure=self._skill_exposure,

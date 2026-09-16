@@ -355,6 +355,7 @@ async def _run_agent_session(
             iter_num=None,
             model=request.get("model"),
             reasoning_effort=request.get("reasoning_effort"),
+            context_tier=request.get("context_tier"),
             working_directory=str(working_directory),
             issue_ref=request["issue_ref"],
             skill_exposure=exposure,

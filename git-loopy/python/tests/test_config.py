@@ -218,10 +218,11 @@ def test_recommended_routing_is_the_locked_core() -> None:
     surfaces present. ``bugfix`` is the seventh key (#294) and is **appended**,
     so the original six keep the sequence the guided walk shipped with.
 
-    These are ADR-0048's values, which supersede the ones #285 locked and the
-    ones the 2026-07-24 routing run proposed. ``review`` is deliberately not
-    ``gpt-5.6-sol`` — a rule ADR-0035 established and ADR-0048 keeps — and no
-    row holds ``max``, which is the escalation rung.
+    These are ADR-0048's values with ADR-0057's ``test`` row, which moved that
+    route off ``gemini-3.6-flash`` once the authenticated harness began
+    advertising it as pending deprecation. ``review`` is deliberately not
+    ``gpt-5.6-sol`` — a rule ADR-0035 established and both successors keep —
+    and no row holds ``max``, which is the escalation rung.
     """
     from git_loopy.config import RECOMMENDED_ROUTING
 
@@ -229,7 +230,7 @@ def test_recommended_routing_is_the_locked_core() -> None:
         "planning": ("claude-opus-5", "xhigh"),
         "review": ("claude-opus-5", "high"),
         "implementation": ("gpt-5.6-terra", "high"),
-        "test": ("gemini-3.6-flash", "high"),
+        "test": ("claude-sonnet-5", "high"),
         "docs": ("gpt-5.6-terra", "low"),
         "chore": ("gpt-5.6-luna", "medium"),
         "bugfix": ("claude-opus-5", "xhigh"),

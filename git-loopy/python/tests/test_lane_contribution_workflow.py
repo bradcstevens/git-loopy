@@ -350,6 +350,7 @@ def test_the_artifact_is_named_the_way_the_host_looks_it_up() -> None:
         base_revision="main",
         model=None,
         reasoning_effort=None,
+        context_tier=None,
         skill_policy=None,
         run_id="01M24Q7VKPKN6M52SMSF3NR3AE",
     )
@@ -404,6 +405,7 @@ def test_the_dispatched_request_is_the_shape_the_worker_parses() -> None:
         base_revision="main",
         model="claude-opus-4.8",
         reasoning_effort="high",
+        context_tier="long_context",
         skill_policy=None,
         run_id="01M24Q7VKPKN6M52SMSF3NR3AE",
     )

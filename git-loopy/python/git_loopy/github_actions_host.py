@@ -1073,6 +1073,7 @@ def _request_json(request: ContributionRequest, send_timeout_seconds: float) -> 
             "base_revision": request.base_revision,
             "model": request.model,
             "reasoning_effort": request.reasoning_effort,
+            "context_tier": request.context_tier,
             "run_id": request.run_id,
             "disabled_skills": list(_disabled_skills(request.skill_policy)),
             "send_timeout_seconds": session_budget(send_timeout_seconds),

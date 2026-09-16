@@ -191,7 +191,7 @@ MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {}
 #: ``planning``        ``claude-opus-5``     ``xhigh``
 #: ``review``          ``claude-opus-5``     ``high``
 #: ``implementation``  ``gpt-5.6-terra``     ``high``
-#: ``test``            ``gemini-3.6-flash``  ``high``
+#: ``test``            ``claude-sonnet-5``   ``high``
 #: ``docs``            ``gpt-5.6-terra``     ``low``
 #: ``chore``           ``gpt-5.6-luna``      ``medium``
 #: ``bugfix``          ``claude-opus-5``     ``xhigh``
@@ -237,9 +237,12 @@ MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {}
 #: ADR-0056 records the inversion as the first thing a table retune should
 #: reconsider. The values here are measured, so they are left alone until one is.
 #:
-#: ``test`` is the one row pinned to its model's ceiling — ``gemini-3.6-flash``
-#: offers ``minimal``/``low``/``medium``/``high`` and nothing above, so raising
-#: this row without changing its model would hard-reject at session creation.
+#: ``test`` moved off ``gemini-3.6-flash`` on **2026-09-15** (ADR-0057): the
+#: authenticated harness began advertising that model with a
+#: ``model_pending_deprecation`` notice for 2026-10-02. It is no longer pinned
+#: to its model's ceiling — ``claude-sonnet-5`` offers ``xhigh`` and ``max``
+#: above ``high`` — so that row is now bounded by the no-``max`` rule above
+#: rather than by its roster entry.
 #:
 #: ``planning`` and ``bugfix`` sit at ``claude-opus-5 @ xhigh``, which ADR-0036
 #: had made *equal* to the **global default**. ADR-0056 moved that default up to
@@ -251,7 +254,7 @@ RECOMMENDED_ROUTING: Mapping[str, tuple[str, str]] = MappingProxyType(
         "planning": ("claude-opus-5", "xhigh"),
         "review": ("claude-opus-5", "high"),
         "implementation": ("gpt-5.6-terra", "high"),
-        "test": ("gemini-3.6-flash", "high"),
+        "test": ("claude-sonnet-5", "high"),
         "docs": ("gpt-5.6-terra", "low"),
         "chore": ("gpt-5.6-luna", "medium"),
         "bugfix": ("claude-opus-5", "xhigh"),
