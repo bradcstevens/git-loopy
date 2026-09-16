@@ -7,6 +7,7 @@ import ast
 import re
 import sys
 import tomllib
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Sequence
@@ -68,6 +69,19 @@ class BumpClassError(ReleaseVersionError):
         super().__init__(message)
 
 
+@dataclass(frozen=True)
+class ReleaseLine:
+    """The Release target and prerelease counter after one issue closes."""
+
+    target: str
+    counter: int
+
+    @property
+    def version(self) -> str:
+        """Return the target's current prerelease, or the target before any bump."""
+        return f"{self.target}-dev.{self.counter}" if self.counter else self.target
+
+
 def resolve_bump_class(labels: Sequence[str]) -> str:
     """Return an issue's one closed ``semver:`` bump class.
 
@@ -88,6 +102,46 @@ def resolve_bump_class(labels: Sequence[str]) -> str:
     if len(keys) != 1:
         raise BumpClassError(BumpClassRefusal.CONFLICTING_LABELS, keys=keys)
     return keys[0]
+
+
+def advance_release_line(
+    last_stable_version: str,
+    current_target: str,
+    current_counter: int,
+    bump_class: str,
+) -> ReleaseLine:
+    """Apply one closed issue to the Release target ratchet and `dev.N` counter."""
+    if bump_class not in BUMP_CLASS_KEYS:
+        raise ReleaseVersionError(f"unknown Release-line bump class {bump_class!r}")
+    if (
+        not isinstance(current_counter, int)
+        or isinstance(current_counter, bool)
+        or current_counter < 0
+    ):
+        raise ReleaseVersionError("Release-line counter must be a non-negative integer")
+
+    stable = _release_target_parts(last_stable_version, "Last stable Release version")
+    current = _release_target_parts(current_target, "Release target")
+    major, minor, patch = stable
+    candidate = {
+        "major": (major + 1, 0, 0),
+        "minor": (major, minor + 1, 0),
+        "patch": (major, minor, patch + 1),
+        "none": stable,
+    }[bump_class]
+    target = ".".join(str(part) for part in max(current, candidate))
+    counter = current_counter + (bump_class != "none")
+    return ReleaseLine(target=target, counter=counter)
+
+
+def _release_target_parts(value: str, label: str) -> tuple[int, int, int]:
+    _validate_semver(value, label)
+    if "-" in value or "+" in value:
+        raise ReleaseVersionError(
+            f"{label} must be a stable major.minor.patch Semantic Versioning value"
+        )
+    major, minor, patch = value.split(".")
+    return int(major), int(minor), int(patch)
 
 
 def _read_metadata_text(path: Path, label: str) -> str:
