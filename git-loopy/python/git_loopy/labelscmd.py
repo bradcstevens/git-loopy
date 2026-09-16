@@ -104,10 +104,7 @@ def run_labels(
     output_fn(_summary(result, apply=apply))
 
     if result.unavailable is not None:
-        manual = sum(
-            not difference.can_apply for difference in result.divergent
-        )
-        repairable = len(result.divergent) - manual
+        manual, repairable = _manual_and_repairable(result)
         guidance = (
             f"could not write the tracker's labels ({result.unavailable}); "
             f"{len(result.applied)} of {repairable} repairable "
@@ -148,10 +145,7 @@ def _summary(result: labels.LabelReconciliation, *, apply: bool) -> str:
     """The closing line: what agreed, what did not, and what to do about it."""
     matched = len(result.matched)
     divergent = len(result.divergent)
-    manual = sum(
-        not difference.can_apply for difference in result.divergent
-    )
-    repairable = divergent - manual
+    manual, repairable = _manual_and_repairable(result)
     if divergent == 0:
         return f"{matched} {_plural('label', matched)} match the vocabulary."
     if apply:
@@ -182,6 +176,12 @@ def _summary(result: labels.LabelReconciliation, *, apply: bool) -> str:
         f"{divergent} {_plural('label', divergent)} differ from the vocabulary; "
         f"{matched} match. Re-run with --apply to write the difference."
     )
+
+
+def _manual_and_repairable(result: labels.LabelReconciliation) -> tuple[int, int]:
+    """Count differences that cannot be applied and those that can."""
+    manual = sum(not difference.can_apply for difference in result.divergent)
+    return manual, len(result.divergent) - manual
 
 
 def _plural(word: str, count: int) -> str:
