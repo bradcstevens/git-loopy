@@ -231,11 +231,15 @@ $RunStartCase = @(
         Where-Object { $_["id"] -ceq "run-start-insight-capabilities" }
 )
 Assert-Equal 1 $RunStartCase.Count "Run-start serialization case count"
+# event-schema.json's `release_version` sites are synthetic (#487): the wire
+# form doesn't disagree with itself on a value it merely copies. The live
+# value is asserted here against the PowerShell distribution's own production
+# decision seam instead, against the one fixture allowed to name it.
 Assert-Equal (
     $ReleaseFixture["expected_release_version"]
-) $RunStartCase[0]["event"]["release_version"] (
-    "Run-start Event Release version"
-)
+) (
+    Get-GitLoopyReleaseVersion
+) "PowerShell Release version seam drifted from the shared Release version authority"
 
 foreach ($Case in $Fixture["serialization_cases"]) {
     $Actual = ConvertTo-GitLoopyJsonLine -Event $Case["event"]

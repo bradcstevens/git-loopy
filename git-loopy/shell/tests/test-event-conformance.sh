@@ -155,15 +155,14 @@ for rejected in "-1" "1.5" "two" " 2"; do
     ! git_loopy_assert_parallel_supported 2>/dev/null
   ) || fail "a malformed Lane cap of '$rejected' must be rejected"
 done
-jq -e \
-  --arg release_version "$(jq -r '.expected_release_version' "$release_fixture")" \
-  '
-    first(
-      .serialization_cases[]
-      | select(.id == "run-start-insight-capabilities")
-    ).event.release_version == $release_version
-  ' "$fixture" >/dev/null ||
-  fail "Run-start Event drifted from the shared Release version"
+# event-schema.json's `release_version` sites are synthetic (#487): the wire
+# form doesn't disagree with itself on a value it merely copies. The live
+# value is asserted here against the shell distribution's own production
+# decision seam instead, against the one fixture allowed to name it.
+assert_equal \
+  "$(jq -r '.expected_release_version' "$release_fixture")" \
+  "$(git_loopy_read_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH")" \
+  "shell Release version seam drifted from the shared Release version authority"
 
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"

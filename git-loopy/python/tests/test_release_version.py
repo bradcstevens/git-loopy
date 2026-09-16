@@ -230,3 +230,24 @@ def test_locked_python_distribution_metadata_matches_release_version() -> None:
         git_loopy_packages[0]["version"]
         == RELEASE_VERSION_FIXTURE["expected_python_distribution_version"]
     )
+
+
+def test_no_fixture_other_than_release_version_contains_live_release_version() -> None:
+    # release-version.json is the single Conformance fixture allowed to name
+    # the live Release version (#487). Every other fixture proves a wire form
+    # or a decision the members can disagree about; the version is neither,
+    # so pinning it anywhere else would make an unrelated Release bump
+    # rewrite fixtures the gate has no reason to touch.
+    live_version = (REPOSITORY_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+
+    offenders = [
+        fixture_path.name
+        for fixture_path in sorted(CONFORMANCE_DIR.glob("*.json"))
+        if fixture_path.name != "release-version.json"
+        and live_version in fixture_path.read_text(encoding="utf-8")
+    ]
+
+    assert offenders == [], (
+        f"live Release version {live_version!r} pinned outside "
+        f"release-version.json in: {offenders}"
+    )

@@ -30,6 +30,7 @@ from git_loopy import cli as cli_module
 from git_loopy import config as config_module
 from git_loopy import version as version_module
 from git_loopy import wrapper as wrapper_module
+from git_loopy.release_version import read_runtime_release_version
 from git_loopy.config import (
     CONTEXT_TIERS,
     MODEL_CONTEXT_TIERS,
@@ -2461,16 +2462,14 @@ def test_event_serialization_fixture(case: dict[str, Any]) -> None:
 _RELEASE_VERSION = _load_fixture("release-version.json")
 
 
-def test_run_start_fixture_pins_exact_release_identity() -> None:
-    run_start = next(
-        case
-        for case in _EVENT_SCHEMA["serialization_cases"]
-        if case["id"] == "run-start-insight-capabilities"
-    )
-    assert (
-        run_start["event"]["release_version"]
-        == _RELEASE_VERSION["expected_release_version"]
-    )
+def test_run_start_release_version_matches_release_version_authority() -> None:
+    # event-schema.json's `release_version` sites are synthetic (#487): the
+    # wire form doesn't disagree with itself on a value it merely copies, so
+    # pinning the live version there would only make every Release bump
+    # rewrite the fixture. The live value is asserted here against the
+    # production decision seam instead, against the one fixture allowed to
+    # name it.
+    assert read_runtime_release_version() == _RELEASE_VERSION["expected_release_version"]
 
 
 _SKILL_CONSULTATION = _load_fixture("skill-consultation.json")
