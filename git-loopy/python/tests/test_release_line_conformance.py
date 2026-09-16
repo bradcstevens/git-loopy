@@ -11,6 +11,7 @@ import pytest
 from git_loopy.release_version import (
     BUMP_CLASS_KEYS,
     BumpClassError,
+    calculate_release_line,
     resolve_bump_class,
 )
 
@@ -41,3 +42,73 @@ def test_fixture_bump_class_refusals(case: dict[str, Any]) -> None:
     assert refusal.value.reason.value == case["reason"]
     assert refusal.value.key == case.get("key")
     assert list(refusal.value.keys) == case.get("keys", [])
+
+
+def _python_cases(name: str) -> list[dict[str, Any]]:
+    return [
+        case
+        for case in FIXTURE[name]
+        if "python" in case.get("distributions", FIXTURE["distributions"])
+    ]
+
+
+def test_release_line_selectors_leave_python_cases_to_run() -> None:
+    assert all(
+        _python_cases(name)
+        for name in (
+            "ratchet_cases",
+            "counter_cases",
+            "order_independence_cases",
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _python_cases("ratchet_cases"),
+    ids=lambda case: case["id"],
+)
+def test_fixture_release_target_ratchets(case: dict[str, Any]) -> None:
+    current = calculate_release_line(
+        case["last_stable_version"], case["prior_bump_classes"]
+    )
+    result = calculate_release_line(
+        case["last_stable_version"],
+        [*case["prior_bump_classes"], case["bump_class"]],
+    )
+
+    assert current.target == case["current_target"]
+    assert result.target == case["new_target"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _python_cases("counter_cases"),
+    ids=lambda case: case["id"],
+)
+def test_fixture_release_line_counts_bumping_closures(case: dict[str, Any]) -> None:
+    result = calculate_release_line(
+        case["last_stable_version"], case["closed_bump_classes"]
+    )
+
+    assert result.target == case["expected"]["target"]
+    assert result.dev_counter == case["expected"]["dev_counter"]
+    assert result.version == case["expected"]["version"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _python_cases("order_independence_cases"),
+    ids=lambda case: case["id"],
+)
+def test_fixture_release_line_is_independent_of_integration_order(
+    case: dict[str, Any],
+) -> None:
+    for integration_order in case["integration_orders"]:
+        result = calculate_release_line(
+            case["last_stable_version"], integration_order
+        )
+
+        assert result.target == case["expected"]["target"]
+        assert result.dev_counter == case["expected"]["dev_counter"]
+        assert result.version == case["expected"]["version"]
