@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PROTOTYPE: Bump-class Pickup</title>
+  <style>
+    body { background: #f7f5f2; color: #202124; font: 16px/1.5 system-ui, sans-serif; margin: 0 auto; max-width: 760px; padding: 3rem 1.5rem; }
+    h1 { margin-bottom: .2rem; }
+    button { background: #155e75; border: 0; border-radius: .25rem; color: white; cursor: pointer; margin: .25rem; padding: .55rem .8rem; }
+    button.secondary { background: #4b5563; }
+    pre { background: #fff; border-left: 4px solid #155e75; padding: 1rem; white-space: pre-wrap; }
+    .note { color: #4b5563; }
+  </style>
+</head>
+<body>
+  <h1>PROTOTYPE: Bump-class Pickup</h1>
+  <p><strong>Question:</strong> Does Pickup have one understandable outcome for each Bump-class decision: read a valid existing class, write a valid inferred class, or report why it cannot classify without defaulting?</p>
+  <p class="note">Throwaway logic prototype. State is in memory and resets on reload.</p>
+
+  <h2>Current Pickup state</h2>
+  <pre id="state"></pre>
+
+  <h2>Free play</h2>
+  <button onclick="dispatch('existing')">Existing semver:patch</button>
+  <button onclick="dispatch('infer', 'minor')">Infer minor</button>
+  <button onclick="dispatch('infer', 'breaking')">Infer unknown key</button>
+  <button onclick="dispatch('infer', null)">No usable proposal</button>
+  <button class="secondary" onclick="dispatch('reset')">Reset unclassified issue</button>
+
+  <h2>Guided walkthrough</h2>
+  <p>1. Reset, then choose <em>Existing semver:patch</em>: Pickup reads it and makes no inference. 2. Reset, then choose <em>Infer minor</em>: the closed key is written to the tracker. 3. Reset, then choose an unknown key or no proposal: Pickup reports the named reason and writes nothing.</p>
+
+  <script>
+    const CLOSED_KEYS = ["major", "minor", "patch", "none"];
+
+    function initialState() {
+      return { labels: ["ready-for-agent"], proposerCalls: 0, trackerWrites: [], outcome: "unclassified" };
+    }
+
+    function decide(state, proposal) {
+      const existing = state.labels.find(label => label.startsWith("semver:"));
+      if (existing && CLOSED_KEYS.includes(existing.slice("semver:".length))) {
+        return { ...state, outcome: `read existing ${existing}; no inference` };
+      }
+      const called = { ...state, proposerCalls: state.proposerCalls + 1 };
+      if (!proposal) {
+        return { ...called, outcome: "reported no_proposal; wrote nothing" };
+      }
+      if (!CLOSED_KEYS.includes(proposal)) {
+        return { ...called, outcome: `reported refused_key: ${proposal}; wrote nothing` };
+      }
+      const label = `semver:${proposal}`;
+      return {
+        ...called,
+        labels: [...called.labels, label],
+        trackerWrites: [...called.trackerWrites, label],
+        outcome: `classified and wrote ${label}`
+      };
+    }
+
+    let state = initialState();
+    function dispatch(action, proposal) {
+      if (action === "reset") state = initialState();
+      if (action === "existing") state = { ...initialState(), labels: ["ready-for-agent", "semver:patch"] };
+      if (action === "infer") state = decide(state, proposal);
+      document.getElementById("state").textContent = JSON.stringify(state, null, 2);
+    }
+    dispatch("reset");
+  </script>
+</body>
+</html>
