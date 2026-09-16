@@ -439,6 +439,11 @@ class LabelDifference:
             return "missing"
         return "drifted" if self.differs else "matched"
 
+    @property
+    def can_apply(self) -> bool:
+        """Whether ``--apply`` can resolve this difference without a rename."""
+        return self.differs != ("name",)
+
 
 @dataclass(frozen=True)
 class LabelReconciliation:
@@ -560,7 +565,7 @@ def reconcile_labels(
 
     applied: list[str] = []
     for difference in report.divergent:
-        if difference.differs == ("name",):
+        if not difference.can_apply:
             continue
         try:
             if difference.tracker is None:
