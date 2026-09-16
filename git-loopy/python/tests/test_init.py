@@ -1567,6 +1567,34 @@ def test_run_init_skips_label_bootstrap_when_the_tracker_is_unreachable(
     assert any("label" in w.lower() for w in warnings)
 
 
+def test_run_init_reports_a_noncanonical_bump_class_label_without_an_unavailable_tracker(
+    tmp_path: Path,
+) -> None:
+    """A reachable tracker carrying ``semver:Minor`` needs a distinct diagnosis."""
+    client = _FakeLabelClient("semver:Minor")
+    warnings: list[str] = []
+
+    rc = init_module.run_init(
+        scope="project",
+        assume_yes=True,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        input_fn=_Input(),
+        output_fn=_Output(),
+        fetch_choices=lambda: [],
+        warn=warnings.append,
+        label_client=client,
+        **_packaged(tmp_path),
+    )
+
+    assert rc == 0
+    assert "semver:minor" not in client.created
+    assert warnings == [
+        "tracker carries noncanonical semver label 'semver:Minor' "
+        "(expected 'semver:minor'); the Bump class decision refuses it."
+    ]
+
+
 def test_run_init_follows_the_documented_mapping_when_bootstrapping(
     tmp_path: Path,
 ) -> None:

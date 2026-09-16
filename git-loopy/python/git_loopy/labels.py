@@ -293,11 +293,15 @@ class LabelBootstrap:
         unavailable: Why the tracker could not be reached or written to, or
             ``None`` when the bootstrap ran. A bootstrap that reports a reason
             created nothing and is not a setup failure.
+        noncanonical_semver: Tracker and expected spellings for closed
+            Bump-class labels that differ by case. The tracker was reachable,
+            but exact Bump-class resolution refuses the carried label.
     """
 
     created: tuple[str, ...] = ()
     existing: tuple[str, ...] = ()
     unavailable: str | None = None
+    noncanonical_semver: tuple[tuple[str, str], ...] = ()
 
 
 @runtime_checkable
@@ -375,14 +379,10 @@ def bootstrap_labels(
             )
         created.append(spec.name)
     if noncanonical_semver:
-        actual, expected = noncanonical_semver[0]
         return LabelBootstrap(
             created=tuple(created),
             existing=tuple(existing),
-            unavailable=(
-                f"tracker carries non-canonical semver: label {actual!r}; "
-                f"expected {expected!r}"
-            ),
+            noncanonical_semver=tuple(noncanonical_semver),
         )
     return LabelBootstrap(created=tuple(created), existing=tuple(existing))
 

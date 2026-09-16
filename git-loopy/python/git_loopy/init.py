@@ -828,6 +828,11 @@ def _bootstrap_tracker_labels(
             f"reachable. Missing labels: "
             f"{', '.join(_missing(vocabulary, result))}."
         )
+    for actual, expected in result.noncanonical_semver:
+        warn(
+            f"tracker carries noncanonical semver label {actual!r} "
+            f"(expected {expected!r}); the Bump class decision refuses it."
+        )
 
 
 def _plural(word: str, count: int) -> str:

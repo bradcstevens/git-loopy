@@ -407,9 +407,9 @@ def test_bootstrap_reports_a_recased_bump_class_label(tmp_path: Path) -> None:
 
     assert "semver:minor" not in result.created
     assert "semver:minor" not in result.existing
-    assert result.unavailable == (
-        "tracker carries non-canonical semver: label 'semver:Minor'; "
-        "expected 'semver:minor'"
+    assert result.unavailable is None
+    assert result.noncanonical_semver == (
+        ("semver:Minor", "semver:minor"),
     )
 
 
