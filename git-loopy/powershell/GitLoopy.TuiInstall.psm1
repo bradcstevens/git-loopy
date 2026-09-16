@@ -349,20 +349,24 @@ function Get-GitLoopyTuiPublishedReleases {
         $Uri = $Template.Replace("{page}", [string]$Page)
         try {
             $Response = Invoke-WebRequest -Uri $Uri -ErrorAction Stop
-            $PageReleases = @($Response.Content | ConvertFrom-Json -AsHashtable)
+            $ParsedReleases = ConvertFrom-Json -InputObject $Response.Content `
+                -AsHashtable -NoEnumerate
         }
         catch {
             throw (New-GitLoopyTuiInstallError -Message (
                     "cannot read published helper Releases from $Uri"
                 ))
         }
-        if ($PageReleases.Count -eq 1 -and $null -eq $PageReleases[0]) {
+        if ($null -eq $ParsedReleases) {
             $PageReleases = @()
         }
-        if ($PageReleases -isnot [Array]) {
+        elseif ($ParsedReleases -isnot [Array]) {
             throw (New-GitLoopyTuiInstallError -Message (
                     "cannot read published helper Releases from $Uri"
                 ))
+        }
+        else {
+            $PageReleases = $ParsedReleases
         }
         foreach ($Release in $PageReleases) {
             $AssetNames = @($Release["assets"] | Where-Object {
@@ -1024,9 +1028,43 @@ function Install-GitLoopyTuiHelper {
             -ExecutableName $Names.Executable
         Test-GitLoopyTuiStagedHelper -Helper $Staged -ReleaseVersion $ResolvedReleaseVersion `
             -SchemaVersion $SchemaVersion -CommandName $Command
+        $ReleaseRecord = "$Destination.release"
+        $ReleaseRecordBackup = Join-Path $Workspace "previous-release-record"
+        $HadReleaseRecord = Test-Path -LiteralPath $ReleaseRecord -PathType Leaf
+        if ($HadReleaseRecord) {
+            try {
+                Copy-Item -LiteralPath $ReleaseRecord -Destination $ReleaseRecordBackup `
+                    -ErrorAction Stop
+            }
+            catch {
+                throw (New-GitLoopyTuiInstallError -Message (
+                        "cannot preserve the resolved helper Release record"
+                    ))
+            }
+        }
         Set-GitLoopyTuiResolvedRelease -Helper $Destination `
             -ResolvedReleaseVersion $ResolvedReleaseVersion
-        Move-GitLoopyTuiHelper -Verified $Staged -Destination $Destination
+        try {
+            Move-GitLoopyTuiHelper -Verified $Staged -Destination $Destination
+        }
+        catch {
+            $ActivationFailure = $_
+            try {
+                if ($HadReleaseRecord) {
+                    Move-Item -LiteralPath $ReleaseRecordBackup -Destination $ReleaseRecord `
+                        -Force -ErrorAction Stop
+                }
+                else {
+                    Remove-Item -LiteralPath $ReleaseRecord -Force -ErrorAction Stop
+                }
+            }
+            catch {
+                throw (New-GitLoopyTuiInstallError -Message (
+                        "cannot restore the resolved helper Release record"
+                    ))
+            }
+            throw $ActivationFailure
+        }
     }
     finally {
         # The workspace is a sibling of the destination, so it would otherwise be

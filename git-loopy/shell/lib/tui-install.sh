@@ -600,9 +600,9 @@ git_loopy_tui_workspace() {
   }
 }
 
-# The one operation that changes what a Run will discover. Everything before it
-# is reversible by deleting a scratch directory; this is not, which is why it
-# happens last and happens once.
+# The one operation that changes the helper bytes a Run will discover. Everything
+# before it is reversible by deleting a scratch directory; a failed activation
+# also restores the resolved-Release record it paired with the existing helper.
 git_loopy_tui_activate() {
   local verified="${1:?verified helper path is required}"
   local destination="${2:?destination path is required}"
@@ -791,9 +791,32 @@ git_loopy_tui_install() {
   )" || return 1
   git_loopy_tui_verify_helper "$staged" "$resolved_release_version" "$schema_version" ||
     return 1
+  local release_record="$destination.release"
+  local release_record_backup="$workspace/previous-release-record"
+  local had_release_record=0
+  if [[ -e "$release_record" ]]; then
+    cp "$release_record" "$release_record_backup" || {
+      _git_loopy_tui_install_error "cannot preserve the resolved helper Release record"
+      return 1
+    }
+    had_release_record=1
+  fi
   git_loopy_tui_record_resolved_release "$destination" "$resolved_release_version" ||
     return 1
-  git_loopy_tui_activate "$staged" "$destination" || return 1
+  if ! git_loopy_tui_activate "$staged" "$destination"; then
+    if ((had_release_record)); then
+      mv -f "$release_record_backup" "$release_record" || {
+        _git_loopy_tui_install_error "cannot restore the resolved helper Release record"
+        return 1
+      }
+    else
+      rm -f "$release_record" || {
+        _git_loopy_tui_install_error "cannot remove the resolved helper Release record"
+        return 1
+      }
+    fi
+    return 1
+  fi
 
   printf '%s\t%s\n' "$destination" "$resolved_release_version"
 }

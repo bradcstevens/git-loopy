@@ -561,7 +561,36 @@ assert_equal "git-loopy-tui 4.5.6" \
   "$("$clone/.git-loopy/bin/git-loopy-tui" --version)" \
   "an unreachable Release leaves the installed helper untouched"
 
-# 11. PATH guidance is printed exactly when the shim is not discoverable.
+# 11. If activation fails after recording a new fallback Release, the old
+# helper and its identity record must remain a pair a future Run can trust.
+activation_failure_clone="$cli_dir/activation-failure"
+make_fake_clone "$activation_failure_clone" 4.5.6
+activation_failure_helper="$activation_failure_clone/.git-loopy/bin/$host_executable"
+mkdir -p "$(dirname -- "$activation_failure_helper")"
+printf 'previously installed helper\n' >"$activation_failure_helper"
+printf '4.5.5\n' >"$activation_failure_helper.release"
+git_loopy_tui_activate() {
+  _git_loopy_tui_install_error "cannot install the verified helper to $2"
+  return 1
+}
+set +e
+activation_failure_out="$(
+  git_loopy_tui_install \
+    "$artifact_metadata" "$activation_failure_clone" 4.5.6 \
+    "$GIT_LOOPY_EVENT_SCHEMA_VERSION" "file://$release" 2>&1
+)"
+activation_failure_status=$?
+set -e
+((activation_failure_status != 0)) ||
+  fail "an activation failure installed a helper"
+assert_contains "$activation_failure_out" "cannot install the verified helper" \
+  "an activation failure names the failed step"
+assert_equal "previously installed helper" "$(<"$activation_failure_helper")" \
+  "an activation failure leaves the previous helper untouched"
+assert_equal "4.5.5" "$(<"$activation_failure_helper.release")" \
+  "an activation failure restores the previous helper Release record"
+
+# 12. PATH guidance is printed exactly when the shim is not discoverable.
 guidance_clone="$cli_dir/guidance"
 make_fake_clone "$guidance_clone" 4.5.6
 guidance_out="$(
