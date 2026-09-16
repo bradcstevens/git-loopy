@@ -169,7 +169,17 @@ from git_loopy.denomination import (
 )
 from git_loopy.prompt import PromptMetadataError, load_prompt
 from git_loopy.rate_card import RateCard
-from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
+from git_loopy.release_version import (
+    RELEASE_VERSION_PATHS,
+    ReleaseLine,
+    ReleaseVersionError,
+    advance_release_line,
+    read_release_version,
+    read_runtime_release_version,
+    release_line_from_version,
+    resolve_bump_class,
+    write_repository_release_version,
+)
 from git_loopy.run_control import RunControlArtifact
 from git_loopy.run_environment_preflight import resolve_run_environment_preflight
 from git_loopy.skill_install import (
@@ -2545,6 +2555,8 @@ class _ParallelLoop:
         # a Parallel Summary is denominated by one card too (#331).
         self._rate_card = rate_card
         self._git = git
+        self._release_line: ReleaseLine | None = None
+        self._last_stable_release_version: str | None = None
         self._materializer = materialization_module.ContributionMaterializer(git)
         self._prompt_text = prompt_text
         self._writers = writers
@@ -4849,8 +4861,83 @@ class _ParallelLoop:
         pre_base: str,
     ) -> None:
         """Finish a green landing: close the issue + delete the integrated branch."""
+        if not self._advance_release_line(lane_work.item):
+            return
         self._close_landed(lane_work.item, pre_base)
         self._delete_branch_safely(contribution.ref, lane_work.branch)
+
+    def _advance_release_line(self, item: AfkReadyItem) -> bool:
+        """Commit one bumped Release line after Integration has published it."""
+        try:
+            bump_class = resolve_bump_class(item.labels)
+        except ReleaseVersionError as exc:
+            self._diag.warning(
+                "integration #%s: cannot resolve Bump class for Release line: %s",
+                item.ref,
+                exc,
+            )
+            # Pickup already named this classification fault. It must not silently
+            # turn into semver:none, but it also cannot retract a green publication.
+            return True
+        if bump_class == "none":
+            return True
+
+        try:
+            if self._release_line is None:
+                current_version = read_release_version(self._repo_root / "VERSION")
+                last_stable = (
+                    self._git.latest_release_version()
+                    if "-" in current_version
+                    else None
+                )
+                (
+                    self._last_stable_release_version,
+                    self._release_line,
+                ) = release_line_from_version(
+                    current_version,
+                    last_stable_version=last_stable,
+                )
+            assert self._last_stable_release_version is not None
+            next_line = advance_release_line(
+                self._last_stable_release_version,
+                self._release_line.target,
+                self._release_line.counter,
+                bump_class,
+            )
+            write_repository_release_version(self._repo_root, next_line.version)
+        except ReleaseVersionError as exc:
+            self._diag.warning(
+                "integration #%s: Release line did not advance: %s", item.ref, exc
+            )
+            return False
+
+        try:
+            self._git.commit_paths(
+                f"chore(release): advance Release line to {next_line.version}",
+                RELEASE_VERSION_PATHS,
+            )
+        except git_module.GitError as exc:
+            try:
+                write_repository_release_version(
+                    self._repo_root, self._release_line.version
+                )
+            except ReleaseVersionError as rollback_exc:
+                self._diag.error(
+                    "integration #%s: Release commit failed and its metadata rollback "
+                    "also failed: %s",
+                    item.ref,
+                    rollback_exc,
+                )
+                return False
+            self._diag.warning(
+                "integration #%s: Release commit failed; restored prior Release line: %s",
+                item.ref,
+                exc,
+            )
+            return False
+
+        self._release_line = next_line
+        return True
 
     def _close_landed(self, item: AfkReadyItem, pre_base: str) -> None:
         """Close a landed issue via the serial closure path + emit ``auto_close``.

@@ -34,6 +34,16 @@ _PYTHON_LOCKFILE = Path("git-loopy/python/uv.lock")
 _RUST_MANIFEST = Path("git-loopy/tui/Cargo.toml")
 _RUST_LOCKFILE = Path("git-loopy/tui/Cargo.lock")
 _TUI_PROBE = Path("git-loopy/tui/README.md")
+RELEASE_VERSION_PATHS: tuple[Path, ...] = (
+    Path("VERSION"),
+    _PYTHON_SOURCE_VERSION,
+    _PYTHON_RUNTIME_VERSION,
+    _PYTHON_PACKAGE_METADATA,
+    _PYTHON_LOCKFILE,
+    _RUST_MANIFEST,
+    _RUST_LOCKFILE,
+    _TUI_PROBE,
+)
 BUMP_CLASS_LABEL_PREFIX = "semver:"
 BUMP_CLASS_KEYS: tuple[str, ...] = ("major", "minor", "patch", "none")
 
@@ -145,6 +155,31 @@ def advance_release_line(
     target = ".".join(str(part) for part in max(current, candidate))
     counter = current_counter + (bump_class != "none")
     return ReleaseLine(target=target, counter=counter)
+
+
+def release_line_from_version(
+    version: str, *, last_stable_version: str | None = None
+) -> tuple[str, ReleaseLine]:
+    """Resolve persisted Release metadata into its stable base and current line."""
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:-dev\.(0|[1-9][0-9]*))?", version)
+    if match is None:
+        raise ReleaseVersionError(
+            "Release line must be a stable or -dev.N Semantic Versioning value"
+        )
+    target, counter_text = match.groups()
+    _release_target_parts(target, "Release target")
+    if counter_text is None:
+        return target, ReleaseLine(target=target, counter=0)
+    if last_stable_version is None:
+        raise ReleaseVersionError(
+            "a prerelease Release line requires its last stable Release version"
+        )
+    stable = _release_target_parts(last_stable_version, "Last stable Release version")
+    if tuple(int(part) for part in target.split(".")) < stable:
+        raise ReleaseVersionError(
+            "Release target cannot precede its last stable Release version"
+        )
+    return last_stable_version, ReleaseLine(target=target, counter=int(counter_text))
 
 
 def _release_target_parts(value: str, label: str) -> tuple[int, int, int]:

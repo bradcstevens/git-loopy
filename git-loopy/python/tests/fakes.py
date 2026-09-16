@@ -82,6 +82,7 @@ class FakeGitClient:
         push_error: GitError | None = None,
         sha_prefix: str = "face",
         merge_conflicts: Sequence[int] | None = None,
+        release_versions: Sequence[str] = (),
         tracked_paths: Iterable[Path | str] = (),
         changed_paths: Mapping[str, Sequence[str]] | None = None,
         _branch_registry: dict[str, FakeGitClient] | None = None,
@@ -100,6 +101,7 @@ class FakeGitClient:
                 )
             ]
         self._log: list[Commit] = list(commits)
+        self._release_versions = tuple(release_versions)
         # Test-controlled worktree state (read by is_dirty / has_untracked).
         self.dirty = dirty
         self.untracked = untracked
@@ -208,6 +210,9 @@ class FakeGitClient:
         if not self._log:
             raise GitError(["git", "rev-parse", "HEAD"], 128, "no commits yet")
         return self._log[-1].sha
+
+    def latest_release_version(self) -> str | None:
+        return self._release_versions[0] if self._release_versions else None
 
     def is_dirty(self) -> bool:
         return self.dirty
@@ -326,6 +331,7 @@ class FakeGitClient:
             branch=branch,
             sha_prefix=f"wt{self._worktree_seq}",
             merge_conflicts=sorted(self._merge_conflict_issues),
+            release_versions=self._release_versions,
             tracked_paths=self._tracked_paths,
             _branch_registry=self._branches,
             _abort_spy=self.repo_merge_aborts,

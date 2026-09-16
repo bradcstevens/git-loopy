@@ -131,6 +131,7 @@ from git_loopy.execution_host import (
 from git_loopy.gate import LoopFailure
 from git_loopy.interactive.state import LiveRunState, issue_detail, queue_rows
 from git_loopy.readiness import BlockedByRead, BlockerNode
+from git_loopy.release_version import validate_repository_release_version
 from git_loopy.session_outcome import (
     SessionOutcome,
     SessionOutcomeRecord,
@@ -473,7 +474,10 @@ def _lane_branch_deletes(fake_git: FakeGitClient) -> list[str]:
 
 
 def _wire_repo(
-    tmp_path: Path, *, merge_conflicts: Sequence[int] = ()
+    tmp_path: Path,
+    *,
+    merge_conflicts: Sequence[int] = (),
+    release_versions: Sequence[str] = (),
 ) -> FakeGitClient:
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text(
@@ -493,6 +497,47 @@ def _wire_repo(
         dirty=False,
         untracked=False,
         merge_conflicts=merge_conflicts,
+        release_versions=release_versions,
+    )
+
+
+def _wire_release_distribution(root: Path, version: str = "1.2.3") -> None:
+    (root / "VERSION").write_text(f"{version}\n", encoding="utf-8")
+    package_dir = root / "git-loopy" / "python" / "git_loopy"
+    package_dir.mkdir(parents=True, exist_ok=True)
+    (package_dir / "__init__.py").write_text(
+        f'__version__ = "{version}"\n', encoding="utf-8"
+    )
+    (package_dir / "VERSION").write_text(f"{version}\n", encoding="utf-8")
+    (package_dir.parent / "pyproject.toml").write_text(
+        f'[project]\nname = "git-loopy"\nversion = "{version}"\n',
+        encoding="utf-8",
+    )
+    (package_dir.parent / "uv.lock").write_text(
+        '\n'.join(
+            (
+                "[[package]]",
+                'name = "git-loopy"',
+                f'version = "{version.replace("-dev.", ".dev")}"',
+                'source = { editable = "." }',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    tui_dir = root / "git-loopy" / "tui"
+    tui_dir.mkdir()
+    (tui_dir / "Cargo.toml").write_text(
+        f'[package]\nname = "git-loopy-tui"\nversion = "{version}"\n',
+        encoding="utf-8",
+    )
+    (tui_dir / "Cargo.lock").write_text(
+        f'[[package]]\nname = "git-loopy-tui"\nversion = "{version}"\n',
+        encoding="utf-8",
+    )
+    (tui_dir / "README.md").write_text(
+        f'{{"name": "git-loopy-tui", "version": "{version}"}}\n',
+        encoding="utf-8",
     )
 
 
@@ -2697,6 +2742,177 @@ def test_parallel_integration_lands_and_closes_both_lanes(
 
     # No worktrees left live once Integration has processed every contribution.
     assert fake_git.active_worktrees == []
+
+
+@pytest.mark.parametrize(
+    ("bump_class", "expected_version", "expected_commit"),
+    (
+        (
+            "patch",
+            "1.2.4-dev.1",
+            "chore(release): advance Release line to 1.2.4-dev.1",
+        ),
+        ("none", "1.2.3", None),
+    ),
+)
+def test_parallel_integration_applies_only_bumped_release_lines_after_publication(
+    bump_class: str,
+    expected_version: str,
+    expected_commit: str | None,
+    tmp_path, monkeypatch
+) -> None:
+    """Only a bumped green contribution commits a post-Integration Release line."""
+    fake_git = _wire_repo(tmp_path)
+    _wire_release_distribution(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42,
+                labels=["ready-for-agent", "parallel-safe", f"semver:{bump_class}"],
+            )
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    )
+
+    assert exit_code == 0
+    assert validate_repository_release_version(tmp_path) == expected_version
+    if expected_commit is None:
+        assert fake_git.commit_paths_calls == []
+    else:
+        assert fake_git.commit_paths_calls == [
+            (
+                expected_commit,
+                (
+                    "VERSION",
+                    "git-loopy/python/git_loopy/__init__.py",
+                    "git-loopy/python/git_loopy/VERSION",
+                    "git-loopy/python/pyproject.toml",
+                    "git-loopy/python/uv.lock",
+                    "git-loopy/tui/Cargo.toml",
+                    "git-loopy/tui/Cargo.lock",
+                    "git-loopy/tui/README.md",
+                ),
+            )
+        ]
+    assert fake_gh.issue_view(42).state == "CLOSED"
+
+
+def test_parallel_integration_restores_the_release_line_when_its_commit_fails(
+    tmp_path, monkeypatch
+) -> None:
+    """A release commit failure leaves base with its prior complete version."""
+    fake_git = _wire_repo(tmp_path)
+    _wire_release_distribution(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42,
+                labels=["ready-for-agent", "parallel-safe", "semver:patch"],
+            )
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    def reject_release_commit(message: str, paths: Sequence[Path | str]) -> str:
+        fake_git.commit_paths_calls.append((message, tuple(str(path) for path in paths)))
+        raise git_module.GitError(["git", "commit"], 1, "pre-commit rejected release")
+
+    monkeypatch.setattr(fake_git, "commit_paths", reject_release_commit)
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 0
+
+    assert validate_repository_release_version(tmp_path) == "1.2.3"
+    assert fake_gh.issue_view(42).state == "OPEN"
+
+
+def test_parallel_integration_continues_a_prerelease_release_line(
+    tmp_path, monkeypatch
+) -> None:
+    """A new Run retains a persisted dev counter and its stable Release base."""
+    fake_git = _wire_repo(tmp_path, release_versions=("1.2.3",))
+    _wire_release_distribution(tmp_path, version="1.3.0-dev.7")
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42,
+                labels=["ready-for-agent", "parallel-safe", "semver:patch"],
+            )
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 0
+
+    assert validate_repository_release_version(tmp_path) == "1.3.0-dev.8"
+    assert fake_gh.issue_view(42).state == "CLOSED"
 
 
 class _BaseWatchingGateRunner(FakeGateRunner):

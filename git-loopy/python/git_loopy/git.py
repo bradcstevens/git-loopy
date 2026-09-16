@@ -83,6 +83,7 @@ Design notes:
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -380,6 +381,10 @@ class GitClient(Protocol):
         """Return the current ``HEAD`` commit SHA (full 40-char form)."""
         ...
 
+    def latest_release_version(self) -> str | None:
+        """Return the newest stable ``vX.Y.Z`` tag reachable from ``HEAD``."""
+        ...
+
     def is_dirty(self) -> bool:
         """Return ``True`` if the tree has uncommitted staged/unstaged changes."""
         ...
@@ -641,6 +646,18 @@ class SubprocessGitClient:
         """
         out = _run(["rev-parse", "HEAD"], cwd=self._root)
         return out.strip()
+
+    def latest_release_version(self) -> str | None:
+        """Return the newest stable Release tag that the current base contains."""
+        tags = _run(
+            ["tag", "--merged", "HEAD", "--list", "v*", "--sort=-version:refname"],
+            cwd=self._root,
+        ).splitlines()
+        for tag in tags:
+            match = re.fullmatch(r"v(\d+\.\d+\.\d+)", tag)
+            if match is not None:
+                return match.group(1)
+        return None
 
     def is_dirty(self) -> bool:
         """Return ``True`` if the working tree has uncommitted changes.

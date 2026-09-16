@@ -194,6 +194,22 @@ def test_head_sha_raises_in_empty_repo(tmp_path: Path) -> None:
         SubprocessGitClient(tmp_path).head_sha()
 
 
+def test_latest_release_version_uses_the_newest_merged_stable_tag(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    _commit(tmp_path, "init")
+    for tag in ("v1.2.3", "v1.3.0-dev.1", "v1.10.0"):
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "tag", tag],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    assert SubprocessGitClient(tmp_path).latest_release_version() == "1.10.0"
+
+
 # --------------------------------------------------------------------------- #
 # is_dirty                                                                     #
 # --------------------------------------------------------------------------- #

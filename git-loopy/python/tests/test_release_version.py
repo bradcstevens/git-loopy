@@ -16,6 +16,7 @@ import pytest
 import git_loopy.release_version as release_version
 from git_loopy.release_version import (
     ReleaseVersionError,
+    release_line_from_version,
     validate_repository_release_version,
     write_repository_release_version,
 )
@@ -343,6 +344,17 @@ def test_release_writer_advances_all_distribution_copies(tmp_path: Path) -> None
         for path in tmp_path.rglob("*")
         if path.is_file()
     } == modes_before
+
+
+def test_release_line_reader_continues_a_dev_counter_from_its_stable_release() -> None:
+    last_stable, release_line = release_line_from_version(
+        "1.3.0-dev.7",
+        last_stable_version="1.2.3",
+    )
+
+    assert last_stable == "1.2.3"
+    assert release_line.target == "1.3.0"
+    assert release_line.counter == 7
 
 
 def test_release_writer_refuses_invalid_semver_without_touching_distribution(
