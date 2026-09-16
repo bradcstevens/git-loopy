@@ -484,6 +484,7 @@ impl DashboardState {
                 self.begin_iteration(now_monotonic);
             }
             EventPayload::AfkReadyCollected(pool) => self.record_pool(&pool.issues),
+            EventPayload::PoolRefreshed(membership) => self.record_membership(&membership.issues),
             EventPayload::IssueActivated(activated) => {
                 self.authoritative_binding = true;
                 if self.active_ref.is_none() {
@@ -729,6 +730,12 @@ impl DashboardState {
             if entry.status == STATUS_QUEUED && !issues.contains(issue) {
                 entry.status = STATUS_GONE.to_string();
             }
+        }
+    }
+
+    fn record_membership(&mut self, issues: &[IssueRef]) {
+        for issue in issues {
+            self.insert_entry(issue.clone());
         }
     }
 

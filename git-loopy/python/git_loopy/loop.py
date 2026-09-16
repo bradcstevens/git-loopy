@@ -2566,6 +2566,7 @@ class _ParallelLoop:
         # Parallel mode degrades entirely to the serial path (`drive`).
         self._pool: RollingPool | None = None
         self._scheduler: rolling_scheduler.RollingScheduler | None = None
+        self._membership_read_visible = False
         self._iteration_cap_announced = False
         # A Lane routing refusal is a **Pickup skip**, not a fatal worker
         # exception. Keep the candidate cached but ineligible for this Run so
@@ -2595,6 +2596,7 @@ class _ParallelLoop:
                 clock=time.monotonic,
                 eligible=self._lane_candidate_eligible,
                 cacheable=self._lane_candidate_cacheable,
+                on_membership_read=self._emit_membership_read,
             )
             self._scheduler = rolling_scheduler.RollingScheduler(
                 diag=diag,
@@ -4465,6 +4467,19 @@ class _ParallelLoop:
             "capacity": capacity,
             "starting_lane_limit": self._scheduler.effective_limit,
         }
+
+    def _emit_membership_read(
+        self, candidates: tuple[PoolCandidate, ...], forced: bool
+    ) -> None:
+        """Publish the cache's add-only Membership read at Run scope."""
+        if not candidates and not (forced and self._membership_read_visible):
+            return
+        self._membership_read_visible = True
+        self._serial._emit(
+            events_module.WRAPPER_POOL_REFRESHED,
+            iter_num=None,
+            issues=[candidate.ref for candidate in candidates],
+        )
 
     def _emit_contribution_event(
         self,

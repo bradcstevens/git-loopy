@@ -83,6 +83,12 @@ def is_parallel_safe(candidate: PoolCandidate) -> bool:
     return isinstance(candidate.ref, int) and LABEL_PARALLEL_SAFE in candidate.labels
 
 
+def _ignore_membership_read(
+    _candidates: tuple[PoolCandidate, ...], _forced: bool
+) -> None:
+    """Default visibility seam for callers that do not publish Membership reads."""
+
+
 @dataclass(frozen=True)
 class RefreshBackoff:
     """Bounded exponential backoff for demand-gated membership refresh.
@@ -167,6 +173,9 @@ class RollingPool:
             **Blocked** so the next refresh can promote them when their
             blockers close.
         backoff: The bounded exponential backoff policy.
+        on_membership_read: Receives complete cache membership in FIFO order
+            and whether it was the terminal confirmation, when the read is new,
+            changed, or forced.
     """
 
     diag: logging.Logger
@@ -176,9 +185,13 @@ class RollingPool:
     eligible: Callable[[PoolCandidate], bool] = is_parallel_safe
     cacheable: Callable[[PoolCandidate], bool] = is_parallel_safe
     backoff: RefreshBackoff = field(default_factory=RefreshBackoff)
+    on_membership_read: Callable[[tuple[PoolCandidate, ...], bool], None] = (
+        _ignore_membership_read
+    )
 
     _entries: list[_CachedCandidate] = field(default_factory=list, init=False)
     _refreshing: bool = field(default=False, init=False)
+    _membership_read_seen: bool = field(default=False, init=False)
     _demand_unmet: bool = field(default=False, init=False)
     _interval: float = field(default=0.0, init=False)
     _next_refresh_at: float = field(default=0.0, init=False)
@@ -369,9 +382,9 @@ class RollingPool:
     def _refresh_now(self) -> MembershipSnapshot:
         """Force one refresh regardless of the backoff window."""
         self._next_refresh_at = self.clock()
-        return self._refresh()
+        return self._refresh(force_emit=True)
 
-    def _refresh(self) -> MembershipSnapshot:
+    def _refresh(self, *, force_emit: bool = False) -> MembershipSnapshot:
         """Read membership once, reconcile it, and re-arm the backoff window.
 
         Re-entrant calls are coalesced (#219 §2.3): while a read is in flight a
@@ -391,6 +404,11 @@ class RollingPool:
             before = self.candidate_refs
             self._reconcile(snapshot)
             changed = self.candidate_refs != before
+            if force_emit or not self._membership_read_seen or changed:
+                self._membership_read_seen = True
+                self.on_membership_read(
+                    tuple(entry.candidate for entry in self._entries), force_emit
+                )
         else:
             self.diag.warning(
                 "membership refresh incomplete; retaining last complete snapshot"

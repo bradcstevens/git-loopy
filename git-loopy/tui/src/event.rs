@@ -101,6 +101,8 @@ pub enum EventPayload {
     IterationStart,
     /// `wrapper.afk_ready.collected`
     AfkReadyCollected(AfkReadyCollected),
+    /// `wrapper.pool.refreshed`
+    PoolRefreshed(PoolRefreshed),
     /// `wrapper.issue.activated`
     IssueActivated(IssueActivated),
     /// `wrapper.pickup.bound`
@@ -214,6 +216,14 @@ pub struct InsightCapabilities {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct AfkReadyCollected {
     /// Pool membership in source order.
+    #[serde(default)]
+    pub issues: Vec<IssueRef>,
+}
+
+/// One non-authoritative Membership read during a Parallel Run.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct PoolRefreshed {
+    /// Cache membership in stable FIFO order.
     #[serde(default)]
     pub issues: Vec<IssueRef>,
 }
@@ -555,6 +565,7 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.contribution.start" => EventPayload::ContributionStart(decode_or_default(value)),
         "wrapper.iteration.start" => EventPayload::IterationStart,
         "wrapper.afk_ready.collected" => EventPayload::AfkReadyCollected(decode_or_default(value)),
+        "wrapper.pool.refreshed" => EventPayload::PoolRefreshed(decode_or_default(value)),
         "wrapper.issue.activated" => match serde_json::from_value(value.clone()) {
             Ok(activated) => EventPayload::IssueActivated(activated),
             // An activation naming no usable issue binds nothing; it is

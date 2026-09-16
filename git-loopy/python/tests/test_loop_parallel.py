@@ -582,6 +582,23 @@ def test_parallel_run_dispatches_two_lanes(tmp_path, monkeypatch) -> None:
 
     # Each Lane's commit advanced its OWN branch: two commit.recorded events.
     events = _logged_events(tmp_path)
+    membership_reads = [
+        event for event in events if event["type"] == "wrapper.pool.refreshed"
+    ]
+    assert len(membership_reads) == 1
+    assert membership_reads[0]["issues"] == [42, 43]
+    assert membership_reads[0]["iter"] is None
+    assert not {
+        "contribution_id",
+        "issue",
+        "lane_id",
+        "lane_issue",
+    }.intersection(membership_reads[0])
+    assert events.index(membership_reads[0]) < next(
+        index
+        for index, event in enumerate(events)
+        if event["type"] == "wrapper.contribution.start"
+    )
     commit_events = [e for e in events if e["type"] == "wrapper.commit.recorded"]
     assert len(commit_events) == 2, (
         f"expected one commit per Lane, got {len(commit_events)}"
@@ -4791,6 +4808,7 @@ def test_parallel_reports_serial_fallback_when_nothing_carries_parallel_safe(
     assert types.index("wrapper.parallel.serial_fallback") < types.index(
         "wrapper.iteration.start"
     )
+    assert "wrapper.pool.refreshed" not in types
     # Dispatch is unchanged: the plain issue was still worked and closed.
     assert [n for (n, _c) in fake_gh.issue_close_calls] == [43]
 

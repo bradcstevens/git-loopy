@@ -742,6 +742,89 @@ class TestConfirmEmpty:
 
 
 # --------------------------------------------------------------------------- #
+# Membership-read visibility (#481)                                            #
+# --------------------------------------------------------------------------- #
+
+
+class TestMembershipRead:
+    def test_complete_reads_publish_initial_changes_and_final_confirmation(self) -> None:
+        """A complete Membership read is visible without gaining Pool authority."""
+        source = ScriptedSource(
+            [
+                _snapshot([31, 7]),
+                _snapshot([31, 7]),
+                _snapshot([31, 7, 19]),
+                _snapshot([31, 7, 19]),
+            ]
+        )
+        clock = FakeClock()
+        published: list[tuple[int | str, ...]] = []
+        pool = _pool(
+            source,
+            clock=clock,
+            on_membership_read=lambda candidates, _forced: published.append(
+                tuple(candidate.ref for candidate in candidates)
+            ),
+        )
+
+        pool.start()
+        pool.service(refillable=3)
+        clock.advance(2.0)
+        pool.service(refillable=4)
+
+        assert published == [(31, 7), (31, 7, 19)]
+
+        assert pool.confirm_empty() is False
+        assert published == [(31, 7), (31, 7, 19), (31, 7, 19)]
+
+    def test_incomplete_and_coalesced_refreshes_publish_nothing(self) -> None:
+        source = ScriptedSource(
+            [
+                _snapshot([31]),
+                MembershipSnapshot(candidates=(), complete=False),
+                _snapshot([31]),
+            ]
+        )
+        clock = FakeClock()
+        published: list[tuple[int | str, ...]] = []
+        pool = _pool(
+            source,
+            clock=clock,
+            on_membership_read=lambda candidates, _forced: published.append(
+                tuple(candidate.ref for candidate in candidates)
+            ),
+        )
+        pool.start()
+        pool.service(refillable=2)
+
+        source.on_membership = lambda: pool.service(refillable=2)
+        clock.advance(4.0)
+        pool.service(refillable=2)
+
+        assert published == [(31,)]
+        assert pool.candidate_refs == (31,)
+
+    def test_changed_read_keeps_a_quarantined_candidate_visible(self) -> None:
+        source = ScriptedSource(
+            [_snapshot([31, 7]), _snapshot([31, 19])],
+            pickups={31: PICKUP_UNAVAILABLE},
+        )
+        published: list[tuple[int | str, ...]] = []
+        pool = _pool(
+            source,
+            on_membership_read=lambda candidates, _forced: published.append(
+                tuple(candidate.ref for candidate in candidates)
+            ),
+        )
+        pool.start()
+
+        assert pool.take().item is not None
+        pool.service(refillable=2)
+
+        assert published == [(31, 7), (31, 19)]
+
+
+# --------------------------------------------------------------------------- #
 # Module structure                                                             #
 # --------------------------------------------------------------------------- #
 

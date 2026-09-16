@@ -458,6 +458,63 @@ fn one_issue_the_harness_could_not_price_leaves_every_other_row_reported() {
     );
 }
 
+#[test]
+fn a_membership_read_only_adds_queued_rows_to_the_queue() {
+    let events = vec![
+        serde_json::json!({"type": "wrapper.iteration.start", "iter": 1}),
+        serde_json::json!({
+            "type": "wrapper.afk_ready.collected",
+            "iter": 1,
+            "issues": [42, 43, 44, 45, 47, 48]
+        }),
+        serde_json::json!({"type": "wrapper.issue.activated", "iter": 1, "issue": 42}),
+        serde_json::json!({
+            "type": "wrapper.iteration.end",
+            "iter": 1,
+            "issues": [
+                {"issue": 42, "status": "closed"},
+                {"issue": 43, "status": "advanced"},
+                {"issue": 44, "status": "no-progress"}
+            ]
+        }),
+        serde_json::json!({
+            "type": "agent.output",
+            "lane_issue": 47,
+            "text": "working"
+        }),
+        serde_json::json!({
+            "type": "wrapper.afk_ready.collected",
+            "iter": 2,
+            "issues": [42, 43, 44, 47, 48]
+        }),
+        serde_json::json!({
+            "type": "wrapper.pool.refreshed",
+            "iter": null,
+            "issues": [42, 43, 44, 45, 46, 47]
+        }),
+    ];
+
+    let projected = reduce(&events, IssueRef::number(46));
+
+    assert_eq!(queue_row(&projected, 42)["status"], "closed");
+    assert_eq!(queue_row(&projected, 43)["status"], "advanced");
+    assert_eq!(queue_row(&projected, 44)["status"], "no-progress");
+    assert_eq!(queue_row(&projected, 45)["status"], "gone");
+    assert_eq!(queue_row(&projected, 47)["status"], "active");
+    assert_eq!(
+        queue_row(&projected, 48)["status"],
+        "queued",
+        "a Membership read never sweeps a queued row it does not list"
+    );
+    let queued = queue_row(&projected, 46);
+    assert_eq!(queued["status"], "queued");
+    assert!(queued["started_at"].is_null());
+    assert_eq!(queued["active_seconds"], 0.0);
+    assert_eq!(queued["iteration_count"], 0);
+    assert!(queued["tokens_in"].is_null());
+    assert!(queued["tokens_out"].is_null());
+}
+
 // --------------------------------------------------------------------------
 // Pickup and skip records (#397)
 // --------------------------------------------------------------------------
