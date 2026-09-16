@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import ast
+import os
 import re
+import stat
 import sys
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from enum import Enum
@@ -27,6 +30,10 @@ _SEMVER = re.compile(
 _PYTHON_SOURCE_VERSION = Path("git-loopy/python/git_loopy/__init__.py")
 _PYTHON_PACKAGE_METADATA = Path("git-loopy/python/pyproject.toml")
 _PYTHON_RUNTIME_VERSION = Path("git-loopy/python/git_loopy/VERSION")
+_PYTHON_LOCKFILE = Path("git-loopy/python/uv.lock")
+_RUST_MANIFEST = Path("git-loopy/tui/Cargo.toml")
+_RUST_LOCKFILE = Path("git-loopy/tui/Cargo.lock")
+_TUI_PROBE = Path("git-loopy/tui/README.md")
 BUMP_CLASS_LABEL_PREFIX = "semver:"
 BUMP_CLASS_KEYS: tuple[str, ...] = ("major", "minor", "patch", "none")
 
@@ -80,6 +87,12 @@ class ReleaseLine:
     def version(self) -> str:
         """Return the target's current prerelease, or the target before any bump."""
         return f"{self.target}-dev.{self.counter}" if self.counter else self.target
+
+
+@dataclass(frozen=True)
+class _ReleaseVersionUpdate:
+    path: Path
+    content: str
 
 
 def resolve_bump_class(labels: Sequence[str]) -> str:
@@ -291,6 +304,286 @@ def validate_repository_release_version(
                 f"expected {authority!r} from VERSION, found {publication!r}"
             )
     return authority
+
+
+def write_repository_release_version(repository_root: Path, version: str) -> None:
+    """Atomically advance every checked-in Release-version copy to ``version``.
+
+    The writer only accepts stable and ``-dev.N`` Release-line values because
+    those are the forms whose Python package metadata has an unambiguous PEP
+    440 representation. All targets are read and transformed before replacement
+    begins, and each original is staged as a rollback file before its target
+    changes.
+    """
+    _validate_semver(version, "Release version")
+    python_version = _python_distribution_version(version)
+    authority = validate_repository_release_version(repository_root)
+    updates = (
+        _ReleaseVersionUpdate(repository_root / "VERSION", f"{version}\n"),
+        _ReleaseVersionUpdate(
+            repository_root / _PYTHON_SOURCE_VERSION,
+            _replace_python_source_version(
+                _read_metadata_text(
+                    repository_root / _PYTHON_SOURCE_VERSION,
+                    "Python source Release metadata",
+                ),
+                authority,
+                version,
+                repository_root / _PYTHON_SOURCE_VERSION,
+            ),
+        ),
+        _ReleaseVersionUpdate(repository_root / _PYTHON_RUNTIME_VERSION, f"{version}\n"),
+        _ReleaseVersionUpdate(
+            repository_root / _PYTHON_PACKAGE_METADATA,
+            _replace_project_version(
+                _read_metadata_text(
+                    repository_root / _PYTHON_PACKAGE_METADATA,
+                    "Python package Release metadata",
+                ),
+                authority,
+                version,
+                repository_root / _PYTHON_PACKAGE_METADATA,
+            ),
+        ),
+        _ReleaseVersionUpdate(
+            repository_root / _PYTHON_LOCKFILE,
+            _replace_package_version(
+                _read_metadata_text(
+                    repository_root / _PYTHON_LOCKFILE,
+                    "Python lockfile Release metadata",
+                ),
+                "git-loopy",
+                _python_distribution_version(authority),
+                python_version,
+                repository_root / _PYTHON_LOCKFILE,
+            ),
+        ),
+        _ReleaseVersionUpdate(
+            repository_root / _RUST_MANIFEST,
+            _replace_package_version(
+                _read_metadata_text(
+                    repository_root / _RUST_MANIFEST,
+                    "Rust manifest Release metadata",
+                ),
+                "git-loopy-tui",
+                authority,
+                version,
+                repository_root / _RUST_MANIFEST,
+            ),
+        ),
+        _ReleaseVersionUpdate(
+            repository_root / _RUST_LOCKFILE,
+            _replace_package_version(
+                _read_metadata_text(
+                    repository_root / _RUST_LOCKFILE,
+                    "Rust lockfile Release metadata",
+                ),
+                "git-loopy-tui",
+                authority,
+                version,
+                repository_root / _RUST_LOCKFILE,
+            ),
+        ),
+        _ReleaseVersionUpdate(
+            repository_root / _TUI_PROBE,
+            _replace_exactly_once(
+                _read_metadata_text(
+                    repository_root / _TUI_PROBE,
+                    "TUI documented probe Release metadata",
+                ),
+                re.compile(
+                    rf'("version":\s*)"{re.escape(authority)}"',
+                ),
+                rf'\g<1>"{version}"',
+                repository_root / _TUI_PROBE,
+                "TUI documented probe Release version",
+            ),
+        ),
+    )
+    _apply_release_version_updates(updates)
+
+
+def _python_distribution_version(version: str) -> str:
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:-dev\.(\d+))?", version)
+    if match is None:
+        raise ReleaseVersionError(
+            "Release version must be stable or a -dev.N prerelease to update "
+            "Python distribution metadata"
+        )
+    stable, counter = match.groups()
+    return f"{stable}.dev{counter}" if counter is not None else stable
+
+
+def _replace_python_source_version(
+    content: str,
+    expected: str,
+    version: str,
+    path: Path,
+) -> str:
+    return _replace_exactly_once(
+        content,
+        re.compile(rf'(__version__\s*=\s*["\']){re.escape(expected)}(["\'])'),
+        rf"\g<1>{version}\g<2>",
+        path,
+        "Python source Release version",
+    )
+
+
+def _replace_project_version(
+    content: str,
+    expected: str,
+    version: str,
+    path: Path,
+) -> str:
+    project = re.search(r"(?ms)^\[project\]$(.*?)(?=^\[|\Z)", content)
+    if project is None:
+        raise ReleaseVersionError(f"cannot find [project] metadata in {path}")
+    replacement = _replace_exactly_once(
+        project.group(1),
+        re.compile(rf'(^version\s*=\s*["\']){re.escape(expected)}(["\']$)', re.MULTILINE),
+        rf"\g<1>{version}\g<2>",
+        path,
+        "Python package Release version",
+    )
+    return f"{content[:project.start(1)]}{replacement}{content[project.end(1):]}"
+
+
+def _replace_package_version(
+    content: str,
+    package_name: str,
+    expected: str,
+    version: str,
+    path: Path,
+) -> str:
+    headers = list(re.finditer(r"(?m)^\[(?:\[)?package(?:\])?\]$", content))
+    matches: list[tuple[int, int]] = []
+    for index, header in enumerate(headers):
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(content)
+        section = content[header.start() : end]
+        if re.search(
+            rf'^name\s*=\s*"{re.escape(package_name)}"$',
+            section,
+            re.MULTILINE,
+        ):
+            matches.append((header.start(), end))
+
+    if len(matches) != 1:
+        raise ReleaseVersionError(
+            f"{package_name} Release metadata must occur exactly once in {path}"
+        )
+    start, end = matches[0]
+    replacement = _replace_exactly_once(
+        content[start:end],
+        re.compile(rf'(^version\s*=\s*["\']){re.escape(expected)}(["\']$)', re.MULTILINE),
+        rf"\g<1>{version}\g<2>",
+        path,
+        f"{package_name} Release version",
+    )
+    return f"{content[:start]}{replacement}{content[end:]}"
+
+
+def _replace_exactly_once(
+    content: str,
+    pattern: re.Pattern[str],
+    replacement: str,
+    path: Path,
+    label: str,
+) -> str:
+    updated, count = pattern.subn(replacement, content)
+    if count != 1:
+        raise ReleaseVersionError(f"{label} must occur exactly once in {path}")
+    return updated
+
+
+def _apply_release_version_updates(updates: Sequence[_ReleaseVersionUpdate]) -> None:
+    staged: list[tuple[Path, Path, Path]] = []
+    try:
+        for update in updates:
+            original = _read_metadata_text(update.path, "Release version copy")
+            replacement = _stage_release_version_content(update.path, update.content)
+            try:
+                backup = _stage_release_version_content(update.path, original)
+            except (ReleaseVersionError, OSError):
+                _remove_staged_release_version_paths((replacement,))
+                raise
+            staged.append(
+                (update.path, replacement, backup)
+            )
+    except (ReleaseVersionError, OSError) as exc:
+        _remove_staged_release_version_files(staged)
+        if isinstance(exc, ReleaseVersionError):
+            raise
+        raise ReleaseVersionError(f"cannot stage Release version metadata: {exc}") from exc
+
+    try:
+        replaced: list[tuple[Path, Path, Path]] = []
+        for target, replacement, original in staged:
+            os.replace(replacement, target)
+            replaced.append((target, replacement, original))
+    except OSError as exc:
+        rollback_error: OSError | None = None
+        for target, _replacement, original in reversed(replaced):
+            try:
+                os.replace(original, target)
+            except OSError as rollback_exc:
+                rollback_error = rollback_exc
+                break
+        if rollback_error is not None:
+            raise ReleaseVersionError(
+                "cannot complete Release version write and rollback failed: "
+                f"{rollback_error}"
+            ) from exc
+        raise ReleaseVersionError(
+            f"cannot complete Release version write; all copies were restored: {exc}"
+        ) from exc
+    finally:
+        _remove_staged_release_version_files(staged)
+
+
+def _stage_release_version_content(target: Path, content: str) -> Path:
+    staged_path: Path | None = None
+    try:
+        mode = stat.S_IMODE(target.stat().st_mode)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".git-loopy-release",
+            delete=False,
+        ) as staged:
+            staged_path = Path(staged.name)
+            os.chmod(staged_path, mode)
+            staged.write(content)
+            staged.flush()
+            os.fsync(staged.fileno())
+        return staged_path
+    except OSError:
+        if staged_path is not None:
+            _remove_staged_release_version_paths((staged_path,))
+        raise
+
+
+def _remove_staged_release_version_paths(paths: Sequence[Path]) -> None:
+    cleanup_errors: list[OSError] = []
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            cleanup_errors.append(exc)
+    if cleanup_errors:
+        raise ReleaseVersionError(
+            f"cannot remove staged Release version metadata: {cleanup_errors[0]}"
+        ) from cleanup_errors[0]
+
+
+def _remove_staged_release_version_files(
+    staged: Sequence[tuple[Path, Path, Path]],
+) -> None:
+    _remove_staged_release_version_paths(
+        tuple(path for _target, replacement, original in staged for path in (replacement, original))
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
