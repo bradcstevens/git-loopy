@@ -14,7 +14,11 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from git_loopy.execution_host import ContributionRequest, ContributionSuccess
+from git_loopy.execution_host import (
+    ContributionFailure,
+    ContributionRequest,
+    ContributionSuccess,
+)
 from git_loopy import github_actions_host
 from git_loopy.github_actions_host import (
     ActionsArtifact,
@@ -23,6 +27,7 @@ from git_loopy.github_actions_host import (
     ActionsStep,
     GitHubActionsExecutionHost,
 )
+from git_loopy.skill_policy import EffectiveSkillPolicy, SkillPolicyScope
 
 
 def _request(**overrides: object) -> ContributionRequest:
@@ -32,7 +37,13 @@ def _request(**overrides: object) -> ContributionRequest:
         "base_revision": "a" * 40,
         "model": "gpt-5.6-terra",
         "reasoning_effort": "high",
-        "skill_policy": {"skills": ()},
+        "skill_policy": EffectiveSkillPolicy(
+            enabled=("code-review",),
+            required=("code-review",),
+            legacy_denied=(),
+            source_kinds={"code-review": "packaged"},
+            base_scope=SkillPolicyScope.GLOBAL,
+        ),
         "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
     }
     defaults.update(overrides)
@@ -61,12 +72,14 @@ def _artifact() -> bytes:
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w") as zipped:
         zipped.writestr("completion.json", json.dumps(completion))
+        zipped.writestr("ending.json", json.dumps(completion["ending"]))
         zipped.writestr("events.jsonl", json.dumps(event) + "\n")
     return archive.getvalue()
 
 
 @dataclass
 class _FakeActionsClient:
+    workflow_ref: str = "main"
     dispatched: list[tuple[str, str, dict[str, str]]] = field(default_factory=list)
     get_run_calls: list[int] = field(default_factory=list)
     runs: list[ActionsRun] = field(
@@ -129,7 +142,7 @@ def test_actions_host_dispatches_one_named_workflow_for_the_reserved_issue() -> 
     assert client.dispatched == [
         (
             "lane-contribution.yml",
-            "a" * 40,
+            "main",
             {
                 "request": json.dumps(
                     {
@@ -138,6 +151,14 @@ def test_actions_host_dispatches_one_named_workflow_for_the_reserved_issue() -> 
                         "base_revision": "a" * 40,
                         "model": "gpt-5.6-terra",
                         "reasoning_effort": "high",
+                        "skill_policy": {
+                            "enabled": ["code-review"],
+                            "required": ["code-review"],
+                            "legacy_denied": [],
+                            "source_kinds": {"code-review": "packaged"},
+                            "base_scope": "global",
+                            "fallback": None,
+                        },
                         "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
                     },
                     separators=(",", ":"),
@@ -168,6 +189,25 @@ def test_actions_host_keeps_backdated_events_but_strips_remote_monotonic_time() 
             "content": "done",
         },
     )
+
+
+def test_actions_host_returns_a_breach_when_a_post_session_step_fails() -> None:
+    client = _FakeActionsClient()
+    client.runs[0] = ActionsRun(
+        database_id=17,
+        display_title=client.runs[0].display_title,
+        status="completed",
+        conclusion="failure",
+    )
+    host = GitHubActionsExecutionHost(client=client, capacity=1)
+
+    outcome = asyncio.run(host.run_contribution(_request()))
+
+    assert isinstance(outcome, ContributionFailure)
+    assert outcome.reason == "workflow_failed"
+    assert outcome.classification == "breach"
+    assert outcome.ending is not None
+    assert outcome.ending.progressed is True
 
 
 def test_subprocess_actions_client_dispatches_through_gh_api(
@@ -212,6 +252,19 @@ def test_lane_workflow_uses_the_job_token_and_uploads_only_completion_artifacts(
     assert "COPILOT_GITHUB_TOKEN: ${{ github.token }}" in workflow
     assert "GH_TOKEN: ${{ github.token }}" in workflow
     assert "timeout-minutes: 360" in workflow
+    assert (
+        "concurrency:\n"
+        "  group: git-loopy-lane-${{ fromJSON(inputs.request).issue_ref }}\n"
+        "  cancel-in-progress: true"
+    ) in workflow
+    assert 'git config user.name "github-actions[bot]"' in workflow
+    assert (
+        'git config user.email "41898282+github-actions[bot]@users.noreply.github.com"'
+        in workflow
+    )
     assert "./.github/actions/setup-lane-contribution" in workflow
     assert "actions/upload-artifact@v4" in workflow
+    assert "if: always()" in workflow
+    assert "${{ runner.temp }}/ending.json" in workflow
+    assert "${{ runner.temp }}/events.jsonl" in workflow
     assert "secrets." not in workflow

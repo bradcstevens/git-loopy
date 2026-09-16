@@ -3955,6 +3955,7 @@ class _EventfulRemoteExecutionHost(_RemoteBranchExecutionHost):
                     "iter": None,
                     "type": "assistant.message",
                     "content": "completed remotely",
+                    "observed_monotonic": 123.0,
                 },
             ),
         )
@@ -3986,6 +3987,7 @@ def test_parallel_loop_ingests_backdated_remote_artifact_events(
     assert {event["issue"] for event in remote_events} == {42, 43}
     assert all(event["contribution_id"] for event in remote_events)
     assert all(event["lane_id"] for event in remote_events)
+    assert all("observed_monotonic" not in event for event in remote_events)
 
 
 @dataclass

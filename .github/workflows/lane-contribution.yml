@@ -10,6 +10,10 @@ on:
 
 run-name: git-loopy ${{ fromJSON(inputs.request).run_id }} issue ${{ fromJSON(inputs.request).issue_ref }}
 
+concurrency:
+  group: git-loopy-lane-${{ fromJSON(inputs.request).issue_ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
   # actionlint: ignore
@@ -29,6 +33,12 @@ jobs:
         with:
           ref: ${{ fromJSON(inputs.request).base_revision }}
           fetch-depth: 0
+
+      - name: Configure contribution author
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - uses: ./.github/actions/setup-lane-contribution
 
@@ -58,16 +68,17 @@ jobs:
             --arg remote "$(git remote get-url origin)" \
             --arg ref "refs/heads/${branch}" \
             --arg sha "$(git rev-parse HEAD)" \
-            --argjson ending "$(cat "$RUNNER_TEMP/git-loopy-ending.json")" \
+            --argjson ending "$(cat "$RUNNER_TEMP/ending.json")" \
             '{remote: $remote, ref: $ref, sha: $sha, ending: $ending}' \
             > "$RUNNER_TEMP/completion.json"
 
       - name: Upload contribution result
-        if: success()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: git-loopy-${{ fromJSON(inputs.request).run_id }}-issue-${{ fromJSON(inputs.request).issue_ref }}
           path: |
             ${{ runner.temp }}/completion.json
-            ${{ runner.temp }}/git-loopy-events.jsonl
+            ${{ runner.temp }}/ending.json
+            ${{ runner.temp }}/events.jsonl
           if-no-files-found: error

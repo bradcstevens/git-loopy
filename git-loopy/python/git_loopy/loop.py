@@ -3796,6 +3796,7 @@ class _ParallelLoop:
         """Append the host artifact's original, backdated event envelopes."""
         for remote_event in remote_events:
             envelope = dict(remote_event)
+            envelope.pop("observed_monotonic", None)
             envelope.update(
                 contribution_id=contribution.contribution_id,
                 issue=contribution.ref,

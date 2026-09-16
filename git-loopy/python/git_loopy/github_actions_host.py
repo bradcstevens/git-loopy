@@ -31,6 +31,7 @@ from git_loopy.session_outcome import (
     SessionOutcomeRecord,
     SessionTermination,
 )
+from git_loopy.skill_policy import EffectiveSkillPolicy
 
 __all__ = [
     "ActionsStep",
@@ -89,6 +90,11 @@ class ActionsArtifact:
 class ActionsClient(Protocol):
     """The small GitHub Actions API surface this host needs."""
 
+    @property
+    def workflow_ref(self) -> str:
+        """The branch or tag from which Actions loads the workflow."""
+        ...
+
     def dispatch(self, workflow: str, ref: str, inputs: dict[str, str]) -> None:
         """Dispatch one workflow run."""
         ...
@@ -113,13 +119,18 @@ class ActionsError(RuntimeError):
 class SubprocessActionsClient:
     """Actions API client implemented with the authenticated ``gh`` CLI."""
 
-    def __init__(self, repository: str) -> None:
+    def __init__(self, repository: str, workflow_ref: str = "main") -> None:
         self._repository = repository
+        self._workflow_ref = workflow_ref
+
+    @property
+    def workflow_ref(self) -> str:
+        return self._workflow_ref
 
     @classmethod
     def discover(cls) -> "SubprocessActionsClient":
         """Bind the client to the repository resolved by the authenticated CLI."""
-        command = ["gh", "repo", "view", "--json", "nameWithOwner"]
+        command = ["gh", "repo", "view", "--json", "nameWithOwner,defaultBranchRef"]
         try:
             completed = subprocess.run(command, capture_output=True, check=False)
         except FileNotFoundError as exc:
@@ -131,12 +142,18 @@ class SubprocessActionsClient:
                 f"{detail}"
             )
         try:
-            name_with_owner = json.loads(completed.stdout)["nameWithOwner"]
+            repository = json.loads(completed.stdout)
+            name_with_owner = repository["nameWithOwner"]
+            default_branch = repository["defaultBranchRef"]["name"]
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
-            raise ActionsError("gh repository response has no nameWithOwner") from exc
+            raise ActionsError(
+                "gh repository response has no nameWithOwner/defaultBranchRef"
+            ) from exc
         if not isinstance(name_with_owner, str) or not name_with_owner:
             raise ActionsError("gh repository response has invalid nameWithOwner")
-        return cls(name_with_owner)
+        if not isinstance(default_branch, str) or not default_branch:
+            raise ActionsError("gh repository response has invalid defaultBranchRef")
+        return cls(name_with_owner, workflow_ref=default_branch)
 
     def dispatch(self, workflow: str, ref: str, inputs: dict[str, str]) -> None:
         fields = [
@@ -283,7 +300,7 @@ class GitHubActionsExecutionHost:
         try:
             self._client.dispatch(
                 _WORKFLOW,
-                request.base_revision,
+                self._client.workflow_ref,
                 {"request": _request_json(request)},
             )
         except ActionsError as exc:
@@ -328,10 +345,26 @@ class GitHubActionsExecutionHost:
                 detail=f"Actions workflow {run.database_id} exceeded six hours",
             )
         if run.conclusion != "success":
+            try:
+                artifact = self._client.get_artifact(run.database_id, artifact_name)
+                ending = _read_failure_ending(artifact)
+            except (
+                ActionsError,
+                OSError,
+                UnicodeDecodeError,
+                ValueError,
+                zipfile.BadZipFile,
+            ):
+                return ContributionFailure(
+                    reason="workflow_failed",
+                    classification="never_started",
+                    ending=None,
+                    detail=_liveness_detail(run),
+                )
             return ContributionFailure(
                 reason="workflow_failed",
-                classification="never_started",
-                ending=None,
+                classification="breach",
+                ending=ending,
                 detail=_liveness_detail(run),
             )
         try:
@@ -389,10 +422,24 @@ def _request_json(request: ContributionRequest) -> str:
             "base_revision": request.base_revision,
             "model": request.model,
             "reasoning_effort": request.reasoning_effort,
+            "skill_policy": _skill_policy_payload(request.skill_policy),
             "run_id": request.run_id,
         },
         separators=(",", ":"),
     )
+
+
+def _skill_policy_payload(policy: object) -> dict[str, object]:
+    if not isinstance(policy, EffectiveSkillPolicy):
+        raise ActionsError("Actions contribution requires an Effective Skill policy")
+    return {
+        "enabled": list(policy.enabled),
+        "required": list(policy.required),
+        "legacy_denied": list(policy.legacy_denied),
+        "source_kinds": dict(policy.source_kinds),
+        "base_scope": policy.base_scope.value,
+        "fallback": policy.fallback.value if policy.fallback is not None else None,
+    }
 
 
 def _run_title(request: ContributionRequest) -> str:
@@ -443,9 +490,28 @@ def _parse_completion(
     remote = completion.get("remote")
     ref = completion.get("ref")
     sha = completion.get("sha")
-    ending = completion.get("ending")
     if not all(isinstance(value, str) and value for value in (remote, ref, sha)):
         raise ValueError("completion artifact must name remote, ref, and sha")
+    return remote, ref, sha, _parse_ending(completion.get("ending"))
+
+
+def _read_failure_ending(artifact: ActionsArtifact) -> SessionOutcomeRecord:
+    with zipfile.ZipFile(io.BytesIO(artifact.archive)) as zipped:
+        names = {name.rsplit("/", 1)[-1]: name for name in zipped.namelist()}
+        try:
+            ending_raw = zipped.read(names["ending.json"])
+        except KeyError as exc:
+            raise ValueError(
+                f"artifact {artifact.name!r} must contain ending.json"
+            ) from exc
+    try:
+        ending = json.loads(ending_raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("ending artifact is not JSON") from exc
+    return _parse_ending(ending)
+
+
+def _parse_ending(ending: Any) -> SessionOutcomeRecord:
     if not isinstance(ending, Mapping):
         raise ValueError("completion artifact must carry a session ending")
     outcome = ending.get("outcome")
@@ -456,15 +522,10 @@ def _parse_completion(
     if not isinstance(termination, str) or not isinstance(progressed, bool):
         raise ValueError("completion ending must name termination and progressed")
     try:
-        return (
-            remote,
-            ref,
-            sha,
-            SessionOutcomeRecord(
-                outcome=None if outcome is None else SessionOutcome(outcome),
-                progressed=progressed,
-                termination=SessionTermination(termination),
-            ),
+        return SessionOutcomeRecord(
+            outcome=None if outcome is None else SessionOutcome(outcome),
+            progressed=progressed,
+            termination=SessionTermination(termination),
         )
     except ValueError as exc:
         raise ValueError(f"completion ending is invalid: {exc}") from exc
