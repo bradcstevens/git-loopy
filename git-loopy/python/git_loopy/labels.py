@@ -421,9 +421,10 @@ class LabelDifference:
         spec: The vocabulary entry, already resolved to *this* tracker's name.
         tracker: The label the tracker carries under that name, or ``None`` when
             it carries none — the entry is missing.
-        differs: The attribute names that disagree (``"color"``, ``"description"``),
-            in that order. Empty when the tracker matches, and always empty when
-            the entry is missing: an absent label does not also drift.
+        differs: The attribute names that disagree (``"name"``, ``"color"``,
+            ``"description"``), in that order. Empty when the tracker matches,
+            and always empty when the entry is missing: an absent label does not
+            also drift.
     """
 
     spec: LabelSpec
@@ -515,11 +516,11 @@ def reconcile_labels(
     vocabulary is not looked at, never reported, and never deleted: the
     vocabulary says what a repository *must* carry, never what it may not.
 
-    With ``apply`` the same pass writes the difference back, in vocabulary order
-    — creating what is missing, and overwriting the colour and description of
-    what drifted under the tracker's own spelling of the name, so a reconcile
-    never renames anything. Idempotent by construction: a second call finds
-    nothing divergent and writes nothing.
+    With ``apply`` the same pass writes fixable differences back, in vocabulary
+    order — creating what is missing, and overwriting the colour and description
+    of what drifted under the tracker's own spelling of the name, so a reconcile
+    never renames anything. A noncanonical Bump-class spelling is reported but
+    cannot be fixed without a rename, so it is not repeatedly rewritten.
 
     The default writes nothing at all. Reporting is what an operator can run
     against someone else's tracker without consequence, so it is the default
@@ -558,6 +559,8 @@ def reconcile_labels(
 
     applied: list[str] = []
     for difference in report.divergent:
+        if difference.differs == ("name",):
+            continue
         try:
             if difference.tracker is None:
                 client.label_create(difference.spec)
@@ -578,6 +581,11 @@ def _compare(spec: LabelSpec, tracker: TrackerLabel | None) -> LabelDifference:
     if tracker is None:
         return LabelDifference(spec=spec)
     differs: list[str] = []
+    if (
+        spec.name.startswith(BUMP_CLASS_LABEL_PREFIX)
+        and tracker.name != spec.name
+    ):
+        differs.append("name")
     if _normalise_color(tracker.color) != _normalise_color(spec.color):
         differs.append("color")
     if tracker.description.strip() != spec.description.strip():

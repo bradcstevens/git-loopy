@@ -919,6 +919,45 @@ def test_reconcile_updates_a_case_differing_label_where_it_actually_is(
     )
 
 
+def test_reconcile_reports_a_recased_bump_class_label_as_noncanonical(
+    tmp_path: Path,
+) -> None:
+    """Exact bump-class matching cannot silently accept ``semver:Minor``."""
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    minor = next(spec for spec in vocabulary if spec.name == "semver:minor")
+    client = _FakeReconcileClient(
+        labels_module.TrackerLabel("semver:Minor", minor.color, minor.description),
+        *_carrying(*(spec for spec in vocabulary if spec is not minor)),
+    )
+
+    result = labels_module.reconcile_labels(vocabulary, client)
+
+    assert [(difference.spec.name, difference.differs) for difference in result.drifted] == [
+        ("semver:minor", ("name",))
+    ]
+
+
+def test_reconcile_does_not_reapply_an_unfixable_bump_class_name_mismatch(
+    tmp_path: Path,
+) -> None:
+    """Reconciling cannot rename a tracker label that differs only by case."""
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    minor = next(spec for spec in vocabulary if spec.name == "semver:minor")
+    client = _FakeReconcileClient(
+        labels_module.TrackerLabel("semver:Minor", minor.color, minor.description),
+        *_carrying(*(spec for spec in vocabulary if spec is not minor)),
+    )
+
+    result = labels_module.reconcile_labels(vocabulary, client, apply=True)
+
+    assert client.created == []
+    assert client.updated == []
+    assert result.applied == ()
+    assert [(difference.spec.name, difference.differs) for difference in result.drifted] == [
+        ("semver:minor", ("name",))
+    ]
+
+
 def test_subprocess_label_client_reads_colour_and_description(monkeypatch) -> None:
     """Reconciling needs more than names, and a null description is not drift."""
     from git_loopy import gh
