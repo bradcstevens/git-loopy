@@ -11,7 +11,7 @@ on:
 run-name: git-loopy ${{ fromJSON(inputs.request).run_id }} issue ${{ fromJSON(inputs.request).issue_ref }}
 
 concurrency:
-  group: git-loopy-lane-${{ fromJSON(inputs.request).issue_ref }}
+  group: ${{ fromJSON(inputs.request).contribution_group }}
   cancel-in-progress: true
 
 permissions:

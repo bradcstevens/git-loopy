@@ -117,6 +117,21 @@ def test_a_stopped_contribution_is_not_demotion_evidence() -> None:
     assert tally == {}
 
 
+def test_a_contribution_that_never_started_is_not_demotion_evidence() -> None:
+    """A dispatch that never reached an Agent session says nothing about a pair.
+
+    ADR-0050: ``never_started`` and ``stall`` have no session ending to offer,
+    so they are facts about the **Execution host**, not about the **Routed
+    pair** the Run would have spent on them (#462, spec #445 §L).
+    """
+    never_started = _contribution(
+        1, model="cheap", effort="low", reason=REASON_UNCHANGED_BRANCH
+    )
+    never_started.session_started = False
+
+    assert demotion.tally_no_progress([never_started]) == {}
+
+
 def test_effort_is_half_of_the_key() -> None:
     """One model at two efforts is two pairs, because a pair is what routes.
 

@@ -260,6 +260,12 @@ class Contribution:
         strike_reaction: :data:`STRIKE_RESET`, :data:`STRIKE_ADD`, or
             :data:`STRIKE_NONE`, recorded once at finalization. ``None`` while
             open.
+        session_started: Whether an Agent session ever ran for this
+            contribution. ``False`` only for an **Execution host** failure that
+            reached no session at all (ADR-0050's ``never_started`` and
+            ``stall``), which is the whole of what makes such a row blameless:
+            it is evidence about the host, never about the issue or the
+            **Routed pair**.
     """
 
     contribution_id: str
@@ -270,6 +276,7 @@ class Contribution:
     published: bool = False
     reason: str | None = None
     strike_reaction: str | None = None
+    session_started: bool = True
 
 
 @dataclass
@@ -678,8 +685,10 @@ class RollingScheduler:
         still takes a distinct, non-Integration control-flow path.
 
         A host that never started or stalled did not start an Agent session.
-        Undo the provisional session claim so the Pool can offer its issue again;
-        a breach keeps the claim because that Agent session did run.
+        Undo the provisional session claim so the Pool can offer its issue again
+        and record the absent session on the row (:attr:`Contribution.session_started`),
+        which is what makes it blameless in both ledgers; a breach keeps the
+        claim, and the blame, because that Agent session did run.
 
         The contribution is withdrawn from the **Integration backlog** and the
         parked FIFO first. A contribution interrupted after admission is still
@@ -687,7 +696,8 @@ class RollingScheduler:
         un-drained after every Lane it can still account for has been closed.
 
         Args:
-            reoffer: Whether the issue returns to the **Pool** unspent.
+            reoffer: Whether the issue returns to the **Pool** unspent. True
+                exactly when no Agent session ran, which is the same fact.
             reason: The already-published terminal reason to finalize with.
         """
         if contribution in self._admitted:
@@ -695,6 +705,7 @@ class RollingScheduler:
         self._parked = [
             entry for entry in self._parked if entry[1] is not contribution
         ]
+        contribution.session_started = not reoffer
         self._finalize(contribution, reason=reason)
         if reoffer:
             self._units_spent -= 1
@@ -833,7 +844,7 @@ class RollingScheduler:
         """Close a contribution exactly once and record its Strike reaction."""
         contribution.published = reason == REASON_PUBLISHED
         contribution.reason = reason
-        if reason == REASON_OPERATOR_STOP:
+        if reason == REASON_OPERATOR_STOP or not contribution.session_started:
             contribution.strike_reaction = STRIKE_NONE
         else:
             contribution.strike_reaction = (

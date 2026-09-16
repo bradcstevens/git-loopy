@@ -114,6 +114,7 @@ from copilot.generated.session_events import (
 
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
+from git_loopy import demotion as demotion_module
 from git_loopy import loop as loop_module
 from git_loopy import rolling_pressure
 from git_loopy.attempt_lifecycle import AttemptState
@@ -3682,6 +3683,46 @@ def test_parallel_run_stops_before_dispatch_when_remote_base_is_red(
     assert not [event for event in events if event["type"] == "wrapper.strike"]
 
 
+def test_a_degraded_parallel_run_spends_no_green_base_preflight(
+    tmp_path, monkeypatch
+) -> None:
+    """A Run that can dispatch no Lane binds no host, so it proves nothing.
+
+    The green-base preflight is a whole remote CI run (spec #445 §D). A source
+    that is not Rolling-capable degrades **Parallel mode** entirely to the
+    serial path, and serial **Iterations** are in-place work that binds no
+    **Execution host** — so paying for that proof would buy nothing, and a red
+    verdict would end a Run that was never going to dispatch to the host at
+    all.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(fake_git=fake_git, scripted_events=[]),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    host = _RedHostPreflight()
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, execution_host=host, **kwargs)
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="prds",
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+    assert host.preflight_requests == []
+
+
 @dataclass
 class _TerminalFailureExecutionHost(_GreenHostPreflight):
     """A complete host double that never starts an Agent session."""
@@ -3731,7 +3772,7 @@ class _NeverStartedExecutionHost(_GreenHostPreflight):
 
     placement: Placement = "github-actions"
     isolation_grade: IsolationGrade = "machine boundary"
-    capacity: int = 1
+    capacity: int = 3
     calls: list[ContributionRequest] = field(default_factory=list)
     preflight_requests: list[HostPreflightRequest] = field(default_factory=list)
 
@@ -3746,10 +3787,19 @@ class _NeverStartedExecutionHost(_GreenHostPreflight):
         )
 
 
-def test_repeated_dispatch_failures_contract_then_end_as_an_environment_failure(
+def test_repeated_dispatch_failures_narrow_the_lane_count_then_end_the_run(
     tmp_path, monkeypatch
 ) -> None:
-    """Never-started work feeds host pressure, never Strike or Demotion."""
+    """A never-started dispatch is blameless, and repetition is what it costs.
+
+    Spec #445 §L: a contribution that never started is a host or setup failure
+    and **never a Strike**, and repeated dispatch failure "feeds the existing
+    host and setup pressure input, which narrows the Lane count" rather than
+    inventing a signal of its own. So the effective Lane limit steps down one
+    Lane at a time under the ordinary host-pressure rule, and only when the
+    last Lane is spent — no Lane left to dispatch into — does the Run end as an
+    **environment failure** rather than spinning (ADR-0050).
+    """
     _fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_rolling(
         tmp_path, monkeypatch
     )
@@ -3763,24 +3813,30 @@ def test_repeated_dispatch_failures_contract_then_end_as_an_environment_failure(
         return instance
 
     monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
     cfg = replace(cfg, max_iterations=0)
 
     async def _bounded() -> int:
-        return await asyncio.wait_for(loop_module.run(cfg), timeout=1)
+        return await asyncio.wait_for(loop_module.run(cfg), timeout=10)
 
     assert asyncio.run(_bounded()) == 1
     assert len(host.preflight_requests) == 1
-    assert len(host.calls) == 6
     assert fake_client.created == []
     assert len(built) == 1
-    assert built[0].demotion_contributions == ()
+    assert demotion_module.tally_no_progress(built[0].finalized_contributions) == {}
     events = _logged_events(tmp_path)
     assert not [event for event in events if event["type"] == "wrapper.strike"]
-    assert [
-        event["effective_lane_limit"]
+    contractions = [
+        (event["effective_lane_limit"], event["pressure"])
         for event in events
         if event["type"] == "wrapper.concurrency.changed"
-    ] == [0]
+    ]
+    assert contractions == [(2, "host"), (1, "host"), (0, "host")]
+    assert {
+        event["summary"]["strike_reaction"]
+        for event in events
+        if event["type"] == "wrapper.contribution.end"
+    } == {"none"}
 
 
 def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(

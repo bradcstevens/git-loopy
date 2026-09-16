@@ -2539,10 +2539,8 @@ class _ParallelLoop:
         self._crash: BaseException | None = None
         # A green-base failure ends before any contribution exists. A repeated
         # never-started failure reaches the same environment disposition after
-        # the existing host/setup pressure controller contracts the Lane limit.
+        # the existing host/setup pressure controller has spent the last Lane.
         self._environment_failure = False
-        # Contributions with no Agent-session ending must not reach Demotion.
-        self._blameless_contribution_ids: set[str] = set()
         # Only these tasks are eligible for a second Stop.  Lifecycle tasks also
         # own merge, close, branch deletion, and push transactions, which must
         # be allowed to complete once they have begun.
@@ -2774,8 +2772,30 @@ class _ParallelLoop:
         return exit_code
 
     async def _preflight_execution_host(self) -> bool:
-        """Run a selected remote host's green-base check exactly once per Run."""
-        if self._execution_host is None:
+        """Prove the bound host's base green, once per Run, before any dispatch.
+
+        Spec #445 §D: a Run bound to a remote **Execution host** runs the target
+        repository's own declared feedback loops on a clean checkout of base,
+        *on the host*, before it dispatches a single Lane. A runner whose
+        toolchain is missing or broken otherwise fails every Lane for a reason
+        that has nothing to do with the model, and the **Strike** counter
+        blames the model anyway. Running the same proof as each Lane job's
+        first step is refused — one proof at N times the cost — so this is
+        asked once here and never per Lane.
+
+        Asked only of a Run that can actually dispatch: a degraded Run
+        (:attr:`_rolling_capable` false) runs serial **Iterations**, which are
+        in-place work binding no host, and a Run that injected no host works
+        through the local adapter, whose base is the operator's own worktree
+        and needs no remote proof.
+
+        Returns:
+            Whether the Run may dispatch. ``False`` is an **environment
+            failure** — reported and then ended on by the caller with
+            ``preflight_failed``, adding no **Strike**, because no contribution
+            exists yet for one to be charged against.
+        """
+        if self._execution_host is None or not self._rolling_capable:
             return True
         try:
             base_revision = self._git.head_sha()
@@ -3158,15 +3178,6 @@ class _ParallelLoop:
             contribution
             for contribution in self._scheduler.finalized
             if contribution.contribution_id not in self._abandoned_at_exit
-        )
-
-    @property
-    def demotion_contributions(self) -> tuple[rolling_scheduler.Contribution, ...]:
-        """Return finalized work that reached an Agent-session ending."""
-        return tuple(
-            contribution
-            for contribution in self.finalized_contributions
-            if contribution.contribution_id not in self._blameless_contribution_ids
         )
 
     def _report_concurrency_change(self) -> None:
@@ -3770,9 +3781,6 @@ class _ParallelLoop:
             reason=_terminal_reason_for(outcome),
         )
         assert disposition == rolling_scheduler.TERMINAL
-        if outcome.classification != "breach":
-            contribution.strike_reaction = rolling_scheduler.STRIKE_NONE
-            self._blameless_contribution_ids.add(contribution.contribution_id)
         if lane_work.reclaimed:
             self._lane_work.pop(contribution.contribution_id, None)
         self._finalize_contribution(contribution, published=False)
@@ -3780,11 +3788,26 @@ class _ParallelLoop:
             self._record_dispatch_failure_pressure()
 
     def _record_dispatch_failure_pressure(self) -> None:
-        """Feed a never-started dispatch into host/setup pressure.
+        """Feed a never-started dispatch into host/setup pressure (spec #445 §L).
 
-        The controller's full observation window is the bounded definition of
-        "repeated".  Once it contracts, no new Lane is reserved and the Run
-        drains to the same environment-failure exit used by a red base.
+        A dispatch that never reached an Agent session is a host or setup
+        failure, and §L routes repetition to *the existing* host-and-setup
+        pressure input rather than to a counter of its own: a per-issue dispatch
+        tally would be neither an **Attempt** nor a **Strike**, which is exactly
+        the new signal §L forbids. So each failure is one observation of the
+        one input that already narrows the Lane count, and the controller's own
+        window and cooldown are the bounded definition of *repeated*.
+
+        Observing per failure rather than on the monitor's clock is deliberate
+        and is not the burst-sampling the clock exists to prevent: host load is
+        a continuous quantity that a fast sample would misread, while a failed
+        dispatch is a discrete event the Run spends a whole Lane reservation on.
+        Pacing these on wall time would keep dispatching into a dead host
+        between samples.
+
+        When the last Lane is spent the Run can never reserve another, so it
+        ends as an **environment failure** rather than spinning (ADR-0050) —
+        the same disposition a red green-base preflight reaches, arriving later.
         """
         assert self._scheduler is not None
         change = self._scheduler.observe_pressure(
@@ -3797,7 +3820,8 @@ class _ParallelLoop:
             iter_num=None,
             **change.payload,
         )
-        self._environment_failure = True
+        if change.effective_lane_limit == 0:
+            self._environment_failure = True
 
     async def _run_local_contribution(
         self,
@@ -5432,11 +5456,7 @@ def _demote_after_run(
     precondition for the work a Run has already finished, and this runs after the
     exit code has been decided, so nothing here can change it.
     """
-    contributions = (
-        loop.demotion_contributions
-        if hasattr(loop, "demotion_contributions")
-        else loop.finalized_contributions
-    )
+    contributions = loop.finalized_contributions
     if not contributions:
         return
     try:

@@ -132,6 +132,36 @@ def test_local_host_refuses_an_unbounded_or_invalid_capacity(capacity: object) -
         LocalExecutionHost(runner=runner, capacity=capacity)  # type: ignore[arg-type]
 
 
+# --------------------------------------------------------------------------- #
+# The seam's single-live-contribution obligation                              #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_contribution_group_is_keyed_on_the_issue_alone() -> None:
+    """One live contribution per issue is the seam's key, not a host's (#462).
+
+    Spec #445 §D states the guarantee as a **seam obligation on every host**,
+    so the seam owns the name a host supersedes by. Keying it on the issue and
+    nothing else is the whole of what makes a restarted Run *supersede* an
+    orphan left by a dead supervisor instead of racing it — a key carrying the
+    ``run_id`` would name a different contribution for every Run and guarantee
+    nothing across them.
+    """
+    orphaned = execution_host.contribution_group(462)
+    restarted = execution_host.contribution_group(462)
+
+    assert orphaned == restarted
+    assert execution_host.contribution_group(463) != orphaned
+    assert "01ARZ3NDEKTSV4RRFFQ69G5FAV" not in orphaned
+
+
+def test_the_contribution_group_reads_a_string_issue_reference() -> None:
+    """The ``prds`` backend refers to its issues by path, not by number."""
+    assert execution_host.contribution_group("prds/feature/001-slice.md") != (
+        execution_host.contribution_group("prds/feature/002-slice.md")
+    )
+
+
 def test_local_host_satisfies_execution_host_protocol() -> None:
     async def runner(request: ContributionRequest) -> LocalRunResult:
         raise AssertionError("not exercised")

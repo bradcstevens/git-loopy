@@ -14,6 +14,7 @@ import zipfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from git_loopy import execution_host
 from git_loopy.execution_host import (
     ContributionFailure,
     ContributionRequest,
@@ -222,6 +223,7 @@ def test_actions_host_dispatches_one_named_workflow_for_the_reserved_issue() -> 
                 "request": json.dumps(
                     {
                         "issue_ref": 42,
+                        "contribution_group": "git-loopy-lane-42",
                         "prompt": "implement the issue",
                         "base_revision": "a" * 40,
                         "model": "gpt-5.6-terra",
@@ -327,6 +329,28 @@ def test_subprocess_actions_client_dispatches_through_gh_api(
     ]
 
 
+def test_actions_host_supersedes_by_the_seams_contribution_group() -> None:
+    """The host transports the seam's group; it never invents one (#462).
+
+    Spec #445 §D: at most one live contribution per issue is an obligation on
+    every host, and Actions satisfies it with a concurrency group that cancels
+    in progress. Sending :func:`~git_loopy.execution_host.contribution_group`
+    as an input — rather than letting the workflow build a name out of the
+    request — is what keeps the guarantee the seam's: the group cannot drift to
+    something Run-scoped, so a restarted Run supersedes an orphaned contribution
+    for the same issue instead of racing it.
+    """
+    client = _FakeActionsClient()
+    host = GitHubActionsExecutionHost(client=client, capacity=2)
+
+    asyncio.run(host.run_contribution(_request()))
+
+    (_workflow, _ref, inputs) = client.dispatched[0]
+    assert json.loads(inputs["request"])["contribution_group"] == (
+        execution_host.contribution_group(42)
+    )
+
+
 def test_lane_workflow_uses_the_job_token_and_uploads_only_completion_artifacts() -> None:
     workflow = (
         Path(__file__).parents[3] / ".github/workflows/lane-contribution.yml"
@@ -338,7 +362,7 @@ def test_lane_workflow_uses_the_job_token_and_uploads_only_completion_artifacts(
     assert "timeout-minutes: 360" in workflow
     assert (
         "concurrency:\n"
-        "  group: git-loopy-lane-${{ fromJSON(inputs.request).issue_ref }}\n"
+        "  group: ${{ fromJSON(inputs.request).contribution_group }}\n"
         "  cancel-in-progress: true"
     ) in workflow
     assert 'git config user.name "github-actions[bot]"' in workflow

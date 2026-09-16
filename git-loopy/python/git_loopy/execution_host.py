@@ -35,6 +35,15 @@ Six refusals every implementation must honour (spec #445 §A):
 * never serves as the Run's observability endpoint;
 * never mints identity — ``run_id`` is handed to it, not minted by it.
 
+One obligation beside them (spec #445 §D): **at most one live contribution
+per issue**. It is stated here, at the seam, rather than left for each host
+to renegotiate, because a host that satisfied only "one per *this Run*" would
+still leave two agents on one issue whenever a supervisor died mid-flight.
+The seam owns the name a host supersedes by — :func:`contribution_group` —
+and a host satisfies the obligation by superseding under it (a restarted Run
+displaces an orphan rather than racing it) or by construction, as
+:class:`LocalExecutionHost` does.
+
 A host receives no credentials; it authenticates itself. The one commit a
 host may author on its own initiative is a **Checkpoint**, carrying the
 Checkpoint trailer and free of closing keywords (see
@@ -84,6 +93,7 @@ __all__ = [
     "IsolationGrade",
     "ContributionFailureClass",
     "REASON_CHECKPOINT_FAILED",
+    "contribution_group",
     "HostPreflightRequest",
     "HostPreflightResult",
     "ContributionRequest",
@@ -138,10 +148,39 @@ _CONTRIBUTION_FAILURE_CLASSES = frozenset(
 #: something stable to key on.
 REASON_CHECKPOINT_FAILED = "checkpoint_failed"
 
+#: The prefix every **Lane contribution** group name carries, so the names a
+#: host holds are recognisably git-loopy's on a shared machine or account.
+_CONTRIBUTION_GROUP_PREFIX = "git-loopy-lane"
+
+
+def contribution_group(issue_ref: int | str) -> str:
+    """The seam's one name for *the* live contribution for this issue.
+
+    **At most one live contribution per issue** is a seam obligation on every
+    host (spec #445 §D), so the *name* a host supersedes by is the seam's and
+    not each host's. It is derived from the issue reference alone: a key
+    carrying the ``run_id`` would name a different contribution in every Run,
+    which guarantees nothing across them — and superseding across Runs is the
+    point. A restarted Run whose supervisor died mid-contribution computes the
+    same group as the Run that left the orphan, so its dispatch displaces that
+    orphan rather than racing it.
+
+    Deliberately not a per-host detail and deliberately not an identity the
+    Run mints: a host that invented its own key could satisfy "one live
+    contribution per *this Run*" and still leave two agents on one issue.
+    """
+    return f"{_CONTRIBUTION_GROUP_PREFIX}-{issue_ref}"
+
 
 @dataclass(frozen=True)
 class HostPreflightRequest:
-    """The immutable base revision a remote host must gate before dispatching."""
+    """What a host needs to prove the base is green before any dispatch.
+
+    The base revision is the exact commit every Lane this Run dispatches will
+    branch from, so the proof is about the revision the work actually starts
+    at rather than about whatever the host's default branch happened to be.
+    ``run_id`` identifies the Run the proof belongs to; a host never mints it.
+    """
 
     base_revision: str
     run_id: str
@@ -149,7 +188,14 @@ class HostPreflightRequest:
 
 @dataclass(frozen=True)
 class HostPreflightResult:
-    """The remote host's green-base verdict for one Run."""
+    """A host's green-base verdict for one Run.
+
+    ``passed`` is false for every way the proof did not come back green — the
+    declared loops failed, the host could not be reached, the dispatch itself
+    was refused — because the Run's disposition is the same for all of them:
+    an **environment failure** that adds no **Strike**. ``detail`` is what an
+    operator reads to tell those apart.
+    """
 
     passed: bool
     detail: str = ""
@@ -318,11 +364,19 @@ class ExecutionHost(Protocol):
         ...
 
     async def preflight(self, request: HostPreflightRequest) -> HostPreflightResult:
-        """Gate the clean base once before this host accepts contributions.
+        """Gate the clean base once per Run, before this host is dispatched to.
 
-        Every host guarantees at most one live contribution per issue. Remote
-        hosts additionally run the target repository's declared feedback loops
-        on ``request.base_revision`` and return their environment verdict.
+        A remote host runs the target repository's own declared feedback loops
+        on ``request.base_revision``, on the host, and returns that verdict
+        (spec #445 §D). Without it the expensive silent failure is live: a
+        runner missing the repository's toolchain fails every Lane for a reason
+        that has nothing to do with the model. Running the same proof as each
+        Lane job's first step is refused — one proof at N times the cost — so
+        this is asked once per Run and never once per Lane.
+
+        A red verdict is an **environment failure**, never a **Strike**: no
+        contribution exists yet to blame. A placement with no remote
+        environment to verify (``local``) passes trivially.
         """
         ...
 
@@ -337,6 +391,12 @@ class ExecutionHost(Protocol):
         raises to signal a contribution-level failure — a stall or a refused
         branch is a value, not an exception, so callers (and tests) can
         branch on the outcome without a ``try``/``except``.
+
+        **At most one live contribution per issue** (spec #445 §D): dispatching
+        for an issue that already has a live contribution supersedes it under
+        :func:`contribution_group` rather than joining it. The Run relies on
+        this across its own restarts, so it is an obligation of the seam and
+        not of any one host.
         """
         ...
 
@@ -409,6 +469,13 @@ class LocalExecutionHost:
     returned branch that still carries uncommitted or untracked work rather
     than treating it as durable. The runner is never retried by this
     adapter — one call in, one outcome out (one of the seam's six refusals).
+
+    The seam's **one live contribution per issue** obligation holds here by
+    construction rather than by a superseding mechanism: the Run binds an
+    issue to one Lane, each Lane works its own worktree, and the agent
+    sessions are children of the supervisor — so a dead supervisor leaves no
+    live local contribution for a restarted Run to supersede. There is
+    nothing to cancel and nothing to race.
     """
 
     def __init__(self, runner: LocalRunner, *, capacity: int | None = None) -> None:

@@ -123,6 +123,13 @@ def tally_no_progress(contributions: Iterable[Contribution]) -> dict[Pair, int]:
     still running. And one that resolved **no model** belongs to no pair, so it
     is evidence about nothing this module can act on.
 
+    A third row is skipped for a different reason: a contribution whose Agent
+    session never started (ADR-0050's ``never_started`` and ``stall``, spec
+    #445 §L). Its pair was resolved and then never spent, so the row records an
+    **Execution host** that could not carry the work — and demoting a pair for
+    a host's dispatch failure would rewrite the routing table on evidence about
+    the machine.
+
     Args:
         contributions: The Run's finalized contributions, in any order —
             typically :attr:`~git_loopy.rolling_scheduler.RollingScheduler.finalized`.
@@ -140,6 +147,8 @@ def tally_no_progress(contributions: Iterable[Contribution]) -> dict[Pair, int]:
             REASON_OPERATOR_STOP,
             REASON_PUBLISHED,
         }:
+            continue
+        if not contribution.session_started:
             continue
         if contribution.model is None:
             continue

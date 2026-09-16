@@ -27,6 +27,7 @@ from git_loopy.execution_host import (
     HostPreflightResult,
     IsolationGrade,
     Placement,
+    contribution_group,
 )
 from git_loopy.session_outcome import (
     SessionOutcome,
@@ -298,7 +299,13 @@ class GitHubActionsExecutionHost:
         return self._capacity
 
     async def preflight(self, request: HostPreflightRequest) -> HostPreflightResult:
-        """Run the target repository's declared feedback loops at clean base."""
+        """Prove the target repository's declared loops are green at clean base.
+
+        Once per Run, before any Lane is dispatched (spec #445 §D). A red
+        verdict — or a preflight that could not be dispatched or observed at
+        all — is an **environment failure** the Run ends on, never a
+        **Strike**: no contribution exists yet for one to be charged against.
+        """
         title = _preflight_title(request)
         try:
             self._client.dispatch(
@@ -306,22 +313,7 @@ class GitHubActionsExecutionHost:
                 self._client.workflow_ref,
                 {"preflight": _preflight_request_json(request)},
             )
-        except ActionsError as exc:
-            return HostPreflightResult(passed=False, detail=str(exc))
-
-        started = self._clock()
-        run: ActionsRun | None = None
-        try:
-            while self._clock() - started < self._timeout_seconds:
-                if run is None:
-                    discovered = self._client.find_run(title)
-                    if discovered is not None:
-                        run = self._client.get_run(discovered.database_id)
-                else:
-                    run = self._client.get_run(run.database_id)
-                if run is not None and run.status == "completed":
-                    break
-                await self._sleep(self._poll_interval_seconds)
+            run = await self._await_completed_run(title)
         except ActionsError as exc:
             return HostPreflightResult(passed=False, detail=str(exc))
 
@@ -339,6 +331,29 @@ class GitHubActionsExecutionHost:
             return HostPreflightResult(passed=False, detail=_liveness_detail(run))
         return HostPreflightResult(passed=True)
 
+    async def _await_completed_run(self, title: str) -> ActionsRun | None:
+        """Poll one dispatched workflow run until it completes or time runs out.
+
+        Liveness is coarse and polled because the platform streams no logs
+        (spec #445 §D). Returns the last observed run — ``status`` still short
+        of ``"completed"`` means the six-hour wall was hit — or ``None`` when
+        the dispatched run never became observable at all. The two are
+        different facts about the host and the callers classify them apart.
+        """
+        started = self._clock()
+        run: ActionsRun | None = None
+        while self._clock() - started < self._timeout_seconds:
+            if run is None:
+                discovered = self._client.find_run(title)
+                if discovered is not None:
+                    run = self._client.get_run(discovered.database_id)
+            else:
+                run = self._client.get_run(run.database_id)
+            if run is not None and run.status == "completed":
+                break
+            await self._sleep(self._poll_interval_seconds)
+        return run
+
     async def run_contribution(self, request: ContributionRequest) -> ContributionOutcome:
         title = _run_title(request)
         artifact_name = _artifact_name(request)
@@ -355,19 +370,8 @@ class GitHubActionsExecutionHost:
                 ending=None,
                 detail=str(exc),
             )
-        started = self._clock()
-        run: ActionsRun | None = None
         try:
-            while self._clock() - started < self._timeout_seconds:
-                if run is None:
-                    discovered = self._client.find_run(title)
-                    if discovered is not None:
-                        run = self._client.get_run(discovered.database_id)
-                else:
-                    run = self._client.get_run(run.database_id)
-                if run is not None and run.status == "completed":
-                    break
-                await self._sleep(self._poll_interval_seconds)
+            run = await self._await_completed_run(title)
         except ActionsError as exc:
             return ContributionFailure(
                 reason="workflow_status_unavailable",
@@ -464,6 +468,7 @@ def _request_json(request: ContributionRequest) -> str:
     return json.dumps(
         {
             "issue_ref": request.issue_ref,
+            "contribution_group": contribution_group(request.issue_ref),
             "prompt": request.prompt,
             "base_revision": request.base_revision,
             "model": request.model,

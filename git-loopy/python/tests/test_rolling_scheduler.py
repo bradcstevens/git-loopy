@@ -284,6 +284,27 @@ def test_blamefree_host_failure_releases_the_provisional_session_claim() -> None
     assert [reservation.item.ref for reservation in scheduler.reserve()] == [11]
 
 
+def test_a_contribution_that_never_started_finalizes_blameless() -> None:
+    """A row with no Agent session behind it charges nothing and proves nothing.
+
+    ADR-0050: the absent session ending *is* the class distinction, so the two
+    ledgers a finalized contribution feeds — the **Strike** reaction on the
+    wire and **Demotion**'s per-pair no-progress count — both read the row as
+    evidence about the **Execution host** rather than about the issue or its
+    **Routed pair** (#462, spec #445 §L).
+    """
+    scheduler, _source = _scheduler([11], lane_cap=1)
+    scheduler.start()
+    contribution = scheduler.start_session(scheduler.reserve()[0])
+
+    scheduler.finish_terminal_failure(
+        contribution, reoffer=True, reason=REASON_UNCHANGED_BRANCH
+    )
+
+    assert contribution.session_started is False
+    assert contribution.strike_reaction == "none"
+
+
 def test_a_host_failure_finalizes_with_the_reason_the_run_chose() -> None:
     """The Run, not the host, names the terminal reason it publishes (#447).
 
