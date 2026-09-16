@@ -106,6 +106,12 @@ _STRIKE = "wrapper.strike"
 # pool, commits, closures, and per-iteration boundaries all flow through the
 # same #22 fan-out, so the ledger folds out of them with no new plumbing.
 _AFK_READY_COLLECTED = "wrapper.afk_ready.collected"
+#: One **Membership read** (#481, ADR-0042): the shallow, non-authoritative
+#: read **Rolling dispatch** takes *during* a unit of work. It is add-only —
+#: it may open a ``queued`` row for a ref this Run has not seen and may touch
+#: nothing else. Deliberately **not** folded through ``_record_pool``, whose
+#: handler *is* the ``gone`` sweep: one authority, one sweep.
+_POOL_REFRESHED = "wrapper.pool.refreshed"
 #: The two halves of one **Pickup** walk (#397). Attributed to the issue each
 #: names rather than to the **Active issue**, which is the whole value of the
 #: record: a skip folded into the issue a Run was working would say the Run
@@ -744,6 +750,8 @@ class LiveRunState:
                 self.status = _STATUS_RUNNING
         elif etype == _AFK_READY_COLLECTED:
             self._record_pool(event.get("issues"), now)
+        elif etype == _POOL_REFRESHED:
+            self._record_membership(event.get("issues"), now)
         elif etype == _PICKUP_BOUND:
             self._record_pickup_line(
                 event.get("issue"), _log_pickup_bound_text(event), now
@@ -1556,6 +1564,27 @@ class LiveRunState:
         for ref, entry in self.ledger.items():
             if entry.status == STATUS_QUEUED and ref not in present:
                 entry.status = STATUS_GONE
+
+    def _record_membership(self, issues: Any, now: float) -> None:
+        """Fold one ``pool.refreshed`` **Membership read** into the ledger.
+
+        Add-only, and that is the whole of it (ADR-0042). A ref this Run has
+        not seen opens a ``queued`` row so the **Queue** shows the Run's real
+        scope rather than the count of **Lanes** that happen to have started;
+        every ref already in the ledger is left exactly as it is, whatever
+        status it carries, because a read taken *during* a unit of work
+        routinely lists issues a Lane is working or has finished.
+
+        It never sweeps and never sets ``_iter_pool``: this read is not an
+        Iteration's input, and an issue it does not list has not left the Run's
+        view — it was merely not eligible at the instant the read was taken.
+        """
+        for ref in issues or ():
+            ref = self._normalize_ref(ref)
+            if ref not in self.ledger:
+                self.ledger[ref] = IssueLedgerEntry(
+                    ref=ref, first_seen_at=now, first_seen_iter=self.iteration
+                )
 
     def _scan_for_marker(self, text: Any) -> None:
         """Project legacy traces that lack an authoritative activation event."""

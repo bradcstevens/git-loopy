@@ -465,6 +465,7 @@ def test_state_event_type_constants_match_events() -> None:
     assert (
         state_module._AFK_READY_COLLECTED == events_module.WRAPPER_AFK_READY_COLLECTED
     )
+    assert state_module._POOL_REFRESHED == events_module.WRAPPER_POOL_REFRESHED
     assert state_module._COMMIT_RECORDED == events_module.WRAPPER_COMMIT_RECORDED
     assert (
         state_module._CHECKPOINT_RECORDED == events_module.WRAPPER_CHECKPOINT_RECORDED

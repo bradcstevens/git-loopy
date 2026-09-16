@@ -762,7 +762,7 @@ class TestMembershipRead:
         pool = _pool(
             source,
             clock=clock,
-            on_membership_read=lambda candidates, _forced: published.append(
+            on_membership_read=lambda candidates: published.append(
                 tuple(candidate.ref for candidate in candidates)
             ),
         )
@@ -790,7 +790,7 @@ class TestMembershipRead:
         pool = _pool(
             source,
             clock=clock,
-            on_membership_read=lambda candidates, _forced: published.append(
+            on_membership_read=lambda candidates: published.append(
                 tuple(candidate.ref for candidate in candidates)
             ),
         )
@@ -805,6 +805,7 @@ class TestMembershipRead:
         assert pool.candidate_refs == (31,)
 
     def test_changed_read_keeps_a_quarantined_candidate_visible(self) -> None:
+        """A failed authoritative read is not a reason to drop a Queue row."""
         source = ScriptedSource(
             [_snapshot([31, 7]), _snapshot([31, 19])],
             pickups={31: PICKUP_UNAVAILABLE},
@@ -812,16 +813,64 @@ class TestMembershipRead:
         published: list[tuple[int | str, ...]] = []
         pool = _pool(
             source,
-            on_membership_read=lambda candidates, _forced: published.append(
+            on_membership_read=lambda candidates: published.append(
                 tuple(candidate.ref for candidate in candidates)
             ),
         )
         pool.start()
 
         assert pool.take().item is not None
+        assert pool.unavailable_count == 1, "31's Pickup failed; it is quarantined"
         pool.service(refillable=2)
 
         assert published == [(31, 7), (31, 19)]
+
+    def test_only_eligible_candidates_are_published(self) -> None:
+        """The Queue names work a **Lane** could take, not everything cached.
+
+        A **Blocked** candidate stays cached so the next read can promote it
+        without a second round-trip, but it is not Lane work — and a ``queued``
+        row for it would deepen the Queue with work this Run cannot start,
+        which is the misreading #481 exists to remove, inverted.
+        """
+        source = ScriptedSource([_snapshot([31, 7, 19])])
+        published: list[tuple[int | str, ...]] = []
+        pool = _pool(
+            source,
+            eligible=lambda candidate: candidate.ref != 7,
+            on_membership_read=lambda candidates: published.append(
+                tuple(candidate.ref for candidate in candidates)
+            ),
+        )
+
+        pool.start()
+
+        assert published == [(31, 19)]
+        assert pool.candidate_refs == (31, 7, 19), "the cache still holds it"
+
+    def test_published_order_is_the_cache_order_not_the_snapshot_order(self) -> None:
+        """The **Queue**'s order is the order ``take`` walks (#219 §2.9, #393).
+
+        A later read that lists a survivor further down must not move its row:
+        the payload is the cache, which never re-sorts, and a newcomer joins
+        behind the candidates already queued however the source ordered it.
+        """
+        source = ScriptedSource([_snapshot([31, 7]), _snapshot([19, 7, 31])])
+        clock = FakeClock()
+        published: list[tuple[int | str, ...]] = []
+        pool = _pool(
+            source,
+            clock=clock,
+            on_membership_read=lambda candidates: published.append(
+                tuple(candidate.ref for candidate in candidates)
+            ),
+        )
+
+        pool.start()
+        clock.advance(4.0)
+        pool.service(refillable=3)
+
+        assert published == [(31, 7), (31, 7, 19)]
 
 
 # --------------------------------------------------------------------------- #

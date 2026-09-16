@@ -83,9 +83,7 @@ def is_parallel_safe(candidate: PoolCandidate) -> bool:
     return isinstance(candidate.ref, int) and LABEL_PARALLEL_SAFE in candidate.labels
 
 
-def _ignore_membership_read(
-    _candidates: tuple[PoolCandidate, ...], _forced: bool
-) -> None:
+def _ignore_membership_read(_candidates: tuple[PoolCandidate, ...]) -> None:
     """Default visibility seam for callers that do not publish Membership reads."""
 
 
@@ -173,9 +171,11 @@ class RollingPool:
             **Blocked** so the next refresh can promote them when their
             blockers close.
         backoff: The bounded exponential backoff policy.
-        on_membership_read: Receives complete cache membership in FIFO order
-            and whether it was the terminal confirmation, when the read is new,
-            changed, or forced.
+        on_membership_read: Receives the eligible cache membership in FIFO
+            order every time a read is worth publishing — the Run's first, one
+            that changed it, and the forced terminal confirmation. Whether a
+            read was worth publishing is this cache's decision and not the
+            consumer's, so the callable takes the membership and nothing else.
     """
 
     diag: logging.Logger
@@ -185,7 +185,7 @@ class RollingPool:
     eligible: Callable[[PoolCandidate], bool] = is_parallel_safe
     cacheable: Callable[[PoolCandidate], bool] = is_parallel_safe
     backoff: RefreshBackoff = field(default_factory=RefreshBackoff)
-    on_membership_read: Callable[[tuple[PoolCandidate, ...], bool], None] = (
+    on_membership_read: Callable[[tuple[PoolCandidate, ...]], None] = (
         _ignore_membership_read
     )
 
@@ -406,9 +406,7 @@ class RollingPool:
             changed = self.candidate_refs != before
             if force_emit or not self._membership_read_seen or changed:
                 self._membership_read_seen = True
-                self.on_membership_read(
-                    tuple(entry.candidate for entry in self._entries), force_emit
-                )
+                self.on_membership_read(self._eligible_membership())
         else:
             self.diag.warning(
                 "membership refresh incomplete; retaining last complete snapshot"
@@ -421,6 +419,24 @@ class RollingPool:
             self._jitter(self._interval) if self._interval > 0 else 0.0
         )
         return snapshot
+
+    def _eligible_membership(self) -> tuple[PoolCandidate, ...]:
+        """The membership one **Membership read** publishes, in cache order.
+
+        The eligible half of the cache. Cache order is the **Queue**'s order and
+        the Wrapper contract §3.2 selection order — see :meth:`_reconcile`,
+        which never re-sorts.
+
+        A **quarantined** candidate needs no exception here, because this runs
+        immediately after :meth:`_reconcile` and a survivor a complete read
+        still lists leaves quarantine there (§2.11). So a candidate a failed
+        **Pickup** quarantined is published again by the very read that makes
+        it worth retrying, and a Queue row is never lost to an unreachable
+        issue.
+        """
+        return tuple(
+            entry.candidate for entry in self._entries if self.eligible(entry.candidate)
+        )
 
     def _jitter(self, interval: float) -> float:
         assert self.jitter is not None  # set in __post_init__

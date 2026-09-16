@@ -4701,6 +4701,10 @@ def test_parallel_over_a_non_rolling_source_reports_the_degrade(
     assert types.index("wrapper.run.start") < types.index(
         "wrapper.parallel.degraded"
     )
+    # A backend with no **Membership read** is not a backend with an empty one:
+    # ``shallow_membership`` lives on ``RollingIssueSource``, which ``prds``
+    # does not implement, so the Run emits no read at all (ADR-0042).
+    assert "wrapper.pool.refreshed" not in types
 
 
 def test_parallel_over_a_rolling_source_reports_no_degrade(

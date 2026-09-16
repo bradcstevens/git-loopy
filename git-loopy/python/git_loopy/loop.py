@@ -4468,11 +4468,18 @@ class _ParallelLoop:
             "starting_lane_limit": self._scheduler.effective_limit,
         }
 
-    def _emit_membership_read(
-        self, candidates: tuple[PoolCandidate, ...], forced: bool
-    ) -> None:
-        """Publish the cache's add-only Membership read at Run scope."""
-        if not candidates and not (forced and self._membership_read_visible):
+    def _emit_membership_read(self, candidates: tuple[PoolCandidate, ...]) -> None:
+        """Publish the cache's add-only Membership read at Run scope.
+
+        A Run that has never seen Lane work is a **Serial fallback** Run, and
+        its stream stays byte-for-byte what a serial Run's is: an empty read
+        before the first non-empty one adds no **Queue** row and would only
+        announce a Parallel mode that never engaged. Once membership has been
+        published, every later read is news — including the one that empties
+        the Queue, which is how an operator tells "nothing eligible is left"
+        from "the Run stopped looking".
+        """
+        if not candidates and not self._membership_read_visible:
             return
         self._membership_read_visible = True
         self._serial._emit(
