@@ -104,10 +104,20 @@ def run_labels(
     output_fn(_summary(result, apply=apply))
 
     if result.unavailable is not None:
-        warn(
+        manual, repairable = _manual_and_repairable(result)
+        guidance = (
             f"could not write the tracker's labels ({result.unavailable}); "
-            f"{len(result.applied)} of {len(result.divergent)} were reconciled. "
-            f"Re-run `git-loopy labels --apply` once the tracker accepts writes."
+            f"{len(result.applied)} of {repairable} repairable "
+            f"{_plural('difference', repairable)} were reconciled. "
+            "Re-run `git-loopy labels --apply` once the tracker accepts writes."
+        )
+        if manual:
+            guidance += (
+                f" {manual} {_plural('label', manual)} requires manual "
+                "correction because its tracker spelling is noncanonical."
+            )
+        warn(
+            guidance
         )
         return 1
     return 0
@@ -135,18 +145,43 @@ def _summary(result: labels.LabelReconciliation, *, apply: bool) -> str:
     """The closing line: what agreed, what did not, and what to do about it."""
     matched = len(result.matched)
     divergent = len(result.divergent)
+    manual, repairable = _manual_and_repairable(result)
     if divergent == 0:
         return f"{matched} {_plural('label', matched)} match the vocabulary."
     if apply:
-        return (
+        summary = (
             f"Reconciled {len(result.applied)} "
             f"{_plural('label', len(result.applied))}; "
             f"{matched} already matched."
+        )
+        if manual:
+            return (
+                f"{summary} {manual} {_plural('label', manual)} "
+                "requires manual correction because its tracker spelling is "
+                "noncanonical."
+            )
+        return summary
+    if repairable == 0:
+        return (
+            f"{manual} {_plural('label', manual)} requires manual correction "
+            "because its tracker spelling is noncanonical."
+        )
+    if manual:
+        return (
+            f"{divergent} {_plural('label', divergent)} differ from the "
+            f"vocabulary; {repairable} can be reconciled with --apply and "
+            f"{manual} {_plural('label', manual)} requires manual correction."
         )
     return (
         f"{divergent} {_plural('label', divergent)} differ from the vocabulary; "
         f"{matched} match. Re-run with --apply to write the difference."
     )
+
+
+def _manual_and_repairable(result: labels.LabelReconciliation) -> tuple[int, int]:
+    """Count differences that cannot be applied and those that can."""
+    manual = sum(not difference.can_apply for difference in result.divergent)
+    return manual, len(result.divergent) - manual
 
 
 def _plural(word: str, count: int) -> str:

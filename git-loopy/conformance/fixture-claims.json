@@ -87,6 +87,12 @@
       "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 drives production progress and Strike accounting with fixture steps."},
       "rust": {"kind": "waived_out_of_scope", "reason": "Strike accounting belongs to an Orchestrator; the Dashboard displays emitted progress without calculating it."}
     },
+    "release-line.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_release_line_conformance.py drives fixture Bump-class cases and refusals through production resolve_bump_class."},
+      "shell": {"kind": "waived_owed", "reason": "Spec #486 obliges every Orchestrator to advance the Release line, but the shell suite exercises no Bump-class seam yet.", "issue": 576},
+      "powershell": {"kind": "waived_owed", "reason": "Spec #486 obliges every Orchestrator to advance the Release line, but the PowerShell suite exercises no Bump-class seam yet.", "issue": 577},
+      "rust": {"kind": "waived_out_of_scope", "reason": "Bump class is resolved from an issue's semver: labels at Pickup; the Dashboard never reads issue labels and only projects an emitted Release line."}
+    },
     "release-trust.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_release_trust.py drives fixture publication cases through production trust verification."},
       "shell": {"kind": "waived_out_of_scope", "reason": "Release signing and attestation verification belong to distribution tooling, not an Orchestrator."},

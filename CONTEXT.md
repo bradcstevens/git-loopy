@@ -151,7 +151,7 @@ _Avoid_: round, pass, tick; session as a separate accounting unit.
 **Label vocabulary**:
 The labels a repository's tracker must carry before a Run can do anything: the five
 canonical triage roles a human triages with, plus **Parallel-safe**, **Priority**, and
-the seven closed **Task type** labels. `git-loopy init`
+the seven closed **Task type** labels and four closed **Bump class** labels. `git-loopy init`
 ensures it exists, creating only what is absent and never altering a label that is
 already there. The five roles take whatever strings the repository's documented
 triage-label mapping gives them; the rest take the one string the runner
@@ -601,7 +601,7 @@ _Avoid_: release train, dev branch, version series.
 How much of the **Release version** one issue moves — `major`, `minor`, `patch`, or
 `none` — carried by a closed `semver:` label an agent infers at **Pickup** and writes
 back. A `none` advances nothing; an *absent* label is an unclassified issue, which is
-a fault rather than a fourth answer.
+a fault rather than a fifth answer.
 _Avoid_: version label, severity, impact, semver level.
 
 **Promotion**:

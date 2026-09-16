@@ -7,6 +7,7 @@ import ast
 import re
 import sys
 import tomllib
+from enum import Enum
 from pathlib import Path
 from typing import Sequence
 
@@ -25,10 +26,68 @@ _SEMVER = re.compile(
 _PYTHON_SOURCE_VERSION = Path("git-loopy/python/git_loopy/__init__.py")
 _PYTHON_PACKAGE_METADATA = Path("git-loopy/python/pyproject.toml")
 _PYTHON_RUNTIME_VERSION = Path("git-loopy/python/git_loopy/VERSION")
+BUMP_CLASS_LABEL_PREFIX = "semver:"
+BUMP_CLASS_KEYS: tuple[str, ...] = ("major", "minor", "patch", "none")
 
 
 class ReleaseVersionError(ValueError):
     """Release metadata is missing, unreadable, or invalid."""
+
+
+class BumpClassRefusal(Enum):
+    """Why issue labels cannot resolve to one Release-version bump class."""
+
+    UNCLASSIFIED = "unclassified_bump_class"
+    UNKNOWN_KEY = "unknown_semver_key"
+    CONFLICTING_LABELS = "conflicting_semver_labels"
+
+
+class BumpClassError(ReleaseVersionError):
+    """An issue's ``semver:`` labels are absent, unknown, or conflicting."""
+
+    def __init__(
+        self,
+        reason: BumpClassRefusal,
+        *,
+        key: str | None = None,
+        keys: Sequence[str] = (),
+    ) -> None:
+        self.reason = reason
+        self.key = key
+        self.keys = tuple(keys)
+        if reason is BumpClassRefusal.UNCLASSIFIED:
+            message = "issue is unclassified: it carries no semver: label"
+        elif reason is BumpClassRefusal.UNKNOWN_KEY:
+            message = (
+                f"unknown semver: key {key!r}; permitted keys: "
+                f"{', '.join(BUMP_CLASS_KEYS)}"
+            )
+        else:
+            labels = ", ".join(f"{BUMP_CLASS_LABEL_PREFIX}{value}" for value in keys)
+            message = f"issue carries conflicting semver: labels {labels}"
+        super().__init__(message)
+
+
+def resolve_bump_class(labels: Sequence[str]) -> str:
+    """Return an issue's one closed ``semver:`` bump class.
+
+    A missing label is an unclassified fault, deliberately distinct from
+    ``semver:none``. Unknown and multiple ``semver:`` labels are refused before
+    returning a decision, so callers never silently choose a Release impact.
+    """
+    keys = tuple(
+        label[len(BUMP_CLASS_LABEL_PREFIX) :]
+        for label in labels
+        if label.startswith(BUMP_CLASS_LABEL_PREFIX)
+    )
+    unknown = next((key for key in keys if key not in BUMP_CLASS_KEYS), None)
+    if unknown is not None:
+        raise BumpClassError(BumpClassRefusal.UNKNOWN_KEY, key=unknown)
+    if not keys:
+        raise BumpClassError(BumpClassRefusal.UNCLASSIFIED)
+    if len(keys) != 1:
+        raise BumpClassError(BumpClassRefusal.CONFLICTING_LABELS, keys=keys)
+    return keys[0]
 
 
 def _read_metadata_text(path: Path, label: str) -> str:
