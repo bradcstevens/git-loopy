@@ -25,6 +25,8 @@ import pytest
 
 from git_loopy import (
     calibration_search,
+    bump_class_session,
+    classifier_session,
     events,
     proving_admission,
     session_scope,
@@ -213,7 +215,7 @@ def test_both_non_iteration_sessions_go_through_the_same_carve_out() -> None:
     carve-out could drift, and the drift would re-arm the hazard silently in
     whichever copy was not updated — so this is a structural guard, not a case.
     """
-    for module in (trial, task_type_session):
+    for module in (trial, classifier_session):
         tree = ast.parse(inspect.getsource(module))
         openings = [
             node
@@ -312,6 +314,8 @@ def test_no_calibration_module_can_reach_the_orchestrator() -> None:
     for module in (
         trial,
         task_type_session,
+        bump_class_session,
+        classifier_session,
         session_scope,
         calibration_search,
         trial_concurrency,

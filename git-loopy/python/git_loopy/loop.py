@@ -207,6 +207,8 @@ from git_loopy.skill_run_preflight import (
     RunSkillPreflight,
     resolve_run_skill_preflight,
 )
+from git_loopy.bump_class_pickup import PickupBumpClassifier
+from git_loopy.bump_class_session import SessionBumpClassProposer
 from git_loopy.task_type_classifier import ClassifierPair
 from git_loopy.task_type_pickup import (
     PickupClassifier,
@@ -928,6 +930,27 @@ class _Loop:
                 # its worktree exists — the Task type is what decides the pair
                 # the Lane is then created for — so there is no Lane path to
                 # read, and reading the issue's own content needs none.
+                working_directory=None,
+                send_timeout_seconds=config.send_timeout_seconds,
+                skill_exposure=self._skill_exposure,
+                cost_meter=self._session_observer,
+                warn=self._diag.warning,
+            ),
+            client=(
+                task_type_client
+                if task_type_client is not None
+                else _make_task_type_label_client()
+            ),
+            diag=self._diag,
+        )
+        self._bump_classifier = PickupBumpClassifier(
+            pair=classifier_pair,
+            propose=SessionBumpClassProposer(
+                client=self._client,
+                config=self._config,
+                event_log=self._writers.event_log,
+                sinks=self._sinks,
+                run_id=self._writers.run_id,
                 working_directory=None,
                 send_timeout_seconds=config.send_timeout_seconds,
                 skill_exposure=self._skill_exposure,
@@ -1776,9 +1799,10 @@ class _Loop:
             failing to acquire a label may cost the issue its Iteration or its
             **Strike** count.
         """
-        labelled = await self._classifier.labelled(item)
-        if labelled is item:
-            return item, routed
+        task_type_labelled = await self._classifier.labelled(item)
+        labelled = await self._bump_classifier.labelled(task_type_labelled)
+        if task_type_labelled is item:
+            return labelled, routed
         try:
             resolution = self._resolve_route(labelled, warn=lambda _message: None)
         except TaskTypeError as exc:

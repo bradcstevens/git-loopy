@@ -1,17 +1,17 @@
-"""The Task-type adapter over shared unattended classifier sessions."""
+"""The Bump-class adapter over shared unattended classifier sessions."""
 
 from __future__ import annotations
 
 from typing import Any, Callable
 
+from git_loopy.bump_class_pickup import bump_class_prompt
 from git_loopy.classifier_session import SessionClassifierProposer
-from git_loopy.task_type_classifier import classifier_prompt
 
-__all__ = ["SessionTaskTypeProposer"]
+__all__ = ["SessionBumpClassProposer"]
 
 
-class SessionTaskTypeProposer(SessionClassifierProposer):
-    """Run the Task-type classifier's prompt in a non-Iteration session."""
+class SessionBumpClassProposer(SessionClassifierProposer):
+    """Run the Bump-class classifier's prompt in a non-Iteration session."""
 
     def __init__(
         self,
@@ -36,7 +36,7 @@ class SessionTaskTypeProposer(SessionClassifierProposer):
             run_id=run_id,
             working_directory=working_directory,
             send_timeout_seconds=send_timeout_seconds,
-            prompt=classifier_prompt,
+            prompt=bump_class_prompt,
             skill_exposure=skill_exposure,
             cost_meter=cost_meter,
             session_factory=session_factory,

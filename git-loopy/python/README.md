@@ -362,8 +362,8 @@ Copilot, network access, or the TUI.
 | --------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GIT_LOOPY_MODEL`                           | `claude-opus-5`                | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `GIT_LOOPY_REASONING_EFFORT` for backward compatibility. With ModelSelectionMode enabled (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`) this value is the startup picker's pre-selected cursor and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly. |
 | `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, case-insensitive (the `--reasoning-effort` flag overrides this). Explicit `none` requests no reasoning; an omitted value lets the backend choose when no configured/default effort applies. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A model without configurable reasoning (`auto`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
-| `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type classifier** runs on — the agent call that reads an *unlabelled* issue's own content and proposes its `task-type:` key so **Routing** has a label to read (ADR-0029). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
-| `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort the classifier runs at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
+| `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type** and **Bump-class classifiers** run on. Each reads an unlabelled issue's own content and writes a closed `task-type:` or `semver:` label back at **Pickup** (ADR-0029, ADR-0052). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
+| `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort both classifiers run at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
 | `GIT_LOOPY_MAX_NMT_STRIKES`                 | `3`                            | Consecutive no-progress iterations before aborting exit `1`. Integer ≥ 1.                                                                                                                                        |
 | `GIT_LOOPY_WORKTREE_SETUP`         | unset (auto-detect)            | A shell command run in each freshly created **Lane** worktree, before that Lane's agent session starts, to prepare its environment (install deps, create a venv, ...) so the feedback loops can run there. Runs once per Lane creation with `cwd` set to the worktree. When unset/blank, a best-effort auto-detect picks a common install command for the project type (`uv.lock`→`uv sync`, `package-lock.json`→`npm ci`, `package.json`→`npm install`, `requirements.txt`→`pip install -r requirements.txt`, `go.mod`→`go mod download`, ...). A non-zero setup exit is surfaced in the diagnostics log but does not abort the Lane. |
@@ -566,9 +566,10 @@ not `config` keys.
 
 `classifier_model` / `classifier_effort` (env: `GIT_LOOPY_CLASSIFIER_MODEL`,
 `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`) name the pair the **Task-type
-classifier** itself runs on — the agent call that reads an *unlabelled* issue's
-own content and proposes its task type, so routing has a `task-type:` label to
-read (ADR-0029).
+classifier** and **Bump-class classifier** run on. At **Pickup**, each reads an
+unlabelled issue's own content: the former writes a `task-type:` label for
+**Routing** to read, and the latter writes a `semver:` label for the **Release
+line** to read (ADR-0029, ADR-0052).
 
 Two properties are worth knowing before you set it:
 
@@ -577,19 +578,16 @@ Two properties are worth knowing before you set it:
   unmeasured prior governing every routing decision, and one that would show up
   nowhere as a routing input. Leaving these keys unset does **not** fall back to
   `model`; it falls back to the **cheapest pair on the live roster**.
-- **The taxonomy is closed.** A proposal outside the seven `task-type:` keys is
-  refused, not warned about, and the issue keeps routing to the run-wide default.
-- **What it infers is written back to your tracker.** The proposed key is applied
-  to the issue as a `task-type:` label, unattended and with no review step — that
-  is what makes the corpus inspectable, correctable and reusable instead of
-  re-inferred on every run (ADR-0029). An issue that already carries a
-  `task-type:` label is never relabelled — the check is re-asked of the tracker
+- **The taxonomies are closed.** A proposal outside the seven `task-type:` keys
+  or four `semver:` keys is refused, never written. A Bump class the classifier
+  cannot determine is reported rather than defaulted.
+- **What they infer is written back to your tracker.** The proposed key is
+  applied to the issue as a `task-type:` or `semver:` label, unattended and with
+  no review step — that is what makes the corpus inspectable, correctable and
+  reusable instead of re-inferred on every run. An issue that already carries a
+  valid label is never relabelled; the check is re-asked of the tracker
   immediately before the write, so a label you apply while a run is classifying
-  the issue still wins — the write is idempotent, and a write the tracker refuses
-  is non-fatal: the run continues on the inferred type and the label is simply
-  absent. Every label the classifier applies — and every one it could not — is
-  named in the run's diagnostics, on stderr and in the run log, which is the only
-  audit trail there is once the label is on the issue.
+  the issue still wins. The write is idempotent and non-fatal.
 
 Classification spends **AI Credits** like any other session, and that spend is
 folded into the run's cost. It never ticks a **Strike** and is never counted as

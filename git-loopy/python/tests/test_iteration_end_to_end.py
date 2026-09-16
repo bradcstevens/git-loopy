@@ -4213,7 +4213,7 @@ def _wire_classifier_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    answer: str = "<task-type>bugfix</task-type>",
+    answer: str = "<task-type>bugfix</task-type>\n<bump-class>none</bump-class>",
     classifier_model: str = "gpt-5-mini",
     labels: list[str] | None = None,
     label_client: _RecordingTaskTypeLabelClient | None = None,
@@ -4277,11 +4277,30 @@ def test_an_unlabelled_issue_is_classified_and_labelled_at_pickup(
     )
 
     assert exit_code == 0
-    assert tracker.applied == [(7, "task-type:bugfix")]
+    assert tracker.applied == [(7, "task-type:bugfix"), (7, "semver:none")]
     assert [
         (e["task_type_keys"], e["model"], e["effort"], e["routing_source"])
         for e in _bound_pickups(tmp_path)
     ] == [(["bugfix"], "claude-opus-4.7", "high", "routed")]
+
+
+def test_an_unclassified_bump_class_is_inferred_and_written_at_pickup(
+    tmp_path, monkeypatch
+) -> None:
+    """The Bump class is inferred by the unattended Pickup before work starts."""
+    fake_client, tracker = _wire_classifier_run(
+        tmp_path,
+        monkeypatch,
+        answer="<task-type>bugfix</task-type>\n<bump-class>minor</bump-class>",
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(_classifier_config(), staircase=_cheap_staircase())
+    )
+
+    assert exit_code == 0
+    assert (7, "semver:minor") in tracker.applied
+    assert fake_client.models.count("gpt-5-mini") == 2
 
 
 def test_the_iteration_runs_on_the_pair_the_inferred_type_routed_to(
@@ -4294,7 +4313,7 @@ def test_the_iteration_runs_on_the_pair_the_inferred_type_routed_to(
 
     # The classifying session first, on the cheapest rung; then the work, on the
     # pair `[routing]` names for `bugfix` — never the run-wide `claude-sonnet-5`.
-    assert fake_client.models == ["gpt-5-mini", "claude-opus-4.7"]
+    assert fake_client.models == ["gpt-5-mini", "gpt-5-mini", "claude-opus-4.7"]
 
 
 def test_the_classifier_never_borrows_the_run_wide_default(
@@ -4322,7 +4341,9 @@ def test_an_already_labelled_issue_spends_nothing_at_pickup(
 ) -> None:
     """Inference is a one-off because the label persists, not because of a cache."""
     fake_client, tracker = _wire_classifier_run(
-        tmp_path, monkeypatch, labels=["ready-for-agent", "task-type:bugfix"]
+        tmp_path,
+        monkeypatch,
+        labels=["ready-for-agent", "task-type:bugfix", "semver:none"],
     )
 
     asyncio.run(loop_module.run(_classifier_config(), staircase=_cheap_staircase()))
@@ -4347,7 +4368,7 @@ def test_a_refused_tracker_write_still_routes_this_iteration(
     )
 
     assert exit_code == 0
-    assert fake_client.models == ["gpt-5-mini", "claude-opus-4.7"]
+    assert fake_client.models == ["gpt-5-mini", "gpt-5-mini", "claude-opus-4.7"]
 
 
 def test_a_classifier_written_label_is_indistinguishable_from_a_hand_written_one(
@@ -4476,8 +4497,12 @@ def test_a_configured_classifier_pair_needs_no_staircase(tmp_path, monkeypatch) 
         )
     )
 
-    assert tracker.applied == [(7, "task-type:bugfix")]
-    assert fake_client.models == ["gemini-3.5-flash", "claude-opus-4.7"]
+    assert tracker.applied == [(7, "task-type:bugfix"), (7, "semver:none")]
+    assert fake_client.models == [
+        "gemini-3.5-flash",
+        "gemini-3.5-flash",
+        "claude-opus-4.7",
+    ]
 
 
 # ---------------------------------------------------------------------------
