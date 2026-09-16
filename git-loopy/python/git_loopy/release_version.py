@@ -7,6 +7,7 @@ import ast
 import re
 import sys
 import tomllib
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Sequence
@@ -28,6 +29,7 @@ _PYTHON_PACKAGE_METADATA = Path("git-loopy/python/pyproject.toml")
 _PYTHON_RUNTIME_VERSION = Path("git-loopy/python/git_loopy/VERSION")
 BUMP_CLASS_LABEL_PREFIX = "semver:"
 BUMP_CLASS_KEYS: tuple[str, ...] = ("major", "minor", "patch", "none")
+_BUMP_CLASS_RANK = {"none": 0, "patch": 1, "minor": 2, "major": 3}
 
 
 class ReleaseVersionError(ValueError):
@@ -68,6 +70,21 @@ class BumpClassError(ReleaseVersionError):
         super().__init__(message)
 
 
+@dataclass(frozen=True)
+class ReleaseLine:
+    """The derived target, counter, and published version for one Release line."""
+
+    target: str
+    dev_counter: int
+
+    @property
+    def version(self) -> str:
+        """Return the stable target or its current development prerelease."""
+        if self.dev_counter == 0:
+            return self.target
+        return f"{self.target}-dev.{self.dev_counter}"
+
+
 def resolve_bump_class(labels: Sequence[str]) -> str:
     """Return an issue's one closed ``semver:`` bump class.
 
@@ -88,6 +105,60 @@ def resolve_bump_class(labels: Sequence[str]) -> str:
     if len(keys) != 1:
         raise BumpClassError(BumpClassRefusal.CONFLICTING_LABELS, keys=keys)
     return keys[0]
+
+
+def calculate_release_line(
+    last_stable_version: str,
+    closed_bump_classes: Sequence[str],
+) -> ReleaseLine:
+    """Derive an order-independent Release line from its stable floor and closures."""
+    stable = _stable_version_core(last_stable_version)
+    unknown = next(
+        (
+            bump_class
+            for bump_class in closed_bump_classes
+            if bump_class not in BUMP_CLASS_KEYS
+        ),
+        None,
+    )
+    if unknown is not None:
+        raise ReleaseVersionError(f"unknown Release-line Bump class {unknown!r}")
+
+    highest_bump = max(
+        closed_bump_classes,
+        key=_BUMP_CLASS_RANK.__getitem__,
+        default="none",
+    )
+    target = _bump_stable_version(stable, highest_bump)
+    dev_counter = sum(bump_class != "none" for bump_class in closed_bump_classes)
+    return ReleaseLine(target=target, dev_counter=dev_counter)
+
+
+def _stable_version_core(version: str) -> tuple[int, int, int]:
+    _validate_semver(version, "Last stable Release version")
+    if "-" in version.split("+", 1)[0]:
+        raise ReleaseVersionError(
+            f"Last stable Release version must not be a prerelease: {version!r}"
+        )
+    major, minor, patch = version.split("+", 1)[0].split(".")
+    return int(major), int(minor), int(patch)
+
+
+def _bump_stable_version(
+    stable: tuple[int, int, int],
+    bump_class: str,
+) -> str:
+    major, minor, patch = stable
+    if bump_class == "major":
+        major += 1
+        minor = 0
+        patch = 0
+    elif bump_class == "minor":
+        minor += 1
+        patch = 0
+    elif bump_class == "patch":
+        patch += 1
+    return f"{major}.{minor}.{patch}"
 
 
 def _read_metadata_text(path: Path, label: str) -> str:
