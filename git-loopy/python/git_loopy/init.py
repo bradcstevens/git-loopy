@@ -625,10 +625,12 @@ class _ScopeUnavailable(Exception):
 def _default_wizard_runner(
     *,
     scope_options: Sequence[str],
+    scope_paths: Mapping[str, Path] | None = None,
     model_choices: Sequence[ModelChoice],
     default_model: str,
     default_effort: str | None,
     rebuild_skill_selection: Callable[..., tuple[str, ...]],
+    skill_selection_model: Callable[..., Any] | None = None,
     scope_locked: bool = False,
     input_fn: Callable[[str], str] = input,
     output_fn: Callable[[str], None] = print,
@@ -639,6 +641,7 @@ def _default_wizard_runner(
     This is deliberately a boring adapter: issue 504 moves the seam, while the
     Textual application and removal of these renderers belong to later issues.
     """
+    del scope_paths, skill_selection_model
     if scope_locked:
         # The operator already fixed the scope with a flag, so there is nothing
         # to ask. A *single* option is not the same thing: outside a repository
@@ -872,6 +875,36 @@ def run_init(
                 )
                 return collected
 
+            def build_skill_selection_model(
+                scaffold_decision: bool, selected_scope: str
+            ) -> Any:
+                """Build the shared picker model for the alternate Textual runner."""
+                from git_loopy import skillscmd
+
+                selected_targets = _resolve_targets(selected_scope, repo_root, env)
+                try:
+                    return skillscmd.discover_skill_policy(
+                        scope=selected_scope,
+                        repo_root=repo_root,
+                        env=env,
+                        client_factory=client_factory,
+                        discoverer=discoverer or skillscmd.discover_skill_catalog,
+                        git=git,
+                        required_skills=_post_setup_required_skills(
+                            repo_root=repo_root,
+                            env=env,
+                            prompt_path=selected_targets.prompt_path,
+                            prompt_source=prompt_source,
+                            scaffold=scaffold_decision,
+                            required_skills=required_skills,
+                        ),
+                        installed_skills_dir=skills_source,
+                    ).model
+                except skillscmd.SKILL_POLICY_FAILURES as exc:
+                    raise _SkillPolicyUnavailable(
+                        f"cannot establish a Skill policy: {type(exc).__name__}: {exc}"
+                    ) from exc
+
             runner_options: dict[str, Any] = {}
             if wizard_runner is _default_wizard_runner:
                 runner_options.update(
@@ -879,10 +912,15 @@ def run_init(
                 )
             answers = wizard_runner(
                 scope_options=scope_options,
+                scope_paths={
+                    option: _resolve_targets(option, repo_root, env).config_path
+                    for option in scope_options
+                },
                 model_choices=model_choices,
                 default_model=default_model,
-                default_effort=default_effort,  # type: ignore[arg-type]
+                default_effort=default_effort,
                 rebuild_skill_selection=rebuild_skill_selection,
+                skill_selection_model=build_skill_selection_model,
                 scope_locked=scope is not None,
                 **runner_options,
             )
