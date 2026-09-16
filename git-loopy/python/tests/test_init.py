@@ -9,6 +9,7 @@ and a fake ``fetch_choices`` model seam — so no test touches the real TTY,
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import inspect
 
 import tomllib
@@ -18,6 +19,7 @@ from typing import Any, Mapping, Sequence
 import pytest
 
 from git_loopy import init as init_module
+from git_loopy import scaffold_provenance
 from git_loopy import settings
 from git_loopy import skill_install
 from git_loopy.interactive.models import ModelChoice
@@ -817,6 +819,275 @@ def test_run_init_project_scaffolds_the_prompt_but_never_a_skill(
     assert not (tmp_path / ".copilot").exists()
 
 
+def _asset_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_run_init_records_provenance_for_every_scaffolded_asset(
+    tmp_path: Path,
+) -> None:
+    """A fresh scaffold records the exact Config and prompt it wrote."""
+    rc = init_module.run_init(
+        wizard_runner=_runner("1", "4", "n", "y"),
+        scope="project",
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=_env(tmp_path),
+        fetch_choices=lambda: [_choice("claude-opus-4.8")],
+        **_packaged(tmp_path),
+    )
+
+    assert rc == 0
+    scope = tmp_path / "git-loopy"
+    record = scaffold_provenance.read_scaffold_provenance(scope)
+    assert record is not None
+    assert set(record.assets) == {"config.toml", "PROMPT.md"}
+    for name, asset in record.assets.items():
+        assert asset.release_version == init_module.read_runtime_release_version()
+        assert asset.sha256 == _asset_digest(scope / name)
+
+
+def test_run_init_rescaffold_replaces_provenance_with_current_content(
+    tmp_path: Path,
+) -> None:
+    """A later scaffold replaces each entry with the content it just wrote."""
+    first = _packaged(tmp_path)
+    assert (
+        init_module.run_init(
+            wizard_runner=_runner("1", "4", "n", "y"),
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            **first,
+        )
+        == 0
+    )
+
+    replacement = tmp_path / "replacement" / "PROMPT.md"
+    replacement.parent.mkdir(parents=True)
+    replacement.write_text("REPLACEMENT PROMPT\n", encoding="utf-8")
+    second = _packaged(tmp_path)
+    second["packaged_prompt"] = replacement
+    assert (
+        init_module.run_init(
+            wizard_runner=_runner(out=_Output()),
+            scope="project",
+            assume_yes=True,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            default_model="gpt-5.4",
+            default_effort="high",
+            **second,
+        )
+        == 0
+    )
+
+    scope = tmp_path / "git-loopy"
+    record = scaffold_provenance.read_scaffold_provenance(scope)
+    assert record is not None
+    assert scope.joinpath("PROMPT.md").read_text(encoding="utf-8") == "REPLACEMENT PROMPT\n"
+    for name, asset in record.assets.items():
+        assert asset.release_version == init_module.read_runtime_release_version()
+        assert asset.sha256 == _asset_digest(scope / name)
+
+
+def test_run_init_drops_provenance_for_an_edited_unscaffolded_prompt(
+    tmp_path: Path,
+) -> None:
+    """A prompt skipped on re-init remains unrecorded after operator edits it."""
+    assert (
+        init_module.run_init(
+            wizard_runner=_runner("1", "4", "n", "y"),
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            **_packaged(tmp_path),
+        )
+        == 0
+    )
+    scope = tmp_path / "git-loopy"
+    scope.joinpath("PROMPT.md").write_text("OPERATOR PROMPT\n", encoding="utf-8")
+
+    assert (
+        init_module.run_init(
+            wizard_runner=_runner("1", "4", "n", "n"),
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            **_packaged(tmp_path),
+        )
+        == 0
+    )
+
+    record = scaffold_provenance.read_scaffold_provenance(scope)
+    assert record is not None
+    assert set(record.assets) == {"config.toml"}
+
+
+def test_run_init_invalidates_stale_provenance_when_recording_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed record write leaves the supported unrecorded state, never a lie."""
+    assert (
+        init_module.run_init(
+            wizard_runner=_runner("1", "4", "n", "y"),
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            **_packaged(tmp_path),
+        )
+        == 0
+    )
+    scope = tmp_path / "git-loopy"
+    config_before = scope.joinpath("config.toml").read_text(encoding="utf-8")
+
+    def fail_record(_scope_dir: Path, **_kwargs: object) -> Path:
+        raise scaffold_provenance.ScaffoldProvenanceError("injected write failure")
+
+    monkeypatch.setattr(init_module, "record_scaffolded_assets", fail_record)
+    warnings: list[str] = []
+    assert (
+        init_module.run_init(
+            wizard_runner=_runner(out=_Output()),
+            scope="project",
+            assume_yes=True,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            default_model="gpt-5.4",
+            default_effort="high",
+            warn=warnings.append,
+            **_packaged(tmp_path),
+        )
+        == 1
+    )
+
+    assert scope.joinpath("config.toml").read_text(encoding="utf-8") != config_before
+    assert scaffold_provenance.read_scaffold_provenance(scope) is None
+    assert warnings == [
+        "cannot record scaffold provenance: injected write failure; "
+        "assets were written without scaffold provenance."
+    ]
+
+
+def test_run_init_preserves_provenance_when_config_cannot_be_loaded(
+    tmp_path: Path,
+) -> None:
+    """An invalid Config aborts before it can invalidate a valid record."""
+    assert (
+        init_module.run_init(
+            wizard_runner=_runner("1", "4", "n", "y"),
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            **_packaged(tmp_path),
+        )
+        == 0
+    )
+    scope = tmp_path / "git-loopy"
+    provenance_before = scaffold_provenance.scaffold_provenance_path(scope).read_text(
+        encoding="utf-8"
+    )
+    scope.joinpath("config.toml").write_text("[not valid", encoding="utf-8")
+
+    with pytest.raises(settings.SettingsError):
+        init_module.run_init(
+            wizard_runner=_runner(out=_Output()),
+            scope="project",
+            assume_yes=True,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            default_model="gpt-5.4",
+            default_effort="high",
+            **_packaged(tmp_path),
+        )
+
+    assert (
+        scaffold_provenance.scaffold_provenance_path(scope).read_text(encoding="utf-8")
+        == provenance_before
+    )
+
+
+def test_run_init_preserves_provenance_when_config_write_fails(
+    tmp_path: Path,
+) -> None:
+    """A failed atomic Config write cannot discard valid provenance."""
+    assert (
+        init_module.run_init(
+            wizard_runner=_runner("1", "4", "n", "y"),
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            **_packaged(tmp_path),
+        )
+        == 0
+    )
+    scope = tmp_path / "git-loopy"
+    provenance_before = scaffold_provenance.scaffold_provenance_path(scope).read_text(
+        encoding="utf-8"
+    )
+
+    def fail_writer(_path: Path, _values: Mapping[str, object]) -> None:
+        raise OSError("injected Config write failure")
+
+    with pytest.raises(OSError, match="injected Config write failure"):
+        init_module.run_init(
+            wizard_runner=_runner(out=_Output()),
+            scope="project",
+            assume_yes=True,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            default_model="gpt-5.4",
+            default_effort="high",
+            writer=fail_writer,
+            **_packaged(tmp_path),
+        )
+
+    assert (
+        scaffold_provenance.scaffold_provenance_path(scope).read_text(encoding="utf-8")
+        == provenance_before
+    )
+
+
+def test_read_scaffold_provenance_accepts_an_absent_record(tmp_path: Path) -> None:
+    """An unrecorded installation is a normal, readable state."""
+    assert scaffold_provenance.read_scaffold_provenance(tmp_path / "git-loopy") is None
+
+
+def test_read_scaffold_provenance_rejects_an_unknown_asset_name(tmp_path: Path) -> None:
+    """Only scope-local operator-editable assets may have provenance."""
+    scope = tmp_path / "git-loopy"
+    scope.mkdir()
+    scaffold_provenance.scaffold_provenance_path(scope).write_text(
+        """\
+{
+  "schema_version": 1,
+  "assets": {
+    "/dev/zero": {
+      "release_version": "1.0.0",
+      "sha256": "0"
+    }
+  }
+}
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(scaffold_provenance.ScaffoldProvenanceError):
+        scaffold_provenance.read_scaffold_provenance(scope)
+
+
 def test_run_init_global_scope_targets_config_home(tmp_path: Path) -> None:
     env = _env(tmp_path)
     out = _Output()
@@ -943,6 +1214,9 @@ def test_run_init_yes_writes_defaults_without_fetch(tmp_path: Path) -> None:
     # --yes scaffolds the prompt override by default, and still no Skill.
     assert (tmp_path / "git-loopy" / "PROMPT.md").exists()
     assert not (tmp_path / ".copilot").exists()
+    record = scaffold_provenance.read_scaffold_provenance(tmp_path / "git-loopy")
+    assert record is not None
+    assert set(record.assets) == {"config.toml", "PROMPT.md"}
 
 
 def test_run_init_yes_gates_effort_for_reasoning_incapable_default(

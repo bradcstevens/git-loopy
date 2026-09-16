@@ -62,6 +62,13 @@ from git_loopy.config import (
     gate_reasoning_effort,
 )
 from git_loopy.prompt import PromptMetadataError, resolve_required_skills
+from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
+from git_loopy.scaffold_provenance import (
+    ScaffoldProvenanceError,
+    invalidate_scaffold_provenance,
+    read_scaffold_provenance,
+    record_scaffolded_assets,
+)
 from git_loopy.skill_install import (
     SkillInstallError,
     describe_refresh,
@@ -1001,11 +1008,21 @@ def run_init(
         warn(f"{exc}; nothing was written.")
         return 1
 
+    # Loading an existing Config can fail; do it before invalidating provenance
+    # so that a failed re-init leaves a valid record untouched.
+    values: dict[str, object] = dict(settings.load_config_table(targets.config_path))
+
+    try:
+        release_version = read_runtime_release_version()
+        previous_provenance = read_scaffold_provenance(targets.config_path.parent)
+    except (ReleaseVersionError, ScaffoldProvenanceError) as exc:
+        warn(f"cannot record scaffold provenance: {exc}; nothing was written.")
+        return 1
+
     # Commit phase — every decision is in hand, so nothing above wrote anything.
     # The wizard owns only the keys it collected: everything else in an existing
     # Config at this scope (including a routing table the operator declined to
     # revisit) survives the write untouched.
-    values: dict[str, object] = dict(settings.load_config_table(targets.config_path))
     values["model"] = model
     if effort is not None:
         values["reasoning_effort"] = effort
@@ -1019,12 +1036,54 @@ def run_init(
             for key, (route_model, route_effort) in routing.items()
         }
     values["enabled_skills"] = list(enabled_skills)
-    writer(targets.config_path, values)
+
+    if previous_provenance is not None:
+        try:
+            invalidate_scaffold_provenance(targets.config_path.parent)
+        except ScaffoldProvenanceError as exc:
+            warn(f"cannot record scaffold provenance: {exc}; nothing was written.")
+            return 1
+
+    try:
+        writer(targets.config_path, values)
+    except (OSError, settings.SettingsError):
+        # Config writes are atomic, so a failed write leaves its old content in
+        # place. Restore only entries whose current content still proves that.
+        if previous_provenance is not None:
+            try:
+                record_scaffolded_assets(
+                    targets.config_path.parent,
+                    release_version=release_version,
+                    assets={},
+                    previous=previous_provenance,
+                )
+            except ScaffoldProvenanceError as exc:
+                warn(
+                    f"cannot restore scaffold provenance after Config write failure: {exc}"
+                )
+        raise
+
     output_fn(f"Wrote {targets.config_path}")
 
+    scaffolded_assets = {"config.toml": targets.config_path}
     if scaffold:
         _scaffold_prompt(targets.prompt_path, prompt_source)
+        scaffolded_assets["PROMPT.md"] = targets.prompt_path
         output_fn(f"Wrote {targets.prompt_path}")
+    try:
+        record_path = record_scaffolded_assets(
+            targets.config_path.parent,
+            release_version=release_version,
+            assets=scaffolded_assets,
+            previous=previous_provenance,
+        )
+    except ScaffoldProvenanceError as exc:
+        warn(
+            f"cannot record scaffold provenance: {exc}; "
+            "assets were written without scaffold provenance."
+        )
+        return 1
+    output_fn(f"Wrote {record_path}")
 
     _bootstrap_tracker_labels(
         repo_root=repo_root,
