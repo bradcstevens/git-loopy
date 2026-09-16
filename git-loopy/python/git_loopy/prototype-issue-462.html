@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PROTOTYPE: remote host preflight</title>
+  <style>
+    body { max-width: 760px; margin: 3rem auto; font: 16px/1.5 system-ui, sans-serif; color: #172033; }
+    h1 { color: #3559a8; } section { border-top: 1px solid #d8deeb; margin-top: 2rem; padding-top: 1rem; }
+    button { background: #3559a8; border: 0; border-radius: .3rem; color: white; cursor: pointer; margin: .2rem; padding: .6rem .8rem; }
+    button.secondary { background: #54627d; } dt { font-weight: 700; } dd { margin: 0 0 .6rem; }
+    .changed { color: #a13d12; font-weight: 700; } #state { background: #f4f6fb; padding: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>PROTOTYPE: Remote host preflight</h1>
+  <p><strong>Question:</strong> Does a Run remain blameless when a remote host fails its one green-base check or cannot dispatch, while a successful preflight permits only contribution work?</p>
+  <section>
+    <h2>Current state</h2>
+    <dl id="state"></dl>
+  </section>
+  <section>
+    <h2>Free play</h2>
+    <button onclick="dispatch('preflightGreen')">Green base</button>
+    <button onclick="dispatch('preflightRed')">Red base</button>
+    <button onclick="dispatch('dispatchFailure')">Dispatch fails</button>
+    <button onclick="dispatch('dispatchSuccess')">Contribution starts</button>
+    <button class="secondary" onclick="dispatch('reset')">Reset</button>
+  </section>
+  <section>
+    <h2>Guided walkthroughs</h2>
+    <p><strong>1. Bad environment:</strong> press “Red base”. The Run ends before a contribution or Strike exists.</p>
+    <p><strong>2. Dispatch problem:</strong> press “Green base”, then “Dispatch fails”. The contribution is re-offered; repeated failures increase host pressure, not Strikes.</p>
+    <p><strong>3. Productive work:</strong> press “Green base”, then “Contribution starts”. Only this path begins an Agent session.</p>
+  </section>
+  <script>
+    // Pure state module: no DOM access.
+    const initial = () => ({ preflight: 'pending', contributions: 0, strikes: 0, hostPressure: 0, run: 'running', note: 'Awaiting the green-base preflight.' });
+    const transition = (state, action) => {
+      if (action === 'reset') return initial();
+      if (state.run !== 'running') return { ...state, note: 'This Run has already ended.' };
+      if (action === 'preflightGreen') return { ...state, preflight: 'green', note: 'The host may now start contributions.' };
+      if (action === 'preflightRed') return { ...state, preflight: 'red', run: 'environment failure', note: 'No Agent session occurred, so no Strike exists.' };
+      if (action === 'dispatchFailure' && state.preflight === 'green') return { ...state, hostPressure: state.hostPressure + 1, note: 'No Agent session occurred; the issue is re-offered without a Strike.' };
+      if (action === 'dispatchSuccess' && state.preflight === 'green') return { ...state, contributions: state.contributions + 1, note: 'The contribution has started and may now produce an ending.' };
+      return { ...state, note: 'A contribution cannot start until the base is green.' };
+    };
+    let state = initial();
+    function dispatch(action) { state = transition(state, action); render(); }
+    function render() {
+      document.querySelector('#state').innerHTML = Object.entries(state).map(([key, value]) =>
+        `<dt>${key.replace(/([A-Z])/g, ' $1')}</dt><dd class="${key === 'note' ? 'changed' : ''}">${value}</dd>`).join('');
+    }
+    render();
+  </script>
+</body>
+</html>
