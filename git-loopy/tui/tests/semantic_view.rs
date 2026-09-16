@@ -143,6 +143,42 @@ fn a_strike_wind_down_lifts_only_when_the_trace_says_so() {
     assert!(state.wind_down_observed());
 }
 
+#[test]
+fn a_spent_iteration_cap_stays_draining_until_its_run_ends() {
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    let ctx = context("2026-05-16T00:00:01.000Z", 0);
+
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"type":"wrapper.stop.requested","cause":"iteration_cap","stage":"drain","draining":0,"run_id":"run-1"}"#,
+        )
+        .expect("cap drain decodes"),
+    );
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"type":"wrapper.stop.lifted","cause":"strike_limit","draining":0,"run_id":"run-1"}"#,
+        )
+        .expect("unrelated lift decodes"),
+    );
+
+    assert_eq!(state.wind_down(), Some(("iteration_cap", "drain", 0)));
+    assert_eq!(
+        view(&state, &ctx, IssueRef::number(42))["dashboard"]["header"]["status"],
+        "draining"
+    );
+
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"type":"wrapper.run.end","outcome":"iteration_cap","run_id":"run-1"}"#,
+        )
+        .expect("cap end decodes"),
+    );
+    assert_eq!(
+        view(&state, &ctx, IssueRef::number(42))["dashboard"]["header"]["status"],
+        "iteration_cap"
+    );
+}
+
 /// Drive a fresh Run through a sequence of raw Events and project it.
 fn reduce(events: &[Value], drill_in: IssueRef) -> Value {
     let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
