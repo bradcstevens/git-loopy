@@ -1491,6 +1491,100 @@ def test_commit_paths_with_nothing_to_commit_raises(tmp_path: Path) -> None:
         git.commit_paths("demote", ["routing.measured.toml"])
 
 
+def _reject_commits(path: Path) -> None:
+    """Install a ``pre-commit`` hook that refuses every commit."""
+    hook = path / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\nexit 1\n")
+    hook.chmod(0o755)
+
+
+# --------------------------------------------------------------------------- #
+# unstage_paths — undo the `add` half of a refused commit_paths (#493)          #
+# --------------------------------------------------------------------------- #
+
+
+def test_unstage_paths_leaves_base_mergeable_after_a_refused_commit(
+    tmp_path: Path,
+) -> None:
+    """A refused machine-authored commit must not block every later merge.
+
+    ``commit_paths`` stages and commits as two commands, so a hook that refuses
+    the commit leaves the ``git add`` behind -- and ``git merge`` aborts while
+    *any* index entry differs from ``HEAD``. Under ADR-0052's post-Integration
+    Release-line advance that would silently demote every later publication in
+    the Run over one refused version bump.
+    """
+    _init_repo(tmp_path)
+    _commit(tmp_path, "base", file_name="VERSION", content="1.2.3\n")
+    git = SubprocessGitClient(tmp_path)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "checkout", "-q", "-b", "lane"],
+        check=True, capture_output=True, text=True,
+    )
+    _commit(tmp_path, "lane work", file_name="lane.txt")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "checkout", "-q", "main"],
+        check=True, capture_output=True, text=True,
+    )
+    _commit(tmp_path, "operator work", file_name="unrelated.txt")
+    _reject_commits(tmp_path)
+    (tmp_path / "VERSION").write_text("1.2.4-dev.1\n")
+    with pytest.raises(GitError):
+        git.commit_paths("advance", ["VERSION"])
+    with pytest.raises(GitError):
+        git.merge("lane")
+
+    git.unstage_paths(["VERSION"])
+
+    git.merge("lane")
+
+
+def test_unstage_paths_keeps_an_operator_s_unrelated_staged_work(
+    tmp_path: Path,
+) -> None:
+    """The undo is pathspec-scoped: an operator's index entries are not ours."""
+    _init_repo(tmp_path)
+    _commit(tmp_path, "base", file_name="VERSION", content="1.2.3\n")
+    git = SubprocessGitClient(tmp_path)
+    (tmp_path / "VERSION").write_text("1.2.4-dev.1\n")
+    (tmp_path / "staged.txt").write_text("an operator's work in progress\n")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "VERSION", "staged.txt"],
+        check=True, capture_output=True, text=True,
+    )
+
+    git.unstage_paths(["VERSION"])
+
+    assert _staged_paths(tmp_path) == {"staged.txt"}
+    # Only the index was rewound; the tree is the caller's to restore.
+    assert (tmp_path / "VERSION").read_text() == "1.2.4-dev.1\n"
+
+
+def test_unstage_paths_tolerates_a_pathspec_matching_nothing(tmp_path: Path) -> None:
+    """A distribution missing one version-bearing copy still unwinds the rest."""
+    _init_repo(tmp_path)
+    _commit(tmp_path, "base", file_name="VERSION", content="1.2.3\n")
+    git = SubprocessGitClient(tmp_path)
+    (tmp_path / "VERSION").write_text("1.2.4-dev.1\n")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "VERSION"],
+        check=True, capture_output=True, text=True,
+    )
+
+    git.unstage_paths(["VERSION", "git-loopy/tui/Cargo.toml"])
+
+    assert _staged_paths(tmp_path) == set()
+
+
+def _staged_paths(path: Path) -> set[str]:
+    """Every path whose index entry differs from ``HEAD``."""
+    completed = subprocess.run(
+        ["git", "-C", str(path), "diff", "--cached", "--name-only"],
+        check=True, capture_output=True, text=True,
+    )
+    return set(completed.stdout.split())
+
+
 def _tracked_at_head(path: Path) -> set[str]:
     """Every path tracked at ``HEAD``."""
     completed = subprocess.run(

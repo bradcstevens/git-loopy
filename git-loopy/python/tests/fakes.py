@@ -122,6 +122,7 @@ class FakeGitClient:
         # Write spies.
         self.add_all_calls = 0
         self.commit_paths_calls: list[tuple[str, tuple[str, ...]]] = []
+        self.unstage_paths_calls: list[tuple[str, ...]] = []
         self.commit_messages: list[str] = []
         self.push_calls = 0
         self.switch_calls: list[str] = []
@@ -131,6 +132,10 @@ class FakeGitClient:
         self._worktrees: dict[Path, FakeGitClient] = {}
         self.worktree_adds: list[tuple[Path, str, str]] = []
         self.worktree_removes: list[Path] = []
+        # Every child ever handed out, kept past remove_worktree so a test can
+        # ask what a Lane workspace or Integration stage did across its whole
+        # life -- `_worktrees` only answers for the ones still live.
+        self.worktree_clients: list[FakeGitClient] = []
         # Integration (#62 / ADR-0009): a branch registry keyed by Lane branch
         # name, populated on add_worktree and — unlike _worktrees — **kept** past
         # remove_worktree (a branch outlives its worktree as a breadcrumb), so
@@ -247,6 +252,9 @@ class FakeGitClient:
         self.commit_paths_calls.append((message, tuple(str(p) for p in paths)))
         return self.commit(message)
 
+    def unstage_paths(self, paths: Sequence[Path | str]) -> None:
+        self.unstage_paths_calls.append(tuple(str(p) for p in paths))
+
     def push(self) -> None:
         self.push_calls += 1
         if self.push_error is not None:
@@ -338,6 +346,7 @@ class FakeGitClient:
         )
         self._worktrees[wt_path] = child
         self._branches[branch] = child
+        self.worktree_clients.append(child)
         return child
 
     def open_worktree(self, path: Path) -> FakeGitClient:

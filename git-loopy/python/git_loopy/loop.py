@@ -174,6 +174,7 @@ from git_loopy.release_version import (
     ReleaseLine,
     ReleaseVersionError,
     advance_release_line,
+    is_prerelease,
     read_release_version,
     read_runtime_release_version,
     release_line_from_version,
@@ -2506,7 +2507,11 @@ class _ParallelLoop:
     Lanes' setup and sessions are never blocked on it. Because a contribution
     outlives its Lane slot, all of this is threaded by
     :attr:`~git_loopy.rolling_scheduler.Contribution.contribution_id`, never
-    by ``lane_id`` (#219 §7).
+    by ``lane_id`` (#219 §7). The **Release line** advances in that same
+    serialized section once the publication is green
+    (:meth:`_advance_release_line`, ADR-0052) — never inside a **Lane**
+    contribution, which would have every Lane conflict on the same
+    version-bearing files.
 
     A source that cannot support Rolling dispatch (only
     :class:`~git_loopy.sources.GitHubIssueSource` implements
@@ -4860,56 +4865,64 @@ class _ParallelLoop:
         lane_work: _LaneWork,
         pre_base: str,
     ) -> None:
-        """Finish a green landing: close the issue + delete the integrated branch."""
-        if not self._advance_release_line(lane_work.item):
-            return
+        """Finish a green landing: advance the line, close the issue, reap the branch."""
+        self._advance_release_line(lane_work.item)
         self._close_landed(lane_work.item, pre_base)
         self._delete_branch_safely(contribution.ref, lane_work.branch)
 
-    def _advance_release_line(self, item: AfkReadyItem) -> bool:
-        """Commit one bumped Release line after Integration has published it."""
+    def _advance_release_line(self, item: AfkReadyItem) -> None:
+        """Commit one bumped Release line after Integration has published it.
+
+        Runs post-Integration inside ``self._integration_lock`` (ADR-0052,
+        ADR-0009), never inside a **Lane** contribution: every Lane would
+        otherwise touch the same version-bearing files and conflict on every
+        Integration, on hunks whose conflict carries no meaning, spending the
+        bounded auto-resolution budget reconciling version numbers.
+
+        The **Release target** ratchets and the ``dev.N`` counter counts, so two
+        contributions integrating in either order land the same version. A
+        ``semver:none`` issue advances nothing.
+
+        Every failure here is a diagnostic and never a veto: the contribution is
+        already published on base, and a line that would not move cannot retract
+        a merge that already happened. The version copies are written as one
+        transaction (#491) and restored if the commit is refused, so a refusal
+        leaves the trunk on its prior complete Release line rather than a
+        partially advanced one.
+        """
         try:
             bump_class = resolve_bump_class(item.labels)
         except ReleaseVersionError as exc:
+            # Pickup already named this classification fault, and ADR-0052 keeps
+            # absence distinct from `semver:none`: an unclassified issue must not
+            # silently advance the line either way.
             self._diag.warning(
                 "integration #%s: cannot resolve Bump class for Release line: %s",
                 item.ref,
                 exc,
             )
-            # Pickup already named this classification fault. It must not silently
-            # turn into semver:none, but it also cannot retract a green publication.
-            return True
+            return
         if bump_class == "none":
-            return True
+            return
 
         try:
-            if self._release_line is None:
-                current_version = read_release_version(self._repo_root / "VERSION")
-                last_stable = (
-                    self._git.latest_release_version()
-                    if "-" in current_version
-                    else None
-                )
-                (
-                    self._last_stable_release_version,
-                    self._release_line,
-                ) = release_line_from_version(
-                    current_version,
-                    last_stable_version=last_stable,
-                )
-            assert self._last_stable_release_version is not None
+            last_stable, current_line = self._read_release_line()
             next_line = advance_release_line(
-                self._last_stable_release_version,
-                self._release_line.target,
-                self._release_line.counter,
+                last_stable,
+                current_line.target,
+                current_line.counter,
                 bump_class,
             )
             write_repository_release_version(self._repo_root, next_line.version)
-        except ReleaseVersionError as exc:
+        except (ReleaseVersionError, git_module.GitError) as exc:
+            # `git_module.GitError` reaches here from the tag read behind
+            # `_read_release_line`. It is caught for the same reason every other
+            # fault here is: the merge is already published, so nothing this
+            # method learns may escape and strand a landed contribution.
             self._diag.warning(
                 "integration #%s: Release line did not advance: %s", item.ref, exc
             )
-            return False
+            return
 
         try:
             self._git.commit_paths(
@@ -4917,27 +4930,74 @@ class _ParallelLoop:
                 RELEASE_VERSION_PATHS,
             )
         except git_module.GitError as exc:
-            try:
-                write_repository_release_version(
-                    self._repo_root, self._release_line.version
-                )
-            except ReleaseVersionError as rollback_exc:
-                self._diag.error(
-                    "integration #%s: Release commit failed and its metadata rollback "
-                    "also failed: %s",
-                    item.ref,
-                    rollback_exc,
-                )
-                return False
-            self._diag.warning(
-                "integration #%s: Release commit failed; restored prior Release line: %s",
-                item.ref,
-                exc,
-            )
-            return False
+            self._restore_release_line(item.ref, current_line, exc)
+            return
 
         self._release_line = next_line
-        return True
+
+    def _read_release_line(self) -> tuple[str, ReleaseLine]:
+        """Return the Run's last stable Release version and its current line.
+
+        The persisted value is the authority the first time and this Run's own
+        advances after that, so a Run that closes several issues keeps counting
+        against one target rather than re-deriving it per contribution.
+        """
+        if self._release_line is not None:
+            assert self._last_stable_release_version is not None
+            return self._last_stable_release_version, self._release_line
+        current_version = read_release_version(self._repo_root / "VERSION")
+        # A `dev.N` line's own target is where the ratchet has already reached,
+        # so the stable base it ratchets *from* is the newest published Release.
+        last_stable = (
+            self._git.latest_release_version()
+            if is_prerelease(current_version)
+            else None
+        )
+        (
+            self._last_stable_release_version,
+            self._release_line,
+        ) = release_line_from_version(
+            current_version, last_stable_version=last_stable
+        )
+        return self._last_stable_release_version, self._release_line
+
+    def _restore_release_line(
+        self, ref: int | str, current_line: ReleaseLine, cause: git_module.GitError
+    ) -> None:
+        """Undo a refused Release commit in both the index and the working tree.
+
+        ``commit_paths`` stages before it commits, so a refused commit leaves its
+        ``git add`` behind. Rewriting the files alone would restore the tree and
+        leave the index holding the advanced version, and ``git merge`` aborts
+        while *any* index entry differs from ``HEAD`` — so every later
+        Integration in this Run would fail to publish over one refused
+        machine-authored commit. Both halves are undone, and either failing is an
+        error an operator has to see: the trunk is then left mid-advance.
+        """
+        try:
+            self._git.unstage_paths(RELEASE_VERSION_PATHS)
+        except git_module.GitError as exc:
+            self._diag.error(
+                "integration #%s: Release commit failed and its version paths "
+                "could not be unstaged: %s",
+                ref,
+                exc,
+            )
+        try:
+            write_repository_release_version(self._repo_root, current_line.version)
+        except ReleaseVersionError as exc:
+            self._diag.error(
+                "integration #%s: Release commit failed and its metadata rollback "
+                "also failed: %s",
+                ref,
+                exc,
+            )
+            return
+        self._diag.warning(
+            "integration #%s: Release commit failed; restored prior Release line: %s",
+            ref,
+            cause,
+        )
 
     def _close_landed(self, item: AfkReadyItem, pre_base: str) -> None:
         """Close a landed issue via the serial closure path + emit ``auto_close``.
