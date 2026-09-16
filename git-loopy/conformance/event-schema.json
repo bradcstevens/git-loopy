@@ -311,6 +311,16 @@
     "wrapper.integration.published": {
       "required_when_present": ["contribution_id", "issue", "lane_id"]
     },
+    "wrapper.release.advanced": {
+      "required_when_present": [
+        "bump_class",
+        "issue",
+        "release_target",
+        "release_version"
+      ],
+      "bump_class_values": ["major", "minor", "patch"],
+      "emitted": "After a successful Release-line commit for a closed Bump-class issue. semver:none and failed advances emit nothing."
+    },
     "wrapper.contribution.end": {
       "required_when_present": [
         "contribution_id",
@@ -536,6 +546,7 @@
     "WRAPPER_INTEGRATION_BRANCH_OBSERVED": "wrapper.integration.branch_observed",
     "WRAPPER_INTEGRATION_RECOVERY_STARTED": "wrapper.integration.recovery_started",
     "WRAPPER_INTEGRATION_PUBLISHED": "wrapper.integration.published",
+    "WRAPPER_RELEASE_ADVANCED": "wrapper.release.advanced",
     "WRAPPER_CONTRIBUTION_END": "wrapper.contribution.end",
     "WRAPPER_CONCURRENCY_CHANGED": "wrapper.concurrency.changed",
     "WRAPPER_SERIAL_REQUESTED": "wrapper.serial.requested",
@@ -1816,6 +1827,20 @@
     }
   ],
   "serialization_cases": [
+    {
+      "id": "release-line-advance",
+      "event": {
+        "ts": "2026-05-16T00:00:00.000Z",
+        "run_id": "01HXR0000000000000000000RA",
+        "iter": 3,
+        "type": "wrapper.release.advanced",
+        "bump_class": "patch",
+        "issue": 42,
+        "release_target": "1.2.4",
+        "release_version": "1.2.4-dev.1"
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000RA\", \"iter\": 3, \"type\": \"wrapper.release.advanced\", \"bump_class\": \"patch\", \"issue\": 42, \"release_target\": \"1.2.4\", \"release_version\": \"1.2.4-dev.1\"}\n"
+    },
     {
       "id": "envelope-before-sorted-payload",
       "event": {

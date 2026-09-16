@@ -996,6 +996,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
         set(_EVENT_SCHEMA["contribution_identity"]["lifecycle_types"])
         | set(_EVENT_SCHEMA["contribution_identity"]["scheduler_scoped_types"])
         | set(_EVENT_SCHEMA["run_control_types"])
+        | {"wrapper.release.advanced"}
         # Calibration lifecycle records are no **Run**'s Insight (#371): they
         # carry no ``run_id``, and nothing a Calibration buys is delivered work.
         | set(_EVENT_SCHEMA["calibration_identity"]["lifecycle_types"])
