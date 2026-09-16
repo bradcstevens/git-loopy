@@ -34,6 +34,7 @@ old bash launcher is retired):
 
 * ``--version`` — print the distribution Release version and exit before Run
   discovery, configuration, dependencies, or services.
+* ``info`` — describe the installation identity and exit successfully.
 * Positional ``<max-iterations>`` — ``0`` (or omitted) means unlimited.
 * ``--model ID`` — per-run model override (top of the precedence chain).
 * ``--reasoning-effort EFFORT`` — per-run reasoning-effort override.
@@ -79,6 +80,7 @@ import dataclasses
 import os
 import subprocess
 import sys
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
@@ -131,11 +133,6 @@ _DEFAULT_MAX_NMT_STRIKES = 3
 #: and nothing else: that counter is Run-scoped, shared by every Lane, and ends
 #: the Run — this one is per pair and ends nothing.
 _DEFAULT_DEMOTION_THRESHOLD = 3
-#: Concurrent-Lane cap applied when Parallel mode (ADR-0008) is requested
-#: without an explicit number (bare ``--parallel``). Serial (``parallel=1``)
-#: remains the default when neither ``--parallel`` nor ``GIT_LOOPY_MAX_PARALLEL``
-#: is given.
-_DEFAULT_MAX_PARALLEL = 3
 # Default model used when ``GIT_LOOPY_MODEL`` is unset. A bare base id (model id and
 # reasoning effort are separate axes on the live Copilot CLI — a suffixed
 # id like ``claude-opus-4.7-xhigh`` is rejected as "not available").
@@ -145,20 +142,26 @@ _DEFAULT_MODEL = "claude-opus-5"
 # "works out of the box at full reasoning" intent. Once the operator
 # picks a model, effort comes from the env / model suffix / model default.
 #
-# ``xhigh`` and deliberately **not** ``max`` (ADR-0036): ``max`` is the
-# escalation rung, so a default that spent it would leave unclassified work —
-# which is the whole corpus while nothing produces ``task-type:`` labels — with
-# a second attempt at the identical pair. The default **reserves** the ceiling.
-_DEFAULT_REASONING_EFFORT = "xhigh"
+# ``max`` — the ceiling, deliberately (ADR-0056, superseding ADR-0036). ADR-0036
+# held this one rung down at ``xhigh`` so the escalation rung stayed reachable;
+# ADR-0056 spends it instead, on the finding that the first attempt is the one
+# that matters and a rung that only ever fires after a wasted session is worth
+# less than the strength it withholds. The cost is named, not hidden: see
+# :data:`_DEFAULT_ESCALATION_RUNG`.
+_DEFAULT_REASONING_EFFORT = "max"
 #: The built-in **Escalation rung**: the pair an issue whose session ended in
 #: silent no-progress is retried at when no ``[escalation]`` block names another
-#: (#408). Same model as the **Default pair**, one effort rung above it — the
-#: default reserves ``max`` for exactly this (ADR-0036), and each issue gets
-#: exactly one escalation, so there is no further rung to keep headroom for and
-#: the ceiling is spent here rather than saved. It lives beside the default it
-#: is defined against rather than in :mod:`git_loopy.escalation`, which imports
-#: the harness SDK transitively and so must stay off the subcommand-dispatch
-#: path this module is on.
+#: (#408). Same model as the **Default pair** and, since ADR-0056, the same
+#: effort — so for **unclassified** work escalation is a **no-op**: the retry
+#: reuses the identical pair and buys no new information. That is accepted, not
+#: overlooked. ADR-0036 existed to prevent exactly this and ADR-0056 supersedes
+#: it; the rung is kept rather than removed because it is still a real pair
+#: change for every **Routed pair**, none of which holds ``max`` (ADR-0048), and
+#: because ``[escalation]`` in either Config scope still overrides it.
+#:
+#: It lives beside the default it is defined against rather than in
+#: :mod:`git_loopy.escalation`, which imports the harness SDK transitively and so
+#: must stay off the subcommand-dispatch path this module is on.
 _DEFAULT_ESCALATION_RUNG: tuple[str, str] = (_DEFAULT_MODEL, "max")
 
 
@@ -223,19 +226,24 @@ def _parse_max_iterations(raw: str) -> int:
     return value
 
 
-def _parse_parallel(raw: str) -> int:
-    """Validate the ``--parallel N`` cap as an integer ≥ 1 (1 = serial)."""
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            f"--parallel must be an integer, got {raw!r}"
-        ) from exc
-    if value < 1:
-        raise argparse.ArgumentTypeError(
-            f"--parallel must be ≥ 1 (1 = serial), got {value}"
-        )
-    return value
+class _RetiredOption(argparse.Action):
+    """Reject a removed option with its operational replacement."""
+
+    def __init__(
+        self, option_strings: list[str], dest: str, *, replacement: str, **kwargs: object
+    ) -> None:
+        self._replacement = replacement
+        super().__init__(option_strings, dest, **kwargs)
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        _namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None = None,
+    ) -> None:
+        del values
+        parser.error(f"{option_string} was removed; {self._replacement}")
 
 
 def _parse_issue_pin(raw: str) -> int:
@@ -270,6 +278,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  config                         Manage persisted settings: "
             "set / get / list / edit / path.\n"
             "                                 See `git-loopy config -h`.\n"
+            "  info                           Describe this installation's "
+            "identity and channel.\n"
+            "                                 See `git-loopy info -h`.\n"
             "  skills list                    Inspect the closed-world Skill "
             "policy.\n"
             "  skills edit                    Edit a project or global Skill "
@@ -306,13 +317,17 @@ def build_parser() -> argparse.ArgumentParser:
             "  GIT_LOOPY_ISSUE_SOURCE       'github' (default) or 'prds' "
             "(legacy local-markdown).\n"
             "  GIT_LOOPY_MAX_NMT_STRIKES    Strike threshold (default: 3).\n"
-            "  GIT_LOOPY_MAX_PARALLEL       Parallel-mode Lane cap "
-            "(default: serial; --parallel wins).\n"
+            "  GIT_LOOPY_EXECUTION_HOST     Execution-host placement "
+            "(default: local; --execution-host wins).\n"
+            "  GIT_LOOPY_GITHUB_ACTIONS_CAPACITY\n"
+            "                              Concurrent workflow runs the "
+            "'github-actions' placement may hold\n"
+            "                              (default: the account's own "
+            "concurrency ceiling).\n"
             "  GIT_LOOPY_CALIBRATE_CONCURRENCY\n"
             "                              Trials a Calibration runs at once, "
             "each in its own worktree\n"
-            "                              (default: the Lane cap, then "
-            "serial).\n"
+            "                              (default: serial).\n"
             "  GIT_LOOPY_WORKTREE_SETUP     Parallel-mode per-Lane worktree "
             "setup command\n"
             "                              (default: auto-detect deps install; "
@@ -324,10 +339,6 @@ def build_parser() -> argparse.ArgumentParser:
             "deny guard.\n"
             "  GIT_LOOPY_OTEL_ENABLED          Truthy '1' enables OTel.\n"
             "  OTEL_EXPORTER_OTLP_ENDPOINT  Presence enables OTel.\n"
-            "  GIT_LOOPY_INTERACTIVE           '1' forces the TUI, '0' forces "
-            "the line printer\n"
-            "                              (default: auto-detect from TTY; "
-            "needs the [tui] extra).\n"
             "  GIT_LOOPY_MODEL_SELECT          '1' opts into the startup model "
             "picker (ModelSelectionMode);\n"
             "                              off by default. --select-model wins "
@@ -336,7 +347,7 @@ def build_parser() -> argparse.ArgumentParser:
             "(default: 7200).\n"
             "  GIT_LOOPY_GATE_TIMEOUT_SECONDS  Per-feedback-loop wall-clock "
             "bound for the\n"
-            "                              Parallel-mode Integration gate "
+            "                              Integration gate "
             "(default: 3600).\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -386,17 +397,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--parallel",
-        dest="parallel",
+        action=_RetiredOption,
         nargs="?",
-        type=_parse_parallel,
-        const=_DEFAULT_MAX_PARALLEL,
-        default=None,
         metavar="N",
+        replacement=(
+            "Runs always use rolling dispatch and the Execution host's "
+            "host-declared capacity is the Lane ceiling."
+        ),
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--execution-host",
+        dest="execution_host",
+        default=None,
+        metavar="PLACEMENT",
         help=(
-            "Opt into Parallel mode (ADR-0008): work up to N parallel-safe "
-            "issues concurrently, each in its own git worktree + branch. "
-            "Bare --parallel uses N=%d. Omitted = serial. Overrides "
-            "GIT_LOOPY_MAX_PARALLEL." % _DEFAULT_MAX_PARALLEL
+            "Execution-host placement for this Run. Overrides "
+            "GIT_LOOPY_EXECUTION_HOST; unsupported placements are refused "
+            "during preflight rather than falling back to local."
         ),
     )
     parser.add_argument(
@@ -480,23 +498,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--interactive",
-        dest="interactive",
-        action="store_true",
-        default=None,
-        help=(
-            "Force the interactive Textual dashboard (requires the [tui] "
-            "extra). Default: auto-detect from a TTY. Overrides "
-            "GIT_LOOPY_INTERACTIVE."
-        ),
+        action=_RetiredOption,
+        nargs=0,
+        replacement="the Dashboard is available whenever stdout is a terminal.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--no-interactive",
-        dest="interactive",
-        action="store_false",
-        help=(
-            "Force today's line-printer output even on a TTY. Overrides "
-            "GIT_LOOPY_INTERACTIVE."
-        ),
+        action=_RetiredOption,
+        nargs=0,
+        replacement="the line printer runs automatically when stdout is not a terminal.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--select-model",
@@ -527,7 +539,7 @@ def build_parser() -> argparse.ArgumentParser:
 #: They are kept out of :func:`build_parser` because argparse cannot host an
 #: optional positional (``<max-iterations>``) alongside ``add_subparsers`` in one
 #: parser without misreading ``git-loopy 5`` as an invalid subcommand choice.
-_SUBCOMMANDS = ("init", "config", "skills", "labels", "calibrate")
+_SUBCOMMANDS = ("init", "config", "skills", "labels", "calibrate", "info", "sweep")
 
 
 def _add_scope_flags(
@@ -572,14 +584,14 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="git-loopy",
         description=(
-            "git-loopy subcommands (setup, Config, Skill management, "
-            "and Calibration)."
+            "git-loopy subcommands (setup, Config, Skill management, Sweep, "
+            "Calibration, and installation identity)."
         ),
     )
     sub = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{init,config,skills,labels,calibrate}",
+        metavar="{init,config,skills,labels,calibrate,info,sweep}",
     )
 
     init = sub.add_parser(
@@ -680,6 +692,32 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "and correct the colour / description of the ones that drifted. "
             "Never renames and never deletes."
         ),
+    )
+
+    info = sub.add_parser(
+        "info",
+        help="Describe this installation's artifact, channel, and identity.",
+        description=(
+            "Report the installed artifact, the Install channel when it can be "
+            "proven, Release version, resolved commit, and Edge-install status. "
+            "This command describes facts only and exits successfully even when "
+            "some identity facts are unavailable."
+        ),
+    )
+    info.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the stable installation-inventory JSON document.",
+    )
+
+    sweep = sub.add_parser(
+        "sweep",
+        help="Reclaim dead-Run Lane workspaces and resolved reserved branches.",
+    )
+    sweep.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report exactly what this sweep would remove without changing it.",
     )
 
     config = sub.add_parser(
@@ -833,14 +871,14 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     )
     calibrate.add_argument(
         "--parallel",
-        type=_parse_parallel,
-        default=None,
+        action=_RetiredOption,
+        nargs="?",
         metavar="N",
-        help=(
-            "The Lane cap a Calibration's result would take effect at. Routing "
-            "is a Parallel-mode feature, so calibrate refuses to spend when this "
-            "resolves to 1 (flag > GIT_LOOPY_MAX_PARALLEL > 1)."
+        replacement=(
+            "Calibration Trial width is controlled only by "
+            "GIT_LOOPY_CALIBRATE_CONCURRENCY."
         ),
+        help=argparse.SUPPRESS,
     )
     # The two reporting modes stay exclusive of each other. Neither is required
     # any more: a bare `calibrate` is the spending path (#372), which is safe to
@@ -929,6 +967,70 @@ def _run_labels(args: argparse.Namespace) -> int:
         client=_make_label_client(),
         apply=bool(args.apply),
     )
+
+
+def _run_sweep(args: argparse.Namespace) -> int:
+    """Dispatch the explicit residue-reclamation command."""
+    from git_loopy import sweepcmd
+
+    try:
+        repo_root = resolve_repo_root()
+    except RuntimeError as exc:
+        print(f"git-loopy: sweep requires a git repository: {exc}", file=sys.stderr)
+        return 1
+    return sweepcmd.run_sweep(repo_root=repo_root, dry_run=bool(args.dry_run))
+
+
+def _run_info(
+    args: argparse.Namespace,
+    *,
+    env: Mapping[str, str] | None = None,
+    executable_path: Path | None = None,
+    output_fn: Callable[[str], None] = print,
+) -> int:
+    """Present the installation inventory without turning it into a health gate."""
+    environment = os.environ if env is None else env
+    executable = Path(sys.argv[0]) if executable_path is None else executable_path
+    from git_loopy import installation
+
+    try:
+        inventory = installation.inspect_installation(
+            env=environment,
+            executable_path=executable,
+        )
+    except Exception:  # info reports unavailable identity rather than failing.
+        inventory = installation.Installation(
+            artifact="python-runner",
+            executable=str(executable),
+            install_channel=installation.InstallChannel(name="unproven", proven=False),
+            release_version=None,
+            resolved_commit=None,
+            published=None,
+            edge_install=None,
+        )
+
+    if args.json:
+        import json
+
+        output_fn(json.dumps(inventory.json_dict(), sort_keys=True))
+    else:
+        output_fn(f"Artifact: {inventory.artifact}")
+        output_fn(f"Executable: {inventory.executable}")
+        output_fn(f"Install channel: {inventory.install_channel.name}")
+        output_fn(f"Release version: {_display_identity(inventory.release_version)}")
+        output_fn(f"Resolved commit: {_display_identity(inventory.resolved_commit)}")
+        output_fn(f"Published Release: {_display_identity(inventory.published)}")
+        output_fn(f"Edge install: {_display_identity(inventory.edge_install)}")
+    return 0
+
+
+def _display_identity(value: object) -> str:
+    """Render absent identity as a fact without attaching a judgement."""
+    if value is None:
+        return "unknown"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    return str(value)
 
 
 def _run_config(args: argparse.Namespace) -> int:
@@ -1041,6 +1143,10 @@ def _run_calibrate(args: argparse.Namespace) -> int:
     nothing to report and nothing to measure. The refusal itself is the
     handlers', so every mode phrases it once.
     """
+    removed_env_error = _removed_mode_env_error(os.environ)
+    if removed_env_error is not None:
+        print(f"git-loopy: error: {removed_env_error}", file=sys.stderr)
+        return 1
     try:
         repo_root: Path | None = resolve_repo_root()
     except RuntimeError:
@@ -1231,38 +1337,6 @@ def _resolve_issue_pin(args: argparse.Namespace) -> int | None:
     return int(args.issue_pin[0])
 
 
-def _resolve_parallel(args: argparse.Namespace, env: Mapping[str, str]) -> int:
-    """Resolve the Parallel-mode Lane cap: ``--parallel`` > ``GIT_LOOPY_MAX_PARALLEL`` > 1.
-
-    Precedence (matching the kit's flag-over-env convention):
-
-    1. ``--parallel N`` on the CLI (``args.parallel`` — already validated ≥ 1 by
-       :func:`_parse_parallel`; a bare ``--parallel`` arrives as
-       :data:`_DEFAULT_MAX_PARALLEL` via the flag's ``const``).
-    2. ``GIT_LOOPY_MAX_PARALLEL`` env var when the flag is absent.
-    3. Built-in default ``1`` (serial).
-
-    Parallelism is a **per-run** knob (like ``max_iterations``): it is NEVER
-    read from a persisted ``config.toml``, only from the flag or env.
-
-    Unlike ``GIT_LOOPY_MAX_NMT_STRIKES``, a malformed or sub-1 ``GIT_LOOPY_MAX_PARALLEL``
-    **degrades to serial** rather than aborting the run — an unattended run should
-    never fail to launch over a stray env value; it just runs one issue at a time.
-    """
-    if args.parallel is not None:
-        return int(args.parallel)
-    raw = env.get("GIT_LOOPY_MAX_PARALLEL")
-    if raw is None or not raw.strip():
-        return 1
-    try:
-        value = int(raw)
-    except ValueError:
-        return 1
-    if value < 1:
-        return 1
-    return value
-
-
 def _resolve_issue_source(
     env: Mapping[str, str],
     project: Mapping[str, object],
@@ -1361,31 +1435,6 @@ def _parse_positive_float(raw: str | None) -> float | None:
     except ValueError:
         return None
     return value if value > 0 else None
-
-
-def _resolve_interactive_intent(
-    args: argparse.Namespace,
-    env: Mapping[str, str],
-    project: Mapping[str, object],
-    global_: Mapping[str, object],
-) -> bool | None:
-    """Merge the interactive *intent*: flag > env > project > global > ``None``.
-
-    This produces only the operator's *stated* preference across the config
-    chain; the live TTY / ``[tui]``-extra gating is applied separately by
-    :func:`_should_run_interactive` (which keeps
-    :func:`git_loopy.interactive.detect.resolve_interactive` unchanged).
-    """
-    flag = getattr(args, "interactive", None)
-    if flag is not None:
-        return bool(flag)
-    raw = env.get("GIT_LOOPY_INTERACTIVE")
-    if raw is not None and raw.strip():
-        return _is_truthy(raw)
-    pv = settings.table_bool(project, "interactive", scope="project")
-    if pv is not None:
-        return pv
-    return settings.table_bool(global_, "interactive", scope="global")
 
 
 def _resolve_persisted_str(
@@ -1816,14 +1865,9 @@ def _resolve_model_and_effort(
 
 @dataclasses.dataclass(frozen=True)
 class ResolvedConfig:
-    """The fully-resolved run configuration plus the interactive *intent*.
+    """The fully-resolved Run configuration and routing provenance.
 
     ``run`` is the effective :class:`RunConfig` the loop consumes.
-    ``interactive`` is the merged interactive preference across the chain
-    (flag > env > project > global > ``None``); it is kept *outside* ``RunConfig``
-    because the loop never consumes it — the live TTY / ``[tui]`` gating happens
-    in :func:`_should_run_interactive`.
-
     ``routing_provenance`` and ``routing_suppressed_by`` are the *reporting* half
     of routing (#364), likewise outside ``RunConfig`` because no **Run** consumes
     them: they exist so ``git-loopy config get`` / ``config list`` can name the
@@ -1837,7 +1881,6 @@ class ResolvedConfig:
     """
 
     run: RunConfig
-    interactive: bool | None
     routing_provenance: Mapping[str, RoutingTier] = dataclasses.field(
         default_factory=dict
     )
@@ -1869,10 +1912,10 @@ def resolve_config(
     so it is exhaustively unit-testable. The persisted (config-tiered) knobs are
     ``model``, ``reasoning_effort``, ``max_nmt_strikes``, ``issue_source``,
     ``include_prs``, ``enabled_skills``, ``deny_tools``, ``deny_skills``,
-    ``otel_enabled``, ``interactive``, ``send_timeout_seconds`` and the
+    ``otel_enabled``, ``send_timeout_seconds`` and the
     ``[routing]`` table. The
     per-run-only knobs (``max_iterations``, ``verbosity``, ``render_reasoning``,
-    ``parallel`` and temporary Skill overlays) are NEVER read from a config
+    temporary Skill overlays) are NEVER read from a config
     file — they resolve from flags / env only.
 
     ``[routing]`` is a **config-file-only** tier with one machine-written rung
@@ -1937,6 +1980,12 @@ def resolve_config(
     if effort_flag is not None:
         effort_raw = effort_flag
     model, reasoning_effort = _resolve_model_and_effort(model_raw, effort_raw, warn=warn)
+    execution_host_flag = getattr(args, "execution_host", None)
+    execution_host = (
+        execution_host_flag
+        if execution_host_flag is not None
+        else env.get("GIT_LOOPY_EXECUTION_HOST", "local")
+    )
 
     # The **Task-type classifier**'s own pair (#377, ADR-0029). Resolved from its
     # own env var and its own Config keys, and deliberately *not* from the flags
@@ -1974,7 +2023,7 @@ def resolve_config(
         verbosity=verbosity,
         render_reasoning=bool(args.render_reasoning),
         otel_enabled=_otel_enabled(env, project, global_),
-        parallel=_resolve_parallel(args, env),
+        execution_host=execution_host,
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
         routing=routing,
         routing_suppressed=suppressed_by is not None,
@@ -1984,44 +2033,22 @@ def resolve_config(
         issue_pin=_resolve_issue_pin(args),
         escalation_rung=_resolve_escalation(args, env, project, global_),
     )
-    interactive = _resolve_interactive_intent(args, env, project, global_)
     return ResolvedConfig(
         run=run,
-        interactive=interactive,
         routing_provenance=routing_provenance,
         routing_suppressed_by=suppressed_by,
     )
 
 
-def _should_run_interactive(interactive: bool | None) -> bool:
-    """Resolve whether this invocation takes the interactive (TUI) path.
+def _should_run_interactive() -> bool:
+    """Return whether stdout permits the Dashboard to attach."""
+    from git_loopy.interactive.detect import dashboard_available
 
-    Takes the merged interactive *intent* (already resolved across the flag /
-    env / project / global chain by :func:`resolve_config`) and applies the live
-    gating — stdout TTY-ness and whether the optional ``[tui]`` extra (Textual)
-    is importable — delegating the precedence to
-    :func:`git_loopy.interactive.detect.resolve_interactive` (which stays
-    unchanged: the merged intent is passed as its ``flag`` with no separate
-    ``env_value``, since the env tier is already folded into ``intent``).
-    Imported lazily so a non-interactive invocation never pays the import.
-    """
-    from git_loopy.interactive.detect import (
-        resolve_interactive,
-        textual_available,
-    )
-
-    return resolve_interactive(
-        flag=interactive,
-        env_value=None,
-        isatty=sys.stdout.isatty(),
-        textual_importable=textual_available(),
-        warn=_warn,
-    )
+    return dashboard_available(isatty=sys.stdout.isatty())
 
 
 def _should_auto_init(
     tables: settings.ConfigTables,
-    interactive: bool | None,
     stdin_isatty: bool,
 ) -> bool:
     """Decide whether a bare run auto-runs the first-run ``init`` wizard (#55).
@@ -2031,9 +2058,6 @@ def _should_auto_init(
     * **No Config resolves anywhere** — both the project and global
       ``config.toml`` tables are empty. Once either scope has Config, a bare run
       goes straight to the loop (this slice's "no wizard once configured" rule).
-    * **Not opted out of interactivity** — ``interactive is False``
-      (``GIT_LOOPY_INTERACTIVE=0`` / ``--no-interactive``, already merged across
-      the config chain by :func:`resolve_config`) suppresses the prompt.
     * **stdin is an interactive terminal** — the wizard prompts on stdin, so a
       non-TTY (CI, a pipe) never prompts and the built-in defaults carry the run.
       This is what keeps automated runs from ever hanging on the wizard
@@ -2041,28 +2065,20 @@ def _should_auto_init(
     """
     if tables.project or tables.global_:
         return False
-    if interactive is False:
-        return False
     return stdin_isatty
 
 
 def _should_migrate_skill_policy(
     state: SkillPolicyStartupState,
-    interactive: bool | None,
     stdin_isatty: bool,
 ) -> bool:
     """Decide whether this invocation opens the one-time migration picker (#230).
 
-    The same shape as :func:`_should_auto_init`, and for the same reason: the
-    picker prompts on stdin, so a non-TTY (CI, a pipe) or an explicit
-    ``GIT_LOOPY_INTERACTIVE=0`` / ``--no-interactive`` must never reach it. An
+    The picker prompts on stdin, so a non-TTY (CI, a pipe) never reaches it. An
     unattended Run stays deterministic and non-blocking by falling back to the
-    **Minimal Skill policy** instead — deliberately *without* persisting it, so
-    the operator's first interactive Run is still offered the real choice.
+    **Minimal Skill policy** instead — deliberately *without* persisting it.
     """
     if state is not SkillPolicyStartupState.LEGACY:
-        return False
-    if interactive is False:
         return False
     return stdin_isatty
 
@@ -2089,6 +2105,30 @@ _REMOVED_PRICING_FILE_WARNING = (
     "the harness reported billing, which git-loopy neither authors nor "
     "recomputes. Unset the variable."
 )
+
+
+_REMOVED_MODE_ENVIRONMENTS: Mapping[str, str] = {
+    "GIT_LOOPY_MAX_PARALLEL": (
+        "Runs always use rolling dispatch and the Execution host's "
+        "host-declared capacity is the Lane ceiling."
+    ),
+    "GIT_LOOPY_INTERACTIVE": (
+        "the Dashboard is available whenever stdout is a terminal, and the line "
+        "printer runs when it is not."
+    ),
+    "GIT_LOOPY_LANE_ADAPT": (
+        "the adaptive controller is always active and host-declared capacity is "
+        "its sole Lane ceiling."
+    ),
+}
+
+
+def _removed_mode_env_error(env: Mapping[str, str]) -> str | None:
+    """Return the preflight refusal for a retired Python mode variable."""
+    for name, replacement in _REMOVED_MODE_ENVIRONMENTS.items():
+        if name in env:
+            return f"{name} was removed; {replacement} Unset the variable."
+    return None
 
 
 def _warn_removed_pricing_override(env: Mapping[str, str]) -> None:
@@ -2122,8 +2162,7 @@ def _model_select_unavailable_message(config: RunConfig) -> str:
     """Phrase the 'ModelSelectionMode requested but no TUI' fallback warning.
 
     The startup picker is a TUI action; when it is requested on a run that takes
-    no interactive path (non-TTY, ``--no-interactive``, ``GIT_LOOPY_INTERACTIVE=0``,
-    or the ``[tui]`` extra absent) there is nowhere to draw it, so the run keeps
+    no terminal is available there is nowhere to draw it, so the run keeps
     the configured model rather than prompting.
     """
     target = config.model or "the configured model"
@@ -2131,8 +2170,8 @@ def _model_select_unavailable_message(config: RunConfig) -> str:
         target = f"{target} ({config.reasoning_effort})"
     return (
         "ModelSelectionMode was requested (--select-model / GIT_LOOPY_MODEL_SELECT) "
-        "but no interactive TUI is available to show the picker (it needs a TTY "
-        f"and the [tui] extra); using {target}."
+        "but no interactive TUI is available to show the picker (it needs a TTY); "
+        f"using {target}."
     )
 
 
@@ -2164,6 +2203,10 @@ def main(argv: list[str] | None = None) -> int:
             return _run_labels(sub_args)
         if sub_args.command == "calibrate":
             return _run_calibrate(sub_args)
+        if sub_args.command == "info":
+            return _run_info(sub_args)
+        if sub_args.command == "sweep":
+            return _run_sweep(sub_args)
         return _run_config(sub_args)
 
     parser = build_parser()
@@ -2190,6 +2233,11 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"git-loopy {release_version}")
         return 0
+
+    removed_env_error = _removed_mode_env_error(os.environ)
+    if removed_env_error is not None:
+        print(f"git-loopy: error: {removed_env_error}", file=sys.stderr)
+        return 1
 
     # Early git-root resolution so cwd-not-a-repo crashes with a clean
     # message before we pay the cost of importing the loop module
@@ -2226,15 +2274,14 @@ def main(argv: list[str] | None = None) -> int:
     _warn_removed_pricing_override(os.environ)
 
     # First-run setup (#55, ADR-0006/0007): with NO Config resolving in either
-    # scope, an interactive TTY auto-runs the `init` wizard first, then continues
-    # into the loop on the just-written Config. A non-TTY (CI) or an explicit
-    # opt-out (GIT_LOOPY_INTERACTIVE=0 / --no-interactive) keeps the built-in
-    # defaults and never prompts, so automated runs never hang on the wizard.
+    # scope, a TTY auto-runs the `init` wizard first, then continues into the
+    # loop on the just-written Config. A non-TTY (CI) keeps the built-in defaults
+    # and never prompts, so automated runs never hang on the wizard.
     # Cancelling the wizard aborts the whole command — it writes nothing, runs
     # nothing, and exits non-zero (an aborted setup never starts an unconfirmed
     # loop). The wizard module is imported lazily so a configured bare run (the
     # common case) never pays its import.
-    if _should_auto_init(tables, resolved.interactive, sys.stdin.isatty()):
+    if _should_auto_init(tables, sys.stdin.isatty()):
         from git_loopy import init as _init
 
         init_rc = _init.run_init(
@@ -2277,7 +2324,7 @@ def main(argv: list[str] | None = None) -> int:
         config_present=bool(tables.project or tables.global_),
     )
     if _should_migrate_skill_policy(
-        startup_state, resolved.interactive, sys.stdin.isatty()
+        startup_state, sys.stdin.isatty()
     ):
         from git_loopy import skillscmd as _skillscmd
 
@@ -2309,10 +2356,10 @@ def main(argv: list[str] | None = None) -> int:
     # Interactive path (issue #23, ADR-0001): launch the loop as a peer of a
     # Textual app observing a LiveRunState. The driver module imports Textual,
     # so it is reached only once `_should_run_interactive` has confirmed the
-    # [tui] extra is importable. Every non-interactive condition keeps today's
+    # interactive path. Every non-interactive condition keeps today's
     # exact line-printer behavior (driver left as None).
     select_model = _should_select_model(args)
-    if _should_run_interactive(resolved.interactive):
+    if _should_run_interactive():
         return asyncio.run(
             _drive_interactive(config, select_model=select_model)
         )
@@ -2363,7 +2410,6 @@ async def _notify_roster_drift(
             repo_root = None
         await roster_preflight.notify_roster_drift(
             repo_root=repo_root,
-            parallel=config.parallel,
             listing=listing,
             rate_card=rate_card,
             warn=_warn,
@@ -2380,7 +2426,15 @@ async def _notify_roster_drift(
         )
 
 
-async def _drive_line_printer(config: RunConfig) -> int:
+async def _drive_line_printer(
+    config: RunConfig,
+    *,
+    rate_card: "RateCard | None" = None,
+    staircase: "PriceStaircase | None" = None,
+    run_id: str | None = None,
+    started_at: datetime | None = None,
+    mirror_diagnostics_to_stderr: bool = True,
+) -> int:
     """Resolve the **Rate card**, then drive the line-printer loop (#331).
 
     The non-interactive path is what an unattended loop actually runs, and the
@@ -2393,40 +2447,25 @@ async def _drive_line_printer(config: RunConfig) -> int:
     # Keeps `git-loopy --help` snappy.
     from git_loopy import loop as _loop
 
-    listing = _make_model_listing()
-    rate_card = await resolve_rate_card(listing, warn=_warn)
-    await _notify_roster_drift(config, listing, rate_card)
+    if rate_card is None or staircase is None:
+        listing = _make_model_listing()
+        if rate_card is None:
+            rate_card = await resolve_rate_card(listing, warn=_warn)
+        await _notify_roster_drift(config, listing, rate_card)
+        if staircase is None:
+            staircase = await _resolve_staircase(config, listing, rate_card)
     return await _loop.run(
         config,
         rate_card=rate_card,
-        staircase=await _resolve_staircase(config, listing, rate_card),
+        staircase=staircase,
+        run_id=run_id,
+        started_at=started_at,
+        mirror_diagnostics_to_stderr=mirror_diagnostics_to_stderr,
     )
 
 
 async def _drive_interactive(config: RunConfig, *, select_model: bool) -> int:
-    """Optionally run the startup picker, then drive the observed loop (#23/#24/#31).
-
-    The interactive entrypoint runs inside one :func:`asyncio.run` so the
-    picker's **throwaway** ``list_models()`` client (an async SDK call) and the
-    peer-task loop share a single event loop:
-
-    1. When **ModelSelectionMode** is requested (``select_model`` — the opt-in
-       ``--select-model`` flag or ``GIT_LOOPY_MODEL_SELECT=1``),
-       :func:`git_loopy.interactive.picker.resolve_run_model` resolves the run's
-       model + reasoning effort via the live two-stage picker (issue #24),
-       falling back to the env/default already in ``config`` on any failure. By
-       default the picker is **skipped** and the configured model/effort are used
-       directly (issue #31).
-    2. The (possibly picked) choice is baked into a fresh frozen
-       :class:`RunConfig` (the loop still creates and owns its *own* run client).
-    3. The **Rate card** is resolved from the *same* listing the picker just
-       read (#331, ADR-0026), so it costs no additional round trip, and is held
-       fixed for the whole Run.
-    4. The interactive driver launches the loop as a peer of the observing app
-       (ADR-0001).
-    """
-    from git_loopy import loop as _loop
-
+    """Prepare the TTY Run, then hand off to the detached worker parent."""
     listing = _make_model_listing()
 
     if select_model:
@@ -2442,24 +2481,54 @@ async def _drive_interactive(config: RunConfig, *, select_model: bool) -> int:
     rate_card = await resolve_rate_card(listing, warn=_warn)
     await _notify_roster_drift(config, listing, rate_card)
     staircase = await _resolve_staircase(config, listing, rate_card)
+    return _run_tty_sidecar(
+        config,
+        repo_root=resolve_repo_root(),
+        rate_card=rate_card,
+        staircase=staircase,
+    )
 
-    # The Dashboard's own module is the earliest thing that can fail on the way
-    # up (#326). The [tui] gate probed Textual with ``find_spec``, which does
-    # not import it, so a present-but-broken Textual passes the gate and fails
-    # here. Observability is not a precondition for doing work: degrade to the
-    # line printer exactly as the extra being absent already does, and run.
+
+def _run_tty_sidecar(
+    config: RunConfig,
+    *,
+    repo_root: Path,
+    rate_card: "RateCard | None",
+    staircase: "PriceStaircase | None",
+) -> int:
+    """Start the detached worker, then keep the parent as the attach client."""
+    from git_loopy import run_sidecar
+    from git_loopy.persist import create_writers
+
+    writers = create_writers(repo_root)
+    spec = run_sidecar.DetachedRunSpec(
+        config=config,
+        run_id=writers.run_id,
+        started_at_epoch_ms=int(writers.started_at.timestamp() * 1000),
+        rate_card=rate_card,
+        staircase=staircase,
+    )
     try:
-        from git_loopy.interactive.driver import build_interactive_driver
-
-        driver = build_interactive_driver(config)
-    except Exception as exc:
+        release_version = read_runtime_release_version()
+    except ReleaseVersionError as exc:
         _warn(
-            "the live view could not start — the Dashboard failed to load "
-            f"({type(exc).__name__}: {exc}); falling back to the line printer."
+            "could not read this Runner's Release version "
+            f"({type(exc).__name__}: {exc}); using the line-printer client."
         )
-        return await _loop.run(config, rate_card=rate_card, staircase=staircase)
-    return await _loop.run(
-        config, driver=driver, rate_card=rate_card, staircase=staircase
+        release_version = ""
+    child = run_sidecar.spawn_detached_child(
+        spec,
+        diagnostics_path=writers.diagnostics_path,
+        cwd=Path.cwd(),
+    )
+    return run_sidecar.run_terminal_client(
+        repository_root=repo_root,
+        config=config,
+        trace_path=writers.event_log.path,
+        control_path=run_sidecar.control_path_for_trace(writers.event_log.path),
+        child=child,
+        release_version=release_version,
+        warn=_warn,
     )
 
 
@@ -2480,7 +2549,7 @@ async def _resolve_staircase(
     Demotion declines to step into an ordering it cannot measure, exactly as a
     **Calibration** declines to walk one.
     """
-    if not routing_in_force(config.parallel):
+    if not routing_in_force():
         return None
     try:
         from git_loopy.staircase import resolve_price_staircase

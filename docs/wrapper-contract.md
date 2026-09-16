@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.0 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.4 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -141,10 +141,9 @@ exclusion is an authoring mistake a human must fix; a blocked candidate is corre
 whose turn has not come, and it clears itself when its last blocker closes. It MUST remain in the
 **Pool** — the closure whitelist, the collection Event and the emptiness test all still need to
 see it, and a Pool that is *empty* ends the Run cleanly (§10) where a Pool that is merely *waiting*
-has not run out of work. Readiness is resolved at **Pickup** instead (§3.3), which is also the only
-place it can be afforded: a `blockedBy` read is not carried by the cheap list read, so deciding it
-here would cost one extra round-trip for every candidate collected rather than one for each
-candidate actually considered. See [ADR-0047](adr/0047-a-blocked-issue-is-not-pickup-admissible.md).
+has not run out of work. Readiness is decided at **Pickup** and at **Lane candidacy** instead
+(§3.3, §3.3.1), never here. See
+[ADR-0047](adr/0047-a-blocked-issue-is-not-pickup-admissible.md).
 
 Exclusions MUST be reported as `wrapper.pool.excluded` Events (§12), before the
 `wrapper.afk_ready.collected` they explain, and MUST also reach the operator's own output rather
@@ -348,11 +347,28 @@ MUST pass it over and try the next candidate in the §3.2 order. The candidate s
 nothing and is reconsidered on the next **Iteration** with no human touching the issue. See
 [ADR-0047](adr/0047-a-blocked-issue-is-not-pickup-admissible.md).
 
-**The read.** An Orchestrator MUST resolve readiness through the **GraphQL** `blockedBy` connection
-(`gh api graphql`), not through REST. REST is documented to undercount cross-repository
-dependencies and to do so silently — there is no `totalCount` to notice the shortfall by — so a
-REST read can report a blocked candidate as ready, which is the one outcome this section exists to
-prevent. The read is taken **at Pickup**, per candidate the runner reaches, not at collection.
+**The read.** An Orchestrator MUST resolve readiness through the **GraphQL** `blockedBy` connection,
+not through REST. REST is documented to undercount cross-repository dependencies and to do so
+silently — there is no `totalCount` to notice the shortfall by — so a REST read can report a blocked
+candidate as ready, which is the one outcome this section exists to prevent. `gh issue list` and
+`gh issue view` both serve `--json blockedBy` from GraphQL (`gh` 2.94.0 and later), so the
+requirement is on the *source of the connection*, not on which `gh` subcommand fetched it.
+
+**The connection rides a read already being made.** An Orchestrator MUST NOT pay a per-candidate
+round-trip for readiness. `blockedBy` MUST be requested on the §3.1 collection read and the
+**Membership read** (§9), then carried with each candidate. Thus collecting a **Pool** and
+refreshing Membership cost nothing extra however large the Pool grows.
+
+**Pickup** (serial, §3.3) takes the readiness verdict while it walks the ordered Pool, from the
+connection the collection read carried for that candidate. It MUST NOT issue a second dependency
+read to decide that verdict. **Lane candidacy** (Parallel mode, §9) takes its verdict from the
+continuously refreshed **Membership read**, which is the only read a scheduler turn takes. A Lane
+that reserves a candidate still performs its normal Pickup validation; candidacy is a *cheaper
+refusal taken earlier*, never a replacement for that validation.
+
+A **Membership read** that could not determine a candidate's blockers leaves readiness **unknown**,
+which is not ready — matching how an incomplete read already leaves the Pool's emptiness unknown
+(§9) rather than reporting it empty.
 
 **One hop.** An Orchestrator MUST read the candidate's own `blockedBy` connection and MUST NOT
 traverse the dependency graph further. Transitive traversal is a **non-goal**: it computes a
@@ -385,6 +401,28 @@ when the wait can never end.
 | `readiness_unprovable` | The `blockedBy` connection was incomplete or a node was unreadable |
 
 `issue-readiness.json` pins the verdict and the reason for every case.
+
+**Lane candidacy (Parallel mode).** A **Lane** MUST refuse **candidacy** to a candidate that is not
+ready, rather than reserving it and declining it at its own Pickup. The **Attempt lifecycle** (§9)
+fixed the shape: a Lane's only way to decline a reservation hands the candidate back to the list it
+came from, so a candidate that will be refused every turn would be reserved, skipped and released
+once per scheduler turn for the rest of the Run. Refusing candidacy says the same thing once.
+
+Refusal is **not eviction**. The candidate MUST stay in the scheduler's cache, because the next
+**Membership read** is the whole of what promotes it: a blocker closing mid-Run makes it
+candidate-eligible on the following refresh, with no Run restarted and no human touching the issue.
+This is what separates readiness from an **Attempt-lifecycle** defeat, which nothing inside the Run
+can undo and which therefore does evict.
+
+Readiness **composes** with the other candidacy predicates and MUST NOT replace any of them: a
+candidate must still carry `parallel-safe`, must still pass the Attempt-lifecycle skip, and the
+scheduler's own collision guard is untouched.
+
+Because both seams read the same assertion, **both orders MUST agree**: a Lane MUST NOT reserve an
+issue a serial Iteration of the same Run already found blocked, and a serial fallback taken while
+Lane concurrency is throttled MUST NOT bind one the scheduler already refused. A candidacy refusal
+is silent by design — it is the churn this rule exists to remove — while a serial Pickup skip
+reports itself as §3.3.1 requires.
 
 ## 4. Prompt assembly & agent invocation (phase 1, MUST)
 
@@ -496,7 +534,9 @@ error (exit `2`).
 | `0`  | Clean — cap reached  | The optional iteration cap `N` (§9) is reached.                      |
 | `1`  | Aborted — stuck      | The `GIT_LOOPY_MAX_NMT_STRIKES` Strike ceiling is spent (§6).        |
 | `1`  | Aborted — all skipped | A Pickup found the Pool non-empty and could bind none of it (§14.3). |
+| `1`  | Waiting — all blocked | Every Pickup refusal proved an open native blocker (§3.3.1).         |
 | `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1).      |
+| `1`  | Stopped — operator   | The operator ended the Run deliberately (§10.1, contract 2.3).       |
 | `2`  | Usage error          | Malformed invocation (e.g. non-numeric iteration cap, §9).           |
 
 A Runner with a **Pickup** (§14.3) MUST distinguish the two exit-`1` aborts by reason, and MUST
@@ -509,6 +549,42 @@ same Pool for as long as its Iteration cap allowed. A Runner without a Pickup ne
 reason and is not required to name it beyond mapping it (§10 is the family-wide termination
 matrix that `conformance/exit-codes.json` pins for every member).
 
+`all_blocked` is terminal on the same evidence: a Run cannot close a blocker without first
+starting work, and no candidate can start. It deliberately shares exit `1` with `all_skipped`.
+Both leave work unfinished, so an unattended caller must not treat either as the clean,
+exit-`0` empty Pool; the distinct reason is the actionable branch for a caller that can wait for
+dependency closure instead of repairing a refusal. `all_blocked` applies only when every skipped
+candidate proves an open dependency. A mixed Pool remains `all_skipped`, so waiting never hides
+work an operator can fix.
+
+### 10.1 An operator Stop is a decided outcome (contract 2.3, MUST)
+
+An Orchestrator that offers the operator a **Stop** MUST terminate it under the `operator_stop`
+reason and its **non-zero** exit code. A Stop is a *decided* end to a Run — a human chose it, and
+work was left unfinished — so it MUST NOT be reported as the exit-`0` empty Pool, and it MUST NOT
+borrow the vocabulary of an exit nobody decided. A supervising script is never told everything was
+fine (ADR-0024). An Orchestrator that offers no Stop never reaches this reason and is not required
+to name it beyond mapping it, exactly as §10 requires of `all_skipped`.
+
+The Stop itself takes **two stages** (ADR-0043), driven by the same gesture repeated:
+
+1. The first latches a wind-down. Refill, new **Lane** reservations and new **Iterations** stop at
+   once; every started contribution and **Integration** operation runs to completion and
+   integrates. The latch is durable — a later publication MUST NOT resume refill, which is what
+   distinguishes it from the drain a spent **Strike** ceiling latches.
+2. The second cancels the agent sessions still running, **salvaging** each one's workspace as a
+   **Checkpoint** first. Cancellation is *requested*, never awaited.
+
+Cancellation stops at **round boundaries** — a Lane agent session, or a bounded auto-resolution
+session inside an Integration cascade — and MUST NOT interrupt a publish transaction: the merge of
+an already-verified stage, the issue closure, and the branch deletion. A Run torn open mid-publish
+manufactures the one state nothing reconciles, and the transaction is seconds long.
+
+A contribution or Iteration ended by the second stage is **visible and blameless**: it MUST produce
+a **Summary** row, and it MUST feed neither the **Strike** counter nor **Demotion**. A human
+pressing a key is not evidence against a **Routed pair**. No third, harder in-band verb exists; the
+operating system already provides one, and salvage is what makes it safe.
+
 ## 11. Environment-variable surface (MUST honour the phase-1 core)
 
 Resolution precedence across the family is **CLI flag > env var > project config > global config >
@@ -517,18 +593,18 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 | Variable                       | Phase | Default          | Meaning                                                        |
 | ------------------------------ | ----- | ---------------- | -------------------------------------------------------------- |
 | `GIT_LOOPY_MODEL`              | 1     | `claude-opus-5`  | Model id (bare base id).                                       |
-| `GIT_LOOPY_REASONING_EFFORT`   | 1     | `xhigh` for the built-in model | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; omitted and explicit `none` are distinct. A recognized model-id suffix is peeled into this field, and selecting another model without an effort leaves it omitted so the backend chooses. |
+| `GIT_LOOPY_REASONING_EFFORT`   | 1     | `max` for the built-in model | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; omitted and explicit `none` are distinct. A recognized model-id suffix is peeled into this field, and selecting another model without an effort leaves it omitted so the backend chooses. |
 | `GIT_LOOPY_ISSUE_SOURCE`       | 1     | `github`         | `github` or `prds` (legacy local-markdown mode).              |
 | `GIT_LOOPY_MAX_NMT_STRIKES`    | 1     | `3`              | Consecutive no-progress Iterations before abort.              |
 | `GIT_LOOPY_INCLUDE_PRS`        | 3     | off              | `1`/`true`/`yes` to also advance `ready-for-agent` PRs.       |
-| `GIT_LOOPY_INTERACTIVE`        | 2     | auto (TTY)       | `0` disables the live interface (CI-safe).                     |
+| `GIT_LOOPY_INTERACTIVE`        | 2     | auto (TTY)       | MUST be honoured only by a member whose declared parallel capability manifest exposes this operator choice; Python still ignores it because terminal selection is structural: a TTY detaches the worker and keeps the parent as the attach client, while non-TTY stays on the direct line printer. |
 | `GIT_LOOPY_MODEL_SELECT`       | 3     | off              | `1` enters the startup model picker (**ModelSelectionMode**). |
 | `GIT_LOOPY_DENY_TOOLS`         | 1     | empty            | Denylist of tools (set *union* across config tiers).          |
 | `GIT_LOOPY_DENY_SKILLS`        | 1     | empty            | Deprecated denylist of skills (set *union* across config tiers); subtracts only (§16). |
 | `GIT_LOOPY_ENABLED_SKILLS`     | 3     | unset            | Exact replacement of the configured base **Skill policy** for one Run; an explicit empty value is a real empty policy (§16). |
 | `GIT_LOOPY_SEND_TIMEOUT_SECONDS`| 1    | impl default     | Per-iteration agent send timeout.                             |
 | `GIT_LOOPY_OTEL_ENABLED`       | 4     | off              | `1` enables OTLP export (or `OTEL_EXPORTER_OTLP_ENDPOINT`).    |
-| `GIT_LOOPY_MAX_PARALLEL`       | 5     | `1`              | **Lane** count in **Parallel mode**.                          |
+| `GIT_LOOPY_MAX_PARALLEL`       | 5     | `1`              | MUST be honoured only by a member whose declared parallel capability manifest exposes an operator-selected Lane count; Python refuses it because its Execution host declares the ceiling. |
 | `GIT_LOOPY_WORKTREE_SETUP`     | 5     | none             | Per-worktree setup command for **Parallel mode**.             |
 
 ## 12. Event schema (phase 1, MUST)
@@ -562,21 +638,22 @@ contribution-scoped: it names work that never became a **Lane contribution**, so
 collecting Iteration's `iter` and no contribution identity.
 Dashboard Insight additions within compatibility schema 1 are `wrapper.issue.activated`,
 `agent.output`, and `usage.context_window`; `wrapper.skill_policy.resolved` is the redacted
-Run-scoped record of the frozen **Effective Skill policy** (§16). `wrapper.dashboard.fault` is
-the Run-scoped record of a **Dashboard fault** — a Dashboard that raised, either while running or
-while coming up, which the Run survives as an involuntary **Detach** (ADR-0024). One event covers
-both, because a replay needs to tell a fault from a voluntary Detach, not one fault from another.
-It carries `error_type` and the scrubbed `error` text,
-so a replay can tell a Run the operator walked away from apart from one whose live view crashed
-out from under them; a voluntary Detach records no fault, which is the distinction. It is
-Run-scoped in **Parallel mode** too, never contribution-scoped: the fault is a fact about the
-Dashboard, not about any **Lane**, and every in-flight Lane contribution — including one being
-integrated — runs on to its natural outcome and keeps emitting its own events, now to the line
-printer (#327). Only an
-Orchestrator that hosts a Dashboard can emit it — the shell and PowerShell Orchestrators host
-none and never do. Rolling-dispatch additions
+Run-scoped record of the frozen **Effective Skill policy** (§16). Rolling-dispatch additions
 within compatibility schema 1 are listed under *Rolling-dispatch contribution lifecycle* below.
-Producing these additive events is capability-dependent.
+Producing these additive events is capability-dependent. TTY attach-client failures are local UI
+failures only: they emit no special Event and do not change the worker's own Run record.
+
+Contract-2.4 puts **Wind-down** on the wire. A Run emits
+`wrapper.stop.requested` when it latches a drain or escalates it to cancellation:
+`cause` is one of `operator_stop`, `strike_limit`, or `iteration_cap`; `stage` is
+the ordered ladder `drain`, then `cancel`; and `draining` is the observed number
+of contributions still in flight (`0` for a serial Run). Only `operator_stop` may
+emit `cancel`. The Event records the true latch, not an input gesture, so each
+transition emits once and a third Stop gesture emits nothing. A green publication
+may clear only a Strike drain; that transition emits `wrapper.stop.lifted` with
+`cause: "strike_limit"` and its observed `draining` count. Dashboard consumers
+derive their stopped state from these Events: a trace that predates them is
+unknown, and `wrapper.run.end` with `outcome: "interrupted"` is not a Stop.
 Note the shape: each is dotted `wrapper.<noun>.<verb>`, with underscores used only *within* a
 segment (`afk_ready`, `auto_close`, `ask_user`, `pr`, `work_finished`,
 `branch_observed`, `recovery_started`, `refill_turn`), and two that are
@@ -749,6 +826,29 @@ with the preflight-failure code (§10). Accepting the cap and running serially i
 silently serial Run is byte-identical to a Parallel Run whose tracker carries no `parallel-safe`
 issue, so the operator cannot tell an unimplemented feature from an unlabelled backlog.
 
+**Execution hosts (phase 5, contract 2.2).** The same manifest MUST carry an
+`execution_hosts` list alongside its booleans. Its entries come from the closed
+family vocabulary of host placements relative to the Orchestrator; they never
+name an isolation grade. The list is present even when empty. A non-empty list
+implies `parallel_mode: true`, and `parallel_mode: false` requires
+`execution_hosts: []`. The Python Orchestrator currently declares `["local"]`;
+the shell and PowerShell Orchestrators declare `[]` because they schedule no
+**Lane**. A requested host absent from the distribution's list MUST be refused
+at preflight with the preflight-failure exit code and a diagnostic naming
+`execution_hosts`, the distribution, and the setting an operator can change.
+This is a distribution capability refusal, not a Continuation capability path.
+
+An Orchestrator that emits **Lane contributions** MUST announce its selected
+**Execution host** on `wrapper.run.start` as an `execution_host` object carrying
+`placement`, `isolation_grade`, declared `capacity`, and `starting_lane_limit`.
+It MUST stamp the selected placement as `host` on every
+`wrapper.contribution.start`, including `local`; the isolation grade is announced
+once per Run and MUST NOT be repeated per contribution. Shell and PowerShell emit
+neither payload because they emit no contribution lifecycle Event. Consumers MUST
+read an absent declaration or stamp in a historical trace as `unknown`, never as
+an inferred local placement. These are additive payload fields within Event schema
+compatibility 1; no envelope key or Event-type literal is added.
+
 **A truthful `parallel_mode: true` can still yield a wholly serial Run, and it MUST say so
 (contract 1.28).** The rule above is about the *distribution*; an Orchestrator that declares
 Parallel mode truthfully may still meet a Run whose **issue source** has no **Parallel-safe**
@@ -908,13 +1008,17 @@ The `contribution_identity` and `payload_contracts` sections of
 [`event-schema.json`](../git-loopy/conformance/event-schema.json) pin this vocabulary, its
 `rolling_stream_cases` pin whole ordered streams — Lane refill after admission, parking against a
 full backlog, bounded recovery, the serial latch, and a Parallel Run that never engaged — and the
-serialization cases pin the wire form. Every family member drives those streams through its own
-production serializer, including the members that schedule no Lane: an Orchestrator that cannot
-*produce* a rolling record must still read and write the same bytes. Its `parallel_capabilities`
-section pins each Orchestrator's manifest. As with the other reserved Insight shapes above,
-producing these records is capability-dependent and the rolling-dispatch Orchestrator tickets own
-enabling the producers; the Event-schema fixture revision advances with the first Orchestrator that
-emits them, since that revision is what a distribution's capability manifest advertises.
+serialization cases pin the wire form. A distribution named on a stream's `distributions` list is
+obliged by that stream according to its role: a producer MUST drive the stream through its own
+production serializer and match the pinned lines; a consumer MUST fold the stream without
+diagnostics. The three Orchestrator suites carry their unchanged producer obligation, including
+when an Orchestrator cannot *produce* a rolling record and must still read and write the same
+bytes. The Dashboard core carries the consumer obligation and emits no Event. Its
+`parallel_capabilities` section pins each Orchestrator's manifest. As with the other reserved
+Insight shapes above, producing these records is capability-dependent and the rolling-dispatch
+Orchestrator tickets own enabling the producers; the Event-schema fixture revision advances with
+the first Orchestrator that emits them, since that revision is what a distribution's capability
+manifest advertises.
 [`docs/parallel-mode.md`](parallel-mode.md) is the operator-facing companion to this section.
 
 ### Calibration records (contract 1.16, Python-only)
@@ -1067,6 +1171,38 @@ Each Orchestrator MUST pass the language-neutral fixtures in the
 
 The suite is the generalized successor to the cross-runner parity test ADR-0002 deleted. A
 conformance fixture change is the canonical way to evolve the contract.
+
+### 13.1 Every fixture is claimed or waived (contract 2.0, MUST)
+
+Every fixture in `git-loopy/conformance/` MUST be **accounted for** by every member of the
+**Runner family** — the Python reference Orchestrator, the shell and PowerShell Orchestrators, and
+the Rust **Dashboard** core. Each (fixture, member) pair carries exactly one verdict:
+
+- **Claimed** — the member's own suite reads that fixture's bytes as it runs, takes an assertion's
+  expected value out of them, and compares it against what the member's *production* seam returns.
+  The test is falsifiable: mutate an expected field one of that member's asserted cases reads, and
+  that member's suite goes red. A filename in a README, a doc comment, or production code no test
+  drives is a *mention*, and a mention claims nothing.
+- **Waived, out of scope** — this contract or an accepted ADR puts the fixture's decision outside
+  the member's role (a packaging fixture for an Orchestrator that ships no packaging channel). A
+  reason, and nothing else.
+- **Waived, owed** — the member should exercise the fixture and does not. A reason **and** a
+  tracking issue, so the gap is visible as debt. "Nobody has got to it" is always this kind, never
+  out of scope, and where this contract is silent the entry is owed until a decision says
+  otherwise.
+
+Silence is not a fourth verdict. An unaccounted fixture is a **conformance failure**, not an
+absence: the suite's green means "every member was asked and agreed", and a fixture one member
+reads and three ignore produces that same green from a question only one member was asked.
+
+The verdicts live in one register, `git-loopy/conformance/fixture-claims.json`, which is itself
+Conformance data rather than a fixture and so carries no entry of its own. The **Python suite alone**
+reads it — the Integration gate covers the family, and four implementations of one static
+completeness check is four ways for the family to disagree about the file that records the family's
+agreement. The other three members MUST NOT be required to read it. **No tree is green that
+contains a fixture without a verdict for every member.** Verdicts should therefore land in the same
+change as the fixture; what is gated is the merged result, not the shape of the change. See
+[ADR-0049](adr/0049-every-conformance-fixture-is-claimed-or-waived-by-every-member.md).
 
 ## 14. Per-issue model routing (phase 3, MUST)
 
@@ -1510,7 +1646,11 @@ is Run-level availability, and neither may be derived from the other.
    (`git-loopy/python/git_loopy/wrapper.py`) and the shell/PowerShell equivalents together.
 
 No Orchestrator lands a contract change alone — the Conformance suite fails any port left behind,
-which is the whole point of the backbone.
+which is the whole point of the backbone. §13.1 narrows how that can fail: a fixture no port has
+been asked about cannot land at all, and a port that has been asked and has not implemented the
+answer is recorded as *owing* the fixture, with a tracking issue, instead of passing green for never
+having heard of it. The suite still cannot compel a port to implement anything. What it refuses is
+the silent case.
 
 ---
 

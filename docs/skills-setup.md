@@ -51,7 +51,8 @@ When using the repository as a project scaffold, clone it, drop its history,
 and start your own:
 
 ```bash
-git clone https://github.com/bradcstevens/git-loopy my-project
+# Start from the published v0.9.0 Release.
+git clone --branch v0.9.0 --depth 1 https://github.com/bradcstevens/git-loopy my-project
 cd my-project
 rm -rf .git
 git init && git add -A && git commit -m "Initialize project from git-loopy"
@@ -119,7 +120,7 @@ you:
 
 | | Full-screen picker | Plain picker |
 | --- | --- | --- |
-| Used when | stdout is a terminal **and** the `[tui]` extra is installed | anywhere else — a pipe, CI, `--no-interactive`, or no `[tui]` extra |
+| Used when | stdout is a terminal | anywhere else — a pipe or CI |
 | Search | type to filter, live | type the text, then Enter |
 | Toggle | `Space` on the highlighted row | the row's number |
 | Clear the filter | delete the search text | an empty line |
@@ -127,11 +128,11 @@ you:
 | Save | `Enter` | `done`, then `y` at the confirmation |
 | Cancel | `Esc` or `Ctrl+C` | `q` |
 
-The full-screen picker is **optional, never required**. `pip install
-'git-loopy[tui]'` (or `uv sync --extra tui`) enables it; without the extra the
-plain picker runs and nothing is lost — the two are interchangeable and return
-the same selection. git-loopy probes for the extra without importing it, so a
-base install never pays for a dependency it does not have.
+The full-screen picker is available when the Python Runner is installed with its
+optional `tui` extra. A non-terminal still uses the plain picker, and nothing is
+lost — the two are interchangeable and return the same selection. git-loopy
+probes for Textual without importing it, so non-interactive commands never pay
+for a screen they do not show.
 
 Both renderings obey identical rules, because both read one shared model:
 
@@ -198,7 +199,7 @@ asked again.
   established; later Runs see a configured Config and are never asked again.
 - Cancelling writes nothing **and starts nothing** — the Run exits non-zero so
   no Iteration silently proceeds on a policy you declined to choose.
-- Without a TTY, or with `--no-interactive`, nothing is prompted or persisted:
+- Without a TTY, nothing is prompted or persisted:
   the Run proceeds on the Minimal Skill policy and prints a warning naming
   `git-loopy skills edit` as the fix. Automation therefore never blocks.
 - A Config with `enabled_skills = []` is a real policy — a deliberately empty

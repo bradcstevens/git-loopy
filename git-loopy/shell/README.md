@@ -106,7 +106,8 @@ reuse the single shared [`git-loopy/PROMPT.md`](../PROMPT.md).
 ### Run in place (baseline)
 
 ```bash
-git clone https://github.com/bradcstevens/git-loopy
+# Clone the published v0.9.0 Release.
+git clone --branch v0.9.0 --depth 1 https://github.com/bradcstevens/git-loopy
 # From inside the git repository you want to work (issues labeled ready-for-agent):
 bash /path/to/git-loopy/shell/git-loopy.sh
 ```
@@ -125,6 +126,13 @@ bash git-loopy/shell/git-loopy.sh
 launcher shim on your `PATH` that runs this clone's `git-loopy.sh`, and the
 `git-loopy-tui` helper this clone's Release pins, staged into
 `.git-loopy/bin/` where the Orchestrator looks for it first.
+
+The clone command above is a **v0.9.0 Release** install, so
+`git-loopy --version` reports `git-loopy 0.9.0`. To install another named
+Release, replace `v0.9.0` with its published tag. Pinning a full unreleased
+commit SHA instead is an **Edge install**: identify it by that SHA, not by the
+source `VERSION` value. See the root
+[installation channels](../../README.md#installation-identity-and-channels).
 
 ```bash
 bash git-loopy/shell/install.sh              # -> ~/.local/bin/git-loopy
@@ -203,7 +211,7 @@ distribution whose Events this port doesn't speak).
 ## Run it
 
 ```bash
-# Unlimited iterations, default model (claude-opus-5 at `xhigh` reasoning effort).
+# Unlimited iterations, default model (claude-opus-5 at `max` reasoning effort).
 git-loopy
 
 # Cap at 5 iterations (0 or omitted = unlimited).
@@ -240,7 +248,7 @@ set **union** of their CLI and env values, not an override.
 | — | `--version` | — | Print the distribution Release version and exit before Run preflight. |
 | — | `<max-iterations>` (positional) | `0` (unlimited) | Cap the Run at N Iterations. Reaching it is a clean exit. |
 | `GIT_LOOPY_MODEL` | `--model ID` | `claude-opus-5` | Model id (bare base id). |
-| `GIT_LOOPY_REASONING_EFFORT` | `--reasoning-effort` | `xhigh` for the built-in model | `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`. Choosing another model without an effort leaves it to the backend. |
+| `GIT_LOOPY_REASONING_EFFORT` | `--reasoning-effort` | `max` for the built-in model | `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`. Choosing another model without an effort leaves it to the backend. |
 | `GIT_LOOPY_ISSUE_SOURCE` | `--issue-source` | `github` | `github` or `prds` (legacy local markdown). |
 | `GIT_LOOPY_MAX_NMT_STRIKES` | `--max-nmt-strikes N` | `3` | Consecutive no-progress Iterations before abort. |
 | `GIT_LOOPY_DENY_TOOLS` | `--deny-tool TOOL` (repeatable) | empty | Tools to deny the agent (union). |
@@ -359,7 +367,9 @@ teardown and is never changed by it.
 | `0` | Clean — Pool empty | An Iteration's collection finds no `ready-for-agent` issues. |
 | `0` | Clean — cap reached | The optional iteration cap `N` is reached. |
 | `1` | Aborted — stuck | `GIT_LOOPY_MAX_NMT_STRIKES` consecutive no-progress Iterations. |
-| `1` | Aborted — preflight | A precondition failed before the first Iteration (unauthenticated `gh`, missing `docs/agents/issue-tracker.md`, missing `jq`/`copilot`, …). |
+| `1` | Aborted — all skipped | A **Pickup** walked a non-empty Pool and could bind none of it for a reason an operator can repair. Deliberately not the exit-`0` empty Pool: "there is nothing to do" and "I could not take any of what there is" are different facts. |
+| `1` | Waiting — all blocked | Every Pickup refusal proved an open native `blocked_by` dependency. The distinct `all_blocked` reason lets an operator wait for dependency closure rather than repair the Pool. |
+| `1` | Aborted — preflight | A precondition failed before the first Iteration (unauthenticated `gh`, `gh` older than 2.94.0 and so unable to read `blockedBy`, missing `docs/agents/issue-tracker.md`, missing `jq`/`copilot`, …). |
 | `2` | Usage error | Malformed invocation (e.g. a non-numeric iteration cap). |
 
 The full table is Wrapper contract

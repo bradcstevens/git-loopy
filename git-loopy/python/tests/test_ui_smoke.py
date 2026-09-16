@@ -26,8 +26,6 @@ from typing import Any
 
 import pytest
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
 
 from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import events as events_module
@@ -35,8 +33,6 @@ from git_loopy.events import (
     ASSISTANT_MESSAGE,
     ASSISTANT_REASONING,
     SESSION_CREATED,
-    SESSION_DELETED,
-    SESSION_IDLE,
     TOOL_CALL,
     TOOL_PERMISSION_DENIED,
     TOOL_PERMISSION_REQUESTED,
@@ -57,7 +53,8 @@ from git_loopy.events import (
     WRAPPER_RUN_START,
     WRAPPER_SERIAL_REQUESTED,
     WRAPPER_STRIKE,
-    make_event,
+    WRAPPER_STOP_LIFTED,
+    WRAPPER_STOP_REQUESTED,
 )
 from git_loopy.ui import IterationSnapshot, Renderer, RunSummary, get_console
 from git_loopy.ui.console import STYLES
@@ -144,6 +141,25 @@ def test_styles_dict_exposes_required_tokens() -> None:
             f"STYLES[{required_key!r}] must be a Rich style string, "
             f"got {type(STYLES[required_key]).__name__}"
         )
+
+
+def test_renderer_names_wind_down_cause_and_stage() -> None:
+    renderer, _, output = _make_renderer()
+
+    renderer.render(
+        {
+            "type": WRAPPER_STOP_REQUESTED,
+            "cause": "operator_stop",
+            "stage": "cancel",
+            "draining": 2,
+        }
+    )
+    renderer.render({"type": WRAPPER_STOP_LIFTED, "cause": "strike_limit"})
+
+    rendered = output.getvalue()
+    assert "operator stop / cancel" in rendered
+    assert "2 contributions in flight" in rendered
+    assert "wind-down lifted" in rendered
 
 
 # ---------------------------------------------------------------------------

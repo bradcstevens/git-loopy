@@ -17,12 +17,21 @@ import pytest
 
 from git_loopy import gh
 from git_loopy.gh import (
+    GhCapabilityError,
     GhError,
     GitHubClient,
     Issue,
     PullRequest,
     Repo,
     SubprocessGitHubClient,
+    parse_gh_version,
+    verify_readiness_capability,
+)
+from git_loopy.readiness import (
+    SKIP_READINESS_UNPROVABLE,
+    BlockedByRead,
+    BlockerNode,
+    decide_readiness,
 )
 
 # The ``gh`` mechanics moved from module free functions onto the stateless
@@ -1161,3 +1170,288 @@ def test_a_throttled_close_verification_is_counted_too(monkeypatch) -> None:
         client.issue_close(42, "done")
 
     assert client.rate_limited_reads() == 1
+
+
+# --------------------------------------------------------------------------- #
+# Readiness (#438, ADR-0047, Wrapper contract §3.3.1)                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_parse_gh_version_reads_the_first_semver_triple() -> None:
+    assert parse_gh_version("gh version 2.63.2 (2024-11-04)\nhttps://...") == (
+        2,
+        63,
+        2,
+    )
+
+
+def test_parse_gh_version_raises_capability_error_on_unparseable_output() -> None:
+    with pytest.raises(GhCapabilityError):
+        parse_gh_version("not a version string")
+
+
+def test_verify_readiness_capability_passes_a_modern_gh() -> None:
+    verify_readiness_capability((2, 94, 0))  # no raise
+    verify_readiness_capability((2, 99, 9))  # no raise
+
+
+def test_verify_readiness_capability_fails_loud_naming_remedy_for_an_old_gh() -> None:
+    """#438 owes this: an old ``gh`` must fail loudly, naming the fix.
+
+    The hazard the ticket names is that a ``gh`` too old to report blockers
+    could fail *silently inside a list read*, which today's error path reads
+    as an empty **Pool** -- an unattended Run would quietly conclude there is
+    no work and exit clean. This is the loud alternative: a preflight
+    :exc:`GhCapabilityError` naming the installed version, the minimum
+    required, and the remedy.
+
+    ``2.10.0`` predates even the pre-#438-finding-2 floor; ``2.93.9`` is one
+    patch short of the ``blockedBy``/``blocking`` JSON fields that landed in
+    ``gh`` v2.94.0 (finding 2's evidence, cited on
+    :data:`~git_loopy.gh.MIN_GH_VERSION_FOR_READINESS`) -- both must fail, and
+    the bound is not overridable (finding 4): no production caller has ever
+    needed a different floor than the one this capability actually requires.
+    """
+    for old in ((2, 10, 0), (2, 93, 9)):
+        with pytest.raises(GhCapabilityError) as excinfo:
+            verify_readiness_capability(old)
+
+        message = str(excinfo.value)
+        assert ".".join(str(part) for part in old) in message
+        assert "2.94.0" in message
+        assert "cli.github.com" in message
+
+
+def test_gh_version_parses_the_installed_client(monkeypatch) -> None:
+    def fake_run(cmd, **kw):
+        assert cmd == ["gh", "--version"]
+        return _completed(cmd, stdout="gh version 2.55.0 (2024-06-01)\n")
+
+    _install_fake_run(monkeypatch, fake_run)
+    client = SubprocessGitHubClient()
+
+    assert client.gh_version() == (2, 55, 0)
+
+
+def test_issue_list_requests_blocked_by_in_the_shallow_json_field_set(
+    monkeypatch,
+) -> None:
+    """#438 finding 1: the shallow read requests blockers in the call it
+    already makes, adding no round-trip per candidate.
+
+    Before this fix, ``GitHubIssueSource.readiness`` paid a *second*,
+    dedicated ``gh api graphql`` call per candidate considered just to see
+    ``blockedBy`` -- this asserts the shallow list now asks for the field in
+    the one call it was always going to make.
+    """
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _completed(cmd, stdout=json.dumps(_ISSUE_JSON_LIST_PAYLOAD))
+
+    _install_fake_run(monkeypatch, fake_run)
+    issue_list("ready-for-agent")
+
+    json_fields = captured["cmd"][captured["cmd"].index("--json") + 1]
+    assert "blockedBy" in json_fields
+
+
+def test_issue_view_requests_blocked_by_in_the_json_field_set(monkeypatch) -> None:
+    """The authoritative Pickup re-read carries ``blockedBy`` too (#438
+    finding 1) -- it is the same shallow field set plus ``comments``."""
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _completed(
+            cmd,
+            stdout=json.dumps(
+                {
+                    "number": 7,
+                    "title": "t",
+                    "body": "b",
+                    "labels": [],
+                    "state": "OPEN",
+                    "url": "u",
+                    "comments": [],
+                }
+            ),
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    issue_view(7)
+
+    json_fields = captured["cmd"][captured["cmd"].index("--json") + 1]
+    assert "blockedBy" in json_fields
+
+
+def test_issue_list_parses_blocked_by_onto_the_issue(monkeypatch) -> None:
+    """Propagation, end to end: the JSON ``blockedBy`` connection lands on
+    :attr:`Issue.blocked_by`, exactly as
+    :func:`~git_loopy.gh._parse_blocked_by_connection` parses the connection
+    shape (#438 finding 1 -- "parse it onto Issue").
+
+    Uses the real ``gh`` 2.96.0 node shape: ``id``, ``number``, ``state``,
+    ``title``, and ``url`` (no ``repository`` dict).
+    """
+
+    def fake_run(cmd, **kw):
+        return _completed(
+            cmd,
+            stdout=json.dumps(
+                [
+                    {
+                        "number": 7,
+                        "title": "t",
+                        "body": "b",
+                        "labels": [],
+                        "state": "OPEN",
+                        "url": "https://github.com/acme/widgets/issues/7",
+                        "createdAt": "2026-01-02T03:04:05Z",
+                        "blockedBy": {
+                            "totalCount": 1,
+                            "nodes": [
+                                {
+                                    "id": "I_kwDO123",
+                                    "number": 93,
+                                    "title": "Blocker issue",
+                                    "state": "OPEN",
+                                    "url": "https://github.com/acme/widgets/issues/93",
+                                }
+                            ],
+                        },
+                    }
+                ]
+            ),
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    page = issue_list("ready-for-agent")
+
+    assert page.issues[0].blocked_by == BlockedByRead(
+        total_count=1,
+        nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+    )
+
+
+def test_issue_view_parses_blocked_by_onto_the_issue(monkeypatch) -> None:
+    """The authoritative Pickup re-read carries the propagation too, testing both
+    same-repository and cross-repository blocker nodes under the real ``gh`` shape."""
+
+    def fake_run(cmd, **kw):
+        return _completed(
+            cmd,
+            stdout=json.dumps(
+                {
+                    "number": 7,
+                    "title": "t",
+                    "body": "b",
+                    "labels": [],
+                    "state": "OPEN",
+                    "url": "https://github.com/acme/widgets/issues/7",
+                    "comments": [],
+                    "blockedBy": {
+                        "totalCount": 2,
+                        "nodes": [
+                            {
+                                "id": "I_kwDO1",
+                                "number": 90,
+                                "title": "Same-repo blocker",
+                                "state": "CLOSED",
+                                "url": "https://github.com/acme/widgets/issues/90",
+                            },
+                            {
+                                "id": "I_kwDO2",
+                                "number": 42,
+                                "title": "Cross-repo blocker",
+                                "state": "OPEN",
+                                "url": "https://github.com/other-org/other-repo/issues/42",
+                            },
+                        ],
+                    },
+                }
+            ),
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    issue = issue_view(7)
+
+    assert issue.blocked_by == BlockedByRead(
+        total_count=2,
+        nodes=(
+            BlockerNode(ref="acme/widgets#90", state="closed"),
+            BlockerNode(ref="other-org/other-repo#42", state="open"),
+        ),
+    )
+
+
+def test_issue_view_maps_gh_zero_value_blocker_node_to_unreadable(monkeypatch) -> None:
+    """``gh --json`` encodes an unreadable linked issue as its Go zero value.
+
+    ``LinkedIssueConnection.Nodes`` is a value slice, so GraphQL's unreadable
+    ``null`` node becomes this object instead of JSON ``null`` when ``gh``
+    renders it. The candidate stays available for Pickup, where its readiness
+    becomes unprovable rather than making the enclosing issue unreadable.
+    """
+
+    def fake_run(cmd, **kw):
+        return _completed(
+            cmd,
+            stdout=json.dumps(
+                {
+                    "number": 7,
+                    "title": "t",
+                    "body": "b",
+                    "labels": [],
+                    "state": "OPEN",
+                    "url": "https://github.com/acme/widgets/issues/7",
+                    "comments": [],
+                    "blockedBy": {
+                        "totalCount": 1,
+                        "nodes": [
+                            {
+                                "id": "",
+                                "number": 0,
+                                "title": "",
+                                "state": "",
+                                "url": "",
+                            }
+                        ],
+                    },
+                }
+            ),
+        )
+
+    _install_fake_run(monkeypatch, fake_run)
+    issue = issue_view(7)
+
+    assert issue.blocked_by == BlockedByRead(
+        total_count=1,
+        nodes=(BlockerNode(ref="", state=None, readable=False),),
+    )
+    verdict = decide_readiness(issue.blocked_by)
+    assert verdict.skip_reason == SKIP_READINESS_UNPROVABLE
+    assert verdict.blockers == ()
+
+
+def test_issue_missing_blocked_by_field_is_readiness_unprovable(
+    monkeypatch,
+) -> None:
+    """A ``gh`` (or fixture) that omits ``blockedBy`` entirely is a connection
+    that was never read, not an empty one -- decide_readiness must report
+    ``readiness_unprovable``, not admit the candidate as ready (#438 finding 1,
+    ADR-0047 "An unprovable read is not readiness"). The field remains
+    additive for the rest of :func:`_parse_issue`: a missing field never
+    raises."""
+
+    def fake_run(cmd, **kw):
+        return _completed(cmd, stdout=json.dumps(_ISSUE_JSON_LIST_PAYLOAD))
+
+    _install_fake_run(monkeypatch, fake_run)
+    page = issue_list("ready-for-agent")
+
+    verdict = decide_readiness(page.issues[0].blocked_by)
+    assert verdict.verdict == "blocked"
+    assert verdict.skip_reason == SKIP_READINESS_UNPROVABLE
+    assert verdict.blockers == ()

@@ -23,10 +23,8 @@ Design notes:
   shares with this module.
 * **It asks the scope question rather than answering it**, through
   :func:`~git_loopy.routing_scope.routing_in_force` rather than a fourth
-  comparison of ``parallel``. That answer is now ``True`` in every mode
-  (ADR-0037), so a serial operator hears the same recommendation a Parallel one
-  does — and can act on it, because the pair a re-calibration would fix is the
-  pair their next Run picks up on.
+  mode-specific condition. Every Run can act on the recommendation because the
+  pair a re-calibration would fix is the pair its next Pickup resolves.
 * **It reads the pin; it never runs the classifier.** ``resolve_classifier_pair``
   is a Config question over the staircase. Invoking the **Task-type classifier**
   is a different act with a different cost, and it belongs to the write-back path
@@ -68,7 +66,6 @@ RECALIBRATE_HINT: str = (
 async def notify_roster_drift(
     *,
     repo_root: Path | None,
-    parallel: int,
     listing: LiveModelListing,
     rate_card: RateCard | None,
     warn: Callable[[str], None],
@@ -79,11 +76,6 @@ async def notify_roster_drift(
     Args:
         repo_root: The repository the Run works in, or ``None`` outside one. The
             artifact is a tracked file, so off-repo there is nothing to compare.
-        parallel: The Run's resolved **Lane** count, asked of
-            :func:`~git_loopy.routing_scope.routing_in_force` rather than
-            compared here. Since ADR-0037 a **Routed pair** takes effect at
-            every width, so this silences nobody — it is the seam a future
-            narrowing of the scope would act through.
         listing: The Run's single live model listing — the *same* object
             :func:`~git_loopy.rate_card.resolve_rate_card` already read, so this
             costs no additional round trip and cannot order one listing's rungs
@@ -106,7 +98,7 @@ async def notify_roster_drift(
         The notifications raised, in the order they were warned. Returned as well
         as warned so the decision is assertable without parsing prose.
     """
-    if repo_root is None or not routing_in_force(parallel):
+    if repo_root is None or not routing_in_force():
         return ()
     try:
         artifact = load_measured_routing(measured_routing_path(repo_root))

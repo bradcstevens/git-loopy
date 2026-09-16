@@ -1,6 +1,6 @@
 """``git_loopy.persist`` — filesystem side of observability.
 
-This module owns the three artefacts the runner writes per
+This module owns the three data artefacts the runner writes per
 ``git-loopy`` invocation:
 
 ==================  ==========================================  =================================
@@ -14,6 +14,10 @@ Process diag.       stderr + ``.git-loopy/logs/<iso>-<run_id>.log``  Human-reada
                                                                 stderr stream is primary, the
                                                                 ``.log`` file is the mirror.
 ==================  ==========================================  =================================
+
+The Run's adjacent ``.control`` artifact is created and locked by
+:mod:`git_loopy.run_control`; it is deliberately separate because its advisory
+lock is liveness state rather than persisted observability data.
 
 All artefacts live under the **repo root** (resolved by callers via
 :func:`git_loopy.git.repo_root`). The directories are created lazily on
@@ -503,6 +507,7 @@ def create_writers(
     *,
     run_id: str | None = None,
     started_at: datetime | None = None,
+    mirror_diagnostics_to_stderr: bool = True,
 ) -> WritersBundle:
     """Construct an aligned :class:`WritersBundle` for one ``git-loopy`` invocation.
 
@@ -525,6 +530,10 @@ def create_writers(
             base32). When :data:`None`, a fresh ULID is generated.
         started_at: Optional explicit wall-clock; defaults to
             :func:`datetime.now` in UTC.
+        mirror_diagnostics_to_stderr: Whether the diagnostics logger should
+            mirror records to ``sys.stderr`` as well as to the per-run ``.log``
+            file. Detached child Runs disable the stderr mirror because their
+            stderr already points at that same file.
 
     Returns:
         A :class:`WritersBundle` carrying the three writers + metadata.
@@ -559,7 +568,11 @@ def create_writers(
         runs_dir / f"{stem}.json", run_id=run_id, started_at=started_at
     )
     diagnostics_path = logs_dir / f"{stem}.log"
-    logger = _build_diagnostics_logger(run_id, diagnostics_path)
+    logger = _build_diagnostics_logger(
+        run_id,
+        diagnostics_path,
+        mirror_to_stderr=mirror_diagnostics_to_stderr,
+    )
 
     return WritersBundle(
         run_id=run_id,
@@ -599,8 +612,10 @@ def _format_rfc3339_ms(dt: datetime) -> str:
     return f"{dt.strftime('%Y-%m-%dT%H:%M:%S')}.{millis:03d}Z"
 
 
-def _build_diagnostics_logger(run_id: str, log_path: Path) -> logging.Logger:
-    """Construct a per-run diagnostics logger with stderr + lazy-file handlers.
+def _build_diagnostics_logger(
+    run_id: str, log_path: Path, *, mirror_to_stderr: bool
+) -> logging.Logger:
+    """Construct a per-run diagnostics logger with lazy-file output.
 
     Removes any pre-existing handlers on the named logger before adding
     fresh ones so reusing a ``run_id`` (e.g. in tests) does not leak
@@ -621,9 +636,10 @@ def _build_diagnostics_logger(run_id: str, log_path: Path) -> logging.Logger:
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
 
-    stream_handler = logging.StreamHandler(sys.stderr)
-    stream_handler.setFormatter(fmt)
-    logger.addHandler(stream_handler)
+    if mirror_to_stderr:
+        stream_handler = logging.StreamHandler(sys.stderr)
+        stream_handler.setFormatter(fmt)
+        logger.addHandler(stream_handler)
 
     file_handler = _LazyMkdirFileHandler(
         str(log_path), mode="a", encoding="utf-8", delay=True

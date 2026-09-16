@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "subagentStop": [
+      {
+        "type": "command",
+        "bash": "repo_root=$(git rev-parse --show-toplevel) && exec bash \"$repo_root/.github/hooks/git-loopy-chain.sh\" complete"
+      }
+    ]
+  }
+}

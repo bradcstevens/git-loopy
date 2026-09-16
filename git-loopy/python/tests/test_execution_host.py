@@ -1,0 +1,413 @@
+"""Tests for ``git_loopy.execution_host`` (issue #447, spec #445 §A/§C).
+
+Exercises the Execution host seam in isolation: the outcome contract's data
+shapes, :class:`LocalExecutionHost`'s declared properties and its rejection
+of a returned branch that still carries uncommitted or untracked work, a
+substitutable fake host returning a prepared branch / a terminal failure /
+a stall with no network involved, and the "never silently retries" refusal.
+
+Acceptance criteria reference: issue #447.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass, field
+from typing import Literal
+
+import pytest
+
+from git_loopy import execution_host
+from git_loopy.execution_host import (
+    ContributionFailure,
+    ContributionRequest,
+    ContributionSuccess,
+    ExecutionHost,
+    IsolationGrade,
+    LocalExecutionHost,
+    LocalRunResult,
+    Placement,
+)
+from git_loopy.session_outcome import (
+    SessionOutcomeRecord,
+    SessionTermination,
+)
+
+
+def _request(**overrides: object) -> ContributionRequest:
+    defaults: dict[str, object] = dict(
+        issue_ref=42,
+        prompt="do the thing",
+        base_revision="deadbeef",
+        model="gpt-5",
+        reasoning_effort="medium",
+        skill_policy={"skills": ()},
+        run_id="01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    )
+    defaults.update(overrides)
+    return ContributionRequest(**defaults)  # type: ignore[arg-type]
+
+
+def _ending() -> SessionOutcomeRecord:
+    return SessionOutcomeRecord(
+        outcome=None,
+        progressed=True,
+        termination=SessionTermination.COMPLETED,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# ContributionRequest / outcome shapes                                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_contribution_request_carries_exactly_the_spec_fields() -> None:
+    request = _request()
+    assert request.issue_ref == 42
+    assert request.prompt == "do the thing"
+    assert request.base_revision == "deadbeef"
+    assert request.model == "gpt-5"
+    assert request.reasoning_effort == "medium"
+    assert request.skill_policy == {"skills": ()}
+    assert request.run_id == "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+
+
+def test_contribution_request_is_frozen() -> None:
+    request = _request()
+    with pytest.raises(AttributeError):
+        request.model = "gpt-6"  # type: ignore[misc]
+
+
+# --------------------------------------------------------------------------- #
+# LocalExecutionHost: declared properties                                     #
+# --------------------------------------------------------------------------- #
+
+
+def test_local_host_declares_placement_and_grade() -> None:
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        raise AssertionError("not exercised")
+
+    host = LocalExecutionHost(runner=runner)
+    assert host.placement == "local"
+    assert host.isolation_grade == "workspace separation only"
+
+
+def test_local_host_capacity_derived_from_core_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        raise AssertionError("not exercised")
+
+    monkeypatch.setattr("os.cpu_count", lambda: 8)
+    host = LocalExecutionHost(runner=runner)
+    assert host.capacity == 8
+
+
+def test_local_host_capacity_floors_at_one_when_core_count_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        raise AssertionError("not exercised")
+
+    monkeypatch.setattr("os.cpu_count", lambda: None)
+    host = LocalExecutionHost(runner=runner)
+    assert host.capacity == 1
+
+
+def test_local_host_capacity_explicit_override() -> None:
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        raise AssertionError("not exercised")
+
+    host = LocalExecutionHost(runner=runner, capacity=3)
+    assert host.capacity == 3
+
+
+@pytest.mark.parametrize("capacity", [0, -1, float("inf"), True])
+def test_local_host_refuses_an_unbounded_or_invalid_capacity(capacity: object) -> None:
+    """#456: every host has to name a finite positive Lane ceiling."""
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        raise AssertionError("not exercised")
+
+    with pytest.raises(ValueError, match="finite positive integer"):
+        LocalExecutionHost(runner=runner, capacity=capacity)  # type: ignore[arg-type]
+
+
+def test_local_host_satisfies_execution_host_protocol() -> None:
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        raise AssertionError("not exercised")
+
+    host = LocalExecutionHost(runner=runner)
+    assert isinstance(host, ExecutionHost)
+
+
+# --------------------------------------------------------------------------- #
+# LocalExecutionHost: outcome classification                                  #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_local_host_returns_success_for_a_clean_branch() -> None:
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        return LocalRunResult(
+            branch="git-loopy/run/issue-42",
+            sha="cafef00d",
+            dirty=False,
+            untracked=False,
+            ending=_ending(),
+            checkpoint_ok=True,
+        )
+
+    host = LocalExecutionHost(runner=runner)
+    outcome = await host.run_contribution(_request())
+
+    assert isinstance(outcome, ContributionSuccess)
+    assert outcome.branch == "git-loopy/run/issue-42"
+    assert outcome.sha == "cafef00d"
+    assert outcome.events == ()
+    assert outcome.placement == "local"
+    assert outcome.isolation_grade == "workspace separation only"
+    assert outcome.ending == _ending()
+
+
+def test_remote_host_success_returns_the_completion_triple() -> None:
+    outcome = ContributionSuccess(
+        branch=None,
+        remote="https://example.test/owner/repo.git",
+        ref="refs/heads/git-loopy/run-1/issue-42",
+        sha="a" * 40,
+        events=(),
+        placement="github-actions",
+        isolation_grade="machine boundary",
+        ending=_ending(),
+    )
+
+    assert (outcome.remote, outcome.ref, outcome.sha) == (
+        "https://example.test/owner/repo.git",
+        "refs/heads/git-loopy/run-1/issue-42",
+        "a" * 40,
+    )
+
+
+@pytest.mark.asyncio
+async def test_local_host_rejects_a_branch_carrying_uncommitted_work() -> None:
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        return LocalRunResult(
+            branch="git-loopy/run/issue-42",
+            sha="cafef00d",
+            dirty=True,
+            untracked=False,
+            ending=_ending(),
+            checkpoint_ok=True,
+        )
+
+    host = LocalExecutionHost(runner=runner)
+    outcome = await host.run_contribution(_request())
+
+    assert isinstance(outcome, ContributionFailure)
+    assert outcome.reason == "uncommitted_or_untracked_work"
+    assert outcome.classification == "breach"
+    assert outcome.ending == _ending()
+
+
+@pytest.mark.asyncio
+async def test_local_host_rejects_a_branch_carrying_untracked_work() -> None:
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        return LocalRunResult(
+            branch="git-loopy/run/issue-42",
+            sha="cafef00d",
+            dirty=False,
+            untracked=True,
+            ending=_ending(),
+            checkpoint_ok=True,
+        )
+
+    host = LocalExecutionHost(runner=runner)
+    outcome = await host.run_contribution(_request())
+
+    assert isinstance(outcome, ContributionFailure)
+    assert outcome.reason == "uncommitted_or_untracked_work"
+
+
+@pytest.mark.asyncio
+async def test_local_host_rejects_an_unresolved_sha() -> None:
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        return LocalRunResult(
+            branch="git-loopy/run/issue-42",
+            sha=None,
+            dirty=False,
+            untracked=False,
+            ending=_ending(),
+            checkpoint_ok=True,
+        )
+
+    host = LocalExecutionHost(runner=runner)
+    outcome = await host.run_contribution(_request())
+
+    assert isinstance(outcome, ContributionFailure)
+    assert outcome.reason == "unresolved_branch_sha"
+
+
+def test_contribution_failure_refuses_unknown_classification() -> None:
+    with pytest.raises(ValueError, match="unknown contribution failure classification"):
+        ContributionFailure(
+            reason="typo",
+            classification="unknown",  # type: ignore[arg-type]
+            ending=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_local_host_rejects_a_failed_checkpoint() -> None:
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        return LocalRunResult(
+            branch="git-loopy/run/issue-42",
+            sha="cafef00d",
+            dirty=False,
+            untracked=False,
+            ending=_ending(),
+            checkpoint_ok=False,
+        )
+
+    outcome = await LocalExecutionHost(runner=runner).run_contribution(_request())
+
+    assert isinstance(outcome, ContributionFailure)
+    assert outcome.reason == "checkpoint_failed"
+    # The one host reason the Run maps onto an already-published terminal
+    # reason, so the seam names it rather than leaving it a stray literal.
+    assert execution_host.REASON_CHECKPOINT_FAILED == "checkpoint_failed"
+    assert outcome.classification == "breach"
+
+
+@pytest.mark.asyncio
+async def test_local_host_rejects_an_unverified_worktree() -> None:
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        return LocalRunResult(
+            branch="git-loopy/run/issue-42",
+            sha="cafef00d",
+            dirty=False,
+            untracked=False,
+            ending=_ending(),
+            checkpoint_ok=True,
+            verification_error="git status failed",
+        )
+
+    outcome = await LocalExecutionHost(runner=runner).run_contribution(_request())
+
+    assert isinstance(outcome, ContributionFailure)
+    assert outcome.reason == "unverified_worktree_state"
+    assert outcome.classification == "breach"
+
+
+@pytest.mark.asyncio
+async def test_local_host_never_retries_the_runner() -> None:
+    """A runner called more than once for one outcome is a test failure."""
+    calls = 0
+
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        nonlocal calls
+        calls += 1
+        return LocalRunResult(
+            branch="git-loopy/run/issue-42",
+            sha="cafef00d",
+            dirty=False,
+            untracked=False,
+            ending=_ending(),
+            checkpoint_ok=True,
+        )
+
+    host = LocalExecutionHost(runner=runner)
+    await host.run_contribution(_request())
+
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_local_host_propagates_a_runner_crash_uncaught() -> None:
+    """A crash is not a value the seam masks — it is left uncaught."""
+
+    async def runner(request: ContributionRequest) -> LocalRunResult:
+        raise RuntimeError("boom")
+
+    host = LocalExecutionHost(runner=runner)
+    with pytest.raises(RuntimeError, match="boom"):
+        await host.run_contribution(_request())
+
+
+# --------------------------------------------------------------------------- #
+# A substitutable fake host: prepared branch, terminal failure, a stall       #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class FakeExecutionHost:
+    """An in-memory :class:`ExecutionHost` fake — no network involved.
+
+    ``outcome`` is returned verbatim by :meth:`run_contribution` unless it is
+    the sentinel ``"stall"``, in which case the call hangs forever (an
+    ``asyncio.Event`` that never sets) so a caller can exercise its own
+    timeout / cancellation path against a host that never answers.
+    """
+
+    outcome: ContributionSuccess | ContributionFailure | Literal["stall"]
+    placement: Placement = "fake"
+    isolation_grade: IsolationGrade = "workspace separation only"
+    capacity: int = 4
+    calls: list[ContributionRequest] = field(default_factory=list)
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionSuccess | ContributionFailure:
+        self.calls.append(request)
+        if self.outcome == "stall":
+            await asyncio.Event().wait()  # never set: simulates a stalled host
+        return self.outcome
+
+
+@pytest.mark.asyncio
+async def test_fake_host_returns_a_prepared_branch_with_no_network() -> None:
+    success = ContributionSuccess(
+        branch="git-loopy/run/issue-7",
+        sha="abc123",
+        events=(),
+        placement="fake",
+        isolation_grade="workspace separation only",
+        ending=_ending(),
+    )
+    host = FakeExecutionHost(outcome=success)
+    request = _request(issue_ref=7)
+
+    outcome = await host.run_contribution(request)
+
+    assert outcome is success
+    assert host.calls == [request]
+
+
+@pytest.mark.asyncio
+async def test_fake_host_returns_a_terminal_failure_with_no_network() -> None:
+    failure = ContributionFailure(
+        reason="environment_error",
+        classification="never_started",
+        ending=None,
+        detail="toolchain missing",
+    )
+    host = FakeExecutionHost(outcome=failure)
+
+    outcome = await host.run_contribution(_request())
+
+    assert outcome is failure
+
+
+@pytest.mark.asyncio
+async def test_fake_host_can_stall_with_no_network() -> None:
+    """The Run — not the host — decides what happens next on a stall."""
+    host = FakeExecutionHost(outcome="stall")
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(host.run_contribution(_request()), timeout=0.05)
+
+
+def test_fake_host_satisfies_execution_host_protocol() -> None:
+    host = FakeExecutionHost(
+        outcome=ContributionFailure(
+            reason="x", classification="never_started", ending=None
+        )
+    )
+    assert isinstance(host, ExecutionHost)

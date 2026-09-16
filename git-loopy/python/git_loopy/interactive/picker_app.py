@@ -16,11 +16,11 @@ The presentation half of the startup **model + reasoning-effort picker**
 
 ``enter`` advances/confirms; ``escape`` steps back from effort to model (or
 cancels from the model stage); ``q`` / ``Ctrl+C`` cancel (the orchestrator then
-keeps the env/default). This module imports Textual, so — like
-:mod:`git_loopy.interactive.app` — it is reached only on the interactive path,
-lazily, after :func:`git_loopy.interactive.picker.fetch_live_models` succeeds.
-The pure row model lives in :mod:`git_loopy.interactive.models`; everything here
-is presentation.
+keeps the env/default). This module imports Textual, so it is reached lazily, on
+the opt-in startup-picker path only, after
+:func:`git_loopy.interactive.picker.fetch_live_models` succeeds. The pure row
+model lives in :mod:`git_loopy.interactive.models`; everything here is
+presentation.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Static
 
 from git_loopy.interactive.models import (
@@ -41,11 +42,10 @@ from git_loopy.interactive.models import (
     format_reasoning,
 )
 
-__all__ = ["ModelPickerApp"]
+__all__ = ["ModelPickerApp", "ModelPickerScreen"]
 
 #: Widget ids for the two stage tables, so the shared ``RowSelected`` handler can
-#: tell which stage fired (mirrors how :mod:`git_loopy.interactive.app` routes by
-#: ``event.data_table.id``).
+#: tell which stage fired.
 _MODEL_TABLE = "picker-models"
 _EFFORT_TABLE = "picker-efforts"
 
@@ -58,10 +58,8 @@ _MODEL_COLUMNS = (
 )
 
 
-class ModelPickerApp(App["Selection | None"]):
+class ModelPickerScreen(Screen["Selection | None"]):
     """The one-time, two-stage startup picker (model -> reasoning effort)."""
-
-    TITLE = "git-loopy · pick a model"
 
     CSS = """
     #picker-title {
@@ -178,7 +176,7 @@ class ModelPickerApp(App["Selection | None"]):
             self._show_effort_stage(choice)
         else:
             # Auto-skip stage 2: the model supports no reasoning effort.
-            self.exit(Selection(choice.id, None))
+            self.dismiss(Selection(choice.id, None))
 
     def _on_effort_selected(self, event: DataTable.RowSelected) -> None:
         if self._chosen is None:
@@ -186,7 +184,7 @@ class ModelPickerApp(App["Selection | None"]):
         key = event.row_key.value
         if key is None:
             return
-        self.exit(Selection(self._chosen.id, str(key)))
+        self.dismiss(Selection(self._chosen.id, str(key)))
 
     # -- navigation actions ------------------------------------------------
 
@@ -197,8 +195,33 @@ class ModelPickerApp(App["Selection | None"]):
             self._show_model_stage()
             self.query_one(f"#{_MODEL_TABLE}", DataTable).focus()
         else:
-            self.exit(None)
+            self.dismiss(None)
 
     def action_cancel(self) -> None:
         """q / Ctrl+C: quit the picker; the orchestrator keeps the env/default."""
-        self.exit(None)
+        self.dismiss(None)
+
+
+class ModelPickerApp(App["Selection | None"]):
+    """Thin standalone host for :class:`ModelPickerScreen`."""
+
+    TITLE = "git-loopy · pick a model"
+
+    def __init__(self, choices: Sequence[ModelChoice], *, cursor: int = 0) -> None:
+        super().__init__()
+        self._picker_screen: ModelPickerScreen | None = None
+        self._choices = list(choices)
+        self._cursor = cursor
+
+    def on_mount(self) -> None:
+        self._picker_screen = ModelPickerScreen(self._choices, cursor=self._cursor)
+        self.push_screen(self._picker_screen, self._on_result)
+
+    def query_one(self, selector, expect_type=None):
+        """Keep the old wrapper test/caller access to the hosted widgets."""
+        if self._picker_screen is not None:
+            return self._picker_screen.query_one(selector, expect_type)
+        return super().query_one(selector, expect_type)
+
+    def _on_result(self, result: Selection | None) -> None:
+        self.exit(result)

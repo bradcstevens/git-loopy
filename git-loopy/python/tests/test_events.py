@@ -300,6 +300,7 @@ def test_contribution_scoped_lifecycle_types_are_the_pinned_set() -> None:
         "unchanged_branch",
         "checkpoint_failed",
         "serial_fallback",
+        "operator_stop",
     )
 
 

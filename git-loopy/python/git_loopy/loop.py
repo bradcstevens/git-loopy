@@ -122,6 +122,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import (
     Any,
+    Awaitable,
     Callable,
     Coroutine,
     Iterable,
@@ -133,12 +134,16 @@ from copilot import CopilotClient
 from rich.console import Console
 
 from git_loopy import events as events_module
+from git_loopy import contribution_materialization as materialization_module
+from git_loopy import execution_host as execution_host_module
 from git_loopy import gate as gate_module
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
+from git_loopy import github_actions_host as actions_host_module
 from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
 from git_loopy import session_outcome as session_outcome_module
+from git_loopy import sweep as sweep_module
 from git_loopy.staircase import PriceStaircase, StaircaseRefusal
 from git_loopy import rollup as rollup_module
 from git_loopy import worktree as worktree_module
@@ -165,6 +170,8 @@ from git_loopy.denomination import (
 from git_loopy.prompt import PromptMetadataError, load_prompt
 from git_loopy.rate_card import RateCard
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
+from git_loopy.run_control import RunControlArtifact
+from git_loopy.run_environment_preflight import resolve_run_environment_preflight
 from git_loopy.skill_install import (
     SkillInstallError,
     describe_refresh,
@@ -175,6 +182,7 @@ from git_loopy.rolling_pool import RollingPool, is_parallel_safe
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.run_readback import run_start_payload
 from git_loopy.serial_pickup import (
+    AdmissionRefusal,
     SerialPickup,
     pick_serial,
     reason_for,
@@ -190,6 +198,7 @@ from git_loopy.sources import (
     PoolCollection,
     PrdsIssueSource,
     RollingIssueSource,
+    is_lane_candidate,
 )
 from git_loopy.skill_catalog import discover_skill_catalog as _discover_skill_catalog
 from git_loopy.skill_exposure import SkillExposureError
@@ -297,6 +306,44 @@ def _make_github_client() -> gh_module.SubprocessGitHubClient:
     return gh_module.SubprocessGitHubClient()
 
 
+def _make_execution_host(
+    placement: str,
+    *,
+    send_timeout_seconds: float,
+) -> execution_host_module.ExecutionHost | None:
+    """Construct the **Execution host** the operator named, or ``None`` for local.
+
+    ``None`` is the local placement, and it means "let each Lane build its own
+    :class:`~git_loopy.execution_host.LocalExecutionHost` bound to its own
+    worktree" — a local host is per-contribution by construction, so there is
+    nothing Run-scoped to build here.
+
+    A non-local placement is built once, at preflight, precisely so it fails
+    *there*: a host that cannot name the account's concurrency ceiling, or
+    cannot resolve the repository it dispatches into, must refuse the Run
+    rather than discover it at the first reservation, by which point Lanes are
+    already open and the failure looks like a contribution's rather than the
+    environment's.
+
+    Raises:
+        ValueError: the placement is undeclared, or its host cannot be built.
+        github_actions_host.ActionsError: the Actions repository could not be
+            resolved by the authenticated CLI.
+    """
+    if placement == execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT:
+        return None
+    if placement == actions_host_module.GITHUB_ACTIONS_PLACEMENT:
+        client = actions_host_module.SubprocessActionsClient.discover()
+        actions_host_module.assert_workflow_installed(client)
+        return actions_host_module.GitHubActionsExecutionHost(
+            client=client,
+            capacity=actions_host_module.github_actions_capacity(),
+            workflow_ref=actions_host_module.workflow_ref(client),
+            send_timeout_seconds=send_timeout_seconds,
+        )
+    raise ValueError(f"no adapter exists for execution host {placement!r}")
+
+
 def _make_task_type_label_client() -> gh_module.SubprocessTaskTypeLabelClient:
     """Construct the per-invocation **Task-type classifier** label writer (#409).
 
@@ -380,18 +427,18 @@ def _make_pressure_monitor(
     drive the reaction table with an injected clock and scripted telemetry
     instead of real time and a live API, which #219 §6 requires.
 
-    Production wires the three injected halves the PRD names: budgets from the
-    operator's environment (:meth:`~git_loopy.rolling_pressure.PressureBudgets.from_env`,
-    where an unconfigured budget leaves its signal *unknown* rather than
-    inventing a threshold), the process run queue for host/setup pressure, this
-    Run's own priced Consumption for AI-credit burn, and the ``gh`` seam's
-    count of the reads GitHub throttled for the 429 **Pressure signal**.
+    Production wires the three injected halves the PRD names: pressure budgets
+    from the operator's environment, the process run queue for host/setup
+    pressure, this Run's own priced Consumption for AI-credit burn, and the
+    ``gh`` seam's count of the reads GitHub throttled for the 429 **Pressure
+    signal**.
     """
+    budgets = rolling_pressure.PressureBudgets.from_env(os.environ)
     return rolling_pressure.PressureMonitor.for_run(
-        budgets=rolling_pressure.PressureBudgets.from_env(os.environ),
+        budgets=budgets,
         lane_cap=lane_cap,
         telemetry=rolling_pressure.RunPressureTelemetry(
-            budgets=rolling_pressure.PressureBudgets.from_env(os.environ),
+            budgets=budgets,
             credit_spent=credit_spent,
             rate_limits=rate_limits,
         ),
@@ -400,12 +447,29 @@ def _make_pressure_monitor(
     )
 
 
+def _execution_host_capacity(
+    host: execution_host_module.ExecutionHost | None,
+) -> int:
+    """Return the finite positive capacity the bound Execution host declared."""
+    capacity = (
+        execution_host_module.local_execution_host_capacity()
+        if host is None
+        else host.capacity
+    )
+    if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 1:
+        raise ValueError(
+            "execution host capacity must be a finite positive integer"
+        )
+    return capacity
+
+
 def _make_issue_source(
     config: RunConfig,
     repo_root: Path,
     diag: logging.Logger,
     *,
     include_prs: bool = False,
+    github_client: gh_module.GitHubClient | None = None,
 ) -> IssueSource:
     """Construct the per-invocation :class:`IssueSource`.
 
@@ -432,15 +496,12 @@ def _make_issue_source(
     if config.issue_source == "github":
         return GitHubIssueSource(
             diag,
-            gh=_make_github_client(),
+            gh=github_client if github_client is not None else _make_github_client(),
             include_prs=include_prs,
             pin=config.issue_pin,
-            # A **Lane** Pool is `ready-for-agent` *and* `parallel-safe`, so a
-            # Parallel invocation must refuse a pin lacking the second — else
-            # the pinned issue never enters the Pool, the promotion finds
-            # nothing to promote, and the Run silently works the head of the
-            # order instead (#396).
-            pin_requires_parallel_safe=config.parallel > 1,
+            # A Pin keeps its serial-driver eligibility. Rolling dispatch then
+            # decides whether the selected issue can occupy a Lane.
+            pin_requires_parallel_safe=False,
         )
     if config.issue_source == "prds":
         return PrdsIssueSource(repo_root, diag)
@@ -539,22 +600,19 @@ def _format_recent_commits(commits: Iterable[git_module.Commit]) -> str:
 
 
 def _lane_worktree_path(
-    repo_root: Path, run_id: str, issue_number: int | str
+    common_git_dir: Path, run_id: str, issue_number: int | str
 ) -> Path:
-    """Compute a Lane's worktree path (ADR-0008: sibling, outside the repo).
+    """Compute a Lane's **workspace** path under the clone's git directory.
 
-    Lanes live in ``<repo_root>.worktrees/<run_id>/issue-<N>`` — a sibling
-    directory of the repository, grouped by run so a run's worktrees are easy
-    to find and reap, and one directory per issue so concurrent Lanes never
-    share a tree. Kept *outside* the repo so a Lane's worktree is never itself
-    picked up as untracked content by the main worktree's git status.
+    Lanes live in ``<common-git-dir>/git-loopy/<run_id>/issue-<N>``, grouped by
+    run so a run's workspaces are easy to find and reap, and one directory per
+    issue so concurrent Lanes never share a tree. The common git directory is
+    not content in any working tree, so a live Lane is invisible to ``git
+    status``, unreachable by ``git add -A``, and survives ``git clean -ffxd``
+    — all without an ignore entry — while still being per-clone and dying with
+    the clone.
     """
-    return (
-        repo_root.parent
-        / f"{repo_root.name}.worktrees"
-        / run_id
-        / f"issue-{issue_number}"
-    )
+    return common_git_dir / "git-loopy" / run_id / f"issue-{issue_number}"
 
 
 _AUTO_RESOLUTION_MAX_ATTEMPTS = 3
@@ -571,26 +629,22 @@ _AUTO_RESOLUTION_FALLBACK_COMMENT = (
 
 
 def _integration_worktree_path(
-    repo_root: Path, run_id: str, issue_number: int | str
+    common_git_dir: Path, run_id: str, issue_number: int | str
 ) -> Path:
     """Compute a private **Integration stage** worktree path (#307, ADR-0020).
 
     *Every* Lane contribution is merged and gated in
-    ``<repo_root>.worktrees/<run_id>/integrate/issue-<N>`` before anything
-    reaches base — a sibling of the Lane worktrees under the same per-run
+    ``<common-git-dir>/git-loopy/<run_id>/integrate/issue-<N>`` before anything
+    reaches base — alongside the Lane workspaces under the same per-run
     directory but in an ``integrate/`` subgroup, so it never collides with the
-    Lane's own ``issue-<N>`` worktree. The leaf stays ``issue-<N>`` (matching
-    :func:`_lane_worktree_path`) so the worktree still addresses exactly one
+    Lane's own ``issue-<N>`` workspace. The leaf stays ``issue-<N>`` (matching
+    :func:`_lane_worktree_path`) so the workspace still addresses exactly one
     issue. Bounded auto-resolution for a red / conflicting contribution reuses
     the stage that contribution was already staged in, so recovery costs no
-    extra worktree.
+    extra workspace.
     """
     return (
-        repo_root.parent
-        / f"{repo_root.name}.worktrees"
-        / run_id
-        / "integrate"
-        / f"issue-{issue_number}"
+        common_git_dir / "git-loopy" / run_id / "integrate" / f"issue-{issue_number}"
     )
 
 
@@ -650,6 +704,27 @@ def _report_session_outcome(
     )
 
 
+def _terminal_reason_for(
+    outcome: execution_host_module.ContributionFailure,
+) -> str:
+    """Map an **Execution host**'s terminal failure onto a published reason.
+
+    The host reports *why it refused*; the Run decides what that means on the
+    wire (ADR-0050). The three-class failure vocabulary is not published yet —
+    #453 owns widening ``wrapper.contribution.end``'s ``reason`` — so a
+    failure lands on one of the terminal reasons the wire already carries.
+
+    The distinction that must survive is ``checkpoint_failed``: a contribution
+    whose work could not be *captured* is not a contribution whose branch
+    simply carried nothing, ``docs/wrapper-contract.md`` requires readers to
+    tell them apart, and it is the one refusal every placement can report.
+    Everything else is a branch with nothing to integrate.
+    """
+    if outcome.reason == execution_host_module.REASON_CHECKPOINT_FAILED:
+        return rolling_scheduler.REASON_CHECKPOINT_FAILED
+    return rolling_scheduler.REASON_UNCHANGED_BRANCH
+
+
 class _EventObserver(Protocol):
     """Anything that folds raw Events into its own accounting."""
 
@@ -696,12 +771,21 @@ class _ChainedObserver:
 #: path the process never returns through, and would owe every other member of
 #: the Runner family a ``conformance/exit-codes.json`` case for it.
 RUN_OUTCOME_INTERRUPTED = "interrupted"
+RUN_OUTCOME_OPERATOR_STOP = "operator_stop"
 
 #: Outcomes whose Run stopped *during* iteration ``iter_num`` rather than after
 #: it, so the iteration in flight was never finished and must not be counted.
 #: ``iteration_cap`` breaks the loop on the round that would have exceeded the
 #: cap, before it runs; an interrupt lands inside one.
 _RUN_OUTCOMES_MID_ITERATION = frozenset({"iteration_cap", RUN_OUTCOME_INTERRUPTED})
+
+#: The **Wind-down** ladder as a rung lookup, derived from the family's ordered
+#: wire vocabulary so the order lives in one place (``events.WIND_DOWN_STAGES``)
+#: and this is only the index into it.
+_WIND_DOWN_STAGE_ORDER: dict[str, int] = {
+    stage: rung for rung, stage in enumerate(events_module.WIND_DOWN_STAGES)
+}
+_WIND_DOWN_CAUSES: frozenset[str] = frozenset(events_module.WIND_DOWN_CAUSES)
 
 
 class _Loop:
@@ -757,6 +841,7 @@ class _Loop:
         # *current Iteration* slot, so it cannot answer "what has this whole
         # Run spent" — which is what AI-credit pressure is measured against.
         # Chained rather than replacing, so the serial Summary is untouched.
+        self._usage_observer = usage_observer
         self._session_observer: _EventObserver = (
             self._rollup
             if usage_observer is None
@@ -766,6 +851,22 @@ class _Loop:
         # ``drive`` only when PRs are in scope). ``None`` = unknown / detached
         # HEAD, which disables the defensive restore.
         self._base_branch: str | None = None
+        # Stop is deliberately a request, not cancellation of the orchestration
+        # task: a first gesture ends after this Iteration and a second one can
+        # interrupt only the agent task currently at its round boundary.
+        self._stop_drain_requested = False
+        self._stop_cancel_requested = False
+        #: The **Wind-down** rung this Run has announced, or ``None`` before it
+        #: latches one. Held beside the two gesture flags because the ladder is
+        #: a fact about the *Run*, not about the operator's input: the rolling
+        #: driver latches the same ladder for a spent iteration cap and for a
+        #: drain-confirmed **Strike** abort, neither of which is a gesture.
+        self._wind_down_stage: str | None = None
+        #: The cause the announced rung was latched for. Held beside the rung
+        #: because only a ``strike_limit`` drain is revocable, so the clearing
+        #: Event has to know *which* cause the Run is currently draining for.
+        self._wind_down_cause: str | None = None
+        self._active_agent_task: asyncio.Task[object] | None = None
         self._strike_machine = NMTStrikeStateMachine(
             max_strikes=config.max_nmt_strikes
         )
@@ -872,6 +973,98 @@ class _Loop:
         it lacks is the row to measure it on. Building one is its own slice.
         """
         return ()
+
+    def request_stop_drain(self, *, draining: int = 0) -> None:
+        """Latch a deliberate wind-down without interrupting started work."""
+        if getattr(self, "_stop_drain_requested", False):
+            return
+        self._stop_drain_requested = True
+        self._announce_wind_down(cause="operator_stop", stage="drain", draining=draining)
+
+    def request_stop_cancel(
+        self, *, drain_already_announced: bool = False, draining: int = 0
+    ) -> None:
+        """Cancel the active serial agent task, if a Stop already drained."""
+        if drain_already_announced:
+            self._stop_drain_requested = True
+        else:
+            self.request_stop_drain(draining=draining)
+        if self._stop_cancel_requested:
+            return
+        self._stop_cancel_requested = True
+        self._announce_wind_down(cause="operator_stop", stage="cancel", draining=draining)
+        if self._active_agent_task is not None and not self._active_agent_task.done():
+            self._active_agent_task.cancel()
+
+    def _announce_wind_down(self, *, cause: str, stage: str, draining: int) -> None:
+        """Write the current, Run-scoped Wind-down transition once it is latched.
+
+        The one seam that writes ``wrapper.stop.requested``, and therefore the
+        one place the two axes #445 §J closed are enforced. ``stage`` is an
+        ordered, non-decreasing ladder and ``cancel`` is legal only with
+        ``operator_stop``, so a descent or a mis-caused cancellation is refused
+        *here* rather than left to each announcing site to remember. The rolling
+        driver announces the iteration cap and the drain-confirmed Strike abort
+        from paths that never consult the operator's own latch, so without this
+        a Run cancelled while either was pending would tell a Dashboard it had
+        climbed back down to ``drain``.
+
+        Refusing a transition loses no fact: a Run already at ``cancel`` has
+        said the strongest thing the ladder can say, and the Event records the
+        **latch** rather than the request that reached it.
+        """
+        if stage not in _WIND_DOWN_STAGE_ORDER or cause not in _WIND_DOWN_CAUSES:
+            return
+        if (
+            stage == events_module.WIND_DOWN_STAGES[-1]
+            and cause != events_module.WIND_DOWN_CANCEL_CAUSE
+        ):
+            return
+        latched = self._wind_down_stage
+        if (
+            latched is not None
+            and _WIND_DOWN_STAGE_ORDER[stage] <= _WIND_DOWN_STAGE_ORDER[latched]
+        ):
+            return
+        self._wind_down_stage = stage
+        self._wind_down_cause = cause
+        self._emit(
+            events_module.WRAPPER_STOP_REQUESTED,
+            iter_num=None,
+            cause=cause,
+            stage=stage,
+            draining=draining,
+        )
+
+    def _announce_wind_down_lifted(self, *, cause: str, draining: int) -> None:
+        """Write the Run-scoped clearing of a **revocable** Wind-down.
+
+        The other half of :meth:`_announce_wind_down`, and here for the same
+        reason: the legality rule belongs to the seam, not to the one call site
+        that happens to observe the transition today. Only ``strike_limit`` is
+        revocable — a contribution publishing green makes the abort condition
+        false — while an operator Stop and a spent iteration cap are durable,
+        so neither may ever reach this Event (ADR-0043's asymmetry).
+
+        Lifting resets the ladder, which is what lets a *second* abort later in
+        the same Run announce itself: the Run is genuinely healthy again, so
+        the next drain is a new transition rather than a repeat of one.
+        """
+        if cause not in events_module.WIND_DOWN_LIFTABLE_CAUSES:
+            return
+        if (
+            self._wind_down_stage != events_module.WIND_DOWN_STAGES[0]
+            or self._wind_down_cause != cause
+        ):
+            return
+        self._wind_down_stage = None
+        self._wind_down_cause = None
+        self._emit(
+            events_module.WRAPPER_STOP_LIFTED,
+            iter_num=None,
+            cause=cause,
+            draining=draining,
+        )
 
     # -- event fan-out ------------------------------------------------------
 
@@ -1149,12 +1342,7 @@ class _Loop:
                 # Not the empty-Pool outcome, and it must not be reported as
                 # one: there *was* work and none of it could be taken, which is
                 # a Run going nowhere rather than a Run that is finished.
-                self._diag.error(
-                    "serial Pickup bound nothing: all %d candidate(s) in the "
-                    "Pool were skipped; this Iteration worked no issue",
-                    len(pool),
-                )
-                return self._finish_unworked_iteration(iter_num)
+                return self._finish_unworked_iteration(iter_num, pickup)
             active = pickup.item
             resolution = self._routes[active.ref]
             model, reasoning_effort = resolution.model, resolution.reasoning_effort
@@ -1210,6 +1398,7 @@ class _Loop:
             send_timeout = self._config.send_timeout_seconds
             termination = session_outcome_module.SessionTermination.COMPLETED
             raised: session_outcome_module.SessionError | None = None
+            operator_cancelled = False
             # The harness reports a refused call on the Event stream and lets the
             # session finish politely, so the `except` clauses below see nothing
             # at all in exactly the case worth explaining. The watch is what
@@ -1233,13 +1422,25 @@ class _Loop:
                         ),
                     ) as sdk_session:
                         try:
-                            await sdk_session.send_and_wait(
-                                prompt, timeout=send_timeout
-                            )
+                            if self._stop_cancel_requested:
+                                operator_cancelled = True
+                            else:
+                                agent_task = asyncio.create_task(
+                                    sdk_session.send_and_wait(
+                                        prompt, timeout=send_timeout
+                                    ),
+                                    name=f"git-loopy-iteration-{iter_num}-agent",
+                                )
+                                self._active_agent_task = agent_task
+                                await agent_task
                         except asyncio.TimeoutError:
                             termination = (
                                 session_outcome_module.SessionTermination.TIMED_OUT
                             )
+                        except asyncio.CancelledError:
+                            if not self._stop_cancel_requested:
+                                raise
+                            operator_cancelled = True
                         except Exception as exc:
                             # Contained exactly as before: the bookkeeping below
                             # still runs and the Iteration is accounted as
@@ -1251,6 +1452,8 @@ class _Loop:
                             raised = session_outcome_module.SessionError.from_exception(
                                 exc, origin="send"
                             )
+                        finally:
+                            self._active_agent_task = None
                 except Exception as exc:
                     termination = session_outcome_module.SessionTermination.CRASHED
                     raised = session_outcome_module.SessionError.from_exception(
@@ -1385,15 +1588,18 @@ class _Loop:
             # ending is now what charges the ceiling — through the **Attempt
             # lifecycle** it feeds — so a machine read first would report the
             # count as it stood before this Iteration's own defeat.
-            self._record_session_outcome(
-                active.ref, session_ending, iter_num=iter_num
-            )
-            outcome = self._strike_machine.tick(
-                commits_in_iter=commits_in_iter,
-                auto_closures_in_iter=auto_closures,
-                checkpoints_in_iter=checkpoints_in_iter,
-                pr_advances_in_iter=pr_advances,
-            )
+            if not operator_cancelled:
+                self._record_session_outcome(
+                    active.ref, session_ending, iter_num=iter_num
+                )
+                outcome = self._strike_machine.tick(
+                    commits_in_iter=commits_in_iter,
+                    auto_closures_in_iter=auto_closures,
+                    checkpoints_in_iter=checkpoints_in_iter,
+                    pr_advances_in_iter=pr_advances,
+                )
+            else:
+                outcome = "continue"
 
             # 11) Close the iteration snapshot, persist counters.
             self._finish_iteration(
@@ -1635,10 +1841,16 @@ class _Loop:
         that, so the pair it publishes is the pair the session below is built
         with — a record written before the classification would name a model
         that never ran.
+
+        **Readiness is asked before routing resolves** (#438, ADR-0047,
+        §3.3.1). Like the Attempt-lifecycle filter, it is cheap and answers a
+        Pickup-scoped fact; asking it before :meth:`_resolve_route` means a
+        candidate the walk is about to pass over never first pays to resolve a
+        **Routed pair** it will never run on.
         """
         self._routes = {}
 
-        def admit(item: AfkReadyItem) -> str | None:
+        def admit(item: AfkReadyItem) -> str | AdmissionRefusal | None:
             defeated = self._attempts.defeated_by(item.ref)
             if defeated is not None:
                 # The **Attempt lifecycle** filter (#412), asked before routing
@@ -1649,6 +1861,19 @@ class _Loop:
                 # would be exactly the indefinite passing-over ADR-0032 exists
                 # to make visible.
                 return f"already attempted this Run ({defeated.value})"
+            # **Readiness** (#438, ADR-0047, §3.3.1), asked before routing for
+            # the same reason the Attempt-lifecycle filter is: a candidate the
+            # runner is about to pass over must not first pay to resolve a
+            # **Routed pair** it will never run on.
+            verdict = self._source.readiness(item)
+            if not verdict.admissible:
+                assert verdict.skip_reason is not None
+                if verdict.blockers:
+                    return AdmissionRefusal(
+                        reason=f"{verdict.skip_reason}: {', '.join(verdict.blockers)}",
+                        waiting_on_blocker=True,
+                    )
+                return verdict.skip_reason
             try:
                 resolution = self._resolve_route(
                     item,
@@ -1695,15 +1920,17 @@ class _Loop:
             )
         return pickup
 
-    def _finish_unworked_iteration(self, iter_num: int) -> tuple[str, int, int]:
+    def _finish_unworked_iteration(
+        self, iter_num: int, pickup: SerialPickup
+    ) -> tuple[str, int, int]:
         """End the Run on an Iteration whose **Pickup** bound nothing (#413).
 
         Reached only when a non-empty Pool's every candidate was skipped. It is
         deliberately not the ``empty_pool`` outcome: that one exits the Run 0
         because there is no work, and reporting "I could not take any of it" the
-        same way would end a Run cleanly over a repairable tracker state. So it
-        has its own **Run outcome** and its own non-zero exit reason,
-        ``all_skipped``.
+        same way would end a Run cleanly over a repairable tracker state. It
+        therefore ends as ``all_skipped``, unless every refusal proves an open
+        native blocker, in which case it ends as ``all_blocked``.
 
         Terminating here rather than recording a **Strike** and carrying on is
         what stops the livelock #413 opened. Once the ceiling counts *skipped
@@ -1715,8 +1942,26 @@ class _Loop:
         the next Iteration could differ: the lifecycle is monotonic and the Pool
         is re-read from a tracker no session is touching.
         """
-        self._finish_iteration(iter_num, outcome="all_skipped")
-        return ("all_skipped", 0, 0)
+        assert pickup.skipped
+        outcome = (
+            "all_blocked"
+            if all(skip.waiting_on_blocker for skip in pickup.skipped)
+            else "all_skipped"
+        )
+        if outcome == "all_blocked":
+            self._diag.error(
+                "serial Pickup bound nothing: all %d candidate(s) in the Pool "
+                "wait on open blockers; this Run is waiting on blockers",
+                len(pickup.considered),
+            )
+        else:
+            self._diag.error(
+                "serial Pickup bound nothing: all %d candidate(s) in the Pool "
+                "were skipped; this Iteration worked no issue",
+                len(pickup.considered),
+            )
+        self._finish_iteration(iter_num, outcome=outcome)
+        return (outcome, 0, 0)
 
     def _infer_active_binding(
         self,
@@ -1837,6 +2082,24 @@ class _Loop:
         self._last_session_outcome = record
         self._observe_session_ending(ref, record, iter_num=iter_num)
         _report_session_outcome(self._diag, ref=ref, record=record)
+
+    def _observe_ingested_consumption(self, event: Mapping[str, Any]) -> None:
+        """Charge the Run's AI-credit meter for one **ingested** remote Event.
+
+        A local session's Events reach two accountants: the Iteration rollup
+        that fills the Summary, and the Run-scoped cost meter that AI-credit
+        pressure is judged against (#309). A remote contribution's Events reach
+        only the first, because they arrive through the emitter --- whose
+        observer is the rollup alone --- rather than through a session this
+        process is running.
+
+        So this is the second half, and only the second half: the emitter has
+        already fed the rollup, and feeding it again here would double-count
+        every remote token in the Summary while fixing the meter.
+        """
+        if self._usage_observer is None:
+            return
+        self._usage_observer.observe(event)
 
     def _observe_session_ending(
         self,
@@ -1974,7 +2237,7 @@ class _Loop:
             rate_card=(
                 None if self._rate_card is None else self._rate_card.to_payload()
             ),
-            parallel_capabilities=dict(events_module.PYTHON_PARALLEL_CAPABILITIES),
+            parallel_capabilities=events_module.python_parallel_capabilities(),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
             # #410: what this Run parsed, gate-checked.
@@ -1992,32 +2255,46 @@ class _Loop:
         try:
             try:
                 while True:
+                    if getattr(self, "_stop_drain_requested", False):
+                        outcome_label = RUN_OUTCOME_OPERATOR_STOP
+                        exit_code = exit_code_for(RUN_OUTCOME_OPERATOR_STOP)
+                        break
                     iter_num += 1
                     if (
                         self._config.max_iterations != 0
                         and iter_num > self._config.max_iterations
                     ):
+                        self._announce_wind_down(
+                            cause="iteration_cap", stage="drain", draining=0
+                        )
                         outcome_label = "iteration_cap"
                         break
 
                     outcome, _commits, _closures = await self._run_one_iteration(
                         iter_num
                     )
+                    if getattr(self, "_stop_drain_requested", False):
+                        outcome_label = RUN_OUTCOME_OPERATOR_STOP
+                        exit_code = exit_code_for(RUN_OUTCOME_OPERATOR_STOP)
+                        break
                     if outcome == "empty_pool":
                         outcome_label = "empty_pool"
                         exit_code = exit_code_for("empty_pool")
                         break
-                    if outcome == "all_skipped":
+                    if outcome in {"all_skipped", "all_blocked"}:
                         # #413: there *was* work and none of it could be taken.
                         # Distinct from `empty_pool` (which exits 0) because a
                         # Run that gave up is not a Run that finished, and
                         # distinct from `stuck` because the ceiling was never
                         # reached — a single defeated issue ends a Run whose
                         # Pool held only that one.
-                        outcome_label = "all_skipped"
-                        exit_code = exit_code_for("all_skipped")
+                        outcome_label = outcome
+                        exit_code = exit_code_for(outcome)
                         break
                     if outcome == "aborted":
+                        self._announce_wind_down(
+                            cause="strike_limit", stage="drain", draining=0
+                        )
                         outcome_label = "stuck"
                         exit_code = exit_code_for("stuck")
                         break
@@ -2064,6 +2341,13 @@ class _LaneWork:
     :class:`~git_loopy.rolling_scheduler.Contribution` itself, not here, since
     the scheduler is the authority that minted it at
     :meth:`~git_loopy.rolling_scheduler.RollingScheduler.start_session`.
+
+    ``reclaimed`` is what makes the layered reclamation actors (#452, #445 §F)
+    idempotent and lets an *un*reclaimed workspace be retried. An entry is kept
+    in ``_lane_work`` until its workspace is actually gone — including past the
+    contribution finalizing — so a workspace salvage could not capture is
+    offered to the next actor rather than forgotten with the contribution that
+    owned it.
     """
 
     item: AfkReadyItem
@@ -2071,6 +2355,7 @@ class _LaneWork:
     path: Path
     git: git_module.GitClient
     pre_sha: str | None = None
+    reclaimed: bool = False
 
 
 @dataclass
@@ -2200,7 +2485,7 @@ class _ParallelLoop:
     contribution finalizing and a serial Iteration tick the same Strike
     machine and write one consistent event / counter stream. The serial path
     is unaffected: :func:`run` only builds a ``_ParallelLoop`` when
-    ``config.parallel > 1``.
+    rolling dispatch.
     """
 
     def __init__(
@@ -2224,6 +2509,7 @@ class _ParallelLoop:
         rate_card: RateCard | None = None,
         classifier_pair: ClassifierPair | None = None,
         task_type_client: TaskTypeLabelClient | None = None,
+        execution_host: execution_host_module.ExecutionHost | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -2231,6 +2517,7 @@ class _ParallelLoop:
         # a Parallel Summary is denominated by one card too (#331).
         self._rate_card = rate_card
         self._git = git
+        self._materializer = materialization_module.ContributionMaterializer(git)
         self._prompt_text = prompt_text
         self._writers = writers
         self._sinks = sinks
@@ -2251,6 +2538,22 @@ class _ParallelLoop:
         self._worktree_setup = worktree_setup
         self._run_id = writers.run_id
         self._repo_root = git.root
+        # Where every Lane workspace and Integration stage this Run creates
+        # lives (#449): the clone's own git directory, resolved once. It is
+        # per-clone and outside every working tree's content, so a live
+        # workspace cannot be seen, staged, or cleaned by the tree an agent is
+        # working in — and it needs no ignore entry to stay that way.
+        #
+        # Resolved here, at construction, because the answer is a fact about
+        # the clone and not about any one issue: a git that cannot give it up
+        # would fail identically for every Lane, so retrying per Lane would
+        # only spin. ``run`` turns the failure into a preflight refusal.
+        self._workspace_root = git.common_git_dir()
+        # A supplied host is reusable across contributions. The local adapter is
+        # built for each contribution below so its runner can close over the
+        # concrete Lane state without smuggling that state through the request.
+        self._execution_host = execution_host
+        self._host_capacity = _execution_host_capacity(execution_host)
 
         # Rolling dispatch (#219, ADR-0020) needs the two extra Pool
         # operations `RollingIssueSource` defines. Only the GitHub backend
@@ -2259,8 +2562,13 @@ class _ParallelLoop:
         # Parallel mode degrades entirely to the serial path (`drive`).
         self._pool: RollingPool | None = None
         self._scheduler: rolling_scheduler.RollingScheduler | None = None
-        # Bounded adaptive Lane concurrency (#219 §6, #309). The **Lane cap**
-        # is a safety ceiling, not a utilization promise: under sustained
+        self._iteration_cap_announced = False
+        # A Lane routing refusal is a **Pickup skip**, not a fatal worker
+        # exception. Keep the candidate cached but ineligible for this Run so
+        # the terminal classifier can honestly report all_skipped.
+        self._rolling_refused: set[int | str] = set()
+        # Bounded adaptive Lane concurrency (#219 §6, #309). The bound
+        # **Execution host** declares the safety ceiling. Under sustained
         # **Integration** backpressure, 429s, AI-credit or host/setup pressure,
         # running at the cap wastes capacity and money. The monitor owns the
         # observation cadence and the operator's budgets; the policy it builds
@@ -2268,7 +2576,7 @@ class _ParallelLoop:
         # observation from its own state.
         self._cost_meter = rolling_pressure.RunCostMeter(denomination=denomination)
         self._pressure = _make_pressure_monitor(
-            lane_cap=config.parallel,
+            lane_cap=self._host_capacity,
             diag=diag,
             credit_spent=self._cost_meter,
             rate_limits=rolling_pressure.rate_limit_reader(source),
@@ -2279,11 +2587,12 @@ class _ParallelLoop:
                 source=source,
                 clock=time.monotonic,
                 eligible=self._lane_candidate_eligible,
+                cacheable=self._lane_candidate_cacheable,
             )
             self._scheduler = rolling_scheduler.RollingScheduler(
                 diag=diag,
                 pool=self._pool,
-                lane_cap=config.parallel,
+                lane_cap=self._host_capacity,
                 max_iterations=config.max_iterations,
                 concurrency=self._pressure.controller,
             )
@@ -2292,6 +2601,15 @@ class _ParallelLoop:
         # `lane_id`) so it survives the reusable Lane slot moving on to
         # another issue once this contribution is admitted (#219 §7).
         self._lane_work: dict[str, _LaneWork] = {}
+        # The contribution that owns each live Lane workspace.  Run-exit
+        # reclamation needs this alongside the workspace to close interrupted
+        # accounting after salvaging the branch.
+        self._open_lane_contributions: dict[str, rolling_scheduler.Contribution] = {}
+        # The contributions Run-exit reclamation closed out rather than the
+        # work boundary doing it (#452).  Kept so **Demotion** can tell an
+        # interrupted contribution from a failed one — see
+        # :attr:`finalized_contributions`.
+        self._abandoned_at_exit: set[str] = set()
         # The accounting-scope number each open **Lane contribution** was
         # opened with (#310), keyed the same way and for the same reason: a
         # contribution's Consumption, timing, and Summary row belong to the
@@ -2335,6 +2653,11 @@ class _ParallelLoop:
         # preserve the "crashed" outcome / exit-code contract the retired
         # Wave's single `try/except` around the whole round loop gave.
         self._crash: BaseException | None = None
+        # Only these tasks are eligible for a second Stop.  Lifecycle tasks also
+        # own merge, close, branch deletion, and push transactions, which must
+        # be allowed to complete once they have begun.
+        self._active_agent_tasks: set[asyncio.Task[object]] = set()
+        self._stop_cancel_requested = False
 
         # Compose a serial `_Loop` for serial Iterations AND to share its
         # Strike machine / event emitter / summary counters / Checkpoint
@@ -2360,8 +2683,72 @@ class _ParallelLoop:
             task_type_client=task_type_client,
         )
 
+    def request_stop_drain(self) -> None:
+        """Stop refill and serial reservations while live work drains."""
+        if self._scheduler is not None and self._scheduler.abort_latched:
+            # A Strike drain is already the first stage. The operator's first
+            # gesture escalates it rather than inventing a second drain event.
+            self.request_stop_cancel()
+            return
+        if self._scheduler is not None:
+            self._scheduler.request_stop_drain()
+        self._serial.request_stop_drain(draining=self._draining_count())
+
+    def request_stop_cancel(self) -> None:
+        """Cancel agent sessions only; never their enclosing Lane lifecycle."""
+        if self._stop_cancel_requested:
+            return
+        drain_already_announced = (
+            self._scheduler is not None
+            and (self._scheduler.stop_latched or self._scheduler.abort_latched)
+        )
+        if self._scheduler is not None:
+            self._scheduler.request_stop_drain()
+        self._serial.request_stop_cancel(
+            drain_already_announced=drain_already_announced,
+            draining=self._draining_count(),
+        )
+        self._stop_cancel_requested = True
+        for task in tuple(self._active_agent_tasks):
+            task.cancel()
+
+    def _draining_count(self) -> int:
+        """The observed open-contribution count, or serial's observed zero."""
+        return self._scheduler.open_count if self._scheduler is not None else 0
+
+    def _announce_iteration_cap(self, draining: int) -> None:
+        """Record the one cap latch when the scheduler exhausts its budget."""
+        if self._iteration_cap_announced:
+            return
+        self._iteration_cap_announced = True
+        self._serial._announce_wind_down(
+            cause="iteration_cap", stage="drain", draining=draining
+        )
+
+    async def _await_agent(self, awaitable: Awaitable[object], *, name: str) -> object:
+        """Make an agent call, retaining the one task the second Stop may cancel."""
+        task = asyncio.create_task(awaitable, name=name)
+        self._active_agent_tasks.add(task)
+        try:
+            return await task
+        finally:
+            self._active_agent_tasks.discard(task)
+
+    def _lane_candidate_cacheable(self, candidate: PoolCandidate) -> bool:
+        """Whether this candidate belongs in the Rolling dispatch cache.
+
+        A **Blocked** candidate is not Lane-candidate eligible, but it remains
+        cacheable until a later **Membership read** proves it Ready. The
+        **Attempt lifecycle** differs: a defeated candidate cannot become
+        eligible during this Run, so retaining it would block a terminal Pool
+        claim without a future refresh being able to change that fact.
+        """
+        return is_parallel_safe(candidate) and not self._serial._attempts.skipped(
+            candidate.ref
+        )
+
     def _lane_candidate_eligible(self, candidate: PoolCandidate) -> bool:
-        """Is this candidate **Lane** work *and* still owed an attempt (#412)?
+        """Is this candidate **Lane** work, Ready, and still owed an attempt?
 
         The **Lane** half of the **Attempt lifecycle** skip. A Lane Pickup is a
         Pickup, so a defeated issue must not reach one — but the Lane path
@@ -2388,8 +2775,10 @@ class _ParallelLoop:
         head) was never in the guard, and nothing else would stop a Lane
         reserving it once concurrency recovered.
         """
-        return is_parallel_safe(candidate) and not self._serial._attempts.skipped(
-            candidate.ref
+        return (
+            candidate.ref not in self._rolling_refused
+            and self._lane_candidate_cacheable(candidate)
+            and is_lane_candidate(candidate)
         )
 
     def _alloc_iter_num(self) -> int:
@@ -2419,32 +2808,37 @@ class _ParallelLoop:
         if rc is not None:
             return rc
 
-        self._serial._emit(
-            events_module.WRAPPER_RUN_START,
-            iter_num=None,
-            issue_source=self._config.issue_source,
-            release_version=self._release_version,
-            schema_version=events_module.EVENT_SCHEMA_VERSION,
-            insight_capabilities=events_module.python_insight_capabilities(
+        start_payload = {
+            "issue_source": self._config.issue_source,
+            "release_version": self._release_version,
+            "schema_version": events_module.EVENT_SCHEMA_VERSION,
+            "insight_capabilities": events_module.python_insight_capabilities(
                 rate_card=self._rate_card is not None
             ),
-            rate_card=(
+            "rate_card": (
                 None if self._rate_card is None else self._rate_card.to_payload()
             ),
-            parallel_capabilities=dict(events_module.PYTHON_PARALLEL_CAPABILITIES),
-            max_iterations=self._config.max_iterations,
-            max_nmt_strikes=self._config.max_nmt_strikes,
+            "parallel_capabilities": events_module.python_parallel_capabilities(),
+            "max_iterations": self._config.max_iterations,
+            "max_nmt_strikes": self._config.max_nmt_strikes,
             # #410: what this Run parsed, gate-checked.
             **run_start_payload(self._config),
             # #304: only a Parallel-mode Run carries these, so a serial Run's
             # `wrapper.run.start` is byte-identical to what it always was.
-            parallel_mode=True,
-            lane_cap=self._config.parallel,
-            effective_lane_limit=(
+            "parallel_mode": True,
+            "lane_cap": self._host_capacity,
+            "effective_lane_limit": (
                 self._scheduler.effective_limit
                 if self._scheduler is not None
                 else None
             ),
+        }
+        if self._rolling_capable:
+            start_payload["execution_host"] = self._execution_host_payload()
+        self._serial._emit(
+            events_module.WRAPPER_RUN_START,
+            iter_num=None,
+            **start_payload,
         )
         self._report_parallel_degraded()
 
@@ -2520,7 +2914,7 @@ class _ParallelLoop:
             events_module.WRAPPER_PARALLEL_DEGRADED,
             iter_num=None,
             reason=events_module.PARALLEL_DEGRADE_SOURCE_NOT_ROLLING,
-            lane_cap=self._config.parallel,
+            lane_cap=self._host_capacity,
             issue_source=self._config.issue_source,
         )
 
@@ -2539,19 +2933,34 @@ class _ParallelLoop:
         """
         iter_num = 0
         while True:
+            if self._serial._stop_drain_requested:
+                return (
+                    RUN_OUTCOME_OPERATOR_STOP,
+                    exit_code_for(RUN_OUTCOME_OPERATOR_STOP),
+                    iter_num,
+                )
             iter_num += 1
             if (
                 self._config.max_iterations != 0
                 and iter_num > self._config.max_iterations
             ):
+                self._serial._announce_wind_down(
+                    cause="iteration_cap", stage="drain", draining=0
+                )
                 return "iteration_cap", exit_code_for("iteration_cap"), iter_num - 1
             outcome, _commits, _closures = await self._serial._run_one_iteration(
                 iter_num
             )
+            if self._serial._stop_drain_requested:
+                return (
+                    RUN_OUTCOME_OPERATOR_STOP,
+                    exit_code_for(RUN_OUTCOME_OPERATOR_STOP),
+                    iter_num,
+                )
             if outcome == "empty_pool":
                 return "empty_pool", exit_code_for("empty_pool"), iter_num
-            if outcome == "all_skipped":
-                return "all_skipped", exit_code_for("all_skipped"), iter_num
+            if outcome in {"all_skipped", "all_blocked"}:
+                return outcome, exit_code_for(outcome), iter_num
             if outcome == "aborted":
                 return "stuck", exit_code_for("stuck"), iter_num
 
@@ -2596,6 +3005,12 @@ class _ParallelLoop:
             while True:
                 if self._crash is not None:
                     raise self._crash
+                if self._serial._stop_drain_requested:
+                    return (
+                        RUN_OUTCOME_OPERATOR_STOP,
+                        exit_code_for(RUN_OUTCOME_OPERATOR_STOP),
+                        scheduler._units_spent,
+                    )
 
                 # Cleared before the decision it feeds, never after: a slot
                 # freed after `reserve()` has read the bounds must still earn
@@ -2632,6 +3047,7 @@ class _ParallelLoop:
                 if (
                     scheduler.remaining_units != 0
                     and not scheduler.abort_latched
+                    and not scheduler.stop_latched
                     and scheduler.serial_turn()
                 ):
                     self._report_serial_fallback(scheduler)
@@ -2644,15 +3060,26 @@ class _ParallelLoop:
                     # Iteration's unit is folded in here rather than tracked
                     # by a second, divergeable counter.
                     scheduler._units_spent += 1
-                    if outcome == "aborted":
+                    if self._serial._stop_drain_requested:
+                        return (
+                            RUN_OUTCOME_OPERATOR_STOP,
+                            exit_code_for(RUN_OUTCOME_OPERATOR_STOP),
+                            scheduler._units_spent,
+                        )
+                    if outcome == "aborted" and not scheduler.stop_latched:
                         # §7.4, §7.7: the Strike machine is shared, so a serial
                         # Iteration reaching its limit latches the same
                         # drain-confirmed abort a finalized Lane contribution
                         # does (`_apply_strike_reaction`). Discarding it here
                         # let a Parallel-mode Run emit the abort Event and then
                         # grant itself serial Iterations forever.
-                        scheduler.strike_limit_reached()
-                    if outcome == "all_skipped":
+                        if scheduler.strike_limit_reached():
+                            self._serial._announce_wind_down(
+                                cause="strike_limit",
+                                stage="drain",
+                                draining=scheduler.open_count,
+                            )
+                    if outcome in {"all_skipped", "all_blocked"}:
                         # #413, and terminal *here* rather than latched for the
                         # idle-check, because the scheduler grants a serial turn
                         # only once every Lane has drained (`quiescent`): a
@@ -2663,8 +3090,8 @@ class _ParallelLoop:
                         # candidates for as long as the Run has units, which is
                         # the livelock this outcome exists to end.
                         return (
-                            "all_skipped",
-                            exit_code_for("all_skipped"),
+                            outcome,
+                            exit_code_for(outcome),
                             scheduler._units_spent,
                         )
                     # An `empty_pool` outcome is deliberately NOT terminal here:
@@ -2685,18 +3112,67 @@ class _ParallelLoop:
                 # parked contribution it admits from the FIFO) has finished
                 # (see `_integrate_contribution`) — so it is safe to ask the
                 # scheduler for a terminal outcome here.
-                if scheduler.abort_latched and scheduler.quiescent:
-                    return "stuck", exit_code_for("stuck"), scheduler._units_spent
-                if scheduler.remaining_units == 0 and scheduler.quiescent:
+                if scheduler.stop_latched and (
+                    scheduler.quiescent
+                    or (self._stop_cancel_requested and not self._pending)
+                ):
                     return (
-                        "iteration_cap",
-                        exit_code_for("iteration_cap"),
+                        RUN_OUTCOME_OPERATOR_STOP,
+                        exit_code_for(RUN_OUTCOME_OPERATOR_STOP),
                         scheduler._units_spent,
                     )
-                if serial_pool_seen and scheduler.confirm_empty():
+                if scheduler.abort_latched and scheduler.quiescent:
+                    return "stuck", exit_code_for("stuck"), scheduler._units_spent
+                if scheduler.remaining_units == 0:
+                    self._announce_iteration_cap(scheduler.open_count)
+                    if scheduler.quiescent:
+                        return (
+                            "iteration_cap",
+                            exit_code_for("iteration_cap"),
+                            scheduler._units_spent,
+                        )
+                # The terminal read is authoritative for the Lane half. A
+                # candidate that became Ready while another Lane ran makes its
+                # classifier return ``None``, so the driver reserves it rather
+                # than reporting a stale all-blocked/all-skipped outcome.
+                terminal_outcome = (
+                    scheduler.confirm_terminal_outcome()
+                    if serial_pool_seen
+                    else None
+                )
+                if terminal_outcome is not None:
+                    # The serial driver owns the Run-level collection and
+                    # accounting outcomes, including exclusions. A Rolling
+                    # Pool can prove there is no Lane work before that driver
+                    # has run at all, so give it the first turn rather than
+                    # ending with a scheduler-only outcome.
+                    if terminal_outcome == "empty_pool" and scheduler._units_spent == 0:
+                        self._report_serial_fallback(scheduler)
+                        outcome, _commits, _closures = (
+                            await self._serial._run_one_iteration(
+                                self._alloc_iter_num()
+                            )
+                        )
+                        scheduler._units_spent += 1
+                        if self._serial._stop_drain_requested:
+                            return (
+                                RUN_OUTCOME_OPERATOR_STOP,
+                                exit_code_for(RUN_OUTCOME_OPERATOR_STOP),
+                                scheduler._units_spent,
+                            )
+                        if outcome == "aborted":
+                            return "stuck", exit_code_for("stuck"), scheduler._units_spent
+                        if outcome in {"empty_pool", "all_skipped", "all_blocked"}:
+                            return (
+                                outcome,
+                                exit_code_for(outcome),
+                                scheduler._units_spent,
+                            )
+                        scheduler.serial_finished()
+                        continue
                     return (
-                        "empty_pool",
-                        exit_code_for("empty_pool"),
+                        terminal_outcome,
+                        exit_code_for(terminal_outcome),
                         scheduler._units_spent,
                     )
                 if not serial_pool_seen:
@@ -2710,11 +3186,19 @@ class _ParallelLoop:
                     )
                 await asyncio.sleep(_ROLLING_EMPTY_POLL_INTERVAL)
         finally:
-            if self._pending:
-                for task in self._pending:
-                    task.cancel()
-                await asyncio.gather(*self._pending, return_exceptions=True)
-                self._pending.clear()
+            # Reclamation is synchronous and must stay the last thing that
+            # happens, *behind* no await: a second Stop gesture landing while
+            # the driver drains its cancelled Lane tasks would otherwise
+            # abandon the drain and the salvage with it (#452).
+            try:
+                if self._pending:
+                    if not scheduler.stop_latched:
+                        for task in self._pending:
+                            task.cancel()
+                    await asyncio.gather(*self._pending, return_exceptions=True)
+                    self._pending.clear()
+            finally:
+                self._reclaim_open_lane_workspaces()
 
     @property
     def finalized_contributions(self) -> tuple[rolling_scheduler.Contribution, ...]:
@@ -2731,10 +3215,23 @@ class _ParallelLoop:
         still running and no row can arrive after the count was taken. ``()``
         when a Parallel Run never built a scheduler, because a Run must not fail
         at its last step over having had nothing to demote.
+
+        A contribution the Run **abandoned at exit** (#452) is excluded. It was
+        interrupted, not defeated, and ADR-0043 §J makes a stopped contribution
+        *visible and blameless* — Summary row yes, demotion no.
+        :func:`~git_loopy.demotion.tally_no_progress` used to deliver that for
+        free, by skipping a row whose ``reason`` is still ``None`` as "has not
+        finished" rather than "did not publish". That only held while an
+        interrupted contribution stayed open, which is the very residue #452
+        removes — so closing it out means saying this here instead.
         """
         if self._scheduler is None:
             return ()
-        return self._scheduler.finalized
+        return tuple(
+            contribution
+            for contribution in self._scheduler.finalized
+            if contribution.contribution_id not in self._abandoned_at_exit
+        )
 
     def _report_concurrency_change(self) -> None:
         """Announce an effective-Lane-limit transition, if this turn caused one.
@@ -2810,7 +3307,7 @@ class _ParallelLoop:
             unavailable=fallback.unavailable,
             worked=fallback.worked,
             reason=fallback.reason,
-            lane_cap=self._config.parallel,
+            lane_cap=self._host_capacity,
         )
 
     def _service_serial_required_work(self) -> bool:
@@ -2949,6 +3446,9 @@ class _ParallelLoop:
         """
         try:
             await self._run_lane_lifecycle(reservation)
+        except asyncio.CancelledError:
+            if not self._stop_cancel_requested:
+                raise
         except Exception as exc:  # pragma: no cover - defensive
             if self._crash is None:
                 self._crash = exc
@@ -3030,8 +3530,9 @@ class _ParallelLoop:
         except TaskTypeError as exc:
             self._diag.error("lane #%s routing refused: %s", ref, exc)
             passed_over(f"routing refused: {exc}")
+            self._rolling_refused.add(ref)
             scheduler.release(reservation)
-            raise
+            return
 
         # The **Task-type classifier**'s second call site (#409, ADR-0029),
         # through the same shared seam. Deliberately *after* the refusal above:
@@ -3041,12 +3542,25 @@ class _ParallelLoop:
         item, resolution = await self._serial._classify_at_pickup(
             item, routed=resolution
         )
+        if scheduler.stop_latched or scheduler.abort_latched:
+            scheduler.release(reservation)
+            return
 
         model = resolution.model
         reasoning_effort = resolution.reasoning_effort
-        base = self._resolve_base_ref()
+        try:
+            base = self._git.head_sha()
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "base head_sha for issue #%s failed: %s; releasing reservation",
+                ref,
+                exc,
+            )
+            passed_over(f"base revision failed: {exc}")
+            scheduler.release(reservation)
+            return
         branch = git_module.lane_branch_name(self._run_id, ref)
-        path = _lane_worktree_path(self._repo_root, self._run_id, ref)
+        path = _lane_worktree_path(self._workspace_root, self._run_id, ref)
         try:
             wt_git = self._git.add_worktree(path, branch=branch, base=base)
         except git_module.GitError as exc:
@@ -3058,11 +3572,9 @@ class _ParallelLoop:
             scheduler.release(reservation)
             return
 
-        lane_work = _LaneWork(item=item, branch=branch, path=path, git=wt_git)
-        try:
-            lane_work.pre_sha = wt_git.head_sha()
-        except git_module.GitError as exc:
-            self._diag.warning("lane #%s pre head_sha failed: %s", ref, exc)
+        lane_work = _LaneWork(
+            item=item, branch=branch, path=path, git=wt_git, pre_sha=base
+        )
 
         # Prepare the freshly created worktree before its agent session
         # starts (#65). Non-fatal: a broken environment still lets the agent
@@ -3073,7 +3585,9 @@ class _ParallelLoop:
             reservation, model=model, reasoning_effort=reasoning_effort
         )
         self._lane_work[contribution.contribution_id] = lane_work
-        self._open_contribution_accounting(contribution)
+        self._open_lane_contributions[contribution.contribution_id] = contribution
+        host = self._host_for_contribution(contribution, lane_work)
+        self._open_contribution_accounting(contribution, host=host)
 
         lane_binding = self._serial._new_active_issue_binding(
             None, allowed_refs=(ref,), lane_issue=ref
@@ -3106,22 +3620,90 @@ class _ParallelLoop:
             recent = []
         commits_block = _format_recent_commits(recent)
 
-        signals = await self._run_lane_session(
-            contribution, lane_work, commits_block
+        request = self._build_contribution_request(
+            contribution, lane_work, commits_block, base_revision=base
         )
+        if self._stop_cancel_requested:
+            self._salvage_and_reclaim_lane_workspace(lane_work)
+            disposition = scheduler.finish_terminal_failure(
+                contribution,
+                reoffer=False,
+                reason=rolling_scheduler.REASON_OPERATOR_STOP,
+            )
+            assert disposition == rolling_scheduler.TERMINAL
+            if lane_work.reclaimed:
+                self._lane_work.pop(contribution.contribution_id, None)
+            self._finalize_contribution(contribution, published=False)
+            return
+        supervision_started = time.monotonic()
+        outcome = await host.run_contribution(request)
+        self._account_supervised_contribution(
+            contribution, host, since=supervision_started
+        )
+        if isinstance(outcome, execution_host_module.ContributionFailure):
+            self._diag.warning(
+                "lane #%s execution host (%s) %s: %s (%s)",
+                ref, host.placement, outcome.classification, outcome.reason, outcome.detail,
+            )
+            self._cleanup_injected_host_worktree(
+                lane_work,
+                discard_branch=outcome.classification != "breach",
+            )
+            self._finish_terminal_host_failure(
+                contribution, lane_work, outcome
+            )
+            return
 
-        changed, checkpoint_ok = self._account_lane(contribution, lane_work)
-        # The Lane's **Session outcome** (#403). `changed` is this mode's own
-        # progress answer -- an agent commit or a Checkpoint on the Lane branch
-        # -- so the ending agrees with what the scheduler was told about the
-        # same contribution.
-        lane_outcome = session_outcome_module.resolve_session_outcome(
-            termination=signals.termination,
-            progressed=changed,
-            error=signals.error,
-            content_filtered=signals.content_filtered,
-            no_more_tasks=signals.no_more_tasks,
+        if outcome.remote is not None:
+            assert outcome.ref is not None
+            # Ingested *before* materialization is attempted, because the
+            # artifact has already been read and every failure path below
+            # returns. A fetch that cannot reach the remote says nothing about
+            # what the session did, and erasing hours of Events over it would
+            # leave the operator a terminal failure with no account of the work
+            # that preceded it.
+            self._ingest_contribution_events(contribution, outcome.events)
+            materialized = self._materializer.materialize(
+                remote=outcome.remote,
+                ref=outcome.ref,
+                completion_sha=outcome.sha,
+                destination_branch=(
+                    f"git-loopy/{self._run_id}/materialized/issue-{ref}"
+                ),
+            )
+            if not isinstance(materialized, materialization_module.Materialized):
+                self._cleanup_injected_host_worktree(lane_work, discard_branch=True)
+                if isinstance(materialized, materialization_module.Breach):
+                    failure = execution_host_module.ContributionFailure(
+                        reason=materialized.reason,
+                        classification="breach",
+                        ending=outcome.ending,
+                        detail=materialized.detail,
+                    )
+                else:
+                    failure = execution_host_module.ContributionFailure(
+                        reason="remote_materialization_stalled",
+                        classification="stall",
+                        ending=None,
+                        detail=materialized.detail,
+                    )
+                self._finish_terminal_host_failure(contribution, lane_work, failure)
+                return
+            outcome = dataclass_replace(
+                outcome, branch=materialized.branch, remote=None, ref=None
+            )
+
+        # Reclaim the local placeholder *before* adopting the host's branch: a
+        # host that contributed on a branch of its own leaves the deterministic
+        # Lane branch holding nothing, and §F's collection rule cannot reach it
+        # (it is neither merged into base nor named by the closing issue).
+        assert outcome.branch is not None
+        self._cleanup_injected_host_worktree(
+            lane_work, discard_branch=lane_work.branch != outcome.branch
         )
+        lane_work.branch = outcome.branch
+        lane_outcome = outcome.ending
+        assert lane_outcome is not None
         # Offered to the **Escalation rung**'s ledger before it is said out
         # loud (#408): a Lane that stalled silently is evidence about the
         # *issue*, and the Pickup that acts on it may well be a serial one.
@@ -3130,26 +3712,17 @@ class _ParallelLoop:
             self._diag, ref=lane_work.item.ref, record=lane_outcome
         )
 
-        if checkpoint_ok:
-            try:
-                self._git.remove_worktree(lane_work.path, force=True)
-            except git_module.GitError as exc:
-                self._diag.warning(
-                    "worktree remove for %s failed: %s", lane_work.path, exc
-                )
-        else:
-            # §3.10: a Checkpoint failure preserves the dirty branch and
-            # worktree for forensics / recovery rather than tearing it down.
-            self._diag.warning(
-                "lane #%s checkpoint failed; preserving worktree %s",
-                ref, lane_work.path,
-            )
-
+        # One progress fact per contribution (#403): the ending the outcome
+        # carries is what the scheduler is told, so a contribution's
+        # disposition can never contradict the ending just reported for it.
+        # Re-deriving it from the completion SHA would be a second answer the
+        # local runner's own commit accounting can disagree with.
         disposition = scheduler.finish_work(
-            contribution, changed=changed, checkpoint_ok=checkpoint_ok
+            contribution, changed=lane_outcome.progressed
         )
         if disposition == rolling_scheduler.TERMINAL:
-            self._lane_work.pop(contribution.contribution_id, None)
+            if lane_work.reclaimed:
+                self._lane_work.pop(contribution.contribution_id, None)
             self._finalize_contribution(contribution, published=False)
             return
         if disposition == rolling_scheduler.ADMITTED:
@@ -3198,11 +3771,367 @@ class _ParallelLoop:
             result.output_tail,
         )
 
-    async def _run_lane_session(
+    def _build_contribution_request(
         self,
         contribution: rolling_scheduler.Contribution,
         lane_work: _LaneWork,
         commits_block: str,
+        *,
+        base_revision: str,
+    ) -> execution_host_module.ContributionRequest:
+        """Build the Execution host seam's one input shape for this Lane.
+
+        Carries exactly what spec #445 §A names — issue reference, rendered
+        prompt, base revision, resolved model/reasoning pair, the Effective
+        Skill policy, and the Run's ``run_id`` — and nothing about *how* the
+        host should do the work.
+        """
+        prompt = (
+            f"Previous commits: {commits_block} "
+            f"Issues: {lane_work.item.rendered_block} {self._prompt_text}"
+        )
+        return execution_host_module.ContributionRequest(
+            issue_ref=lane_work.item.ref,
+            prompt=prompt,
+            base_revision=base_revision,
+            model=contribution.model,
+            reasoning_effort=contribution.reasoning_effort,
+            skill_policy=self._skill_exposure,
+            run_id=self._run_id,
+        )
+
+    def _host_for_contribution(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
+    ) -> execution_host_module.ExecutionHost:
+        """Return the supplied host or a local adapter bound to this Lane."""
+        if self._execution_host is not None:
+            return self._execution_host
+
+        async def runner(
+            request: execution_host_module.ContributionRequest,
+        ) -> execution_host_module.LocalRunResult:
+            return await self._run_local_contribution(
+                request, contribution, lane_work
+            )
+
+        return execution_host_module.LocalExecutionHost(runner=runner)
+
+    def _finish_terminal_host_failure(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
+        outcome: execution_host_module.ContributionFailure,
+    ) -> None:
+        """Finalize a host failure before it can reach Integration."""
+        assert self._scheduler is not None
+        # Whatever the host managed to observe reaches the Run's stream even
+        # though the contribution is lost: a terminal failure with no account
+        # of the work that preceded it is the one thing an operator cannot
+        # debug afterwards, because the machine that held the logs is gone.
+        self._ingest_contribution_events(contribution, outcome.events)
+        if outcome.classification == "breach":
+            ending = outcome.ending
+            assert ending is not None
+            self._serial._observe_session_ending(lane_work.item.ref, ending)
+            _report_session_outcome(
+                self._diag, ref=lane_work.item.ref, record=ending
+            )
+
+        disposition = self._scheduler.finish_terminal_failure(
+            contribution,
+            reoffer=outcome.classification != "breach",
+            reason=_terminal_reason_for(outcome),
+        )
+        assert disposition == rolling_scheduler.TERMINAL
+        if lane_work.reclaimed:
+            self._lane_work.pop(contribution.contribution_id, None)
+        self._finalize_contribution(contribution, published=False)
+
+    async def _run_local_contribution(
+        self,
+        request: execution_host_module.ContributionRequest,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
+    ) -> execution_host_module.LocalRunResult:
+        """The ``local`` Execution host's runner (#447).
+
+        This is exactly today's Lane-contribution mechanics — run the agent
+        session (:meth:`_run_lane_session`), then account for it and
+        Checkpoint a dirty tree (:meth:`_account_lane`) — reached through
+        :class:`~git_loopy.execution_host.LocalExecutionHost` rather than
+        called directly, so every Lane contribution now travels through the
+        seam with today's behaviour otherwise unchanged. The session ending
+        travels back on the outcome itself. The local runner is also the
+        **inline reclaim** actor (#452): once the Checkpoint result is known
+        and the worktree state is read for the host's verification, it hands
+        the workspace to salvage.
+        """
+        signals = await self._run_lane_session(
+            contribution, lane_work, request.prompt
+        )
+        changed, checkpoint_ok = self._account_lane(contribution, lane_work)
+        ending = session_outcome_module.resolve_session_outcome(
+            termination=signals.termination,
+            progressed=changed,
+            error=signals.error,
+            content_filtered=signals.content_filtered,
+            no_more_tasks=signals.no_more_tasks,
+        )
+        try:
+            sha = lane_work.git.head_sha()
+        except git_module.GitError:
+            sha = None
+        try:
+            dirty = lane_work.git.is_dirty()
+            untracked = lane_work.git.has_untracked()
+            verification_error = None
+        except git_module.GitError as exc:
+            dirty, untracked = False, False
+            verification_error = f"could not verify worktree state: {exc}"
+        self._salvage_and_reclaim_lane_workspace(lane_work)
+        return execution_host_module.LocalRunResult(
+            branch=lane_work.branch,
+            sha=sha,
+            dirty=dirty,
+            untracked=untracked,
+            ending=ending,
+            checkpoint_ok=checkpoint_ok,
+            verification_error=verification_error,
+        )
+
+    def _cleanup_injected_host_worktree(
+        self, lane_work: _LaneWork, *, discard_branch: bool = False
+    ) -> None:
+        """Reclaim the local placeholder a substituted host did not use.
+
+        Dispatch always cuts the deterministic Lane worktree and branch locally,
+        because that is what the ``local`` placement needs. A substituted host
+        that never ran, or that contributed on a branch of its own, leaves that
+        placeholder holding nothing — and ADR-0050 §F's collection rule cannot
+        reach it, since it is neither merged into base nor named by the closing
+        issue. ``discard_branch`` is how the caller says so; a placeholder the
+        host *did* contribute on is the contribution's own branch and is kept.
+
+        **Salvage** runs first all the same, because this method cannot know
+        the tree is clean — but a salvage commit does not buy a declined
+        placeholder a reprieve. Retaining it would strand the deterministic
+        branch that the very re-offer a blameless failure asks for needs to cut
+        again. So the branch goes whenever the workspace was reclaimed; the one
+        case that keeps it is the one case salvage keeps the workspace for.
+        """
+        if self._execution_host is not None:
+            self._salvage_and_reclaim_lane_workspace(lane_work)
+            if discard_branch and lane_work.reclaimed:
+                self._delete_branch_safely(lane_work.item.ref, lane_work.branch)
+
+    def _ingest_contribution_events(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        remote_events: Iterable[Mapping[str, Any]],
+    ) -> None:
+        """Put a remote contribution's batched, late Events on the Run's stream.
+
+        A local contribution emits onto the shared trace as it works, so there
+        is nothing to ingest. A remote one cannot: GitHub Actions publishes no
+        supported live log stream, so its Events arrive together, after the
+        fact, as an end-of-job artifact — **backdated**, and that is the point.
+        Their wall-clock ``ts`` is the only honest timing a batched stream
+        still carries, so nothing here re-stamps it. The host has already
+        stripped the monotonic observation field (a remote machine's monotonic
+        clock shares no origin with this one), and re-stamping *that* would
+        collapse a six-hour contribution onto the instant its artifact was
+        read.
+
+        What ingest does add is the identity triple, exactly as
+        :meth:`_emit_contribution_event` does for a locally-produced record:
+        without it the Dashboard and a replaying reader would have a stream
+        belonging to no issue, arriving long after the Lane slot that started
+        it was reused.
+        """
+        for remote_event in remote_events:
+            envelope = dict(remote_event)
+            envelope.update(
+                contribution_id=contribution.contribution_id,
+                lane_id=contribution.lane_id,
+                issue=contribution.ref,
+                # The key the rollup selects a contribution's scope on. A
+                # conforming host is not obliged to have stamped it --- the
+                # seam's contract is "this contribution's Events, in whatever
+                # form the host produced them" --- so an unstamped stream would
+                # be logged and then quietly omitted from the accounting.
+                lane_issue=contribution.ref,
+                iter=None,
+            )
+            self._serial._emitter.dispatch(envelope)
+            # The Run-scoped Consumption observer, which the emitter does not
+            # carry (#309): its own observer is the rollup alone, while
+            # AI-credit pressure is measured by the cost meter chained into
+            # `_session_observer`. A local session reaches that meter through
+            # its event observer; a remote one has no session here to reach it
+            # with, so ingest is where its tokens have to land -- otherwise a
+            # Run could spend its whole allowance remotely and still believe
+            # credit pressure was unknown.
+            self._serial._observe_ingested_consumption(envelope)
+
+    def _account_supervised_contribution(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        host: execution_host_module.ExecutionHost,
+        *,
+        since: float,
+    ) -> None:
+        """Charge a non-local contribution the time the orchestrator supervised it.
+
+        ``agent_seconds`` is accumulated inside
+        :meth:`_run_local_agent_session`, which only the ``local`` placement
+        reaches. A contribution that ran on another machine would therefore
+        report **zero** agent time for work that took hours, and the Summary
+        and the Dashboard would render a six-hour remote contribution as
+        instantaneous.
+
+        The orchestrator cannot observe a remote session directly — liveness is
+        coarse and the Events are late — but it *can* honestly measure the span
+        it held the contribution's handle across, which is bounded by the same
+        six-hour job cap the session is. So that span is what a non-local
+        placement reports. The local placement is untouched: its measurement is
+        strictly better, and widening it to the whole seam call would fold
+        worktree setup and the **Checkpoint** into agent time.
+        """
+        if host.placement == execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT:
+            return
+        scope = self._contribution_iter.get(contribution.contribution_id)
+        if scope is None:  # pragma: no cover - defensive
+            return
+        scope.agent_seconds += max(0.0, time.monotonic() - since)
+
+    def _salvage_and_reclaim_lane_workspace(self, lane_work: _LaneWork) -> None:
+        """**Salvage** a **Lane workspace**, then reclaim it (#452, #445 §F).
+
+        The one rule every reclamation actor applies, so that no actor has to
+        know whether some earlier step happened to capture the tree: a dirty
+        workspace is committed to its own Lane branch as a **Checkpoint** —
+        the same message and trailer an ordinary Checkpoint uses, and so
+        close-keyword-free — and only then is the directory reclaimed.
+
+        Because nothing is destroyed, reclamation needs no retention policy.
+        A workspace is preserved on exactly one condition: salvage itself
+        failed, which is the one case where reclaiming would lose work. That
+        is why the inline reclaim on a normal finish comes here too rather
+        than reading its caller's Checkpoint outcome — a Checkpoint that
+        failed leaves the tree dirty, and salvage is what decides.
+
+        Deliberately **Event-free**, including no ``wrapper.checkpoint.recorded``
+        (#445 §F): a Run that was interrupted did not work this issue, and a
+        Checkpoint Event would light a **Queue** row for it in a trace that has
+        no contribution to attach it to. Salvage makes cancelled work
+        *recoverable*, not resumable — a later Run mints a new Lane branch for
+        the issue rather than continuing this one.
+
+        The outcome is read off ``lane_work.reclaimed`` rather than returned,
+        so a caller cannot act on "salvage said so" while the workspace is
+        still on disk.
+        """
+        if lane_work.reclaimed:
+            return
+        try:
+            dirty = lane_work.git.is_dirty() or lane_work.git.has_untracked()
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "lane #%s salvage state check failed; preserving worktree %s: %s",
+                lane_work.item.ref,
+                lane_work.path,
+                exc,
+            )
+            return
+        if dirty:
+            try:
+                lane_work.git.add_all()
+                lane_work.git.commit(checkpoint_message(lane_work.item.ref))
+            except git_module.GitError as exc:
+                self._diag.warning(
+                    "lane #%s salvage Checkpoint failed; preserving worktree %s: %s",
+                    lane_work.item.ref,
+                    lane_work.path,
+                    exc,
+                )
+                return
+        self._remove_lane_workspace(lane_work)
+
+    def _remove_lane_workspace(self, lane_work: _LaneWork) -> None:
+        """Reclaim one **Lane workspace** whose work is already durable.
+
+        Only ever reached from :meth:`_salvage_and_reclaim_lane_workspace`,
+        which is what makes "nothing is destroyed" true of the reclaim rather
+        than of any individual caller. A failed removal leaves ``reclaimed``
+        false so a later actor tries again; it is never fatal, because a
+        leftover directory is residue and losing the Run over it would trade a
+        recoverable problem for an unrecoverable one.
+        """
+        if lane_work.reclaimed:
+            return
+        try:
+            self._git.remove_worktree(lane_work.path, force=True)
+        except git_module.GitError as exc:
+            self._diag.warning(
+                "worktree remove for %s failed: %s", lane_work.path, exc
+            )
+        else:
+            lane_work.reclaimed = True
+
+    def _reclaim_open_lane_workspaces(self) -> None:
+        """Close out every Lane still live when the Rolling driver exits (#452).
+
+        The **Run-exit** reclamation actor, and the one that covers the exits
+        nobody planned: an exception out of the driver, and the cancellation a
+        **Stop** performs. The inline reclaim only runs when a Lane returns
+        through its own work boundary, which a cancelled Lane never does — so
+        without this path an abnormally terminated Run stranded both the
+        workspace *and* the contribution's accounting.
+
+        Synchronous on purpose, and called from ``drive``'s ``finally`` behind
+        no ``await``, so a second Stop gesture cannot abandon it.
+
+        An involuntary interruption uses
+        :data:`~git_loopy.rolling_scheduler.REASON_UNCHANGED_BRANCH`, preserving
+        #452's contract.  An operator's second Stop instead uses
+        :data:`~git_loopy.rolling_scheduler.REASON_OPERATOR_STOP`, making the
+        salvaged, unintegrated work visible without treating it as failure.
+
+        An involuntarily interrupted contribution is also recorded as
+        **abandoned**, which keeps it out of **Demotion** (see
+        :attr:`finalized_contributions`). An operator-stopped contribution stays
+        in that record and the explicit terminal-reason exclusion owns its
+        blamelessness.
+        """
+        for contribution_id, lane_work in tuple(self._lane_work.items()):
+            self._salvage_and_reclaim_lane_workspace(lane_work)
+            if lane_work.reclaimed:
+                self._lane_work.pop(contribution_id, None)
+        for contribution in tuple(self._open_lane_contributions.values()):
+            if contribution.reason is not None:  # pragma: no cover - defensive
+                continue
+            assert self._scheduler is not None
+            reason = (
+                rolling_scheduler.REASON_OPERATOR_STOP
+                if self._stop_cancel_requested
+                else rolling_scheduler.REASON_UNCHANGED_BRANCH
+            )
+            if reason == rolling_scheduler.REASON_UNCHANGED_BRANCH:
+                self._abandoned_at_exit.add(contribution.contribution_id)
+            self._scheduler.finish_terminal_failure(
+                contribution,
+                reoffer=False,
+                reason=reason,
+            )
+            self._finalize_contribution(contribution, published=False)
+
+    async def _run_lane_session(
+        self,
+        contribution: rolling_scheduler.Contribution,
+        lane_work: _LaneWork,
+        prompt: str,
     ) -> _LaneSessionSignals:
         """Run one Lane contribution's SDK session, pinned to its worktree.
 
@@ -3219,11 +4148,13 @@ class _ParallelLoop:
         ending itself is resolved by the caller, because the missing half is
         whether the Lane's branch carries anything, and that is not known until
         the Lane is accounted.
+
+        ``prompt`` arrives fully rendered (#447): the Execution host seam's
+        :class:`~git_loopy.execution_host.ContributionRequest` carries the
+        already-assembled prompt
+        (:meth:`_ParallelLoop._build_contribution_request`), so this method
+        no longer reassembles it from a commit-log fragment.
         """
-        prompt = (
-            f"Previous commits: {commits_block} "
-            f"Issues: {lane_work.item.rendered_block} {self._prompt_text}"
-        )
         send_timeout = self._config.send_timeout_seconds
         termination = session_outcome_module.SessionTermination.COMPLETED
         raised: session_outcome_module.SessionError | None = None
@@ -3262,8 +4193,14 @@ class _ParallelLoop:
                 ),
             ) as sdk_session:
                 try:
-                    await sdk_session.send_and_wait(
-                        prompt, timeout=send_timeout
+                    if self._stop_cancel_requested:
+                        raise asyncio.CancelledError
+                    await self._await_agent(
+                        sdk_session.send_and_wait(prompt, timeout=send_timeout),
+                        name=(
+                            "git-loopy-lane-"
+                            f"{contribution.contribution_id}-agent"
+                        ),
                     )
                 except asyncio.TimeoutError:
                     termination = session_outcome_module.SessionTermination.TIMED_OUT
@@ -3401,7 +4338,8 @@ class _ParallelLoop:
         assert self._scheduler is not None
         async with self._integration_lock:
             latched_before = self._scheduler.serial_latched
-            lane_work = self._lane_work.pop(contribution.contribution_id, None)
+            abort_latched_before = self._scheduler.abort_latched
+            lane_work = self._lane_work.get(contribution.contribution_id)
             if lane_work is None:  # pragma: no cover - defensive
                 self._diag.error(
                     "integration #%s: missing lane state for contribution %s",
@@ -3413,6 +4351,11 @@ class _ParallelLoop:
             newly_admitted = self._scheduler.finalize(
                 contribution, published=published
             )
+            if abort_latched_before and not self._scheduler.abort_latched:
+                self._serial._announce_wind_down_lifted(
+                    cause="strike_limit",
+                    draining=self._scheduler.open_count,
+                )
             if latched_before != self._scheduler.serial_latched:
                 # §5.2: an unpublished contribution requests serial service of
                 # its own. Reported on the same terms as the peek's latch —
@@ -3428,8 +4371,8 @@ class _ParallelLoop:
                     reason=rolling_scheduler.REASON_SERIAL_FALLBACK,
                     serial_required=None,
                 )
-            # `_finalize_contribution` applies the strike reaction itself, so it
-            # is not applied again here (#310).
+            # A green publication is the only thing that can lift a Strike
+            # drain; it must not immediately re-latch from stale Strike state.
             self._finalize_contribution(contribution, published=published)
         # §4.4: this finalize freed an **Integration backlog** slot, lifting
         # backpressure, and each contribution it admitted from the parked FIFO
@@ -3439,7 +4382,10 @@ class _ParallelLoop:
             await self._integrate_contribution(admitted)
 
     def _open_contribution_accounting(
-        self, contribution: rolling_scheduler.Contribution
+        self,
+        contribution: rolling_scheduler.Contribution,
+        *,
+        host: execution_host_module.ExecutionHost,
     ) -> None:
         """Open one **Lane contribution**'s own accounting scope (#310).
 
@@ -3463,8 +4409,30 @@ class _ParallelLoop:
             )
         )
         self._emit_contribution_event(
-            contribution, events_module.WRAPPER_CONTRIBUTION_START
+            contribution,
+            events_module.WRAPPER_CONTRIBUTION_START,
+            host=host.placement,
         )
+
+    def _execution_host_payload(self) -> dict[str, object]:
+        """Describe the single host this rolling Run selected."""
+        assert self._scheduler is not None
+        if self._execution_host is None:
+            placement = execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT
+            isolation_grade = (
+                execution_host_module.LOCAL_EXECUTION_HOST_ISOLATION_GRADE
+            )
+            capacity = self._host_capacity
+        else:
+            placement = self._execution_host.placement
+            isolation_grade = self._execution_host.isolation_grade
+            capacity = self._host_capacity
+        return {
+            "placement": placement,
+            "isolation_grade": isolation_grade,
+            "capacity": capacity,
+            "starting_lane_limit": self._scheduler.effective_limit,
+        }
 
     def _emit_contribution_event(
         self,
@@ -3517,7 +4485,12 @@ class _ParallelLoop:
         committed; only a published one is progress (``advanced``, or
         ``closed`` once its ``wrapper.auto_close`` lands).
         """
-        self._apply_strike_reaction(contribution)
+        if not published:
+            self._apply_strike_reaction(contribution)
+        self._open_lane_contributions.pop(contribution.contribution_id, None)
+        lane_work = self._lane_work.get(contribution.contribution_id)
+        if lane_work is not None and lane_work.reclaimed:
+            self._lane_work.pop(contribution.contribution_id, None)
         scope = self._contribution_iter.pop(contribution.contribution_id, None)
         if scope is None:  # pragma: no cover - defensive
             return
@@ -3582,8 +4555,15 @@ class _ParallelLoop:
         would go missing whenever they were not the same one.
         """
         assert self._scheduler is not None
-        if self._serial._strike_machine.outcome == "aborted":
-            self._scheduler.strike_limit_reached()
+        if (
+            self._serial._strike_machine.outcome == "aborted"
+            and self._scheduler.strike_limit_reached()
+        ):
+            self._serial._announce_wind_down(
+                cause="strike_limit",
+                stage="drain",
+                draining=self._scheduler.open_count,
+            )
 
     async def _integrate_lane(
         self,
@@ -3654,7 +4634,7 @@ class _ParallelLoop:
             # number; a non-int ref cannot be staged (or recovered).
             return None
         branch = git_module.integration_branch_name(self._run_id, ref)
-        path = _integration_worktree_path(self._repo_root, self._run_id, ref)
+        path = _integration_worktree_path(self._workspace_root, self._run_id, ref)
         try:
             git = self._git.add_worktree(
                 path, branch=branch, base=self._resolve_base_ref()
@@ -3825,12 +4805,12 @@ class _ParallelLoop:
             )
 
     def _delete_branch_safely(self, ref: int | str, branch: str) -> None:
-        """``git branch -D`` an integrated branch; a failure only warns."""
+        """``git branch -D`` a discarded Lane branch; a failure only warns."""
         try:
             self._git.delete_branch(branch)
         except git_module.GitError as exc:
             self._diag.warning(
-                "integration #%s: delete of %s failed: %s", ref, branch, exc
+                "lane #%s: delete of %s failed: %s", ref, branch, exc
             )
 
     async def _auto_resolve_lane(
@@ -3919,7 +4899,13 @@ class _ParallelLoop:
                 skill_exposure=self._skill_exposure,
             ) as sdk_session:
                 try:
-                    await sdk_session.send_and_wait(prompt, timeout=send_timeout)
+                    await self._await_agent(
+                        sdk_session.send_and_wait(prompt, timeout=send_timeout),
+                        name=(
+                            "git-loopy-resolution-"
+                            f"{contribution.contribution_id}-{attempt}"
+                        ),
+                    )
                 except asyncio.TimeoutError:
                     self._diag.warning(
                         "integration #%s: auto-resolution attempt %s timed out "
@@ -4014,13 +5000,12 @@ class _ParallelLoop:
 
 
 class InteractiveDriver(Protocol):
-    """Strategy that runs the loop as an *observed peer* of a Textual app.
+    """Observer seam used by tests that compare live versus replayed state.
 
-    The concrete implementation is
-    :class:`git_loopy.interactive.driver.InteractiveDriver`. It is referenced
-    here only as a **structural Protocol** so :mod:`git_loopy.loop` never
-    imports the interactive package — and therefore never imports Textual,
-    keeping the import-guard convention (ADR-0001) intact on the loop side.
+    The production TTY path detached from the Python process in issue #459, but
+    some tests still attach a pure observer to the live sink fan-out to compare
+    the written record with the state a live reader would have built. This stays
+    as a structural Protocol so :mod:`git_loopy.loop` itself remains import-light.
 
     The contract is deliberately tiny:
 
@@ -4029,17 +5014,10 @@ class InteractiveDriver(Protocol):
       :func:`run` as the primary sink on the interactive path.
     * :meth:`attach_panes` receives the loop-owned Summary/Log pane sources
       (issue #26) before :meth:`run` builds the app.
-    * :meth:`attach_detach` receives the exit-model handoff (issue #28): the
-      swappable :class:`~git_loopy.sinks.SinkFanout`, the parked line-printer
-      Renderer to swap in on a **Detach**, the stdout console for the **Stop**
-      scrollback record, and (#325) the **Run**'s durable record, into which a
-      **Dashboard fault** is written.
+    * :meth:`attach_detach` receives the legacy sink handoff used by those tests.
     * :meth:`run` is handed the loop's ``drive`` coroutine-function and is
       responsible for launching it and the Textual app as **peer asyncio
-      tasks** (not parent/child), returning the loop's process exit code. A
-      user **Stop** (``q`` / ``Ctrl+C``) cancels the loop task; a **Detach**
-      (``d``) swaps the sink to the line printer and lets the loop run on; a
-      **Dashboard fault** does the same and records why (ADR-0024).
+      tasks** (not parent/child), returning the loop's process exit code.
     """
 
     state: EventSink
@@ -4069,6 +5047,9 @@ async def run(
     driver: InteractiveDriver | None = None,
     rate_card: RateCard | None = None,
     staircase: "PriceStaircase | None" = None,
+    run_id: str | None = None,
+    started_at: datetime | None = None,
+    mirror_diagnostics_to_stderr: bool = True,
 ) -> int:
     """Drive one ``git-loopy`` invocation to completion.
 
@@ -4114,6 +5095,12 @@ async def run(
           preflight / setup failure).
     """
     try:
+        rolling_pressure.PressureBudgets.from_env(os.environ)
+    except ValueError as exc:
+        print(f"git-loopy: {exc}", file=sys.stderr)
+        return 1
+
+    try:
         release_version = read_runtime_release_version()
     except ReleaseVersionError as exc:
         print(f"git-loopy: Release version error: {exc}", file=sys.stderr)
@@ -4131,23 +5118,17 @@ async def run(
         return 1
     repo_root = git.root
 
+    # 2) Per-Run artifacts. The control artifact needs the repository root, so
+    # release and root resolution above intentionally remain outside its scope.
+    # From here, every Run preflight and cleanup path remains liveness-visible.
     try:
-        prompt_text = _read_prompt(repo_root, os.environ)
-    except FileNotFoundError as exc:
-        print(f"git-loopy: {exc}", file=sys.stderr)
-        return 1
-
-    # 2) Cost denomination — resolved once per Run and threaded as one seam
-    #    (#328), so every Cost-bearing surface denominates identically. Cost is
-    #    the **AI Credits** the harness reported billing (ADR-0026, #329), which
-    #    needs nothing loaded and can therefore never stop a Run from starting:
-    #    the price-file preflight that could abort here is deleted with the table
-    #    it validated (#330).
-    denomination = BilledCreditsDenomination()
-
-    # 3) Writers + diagnostics logger + renderer + sink fan-out.
-    try:
-        writers = create_writers(repo_root)
+        writers = create_writers(
+            repo_root,
+            run_id=run_id,
+            started_at=started_at,
+            mirror_diagnostics_to_stderr=mirror_diagnostics_to_stderr,
+        )
+        control = RunControlArtifact.acquire(writers.event_log.path)
     except Exception as exc:
         print(
             f"git-loopy: failed to construct writers bundle: "
@@ -4155,6 +5136,87 @@ async def run(
             file=sys.stderr,
         )
         return 1
+    diag = writers.diagnostics
+
+    # A free control lock proves its Run cannot still own a Lane workspace.
+    # This is intentionally Event-free: reclaiming someone else's residue is
+    # neither an Iteration nor a contribution of this Run, so it happens here —
+    # before the Run announces itself — and never reaches the wire.
+    try:
+        sweep_report = sweep_module.sweep(
+            git=git,
+            github=_make_github_client() if config.issue_source == "github" else None,
+            control_dir=repo_root / ".git-loopy" / "logs",
+            base_branch=sweep_module.resolve_base_ref(git),
+            dry_run=False,
+        )
+    except (git_module.GitError, gh_module.GhError, OSError) as exc:
+        diag.warning("start-of-Run sweep skipped: %s", exc)
+    else:
+        if sweep_report.reclaimed_anything:
+            diag.info(
+                "start-of-Run sweep reclaimed %d worktree(s), %d branch(es) "
+                "and %d director(ies)",
+                len(sweep_report.worktrees),
+                len(sweep_report.branches),
+                len(sweep_report.directories),
+            )
+
+    if config.execution_host not in events_module.PYTHON_EXECUTION_HOSTS:
+        supported = ", ".join(events_module.PYTHON_EXECUTION_HOSTS) or "(none)"
+        print(
+            f"git-loopy: Execution host {config.execution_host!r} is unsupported: "
+            "the Python distribution declares "
+            f"parallel_capabilities.execution_hosts as [{supported}]. "
+            "Set GIT_LOOPY_EXECUTION_HOST to a declared placement.",
+            file=sys.stderr,
+        )
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
+        return exit_code_for("preflight_failed")
+
+    # A declared placement still has to be *buildable* here, at preflight. The
+    # Actions host needs the account's concurrency ceiling and the repository it
+    # dispatches into; discovering either is missing at the first reservation
+    # would strand Lanes that are already open and dress an environment failure
+    # up as a contribution's.
+    try:
+        selected_execution_host = _make_execution_host(
+            config.execution_host,
+            send_timeout_seconds=config.send_timeout_seconds,
+        )
+    except (ValueError, actions_host_module.ActionsError) as exc:
+        print(
+            f"git-loopy: Execution host {config.execution_host!r} could not be "
+            f"prepared: {exc}",
+            file=sys.stderr,
+        )
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
+        return exit_code_for("preflight_failed")
+
+    try:
+        prompt_text = _read_prompt(repo_root, os.environ)
+    except FileNotFoundError as exc:
+        print(f"git-loopy: {exc}", file=sys.stderr)
+        control.close()
+        return 1
+
+    # 3) Cost denomination — resolved once per Run and threaded as one seam
+    #    (#328), so every Cost-bearing surface denominates identically. Cost is
+    #    the **AI Credits** the harness reported billing (ADR-0026, #329), which
+    #    needs nothing loaded and can therefore never stop a Run from starting:
+    #    the price-file preflight that could abort here is deleted with the table
+    #    it validated (#330).
+    denomination = BilledCreditsDenomination()
+
+    # 4) Renderer + sink fan-out.
     summary = RunSummary(
         denomination=denomination,
         # Read off the same declaration published in the Run-start capability
@@ -4196,9 +5258,8 @@ async def run(
         # Hand the driver the exit-model seam (issue #28): the swappable sink
         # list, the parked stdout Renderer to swap in on Detach, the real
         # console for the Stop / natural-completion scrollback summary, and
-        # (#325) the run's own durable record, so a **Dashboard fault** is
-        # written into the same always-on replay JSONL as every other event
-        # rather than being discarded unread.
+        # The observer test seam receives the run's durable record too, so a
+        # custom driver can annotate the same JSONL stream if it needs to.
         driver.attach_detach(
             sinks=sinks,
             line_printer=renderer,
@@ -4210,16 +5271,37 @@ async def run(
                 diag=writers.diagnostics,
             ),
         )
-    diag = writers.diagnostics
-
-    # 4) IssueSource (factory dispatches on config.issue_source). A
+    # 5) IssueSource (factory dispatches on config.issue_source). A
     #    ValueError here means the config carried a value the loop
     #    doesn't recognise — surface a clean exit 1 rather than letting
     #    the exception escape.
     include_prs = _resolve_include_prs(config, repo_root)
+    github_client = (
+        _make_github_client() if config.issue_source == "github" else None
+    )
+    environment_preflight = resolve_run_environment_preflight(
+        repo_root=repo_root,
+        issue_source=config.issue_source,
+        github_auth_status=(
+            None if github_client is None else github_client.auth_status
+        ),
+    )
+    if not environment_preflight.passed:
+        for failure in environment_preflight.failures:
+            diag.error("%s", failure.message)
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
+        return exit_code_for("preflight_failed")
     try:
         source = _make_issue_source(
-            config, repo_root, diag, include_prs=include_prs
+            config,
+            repo_root,
+            diag,
+            include_prs=include_prs,
+            github_client=github_client,
         )
     except ValueError as exc:
         diag.error("issue source construction failed: %s", exc)
@@ -4228,9 +5310,10 @@ async def run(
             writers.run_summary.flush()
         except Exception as flush_exc:
             diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
         return 1
 
-    # 5) Skill catalog. git-loopy ships no Skills; it installs them from the
+    # 6) Skill catalog. git-loopy ships no Skills; it installs them from the
     #    pinned external repository and refreshes that install at the start of
     #    every Run (ADR-0025), so a Run always executes the revision this
     #    distribution stands behind rather than whatever was left on disk. An
@@ -4247,6 +5330,7 @@ async def run(
             writers.run_summary.flush()
         except Exception as flush_exc:
             diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
         return exit_code_for("preflight_failed")
     if skill_refresh.warning:
         diag.warning("Skill catalog refresh: %s", skill_refresh.warning)
@@ -4255,7 +5339,7 @@ async def run(
         diag.info("%s", describe_refresh(skill_refresh))
         print(f"git-loopy: {describe_refresh(skill_refresh)}", file=sys.stderr)
 
-    # 6) SDK client (lazy via the factory the tests monkeypatch). If
+    # 7) SDK client (lazy via the factory the tests monkeypatch). If
     #    construction itself raises (SDK install broken, port already
     #    held by another process, etc.) we must surface a clean error
     #    rather than letting the traceback escape ``asyncio.run``.
@@ -4278,6 +5362,7 @@ async def run(
             writers.run_summary.flush()
         except Exception as flush_exc:
             diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
         return 1
 
     skill_workspace = TemporaryDirectory(prefix="git-loopy-run-skills-")
@@ -4314,6 +5399,7 @@ async def run(
         except Exception as stop_exc:
             diag.warning("CopilotClient.stop() failed: %s", stop_exc)
         skill_workspace.cleanup()
+        control.close()
         # Skill preflight is preflight: it answers to the Wrapper contract's
         # `preflight_failed` reason rather than to a literal that merely
         # happens to equal it today.
@@ -4338,16 +5424,14 @@ async def run(
         except Exception as stop_exc:
             diag.warning("CopilotClient.stop() failed: %s", stop_exc)
         skill_workspace.cleanup()
+        control.close()
         # Skill preflight is preflight: it answers to the Wrapper contract's
         # `preflight_failed` reason rather than to a literal that merely
         # happens to equal it today.
         return exit_code_for("preflight_failed")
 
-    # Dispatch: Parallel mode (opt-in, config.parallel > 1) drives the
-    # Rolling-dispatch orchestrator (#219, ADR-0020) with the injected
-    # runner-side Integration gate (#60); serial (the default, parallel == 1)
-    # drives the existing loop byte-for-byte unchanged. Both expose the same
-    # ``drive()`` contract.
+    # Dispatch always builds the Rolling-dispatch orchestrator (#219, ADR-0020).
+    # Its embedded serial driver owns Runs whose Pool offers no Lane work.
     #
     # The **Task-type classifier**'s pair (#409, ADR-0029) is resolved once here,
     # from the same staircase **Demotion** steps, and handed to whichever
@@ -4359,8 +5443,8 @@ async def run(
         config, staircase, warn=lambda message: diag.warning("%s", message)
     )
     task_type_client = _make_task_type_label_client()
-    loop: _Loop | _ParallelLoop
-    if config.parallel > 1:
+    loop: _ParallelLoop
+    try:
         loop = _ParallelLoop(
             config=config,
             release_version=release_version,
@@ -4380,26 +5464,29 @@ async def run(
             rate_card=rate_card,
             classifier_pair=classifier_pair,
             task_type_client=task_type_client,
+            execution_host=selected_execution_host,
         )
-    else:
-        loop = _Loop(
-            config=config,
-            release_version=release_version,
-            git=git,
-            prompt_text=prompt_text,
-            denomination=denomination,
-            writers=writers,
-            sinks=sinks,
-            summary=summary,
-            client=client,
-            skill_preflight=skill_preflight,
-            source=source,
-            diag=diag,
-            include_prs=include_prs,
-            rate_card=rate_card,
-            classifier_pair=classifier_pair,
-            task_type_client=task_type_client,
+    except git_module.GitError as exc:
+        # Rolling dispatch resolves where its **Lane workspaces** live up front
+        # (#449). A clone that cannot name its git directory has nowhere to
+        # place them, so this is a preflight refusal before work starts.
+        diag.error("Lane workspace preflight failed: %s", exc)
+        print(
+            f"git-loopy: rolling dispatch could not resolve this repository's "
+            f"git directory, so it has nowhere to place a Lane workspace: {exc}",
+            file=sys.stderr,
         )
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        try:
+            await client.stop()
+        except Exception as stop_exc:
+            diag.warning("CopilotClient.stop() failed: %s", stop_exc)
+        skill_workspace.cleanup()
+        control.close()
+        return exit_code_for("preflight_failed")
 
     exit_code = 1
     try:
@@ -4464,6 +5551,7 @@ async def run(
             telemetry.force_flush()
         except Exception as exc:  # pragma: no cover - defensive
             diag.warning("telemetry.force_flush() failed: %s", exc)
+        control.close()
 
     return exit_code
 

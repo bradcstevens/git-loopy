@@ -199,7 +199,11 @@ collected. It is discriminated and ordered exactly as a Pool is, but it is never
 for anything: no **Pickup** reads it, it cannot make an issue **gone**, and it cannot
 establish that the Pool is empty. It may only add rows. Its cadence is a floor, not a
 period — an Orchestrator takes it on a tick it already owns, never from a second writer
-([ADR-0042](docs/adr/0042-a-membership-read-keeps-the-queue-live.md)).
+([ADR-0042](docs/adr/0042-a-membership-read-keeps-the-queue-live.md)). It carries each
+candidate's blockers on the one list call it already makes, so **Parallel mode** can refuse
+**Lane** candidacy to a **Blocked** issue without a refresh paying a round-trip per
+candidate; a read that could not determine them leaves **Readiness** unknown, exactly as an
+incomplete read already leaves emptiness unknown.
 _Avoid_: poll, refresh, shallow pool, live pool.
 
 **Strike**:
@@ -289,15 +293,19 @@ _Avoid_: rejection, exclusion, deferral.
 **Readiness**:
 Whether a candidate's native tracker dependencies are all closed. A fact about the
 tracker's dependency graph rather than about how the issue was authored: it clears
-itself when the last blocker closes, with no human touching the issue. Read one hop at
-**Pickup**, for each candidate the runner reaches, and never traversed further.
+itself when the last blocker closes, with no human touching the issue. Read one hop and
+never traversed further. Decided at two seams, from whichever read that seam was already
+taking: at **Pickup**, from the authoritative re-read, for each candidate the serial
+runner reaches; and at **Lane** candidacy, from the **Membership read**, for each
+candidate **Rolling dispatch** considers.
 _Avoid_: eligibility (that is the human's `ready-for-agent` assertion, settled at
 collection), **Pool exclusion**, **Pickup skip** (that is what the runner *does* about
 unreadiness, not the fact itself).
 
 **Blocked**:
 A candidate carrying at least one open `blocked_by` dependency, or one whose
-dependencies could not be read. It is not admissible at **Pickup**, stays in the
+dependencies could not be read. It is not admissible at **Pickup** and is refused
+**Lane** candidacy outright — never reserved and never released — stays in the
 **Pool** so the closure whitelist and the emptiness test still see it, and costs no
 **Strike** — it was never attempted. A blocker in another repository blocks exactly as
 one in this repository does. An issue blocked by *itself* is blocked, like any other;
@@ -310,7 +318,8 @@ stays alive, and expiring on its own if the owner stops. It names the run that h
 it, so a run that dies frees its issues without anyone intervening. Leases are what
 let several runs share one tracker: an issue under another run's live Lease is not
 available to this run.
-_Avoid_: claim, lock, reservation, hold.
+_Avoid_: claim unqualified (a **Fixture claim** is a different fact, about Conformance rather than
+about work), lock, reservation, hold.
 
 **Priority**:
 The axis on which an issue is worked ahead of older ones, carried as a label and read
@@ -361,9 +370,36 @@ _Avoid_: active time, waiting time.
 ### Leaving a run
 
 **Stop**:
-Ending a run deliberately — the current iteration is wound down cleanly and the loop
-exits.
+Ending a Run deliberately in two stages. The first Stop immediately latches a
+wind-down — no new Iteration, Lane reservation, or refill starts, while every started
+contribution and Integration operation finishes. The second Stop cancels only active
+agent sessions at their round boundaries after salvage; it never interrupts a publish
+transaction. A stopped contribution remains visible in the **Summary** and is
+blameless. A third gesture does nothing: cancellation is requested rather than
+awaited, the operating system supplies the only harder stop, and **Salvage** is what
+makes that one safe. The Run exits with the decided non-zero `operator_stop` outcome.
 _Avoid_: quit, kill, abort.
+
+**Wind-down**:
+The Run-scoped state in which no new work starts, announced on the trace so a client
+attaching to a draining Run is never shown a healthy one. It has two independent axes.
+Its **cause** is closed — an operator **Stop**, the **Strike** ceiling, or a spent
+iteration cap — and a **Pool** that simply ran out is *not* one: a Run that finished the
+work it had is not winding down. Its **stage** is an ordered, non-decreasing ladder:
+`drain` stops refill while started contributions finish and integrate, then `cancel`
+cancels the agent sessions still running, and only an operator Stop ever reaches
+`cancel`, because nothing cancels a spent cap or a Strike drain. The Run announces the
+**latch** rather than the gesture that asked for it, once per transition — so a third
+gesture announces nothing, and a Stop pressed during a Strike drain escalates rather
+than re-latching. The latch is shared but its exit is asymmetric: a green publication
+makes a Strike abort's condition false and lifts that drain, which is announced too,
+while an operator Stop and a spent cap are durable and never lift. The count of
+contributions still in flight travels with it, and a serial Run's `0` is an observed
+none rather than an unknown. A trace carrying no Wind-down says nothing about whether
+its Run was stopped, and the `interrupted` outcome is never read as one — it also covers
+a closed terminal and a dead driver.
+_Avoid_: shutdown, teardown, quiescing, stopping (**Stop** is the gesture; this is the
+state it latches).
 
 **Detach**:
 Leaving the live interface while the run keeps going unattended, falling back to the
@@ -413,8 +449,8 @@ The per-run accounting band of the **Dashboard**, with one row per serial
 tools, skill calls, skills consulted, commits, closures, and strikes), mirrored in
 the run-end table. A band of the **Dashboard**, not a separate screen. A row is cut
 only when its accounting unit **finalizes**, so work still parked, integrating, or in
-recovery has no partial row — under **Rolling dispatch** an unfinished **Lane
-contribution** is simply absent from the Summary, never half-counted in it.
+recovery has no partial row — except that a contribution stopped by the operator's
+second Stop finalizes a visible, blameless row after its workspace is salvaged.
 
 **Activity**:
 The **Dashboard** band that holds one **Activity window** per live **Agent**, always
@@ -606,6 +642,42 @@ whole precedence chain (not one file); `path` prints the resolved location(s); `
 scope's file in `$EDITOR`. Scope selection mirrors **init**.
 _Avoid_: config command as a synonym for the persisted **Config** itself.
 
+**Install channel**:
+The mechanism that put one git-loopy artifact on a machine and is therefore the only thing entitled
+to replace or remove it — a `uv` tool install, a Homebrew formula, or an installer-placed launcher.
+A channel git-loopy cannot *prove* from the artifact's own location is one it refuses to act on
+(ADR-0054).
+_Avoid_: package manager (only one kind of channel), distribution (that is what a channel carries).
+
+**update (subcommand)**:
+Refreshing the machine-local state git-loopy installed — the prompt override, **Config**, the
+**installed catalog**, and the TUI helper — against the **Release version** already installed.
+Never touches the tracker and never changes which Release is installed.
+_Avoid_: upgrade, sync, refresh-all.
+
+**upgrade (subcommand)**:
+Replacing the installed distribution with a different **Release version** through its **install
+channel**, then running **update**. Moves exactly one artifact: the one it is itself running from.
+_Avoid_: update, self-update, install.
+
+**Edge install**:
+An installation sitting on an unreleased commit rather than a published **Release version**, where
+the version the distribution reports is not an identity. Reached only by explicit opt-in, and always
+reported as such rather than passing for the Release it names.
+_Avoid_: nightly, dev build, unstable.
+
+**Scaffold provenance**:
+The record of which **Release version** wrote an operator-editable asset and what it wrote, which is
+what makes a customized asset distinguishable from a stale one. An asset with no record is treated
+as customized.
+_Avoid_: version stamp, checksum, manifest (that is the **installed catalog**'s record).
+
+**doctor (subcommand)**:
+The verdict-bearing view of whether this machine can start a **Run**, reporting the same preflights a
+Run performs rather than a parallel set of its own (ADR-0055). Distinguished from `info`, which
+reports the same facts carrying no verdict.
+_Avoid_: check, validate, healthcheck; diagnostics (that is the Event/log record).
+
 **Global vs project scope**:
 Whether **Config** and assets apply machine-wide (**global**) or only within one repository
 (**project**). Project overrides global. The git-loopy engine is installed once, globally; scope
@@ -669,10 +741,10 @@ _Avoid_: model override, effective model.
 The kit's built-in model and reasoning effort — the pair a unit of work runs on when
 **Routing** resolved nothing, which is every unit whose issue carries no **Task type**.
 **Atomic**: naming a model opts out of the kit's effort too, and the pair becomes "let the
-backend pick". It sits deliberately one rung *below* the escalation rung, so the default
-**reserves** the ceiling instead of spending it and work that stalls has somewhere to escalate
-to (ADR-0036). Identical in every member of the **Runner family**, and an independent constant:
-it resembles one seeded **Routed pair** by rationale, never by derivation.
+backend pick". It sits deliberately *at* the ceiling, so the default **spends** the escalation
+rung rather than reserving it and unclassified work that stalls has nowhere stronger to go
+(ADR-0056, superseding ADR-0036). Identical in every member of the **Runner family**, and an
+independent constant: it resembles one seeded **Routed pair** by rationale, never by derivation.
 _Avoid_: global default (ambiguous — **Config** has global scope), fallback model.
 
 **Escalation rung**:
@@ -684,12 +756,13 @@ issue resolve to the rung instead of its **Routed pair**, reporting the escalate
 source** so a retry at a dearer pair is never mistaken for a routed one. Escalation is **once**
 (a single rung, not a ladder), **sticky** for the rest of the **Run** so the issue does not fall
 back to the pair that already stalled on it, **strike-free** because trying harder must not be
-punished by the mechanism that aborts a **Run**, a **no-op** where the routed pair already equals
-the rung, and per issue rather than per mode — a **Lane** and a serial **Iteration** read and feed
-one ledger. It is configurable from the **Config** file only and on by default at
-`claude-opus-5 @ max`, and an explicit model pin suppresses it exactly as it suppresses
-**Routing**. It is blind to work that ran expensively and produced nothing usable, because
-progress is commit-shaped and not quality-shaped.
+punished by the mechanism that aborts a **Run**, a **no-op** where the pair in force already
+equals the rung — which since ADR-0056 includes the **Default pair**, so unclassified work is
+retried at what it already ran on — and per issue rather than per mode — a **Lane** and a serial
+**Iteration** read and feed one ledger. It is configurable from the **Config** file only and on
+by default at `claude-opus-5 @ max`, and an explicit model pin suppresses it exactly as it
+suppresses **Routing**. It is blind to work that ran expensively and produced nothing usable,
+because progress is commit-shaped and not quality-shaped.
 _Avoid_: retry model, fallback pair (that is the **Default pair**), escalation ladder.
 
 **Attempt lifecycle**:
@@ -726,13 +799,22 @@ _Avoid_: blacklist, ban, exclusion (that is a **Pool exclusion**, decided at col
 
 **All-skipped Run**:
 How a **Run** ends when a **Pickup** finds the **Pool** non-empty and can bind none of it: exit
-`1` under its own reason, `all_skipped`. It is not an empty Pool — "there is nothing to do" and
-"I could not take any of what there is" are different facts about the repository, and only the
-first is a finished Run — and it is not a **Strike**, because that **Iteration** spends no
-session and gives up on nothing new. It is terminal on the spot rather than counted, since an
-Iteration that charges nothing and binds nothing would otherwise re-walk the same Pool and skip
-the same candidates for as long as the Run has **Iteration** budget.
-_Avoid_: empty pool, stuck, no work.
+`1` under its own reason, `all_skipped`, unless every refusal proves an open native blocker (an
+**All-blocked Run**). It is not an empty Pool — "there is nothing to do" and "I could not take
+any of what there is" are different facts about the repository, and only the first is a finished
+Run — and it is not a **Strike**, because that **Iteration** spends no session and gives up on
+nothing new. It is terminal on the spot rather than counted, since an Iteration that charges
+nothing and binds nothing would otherwise re-walk the same Pool and skip the same candidates for
+as long as the Run has **Iteration** budget.
+_Avoid_: all-blocked run, empty pool, stuck, no work.
+
+**All-blocked Run**:
+How a **Run** ends when a non-empty **Pool** contains only candidates whose **Pickup skip** proves
+an open native blocker: exit `1` under `all_blocked`. It is terminal on the spot because no work
+inside the Run can close a blocker. It shares the non-zero exit status with an **All-skipped Run**
+because neither completed the available work; its distinct reason lets an operator or supervising
+process wait for dependency closure rather than repair the Pool.
+_Avoid_: all-skipped run, empty pool, readiness-unprovable.
 
 **Run readback**:
 The block a **Run** prints at start and publishes on its own start Event, stating **Config** as
@@ -918,6 +1000,40 @@ must pass, keeping the **Runner family** from drifting. The generalized successo
 two-runner cross-parity test (ADR-0002).
 _Avoid_: parity test (the retired two-runner name), integration tests.
 
+**Fixture claim**:
+A member of the **Runner family** exercising a **Conformance suite** fixture: its own suite reads
+that fixture's bytes while it runs, takes an assertion's expected value out of them, and compares
+it against what the member's production seam returns. The test is falsifiable — mutate an expected
+field one of that member's asserted cases reads, and that member's suite goes red. A filename in a
+README, a doc comment or production code no test drives is a mention, and a mention claims nothing.
+One qualifying case is a claim; how much of the fixture a member covers is a separate question.
+Every fixture is claimed or waived by every member; the verdicts live in
+`conformance/fixture-claims.json` (ADR-0049).
+_Avoid_: mention, reference, coverage; claim unqualified (that word's other job here is the
+**Lease** a run takes); **Permanent waiver** and **Owed waiver** (the two ways a fixture is
+accounted for *without* being exercised).
+
+**Permanent waiver**:
+A recorded verdict that a **Conformance suite** fixture is outside a member's role — a packaging
+fixture for an Orchestrator that ships no packaging channel, a discriminator fixture for a
+**Dashboard** that never reads an issue. It carries a reason and nothing else, because there is
+nothing to fix. Available only where the **Wrapper contract** or an accepted ADR puts the
+responsibility outside that member's role: the kind is a judgement about role, never about effort,
+so "nobody has got to it" is an **Owed waiver** every time, and so is a silence in the contract.
+_Avoid_: **Owed waiver** (that one is debt and carries a tracking issue; a gap relabelled permanent
+is debt made invisible), **Pool exclusion** (a human's authoring mistake in an issue — a different
+subject that only shares the shape of the sentence), skip, exemption, "not applicable".
+
+**Owed waiver**:
+A recorded verdict that a member *should* exercise a **Conformance suite** fixture and does not. It
+is a gap, so its entry must carry a **tracking issue** alongside its reason: the register is where
+the debt is *recorded*, and the tracker is the only place it is ever *scheduled*. Recording today's
+owed waivers is what lets the register land green and ratchet, red the first time a fixture arrives
+unaccounted for.
+_Avoid_: **Permanent waiver** (that one has no issue because there is nothing to fix), **Pool
+exclusion** (that is a human's authoring mistake, reported so a human fixes the *issue*), known
+failure, TODO, backlog entry.
+
 ### Parallel execution
 
 **Parallel mode**:
@@ -935,10 +1051,35 @@ _Avoid_: Wave, batch, cohort, sliding window.
 
 **Lane**:
 One reusable concurrent execution slot in **Parallel mode**. A Lane works one
-**Parallel-safe** issue at a time in its own worktree and branch, then becomes available
-for refill once its finished branch is admitted to **Integration**. Shown as one active
-row in the **Dashboard**, with its own timer and **Log**.
+**Parallel-safe** issue at a time in its own **Lane workspace** and branch, then becomes
+available for refill once its finished branch is admitted to **Integration**. Shown as one
+active row in the **Dashboard**, with its own timer and **Log**.
 _Avoid_: worker, thread.
+
+**Lane workspace**:
+The private worktree one **Lane** works its issue in. It lives inside the clone's own git
+directory, under the **Reserved branch namespace**'s subtree and keyed by run and issue, so
+it is never *content* in any working tree: no status, staging, or clean operation in the
+repository can see, capture, or destroy a live workspace, and no ignore entry is needed to
+keep it that way. It is per-clone, so two clones never share one, and it is removed with
+the clone. **Ephemeral by policy**: it exists only while its **Lane contribution** is in
+flight and is reclaimed on every exit path — inline when that contribution finishes, and at
+the Run's own exit when an exception or a **Stop** ends it instead — always after
+**Salvage**, and preserved only when salvage fails.
+_Avoid_: sandbox, checkout, scratch directory; worktree alone (the **Integration stage** is
+one too).
+
+**Salvage**:
+Committing a **Lane workspace**'s dirty tree to its own Lane branch as a **Checkpoint** —
+the existing message and trailer verbatim, so close-keyword-free — before the directory is
+reclaimed. It is what lets reclamation carry no retention policy: nothing is destroyed, so a
+workspace is preserved on exactly one condition, salvage itself failing, which is the one
+case where reclaiming would lose work. Salvage emits no **Event**, not even a Checkpoint
+one, because a Run that was interrupted never worked that issue and a **Queue** row for it
+would trace work that did not happen. It makes cancelled work *recoverable, not resumable*:
+a later Run mints a new Lane branch for the issue rather than continuing the salvaged one,
+which is what lets a Stop cancel safely without pretending the work will be picked up.
+_Avoid_: stash, rescue, auto-commit, recovery, resume.
 
 **Lane contribution**:
 One **Parallel-safe** issue's end-to-end unit of **Parallel mode** work, beginning
@@ -995,8 +1136,35 @@ The private worktree a **Lane contribution** is merged into and gated in before 
 reaches the base branch. Each contribution gets its own stage, and bounded
 auto-resolution reuses the stage its contribution is already in. Because the stage is
 private, a red or conflicting result is never observable on base and there is nothing to
-undo.
+undo. Placed exactly like a **Lane workspace** — inside the clone's git directory, on a
+branch in the **Reserved branch namespace** — with an `integrate/` segment that keeps it
+distinct from the Lane workspace for the same issue.
 _Avoid_: integration branch, staging area, merge queue entry.
+
+**Reserved branch namespace**:
+`git-loopy/`, the branch prefix the runner cuts every branch of its own under — a
+**Lane workspace**'s branch and its **Integration stage**'s alike — and which nothing else
+in a repository may claim. It is the *only* thing that decides whether a leftover worktree
+is git-loopy's to reclaim. A location can never decide it: workspaces once lived in a
+sibling directory that an operator's own worktrees could share, so reclaiming by path
+would take work git-loopy was never given.
+_Avoid_: branch prefix, runner branches, worktree directory.
+
+**Sweep**:
+Reclaiming residue **no live Run owns** — a dead Run's **Lane workspaces**, its resolved
+branches, and the empty directories every reclaimed worktree leaves behind. It runs at the
+start of every Run, for that Run's dead predecessors, and on demand as `git-loopy sweep`
+(with a dry run) for when nothing is running at all. Liveness needs no new mechanism: the
+per-Run control artifact's advisory lock already says *lock free ⇒ Run dead ⇒ its
+workspaces are reclaimable*, which is what covers the hard kill and the lost power cable
+that no in-process handler can. A dirty tree is **Salvaged** first. A branch is collected
+by **resolution** — merged into base, or its issue closed — never by merged-ness alone,
+which structurally cannot see a closed issue's unmerged branch. Resolution stops at a
+**Checkpoint** tip: a closed issue is evidence about the issue, not about work its author
+never chose to commit, so a salvaged branch outlives the sweep that rescued it. A sweep is
+invisible: it emits no **Event**, produces no **Strike**, never appears in a Run's
+**Summary**, and prints nothing when it reclaimed nothing.
+_Avoid_: cleanup, garbage collection, prune, reap (as the name for this step).
 
 **Integration**:
 The serialized **Parallel mode** stage that consumes the **Integration backlog** one

@@ -26,12 +26,23 @@ from __future__ import annotations
 
 import importlib
 import os
+from pathlib import Path
 
 import pytest
 
 from git_loopy import model_listing, skill_install
 from git_loopy.prompt import packaged_required_skills
 from git_loopy.skill_source import SkillSourceError, SkillSourcePin
+
+
+_RUN_TEST_MODULES = frozenset(
+    {
+        "test_iteration_end_to_end.py",
+        "test_loop_parallel.py",
+        "test_rate_card_run_start.py",
+        "test_sweep_run_start.py",
+    }
+)
 
 
 @pytest.fixture(autouse=True)
@@ -80,6 +91,22 @@ def _refuse_live_model_listing(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(model_listing, "fetch_live_models", _refuse)
+
+
+@pytest.fixture(autouse=True)
+def _declare_runnable_feedback_loop_for_run_tests(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> None:
+    """Give every synthetic Run repository the Integration contract it requires."""
+    if request.path.name not in _RUN_TEST_MODULES:
+        return
+    (tmp_path / "AGENTS.md").write_text(
+        "## Feedback loops\n\n"
+        "| Loop | Command |\n"
+        "| --- | --- |\n"
+        "| Tests | `uv run pytest` |\n",
+        encoding="utf-8",
+    )
 
 
 @pytest.fixture(autouse=True)

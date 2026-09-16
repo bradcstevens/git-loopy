@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.0",
+  "contract_version": "2.3",
   "cases": [
     {
       "id": "empty-pool-is-clean",
@@ -23,8 +23,18 @@
       "exit_code": 1
     },
     {
+      "id": "all-blocked-run-is-waiting",
+      "reason": "all_blocked",
+      "exit_code": 1
+    },
+    {
       "id": "preflight-failure-is-aborted",
       "reason": "preflight_failed",
+      "exit_code": 1
+    },
+    {
+      "id": "operator-stop-is-aborted",
+      "reason": "operator_stop",
       "exit_code": 1
     },
     {

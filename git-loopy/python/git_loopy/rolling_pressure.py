@@ -22,10 +22,9 @@ its own pressure:
   requires and the reaction table depends on: an unknown signal may neither
   fire a contraction nor help prove health.
 * **Configuration.** :class:`PressureBudgets` carries only what an *operator*
-  explicitly set. Credit and host pressure are ratios against budgets, and a
-  budget nobody configured cannot be guessed — a machine its owner is happy to
-  saturate is a legitimate choice, so an unconfigured budget leaves its signal
-  unknown rather than defaulting to a threshold the Run invents for them.
+  explicitly set. Credit pressure is a ratio against the operator's budget.
+  Host pressure gets the controller's default budget, because the host's own
+  declared capacity is only trustworthy when the Run can observe its load.
 
 Design notes:
 
@@ -33,15 +32,9 @@ Design notes:
   because that is what a counter naturally holds; :class:`PressureMonitor`
   differences them so each observation carries what happened *inside* it.
   Host load is instantaneous and passes through unchanged.
-* **Disabled is "never observed", not a second frozen code path.** An
-  unobserved :class:`~git_loopy.rolling_concurrency.ConcurrencyController`
-  cannot move, so ``GIT_LOOPY_LANE_ADAPT=0`` is implemented by declining to
-  sample — which also costs the Run no telemetry read. #219 §6's static-safe
-  ``min(Lane cap, 3)`` is then exactly where the Run started.
-* **Adaptation stays on with no budgets configured.** The **Integration
+* **Adaptation always remains on.** The **Integration
   backlog** is the Run's own state and always authoritative, so a Run with no
-  external telemetry at all still contracts under its own backpressure while
-  reporting the two budgets unknown.
+  credit telemetry still contracts under its own backpressure.
 """
 
 from __future__ import annotations
@@ -51,7 +44,7 @@ import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from git_loopy.denomination import CostDenomination
 from git_loopy.gh import RateLimitReporting
@@ -63,7 +56,6 @@ from git_loopy.rolling_concurrency import (
 from git_loopy.usage import BillingSample, UsageTally
 
 __all__ = [
-    "ENV_ADAPTIVE",
     "ENV_CREDIT_BUDGET",
     "ENV_HOST_LOAD_BUDGET",
     "OBSERVATION_INTERVAL_SECONDS",
@@ -88,17 +80,12 @@ _USAGE_TOKENS = "usage.tokens"
 # worktree setup cannot look like a trend.
 OBSERVATION_INTERVAL_SECONDS = 30.0
 
-#: Set to a falsey string to hold the Run at the static-safe effective limit.
-ENV_ADAPTIVE = "GIT_LOOPY_LANE_ADAPT"
 #: The operator's authoritative AI-credit ceiling, in USD per hour.
 ENV_CREDIT_BUDGET = "GIT_LOOPY_CREDIT_BUDGET_USD_PER_HOUR"
 #: The operator's host budget: tolerated run-queue depth per CPU.
 ENV_HOST_LOAD_BUDGET = "GIT_LOOPY_HOST_LOAD_BUDGET"
 
 _SECONDS_PER_HOUR = 3600.0
-
-_FALSEY = frozenset({"0", "false", "no", "off", ""})
-
 
 @dataclass(frozen=True)
 class PressureReading:
@@ -121,6 +108,15 @@ class PressureTelemetry(Protocol):
 
     def read(self) -> PressureReading:
         """Read the current Run-to-date counters and host ratio."""
+        ...
+
+
+@runtime_checkable
+class HostLoadObservability(Protocol):
+    """Optional telemetry capability that answers whether host load is visible."""
+
+    def host_load_observable(self) -> bool:
+        """Return whether the host can currently report normalized load."""
         ...
 
 
@@ -166,37 +162,34 @@ class PressureBudgets:
     """The operator's explicitly configured pressure budgets (#219 §6).
 
     Attributes:
-        adaptive: Whether the effective Lane limit may move at all. ``False``
-            holds the Run at ``min(Lane cap, 3)`` for its whole life.
         credit_usd_per_hour: The authoritative AI-credit ceiling. ``None`` —
             the default — makes credit pressure *unavailable* however good the
             cost telemetry is, because burn without a target is a number with
             no judgement attached.
-        host_load_per_cpu: The tolerated run-queue depth per CPU. ``None``
-            makes host pressure unavailable for the same reason.
+        host_load_per_cpu: The tolerated run-queue depth per CPU. It defaults
+            to ``1.0`` so host-load observability is available without an
+            operator-only switch.
     """
 
-    adaptive: bool = True
     credit_usd_per_hour: float | None = None
-    host_load_per_cpu: float | None = None
+    host_load_per_cpu: float = 1.0
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> PressureBudgets:
         """Resolve budgets from the process environment.
 
-        An unusable value reads as *unconfigured* rather than failing the Run
-        or being guessed at: refusing to start would punish an operator for a
-        stray character in an optional knob, and interpreting it would silently
-        govern their Run from a typo.
+        Credit and host budget values that cannot express a positive number
+        read as their defaults. The retired adaptation switch is refused:
+        allowing it to silently do nothing would leave operators believing a
+        Run was constrained when it was not.
         """
-        raw_adaptive = environ.get(ENV_ADAPTIVE)
+        if "GIT_LOOPY_LANE_ADAPT" in environ:
+            raise ValueError("GIT_LOOPY_LANE_ADAPT is no longer supported")
         return cls(
-            adaptive=(
-                True if raw_adaptive is None else raw_adaptive.strip().lower()
-                not in _FALSEY
-            ),
             credit_usd_per_hour=_positive_float(environ.get(ENV_CREDIT_BUDGET)),
-            host_load_per_cpu=_positive_float(environ.get(ENV_HOST_LOAD_BUDGET)),
+            host_load_per_cpu=(
+                _positive_float(environ.get(ENV_HOST_LOAD_BUDGET)) or 1.0
+            ),
         )
 
     def credit_target(self, interval: float) -> float | None:
@@ -228,6 +221,7 @@ def adaptive_controller(
     budgets: PressureBudgets,
     *,
     lane_cap: int,
+    host_load_observable: bool = False,
     interval: float = OBSERVATION_INTERVAL_SECONDS,
 ) -> ConcurrencyController:
     """Build the policy for a Run with these budgets (#219 §6).
@@ -239,6 +233,7 @@ def adaptive_controller(
     return ConcurrencyController(
         configured_lane_cap=lane_cap,
         credit_target=budgets.credit_target(interval),
+        host_load_observable=host_load_observable,
     )
 
 
@@ -327,6 +322,10 @@ class RunPressureTelemetry:
             host_pressure=self._host_pressure(),
         )
 
+    def host_load_observable(self) -> bool:
+        """Whether this host can currently report normalized load."""
+        return self._host_pressure() is not None
+
     def _host_pressure(self) -> float | None:
         """The run queue as a ratio of the configured budget (#219 §6).
 
@@ -360,7 +359,7 @@ class PressureMonitor:
     driver's turn loop carries none of it.
 
     Args:
-        budgets: Operator configuration, including the adaptation switch.
+        budgets: Operator configuration for credit and host pressure.
         telemetry: The injected signal source.
         clock: Injected monotonic seconds.
         controller: The policy this monitor paces. Built here rather than by
@@ -391,12 +390,26 @@ class PressureMonitor:
         diag: logging.Logger | None = None,
     ) -> PressureMonitor:
         """Build a monitor and the policy it paces, from one set of budgets."""
+        host_load_observable = False
+        if isinstance(telemetry, HostLoadObservability):
+            try:
+                host_load_observable = telemetry.host_load_observable()
+            except Exception as exc:  # noqa: BLE001 - optional telemetry boundary
+                if diag is not None:
+                    diag.warning(
+                        "host-load telemetry unavailable at Run start; "
+                        "using the static-safe Lane limit: %s",
+                        exc,
+                    )
         return cls(
             budgets=budgets,
             telemetry=telemetry,
             clock=clock,
             controller=adaptive_controller(
-                budgets, lane_cap=lane_cap, interval=interval
+                budgets,
+                lane_cap=lane_cap,
+                host_load_observable=host_load_observable,
+                interval=interval,
             ),
             interval=interval,
             diag=diag,
@@ -416,17 +429,10 @@ class PressureMonitor:
 
         Returns:
             The authoritative effective-limit transition this observation
-            caused, or ``None`` — which covers "not due yet", "adaptation
-            disabled", "still seeding the baseline", and "sampled, nothing to
-            announce" alike. All four are the same instruction to the caller:
-            emit nothing.
+            caused, or ``None`` — which covers "not due yet", "still seeding
+            the baseline", and "sampled, nothing to announce" alike. All three
+            are the same instruction to the caller: emit nothing.
         """
-        if not self.budgets.adaptive:
-            # #219 §6: frozen at the static-safe limit. An unobserved
-            # controller cannot move, so this needs no second code path — and
-            # costs the Run no telemetry read either.
-            return None
-
         now = self.clock()
         if self._last_at is None:
             self._seed(now)

@@ -172,13 +172,49 @@ exit $Status
 '@
     Write-FakeCommand -BinDir $BinDir -Name "gh" -Body @'
 $ErrorActionPreference = "Stop"
+function Complete-FakeIssueJson {
+    param([Parameter(Mandatory)][string]$Text)
+
+    $Payload = $Text | ConvertFrom-Json -AsHashtable -DateKind String -NoEnumerate
+    $Rows = if ($Payload -is [Collections.IList]) {
+        @($Payload)
+    }
+    else {
+        @($Payload)
+    }
+    foreach ($Row in $Rows) {
+        if ($Row -is [Collections.IDictionary] -and -not $Row.Contains("blockedBy")) {
+            $Row["blockedBy"] = [ordered]@{ totalCount = 0; nodes = @() }
+        }
+    }
+    return ConvertTo-Json -InputObject $Payload -Compress -Depth 100
+}
 [IO.File]::AppendAllText(
     $env:FAKE_GH_LOG,
     ($args -join " ") + [Environment]::NewLine
 )
-$Command = if ($args.Count -ge 2) { "$($args[0]) $($args[1])" } else { "" }
+$Command = if ($args.Count -ge 2) {
+    "$($args[0]) $($args[1])"
+}
+elseif ($args.Count -eq 1) {
+    [string]$args[0]
+}
+else {
+    ""
+}
 switch -CaseSensitive ($Command) {
-    "auth status" {
+"--version" {
+    [Console]::Out.WriteLine(
+        $(if ($env:FAKE_GH_VERSION) {
+                $env:FAKE_GH_VERSION
+            }
+            else {
+                "gh version 2.94.0 (fake)"
+            })
+    )
+    exit 0
+}
+"auth status" {
         exit $(if ($env:FAKE_GH_AUTH_STATUS) {
             [int]$env:FAKE_GH_AUTH_STATUS
         } else {
@@ -201,12 +237,18 @@ switch -CaseSensitive ($Command) {
             $env:FAKE_GH_LIST_COUNT,
             [string]($Count + 1)
         )
-        [Console]::Out.Write([IO.File]::ReadAllText($env:FAKE_GH_LIST_JSON))
+        [Console]::Out.Write(
+            (Complete-FakeIssueJson -Text (
+                [IO.File]::ReadAllText($env:FAKE_GH_LIST_JSON)
+            ))
+        )
         exit 0
     }
     "issue view" {
         $ViewPath = Join-Path $env:FAKE_GH_VIEW_DIR "$($args[2]).json"
-        [Console]::Out.Write([IO.File]::ReadAllText($ViewPath))
+        [Console]::Out.Write(
+            (Complete-FakeIssueJson -Text ([IO.File]::ReadAllText($ViewPath)))
+        )
         exit 0
     }
     default {
@@ -407,13 +449,48 @@ function Complete-FakeCommand {
     }
     exit $Status
 }
+function Complete-FakeIssueJson {
+    param([Parameter(Mandatory)][string]$Text)
+
+    $Payload = $Text | ConvertFrom-Json -AsHashtable -DateKind String -NoEnumerate
+    $Rows = if ($Payload -is [Collections.IList]) {
+        @($Payload)
+    }
+    else {
+        @($Payload)
+    }
+    foreach ($Row in $Rows) {
+        if ($Row -is [Collections.IDictionary] -and -not $Row.Contains("blockedBy")) {
+            $Row["blockedBy"] = [ordered]@{ totalCount = 0; nodes = @() }
+        }
+    }
+    return ConvertTo-Json -InputObject $Payload -Compress -Depth 100
+}
 [IO.File]::AppendAllText(
     $env:FAKE_GH_LOG,
     ($args -join " ") + [Environment]::NewLine
 )
-$Command = if ($args.Count -ge 2) { "$($args[0]) $($args[1])" } else { "" }
+$Command = if ($args.Count -ge 2) {
+    "$($args[0]) $($args[1])"
+}
+elseif ($args.Count -eq 1) {
+    [string]$args[0]
+}
+else {
+    ""
+}
 switch -CaseSensitive ($Command) {
-    "auth status" {
+"--version" {
+    Write-Output $(if ($env:FAKE_GH_VERSION) {
+            $env:FAKE_GH_VERSION
+        }
+        else {
+            "gh version 2.94.0 (fake)"
+        })
+    Complete-FakeCommand 0
+    return
+}
+"auth status" {
         $Status = if ($env:FAKE_GH_AUTH_STATUS) {
             [int]$env:FAKE_GH_AUTH_STATUS
         } else {
@@ -441,14 +518,18 @@ switch -CaseSensitive ($Command) {
             ($Count -gt [int]$env:FAKE_GH_EMPTY_AFTER)) {
             Write-Output "[]"
         } else {
-            Write-Output ([IO.File]::ReadAllText($env:FAKE_GH_LIST_JSON))
+            Write-Output (Complete-FakeIssueJson -Text (
+                [IO.File]::ReadAllText($env:FAKE_GH_LIST_JSON)
+            ))
         }
         Complete-FakeCommand 0
         return
     }
     "issue view" {
         $ViewPath = Join-Path $env:FAKE_GH_VIEW_DIR "$($args[2]).json"
-        Write-Output ([IO.File]::ReadAllText($ViewPath))
+        Write-Output (Complete-FakeIssueJson -Text (
+            [IO.File]::ReadAllText($ViewPath)
+        ))
         Complete-FakeCommand 0
         return
     }
@@ -1034,6 +1115,32 @@ exit 97
     Assert-Contains $GhLog "repo view" "GitHub repo preflight"
     Assert-Contains $GhLog "issue list" "GitHub Pool collection"
 
+    # `blockedBy` rides collection. Older gh versions reject that field and the
+    # historical empty-Pool fallback would report success, so preflight refuses
+    # before the Run or Pool exists.
+    [IO.File]::WriteAllText($env:FAKE_GH_LOG, "")
+    $env:FAKE_GH_VERSION = "gh version 2.93.9 (fake)"
+    $OldGhStdout = Join-Path $TempDir "old-gh.stdout"
+    $OldGhStderr = Join-Path $TempDir "old-gh.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $EmptyRepo `
+        -FakeBin $EmptyBin `
+        -StdoutPath $OldGhStdout `
+        -StderrPath $OldGhStderr
+    $env:FAKE_GH_VERSION = $null
+    Assert-Equal 1 $Status "old gh readiness preflight exit"
+    Assert-Contains (
+        [IO.File]::ReadAllText($OldGhStderr)
+    ) "cannot read issue dependencies (blockedBy)" (
+        "old gh readiness preflight explains the missing capability"
+    )
+    Assert-Equal 0 ([IO.File]::ReadAllText($OldGhStdout).Length) (
+        "old gh readiness preflight starts no Run"
+    )
+    Assert-True (-not (
+            [IO.File]::ReadAllText($env:FAKE_GH_LOG) -match "(?m)^issue list"
+        )) "old gh readiness preflight reads no Pool"
+
     $env:GIT_LOOPY_MODEL = "env-model"
     $env:GIT_LOOPY_REASONING_EFFORT = "high"
     $env:GIT_LOOPY_ISSUE_SOURCE = "prds"
@@ -1469,7 +1576,7 @@ exit 97
         "wrapper.afk_ready.collected,wrapper.issue.activated," +
         "wrapper.pickup.bound,agent.output," +
         "wrapper.commit.recorded,wrapper.commit.recorded," +
-        "wrapper.iteration.end,wrapper.run.end"
+        "wrapper.iteration.end,wrapper.stop.requested,wrapper.run.end"
     ) ([string]::Join(",", @($CommitsEvents | ForEach-Object { $_["type"] }))) (
         "commit events precede the Iteration end that closes their Iteration"
     )
@@ -2789,6 +2896,32 @@ Start-Sleep -Seconds $Sleep
     }
     Reset-GitLoopyIterationLifecycleState
 
+    # The reference's `IterationRollup.finish` normalization: a terminal reason
+    # *is* the Iteration's outcome, and the derived per-issue status only stands
+    # in for it when no reason was given. Ported as the rule rather than as a
+    # list of the reasons this port happens to pass today, so a Run that ends
+    # for a new reason reports that reason to the Dashboard instead of the
+    # `no_progress` it derived on the way there.
+    foreach ($Ending in @(
+        @{ Reason = "all_skipped"; Outcome = "all_skipped" },
+        @{ Reason = "aborted"; Outcome = "aborted" },
+        @{ Reason = ""; Outcome = "no_progress" }
+    )) {
+        $Ended = Get-GitLoopyIterationRollup `
+            -IterationStartedMonotonic 30 `
+            -FinishedMonotonic 32 `
+            -ActiveIssue $null `
+            -ActiveStartedAt $null `
+            -FirstStartedAt $null `
+            -ActiveClosedAt $null `
+            -ActiveClosedMonotonic $null `
+            -Strikes 0 `
+            -TerminalOutcome $Ending["Reason"]
+        Assert-Equal $Ending["Outcome"] $Ended["outcome"] (
+            "an Iteration ending on '$($Ending["Reason"])' reports it"
+        )
+    }
+
     # A serial **Pickup** is *prospective*: it binds before the agent session
     # starts, so its Active time begins at the binding and not at the Iteration
     # start. Only the three after-the-fact fallbacks -- `closure`, `commit` and
@@ -2863,6 +2996,7 @@ Start-Sleep -Seconds $Sleep
         -Context ([pscustomobject]@{}) `
         -EventTypes @{ WRAPPER_ISSUE_ACTIVATED = "wrapper.issue.activated" } `
         -Iteration 1 `
+        -IssueSource "prds" `
         -Pool @(
             [ordered]@{ number = 9 },
             [ordered]@{ number = 7 },
@@ -4199,6 +4333,446 @@ Start-Sleep -Seconds $Sleep
     Assert-Contains ([IO.File]::ReadAllText($env:FAKE_COPILOT_PROMPT)) "=== Issue #72:" (
         "the agent was handed the pinned issue"
     )
+
+    # The readiness capability gate, driven over `gh` versions that are not
+    # installed. Both halves are pure, so the whole refusal is exercisable from
+    # a stubbed `gh --version` rather than from whatever the host happens to
+    # have. The stub replaces whatever `gh` is in scope and is put back after,
+    # so this block neither inherits nor leaves a `gh` for its neighbours.
+    $script:GateRequests = [Collections.Generic.List[string]]::new()
+    $script:GateVersionText = ""
+    $script:GateVersionExit = 0
+    $PreviousGh = Get-Item -LiteralPath "function:global:gh" -ErrorAction Ignore
+    function global:gh {
+        $script:GateRequests.Add([string]::Join(" ", $args))
+        $global:LASTEXITCODE = $script:GateVersionExit
+        if ($script:GateVersionText) {
+            return $script:GateVersionText
+        }
+    }
+    function Invoke-ReadinessGate {
+        param(
+            [AllowEmptyString()]
+            [string]$VersionText,
+            [int]$ExitCode = 0,
+            [Parameter(Mandatory)]
+            [ref]$Stderr
+        )
+
+        $script:GateRequests.Clear()
+        $script:GateVersionText = $VersionText
+        $script:GateVersionExit = $ExitCode
+        $Captured = [IO.StringWriter]::new()
+        $Previous = [Console]::Error
+        [Console]::SetError($Captured)
+        try {
+            $Verdict = Assert-GitLoopyReadinessCapability
+        }
+        finally {
+            [Console]::SetError($Previous)
+        }
+        $Stderr.Value = $Captured.ToString()
+        return $Verdict
+    }
+    function Set-ReadinessFloor {
+        param([Parameter(Mandatory)][version]$Floor)
+
+        & (Get-Module -Name "GitLoopy.Orchestrator") {
+            param($Value)
+            $Script:GitLoopyMinGhVersionForReadiness = $Value
+        } $Floor
+    }
+
+    # `gh --version`'s real output: the triple sits on the first line beside a
+    # build date, with the release URL on a second line.
+    Assert-Equal ([version]"2.94.0") (
+        ConvertTo-GitLoopyGhVersion -Text (
+            "gh version 2.94.0 (2026-01-01)`n" +
+            "https://github.com/cli/cli/releases/tag/v2.94.0"
+        )
+    ) "gh --version's first line is where the version is read"
+    # Read per component and decimally: `08` is eight, and a build component
+    # beyond the triple is not part of the comparison.
+    Assert-Equal ([version]"2.8.0") (
+        ConvertTo-GitLoopyGhVersion -Text "gh version 2.08.0"
+    ) "a zero-padded component is read decimally"
+    Assert-Equal ([version]"2.94.0") (
+        ConvertTo-GitLoopyGhVersion -Text "gh version 2.94.0.1 (2026-01-01)"
+    ) "a four-component build is read as its triple"
+    Assert-Equal $null (
+        ConvertTo-GitLoopyGhVersion -Text "gh version unknown"
+    ) "output carrying no version parses to nothing"
+    Assert-True (
+        Test-GitLoopyVersionLessThan `
+            -Actual ([version]"2.9.0") `
+            -Required ([version]"2.94.0")
+    ) "versions compare numerically per component, never lexically"
+
+    $OriginalFloor = & (Get-Module -Name "GitLoopy.Orchestrator") {
+        $Script:GitLoopyMinGhVersionForReadiness
+    }
+    try {
+        $GateStderr = ""
+        Assert-True (
+            Invoke-ReadinessGate `
+                -VersionText "gh version $OriginalFloor (2026-01-01)" `
+                -Stderr ([ref]$GateStderr)
+        ) "gh at the floor can read blockers"
+        Assert-Equal 0 $GateStderr.Length "an admitted gh says nothing"
+        Assert-Equal "--version" (
+            [string]::Join(" ", $script:GateRequests)
+        ) "the gate reads the command its message names"
+
+        Assert-True (-not (
+                Invoke-ReadinessGate `
+                    -VersionText "gh version 2.93.9 (2026-01-01)" `
+                    -Stderr ([ref]$GateStderr)
+            )) "gh below the floor is refused"
+        Assert-Contains $GateStderr "gh 2.93.9 cannot read issue dependencies" (
+            "the refusal names the installed gh"
+        )
+        Assert-Contains $GateStderr "``gh issue list``/``gh issue view --json``" (
+            "the refusal names the reads that would have failed"
+        )
+        Assert-Contains $GateStderr "requires gh >= $OriginalFloor" (
+            "the refusal names the floor"
+        )
+        Assert-Contains $GateStderr "https://cli.github.com/" (
+            "the refusal names the remedy"
+        )
+
+        Assert-True (-not (
+                Invoke-ReadinessGate `
+                    -VersionText "gh version 2.94.0" `
+                    -ExitCode 1 `
+                    -Stderr ([ref]$GateStderr)
+            )) "a gh that cannot report its version is refused"
+        Assert-Contains $GateStderr "``gh --version`` failed" (
+            "a failed version read names the command that failed"
+        )
+        Assert-True (-not (
+                Invoke-ReadinessGate `
+                    -VersionText "gh version unknown" `
+                    -Stderr ([ref]$GateStderr)
+            )) "a gh whose version cannot be parsed is refused"
+        Assert-Contains $GateStderr "could not parse a version" (
+            "an unparseable version read says so rather than guessing"
+        )
+
+        # The floor and the message it names come from the one constant, so
+        # moving it moves the refusal — not just the wording.
+        Set-ReadinessFloor -Floor "3.10.2"
+        Assert-True (-not (
+                Invoke-ReadinessGate `
+                    -VersionText "gh version 2.94.0 (2026-01-01)" `
+                    -Stderr ([ref]$GateStderr)
+            )) "the moved floor refuses what the old one admitted"
+        Assert-Contains $GateStderr "requires gh >= 3.10.2" (
+            "the refusal names the moved floor"
+        )
+        Assert-True (
+            Invoke-ReadinessGate `
+                -VersionText "gh version 3.10.2 (2026-01-01)" `
+                -Stderr ([ref]$GateStderr)
+        ) "the moved floor admits what it names"
+        # 3.9.9 sorts *after* 3.10.2 lexically and before it numerically.
+        Assert-True (-not (
+                Invoke-ReadinessGate `
+                    -VersionText "gh version 3.9.9 (2026-01-01)" `
+                    -Stderr ([ref]$GateStderr)
+            )) "the moved floor compares its minor component numerically"
+    }
+    finally {
+        Set-ReadinessFloor -Floor $OriginalFloor
+        Remove-Item -LiteralPath "function:global:gh" -ErrorAction Ignore
+        if ($null -ne $PreviousGh) {
+            Set-Item -LiteralPath "function:global:gh" -Value $PreviousGh.ScriptBlock
+        }
+    }
+
+    # Readiness answers per *source*, mirroring the reference member's
+    # `IssueSource.readiness(item)`: local markdown has no dependency graph to
+    # be blocked by, and GitHub decides from the connection collection carried.
+    $BlockedCandidate = [ordered]@{
+        number = 51
+        blocked_by = [ordered]@{
+            totalCount = 1
+            nodes = @(
+                [ordered]@{
+                    id = "blocker"
+                    number = 93
+                    state = "OPEN"
+                    url = "https://github.com/acme/widgets/issues/93"
+                }
+            )
+        }
+    }
+    $PrdsVerdict = Get-GitLoopyCandidateReadiness `
+        -Candidate $BlockedCandidate `
+        -IssueSource "prds"
+    Assert-True $PrdsVerdict["admissible"] (
+        "a local-markdown candidate has no dependency graph to be blocked by"
+    )
+    $GitHubVerdict = Get-GitLoopyCandidateReadiness `
+        -Candidate $BlockedCandidate `
+        -IssueSource "github"
+    Assert-True (-not $GitHubVerdict["admissible"]) (
+        "a GitHub candidate with an open blocker is not admissible"
+    )
+    Assert-Equal "blocked_by_open_dependency" (
+        [string]$GitHubVerdict["skip_reason"]
+    ) "the GitHub verdict names why"
+    Assert-Equal "acme/widgets#93" (
+        [string]::Join(", ", @($GitHubVerdict["blockers"]))
+    ) "the GitHub verdict names whom"
+    # An absent connection is not an empty one: nothing was read, so nothing
+    # says no blocker was found.
+    $UnreadVerdict = Get-GitLoopyCandidateReadiness `
+        -Candidate ([ordered]@{ number = 51 }) `
+        -IssueSource "github"
+    Assert-Equal "readiness_unprovable" (
+        [string]$UnreadVerdict["skip_reason"]
+    ) "a candidate whose connection never arrived is not silently admitted"
+
+    # ADR-0047: a blocked candidate remains in the Pool but is passed over at
+    # Pickup, where the carried connection names its open blocker. No session or
+    # Strike is spent discovering tracker state the collection already held.
+    $ReadinessRepo = Join-Path $TempDir "readiness-pickup"
+    $ReadinessBin = Join-Path $TempDir "readiness-pickup-bin"
+    New-RealTestRepo -Root $ReadinessRepo
+    Write-TurnTools -BinDir $ReadinessBin
+    $ReadinessViews = Join-Path $TempDir "readiness-pickup-views"
+    [IO.Directory]::CreateDirectory($ReadinessViews) | Out-Null
+    $ReadinessBody = "## What to build`nShip it.`n`n## Acceptance criteria`n- Done."
+    $BlockedBy = [ordered]@{
+        totalCount = 1
+        nodes = @(
+            [ordered]@{
+                id = "blocker"
+                number = 93
+                state = "OPEN"
+                url = "https://github.com/acme/widgets/issues/93"
+            }
+        )
+    }
+    $ReadyBlockedBy = [ordered]@{ totalCount = 0; nodes = @() }
+    $ReadinessRows = @(
+        [ordered]@{
+            number = 51
+            title = "Blocked"
+            body = $ReadinessBody
+            labels = @([ordered]@{ name = "ready-for-agent" })
+            state = "OPEN"
+            url = "https://github.com/acme/widgets/issues/51"
+            createdAt = "2026-01-01T00:00:00Z"
+            blockedBy = $BlockedBy
+            comments = @()
+        },
+        [ordered]@{
+            number = 52
+            title = "Ready"
+            body = $ReadinessBody
+            labels = @([ordered]@{ name = "ready-for-agent" })
+            state = "OPEN"
+            url = "https://github.com/acme/widgets/issues/52"
+            createdAt = "2026-01-02T00:00:00Z"
+            blockedBy = $ReadyBlockedBy
+            comments = @()
+        }
+    )
+    foreach ($Row in $ReadinessRows) {
+        $MembershipRow = [ordered]@{}
+        foreach ($Entry in $Row.GetEnumerator()) {
+            $MembershipRow[$Entry.Key] = $Entry.Value
+        }
+        # The collection snapshot decides readiness at Pickup. A later membership
+        # read may observe a changed graph, but it must not replace that carried
+        # connection in the current Pool.
+        $MembershipRow["blockedBy"] = $ReadyBlockedBy
+        [IO.File]::WriteAllText(
+            (Join-Path $ReadinessViews "$($Row["number"]).json"),
+            ($MembershipRow | ConvertTo-Json -Depth 10)
+        )
+    }
+    $ReadinessList = Join-Path $TempDir "readiness-pickup-list.json"
+    [IO.File]::WriteAllText(
+        $ReadinessList,
+        ($ReadinessRows | ConvertTo-Json -Depth 10 -AsArray)
+    )
+    $env:FAKE_GH_LOG = Join-Path $TempDir "readiness-pickup-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "readiness-pickup-list.count"
+    $env:FAKE_GH_LIST_JSON = $ReadinessList
+    $env:FAKE_GH_VIEW_DIR = $ReadinessViews
+    $env:FAKE_GH_CLOSED = Join-Path $TempDir "readiness-pickup-closed.txt"
+    Set-CopilotEnv -Prefix "readiness-pickup"
+    $ReadinessStdout = Join-Path $TempDir "readiness-pickup.stdout"
+    $ReadinessStderr = Join-Path $TempDir "readiness-pickup.stderr"
+    $ReadinessStatus = Invoke-Entrypoint `
+        -Repo $ReadinessRepo `
+        -FakeBin $ReadinessBin `
+        -StdoutPath $ReadinessStdout `
+        -StderrPath $ReadinessStderr `
+        -Arguments @("1")
+    Assert-Equal 0 $ReadinessStatus (
+        "blocked Pickup advances to ready work: " +
+        [IO.File]::ReadAllText($ReadinessStderr)
+    )
+    $ReadinessEvents = Read-Events -Path $ReadinessStdout
+    $ReadinessSkipped = @(
+        $ReadinessEvents | Where-Object {
+            $_["type"] -ceq "wrapper.pickup.skipped"
+        }
+    )
+    Assert-Equal 1 $ReadinessSkipped.Count "blocked Pickup emits one skip"
+    Assert-Equal 51 $ReadinessSkipped[0]["issue"] "skip names blocked issue"
+    Assert-Equal "blocked_by_open_dependency: acme/widgets#93" (
+        $ReadinessSkipped[0]["reason"]
+    ) "skip names the open blocker"
+    Assert-Equal 1 $ReadinessSkipped[0]["position"] "skip keeps Pool position"
+    Assert-Equal 2 $ReadinessSkipped[0]["considered"] "skip keeps Pool size"
+    $ReadinessBound = @(
+        $ReadinessEvents | Where-Object {
+            $_["type"] -ceq "wrapper.pickup.bound"
+        }
+    )
+    Assert-Equal 1 $ReadinessBound.Count "ready candidate emits one bound Pickup"
+    Assert-Equal 52 $ReadinessBound[0]["issue"] "bound Pickup names ready issue"
+    Assert-Equal 2 $ReadinessBound[0]["position"] (
+        "bound Pickup preserves its position after the readiness skip"
+    )
+    Assert-Equal 0 @(
+        $ReadinessEvents | Where-Object {
+            $_["type"] -ceq "wrapper.pickup.bound" -and $_["issue"] -eq 51
+        }
+    ).Count "blocked issue was never bound"
+    Assert-Contains ([IO.File]::ReadAllText($ReadinessStderr)) "acme/widgets#93" (
+        "Pickup tells the operator which blocker it found"
+    )
+    Assert-Contains ([IO.File]::ReadAllText($env:FAKE_GH_LOG)) (
+        "--json number,title,body,labels,state,url,createdAt,blockedBy"
+    ) "collection requests blockers from the one shallow field set"
+
+    # A non-empty Pool whose candidates all name open blockers ends waiting on
+    # blockers rather than consuming the configured iteration budget.
+    $AllBlockedRows = @($ReadinessRows[0])
+    $AllBlockedList = Join-Path $TempDir "readiness-all-blocked-list.json"
+    [IO.File]::WriteAllText(
+        $AllBlockedList,
+        ($AllBlockedRows | ConvertTo-Json -Depth 10 -AsArray)
+    )
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "readiness-all-blocked-list.count"
+    $env:FAKE_GH_LIST_JSON = $AllBlockedList
+    Set-CopilotEnv -Prefix "readiness-all-blocked"
+    $AllBlockedStdout = Join-Path $TempDir "readiness-all-blocked.stdout"
+    $AllBlockedStderr = Join-Path $TempDir "readiness-all-blocked.stderr"
+    $AllBlockedStatus = Invoke-Entrypoint `
+        -Repo $ReadinessRepo `
+        -FakeBin $ReadinessBin `
+        -StdoutPath $AllBlockedStdout `
+        -StderrPath $AllBlockedStderr `
+        -Arguments @("5")
+    Assert-Equal 1 $AllBlockedStatus "all-blocked Pool exits nonzero"
+    $AllBlockedEvents = Read-Events -Path $AllBlockedStdout
+    Assert-Equal 1 @(
+        $AllBlockedEvents | Where-Object {
+            $_["type"] -ceq "wrapper.pickup.skipped"
+        }
+    ).Count "all-blocked Pool emits one Pickup skip"
+    Assert-Equal 0 @(
+        $AllBlockedEvents | Where-Object {
+            $_["type"] -ceq "wrapper.pickup.bound"
+        }
+    ).Count "all-blocked Pool binds nothing"
+    Assert-Equal 0 @(
+        $AllBlockedEvents | Where-Object {
+            $_["type"] -ceq "wrapper.strike"
+        }
+    ).Count "all-blocked Pool charges no Strike"
+    $AllBlockedIteration = @(
+        $AllBlockedEvents | Where-Object {
+            $_["type"] -ceq "wrapper.iteration.end"
+        }
+    )
+    Assert-Equal "all_blocked" $AllBlockedIteration[0]["outcome"] (
+        "all-blocked Iteration reports all_blocked"
+    )
+    $AllBlockedRun = @(
+        $AllBlockedEvents | Where-Object { $_["type"] -ceq "wrapper.run.end" }
+    )
+    Assert-Equal "all_blocked" $AllBlockedRun[0]["outcome"] (
+        "all-blocked Run reports all_blocked"
+    )
+    Assert-Equal 1 $AllBlockedRun[0]["iterations_run"] (
+        "all-blocked Pool stops after one Iteration"
+    )
+    Assert-True (-not [IO.File]::Exists($env:FAKE_COPILOT_CALLS)) (
+        "all-blocked Pool starts no agent session"
+    )
+    Assert-Contains ([IO.File]::ReadAllText($AllBlockedStderr)) (
+        "waiting on blockers"
+    ) "the all-blocked ending tells the operator why work did not start"
+
+    # A read that cannot prove readiness is not a blocker wait. Mixing it with
+    # a proven blocker retains all_skipped so an operator-facing repair is not
+    # hidden behind the waiting outcome.
+    $MixedRows = @(
+        $ReadinessRows[0],
+        [ordered]@{
+            number = 52
+            title = "Unreadable readiness"
+            body = $ReadinessBody
+            labels = @([ordered]@{ name = "ready-for-agent" })
+            state = "OPEN"
+            url = "https://github.com/acme/widgets/issues/52"
+            createdAt = "2026-01-02T00:00:00Z"
+            blockedBy = [ordered]@{ totalCount = 1; nodes = @() }
+            comments = @()
+        }
+    )
+    $MixedList = Join-Path $TempDir "readiness-mixed-skips-list.json"
+    [IO.File]::WriteAllText(
+        $MixedList,
+        ($MixedRows | ConvertTo-Json -Depth 10 -AsArray)
+    )
+    [IO.File]::WriteAllText(
+        (Join-Path $ReadinessViews "52.json"),
+        ($MixedRows[1] | ConvertTo-Json -Depth 10)
+    )
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "readiness-mixed-skips-list.count"
+    $env:FAKE_GH_LIST_JSON = $MixedList
+    Set-CopilotEnv -Prefix "readiness-mixed-skips"
+    $MixedStdout = Join-Path $TempDir "readiness-mixed-skips.stdout"
+    $MixedStderr = Join-Path $TempDir "readiness-mixed-skips.stderr"
+    $MixedStatus = Invoke-Entrypoint `
+        -Repo $ReadinessRepo `
+        -FakeBin $ReadinessBin `
+        -StdoutPath $MixedStdout `
+        -StderrPath $MixedStderr `
+        -Arguments @("5")
+    Assert-Equal 1 $MixedStatus "mixed blocked Pool exits nonzero"
+    $MixedEvents = Read-Events -Path $MixedStdout
+    $MixedSkipReasons = @(
+        $MixedEvents |
+            Where-Object { $_["type"] -ceq "wrapper.pickup.skipped" } |
+            ForEach-Object { $_["reason"] }
+    )
+    Assert-Equal 2 $MixedSkipReasons.Count "mixed blocked Pool emits both skips"
+    Assert-Equal "blocked_by_open_dependency: acme/widgets#93" $MixedSkipReasons[0] (
+        "mixed blocked Pool names the proved blocker"
+    )
+    Assert-Equal "readiness_unprovable" $MixedSkipReasons[1] (
+        "mixed blocked Pool preserves the unreadable readiness refusal"
+    )
+    Assert-Equal "all_skipped" @(
+        $MixedEvents |
+            Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )[0]["outcome"] "mixed blocked Iteration remains all_skipped"
+    Assert-Equal "all_skipped" @(
+        $MixedEvents | Where-Object { $_["type"] -ceq "wrapper.run.end" }
+    )[0]["outcome"] "mixed blocked Run remains all_skipped"
+    Assert-True (-not [IO.File]::Exists($env:FAKE_COPILOT_CALLS)) (
+        "mixed blocked Pool starts no agent session"
+    )
 }
 finally {
     foreach ($Name in @(
@@ -4207,6 +4781,7 @@ finally {
         "FAKE_GH_LIST_JSON",
         "FAKE_GH_VIEW_DIR",
         "FAKE_GH_AUTH_STATUS",
+        "FAKE_GH_VERSION",
         "FAKE_GH_EMPTY_AFTER",
         "FAKE_GH_CLOSED",
         "FAKE_GH_CLOSE_DIR",

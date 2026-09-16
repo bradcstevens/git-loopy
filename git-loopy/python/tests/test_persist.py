@@ -26,7 +26,6 @@ from __future__ import annotations
 import ast
 import json
 import logging
-import os
 import re
 import subprocess
 import sys
@@ -39,7 +38,6 @@ import pytest
 from git_loopy import persist as persist_module
 from git_loopy.events import REDACTED_SECRET, make_event
 from git_loopy.persist import (
-    GITIGNORE_ENTRY,
     EventLogWriter,
     IterationCounters,
     RunSummaryWriter,
@@ -490,7 +488,7 @@ def test_run_summary_writes_empty_iterations_for_zero_iter_runs(
     """A run that exits cleanly on empty pool (zero iterations) still
     emits a valid summary JSON with an empty iterations list."""
     path = tmp_path / "run.json"
-    with RunSummaryWriter(path, run_id=_FIXED_RUN_ID, started_at=_FIXED_TS) as w:
+    with RunSummaryWriter(path, run_id=_FIXED_RUN_ID, started_at=_FIXED_TS):
         pass  # no record() calls
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["iterations"] == []
@@ -502,7 +500,7 @@ def test_run_summary_started_at_uses_rfc3339_ms_format(tmp_path: Path) -> None:
     payload uses real RFC3339 (so log analytics tools can parse it)."""
     path = tmp_path / "run.json"
     naive_ts = datetime(2026, 1, 2, 3, 4, 5, 6_000)  # tzinfo missing → assume UTC
-    with RunSummaryWriter(path, run_id=_FIXED_RUN_ID, started_at=naive_ts) as w:
+    with RunSummaryWriter(path, run_id=_FIXED_RUN_ID, started_at=naive_ts):
         pass
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["started_at"] == "2026-01-02T03:04:05.006Z"
@@ -647,6 +645,22 @@ def test_create_writers_diagnostics_log_lazy_mkdir(tmp_path: Path) -> None:
     assert not (tmp_path / ".git-loopy").exists()
     bundle.diagnostics.info("diag msg")
     assert bundle.diagnostics_path.exists()
+
+
+def test_create_writers_can_disable_stderr_mirroring(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bundle = create_writers(
+        tmp_path,
+        run_id=_FIXED_RUN_ID,
+        started_at=_FIXED_TS,
+        mirror_diagnostics_to_stderr=False,
+    )
+
+    bundle.diagnostics.info("diag only in file")
+
+    assert capsys.readouterr().err == ""
+    assert "diag only in file" in bundle.diagnostics_path.read_text(encoding="utf-8")
 
 
 def test_writers_bundle_is_frozen() -> None:

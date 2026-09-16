@@ -88,7 +88,7 @@ work needs it.
 | **Task-type routing** | Seven task types (`planning`, `review`, `implementation`, `test`, `docs`, `chore`, `bugfix`) each route to their own model and reasoning effort, so a chore never pays feature prices | [customization](docs/customization.md) |
 | **Measured routing** *(in progress)* | Routes calibrated from what Runs actually cost and deliver, rather than from a static opinion | [ADR-0027](docs/adr/0027-routing-is-calibrated-by-measurement.md) |
 | **Parallel Lanes** | Opt-in worktree-isolated Lanes work several `parallel-safe` issues at once, with a serialized, bounded-green Integration stage | [parallel mode](docs/parallel-mode.md) |
-| **Live Dashboard** | Per-Iteration activity, context fill, observed tokens, and billed cost while the Run is happening | [runners](docs/runners.md) |
+| **Live interface** | Per-Iteration activity, context fill, observed tokens, and billed cost while the Run is happening — via the shared `git-loopy-tui` helper on a terminal, or the line printer everywhere else | [runners](docs/runners.md) |
 | **Closed-world Skill policy** | Exactly the Skills a Run may load — no ambient context bloat from whatever is installed on the host | [skill policy](docs/skill-policy.md) |
 
 ## Get started
@@ -99,8 +99,8 @@ work needs it.
 [`docs/skills-setup.md`](docs/skills-setup.md#prerequisites).
 
 ```bash
-# Install the engine once, user-global.
-uv tool install "git+https://github.com/bradcstevens/git-loopy#subdirectory=git-loopy/python"
+# Install the current published Release once, user-global.
+uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.9.0#subdirectory=git-loopy/python"
 
 # In the repository you want it to work on:
 cd ~/code/my-project
@@ -112,12 +112,15 @@ git-loopy init
 git-loopy
 ```
 
+On a terminal, a Run detaches its worker and opens the live interface with the
+shared `git-loopy-tui` helper when available, falling back to the line printer.
+A non-terminal Run uses the line printer directly.
+
 Useful variations:
 
 ```bash
 git-loopy 50                      # cap the Run at 50 Iterations
 git-loopy --model claude-opus-5   # override the model for this Run
-git-loopy --parallel 3            # opt into Parallel mode
 git-loopy config list             # the effective settings a Run would use
 ```
 
@@ -129,7 +132,28 @@ git-loopy config list             # the effective settings a Run would use
 
 Hosts without Python can run the [shell](git-loopy/shell/README.md) or
 [PowerShell](git-loopy/powershell/README.md) Orchestrator instead — same
-contract, same Dashboard.
+contract, same live helper.
+
+### Installation identity and channels
+
+The default command installs the published **v0.9.0 Release**. Its
+installation identity is therefore `git-loopy 0.9.0`: `git-loopy --version`
+and `wrapper.run.start` report that exact Release version.
+
+To install another named, published Release, replace the tag with the Release
+you want. For example, this installs the published **v0.8.0 Release**:
+
+```bash
+uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.8.0#subdirectory=git-loopy/python"
+```
+
+An unreleased commit is an explicit **Edge install**, not a Release install.
+Pin the full commit SHA deliberately and identify that installation by its SHA;
+do not treat its source `VERSION` output as proof of Release identity:
+
+```bash
+uv tool install "git+https://github.com/bradcstevens/git-loopy@<unreleased-commit-sha>#subdirectory=git-loopy/python"
+```
 
 ## The skills and their purpose
 
@@ -227,8 +251,8 @@ this catalog; `npx skills find <query>` searches it.
 7. **Complete one Iteration.** The agent reads the issue and domain docs, works in
    vertical slices, and runs the repository's feedback loops. It commits with a
    close keyword and closes the issue. The Orchestrator captures leftover work in
-   a Checkpoint when necessary, pushes new commits, updates the Dashboard and
-   Summary, and records a Strike when no meaningful progress occurred.
+   a Checkpoint when necessary, pushes new commits, updates the live interface
+   and Summary, and records a Strike when no meaningful progress occurred.
 8. **Repeat, then judge.** The next Iteration receives a fresh Pool and context.
    The Run stops when work is exhausted, the configured limit is reached, or
    strikes trip the guardrail. The loop engineer reviews the pushed result against

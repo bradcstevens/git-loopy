@@ -55,6 +55,85 @@ while IFS= read -r case_json; do
     "discriminator exclusion reason: $case_id"
 done < <(jq -c '.cases[]' "$conformance_dir/discriminator.json")
 
+# Wrapper contract §3.3.1 — Readiness is decided at Pickup from the `blockedBy`
+# connection the collection already carried. Transform the language-neutral
+# fixture into the shape `gh issue list --json blockedBy` returns, then drive the
+# port's decision seam directly so the verdict cannot drift from the reference.
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  blocked_by="$(
+    jq -c '
+      .blocked_by
+      | {
+          totalCount: .total_count,
+          nodes: [
+            .nodes[]
+            | if .readable == false then
+                {id: "", number: 0, state: "", title: "", url: ""}
+              else
+                (.ref
+                 | capture("^(?<owner>[^/]+)/(?<repo>[^#]+)#(?<number>[0-9]+)$"))
+                as $ref
+                | {
+                    id: "fixture",
+                    number: ($ref.number | tonumber),
+                    state: (.state | ascii_upcase),
+                    title: "fixture",
+                    url: ("https://github.com/\($ref.owner)/\($ref.repo)/issues/\($ref.number)")
+                  }
+              end
+          ]
+        }
+    ' <<<"$case_json"
+  )"
+  actual="$(git_loopy_decide_readiness "$blocked_by")"
+  expected="$(
+    jq -c '.expected | {
+      verdict,
+      admissible,
+      skip_reason,
+      blockers: (.blockers // [])
+    }' <<<"$case_json"
+  )"
+  assert_equal "$expected" "$actual" "issue-readiness fixture: $case_id"
+done < <(jq -c '.cases[]' "$conformance_dir/issue-readiness.json")
+
+# §3.3.1 — the connection MUST ride a read this port already makes, and the
+# fixture's `read` block is what says which read and which field. The verdict
+# adapter above cannot see that: it would keep passing while a port paid one
+# dedicated dependency round-trip per candidate.
+#
+# One assertion here binds production and the rest are a tripwire, which is the
+# split to read them by. `connection` is checked *against* the one place this
+# port names its shallow field set, so dropping `blockedBy` from that constant
+# fails here. `transport`, `fetched_at`, `decided_at` and `hops` assert the
+# fixture alone: this port issues no GraphQL of its own and names no page size,
+# so it has no counterpart to compare them to. They earn their place by failing
+# the moment the shared read shape moves under a member -- if `fetched_at` went
+# back to `pickup`, the membership assertion below would still pass while this
+# port's whole reason for riding the collection read had evaporated, and a
+# member that reads its verdict out of a fixture it no longer matches is exactly
+# the drift the Conformance suite exists to catch.
+readiness_read="$(jq -c '.read' "$conformance_dir/issue-readiness.json")"
+assert_equal "graphql" "$(jq -r '.transport' <<<"$readiness_read")" \
+  "issue-readiness read: GraphQL, never REST"
+assert_equal "collection" "$(jq -r '.fetched_at' <<<"$readiness_read")" \
+  "issue-readiness read: the connection rides the collection read"
+assert_equal "pickup" "$(jq -r '.decided_at' <<<"$readiness_read")" \
+  "issue-readiness read: the verdict is taken at Pickup"
+assert_equal "1" "$(jq -r '.hops' <<<"$readiness_read")" \
+  "issue-readiness read: one hop, never traversed"
+# `gh --json <connection>` is GraphQL-backed and pages the connection itself, so
+# this port meets `transport` and `min_page_size` by asking for the field on a
+# read it already makes rather than by naming a page size of its own.
+readiness_connection="$(jq -r '.connection' <<<"$readiness_read")"
+case ",$GIT_LOOPY_SHALLOW_ISSUE_FIELDS," in
+  *",$readiness_connection,"*) ;;
+  *)
+    fail "issue-readiness read: the shallow field set does not request $readiness_connection"$'\n'"fields:   $GIT_LOOPY_SHALLOW_ISSUE_FIELDS"
+    ;;
+esac
+
 # Wrapper contract §3.2 — the total order over eligible issues (#391, ADR-0032).
 # The adapter drives the fixture through `git_loopy_order_issues` itself; a
 # reimplementation here would pass while the Orchestrator ordered a Pool
@@ -363,7 +442,7 @@ done < <(jq -c '.detection_cases[]' "$conformance_dir/checkpoint-messages.json")
   git_loopy_resolve_config
   assert_equal "0" "$GIT_LOOPY_MAX_ITERATIONS" "default iteration cap"
   assert_equal "claude-opus-5" "$GIT_LOOPY_MODEL" "default model"
-  assert_equal "xhigh" "$GIT_LOOPY_REASONING_EFFORT" "default reasoning effort"
+  assert_equal "max" "$GIT_LOOPY_REASONING_EFFORT" "default reasoning effort"
   assert_equal "github" "$GIT_LOOPY_ISSUE_SOURCE" "default issue source"
   assert_equal "3" "$GIT_LOOPY_MAX_NMT_STRIKES" "default Strike threshold"
   assert_equal "7200" "$GIT_LOOPY_SEND_TIMEOUT_SECONDS" "default send timeout"

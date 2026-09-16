@@ -1,13 +1,13 @@
 # Parallel mode
 
-By default a Run works **one issue at a time**. **Parallel mode** is the opt-in
-execution mode in which the runner works several independent issues at once,
-each isolated in its own git worktree. This page is the operator's guide to
-turning it on and reading what it does. [ADR-0020](adr/0020-rolling-dispatch-with-bounded-green-integration.md)
+The Python Runner always uses **rolling dispatch**: it works independent issues
+in isolated git worktrees whenever its Pool has **Lane** work. The bound
+**Execution host** declares the Lane ceiling. This page is the operator's guide
+to reading that behavior. [ADR-0020](adr/0020-rolling-dispatch-with-bounded-green-integration.md)
 records the design; §12 of the [Wrapper contract](wrapper-contract.md) defines
 the Events; [`CONTEXT.md`](../CONTEXT.md) defines every term in bold below.
 
-## Before you turn it on: does your distribution have it?
+## Does your distribution have it?
 
 Parallel mode is a **scheduling** capability, and not every member of the
 **Runner family** has one. Every Run declares what it can schedule on its
@@ -24,14 +24,16 @@ Parallel mode is a **scheduling** capability, and not every member of the
 ```
 
 Today the **Python Orchestrator** is the only member that schedules **Lanes**.
-The shell and PowerShell Orchestrators declare every key `false`. A distribution
-that declares `parallel_mode: false` will **refuse** a **Lane cap** above 1 at
-preflight rather than accept it and run serially:
+It has no operator-selected Lane count: the Execution host declares the
+ceiling. The shell and PowerShell Orchestrators declare every key `false`; their
+own READMEs retain their flags and environment-variable precedence. A native
+distribution that declares `parallel_mode: false` refuses a **Lane cap** above
+1 at preflight rather than accepting it and running serially:
 
 ```
 git-loopy: a Lane cap of 3 was requested, but the shell Orchestrator declares parallel_mode unsupported.
 git-loopy: this distribution has no Rolling dispatch scheduler, so it cannot fill a second Lane.
-git-loopy: unset GIT_LOOPY_MAX_PARALLEL or set it to 1 to run serially, or use a distribution whose parallel_capabilities.parallel_mode is true.
+git-loopy: use a distribution whose parallel_capabilities.parallel_mode is true.
 ```
 
 That refusal is deliberate. A silently serial Run looks exactly like a Parallel
@@ -44,23 +46,18 @@ producer yet, so a Parallel Run still writes legacy **Wave**-shaped rows. Nothin
 about how the Run *behaves* depends on that key — it tells you what a replay log
 will contain.
 
-## Turning it on
+## Starting a Run
 
-Set the **Lane cap**:
-
-```bash
-GIT_LOOPY_MAX_PARALLEL=3 git-loopy
-```
-
-Optionally give each worktree a setup command — dependency installation, a
+Run `git-loopy`. Optionally give each worktree a setup command — dependency installation, a
 virtualenv, whatever a fresh checkout of your repository needs before the
 feedback loops can run:
 
 ```bash
-GIT_LOOPY_MAX_PARALLEL=3 GIT_LOOPY_WORKTREE_SETUP='npm ci' git-loopy
+GIT_LOOPY_WORKTREE_SETUP='npm ci' git-loopy
 ```
 
-A cap of `1` (or unset) is the ordinary serial loop, unchanged.
+When no issue is Lane-eligible, the serial **Iteration driver** reaches the
+same outcomes and emits the existing degraded or serial-fallback Event.
 
 ## Eligibility is yours to assert: `parallel-safe`
 
@@ -88,26 +85,33 @@ not only in the Event stream — because you are the only one who can fix it. Th
 other two reasons it can give are that every `parallel-safe` issue it found was
 already worked this Run, and that a candidate could not be read.
 
-## The Lane cap is a ceiling, not a target
+## The host capacity is a ceiling, not a target
 
-`GIT_LOOPY_MAX_PARALLEL` is a safety and resource bound. **Rolling dispatch**
+The bound **Execution host** is the safety and resource bound. **Rolling dispatch**
 fills **Lanes** continuously — a Lane is refilled the moment its work is handed
 off, with no barrier round waiting for its neighbours — but it will deliberately
 leave capacity idle. A Run that sits at two Lanes under a cap of five is not
 malfunctioning. The reasons it holds back:
 
 - **A small eligible Pool.** There is nothing `parallel-safe` left to start.
+- **A blocked candidate.** An issue carrying an open `blocked_by` dependency — or
+  one whose dependencies the **Membership read** could not determine — is refused
+  Lane candidacy, so it is never reserved and never released. It stays cached, and
+  the next refresh that sees its last blocker closed makes it a candidate again
+  mid-Run, with nothing restarted.
 - **Integration backpressure** (below).
 - **A contracted Effective Lane limit.** The number of Lanes the runner may fill
-  *right now* starts below your cap and moves against **Pressure signals**:
-  sustained API rate limiting, AI-credit burn against a configured ceiling, host
-  or worktree-setup load, and the **Integration backlog**. It contracts quickly
-  and expands one Lane at a time against sustained evidence of health, and never
-  above your cap, which never moves. A signal the Run cannot observe is reported
-  *unknown* — never estimated, and never used as evidence that expanding is safe.
+  *right now* starts at `min(Lane cap, 3)`. A Lane cap of 10 opens three Lanes
+  at first when eligible work is available; that is normal startup, not a
+  fault. It moves against **Pressure signals**: sustained API rate limiting,
+  AI-credit burn against a configured ceiling, host or worktree-setup load, and
+  the **Integration backlog**. It contracts quickly and expands one Lane at a
+  time against sustained evidence of health, and never above host capacity. A
+  signal the Run cannot observe is reported *unknown* — never estimated, and
+  never used as evidence that expanding is safe.
 
 Each authoritative change emits `wrapper.concurrency.changed` carrying both the
-immutable configured cap and the current effective limit.
+immutable host-declared cap and the current effective limit.
 
 ## Integration: the serialized stage, and its backpressure
 
@@ -131,9 +135,93 @@ instant a slot frees. It exists to stop unbounded branch staleness — the furth
 a Lane's branch drifts from a moving base, the more of its verified result is
 wasted re-verifying.
 
-Practically: raising `GIT_LOOPY_MAX_PARALLEL` past the point where Integration
-saturates buys nothing. Integration, not the Lane count, is the governing
-resource.
+Integration, not an operator-set Lane count, is the governing resource.
+
+## Where the workspaces live, and which branches are ours
+
+A **Lane workspace** — and the private **Integration stage** its contribution is
+gated in — is a git worktree, and both are placed inside your repository's own
+git directory:
+
+```
+<repo>/.git/git-loopy/<run_id>/issue-<N>            ← the Lane workspace
+<repo>/.git/git-loopy/<run_id>/integrate/issue-<N>  ← its Integration stage
+```
+
+That location is chosen so a live Lane cannot get in the way of the very
+commands the agents in it are running. The git directory is not *content* in any
+working tree, so a workspace never appears in `git status`, cannot be picked up
+by `git add -A` (and produces no embedded-repository warning), survives `git
+clean -ffxd`, and is skipped by tree-walking feedback loops — with **no
+`.gitignore` entry**, so nothing about your repository has to change to make it
+so. It is also per-clone: two clones of the same repository each get their own
+workspaces, neither can see the other's, and deleting a clone deletes its
+workspaces with it.
+
+You do not have to clean anything up in the normal case: a workspace is torn
+down as soon as its contribution finishes.
+
+**`git-loopy/` is a reserved branch namespace.** Every branch the runner cuts
+for itself lives under it — `git-loopy/<run_id>/issue-<N>` for a Lane and
+`git-loopy/<run_id>/integrate/issue-<N>` for its stage — and it is the *only*
+thing git-loopy will ever use to decide that a workspace is its own to reclaim.
+Don't put your own branches there.
+
+Reading ownership from the branch rather than from a directory is what makes
+residue safe to identify. Earlier Runs placed workspaces in a sibling
+`<repo>.worktrees/` directory, which an operator's own worktrees could also be
+living in; sweeping that directory by location would take work nobody asked
+git-loopy to touch. A leftover from those Runs is still recognisable — it is on
+a `git-loopy/` branch, wherever it sits — while a worktree of yours next to it
+is not, and never will be.
+
+## Sweep: what happens to residue nobody is holding
+
+A workspace is torn down as soon as its contribution finishes, and again at the
+Run's own exit if an exception or a **Stop** ended it instead — but a hard kill
+or a lost power cable runs no code at all, so some residue survives every
+in-process handler. **Sweep** is what reclaims it.
+
+Every Run sweeps at startup, and `git-loopy sweep` does the same on demand for
+when nothing is running:
+
+```bash
+git-loopy sweep --dry-run   # report exactly what would be removed
+git-loopy sweep             # remove it
+```
+
+A sweep that reclaimed nothing prints nothing, so on a clean machine both
+commands are silent and any output at all is news.
+
+What a sweep is allowed to touch is decided by one thing at a time:
+
+- **Whose residue is it?** Only a Run that can be *proven* dead. Each Run holds
+  an OS advisory lock on its own control artifact for as long as it lives, so a
+  free lock means the Run is gone and its workspaces are reclaimable. A Run
+  still holding its lock is never touched — which is what lets two Runs share a
+  clone, including from *different worktrees* of it, since a sweep looks for
+  that lock in every worktree the clone registers. Where the lock cannot be
+  read at all, liveness is *unknown* rather than dead, and nothing is reclaimed.
+- **Is any of it unfinished work?** A dirty workspace is committed to its own
+  Lane branch as a Checkpoint — **salvaged** — before the directory goes. Work
+  is never destroyed, so the only workspace a sweep leaves behind is one whose
+  salvage failed. Salvaged work is recoverable, not resumable: a later Run cuts
+  a fresh Lane branch for the issue rather than continuing that one.
+- **Is the branch still worth anything?** A stage branch is always collected.
+  A Lane branch is collected once it is *resolved* — merged into the branch
+  you are on, or belonging to an issue that has since closed. An unmerged
+  branch for an issue still open stays, because it may be the only copy. So
+  does one whose last commit is a Checkpoint: an issue closing tells you the
+  issue was settled, not that anyone ever looked at work its author never
+  committed. That is what makes a salvage worth performing — it survives the
+  sweep that rescued it, and every sweep after.
+- **Is the directory empty?** `git worktree remove` takes only the leaf it is
+  given, so run and `integrate/` directories pile up empty forever. A sweep
+  removes a directory only when it is genuinely empty, which is why one shared
+  with your own worktrees is safe to point it at.
+
+A sweep is not work: it emits no events, produces no strikes, and never appears
+in a Run's summary. A Run that swept an issue's residue did not work that issue.
 
 ## Interleaving with serial work
 
@@ -149,7 +237,10 @@ interleaving, not a fallback, and is reported as neither.
 
 - Each Lane is one active row in the **Dashboard**, with its own timer and
   **Log**.
-- The **Queue** accounts for an issue across every contribution it took.
+- The **Queue** accounts for every issue the Run has read, filling as it reads
+  membership, across every contribution an issue took. It can therefore be
+  deeper than the number of running Lanes; Queue rows are not a count of Lanes
+  the Run started.
 - Per-Lane records in `.git-loopy/logs/<iso>-<run_id>.jsonl` are attributed to
   their contribution, so a Lane being refilled never reattributes earlier work.
 

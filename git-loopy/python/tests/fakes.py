@@ -16,6 +16,7 @@ from typing import Iterable, Mapping, NoReturn, Sequence
 
 from git_loopy.gate import GateResult, LoopFailure
 from git_loopy.gh import (
+    MIN_GH_VERSION_FOR_READINESS,
     GhError,
     Issue,
     IssueListPage,
@@ -23,7 +24,7 @@ from git_loopy.gh import (
     RateLimitCounter,
     Repo,
 )
-from git_loopy.git import Commit, GitError
+from git_loopy.git import Commit, GitError, Worktree
 
 
 class FakeGitClient:
@@ -142,6 +143,8 @@ class FakeGitClient:
         )
         self.merge_calls: list[str] = []
         self.branch_deletes: list[str] = []
+        self.remote_refs: dict[tuple[str, str], FakeGitClient] = {}
+        self.fetch_calls: list[tuple[str, str, str]] = []
         # Integration recovery (#63 / ADR-0020). ``merge_conflicts`` scripts the
         # issue numbers whose **Lane** branch raises on :meth:`merge` (models a
         # conflicting landing) so a test drives the abort + auto-resolution path.
@@ -163,6 +166,15 @@ class FakeGitClient:
     def root(self) -> Path:
         """The repository root this client is bound to (parity with the adapter)."""
         return self._root
+
+    def common_git_dir(self) -> Path:
+        """The fake clone's shared git directory — where workspaces are placed.
+
+        The adapter resolves this from ``git rev-parse --git-common-dir``; the
+        fake models the ordinary answer for a non-bare clone so a Lane's
+        workspace path is shaped exactly as production shapes it.
+        """
+        return self._root / ".git"
 
     # -- internal helpers --------------------------------------------------
 
@@ -322,6 +334,13 @@ class FakeGitClient:
         self._branches[branch] = child
         return child
 
+    def open_worktree(self, path: Path) -> FakeGitClient:
+        """Return the live child worktree bound to ``path``."""
+        try:
+            return self._worktrees[Path(path)]
+        except KeyError as exc:
+            raise GitError(["git", "worktree", "list"], 128, f"not found: {path}") from exc
+
     def remove_worktree(self, path: Path, *, force: bool = False) -> None:
         """Model ``git worktree remove`` — drop the child, keep the branch.
 
@@ -338,6 +357,22 @@ class FakeGitClient:
     def active_worktrees(self) -> list[Path]:
         """Paths of the worktrees currently live (added and not yet removed)."""
         return list(self._worktrees)
+
+    def list_worktrees(self) -> list[Worktree]:
+        """Model ``git worktree list`` — this client plus every live child.
+
+        Reports the branch each one has checked out, which is the fact
+        ownership is decided from (:func:`git_loopy.git.reserved_worktrees`).
+        A removed worktree is gone from the listing even though its branch
+        survives as a breadcrumb, exactly as real git reports it.
+        """
+        return [
+            Worktree(path=self._root, branch=self.branch),
+            *(
+                Worktree(path=path, branch=child.branch)
+                for path, child in self._worktrees.items()
+            ),
+        ]
 
     def worktree_client(self, path: Path) -> FakeGitClient | None:
         """Return the live child client bound to ``path`` (or ``None``).
@@ -394,6 +429,33 @@ class FakeGitClient:
             if commit.sha not in known:
                 self._log.append(commit)
 
+    def probe_remote_ref(self, remote: str, ref: str) -> str | None:
+        """Return the scripted remote contribution ref, if the remote has it."""
+        branch = self.remote_refs.get((remote, ref))
+        return branch.head_sha() if branch is not None else None
+
+    def fetch_sha(self, remote: str, sha: str, branch: str) -> None:
+        """Materialize a scripted remote ref as a local branch."""
+        self.fetch_calls.append((remote, sha, branch))
+        source = next(
+            (
+                candidate
+                for (candidate_remote, _ref), candidate in self.remote_refs.items()
+                if candidate_remote == remote and candidate.head_sha() == sha
+            ),
+            None,
+        )
+        if source is None:
+            raise GitError(["git", "fetch", remote, sha], 128, "unknown remote SHA")
+        self._branches[branch] = source
+
+    def resolve_ref(self, ref: str) -> str:
+        """Resolve a materialized or local branch to its current SHA."""
+        branch = self._branches.get(ref)
+        if branch is None:
+            raise GitError(["git", "rev-parse", ref], 128, "unknown ref")
+        return branch.head_sha()
+
     def abort_merge(self) -> None:
         """Model ``git merge --abort`` — unwind a conflicted merge (#63).
 
@@ -419,6 +481,33 @@ class FakeGitClient:
             raise GitError(["git", "branch", "-D", branch], 1, f"not found: {branch}")
         del self._branches[branch]
         self.branch_deletes.append(branch)
+
+    def list_branches(self) -> list[str]:
+        """Return the fake's root branch and registered worktree branches."""
+        names = set(self._branches)
+        if self.branch is not None:
+            names.add(self.branch)
+        return sorted(names)
+
+    def is_merged_into(self, branch: str, base: str) -> bool:
+        """Model reachability by checking whether every branch commit is on base."""
+        candidate = self._branches.get(branch)
+        if candidate is None:
+            raise GitError(["git", "merge-base", branch, base], 128, f"unknown: {branch}")
+        if base != self.branch:
+            raise GitError(["git", "merge-base", branch, base], 128, f"unknown: {base}")
+        base_shas = {commit.sha for commit in self._log}
+        return all(commit.sha in base_shas for commit in candidate._log)
+
+    def branch_tip(self, branch: str) -> Commit:
+        """Return the newest commit on ``branch``'s own log."""
+        candidate = self._branches.get(branch)
+        log = self._log if candidate is None and branch == self.branch else None
+        if candidate is not None:
+            log = candidate._log
+        if not log:
+            raise GitError(["git", "log", "-1", branch], 128, f"unknown: {branch}")
+        return log[-1]
 
     # -- test scripting ----------------------------------------------------
 
@@ -530,8 +619,10 @@ class FakeGitHubClient:
         issue_close_errors: Mapping[int, GhError] | None = None,
         issue_comment_errors: Mapping[int, GhError] | None = None,
         pr_view_errors: Mapping[int, GhError] | None = None,
+        gh_version: tuple[int, int, int] = MIN_GH_VERSION_FOR_READINESS,
     ) -> None:
         self.authed = authed
+        self.gh_version_value = gh_version
         self.repo = (
             repo if repo is not None else Repo(owner="octo", name="kit", default_branch="main")
         )
@@ -569,6 +660,9 @@ class FakeGitHubClient:
     def rate_limited_reads(self) -> int:
         """How many injected failures were GitHub throttling this Run."""
         return self._rate_limited()
+
+    def gh_version(self) -> tuple[int, int, int]:
+        return self.gh_version_value
 
     def seed_issue(self, issue: Issue) -> None:
         """Add or replace one issue in the store, as a mid-Run filing would.
@@ -622,17 +716,19 @@ class FakeGitHubClient:
         if err is not None:
             self._fail(err)
         if number in self._issue_views:
-            return self._issue_views[number]
-        try:
-            return self._issues[number]
-        except KeyError:
-            self._fail(
-                GhError(
-                    ["gh", "issue", "view", str(number)],
-                    1,
-                    f"issue #{number} not found",
+            issue = self._issue_views[number]
+        else:
+            try:
+                issue = self._issues[number]
+            except KeyError:
+                self._fail(
+                    GhError(
+                        ["gh", "issue", "view", str(number)],
+                        1,
+                        f"issue #{number} not found",
+                    )
                 )
-            )
+        return issue
 
     def issue_close(self, number: int, comment: str) -> None:
         self.issue_close_calls.append((number, comment))

@@ -20,7 +20,11 @@ import pytest
 
 from git_loopy.rolling_concurrency import ConcurrencyController
 from git_loopy.rolling_pool import RollingPool
-from git_loopy.rolling_scheduler import RollingScheduler
+from git_loopy.rolling_scheduler import (
+    REASON_CHECKPOINT_FAILED,
+    REASON_UNCHANGED_BRANCH,
+    RollingScheduler,
+)
 from git_loopy.sources import (
     AfkReadyItem,
     MembershipSnapshot,
@@ -251,6 +255,80 @@ def test_worked_guard_latches_at_session_start_and_never_releases() -> None:
     assert scheduler.reserve() == ()
     assert source.refs == [11]
     assert source.membership_calls > 1
+
+
+def test_a_worked_candidate_does_not_block_the_final_empty_refresh() -> None:
+    """A lifecycle refusal cannot be re-cached behind the scheduler's guard."""
+    scheduler, _source = _scheduler([11], lane_cap=1)
+    scheduler.start()
+    (reservation,) = scheduler.reserve()
+    contribution = scheduler.start_session(reservation)
+    scheduler.finish_work(contribution, changed=False)
+
+    assert scheduler.confirm_empty() is True
+
+
+def test_blamefree_host_failure_releases_the_provisional_session_claim() -> None:
+    """A host that never started work leaves its issue eligible for another Lane."""
+    scheduler, _source, clock = _scheduler_with_clock([11], lane_cap=1, max_iterations=5)
+    scheduler.start()
+    contribution = scheduler.start_session(scheduler.reserve()[0])
+
+    disposition = scheduler.finish_terminal_failure(
+        contribution, reoffer=True, reason=REASON_UNCHANGED_BRANCH
+    )
+
+    assert disposition == "terminal"
+    assert scheduler.remaining_units == 5
+    clock.advance(120.0)
+    assert [reservation.item.ref for reservation in scheduler.reserve()] == [11]
+
+
+def test_a_host_failure_finalizes_with_the_reason_the_run_chose() -> None:
+    """The Run, not the host, names the terminal reason it publishes (#447).
+
+    ``wrapper.contribution.end``'s ``reason`` must keep telling
+    ``checkpoint_failed`` apart from ``unchanged_branch``, so the caller maps
+    the host's refusal onto one of them rather than the scheduler assuming one.
+    """
+    scheduler, _source = _scheduler([11], lane_cap=1)
+    scheduler.start()
+    contribution = scheduler.start_session(scheduler.reserve()[0])
+
+    disposition = scheduler.finish_terminal_failure(
+        contribution, reoffer=False, reason=REASON_CHECKPOINT_FAILED
+    )
+
+    assert disposition == "terminal"
+    assert contribution.reason == "checkpoint_failed"
+
+
+def test_a_terminal_finalization_withdraws_admitted_and_parked_contributions() -> None:
+    """An interrupted Run leaves nothing holding the pipeline open (#452).
+
+    The Run-exit reclaim closes out contributions that were still admitted to
+    the **Integration backlog**, or parked behind it, when the driver exited.
+    Finalizing one therefore has to withdraw it from both, or the pipeline
+    reads un-drained after every Lane it can account for has been closed — and
+    full quiescence is the precondition a valid ``wrapper.run.end`` is written
+    against.
+    """
+    scheduler, _source = _scheduler([11, 12, 13], lane_cap=3)
+    scheduler.start()
+    contributions = [
+        scheduler.start_session(reservation) for reservation in scheduler.reserve()
+    ]
+    assert [
+        scheduler.finish_work(contribution, changed=True)
+        for contribution in contributions
+    ] == ["admitted", "admitted", "parked"]
+
+    for contribution in contributions:
+        scheduler.finish_terminal_failure(
+            contribution, reoffer=False, reason=REASON_UNCHANGED_BRANCH
+        )
+
+    assert scheduler.quiescent is True
 
 
 # --------------------------------------------------------------------------- #
@@ -595,6 +673,23 @@ def test_strike_limit_latches_a_drain_confirmed_abort() -> None:
     assert scheduler.open_count == 1  # §7.7: started work still finishes
 
 
+def test_operator_stop_latches_a_drain_that_a_publication_cannot_resume() -> None:
+    """A deliberate Stop is final even when a Lane publishes while it drains."""
+    scheduler, source = _scheduler([11], lane_cap=1)
+    scheduler.start()
+    contribution = scheduler.start_session(scheduler.reserve()[0])
+    scheduler.finish_work(contribution, changed=True)
+
+    scheduler.request_stop_drain()
+    scheduler.finalize(contribution, published=True)
+
+    assert scheduler.phase == "draining_for_stop"
+    assert scheduler.refillable == 0
+    assert contribution.strike_reaction == "reset"
+    source.refs = [12]
+    assert scheduler.reserve() == ()
+
+
 def test_a_later_publication_cancels_the_pending_abort() -> None:
     scheduler, source = _scheduler([11], lane_cap=1)
     scheduler.start()
@@ -885,4 +980,4 @@ def test_only_a_pool_with_work_left_earns_a_lane_back() -> None:
     changes = [
         c for _ in range(30) if (c := busy.observe_pressure(**calm)) is not None
     ]
-    assert [c.effective_lane_limit for c in changes] == [2, 3, 4]
+    assert [c.effective_lane_limit for c in changes] == [2, 3]

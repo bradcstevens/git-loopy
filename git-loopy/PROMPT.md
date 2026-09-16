@@ -51,7 +51,7 @@ Many skills in the installed catalog exist for **human-driven sessions or upstre
 
 - `/triage` — relabels issues into the `ready-for-agent` pool.
 - `/to-spec`, `/to-tickets` — create or relabel issues (a spec and its sliced tickets) upstream of the loop.
-- `/to-questionnaire`, `/intake`, `/wayfinder` — capture and shape requirements into specs/tickets; the loop consumes their output, it doesn't produce it.
+- `/to-questionnaire`, `/wayfinder` — capture and shape requirements into specs/tickets; the loop consumes their output, it doesn't produce it.
 
 **Human-in-the-loop skills** — they need a person to answer, so they can't run unattended. Most are `disable-model-invocation: true`; `/grilling` is model-invocable but still needs a human to grill:
 
@@ -63,7 +63,9 @@ Many skills in the installed catalog exist for **human-driven sessions or upstre
 
 - `/handoff` — pointless here because each iteration is a fresh one-shot invocation; persistence happens via commits and (sparingly) issue comments, not handoff docs.
 - `/implement` — a human-driven "implement this spec end-to-end" orchestrator; this loop already *is* that orchestration (it picks one task, drives `/tdd`, and commits), so invoking it would just nest a second driver.
-- `/setup-git-loopy-skills`, `/writing-great-skills` — install or author skills, not loop work.
+- `/next` — a router whose route table hands work straight to `/implement`, so it nests that same second driver; and the runner has already bound your issue, so its selection role contradicts the binding rather than merely duplicating it.
+- `/loop-me` — starts a loop of its own, which inside a loop iteration is the nesting above one level worse.
+- `/setup-git-loopy-skills`, `/writing-for-agents`, `/writing-great-skills` — install skills or author the documents agents read, not loop work.
 
 The guidance the excluded and now-removed skills used to carry still holds and is already inlined above: favour reviewable output over token compression while running unattended, go up a layer to map an unfamiliar area before drilling in, stress-test plans against the domain docs, and reach for deep-module design via `/codebase-design`.
 
@@ -150,4 +152,4 @@ If issues were passed in `=== <path> ===` form:
 
 - ONLY WORK ON THE SINGLE ISSUE YOU WERE HANDED, per iteration.
 - After completing a task, do **not** emit `<promise>NO MORE TASKS</promise>`. Just end the turn — the wrapper's next iteration will re-collect the AFK-ready pool and decide whether anything is left. Emitting NMT in an iteration where you did work is treated by the wrapper as a signal that you're confused, not as a clean termination.
-- If your issue turns out to be unworkable end to end (already done, or blocked on something you cannot satisfy from here), say so in a `gh issue comment` on that issue, then output `<promise>NO MORE TASKS</promise>` and stop. Never substitute a different issue — the runner decides what comes next. The wrapper tolerates NMT only if no work was done; if you repeatedly emit it while AFK-ready issues remain, the wrapper will abort with a non-zero exit so a human can investigate.
+- If your issue turns out to be unworkable end to end (already done, or blocked on something you cannot satisfy from here), say so in a `gh issue comment` on that issue. If the tracker offers native dependencies and you have identified a genuine blocker as a real, open issue, also record it as a native dependency on your own issue. Do not record a dependency you have not actually identified as an open issue. The comment remains required beside the dependency: the dependency is what selection reads, and the comment is what people read. If the blocker is not an issue, comment, then output `<promise>NO MORE TASKS</promise>` and stop. Otherwise, after recording the dependency and comment, output `<promise>NO MORE TASKS</promise>` and stop. Never substitute a different issue — the runner decides what comes next. The wrapper tolerates NMT only if no work was done; if you repeatedly emit it while AFK-ready issues remain, the wrapper will abort with a non-zero exit so a human can investigate.

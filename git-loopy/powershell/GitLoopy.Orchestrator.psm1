@@ -328,7 +328,7 @@ function Resolve-GitLoopyConfig {
             $ReasoningEffort = $SuffixEffort
         }
         elseif (-not $ModelExplicit) {
-            $ReasoningEffort = "xhigh"
+            $ReasoningEffort = "max"
         }
         else {
             $ReasoningEffort = $null
@@ -789,8 +789,25 @@ $Script:GitLoopyListMaxLimit = 1600
 # Conformance seam's callers to carry a value all but one of them ignores.
 $Script:GitLoopyIssuePin = $null
 
+# The `--json` field set every shallow issue read asks for, named once so this
+# port cannot drift from the Python reference's `_SHALLOW_ISSUE_FIELDS`, and so
+# the §3.1 collection and the authoritative per-issue view cannot drift from each
+# other. `blockedBy` (§3.3.1) rides both for that reason: **Readiness** needs the
+# connection for every candidate a **Pickup** walks, and asking for it on a read
+# the caller was always going to make costs nothing however large the **Pool**
+# grows, where a dedicated dependency call would cost one round-trip per
+# candidate. `gh` serves the field from GraphQL and pages the connection past
+# GitHub's 50-link per-issue cap itself, so the port names no page size of its
+# own; what it must not do is treat a connection it could not read as an empty
+# one, which `Get-GitLoopyReadiness` refuses to do.
 $Script:GitLoopyShallowIssueFields =
-    "number,title,body,labels,state,url,createdAt"
+    "number,title,body,labels,state,url,createdAt,blockedBy"
+# `blockedBy` first shipped in gh 2.94.0. A lower version would fail inside the
+# collection read and masquerade as an empty Pool, so capability is established
+# once in preflight before the Pool exists. Typed rather than a string that
+# happens to look like one, so the gate compares against this constant itself and
+# there is no second reading of the floor to drift from the message naming it.
+$Script:GitLoopyMinGhVersionForReadiness = [version]::new(2, 94, 0)
 # The label the Pool query filters on, named once so the pin's eligibility check
 # (`Assert-GitLoopyPinEligible`) cannot drift from the query it must agree with.
 $Script:GitLoopyReadyLabel = "ready-for-agent"
@@ -803,6 +820,237 @@ $Script:GitLoopyMaxAcceptedYear = 9999
 $Script:GitLoopyTimestampPattern = [regex]::new(
     '^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?' +
     '(?:[Zz]|([+-])(\d{2}):(\d{2}))$')
+
+# The `--json` field set every shallow issue read asks for, readable so the
+# Conformance adapter can assert that the connection `issue-readiness.json`
+# names is requested by the read that carries it — rather than reproducing the
+# field list and staying green while production asked for something else.
+function Get-GitLoopyShallowIssueFields {
+    [CmdletBinding()]
+    param()
+
+    return $Script:GitLoopyShallowIssueFields
+}
+
+$Script:GitLoopyGhVersionPattern = [regex]::new('([0-9]+)\.([0-9]+)\.([0-9]+)')
+
+# The `major.minor.patch` in `gh --version`'s output, or `$null` when there is
+# none. Pure, so the gate below is exercisable over `gh` versions that are not
+# installed. The triple is read wherever it appears and rebuilt component by
+# component, exactly as the reference member's `parse_gh_version` does: a build
+# component past the patch is not part of the capability question, and a
+# zero-padded component is decimal (`2.08.0` is 2.8.0, never 2.0.0).
+function ConvertTo-GitLoopyGhVersion {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Text
+    )
+
+    $Match = $Script:GitLoopyGhVersionPattern.Match($Text)
+    if (-not $Match.Success) {
+        return $null
+    }
+    return [version]::new(
+        [int]$Match.Groups[1].Value,
+        [int]$Match.Groups[2].Value,
+        [int]$Match.Groups[3].Value
+    )
+}
+
+# Whether `$Actual` orders before `$Required`. `[version]` compares per
+# component and never lexically, which is the whole point: `2.9.0` is older than
+# `2.94.0`, and a string comparison says the opposite.
+function Test-GitLoopyVersionLessThan {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [version]$Actual,
+        [Parameter(Mandatory)]
+        [version]$Required
+    )
+
+    return $Actual -lt $Required
+}
+
+# Wrapper contract §3.3.1 — refuse a `gh` that cannot report `blockedBy`, at
+# preflight, before a Pool exists. A `gh` too old to honour the field fails
+# *inside* the collection read, where this port's error path reports an empty
+# Pool — so an unattended Run would conclude there is no work and exit clean.
+function Assert-GitLoopyReadinessCapability {
+    [CmdletBinding()]
+    param()
+
+    # stdout only: `gh --version` prints the version there, and merging a native
+    # command's stderr into the pipeline throws under the `Stop` error
+    # preference this port runs with.
+    $VersionOutput = @(& gh --version 2>$null)
+    $Raw = [string]::Join([Environment]::NewLine, $VersionOutput)
+    if ($LASTEXITCODE -ne 0) {
+        [Console]::Error.WriteLine(
+            'git-loopy: `gh --version` failed. Install gh from ' +
+            'https://cli.github.com/.'
+        )
+        return $false
+    }
+    # The floor is the constant itself, so it cannot drift from the message that
+    # names it: moving `$Script:GitLoopyMinGhVersionForReadiness` moves the
+    # comparison, and there is no second reading of it to forget.
+    $Installed = ConvertTo-GitLoopyGhVersion -Text $Raw
+    if ($null -eq $Installed) {
+        [Console]::Error.WriteLine(
+            'git-loopy: could not parse a version from `gh --version` output: ' +
+            (@($Raw -split "`r?`n") | Select-Object -First 1)
+        )
+        return $false
+    }
+    if (
+        Test-GitLoopyVersionLessThan `
+            -Actual $Installed `
+            -Required $Script:GitLoopyMinGhVersionForReadiness
+    ) {
+        [Console]::Error.WriteLine(
+            "git-loopy: gh $Installed cannot read issue dependencies " +
+            '(blockedBy) via `gh issue list`/`gh issue view --json`; ' +
+            "git-loopy requires gh >= $Script:GitLoopyMinGhVersionForReadiness. " +
+            'Upgrade gh: https://cli.github.com/.'
+        )
+        return $false
+    }
+    return $true
+}
+
+$Script:GitLoopyBlockerUrlPattern = [regex]::new(
+    '^https?://[^/]+/([^/]+)/([^/]+)/issues/([0-9]+)$')
+
+# Wrapper contract §3.3.1 — decide from the carried GraphQL connection. This is
+# deliberately pure: collection performs the source read, while Pickup decides
+# whether the candidate is admissible without another dependency round-trip.
+#
+# Returns `{verdict, admissible, skip_reason, blockers}` — the same record the
+# reference member's `decide_readiness` returns, so the fixture adapter drives
+# exactly the decision the serial Pickup takes.
+function Get-GitLoopyReadiness {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$BlockedBy
+    )
+
+    $ConnectionIsValid = (
+        $BlockedBy -is [Collections.IDictionary] -and
+        $BlockedBy.Contains("totalCount") -and
+        $BlockedBy.Contains("nodes") -and
+        $BlockedBy["totalCount"] -is [ValueType] -and
+        $BlockedBy["totalCount"] -isnot [bool] -and
+        [double]$BlockedBy["totalCount"] -ge 0 -and
+        [double]$BlockedBy["totalCount"] -eq [math]::Floor(
+            [double]$BlockedBy["totalCount"]
+        ) -and
+        $BlockedBy["nodes"] -is [Collections.IList]
+    )
+    [object[]]$Nodes = @()
+    if ($ConnectionIsValid) {
+        $Nodes = [object[]]$BlockedBy["nodes"]
+    }
+    $OpenBlockers = [Collections.Generic.List[string]]::new()
+    $Unreadable = $false
+
+    foreach ($Node in $Nodes) {
+        # `gh --json` renders a node GraphQL would not disclose as the Go zero
+        # value `{"id":"","number":0,"state":"","title":"","url":""}`, because
+        # its `LinkedIssueConnection.Nodes` is a value slice. Every field below
+        # is one the zero value fails, so a blocker in a repository the token
+        # cannot see is unreadable rather than silently ready.
+        $Url = if ($Node -is [Collections.IDictionary]) {
+            $Script:GitLoopyBlockerUrlPattern.Match([string]$Node["url"])
+        }
+        else {
+            $null
+        }
+        $Readable = $Node -is [Collections.IDictionary] -and
+            -not [string]::IsNullOrWhiteSpace([string]$Node["id"]) -and
+            $Node["number"] -is [ValueType] -and
+            $Node["number"] -isnot [bool] -and
+            [double]$Node["number"] -gt 0 -and
+            [double]$Node["number"] -eq [math]::Floor([double]$Node["number"]) -and
+            -not [string]::IsNullOrWhiteSpace([string]$Node["state"]) -and
+            $Url.Success
+        if (-not $Readable) {
+            $Unreadable = $true
+            continue
+        }
+        $Ref = "{0}/{1}#{2}" -f
+            $Url.Groups[1].Value,
+            $Url.Groups[2].Value,
+            $Url.Groups[3].Value
+        # The fixture's vocabulary is `open`/`closed` and GraphQL's enum is
+        # `OPEN`/`CLOSED`. The reference member and the shell Orchestrator both
+        # fold the case before comparing, and a port that recognised only one
+        # casing would report a blocked candidate as **ready**.
+        if (([string]$Node["state"]).ToLowerInvariant() -ceq "open") {
+            $OpenBlockers.Add($Ref)
+        }
+    }
+
+    if ($OpenBlockers.Count -gt 0) {
+        return [ordered]@{
+            verdict = "blocked"
+            admissible = $false
+            skip_reason = "blocked_by_open_dependency"
+            blockers = [string[]]$OpenBlockers
+        }
+    }
+    if (
+        -not $ConnectionIsValid -or
+        $Nodes.Count -ne [int]$BlockedBy["totalCount"] -or
+        $Unreadable
+    ) {
+        return [ordered]@{
+            verdict = "blocked"
+            admissible = $false
+            skip_reason = "readiness_unprovable"
+            blockers = [string[]]@()
+        }
+    }
+    return [ordered]@{
+        verdict = "ready"
+        admissible = $true
+        skip_reason = $null
+        blockers = [string[]]@()
+    }
+}
+
+# One Pool candidate's **Readiness** verdict, from whichever read its source
+# already took. Mirrors the reference member's `IssueSource.readiness(item)`:
+# the decision is the same everywhere (`Get-GitLoopyReadiness`), and the only
+# source-shaped question is where — or whether — a `blockedBy` connection exists
+# at all. The local-markdown backend has no native dependency graph, so it has
+# nothing to be **Blocked** by and reports every candidate ready.
+#
+# A GitHub candidate whose `blocked_by` is absent or `$null` is deliberately
+# *not* treated as an empty connection: the connection was never read, so there
+# is nothing to say no blocker was found, and it reaches `readiness_unprovable`
+# rather than silently admitting a candidate whose blockers were never checked.
+function Get-GitLoopyCandidateReadiness {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$Candidate,
+        [string]$IssueSource = "github"
+    )
+
+    if ($IssueSource -cne "github") {
+        return [ordered]@{
+            verdict = "ready"
+            admissible = $true
+            skip_reason = $null
+            blockers = [string[]]@()
+        }
+    }
+    return Get-GitLoopyReadiness -BlockedBy $Candidate["blocked_by"]
+}
 
 # `ConvertFrom-Json` coerces anything ISO-8601-shaped into a [datetime], and it
 # is *more* liberal than §3.2's grammar: it accepts a zone-less
@@ -1154,7 +1402,9 @@ function Get-GitLoopyExitCode {
         "iteration_cap" { return 0 }
         "stuck" { return 1 }
         "all_skipped" { return 1 }
+        "all_blocked" { return 1 }
         "preflight_failed" { return 1 }
+        "operator_stop" { return 1 }
         "usage_error" { return 2 }
         default { throw "Unknown Run exit reason: $Reason" }
     }
@@ -1345,6 +1595,18 @@ function Get-GitLoopyIterationRollup {
         else {
             $Status
         }
+    }
+
+    # The reference's `IterationRollup.finish` normalization: a terminal reason
+    # *is* the Iteration's outcome, and only the derived per-issue status stands
+    # in for it when no reason was given. `aborted` and `gone` also override the
+    # issue's own status above, because they describe what happened to that
+    # issue; `all_skipped` cannot, because it is precisely the case where there
+    # is no issue to describe. The empty-Pool ending passes no reason at all and
+    # keeps the derived `no_progress`, which is what the reference normalizes it
+    # to anyway.
+    if (-not [string]::IsNullOrEmpty($TerminalOutcome)) {
+        $Outcome = $TerminalOutcome
     }
 
     return [ordered]@{
@@ -1683,6 +1945,13 @@ function Invoke-GitLoopyPreflight {
             [Console]::Error.WriteLine(
                 "git-loopy: gh could not resolve this GitHub repository."
             )
+            return $null
+        }
+        # Wrapper contract §3.3.1 — asked here, where the reference member asks
+        # it: after the repository resolves and before any Pool is collected, so
+        # a `gh` that cannot report blockers can never reach the collection read
+        # whose failure path this port reports as an empty Pool.
+        if (-not (Assert-GitLoopyReadinessCapability)) {
             return $null
         }
         $Script:GitLoopyIssuePin = $Config.IssuePin
@@ -2132,6 +2401,10 @@ function Get-GitLoopyGitHubPool {
             state = [string]$Full["state"]
             url = [string]$Full["url"]
             created_at = [string]($Full["createdAt"] ?? $Full["created_at"] ?? "")
+            # The collection read carries the connection Pickup decides from.
+            # A later membership read can validate current state but cannot
+            # replace this Pool snapshot's readiness evidence.
+            blocked_by = $Candidate["blockedBy"]
             comments = [object[]]$Comments
         }
     }
@@ -2891,6 +3164,7 @@ function Get-GitLoopyCurrentIterationRollup {
 # It does not sort. Order is decided at the read (§3.2), and re-deciding it here
 # would be a second implementation of the one decision
 # `conformance/issue-ordering.json` exists to keep single.
+$script:GitLoopySerialPickupTerminalOutcome = $null
 function Select-GitLoopySerialPickup {
     [CmdletBinding()]
     param(
@@ -2901,52 +3175,94 @@ function Select-GitLoopySerialPickup {
         [Parameter(Mandatory)]
         [int]$Iteration,
         [AllowEmptyCollection()]
-        [object[]]$Pool
+        [object[]]$Pool,
+        [string]$IssueSource = "github"
     )
 
     $Items = @($Pool)
+    $script:GitLoopySerialPickupTerminalOutcome = $null
     if ($Items.Count -eq 0) {
         return @()
     }
-    $Head = $Items[0]
-    $Ref = if ($Head.Contains("number")) {
-        [string]$Head["number"]
-    }
-    else {
-        [string]$Head["ref"]
-    }
+    [int]$Position = 0
+    $AllWaitingOnBlockers = $true
+    foreach ($Head in $Items) {
+        $Position += 1
+        $Ref = if ($Head.Contains("number")) {
+            [string]$Head["number"]
+        }
+        else {
+            [string]$Head["ref"]
+        }
+        $Readiness = Get-GitLoopyCandidateReadiness `
+            -Candidate $Head `
+            -IssueSource $IssueSource
+        if (-not $Readiness["admissible"]) {
+            $Reason = [string]$Readiness["skip_reason"]
+            if ($Reason -cne "blocked_by_open_dependency") {
+                $AllWaitingOnBlockers = $false
+            }
+            $Blockers = [string]::Join(", ", @($Readiness["blockers"]))
+            $EventReason = if ([string]::IsNullOrEmpty($Blockers)) {
+                $Reason
+            }
+            else {
+                "${Reason}: $Blockers"
+            }
+            $Label = if ($Ref -match '^[0-9]+$') { "#$Ref" } else { $Ref }
+            # The Pool exclusion line's shape, because a skip is the same kind
+            # of fact for an operator: what was passed over, and why in words.
+            [Console]::Error.WriteLine(
+                "git-loopy: serial Pickup skipped $Label — " +
+                $Reason.Replace('_', ' ') +
+                $(if ([string]::IsNullOrEmpty($Blockers)) { "" } else { ": $Blockers" })
+            )
+            Write-GitLoopyPickupSkipped `
+                -Context $Context `
+                -EventTypes $EventTypes `
+                -Iteration $Iteration `
+                -Ref $Ref `
+                -Reason $EventReason `
+                -Position $Position `
+                -Considered $Items.Count
+            continue
+        }
 
-    $Bound = Publish-GitLoopyActiveBinding `
-        -Context $Context `
-        -EventTypes $EventTypes `
-        -Iteration $Iteration `
-        -Ref $Ref `
-        -Source "serial_pickup" `
-        -ObservedAt ([DateTimeOffset]::UtcNow)
-    if (-not $Bound) {
-        # The selection stands even though the binding did not. An activation is
-        # refused exactly when the Iteration is already bound, so the prompt
-        # keeps the one issue rather than reverting to the whole Pool: putting
-        # the menu back would ask the agent to rank a list whose answer the
-        # runner had already decided without it.
+        $Bound = Publish-GitLoopyActiveBinding `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -Iteration $Iteration `
+            -Ref $Ref `
+            -Source "serial_pickup" `
+            -ObservedAt ([DateTimeOffset]::UtcNow)
+        if (-not $Bound) {
+            [Console]::Error.WriteLine(
+                "git-loopy: serial Pickup selected $Ref but its activation was " +
+                "refused; the Iteration works that issue on the standing binding."
+            )
+            return @($Head)
+        }
+        $Label = if ($Ref -match '^[0-9]+$') { "#$Ref" } else { $Ref }
+        Write-GitLoopyPickupBound `
+            -Context $Context `
+            -EventTypes $EventTypes `
+            -Iteration $Iteration `
+            -Ref $Ref `
+            -Head $Head `
+            -Position $Position `
+            -Considered $Items.Count
         [Console]::Error.WriteLine(
-            "git-loopy: serial Pickup selected $Ref but its activation was " +
-            "refused; the Iteration works that issue on the standing binding."
+            "git-loopy: serial Pickup bound $Label (position $Position of $($Items.Count))"
         )
         return @($Head)
     }
-    $Label = if ($Ref -match '^[0-9]+$') { "#$Ref" } else { $Ref }
-    Write-GitLoopyPickupBound `
-        -Context $Context `
-        -EventTypes $EventTypes `
-        -Iteration $Iteration `
-        -Ref $Ref `
-        -Head $Head `
-        -Considered $Items.Count
-    [Console]::Error.WriteLine(
-        "git-loopy: serial Pickup bound $Label (position 1 of $($Items.Count))"
-    )
-    return @($Head)
+    $script:GitLoopySerialPickupTerminalOutcome = if ($AllWaitingOnBlockers) {
+        "all_blocked"
+    }
+    else {
+        "all_skipped"
+    }
+    return @()
 }
 
 # One **Pickup** binding as an Event (#397): which issue, why it was chosen, and
@@ -2965,6 +3281,7 @@ function Write-GitLoopyPickupBound {
         [string]$Ref,
         [Parameter(Mandatory)]
         [Collections.IDictionary]$Head,
+        [int]$Position = 1,
         [Parameter(Mandatory)]
         [int]$Considered
     )
@@ -2976,7 +3293,48 @@ function Write-GitLoopyPickupBound {
         -Payload (Get-GitLoopyPickupRecord `
             -Ref $Ref `
             -Head $Head `
+            -Position $Position `
             -Considered $Considered)
+}
+
+# One candidate a **Pickup** passed over, and why (#397). A record rather than a
+# log line, and that is the entire point: the starvation ADR-0032 fixes was
+# invisible *precisely* because being passed over left no trace, so an issue
+# could be skipped fifty times and the only evidence was that it was still in
+# the backlog. Emitted before the `Write-GitLoopyPickupBound` that ends the walk,
+# so a replay reads what was passed over and then what was taken instead.
+#
+# `position` and `considered` travel together for the same reason they do on a
+# bound record: afterwards the order that gave them meaning is gone.
+function Write-GitLoopyPickupSkipped {
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Context,
+        [Parameter(Mandatory)]
+        [Collections.IDictionary]$EventTypes,
+        [Parameter(Mandatory)]
+        [int]$Iteration,
+        [Parameter(Mandatory)]
+        [string]$Ref,
+        [Parameter(Mandatory)]
+        [string]$Reason,
+        [Parameter(Mandatory)]
+        [int]$Position,
+        [Parameter(Mandatory)]
+        [int]$Considered
+    )
+
+    $Issue = if ($Ref -match '^[0-9]+$') { [int]$Ref } else { $Ref }
+    Write-GitLoopyEvent `
+        -Context $Context `
+        -Type $EventTypes["WRAPPER_PICKUP_SKIPPED"] `
+        -Iteration $Iteration `
+        -Payload ([ordered]@{
+            issue = $Issue
+            reason = $Reason
+            position = $Position
+            considered = $Considered
+        })
 }
 
 # The payload half of a **Pickup** record, separated from its emission so the
@@ -2987,6 +3345,7 @@ function Get-GitLoopyPickupRecord {
         [string]$Ref,
         [Parameter(Mandatory)]
         [Collections.IDictionary]$Head,
+        [int]$Position = 1,
         [Parameter(Mandatory)]
         [int]$Considered
     )
@@ -3013,7 +3372,7 @@ function Get-GitLoopyPickupRecord {
     return [ordered]@{
         issue = $Issue
         reason = $Reason
-        position = 1
+        position = $Position
         considered = $Considered
     }
 }
@@ -3914,7 +4273,46 @@ function Invoke-GitLoopyDiscoveryLoop {
             -Context $Context `
             -EventTypes $EventTypes `
             -Iteration $Iteration `
-            -Pool $Pool)
+            -Pool $Pool `
+            -IssueSource $Config.IssueSource)
+        if ($PickedPool.Count -eq 0 -and
+            $null -ne $script:GitLoopySerialPickupTerminalOutcome) {
+            # Wrapper contract §3.3/§10 — a non-empty Pool the Pickup could bind
+            # none of is not the empty queue, and reporting it as one would end a
+            # Run cleanly over a repository state nobody has finished with. It is
+            # terminal on the spot rather than re-walked: no session ran, no
+            # Strike was charged and nothing inside the Run can change the next
+            # walk's answer, so continuing would spend the whole Iteration budget
+            # reaching this same ending. #443 owns what a Pool that is merely
+            # *waiting* should read as.
+            $TerminalOutcome = $script:GitLoopySerialPickupTerminalOutcome
+            if ($TerminalOutcome -ceq "all_blocked") {
+                [Console]::Error.WriteLine(
+                    "git-loopy: serial Pickup bound nothing: all $($Pool.Count) " +
+                    "candidate(s) in the Pool wait on open blockers; this Run is " +
+                    "waiting on blockers."
+                )
+            }
+            else {
+                [Console]::Error.WriteLine(
+                    "git-loopy: serial Pickup bound nothing: all $($Pool.Count) " +
+                    "candidate(s) in the Pool were skipped; this Iteration worked " +
+                    "no issue."
+                )
+            }
+            $Rollup = Get-GitLoopyCurrentIterationRollup `
+                -FinishedMonotonic (Get-GitLoopyMonotonicSeconds) `
+                -Strikes $Strikes `
+                -TerminalOutcome $TerminalOutcome
+            Write-GitLoopyEvent `
+                -Context $Context `
+                -Type $EventTypes["WRAPPER_ITERATION_END"] `
+                -Iteration $Iteration `
+                -Payload $Rollup
+            $IterationsRun = $Iteration
+            $Outcome = $TerminalOutcome
+            break
+        }
 
         # Assemble the same minimum context as the Python reference (last-5
         # commits + the bound issue's block + the resolved shared prompt) and
@@ -4100,6 +4498,23 @@ function Invoke-GitLoopyDiscoveryLoop {
         }
     }
 
+    if ($Outcome -ceq "iteration_cap" -or $Outcome -ceq "stuck") {
+        $WindDownCause = if ($Outcome -ceq "stuck") {
+            "strike_limit"
+        }
+        else {
+            "iteration_cap"
+        }
+        Write-GitLoopyEvent `
+            -Context $Context `
+            -Type $EventTypes["WRAPPER_STOP_REQUESTED"] `
+            -Payload ([ordered]@{
+                cause = $WindDownCause
+                stage = "drain"
+                draining = 0
+            })
+    }
+
     Write-GitLoopyEvent `
         -Context $Context `
         -Type $EventTypes["WRAPPER_RUN_END"] `
@@ -4113,6 +4528,9 @@ function Invoke-GitLoopyDiscoveryLoop {
     }
     if ($Outcome -ceq "stuck") {
         return Get-GitLoopyExitCode -Reason "stuck"
+    }
+    if ($Outcome -ceq "all_skipped" -or $Outcome -ceq "all_blocked") {
+        return Get-GitLoopyExitCode -Reason $Outcome
     }
     return Get-GitLoopyExitCode -Reason "iteration_cap"
 }
@@ -4208,6 +4626,12 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyIssueListToCompletion",
     "Get-GitLoopyNextReadStep",
     "Get-GitLoopyReadSchedule",
+    "Get-GitLoopyShallowIssueFields",
+    "ConvertTo-GitLoopyGhVersion",
+    "Test-GitLoopyVersionLessThan",
+    "Assert-GitLoopyReadinessCapability",
+    "Get-GitLoopyReadiness",
+    "Get-GitLoopyCandidateReadiness",
     "Get-GitLoopyPriorityLabel",
     "Get-GitLoopyAcceptedYearRange",
     "Get-GitLoopyPriorityRank",
@@ -4219,6 +4643,7 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyOrderedCandidates",
     "Select-GitLoopySerialPickup",
     "Write-GitLoopyPickupBound",
+    "Write-GitLoopyPickupSkipped",
     "Get-GitLoopyPickupRecord",
     "Get-GitLoopyExitCode",
     "Get-GitLoopyCloseKeywordPattern",

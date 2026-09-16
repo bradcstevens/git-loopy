@@ -3,6 +3,8 @@ Set-StrictMode -Version Latest
 $script:EventTypes = [ordered]@{
     WRAPPER_RUN_START = "wrapper.run.start"
     WRAPPER_RUN_END = "wrapper.run.end"
+    WRAPPER_STOP_REQUESTED = "wrapper.stop.requested"
+    WRAPPER_STOP_LIFTED = "wrapper.stop.lifted"
     WRAPPER_ISSUE_ACTIVATED = "wrapper.issue.activated"
     WRAPPER_SKILL_POLICY_RESOLVED = "wrapper.skill_policy.resolved"
     WRAPPER_ITERATION_START = "wrapper.iteration.start"
@@ -24,10 +26,6 @@ $script:EventTypes = [ordered]@{
     WRAPPER_PR_ADVANCED = "wrapper.pr.advanced"
     WRAPPER_STRIKE = "wrapper.strike"
     WRAPPER_ASK_USER_ATTEMPTED = "wrapper.ask_user.attempted"
-    # Run-scoped record of a **Dashboard fault** (ADR-0024). Only an
-    # Orchestrator that hosts a Dashboard can emit it; this port hosts none, so
-    # it carries the literal for vocabulary parity and never produces the Event.
-    WRAPPER_DASHBOARD_FAULT = "wrapper.dashboard.fault"
     WRAPPER_POOL_REFRESHED = "wrapper.pool.refreshed"
     WRAPPER_CONTRIBUTION_START = "wrapper.contribution.start"
     WRAPPER_CONTRIBUTION_WORK_FINISHED = "wrapper.contribution.work_finished"
@@ -116,6 +114,7 @@ $script:ParallelCapabilities = [ordered]@{
     integration_backlog = $false
     adaptive_lane_limit = $false
     contribution_events = $false
+    execution_hosts = [string[]]@()
 }
 
 $script:EnvelopeKeys = @("ts", "run_id", "iter", "type")

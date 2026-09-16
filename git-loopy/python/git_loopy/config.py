@@ -207,7 +207,10 @@ MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {}
 #:   escalation rung, so a routed pair equal to the rung makes escalation a
 #:   no-op — the retry would reuse the identical pair. ADR-0035's ``planning``
 #:   spent the rung outright and bought that dead retry; every row now sits
-#:   below it, so escalation is live for all seven Task types.
+#:   below it, so escalation is live for all seven Task types. This rule is
+#:   what keeps ADR-0056 — which spends the rung on the *run-wide default* —
+#:   from making escalation inert everywhere rather than only for unclassified
+#:   work.
 #: * **A reasoning-incapable model is unroutable through** ``[routing]``. An
 #:   effort supplied to an effort-incapable model — ``claude-haiku-4.5``,
 #:   ``claude-sonnet-4.5``, ``auto``, whose roster entries are the empty set —
@@ -227,18 +230,22 @@ MODEL_CONTEXT_TIERS: dict[str, frozenset[str]] = {}
 #:   so a Lane never reviews its own vendor's work. There is no vendor map, no
 #:   cross-entry check and no warning enforcing it.
 #:
-#: ``bugfix`` stays at ``xhigh``: ``high`` would make labelling a bug *cheaper*
-#: than not labelling it, since the run-wide default is already ``xhigh``.
+#: ``bugfix`` stays at ``xhigh``, which since ADR-0056 is one rung *below* the
+#: run-wide default (``claude-opus-5 @ max``) rather than equal to it. ADR-0048
+#: chose it over ``high`` so that labelling a bug was not *cheaper* than leaving
+#: it unlabelled; moving the default to the ceiling inverted that relation, and
+#: ADR-0056 records the inversion as the first thing a table retune should
+#: reconsider. The values here are measured, so they are left alone until one is.
 #:
 #: ``test`` is the one row pinned to its model's ceiling — ``gemini-3.6-flash``
 #: offers ``minimal``/``low``/``medium``/``high`` and nothing above, so raising
 #: this row without changing its model would hard-reject at session creation.
 #:
-#: ``planning`` and ``bugfix`` now *equal* the **global default**
-#: (``claude-opus-5 @ xhigh``, ADR-0036), where ADR-0035's ``planning`` diverged
-#: from it. That is a coincidence of value, not mechanism — the default is an
-#: independent constant in ``cli.py``, is never derived from this table, and
-#: keeps reserving the escalation rung whether or not a row happens to match it.
+#: ``planning`` and ``bugfix`` sit at ``claude-opus-5 @ xhigh``, which ADR-0036
+#: had made *equal* to the **global default**. ADR-0056 moved that default up to
+#: ``max``, so they are a rung below it again. Either way it is a coincidence of
+#: value, not mechanism — the default is an independent constant in ``cli.py``
+#: and is never derived from this table.
 RECOMMENDED_ROUTING: Mapping[str, tuple[str, str]] = MappingProxyType(
     {
         "planning": ("claude-opus-5", "xhigh"),
@@ -603,13 +610,10 @@ class RunConfig:
             (either ``GIT_LOOPY_OTEL_ENABLED=1`` or
             ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set). The OTel wiring
             itself lands in issue #12; this slice just plumbs the flag.
-        parallel: Opt-in **Parallel mode** cap (ADR-0008). ``1`` (the
-            default) is serial — :func:`git_loopy.loop.run` drives the
-            existing single-worktree loop byte-for-byte unchanged. ``> 1``
-            requests up to that many concurrent **Lanes** per **Wave**;
-            :mod:`git_loopy.cli` resolves it from ``--parallel N`` /
-            ``GIT_LOOPY_MAX_PARALLEL`` (defaulting to ``N=3`` when Parallel
-            mode is requested without an explicit cap). Must be ≥ 1.
+        execution_host: The requested **Execution host** placement for this
+            Run. ``"local"`` is the default; a distribution refuses an
+            unsupported placement during preflight rather than silently falling
+            back to local.
         issue_pin: The invocation-scoped **Pin** (#396, ADR-0032): the single
             issue ``--issue N`` named, or ``None``. It bypasses the §3.2
             selection **order** and nothing else — an issue pinned here still
@@ -689,7 +693,7 @@ class RunConfig:
     verbosity: int = 0
     render_reasoning: bool = True
     otel_enabled: bool = False
-    parallel: int = 1
+    execution_host: str = "local"
     send_timeout_seconds: float = DEFAULT_SEND_TIMEOUT_SECONDS
     routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)
     context_tier: str = DEFAULT_CONTEXT_TIER
@@ -722,10 +726,6 @@ class RunConfig:
         if self.verbosity < 0 or self.verbosity > 3:
             raise ValueError(
                 f"verbosity must be in 0..3, got {self.verbosity}"
-            )
-        if self.parallel < 1:
-            raise ValueError(
-                f"parallel must be ≥ 1 (1 = serial), got {self.parallel}"
             )
         if self.issue_pin is not None and self.issue_pin < 1:
             raise ValueError(

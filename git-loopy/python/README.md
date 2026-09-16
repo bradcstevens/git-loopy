@@ -33,11 +33,11 @@ persisted `config.toml` values.
 # From the repo root: install the runner's dependencies.
 uv sync --project git-loopy/python
 
+# Optional: install the startup-pickers extra (Textual).
+uv sync --project git-loopy/python --extra tui
+
 # Optional: install the OpenTelemetry extra to enable opt-in tracing.
 uv sync --project git-loopy/python --extra otel
-
-# Optional: install the interactive TUI extra (live dashboard + Stop).
-uv sync --project git-loopy/python --extra tui
 ```
 
 **Requires:** Python **≥ 3.11** on PATH, and either
@@ -58,8 +58,8 @@ deferred, so the install string points at this repo's nested package via
 `#subdirectory=git-loopy/python`:
 
 ```bash
-# Put a single `git-loopy` command on PATH (user-global).
-uv tool install "git+https://github.com/bradcstevens/git-loopy#subdirectory=git-loopy/python"
+# Put a single `git-loopy` command for the published v0.9.0 Release on PATH.
+uv tool install "git+https://github.com/bradcstevens/git-loopy@v0.9.0#subdirectory=git-loopy/python"
 
 # ...then run it from inside any git repo:
 cd ~/some/other/repo && git-loopy
@@ -69,14 +69,14 @@ For an ephemeral, npx-style run (no install), use `uvx` with the same spec (a
 bare `uvx git-loopy` is reserved for a future PyPI release):
 
 ```bash
-uvx --from "git+https://github.com/bradcstevens/git-loopy#subdirectory=git-loopy/python" git-loopy
+uvx --from "git+https://github.com/bradcstevens/git-loopy@v0.9.0#subdirectory=git-loopy/python" git-loopy
 ```
 
 Repos already on Python/uv can instead add it as a **project-local dev
 dependency** and run it through their own environment:
 
 ```bash
-uv add --dev "git+https://github.com/bradcstevens/git-loopy#subdirectory=git-loopy/python"
+uv add --dev "git+https://github.com/bradcstevens/git-loopy@v0.9.0#subdirectory=git-loopy/python"
 uv run git-loopy
 ```
 
@@ -85,6 +85,54 @@ wheel (see [Prompt resolution](#prompt-resolution)), so a bare `git-loopy` works
 in a repo that has no `git-loopy/` folder at all. Persist per-run knobs in a
 [`config.toml`](#persistent-config-configtoml) — hand-written, or scaffolded for
 you by [`git-loopy init`](#first-run-setup-git-loopy-init) — when you want them.
+
+The commands above are all **v0.9.0 Release** installs: `git-loopy --version`
+reports `git-loopy 0.9.0`, the installation's Release identity. To choose a
+different named Release, use its published tag in the same position (for
+example, `@v0.8.0`). To deliberately install unreleased source, pin a full
+commit SHA instead; that is an **Edge install**, whose identity is the SHA, not
+the source `VERSION` value. See the root
+[installation channels](../../README.md#installation-identity-and-channels)
+for commands.
+
+---
+
+## Installation identity (`git-loopy info`)
+
+`git-loopy info` describes the Python Runner artifact currently executing: its
+executable path, **Install channel** (only when that ownership can be proven),
+**Release version**, resolved commit, whether that commit is a published Release,
+and **Edge install** status. It is read-only and always exits `0`; unavailable
+identity is reported as `unknown`, never treated as a health failure.
+
+```bash
+git-loopy info
+git-loopy info --json
+```
+
+`--json` emits this stable schema. Fields with unknown facts are `null`; the
+`assets` array is intentionally empty until the installation inventory's
+Config-home asset half lands.
+
+```json
+{
+  "schema_version": 1,
+  "artifact": "python-runner",
+  "executable": "/path/to/git-loopy",
+  "install_channel": {"name": "uv-tool", "proven": true},
+  "release_version": "0.9.0",
+  "resolved_commit": "0123456789abcdef0123456789abcdef01234567",
+  "published": true,
+  "edge_install": false,
+  "assets": []
+}
+```
+
+`install_channel.name` is `uv-tool`, `homebrew`, `installer-launcher`, or
+`unproven`. `unproven` is deliberate: `uv tool install` and the shell installer
+can both place a `git-loopy` command in the same XDG bin directory, so inferring
+an owner without the shell installer's self-identifying shim could make a later
+mutating command operate on the wrong artifact.
 
 ---
 
@@ -103,7 +151,7 @@ effort, establish a Skill policy, or get an editable copy of the prompt.
 # Interactive: pick a scope, then a model + reasoning effort from the live list.
 git-loopy init
 
-# Non-interactive (CI-friendly): accept every default, never prompt.
+# CI-friendly: accept every default, never prompt.
 git-loopy init --yes
 
 # Force a scope (skips the scope question).
@@ -118,7 +166,7 @@ The wizard:
   only **global** is available.
 - **Always writes `config.toml`** to that scope with your chosen `model` /
   `reasoning_effort`, seeded from the same live model list the `--select-model`
-  picker uses, rendered as a plain numbered list (no `[tui]` extra required).
+  picker uses, rendered as a plain numbered list by the current setup flow.
 - **Installs the workflow Skill catalog first**, before collecting anything —
   because the **Skill policy** you are about to choose is a choice among the
   installed catalog. It clones
@@ -230,9 +278,9 @@ scope — sets itself up:
   the loop** on the Config it just wrote. Cancelling aborts the whole command
   (writes nothing, runs nothing, non-zero exit) — an aborted setup never starts
   an unconfirmed loop.
-- With **no TTY** or `GIT_LOOPY_INTERACTIVE=0` (CI, pipes) it **never prompts**: it
-  falls back to the built-in defaults and goes straight to the loop, so automated
-  runs can't hang on the wizard.
+- With **no TTY** (CI, pipes) it **never prompts**: it falls back to the built-in
+  defaults and goes straight to the loop, so automated runs can't hang on the
+  wizard.
 - Once Config exists in either scope, a bare `git-loopy` skips the wizard entirely
   and goes straight to the loop.
 
@@ -241,7 +289,7 @@ scope — sets itself up:
 ## Invocation
 
 ```bash
-# Unlimited iterations, default model (claude-opus-5 at `xhigh` reasoning effort).
+# Unlimited iterations, default model (claude-opus-5 at `max` reasoning effort).
 uv run --project git-loopy/python git-loopy
 
 # Cap at 50 iterations.
@@ -276,15 +324,11 @@ uv run --project git-loopy/python git-loopy --disable-skill prototype
 # empty value is a real empty policy, not "unset".
 GIT_LOOPY_ENABLED_SKILLS=tdd,code-review uv run --project git-loopy/python git-loopy
 
-# Opt into Parallel mode (ADR-0020): work up to N `parallel-safe` issues
-# concurrently, each in its own git worktree + branch. Bare `--parallel`
-# uses N=3; omitted = serial (equivalently set GIT_LOOPY_MAX_PARALLEL=3).
-# The Run reports the resolved Lane cap at start, and reports every serial
-# Iteration it falls back to for want of an eligible `parallel-safe` issue —
-# so "nobody applied the label" never looks like "the flag is broken".
-# N is a ceiling, not a target: Integration backpressure deliberately leaves
-# Lanes idle while the bounded Integration backlog is full.
-uv run --project git-loopy/python git-loopy --parallel 3
+# Every Run uses rolling dispatch. The selected Execution host declares its
+# Lane ceiling; `parallel-safe` still decides which issues can occupy a Lane.
+# A Run with no Lane work uses the serial Iteration driver and reports the
+# existing degraded or serial-fallback Event.
+uv run --project git-loopy/python git-loopy
 
 # Use the legacy local-markdown mode (prds/<feature>/NNN-*.md).
 GIT_LOOPY_ISSUE_SOURCE=prds uv run --project git-loopy/python git-loopy
@@ -316,33 +360,28 @@ Copilot, network access, or the TUI.
 
 | Env var                           | Default                        | Notes                                                                                                                                                                                                            |
 | --------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GIT_LOOPY_MODEL`                           | `claude-opus-5`                | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `GIT_LOOPY_REASONING_EFFORT` for backward compatibility. On an interactive run **with ModelSelectionMode enabled** (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`) this value is the startup picker's **pre-selected cursor** (see `GIT_LOOPY_INTERACTIVE`) and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly.                                                                                                                                                                                            |
-| `GIT_LOOPY_REASONING_EFFORT`                | `xhigh` (built-in default model only) | One of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, case-insensitive (the `--reasoning-effort` flag overrides this). Explicit `none` requests no reasoning; an omitted value lets the backend choose when no configured/default effort applies. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`xhigh`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A model without configurable reasoning (`auto`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
+| `GIT_LOOPY_MODEL`                           | `claude-opus-5`                | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `GIT_LOOPY_REASONING_EFFORT` for backward compatibility. With ModelSelectionMode enabled (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`) this value is the startup picker's pre-selected cursor and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly. |
+| `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, case-insensitive (the `--reasoning-effort` flag overrides this). Explicit `none` requests no reasoning; an omitted value lets the backend choose when no configured/default effort applies. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A model without configurable reasoning (`auto`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
 | `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type classifier** runs on — the agent call that reads an *unlabelled* issue's own content and proposes its `task-type:` key so **Routing** has a label to read (ADR-0029). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
 | `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort the classifier runs at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
 | `GIT_LOOPY_MAX_NMT_STRIKES`                 | `3`                            | Consecutive no-progress iterations before aborting exit `1`. Integer ≥ 1.                                                                                                                                        |
-| `GIT_LOOPY_MAX_PARALLEL`           | unset (serial, `1`)            | Opt into **Parallel mode** (ADR-0020): the **Lane cap** — work up to N `parallel-safe` issues concurrently, each an agent in its own git worktree + branch, through continuously refilled reusable **Lanes**. Integer ≥ 1 (`1` = serial). The `--parallel N` flag **wins** over this env var; a bare `--parallel` uses N=3. Only issues carrying **both** `ready-for-agent` **and** `parallel-safe` are eligible — eligibility is a human assertion, never inferred, so a tracker with no `parallel-safe` issue works every issue as a serial Iteration. The Run says which: it reports the resolved Lane cap at start and names each **Serial fallback** with its cause. N is a *ceiling*, not a utilization target: each finished Lane branch is verified in a private **Integration stage** before it reaches the base branch, at most two contributions may be in that bounded **Integration backlog** at once, and while it is full no Lane refills — so a Run may deliberately sit below N. Unlike `GIT_LOOPY_MAX_NMT_STRIKES`, a malformed or sub-1 value here degrades to serial rather than aborting. |
-| `GIT_LOOPY_WORKTREE_SETUP`         | unset (auto-detect)            | **Parallel mode** only (ADR-0008): a shell command run in each freshly created **Lane** worktree, before that Lane's agent session starts, to prepare its environment (install deps, create a venv, ...) so the feedback loops can run there. Runs once per Lane creation with `cwd` set to the worktree. When unset/blank, a best-effort auto-detect picks a common install command for the project type (`uv.lock`→`uv sync`, `package-lock.json`→`npm ci`, `package.json`→`npm install`, `requirements.txt`→`pip install -r requirements.txt`, `go.mod`→`go mod download`, ...). A non-zero setup exit is surfaced in the diagnostics log but does not abort the Lane. Ignored by the serial path. |
-| `GIT_LOOPY_GATE_TIMEOUT_SECONDS`   | `3600` (one hour)              | **Parallel mode** only (ADR-0009): the wall-clock bound each **feedback loop** the **Integration** gate runs must finish within. Integration re-runs the merged worktree's own `AGENTS.md` loops unattended after every Lane merge, so a loop waiting on a socket, a prompt or a lock would otherwise block the gate forever. On expiry the loop's whole process group is killed (the command is a shell whose children hold the same pipes, so killing only the shell leaves the run hanging) and the gate goes **red naming that loop, as a timeout** — kept distinct from a non-zero exit, because a timeout is not a test failure. Sized as a hang catcher rather than a performance budget: raise it when your slowest honest loop needs more room. There is deliberately no value meaning *unbounded*; a malformed, non-positive or non-finite value (`inf` included — `float` parses it and it satisfies `> 0`, so it is exactly a request for no bound) degrades to the default rather than aborting. Ignored by the serial path, which never gates from the runner side. |
-| `GIT_LOOPY_LANE_ADAPT`             | unset (adaptation on)          | **Parallel mode** only (ADR-0020 §6): falsy (`0`, `false`, `no`, `off`, empty) freezes the **Effective Lane limit** at its static-safe start value (`min(Lane cap, 3)`) for the whole Run. Left on, the Run narrows its own concurrency under sustained **Integration** backpressure, API rate limiting, AI-credit burn, or host/setup pressure, and widens it one Lane at a time against sustained evidence of health — never above the configured **Lane cap**, which never moves. Every transition is announced (`⇉ Lane concurrency 2 of 6 (integration backlog)`) and recorded as a `wrapper.concurrency.changed` Event naming the governing signal. Ignored by the serial path. |
-| `GIT_LOOPY_CREDIT_BUDGET_USD_PER_HOUR` | unset (signal unknown)     | **Parallel mode** only: the authoritative AI-credit ceiling adaptation judges this Run's burn against. Without it, credit pressure is reported *unknown* rather than estimated — burn with no target attached is a number, not a judgement, and an unknown signal may neither contract the Effective Lane limit nor be used as evidence of health. Because a Run that cannot see every signal is frozen at the static-safe `min(Lane cap, 3)`, this is also one of the two budgets a Run needs configured before it may widen **past 3 Lanes** at all — set neither and `--parallel 6` is a 3-Lane Run by design. A malformed or non-positive value reads as unset rather than aborting the Run. |
-| `GIT_LOOPY_HOST_LOAD_BUDGET`       | unset (signal unknown)         | **Parallel mode** only: the tolerated run-queue depth **per CPU**, so `1.0` means “keep every core busy but do not queue”. Host/setup pressure is reported as the ratio of the observed one-minute load average per CPU to this budget, and stays *unknown* while unset — a machine its owner is happy to saturate is a legitimate choice, so nothing is inferred. The other budget a Run needs before it may widen past the static-safe 3 Lanes. Same malformed-reads-as-unset rule. |
+| `GIT_LOOPY_WORKTREE_SETUP`         | unset (auto-detect)            | A shell command run in each freshly created **Lane** worktree, before that Lane's agent session starts, to prepare its environment (install deps, create a venv, ...) so the feedback loops can run there. Runs once per Lane creation with `cwd` set to the worktree. When unset/blank, a best-effort auto-detect picks a common install command for the project type (`uv.lock`→`uv sync`, `package-lock.json`→`npm ci`, `package.json`→`npm install`, `requirements.txt`→`pip install -r requirements.txt`, `go.mod`→`go mod download`, ...). A non-zero setup exit is surfaced in the diagnostics log but does not abort the Lane. |
+| `GIT_LOOPY_GATE_TIMEOUT_SECONDS`   | `3600` (one hour)              | The wall-clock bound each **feedback loop** the **Integration** gate runs must finish within. Integration re-runs the merged worktree's own `AGENTS.md` loops unattended after every Lane merge, so a loop waiting on a socket, a prompt or a lock would otherwise block the gate forever. On expiry the loop's whole process group is killed and the gate goes **red naming that loop, as a timeout** — kept distinct from a non-zero exit, because a timeout is not a test failure. |
+| `GIT_LOOPY_CREDIT_BUDGET_USD_PER_HOUR` | unset (contraction unavailable) | The authoritative AI-credit ceiling adaptation judges this Run's burn against. Without it, credit pressure is unknown rather than estimated. Credit never gates capacity or expansion; it only contracts the effective Lane limit under sustained burn. A malformed or non-positive value reads as unset rather than aborting the Run. |
+| `GIT_LOOPY_HOST_LOAD_BUDGET`       | `1.0`                           | The tolerated run-queue depth **per CPU**, so `1.0` means "keep every core busy but do not queue". Host/setup pressure is reported as the ratio of the observed one-minute load average per CPU to this budget. Host-load observability starts and ceilings the controller at the bound Execution host's declared capacity; a platform without a load average remains at the static-safe limit. Same malformed-reads-as-default rule. |
 | `GIT_LOOPY_ENABLED_SKILLS`            | unset                          | **Exact replacement** of the configured base **Skill policy** (ADR-0015) for one Run — comma-separated canonical Skill names. *Presence*, not content, is what counts: an explicitly empty value is a real empty policy (which then fails preflight for omitting the **Required Skills**), while leaving it unset keeps the project / global `enabled_skills`. Because it replaces the base policy it also suppresses the one-time legacy-Config migration offer. See [`docs/skill-policy.md`](../../docs/skill-policy.md). |
 | `GIT_LOOPY_DENY_TOOLS`                | _(empty)_                      | Comma-separated tool denylist. **Unioned** with `--deny-tool` CLI flags — CLI does NOT override env (security-positive divergence).                                                                              |
 | `GIT_LOOPY_DENY_SKILLS`               | _(empty)_                      | **Deprecated** final guard (contract §17.2): comma-separated skill denylist for the `skill` meta-tool's `arguments.skill` field. **Unioned** with `--deny-skill` CLI flags and across config tiers — it only ever subtracts, and a denial that would remove a Required Skill is a validation failure rather than a quiet subtraction. Prefer omitting the name from `enabled_skills`. |
 | `GIT_LOOPY_OTEL_ENABLED`              | unset (disabled)               | Truthy (`1`, `true`, `yes`, `on`) enables OpenTelemetry tracing. Requires the `[otel]` extra. When disabled, `opentelemetry` is never imported — base install pays zero cost.                                    |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`     | unset                          | Presence (non-empty) also enables OTel tracing — matches the conventional OTel-ecosystem activation pattern.                                                                                                     |
 | `GIT_LOOPY_SEND_TIMEOUT_SECONDS`      | `7200` (2 h)                   | Per-Iteration `send_and_wait` timeout. The SDK's default of `60` is far too short for autonomous Iterations that frequently run 30+ minutes.                                                                      |
-| `GIT_LOOPY_INTERACTIVE`               | unset (auto-detect from TTY)   | Truthy (`1`, `true`, `yes`, `on`) forces the interactive Textual dashboard; falsy (`0`, ...) forces today's line printer. Unset = auto-detect (interactive only on a TTY). Either way the interactive path additionally requires the `[tui]` extra; if it is missing, an explicit request warns and falls back to the line printer. **Before the loop starts, an interactive run with ModelSelectionMode enabled (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`; the flag wins over the env var) opens a one-time, two-stage startup picker** (model, then reasoning effort): stage 1 lists models live from `list_models()` (id, display name, premium multiplier, context-window limit, reasoning support + default effort) with policy-disabled models greyed-out and non-selectable and the cursor pre-selected on `GIT_LOOPY_MODEL` (or the built-in default); stage 2 lists the chosen model's supported efforts and is auto-skipped when it supports none. `Enter` confirms, `Esc` steps back / cancels, `q` / `Ctrl+C` cancels (keeping the env/default). The confirmed model + effort are baked into the run. On any `list_models()` failure (offline / unauthed / error) the picker falls back to the env/default values with a warning and the run still proceeds. The picker is **opt-in**: a default interactive run skips it and goes straight to the loop on the configured model/effort with no prompt. When the picker is requested but no interactive TUI is available (`--no-interactive`, a non-TTY run, or the `[tui]` extra absent — and `--no-interactive` / non-TTY runs always skip it), the run warns and falls back to the configured model. The live interface is **tabless and two-level** (ADR-0003). **Level 1** is the **Dashboard** — the only top-level screen: the header band, the live **Queue**, and a compact **Summary** rollup band (run-level totals: tokens, cost, commits, closures, strikes), stacked. The Queue holds focus; `Up`/`Down` move its cursor. Its columns are **Issue \| Status \| Started \| Active \| Closed \| Iters \| Route \| Tokens in \| Tokens out \| Credits \| Premium**: **Started** is the 12-hour AM/PM local wall-clock time the issue first became active (blank until it has been active), **Active** is a live `H:MM:SS` duration that sums across every iteration that worked the issue (the run-start time stays in the header), **Route** is the **Routed pair** that issue is currently priced at — the newest resolution its **Pickup** reached, rendered `model @ effort` with `(backend)` for a half the harness chooses and the em dash while nothing has routed it — and **Tokens in**, **Tokens out**, **Credits** and **Premium** are that issue's live per-issue consumption — tokens plus the **AI Credits** and premium requests the harness reported billing, accrued to the **active** issue (the one named by the working marker) and summed across every iteration that worked it, reconciling with the **Summary** band's run-level totals (an Iteration the harness did not bill renders the `—` em dash rather than a zero, the same treatment the Summary uses). All **wall-clock** surfaces — the header run-start, the Queue's **Started**, and the **Log** line stamps — use 12-hour AM/PM local time, while **durations** (the header elapsed, the Queue's **Active**) stay `H:MM:SS`. **Level 2** is the per-issue **Log**: pressing `Enter` on a selected Queue row opens that issue's Log — the **active** issue shows a live, interleaved **Log** (reasoning dimmed + assistant message + key events, a bounded per-issue tail), a **non-active** issue shows its own retained Log tail with a footer noting the full record is in the JSONL replay log — and `Esc` returns to the Dashboard with the Queue cursor preserved. The Log **auto-scrolls** to the latest line (sticky-with-release): while it is at the bottom it stays pinned to the newest line as output streams in; scrolling up **pauses** autoscroll and shows a `↓ new lines below` indicator; returning to the bottom or pressing `End` **re-engages** auto-bottom and clears it. Every Log line is stamped with the 12-hour AM/PM local-system time it was appended (repeats within the same second are collapsed, so only the first line of a second shows the stamp), and each reasoning block opens with a timestamped `✻ Thinking:` marker. The full per-iteration **Summary** table stays the run-end scrollback artefact, not an in-app screen. `d` **Detaches** (tears down the dashboard but lets the run continue, printing the remainder to normal scrollback); `q` / `Ctrl+C` **Stops** the run, writing the run-end summary table to scrollback (a second `Ctrl+C` forces an immediate exit). |
-
-| `GIT_LOOPY_MODEL_SELECT`              | unset (picker off)             | Truthy (`1`, `true`, `yes`, `on`) opts the interactive run into **ModelSelectionMode** — the one-time startup model + reasoning-effort picker (see `GIT_LOOPY_INTERACTIVE`). Off by default, so an ordinary interactive run goes straight to the loop on the configured model/effort with no prompt. The `--select-model` / `--no-select-model` flag **wins** over this env var when the two disagree. The picker is a TUI action: when requested on a non-interactive run (`--no-interactive`, a non-TTY run, or the `[tui]` extra absent) the run warns and falls back to the configured model. |
+| `GIT_LOOPY_MODEL_SELECT`              | unset (picker off)             | Truthy (`1`, `true`, `yes`, `on`) opts the interactive run into **ModelSelectionMode** — the one-time startup model + reasoning-effort picker. Off by default, so an ordinary interactive run goes straight to the loop on the configured model/effort with no prompt. The `--select-model` / `--no-select-model` flag **wins** over this env var when the two disagree. When requested on a non-TTY run, the run warns and falls back to the configured model. |
 
 CLI flags (`--version`, `--model ID`, `--reasoning-effort EFFORT`,
 `-v` / `-vv` / `-vvv`,
 `--no-reasoning`, `--enable-skill` / `--disable-skill`, `--deny-tool`,
-`--deny-skill` (deprecated), `--interactive` /
-`--no-interactive`, `--select-model` / `--no-select-model`, `--parallel N`,
+`--deny-skill` (deprecated), `--select-model` / `--no-select-model`,
 `--issue N`)
 are the runner's only non-positional flags. `--model` / `--reasoning-effort`
 are per-run overrides at the **top** of the precedence chain (they win over
@@ -354,7 +393,7 @@ issue `N` instead of the head of the selection order, and every other issue
 keeps its place in that order behind it. The pin **bypasses order and nothing
 else** — a pinned issue still has to be eligible, and a pin that is closed,
 missing, unreadable, lacks `ready-for-agent`, fails the AFK-ready body
-discriminator, or (in **Parallel mode**) lacks `parallel-safe` **fails the
+discriminator, or lacks `parallel-safe` **fails the
 invocation** rather than falling back to normal order, because silently working
 a different issue than the one you named is worse than stopping. The refusal
 names what is wrong, down to the specific missing `##` section. It is
@@ -393,7 +432,6 @@ max_nmt_strikes = 5
 demotion_threshold = 3
 include_prs = true
 otel_enabled = false
-interactive = false
 send_timeout_seconds = 7200
 enabled_skills = ["tdd", "code-review"]
 deny_tools = ["bash"]
@@ -402,14 +440,14 @@ deny_skills = []   # deprecated final guard — prefer omitting from enabled_ski
 
 The **persisted** knobs are `model`, `reasoning_effort`, `classifier_model`,
 `classifier_effort`, `issue_source`,
-`include_prs`, `max_nmt_strikes`, `demotion_threshold`, `otel_enabled`, `interactive`,
+`include_prs`, `max_nmt_strikes`, `demotion_threshold`, `otel_enabled`,
 `send_timeout_seconds`, `enabled_skills`, and the two denylists. The
 model/effort **capability gate** (below) still applies to a config-supplied
 model. The two denylists are
 **unioned** across all four sources (CLI ∪ env ∪ project ∪ global) — never
 overridden — matching the security-positive env-var behavior. **Per-run-only**
 knobs are never read from a file: the positional `<max-iterations>` cap, `-v`
-verbosity, `--no-reasoning`, and `--parallel`. A
+verbosity, and `--no-reasoning`. A
 malformed `config.toml` aborts the run with a clean stderr message (exit `1`),
 never a traceback.
 
@@ -489,7 +527,7 @@ git-loopy config edit --global
   issue* at **Pickup**, and every unit of work has a pickup: a serial Iteration
   binds one issue before its session starts exactly as a **Parallel mode**
   **Lane** does, so the pair the Pickup resolved is the pair the session runs on
-  at `parallel = 1` (the default) and at any width. The whole chain, the
+  with one Lane (the serial fallback) and at any width. The whole chain, the
   `measured` tier included, is live out of the box, so `get` / `list` report a
   winning tier with nothing to qualify it. Until ADR-0037 routing was scoped to
   Parallel mode and the serial loop discarded the pair it had just resolved —
@@ -520,7 +558,7 @@ git-loopy config edit --global
 The settable keys are exactly the [persisted knobs](#persistent-config-configtoml)
 above (`model`, `reasoning_effort`, `classifier_model`, `classifier_effort`,
 `issue_source`, `max_nmt_strikes`, `demotion_threshold`,
-`include_prs`, `otel_enabled`, `interactive`, `send_timeout_seconds`,
+`include_prs`, `otel_enabled`, `send_timeout_seconds`,
 `deny_tools`, `deny_skills`). Per-run-only knobs are never persisted, so they are
 not `config` keys.
 
@@ -579,10 +617,10 @@ git-loopy calibrate --status
 git-loopy calibrate --dry-run
 
 # Measure every eligible Task type. Prints the plan, then asks.
-git-loopy calibrate --parallel 4
+git-loopy calibrate
 
 # Re-measure one Task type without paying for all seven.
-git-loopy calibrate docs --parallel 4
+git-loopy calibrate docs
 ```
 
 Every mode is **repository-scoped** and refuses outside a git repository — the
@@ -647,7 +685,7 @@ readable log rather than a file full of escape sequences. Costs are **AI
 Credits** throughout; no USD figure appears anywhere, and a Trial the harness did
 not bill reports `unknown AI Credits` rather than zero.
 
-`GIT_LOOPY_TRIAL_CONCURRENCY=N` runs N Trials at once, each in its own worktree.
+`GIT_LOOPY_CALIBRATE_CONCURRENCY=N` runs N Trials at once, each in its own worktree.
 A rung's first Trial is a probe run alone, so a rung that fails costs what it
 costs serially.
 
@@ -688,8 +726,6 @@ Four things it deliberately does not do:
 - **It costs no extra round trip.** The comparison reads the same live listing
   the Rate card already resolved, and a repository with no artifact never touches
   the roster at all.
-- **It says nothing in serial mode.** Routing is scoped to Parallel mode, so at
-  `--parallel 1` a re-calibration would change nothing you could observe.
 
 Three properties are worth knowing:
 

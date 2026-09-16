@@ -14,17 +14,17 @@ fi
 declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [WRAPPER_RUN_START]="wrapper.run.start"
   [WRAPPER_RUN_END]="wrapper.run.end"
+  [WRAPPER_STOP_REQUESTED]="wrapper.stop.requested"
+  [WRAPPER_STOP_LIFTED]="wrapper.stop.lifted"
   [WRAPPER_ISSUE_ACTIVATED]="wrapper.issue.activated"
   [WRAPPER_SKILL_POLICY_RESOLVED]="wrapper.skill_policy.resolved"
   [WRAPPER_ITERATION_START]="wrapper.iteration.start"
   [WRAPPER_ITERATION_END]="wrapper.iteration.end"
   [WRAPPER_AFK_READY_COLLECTED]="wrapper.afk_ready.collected"
   [WRAPPER_POOL_EXCLUDED]="wrapper.pool.excluded"
-  # The two halves of one **Pickup** walk (#397). This port admits every
-  # candidate -- it has no refusal to make, because the only admission the
-  # Wrapper contract names is §14's Routed pair and this port implements none --
-  # so it binds and never skips. The skip literal is carried for vocabulary
-  # parity and produced the day this port gains something to refuse.
+  # The two halves of one **Pickup** walk (#397). A serial Pickup records each
+  # candidate Readiness refuses before it records the candidate it binds, so a
+  # replay can explain why the ordered Pool's head was passed over.
   [WRAPPER_PICKUP_BOUND]="wrapper.pickup.bound"
   [WRAPPER_PICKUP_SKIPPED]="wrapper.pickup.skipped"
   [WRAPPER_CHECKPOINT_RECORDED]="wrapper.checkpoint.recorded"
@@ -34,10 +34,6 @@ declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [WRAPPER_PR_ADVANCED]="wrapper.pr.advanced"
   [WRAPPER_STRIKE]="wrapper.strike"
   [WRAPPER_ASK_USER_ATTEMPTED]="wrapper.ask_user.attempted"
-  # Run-scoped record of a **Dashboard fault** (ADR-0024). Only an Orchestrator
-  # that hosts a Dashboard can emit it; this port hosts none, so it carries the
-  # literal for vocabulary parity and never produces the Event.
-  [WRAPPER_DASHBOARD_FAULT]="wrapper.dashboard.fault"
   [WRAPPER_POOL_REFRESHED]="wrapper.pool.refreshed"
   [WRAPPER_CONTRIBUTION_START]="wrapper.contribution.start"
   [WRAPPER_CONTRIBUTION_WORK_FINISHED]="wrapper.contribution.work_finished"
@@ -125,7 +121,8 @@ declare -r GIT_LOOPY_PARALLEL_CAPABILITIES_JSON='{
   "rolling_dispatch": false,
   "integration_backlog": false,
   "adaptive_lane_limit": false,
-  "contribution_events": false
+  "contribution_events": false,
+  "execution_hosts": []
 }'
 
 # The Run-start Insight manifest as it goes on the wire: the frozen

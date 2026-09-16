@@ -303,6 +303,65 @@ def _write_fake_helper(path: Path, *, version: str, script: str = "") -> Path:
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_runtime_helper_prefers_the_clone_local_binary_over_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    version = tui_release.helper_release_version(REPOSITORY_ROOT)
+    repo_root = tmp_path / "repo"
+    clone_local = _write_fake_helper(
+        repo_root / ".git-loopy/bin/git-loopy-tui", version=version
+    )
+    path_helper = _write_fake_helper(tmp_path / "path-bin/git-loopy-tui", version=version)
+    monkeypatch.setenv("PATH", str(path_helper.parent))
+
+    helper = tui_release.resolve_runtime_helper(
+        repo_root, release_version=version, warn=lambda _message: None
+    )
+
+    assert helper == clone_local
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_runtime_helper_rejects_a_clone_local_release_mismatch(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    _write_fake_helper(repo_root / ".git-loopy/bin/git-loopy-tui", version="9.9.9")
+    warnings: list[str] = []
+
+    helper = tui_release.resolve_runtime_helper(
+        repo_root,
+        release_version="1.2.3",
+        warn=warnings.append,
+    )
+
+    assert helper is None
+    assert len(warnings) == 1
+    assert "clone-local" in warnings[0]
+    assert "9.9.9" in warnings[0]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_runtime_helper_accepts_a_path_release_mismatch_with_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    helper_path = _write_fake_helper(tmp_path / "bin/git-loopy-tui", version="9.9.9")
+    monkeypatch.setenv("PATH", str(helper_path.parent))
+    warnings: list[str] = []
+
+    helper = tui_release.resolve_runtime_helper(
+        tmp_path / "repo",
+        release_version="1.2.3",
+        warn=warnings.append,
+    )
+
+    assert helper == helper_path
+    assert len(warnings) == 1
+    assert "PATH" in warnings[0]
+    assert "9.9.9" in warnings[0]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
 def test_a_native_artifact_answers_the_probe_and_drains_a_minimal_run(
     tmp_path: Path,
 ) -> None:

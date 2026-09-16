@@ -73,6 +73,7 @@ Design notes:
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
@@ -84,6 +85,8 @@ from typing import (
     Sequence,
     runtime_checkable,
 )
+
+from git_loopy.readiness import BlockedByRead, BlockerNode
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; see SubprocessLabelClient
     from git_loopy.labels import LabelSpec, TrackerLabel
@@ -99,6 +102,10 @@ __all__ = [
     "SubprocessGitHubClient",
     "SubprocessLabelClient",
     "SubprocessTaskTypeLabelClient",
+    "MIN_GH_VERSION_FOR_READINESS",
+    "GhCapabilityError",
+    "parse_gh_version",
+    "verify_readiness_capability",
 ]
 
 _GH_BIN: Final[str] = "gh"
@@ -212,7 +219,19 @@ def next_read_step(limit: int, rows: int) -> ReadStep:
 #: ``comments`` is deliberately absent — :meth:`SubprocessGitHubClient.issue_view`
 #: appends it, and paying for it on a list read would cost a round-trip per
 #: candidate the discriminator is about to drop.
-_SHALLOW_ISSUE_FIELDS: Final[str] = "number,title,body,labels,state,url,createdAt"
+#:
+#: ``blockedBy`` (#438 finding 1) rides in the same call for the identical
+#: reason: **Readiness** (§3.3.1) needs the candidate's ``blockedBy``
+#: connection, and this is the one shallow read both the **Pool** collection
+#: and the **Pickup** re-read (:meth:`SubprocessGitHubClient.issue_view`)
+#: already make. Naming it here — rather than in a second, dedicated
+#: ``gh api graphql`` call per candidate — costs nothing extra on the read the
+#: caller was always going to make, where the dedicated call the readiness
+#: seam used to issue paid a full round-trip *per candidate considered*, not
+#: merely per candidate dispatched.
+_SHALLOW_ISSUE_FIELDS: Final[str] = (
+    "number,title,body,labels,state,url,createdAt,blockedBy"
+)
 
 #: The PR-surface analogue, named for the same reason. PR mode is opt-in and
 #: §3.2 orders *issues*, but a mixed serial **Pool** carries PR items beside
@@ -228,6 +247,172 @@ _RATE_LIMIT_MARKERS: Final[tuple[str, ...]] = (
     "too many requests",
     "abuse detection",
 )
+
+# --------------------------------------------------------------------------- #
+# Readiness (#438, ADR-0047, Wrapper contract §3.3.1)                         #
+# --------------------------------------------------------------------------- #
+
+#: The oldest ``gh`` release this reads the ``blockedBy`` connection against.
+#:
+#: Evidence (#438 finding 2): ``gh issue list``/``gh issue view --json`` only
+#: gained ``blockedBy`` (and ``blocking``, ``parent``, ``subIssues``,
+#: ``issueType``) in `v2.94.0
+#: <https://github.com/cli/cli/releases/tag/v2.94.0>`_ — see the `cli/cli
+#: changelog post
+#: <https://github.blog/changelog/2026-06-10-manage-sub-issues-types-and-dependencies-from-github-cli/>`_
+#: ("As of v2.94.0 ... `gh issue view` and `gh issue list` also expose parent,
+#: sub-issue, type, and dependency data as new JSON fields") and the
+#: ``cli/cli`` source (``api/queries_issue.go``'s ``Issue.BlockedBy
+#: LinkedIssueConnection`` field only exists from that release forward). A
+#: ``gh`` older than 2.94.0 rejects an unknown ``--json`` field outright
+#: (``gh``'s own client-side field allowlist), so gating here — before any
+#: **Pickup** is attempted — turns what would otherwise be a
+#: preflight-invisible failure inside the shallow list/view call (a call
+#: whose today's error path this ticket forbids reading as "no blockers", and
+#: which #438 says must never be mistaken for an empty **Pool**) into one
+#: loud, named failure before a single candidate is walked.
+MIN_GH_VERSION_FOR_READINESS: Final[tuple[int, int, int]] = (2, 94, 0)
+
+
+class GhCapabilityError(Exception):
+    """``gh`` cannot do something git-loopy requires, named at preflight.
+
+    Distinct from :exc:`GhError`: a :exc:`GhError` is one failed invocation; a
+    :exc:`GhCapabilityError` is a fact about the installed ``gh`` itself,
+    discovered *before* any candidate is walked, so it can be reported as "your
+    gh cannot do X, install >= Y" rather than surfacing later as a per-candidate
+    read failure a caller could mistake for "no blockers" (the hazard #438
+    names: an old ``gh`` failing silently inside the **Pool** read reads as an
+    empty Pool to an unattended Run).
+    """
+
+
+def parse_gh_version(raw: str) -> tuple[int, int, int]:
+    """Parse ``gh --version``'s first line into a ``(major, minor, patch)`` triple.
+
+    Pure, so the version gate can be unit-tested against arbitrary ``gh``
+    output without shelling out. Raises :exc:`GhCapabilityError` — not
+    :exc:`GhError` — because an unparseable version string is a capability
+    question ("can I trust what this gh reports?"), not a single failed
+    invocation.
+    """
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", raw)
+    if match is None:
+        raise GhCapabilityError(
+            f"could not parse a version from `gh --version` output: {raw!r}"
+        )
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+def verify_readiness_capability(version: tuple[int, int, int]) -> None:
+    """Fail loud, at preflight, if ``version`` cannot read **Readiness**.
+
+    This is the safeguard #438 owes: adding a readiness read that only fails
+    once a candidate is already being walked would surface as a quiet
+    per-candidate error today's error path reads as "no blockers" — which an
+    unattended Run would take for an empty **Pool** and exit clean. Calling
+    this once, before any **Pickup**, turns that into a loud preflight failure
+    that names the missing capability and the remedy.
+
+    Bound to :data:`MIN_GH_VERSION_FOR_READINESS` rather than taking a
+    ``minimum`` parameter (#438 finding 4): no production caller has ever
+    overridden it — the one version this function may be asked about is
+    "can the installed ``gh`` read Readiness", which
+    :data:`MIN_GH_VERSION_FOR_READINESS` answers on its own. A parameter no
+    caller supplies is not configurability; it is a second place the floor
+    could silently drift from the constant a reader would actually check.
+
+    Args:
+        version: The installed ``gh``'s ``(major, minor, patch)``, as
+            :func:`parse_gh_version` reads it.
+
+    Raises:
+        GhCapabilityError: When ``version < MIN_GH_VERSION_FOR_READINESS``,
+            naming both versions and the upgrade remedy.
+    """
+    if version < MIN_GH_VERSION_FOR_READINESS:
+        installed = ".".join(str(part) for part in version)
+        required = ".".join(str(part) for part in MIN_GH_VERSION_FOR_READINESS)
+        raise GhCapabilityError(
+            f"gh {installed} cannot read issue dependencies (blockedBy) via "
+            f"`gh issue list`/`gh issue view --json`; git-loopy requires "
+            f"gh >= {required}. Upgrade gh: https://cli.github.com/."
+        )
+
+
+#: A genuinely empty ``blockedBy`` connection: ``{"totalCount": 0, "nodes": []}``,
+#: which :func:`_parse_blocked_by_connection` parses to exactly this value. Used
+#: only when the field was actually present and actually empty — never as a
+#: default for a field the response omitted; see :data:`_UNPROVABLE_BLOCKED_BY`.
+_EMPTY_BLOCKED_BY: Final[BlockedByRead] = BlockedByRead(total_count=0, nodes=())
+
+#: The sentinel for a ``blockedBy`` field that was absent or ``null`` — the
+#: shape :meth:`SubprocessGitHubClient.issue_list` / :meth:`issue_view` see on a
+#: ``gh`` too old to have honoured the field, or on a response that happened to
+#: omit it. This is *not* the same fact as :data:`_EMPTY_BLOCKED_BY`: the
+#: connection was never read at all, so there is nothing to say no blocker was
+#: found. Its explicit ``total_count=None`` representation reaches
+#: ``readiness_unprovable`` without overloading a real GraphQL connection
+#: (#438 finding 4, ADR-0047).
+_UNPROVABLE_BLOCKED_BY: Final[BlockedByRead] = BlockedByRead.unprovable()
+
+
+def _parse_blocked_by_connection(
+    connection: object, cmd: Sequence[str], *, field: str
+) -> BlockedByRead:
+    """Convert one ``blockedBy`` connection object into a :class:`BlockedByRead`.
+
+    The one parser for the connection shape ``gh issue list``/``gh issue view
+    --json blockedBy`` returns, kept separate from :func:`_parse_issue` so the
+    connection-shape parsing (partial-error nodes, missing keys) does not
+    entangle with the rest of the issue JSON (#438 finding 1).
+
+    ``gh --json`` renders a GraphQL-unreadable node as the Go zero value
+    ``{"id":"","number":0,"state":"","title":"","url":""}``, because its
+    ``LinkedIssueConnection.Nodes`` is a value slice. It is translated to a
+    :class:`~git_loopy.readiness.BlockerNode` with ``readable=False`` so the
+    candidate remains in the Pool and is skipped as unprovable at Pickup.
+    """
+    try:
+        total_count = int(connection["totalCount"])
+        raw_nodes = connection["nodes"]
+    except (KeyError, TypeError, IndexError) as exc:
+        raise GhError(
+            list(cmd), 0, f"gh {field} JSON malformed: {exc}"
+        ) from exc
+    nodes: list[BlockerNode] = []
+    for raw_node in raw_nodes:
+        if (
+            isinstance(raw_node, dict)
+            and raw_node.get("id") == ""
+            and raw_node.get("number") == 0
+            and raw_node.get("state") == ""
+            and raw_node.get("title") == ""
+            and raw_node.get("url") == ""
+        ):
+            nodes.append(BlockerNode(ref="", state=None, readable=False))
+            continue
+        try:
+            url = str(raw_node["url"])
+            number = raw_node["number"]
+            state = str(raw_node["state"]).lower()
+        except (KeyError, TypeError) as exc:
+            raise GhError(
+                list(cmd), 0, f"gh {field} node malformed: {exc}"
+            ) from exc
+        # ``gh`` 2.96.0's ``blockedBy`` nodes carry ``id``, ``number``,
+        # ``state``, ``title`` and ``url`` — no ``repository`` object (#438
+        # finding 1, verified against the live CLI). The owner/repo is only
+        # recoverable from ``url``: ``.../<owner>/<repo>/issues/<number>``.
+        try:
+            owner, repo_name = url.split("/")[3:5]
+        except (IndexError, ValueError) as exc:
+            raise GhError(
+                list(cmd), 0, f"gh {field} node malformed: url {url!r}"
+            ) from exc
+        ref = f"{owner}/{repo_name}#{number}"
+        nodes.append(BlockerNode(ref=ref, state=state, readable=True))
+    return BlockedByRead(total_count=total_count, nodes=tuple(nodes))
 
 
 class GhError(RuntimeError):
@@ -382,6 +567,18 @@ class Issue:
             to ``""`` — an *absent* timestamp — and never substitutes a clock
             reading of its own.
         comments: Tuple of :class:`Comment`, only populated by :func:`issue_view`.
+        blocked_by: This issue's ``blockedBy`` connection (#438, ADR-0047,
+            Wrapper contract §3.3.1), read from the same ``--json`` call as
+            every other field here — both :func:`issue_list` (the shallow
+            **Pool** collection) and :func:`issue_view` (the authoritative
+            **Pickup** re-read) populate it, so **Readiness**
+            (:mod:`git_loopy.readiness`) never has to issue a second,
+            per-candidate ``gh api graphql`` call just to see it. A field
+            actually present and empty parses to an empty connection
+            (``total_count=0``) — the common path. A field the response
+            omitted or returned ``null`` is a connection never read at all,
+            not an empty one, and maps instead to the sentinel that decides
+            ``readiness_unprovable`` (ADR-0047, #438 finding 1).
     """
 
     number: int
@@ -392,6 +589,7 @@ class Issue:
     url: str
     created_at: str = ""
     comments: tuple[Comment, ...] = field(default=())
+    blocked_by: BlockedByRead = field(default_factory=lambda: _EMPTY_BLOCKED_BY)
 
 
 @dataclass(frozen=True)
@@ -551,6 +749,12 @@ def _parse_issue(data: object, cmd: Sequence[str]) -> Issue:
                     created_at=str(c.get("createdAt") or ""),
                 )
             )
+        blocked_by_raw = data.get("blockedBy")
+        blocked_by = (
+            _parse_blocked_by_connection(blocked_by_raw, cmd, field="issue blockedBy")
+            if blocked_by_raw is not None
+            else _UNPROVABLE_BLOCKED_BY
+        )
         return Issue(
             number=int(data["number"]),
             title=str(data["title"]),
@@ -560,6 +764,7 @@ def _parse_issue(data: object, cmd: Sequence[str]) -> Issue:
             url=str(data["url"]),
             created_at=str(data.get("createdAt") or data.get("created_at") or ""),
             comments=tuple(comments),
+            blocked_by=blocked_by,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise GhError(
@@ -693,6 +898,15 @@ class GitHubClient(Protocol):
 
     def pr_view(self, number: int) -> PullRequest:
         """Fetch one pull request including its ``comments`` and head-ref fields."""
+        ...
+
+    def gh_version(self) -> tuple[int, int, int]:
+        """The installed ``gh``'s ``(major, minor, patch)`` version.
+
+        Read once at preflight via :func:`verify_readiness_capability`, never
+        per candidate — the whole point is to fail before any **Pickup** is
+        attempted (§3.3.1, #438).
+        """
         ...
 
 
@@ -1009,6 +1223,16 @@ class SubprocessGitHubClient:
         raw = self._checked(cmd)
         parsed = _parse_json(raw, [_GH_BIN, *cmd])
         return _parse_pr(parsed, [_GH_BIN, *cmd])
+
+    def gh_version(self) -> tuple[int, int, int]:
+        """The installed ``gh``'s ``(major, minor, patch)`` version.
+
+        Raises:
+            GhError: If ``gh --version`` itself fails to run.
+            GhCapabilityError: If its output cannot be parsed as a version.
+        """
+        raw = self._checked(["--version"])
+        return parse_gh_version(raw)
 
 
 # --------------------------------------------------------------------------- #

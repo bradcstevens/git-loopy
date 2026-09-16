@@ -68,9 +68,13 @@ __all__ = [
     "PYTHON_INSIGHT_CAPABILITIES",
     "PARALLEL_CAPABILITY_NAMES",
     "PYTHON_PARALLEL_CAPABILITIES",
+    "PYTHON_EXECUTION_HOSTS",
+    "python_parallel_capabilities",
     # Wrapper event-type constants
     "WRAPPER_RUN_START",
     "WRAPPER_RUN_END",
+    "WRAPPER_STOP_REQUESTED",
+    "WRAPPER_STOP_LIFTED",
     "WRAPPER_ISSUE_ACTIVATED",
     "WRAPPER_SKILL_POLICY_RESOLVED",
     "WRAPPER_ITERATION_START",
@@ -86,7 +90,6 @@ __all__ = [
     "WRAPPER_PR_ADVANCED",
     "WRAPPER_STRIKE",
     "WRAPPER_ASK_USER_ATTEMPTED",
-    "WRAPPER_DASHBOARD_FAULT",
     # Rolling-dispatch (Parallel mode) event-type constants
     "WRAPPER_POOL_REFRESHED",
     "WRAPPER_CONTRIBUTION_START",
@@ -110,6 +113,11 @@ __all__ = [
     "CONTRIBUTION_IDENTITY_KEYS",
     "CONTRIBUTION_SCOPED_EVENT_TYPES",
     "CONTRIBUTION_TERMINAL_REASONS",
+    # Wind-down vocabulary
+    "WIND_DOWN_CAUSES",
+    "WIND_DOWN_STAGES",
+    "WIND_DOWN_CANCEL_CAUSE",
+    "WIND_DOWN_LIFTABLE_CAUSES",
     # Calibration event-type constants
     "CALIBRATION_TRIAL_START",
     "CALIBRATION_TRIAL_END",
@@ -221,6 +229,21 @@ PYTHON_PARALLEL_CAPABILITIES: dict[str, bool] = {
     # this declares.
     "contribution_events": True,
 }
+# Placement is relative to the Orchestrator, never an isolation grade. The
+# manifest is intentionally a list, and #460 is what it was made a list for:
+# the GitHub Actions host extends this declaration without adding a boolean to
+# every Runner-family member. Declaring a placement is a claim about this
+# distribution's own adapters -- a Run naming an undeclared one is refused at
+# preflight rather than downgraded to local.
+PYTHON_EXECUTION_HOSTS: tuple[str, ...] = ("local", "github-actions")
+
+
+def python_parallel_capabilities() -> dict[str, bool | list[str]]:
+    """The Python Runner's complete Run-start Parallel manifest."""
+    return {
+        **PYTHON_PARALLEL_CAPABILITIES,
+        "execution_hosts": list(PYTHON_EXECUTION_HOSTS),
+    }
 
 _DEFAULT_CONTEXT_TARGET_TOKENS = 100_000
 _DEFAULT_CONTEXT_CEILING_TOKENS = 150_000
@@ -233,6 +256,8 @@ _CONTEXT_WINDOW_SAFETY_PERCENT = 75
 # :func:`make_event`; they have no SDK equivalent.
 WRAPPER_RUN_START = "wrapper.run.start"
 WRAPPER_RUN_END = "wrapper.run.end"
+WRAPPER_STOP_REQUESTED = "wrapper.stop.requested"
+WRAPPER_STOP_LIFTED = "wrapper.stop.lifted"
 WRAPPER_ISSUE_ACTIVATED = "wrapper.issue.activated"
 WRAPPER_SKILL_POLICY_RESOLVED = "wrapper.skill_policy.resolved"
 WRAPPER_ITERATION_START = "wrapper.iteration.start"
@@ -273,14 +298,6 @@ WRAPPER_AUTO_CLOSE = "wrapper.auto_close"
 WRAPPER_PR_ADVANCED = "wrapper.pr.advanced"
 WRAPPER_STRIKE = "wrapper.strike"
 WRAPPER_ASK_USER_ATTEMPTED = "wrapper.ask_user.attempted"
-# Emitted once when a **Dashboard fault** — a Dashboard that raises — turns
-# into an involuntary **Detach** (#325, ADR-0024). Run-scoped: it is a fact
-# about the process hosting the renderer, not about any Iteration's work.
-# Carries ``error_type`` and the scrubbed ``error`` text, so a replay can tell
-# a Run the operator walked away from apart from one whose live view crashed
-# out from under them. Interactive Python Runs only — the shell and PowerShell
-# Orchestrators host no Dashboard and never emit it.
-WRAPPER_DASHBOARD_FAULT = "wrapper.dashboard.fault"
 
 # Rolling-dispatch events (Parallel mode). Rolling dispatch reuses Lanes
 # continuously instead of synchronising a Wave, so the Parallel lifecycle is
@@ -362,13 +379,47 @@ CONTRIBUTION_SCOPED_EVENT_TYPES: frozenset[str] = frozenset(
 
 # The behaviourally distinct terminal dispositions a ``wrapper.contribution.end``
 # MUST be able to tell apart. ``published`` is the only Parallel progress; the
-# other three each add exactly one Strike.
+# three ordinary unpublished dispositions each add exactly one Strike.
 CONTRIBUTION_TERMINAL_REASONS: tuple[str, ...] = (
     "published",
     "unchanged_branch",
     "checkpoint_failed",
     "serial_fallback",
+    "operator_stop",
 )
+
+# The **Wind-down** vocabulary (#445 §J, ADR-0043), carried on
+# :data:`WRAPPER_STOP_REQUESTED` and :data:`WRAPPER_STOP_LIFTED`. Both axes are
+# closed, because a **Wind-down** is the one thing a client attaching to a
+# draining Run reads to tell it apart from a healthy one, and an open vocabulary
+# there is a cause no consumer can render.
+#
+# ``cause`` names why refill stopped. A **Pool** that simply ran out is not a
+# cause: the Run finished the work it had, which is not a Wind-down.
+WIND_DOWN_CAUSES: tuple[str, ...] = (
+    "operator_stop",
+    "strike_limit",
+    "iteration_cap",
+)
+
+# ``stage`` is an *ordered* ladder, listed weakest-first, and a Run's announced
+# stage never decreases. A tuple rather than a set because the order is the
+# contract: ``drain`` stops refill while started work finishes, ``cancel``
+# additionally cancels the agent sessions still running.
+WIND_DOWN_STAGES: tuple[str, ...] = ("drain", "cancel")
+
+# Only the operator's own Stop may reach the cancel rung. Nothing cancels a
+# spent iteration cap or a Strike drain — both are latches the Run entered on
+# its own, and neither has a second gesture behind it to escalate.
+WIND_DOWN_CANCEL_CAUSE = "operator_stop"
+
+# The only revocable cause, and therefore the only one
+# :data:`WRAPPER_STOP_LIFTED` may name: a contribution publishing green during
+# an abort drain makes the Strike condition false and un-latches it. An operator
+# Stop and an iteration cap are durable, and a third ``stage`` value for
+# "cleared" was refused because a cleared operator Stop is representable
+# nonsense.
+WIND_DOWN_LIFTABLE_CAUSES: tuple[str, ...] = ("strike_limit",)
 
 # Calibration events (#371, ADR-0027). A **Calibration** is not a **Run** and a
 # **Trial** is not an **Iteration**, so its records get a type prefix of their own

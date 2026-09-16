@@ -77,7 +77,6 @@ def test_registry_covers_exactly_the_persisted_schema() -> None:
         "demotion_threshold",
         "include_prs",
         "otel_enabled",
-        "interactive",
         "send_timeout_seconds",
         "deny_tools",
         "deny_skills",
@@ -87,7 +86,6 @@ def test_registry_covers_exactly_the_persisted_schema() -> None:
 
 def test_coerce_bool_accepts_truthy_and_falsy_tokens() -> None:
     assert configcmd.coerce_value("include_prs", "true") is True
-    assert configcmd.coerce_value("interactive", "0") is False
     assert configcmd.coerce_value("otel_enabled", "Yes") is True
 
 
@@ -588,14 +586,6 @@ def test_get_enabled_skills_uses_presence_aware_replacement(tmp_path: Path) -> N
     )
 
     assert out.text == ""
-
-
-def test_get_tri_state_none_renders_empty(tmp_path: Path) -> None:
-    out = _Sink()
-    configcmd.run_get(
-        "interactive", repo_root=tmp_path, env=_env(tmp_path), out=out, err=_Sink()
-    )
-    assert out.text == ""  # unset interactive intent -> empty (auto)
 
 
 def test_get_unknown_key_errors(tmp_path: Path) -> None:

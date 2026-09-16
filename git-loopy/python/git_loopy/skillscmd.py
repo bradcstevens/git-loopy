@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 import sys
 from dataclasses import dataclass, replace
-from importlib.resources import files
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Mapping, Sequence
@@ -222,7 +222,7 @@ def run_textual_skill_picker(
     input_fn: Callable[[str], str] = input,
     output_fn: Callable[[str], None] = print,
 ) -> SkillSelectionResult | None:
-    """Run the optional ``[tui]`` picker; return ``None`` on cancel.
+    """Run the Textual picker; return ``None`` on cancel.
 
     Signature-compatible with :func:`run_plain_skill_picker` so the two are
     interchangeable behind :data:`PickerRunner`. ``input_fn`` and ``output_fn``
@@ -230,9 +230,9 @@ def run_textual_skill_picker(
     accepting them is what lets one collection seam call either implementation
     without knowing which it got.
 
-    Textual is imported **here**, not at module import, so ``--help``, every
-    non-interactive command, and the base test suite never pay for — or require
-    — the optional extra.
+    Textual is imported **here**, not at module import, so ``--help`` and every
+    non-interactive command keep a light import path even though Textual is now
+    a base dependency.
     """
     from .interactive.skill_picker_app import SkillPickerApp
 
@@ -248,7 +248,7 @@ def select_skill_picker(
 
     The plain-terminal picker is the base installation's guarantee, so it is the
     fallback for every invocation that cannot render a fullscreen app — the
-    ``[tui]`` extra absent, or stdout not a terminal. Both implementations drive
+    Textual unavailable, or stdout not a terminal. Both implementations drive
     the same :class:`SkillSelectionModel` and return the same
     :class:`SkillSelectionResult`, so this decides presentation only.
     """
@@ -265,14 +265,14 @@ def _stdout_isatty() -> bool:
 
 
 def _textual_importable() -> bool:
-    """Probe the ``[tui]`` extra without importing it.
+    """Probe Textual availability without importing it.
 
-    Reuses the interactive path's pure probe (``importlib.util.find_spec``), so
-    checking costs no Textual import and no screen side effects.
+    ``find_spec`` costs no Textual import and no screen side effects.
     """
-    from .interactive.detect import textual_available
-
-    return textual_available()
+    try:
+        return importlib.util.find_spec("textual") is not None
+    except (ImportError, ValueError):  # pragma: no cover - defensive
+        return False
 
 
 def _resolve_picker_runner(picker_runner: PickerRunner | None) -> PickerRunner:
@@ -604,6 +604,21 @@ class _PolicyContext:
     configured: bool = True
 
 
+@dataclass(frozen=True)
+class SkillPolicyCollection:
+    """A discovered Skill policy ready for an interaction owner to render.
+
+    Discovery, baseline seeding, and validation evidence are gathered before an
+    interface receives the model.  The opaque context preserves that evidence
+    for :func:`validate_skill_policy`, so callers cannot accidentally validate
+    a choice against a second, different catalog.
+    """
+
+    model: SkillSelectionModel
+    _context: _PolicyContext
+    _scope: str
+
+
 def _collect_policy_context(
     *,
     scope: str,
@@ -671,6 +686,52 @@ def _collect_policy_context(
         )
 
 
+def discover_skill_policy(
+    *,
+    scope: str,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    client_factory: ClientFactory | None = None,
+    discoverer: CatalogDiscoverer = discover_skill_catalog,
+    git: GitClient | None = None,
+    required_skills: Iterable[str] | None = None,
+    installed_skills_dir: Path | None = None,
+    legacy_denied: Iterable[str] = (),
+) -> SkillPolicyCollection:
+    """Discover and seed a policy without choosing or rendering anything."""
+    context = _collect_policy_context(
+        scope=scope,
+        repo_root=repo_root,
+        env=env,
+        client_factory=client_factory,
+        discoverer=discoverer,
+        git=git,
+        required_skills=required_skills,
+        installed_skills_dir=installed_skills_dir,
+        legacy_denied=legacy_denied,
+    )
+    return SkillPolicyCollection(
+        model=_selection_model(
+            catalog=context.catalog,
+            enabled=context.seed,
+            required=context.required,
+            tracked_project_skills=context.tracked,
+        ),
+        _context=context,
+        _scope=scope,
+    )
+
+
+def validate_skill_policy(
+    collection: SkillPolicyCollection,
+    enabled: Iterable[str],
+) -> tuple[str, ...]:
+    """Validate a chosen policy against its discovered catalog and constraints."""
+    selected = tuple(sorted(set(enabled)))
+    _validate_policy(selected, scope=collection._scope, context=collection._context)
+    return selected
+
+
 def _validate_policy(
     enabled: Iterable[str],
     *,
@@ -689,6 +750,53 @@ def _validate_policy(
         required_skills=context.required,
         tracked_project_skills=context.tracked,
     )
+
+
+def validate_skill_policy_for_scope(
+    enabled: Iterable[str],
+    *,
+    scope: str,
+    repo_root: Path | None,
+    env: Mapping[str, str],
+    client_factory: ClientFactory | None = None,
+    discoverer: CatalogDiscoverer = discover_skill_catalog,
+    git: GitClient | None = None,
+    required_skills: Iterable[str] | None = None,
+    installed_skills_dir: Path | None = None,
+    legacy_denied: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """Resolve a policy the caller already holds, collecting its context here.
+
+    The companion to :func:`collect_skill_policy` for a caller that obtained a
+    proposed policy some other way — ``init``'s injected wizard runner is free
+    to return an answer set it never routed through the picker, and ADR-0015's
+    closed world has to hold for that answer set too.
+
+    Distinct from :func:`validate_skill_policy`, which takes a
+    :class:`SkillPolicyCollection` the caller already holds and so validates
+    against *that* collection's evidence. This one has no collection, so it
+    discovers the context itself from ``scope`` — which is why it cannot be the
+    same function, and why the two names differ rather than overloading one.
+    Both resolve through the same :func:`_validate_policy`, so neither can drift
+    into a second opinion about what a valid policy is.
+
+    Raises any member of :data:`SKILL_POLICY_FAILURES` when the policy cannot
+    be resolved, and returns the policy unchanged when it can.
+    """
+    names = tuple(enabled)
+    context = _collect_policy_context(
+        scope=scope,
+        repo_root=repo_root,
+        env=env,
+        client_factory=client_factory,
+        discoverer=discoverer,
+        git=git,
+        required_skills=required_skills,
+        installed_skills_dir=installed_skills_dir,
+        legacy_denied=legacy_denied,
+    )
+    _validate_policy(names, scope=scope, context=context)
+    return names
 
 
 def _policy_config_path(
@@ -739,8 +847,7 @@ def collect_skill_policy(
     The discovery workspace is gone before this returns, so a caller that writes
     afterwards can never leave a changed Config behind a teardown failure.
     """
-    runner = _resolve_picker_runner(picker_runner)
-    context = _collect_policy_context(
+    collection = discover_skill_policy(
         scope=scope,
         repo_root=repo_root,
         env=env,
@@ -751,17 +858,11 @@ def collect_skill_policy(
         installed_skills_dir=installed_skills_dir,
         legacy_denied=legacy_denied,
     )
-    model = _selection_model(
-        catalog=context.catalog,
-        enabled=context.seed,
-        required=context.required,
-        tracked_project_skills=context.tracked,
-    )
-    result = runner(model, input_fn=input_fn, output_fn=output_fn)
+    runner = _resolve_picker_runner(picker_runner)
+    result = runner(collection.model, input_fn=input_fn, output_fn=output_fn)
     if result is None:
         raise SkillPolicyCancelled
-    _validate_policy(result.enabled, scope=scope, context=context)
-    return result.enabled
+    return validate_skill_policy(collection, result.enabled)
 
 
 def run_skills_edit(

@@ -228,7 +228,6 @@ _KEYS: dict[str, _Key] = {
         ),
         _Key("include_prs", _coerce_bool, lambda rc: rc.run.include_prs),
         _Key("otel_enabled", _coerce_bool, lambda rc: rc.run.otel_enabled),
-        _Key("interactive", _coerce_bool, lambda rc: rc.interactive),
         _Key(
             "send_timeout_seconds",
             _coerce_timeout,

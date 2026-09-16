@@ -1,10 +1,9 @@
 """The glossary entries this arc's shipped code earned (#336).
 
-``CONTEXT.md`` records *shipped reality*: the **Terminal owner** and the
-**Dashboard fault** that ADR-0024 named, the **Rate card** and **AI Credits**
-that ADR-0026 settled, and the correction of a Cost derivation rule that has
-been deleted. ADR-0018 deferred that correction until the change shipped; this
-is when it ships.
+``CONTEXT.md`` records *shipped reality*: the **Terminal owner**, the **Rate
+card** and **AI Credits** that ADR-0026 settled, and the correction of a Cost
+derivation rule that has been deleted. ADR-0018 deferred that correction until
+the change shipped; this is when it ships.
 
 Documentation-only and deliberately narrow. Every assertion is a claim some
 future slice could contradict without noticing — the deleted token-multiplication
@@ -77,15 +76,6 @@ def test_the_glossary_names_the_terminal_owner() -> None:
     assert "_Avoid_:" in entry
 
 
-def test_the_glossary_names_the_dashboard_fault() -> None:
-    """A Dashboard that raises, which the Run survives (ADR-0024)."""
-    entry = _entry("Dashboard fault")
-
-    assert "raises" in entry
-    assert "involuntary **Detach**" in entry
-    assert "_Avoid_:" in entry
-
-
 def test_the_glossary_names_the_rate_card() -> None:
     """The server's live per-model price listing, never hand-maintained."""
     entry = _entry("Rate card")
@@ -103,7 +93,6 @@ def test_detach_covers_its_voluntary_and_its_involuntary_form() -> None:
 
     assert "voluntar" in entry
     assert "involuntar" in entry
-    assert "**Dashboard fault**" in entry
     assert "same continuation" in entry, "the two forms differ only in their label"
 
 
@@ -180,16 +169,6 @@ def test_no_part_of_the_glossary_still_derives_cost_from_a_usage_tally_rule() ->
 #: failure mode this pins — the same failure ADR-0026 avoided by leaving
 #: ``CONTEXT.md`` untouched until the Runs it describes existed.
 SHIPPED_TERMS: tuple[tuple[str, str, str], ...] = (
-    (
-        "Terminal owner",
-        "git-loopy/python/git_loopy/interactive/terminal.py",
-        "class TerminalOwner",
-    ),
-    (
-        "Dashboard fault",
-        "git-loopy/python/git_loopy/events.py",
-        "WRAPPER_DASHBOARD_FAULT =",
-    ),
     ("Rate card", "git-loopy/python/git_loopy/rate_card.py", "class RateCard"),
     (
         "AI Credits",
@@ -219,7 +198,6 @@ def test_every_new_term_is_implemented_by_shipped_code(
 #: and ADR-0026 records that renumbering. A published number is never reused.
 TERM_DECISIONS: tuple[tuple[str, str], ...] = (
     ("Terminal owner", ADR_0024),
-    ("Dashboard fault", ADR_0024),
     ("Detach", ADR_0024),
     ("AI Credits", ADR_0026),
     ("Rate card", ADR_0026),

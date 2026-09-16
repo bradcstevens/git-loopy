@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -56,6 +57,7 @@ from git_loopy.gh import (
     ReadStep,
     next_read_step,
 )
+from git_loopy.readiness import BlockedByRead, BlockerNode, decide_readiness
 from git_loopy.issue_order import (
     LABEL_PRIORITY,
     MAX_ACCEPTED_YEAR,
@@ -596,6 +598,41 @@ def test_python_normalized_rollup_fixture(case: dict[str, Any]) -> None:
     assert actual == case["expected"]
 
 
+def test_wind_down_vocabulary_has_one_declaration() -> None:
+    """#457: the two **Wind-down** axes are declared once and pinned here.
+
+    ``cause``, the ordered ``stage`` ladder, the cancel rung's sole cause and
+    the single liftable cause all live in ``events`` beside the two literals
+    that carry them, so a port copying the family's vocabulary copies the
+    constraints with it. Before this they were fixture-only prose, pinned
+    against nothing — which is how a producer drifts from the schema a
+    Dashboard reads without any suite noticing.
+
+    The ``stage`` assertion is on a *list*, not a set: the ladder's order is
+    the contract that makes "non-decreasing" mean anything, and a set would
+    let ``cancel`` and ``drain`` swap places silently.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"]["wrapper.stop.requested"]
+    assert tuple(contract["cause_values"]) == events_module.WIND_DOWN_CAUSES
+    assert tuple(contract["stage_order"]) == events_module.WIND_DOWN_STAGES
+    assert set(contract["stage_values"]) == set(events_module.WIND_DOWN_STAGES)
+    assert contract["cancel_cause"] == events_module.WIND_DOWN_CANCEL_CAUSE
+
+    # The clearing Event's vocabulary is a strict subset of the same causes:
+    # only a Strike drain is revocable, so nothing else may ever lift.
+    lifted = _EVENT_SCHEMA["payload_contracts"]["wrapper.stop.lifted"]
+    assert tuple(lifted["cause_values"]) == events_module.WIND_DOWN_LIFTABLE_CAUSES
+    assert set(events_module.WIND_DOWN_LIFTABLE_CAUSES) < set(
+        events_module.WIND_DOWN_CAUSES
+    )
+
+    # Both are Run control, never Insight and never contribution-scoped.
+    assert set(_EVENT_SCHEMA["run_control_types"]) == {
+        events_module.WRAPPER_STOP_REQUESTED,
+        events_module.WRAPPER_STOP_LIFTED,
+    }
+
+
 def test_pickup_reason_vocabulary_has_one_declaration() -> None:
     """#397: the reason an operator reads is the reason the runner produced.
 
@@ -815,6 +852,10 @@ _NOT_EVENT_TYPES = frozenset(
         "REDACTED_SECRET",
         "CALIBRATION_EVENT_PREFIX",
         "PARALLEL_DEGRADE_SOURCE_NOT_ROLLING",
+        # A **Wind-down** payload value, not a type literal: the one ``cause``
+        # the cancel rung admits. Pinned instead by
+        # ``test_wind_down_vocabulary_has_one_declaration``.
+        "WIND_DOWN_CANCEL_CAUSE",
     }
 )
 
@@ -827,6 +868,11 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
         and isinstance(value := getattr(events_module, name), str)
     }
     assert actual == _EVENT_SCHEMA["event_types"]
+
+
+def test_wrapper_dashboard_fault_is_retired_and_unreusable() -> None:
+    assert "WRAPPER_DASHBOARD_FAULT" not in events_module.__all__
+    assert "wrapper.dashboard.fault" not in _EVENT_SCHEMA["event_types"].values()
 
 
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
@@ -882,10 +928,22 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     consumer pinned to 1.1 already had to skip unknown types, so dropping them
     does not move the wire axis even though the obligation axis takes a major
     bump.
+
+    2.3 is the first bump where **both** axes move, and for unrelated reasons.
+    §10.1 gains the two-stage operator **Stop** and its own terminal reason,
+    which is an obligation; independently the wind-down adds the
+    ``wrapper.stop.requested`` type and widens ``wrapper.contribution.end``'s
+    ``reason`` and ``strike_reaction`` enums, and *that* is what moves
+    ``event_schema_version`` to 1.2 — a consumer switching on the old reason
+    set meets a value it has never seen, which is the one thing an additive
+    type never does.
+    2.4 adds the remaining Wind-down causes and the Strike-only lift Event. Both
+    literals ride the existing 1.2 step because that step already made the
+    Stop-event family a schema-visible change.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
-    assert _EVENT_SCHEMA["event_schema_version"] == "1.1"
-    assert _EVENT_SCHEMA["contract_version"] == "2.0"
+    assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
+    assert _EVENT_SCHEMA["contract_version"] == "2.4"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
@@ -933,6 +991,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
     scoped_elsewhere = (
         set(_EVENT_SCHEMA["contribution_identity"]["lifecycle_types"])
         | set(_EVENT_SCHEMA["contribution_identity"]["scheduler_scoped_types"])
+        | set(_EVENT_SCHEMA["run_control_types"])
         # Calibration lifecycle records are no **Run**'s Insight (#371): they
         # carry no ``run_id``, and nothing a Calibration buys is delivered work.
         | set(_EVENT_SCHEMA["calibration_identity"]["lifecycle_types"])
@@ -949,6 +1008,12 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "schema_version",
                 "insight_capabilities",
                 "parallel_capabilities",
+            ],
+            "execution_host_optional": [
+                "placement",
+                "isolation_grade",
+                "capacity",
+                "starting_lane_limit",
             ],
             # #410: the **Run readback**. Optional beside `required`, never in
             # it: a port that routes nothing has no Config to read back, and
@@ -1164,6 +1229,7 @@ def test_event_fixture_pins_rolling_contribution_contract() -> None:
         identity["lifecycle_types"]
         + identity["stamped_types"]
         + identity["scheduler_scoped_types"]
+        + _EVENT_SCHEMA["run_control_types"]
         + identity["forbidden_types"]
     )
     assert len(grouped) == len(set(grouped)), "an event type is in two scopes"
@@ -1182,7 +1248,7 @@ def test_event_fixture_pins_rolling_contribution_contract() -> None:
 
     end = contracts["wrapper.contribution.end"]
     assert tuple(end["reason_values"]) == events_module.CONTRIBUTION_TERMINAL_REASONS
-    assert end["strike_reaction_values"] == ["reset", "+1"]
+    assert end["strike_reaction_values"] == ["reset", "+1", "none"]
     assert "strike_reaction" in end["summary_required"]
 
 
@@ -1350,6 +1416,81 @@ def test_event_fixture_pins_the_parallel_capability_manifest() -> None:
     for orchestrator, manifest in capabilities["orchestrators"].items():
         if not manifest["parallel_mode"]:
             assert not any(manifest.values()), orchestrator
+
+
+def _execution_host_producers() -> tuple[str, ...]:
+    """Execution host placements with a production adapter in this distribution.
+
+    Derived from the source of *every* host module rather than from
+    ``execution_host.py`` alone: the seam's whole point is that a second
+    placement lands in its own module (#460's
+    :mod:`git_loopy.github_actions_host`), and a derivation that only looked at
+    the seam's own file would silently stop noticing new adapters — the exact
+    drift this guard exists to catch.
+    """
+    package = Path(events_module.__file__).parent
+    # The returned expression must be a statement -- a line-start ``return``,
+    # not the word inside a docstring's prose.
+    pattern = (
+        r"@property\s+def placement\(self\) -> Placement:.*?"
+        r"\n[ \t]+return (\"[^\"]+\"|[A-Za-z_][A-Za-z0-9_]*)[ \t]*\n"
+    )
+    placements: list[str] = []
+    for path in sorted(package.glob("*host*.py")):
+        module = importlib.import_module(f"{events_module.__package__}.{path.stem}")
+        for returned in re.findall(
+            pattern, path.read_text(encoding="utf-8"), flags=re.DOTALL
+        ):
+            placements.append(
+                returned[1:-1]
+                if returned.startswith('"')
+                else getattr(module, returned)
+            )
+    return tuple(dict.fromkeys(placements))
+
+
+def test_event_fixture_pins_the_execution_host_declaration() -> None:
+    """#450: host placement is declared beside the parallel capabilities.
+
+    The fixture declares only the closed placement vocabulary. It deliberately
+    does not prescribe an Orchestrator's selection; each member derives its
+    declaration from the hosts it actually implements.
+    """
+    declaration = _EVENT_SCHEMA["parallel_capabilities"]["execution_hosts"]
+    assert declaration["identifiers"] == ["local", "github-actions"]
+    assert tuple(events_module.PYTHON_EXECUTION_HOSTS) == _execution_host_producers()
+
+    manifest = events_module.python_parallel_capabilities()
+    assert all(host in declaration["identifiers"] for host in manifest["execution_hosts"])
+    assert not manifest["execution_hosts"] or manifest["parallel_mode"]
+
+
+def test_event_fixture_pins_execution_host_event_provenance() -> None:
+    """Only the Python producer announces and stamps an Execution host (#453)."""
+    provenance = _EVENT_SCHEMA["execution_host"]
+    assert provenance["run_start_key"] == "execution_host"
+    assert provenance["run_start_fields"] == [
+        "placement",
+        "isolation_grade",
+        "capacity",
+        "starting_lane_limit",
+    ]
+    assert provenance["contribution_start_key"] == "host"
+    assert provenance["producers"] == ["python"]
+    assert provenance["non_producers"] == ["shell", "powershell"]
+    assert provenance["legacy_value"] == "unknown"
+    assert (
+        _EVENT_SCHEMA["payload_contracts"]["wrapper.run.start"][
+            "execution_host_optional"
+        ]
+        == provenance["run_start_fields"]
+    )
+    assert (
+        _EVENT_SCHEMA["payload_contracts"]["wrapper.contribution.start"][
+            "execution_host_stamp"
+        ]
+        == provenance["contribution_start_key"]
+    )
 
 
 def test_python_parallel_manifest_matches_the_producers_it_has() -> None:
@@ -1640,7 +1781,13 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
     for source, event in _pinned_run_start_events():
         for key in required:
             assert key in event, (source, key)
-        assert set(event["parallel_capabilities"]) == set(parallel["names"]), source
+        manifest = event["parallel_capabilities"]
+        assert set(manifest) == {*parallel["names"], "execution_hosts"}, source
+        assert isinstance(manifest["execution_hosts"], list), source
+        assert set(manifest["execution_hosts"]) <= set(
+            parallel["execution_hosts"]["identifiers"]
+        ), source
+        assert not manifest["execution_hosts"] or manifest["parallel_mode"], source
         # An Orchestrator declares one manifest, so a trace may not mix them: a
         # record claiming a real Orchestrator's Insight manifest must carry that
         # same Orchestrator's parallel manifest. A serialization probe carrying
@@ -1655,7 +1802,9 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
             assert claimed & {
                 name
                 for name, declared in parallel["orchestrators"].items()
-                if declared == event["parallel_capabilities"]
+                if declared == {
+                    key: manifest[key] for key in parallel["names"]
+                }
             }, source
         checked += 1
     assert checked, "no pinned wrapper.run.start was found to check"
@@ -3184,6 +3333,19 @@ def test_the_python_capability_manifest_declares_the_written_contract() -> None:
     assert version_module.WRAPPER_CONTRACT_VERSION == _written_contract_version()
 
 
+def test_the_contract_distinguishes_producer_and_consumer_stream_obligations() -> None:
+    """A distribution list obliges each role without making the Dashboard an emitter."""
+    contract = " ".join(_written_contract_text().split())
+
+    assert "producer" in contract
+    assert "drive the stream through its own production serializer" in contract
+    assert "match the pinned lines" in contract
+    assert "consumer" in contract
+    assert "fold the stream without diagnostics" in contract
+    assert "three Orchestrator suites" in contract
+    assert "unchanged" in contract
+
+
 def _selection_order_section() -> str:
     """The written §3.2, so a coincidence elsewhere in the contract cannot pass."""
     contract = _written_contract_text()
@@ -3865,6 +4027,7 @@ def test_the_readiness_read_is_graphql_one_hop_and_a_full_page() -> None:
     assert read["connection"] == "blockedBy"
     assert read["hops"] == 1
     assert read["min_page_size"] == 50
+    assert read["fetched_at"] == "collection"
     assert read["decided_at"] == "pickup"
 
 
@@ -3993,3 +4156,49 @@ def test_readiness_case_ids_are_unique() -> None:
     ids = [case["id"] for case in _readiness_cases()]
 
     assert len(set(ids)) == len(ids)
+
+
+def _blocked_by_read(case: dict[str, Any]) -> BlockedByRead:
+    """One fixture case's ``blocked_by`` object as the seam's own input type.
+
+    Translation only, per the Conformance README: the adapter shapes the
+    fixture record into :class:`~git_loopy.readiness.BlockedByRead` but calls
+    the production seam (:func:`~git_loopy.readiness.decide_readiness`) rather
+    than reproducing its decision.
+    """
+    connection = case["blocked_by"]
+    return BlockedByRead(
+        total_count=connection["total_count"],
+        nodes=tuple(
+            BlockerNode(
+                ref=node["ref"],
+                state=node["state"],
+                readable=node.get("readable", True),
+            )
+            for node in connection["nodes"]
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _readiness_cases(),
+    ids=lambda case: case["id"],
+)
+def test_readiness_fixture_drives_the_python_readiness_seam(
+    case: dict[str, Any],
+) -> None:
+    """#438: the pure readiness seam is *driven by* the fixture, not re-derived.
+
+    Every one of the fixture's ten cases must reach the exact verdict, skip
+    reason, and blocker set :func:`decide_readiness` produces -- the adapter
+    translates the fixture record into the seam's own input type and calls the
+    production decision, never a second copy of it.
+    """
+    expected = case["expected"]
+    verdict = decide_readiness(_blocked_by_read(case))
+
+    assert verdict.verdict == expected["verdict"], case["id"]
+    assert verdict.admissible is expected["admissible"], case["id"]
+    assert verdict.skip_reason == expected["skip_reason"], case["id"]
+    assert list(verdict.blockers) == expected.get("blockers", []), case["id"]

@@ -21,7 +21,10 @@
     "connection": "blockedBy",
     "min_page_size": 50,
     "hops": 1,
+    "fetched_at": "collection",
     "decided_at": "pickup",
+    "fetch_note": "The `blockedBy` connection is collected with the candidate and carried to Pickup. This read adds no request beyond collection.",
+    "decision_note": "Pickup takes the readiness verdict while walking the ordered Pool from the carried connection; it does not make a second dependency read.",
     "transport_note": "GraphQL, never REST. REST is documented to undercount cross-repository dependencies and to do so silently -- there is no `totalCount` to notice the shortfall by -- so a REST read can report a blocked candidate as ready, which is the one outcome this fixture exists to prevent.",
     "page_size_note": "GitHub caps `blockedBy` at 50 links per issue and GraphQL accepts `first: 100`, so a complete read is always one page. A member that asks for fewer than the cap has a defect; an incomplete read is never `the list is long`.",
     "hops_note": "One hop, never traversed. Transitive traversal is a non-goal: it computes a property of the graph rather than reading an assertion about an issue, and it is unbounded in depth."

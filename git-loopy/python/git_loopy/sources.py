@@ -45,7 +45,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -58,6 +58,12 @@ from git_loopy.issue_order import (
     promote_pinned,
 )
 from git_loopy.issue_pin import PinnedIssue, refuse_pin
+from git_loopy.readiness import (
+    SKIP_BLOCKED_BY_OPEN_DEPENDENCY,
+    BlockedByRead,
+    Readiness,
+    decide_readiness,
+)
 from git_loopy.wrapper import (
     actionable_close_refs,
     exit_code_for,
@@ -87,6 +93,7 @@ __all__ = [
     "PoolExclusion",
     "afk_ready_exclusion",
     "in_selection_order",
+    "is_lane_candidate",
     "is_afk_ready",
     "is_pr_afk_ready",
 ]
@@ -304,6 +311,11 @@ class AfkReadyItem:
             local markdown carries no source timestamp — a local-markdown Pool
             therefore orders by ref alone, which is what an absent timestamp
             already means.
+        blocked_by: The native GitHub issue dependency connection captured by
+            the authoritative collection read. Readiness is still decided only
+            when the item reaches **Pickup**; carrying this fact prevents that
+            decision from repeating the read. PR and PRDs items retain the
+            unprovable default because they have no such connection.
     """
 
     ref: int | str
@@ -313,6 +325,7 @@ class AfkReadyItem:
     head_sha: str = ""
     labels: tuple[str, ...] = ()
     created_at: str = ""
+    blocked_by: BlockedByRead = field(default_factory=BlockedByRead.unprovable)
 
 
 @dataclass(frozen=True)
@@ -427,12 +440,44 @@ class PoolCandidate:
             built on has to survive the cheap refresh — a candidate that only
             acquires its timestamp at the authoritative pickup read acquires it
             after the decision that needed it.
+        blocked_by: The candidate's native dependency connection from this
+            **Membership read**. A Lane's candidacy predicate decides its
+            **Readiness** from this already-carried value, so refresh stays one
+            list call however large the **Pool** is. Defaults to
+            :meth:`~git_loopy.readiness.BlockedByRead.unprovable`, matching
+            :attr:`AfkReadyItem.blocked_by`: a record whose blockers were never
+            read has not established that there are none, and the type a
+            candidacy predicate reads directly is the wrong place to assume it.
     """
 
     ref: int | str
     title: str
     labels: tuple[str, ...] = ()
     created_at: str = ""
+    blocked_by: BlockedByRead = field(default_factory=BlockedByRead.unprovable)
+
+
+def is_lane_candidate(candidate: PoolCandidate) -> bool:
+    """Return whether a **Parallel-safe** candidate is Ready for a **Lane**.
+
+    The human's **Parallel-safe** assertion and the tracker's **Readiness**
+    fact are independent candidacy predicates. Keeping their composition beside
+    the Membership record means every Rolling-dispatch caller applies the same
+    pure decision to the blocker connection the **Membership read** carried.
+    """
+    return (
+        isinstance(candidate.ref, int)
+        and LABEL_PARALLEL_SAFE in candidate.labels
+        and decide_readiness(candidate.blocked_by).admissible
+    )
+
+
+def has_proven_open_blocker(candidate: PoolCandidate) -> bool:
+    """Return whether this candidate's carried read proves an open blocker."""
+    return (
+        decide_readiness(candidate.blocked_by).skip_reason
+        == SKIP_BLOCKED_BY_OPEN_DEPENDENCY
+    )
 
 
 @dataclass(frozen=True)
@@ -580,6 +625,22 @@ class IssueSource(Protocol):
         """
         ...
 
+    def readiness(self, item: AfkReadyItem) -> Readiness:
+        """This candidate's **Readiness** verdict (#438, ADR-0047, §3.3.1).
+
+        Asked at **Pickup**, per candidate the runner reaches — never at
+        collection. A source may carry a connection it already read into
+        :class:`AfkReadyItem`, but this is the only point that evaluates it. A
+        source with no native dependency graph (the PRDs backend) has nothing
+        to be blocked by and reports every candidate ready. Takes the whole
+        item (not a bare ref) so a GitHub-backend implementation can tell a PR
+        candidate from an issue via :attr:`AfkReadyItem.kind` — the native
+        ``blocked_by`` dependency graph ADR-0047 reads is an *issue* concept;
+        GitHub's own GraphQL schema has no ``blockedBy`` connection on a pull
+        request.
+        """
+        ...
+
 
 # --------------------------------------------------------------------------- #
 # GitHub backend                                                              #
@@ -668,25 +729,7 @@ class GitHubIssueSource:
         return None
 
     def preflight(self) -> int | None:
-        """Verify ``gh`` is on PATH, authenticated, and resolves a repo.
-
-        GitHub mode requires ``gh`` to be available, authenticated, and repo-scoped.
-        """
-        try:
-            authed = self._gh.auth_status()
-        except gh_module.GhError as exc:
-            self._diag.error(
-                "gh preflight failed: %s. Install `gh` from "
-                "https://cli.github.com/.",
-                exc,
-            )
-            return exit_code_for("preflight_failed")
-        if not authed:
-            self._diag.error(
-                "gh is not authenticated. Run `gh auth login` and re-run "
-                "git_loopy."
-            )
-            return exit_code_for("preflight_failed")
+        """Verify the authenticated GitHub source resolves this repository."""
         try:
             repo = self._gh.repo_view()
         except gh_module.GhError as exc:
@@ -696,8 +739,41 @@ class GitHubIssueSource:
                 exc,
             )
             return exit_code_for("preflight_failed")
+        readiness_rc = self._preflight_readiness()
+        if readiness_rc is not None:
+            return readiness_rc
         self._diag.info("preflight ok: %s", repo.nwo)
         return self._preflight_pin()
+
+    def _preflight_readiness(self) -> int | None:
+        """Fail loud, before any **Pickup**, if ``gh`` cannot read Readiness.
+
+        Issue #438 (ADR-0047, Wrapper contract §3.3.1): a ``gh`` too old to
+        report ``blockedBy`` must never fail *inside* the shallow list or a
+        per-candidate read, because today's error path there reads a failure
+        as an empty **Pool** — an unattended Run would quietly conclude there
+        is no work and exit clean. Checking the capability once here, at
+        preflight, turns that into a loud failure naming the missing
+        capability and the remedy, before a single candidate is walked.
+        """
+        try:
+            version = self._gh.gh_version()
+        except gh_module.GhError as exc:
+            self._diag.error(
+                "gh --version failed: %s. Install `gh` from "
+                "https://cli.github.com/.",
+                exc,
+            )
+            return exit_code_for("preflight_failed")
+        except gh_module.GhCapabilityError as exc:
+            self._diag.error("gh preflight failed: %s", exc)
+            return exit_code_for("preflight_failed")
+        try:
+            gh_module.verify_readiness_capability(version)
+        except gh_module.GhCapabilityError as exc:
+            self._diag.error("gh preflight failed: %s", exc)
+            return exit_code_for("preflight_failed")
+        return None
 
     def _preflight_pin(self) -> int | None:
         """Refuse the invocation when ``--issue N`` names an unworkable issue.
@@ -841,6 +917,7 @@ class GitHubIssueSource:
                     rendered_block=_format_github_issue_block(full),
                     labels=tuple(full.labels),
                     created_at=full.created_at,
+                    blocked_by=full.blocked_by,
                 )
             )
 
@@ -894,6 +971,7 @@ class GitHubIssueSource:
                 title=issue.title,
                 labels=tuple(issue.labels),
                 created_at=issue.created_at,
+                blocked_by=issue.blocked_by,
             )
             for issue in ordered
         )
@@ -928,10 +1006,11 @@ class GitHubIssueSource:
         """Re-read ``ref`` authoritatively and render it for dispatch.
 
         Applies #219 §2.10 verbatim: the issue must still be open, still carry
-        ``ready-for-agent`` *and* ``parallel-safe``, and still satisfy the
-        AFK-ready body discriminator. The same read supplies the comments and
-        rendered prompt block, so a **Lane** never dispatches from membership
-        that a cheap refresh happened to observe some seconds ago.
+        ``ready-for-agent`` *and* ``parallel-safe``, still satisfy the
+        AFK-ready body discriminator, and still be **Ready**. The same read
+        supplies the comments, blockers, and rendered prompt block, so a
+        **Lane** never dispatches from membership that a cheap refresh happened
+        to observe some seconds ago.
 
         Returns:
             A :class:`Pickup` whose ``outcome`` is ``"validated"`` (dispatchable),
@@ -956,6 +1035,7 @@ class GitHubIssueSource:
             or LABEL_READY_FOR_AGENT not in labels
             or LABEL_PARALLEL_SAFE not in labels
             or not is_afk_ready(full.body or "")
+            or not decide_readiness(full.blocked_by).admissible
         ):
             return Pickup(outcome=PICKUP_STALE)
 
@@ -967,6 +1047,7 @@ class GitHubIssueSource:
                 rendered_block=_format_github_issue_block(full),
                 labels=labels,
                 created_at=full.created_at,
+                blocked_by=full.blocked_by,
             ),
         )
 
@@ -1059,6 +1140,29 @@ class GitHubIssueSource:
                 ref,
                 exc,
             )
+
+    def readiness(self, item: AfkReadyItem) -> Readiness:
+        """Decide readiness from the collection read carried on ``item``.
+
+        A non-``int`` ref (defensive only — the GitHub backend never produces
+        one) has no dependency graph to read and is reported ready, mirroring
+        :class:`PrdsIssueSource`'s own answer. A ``"pr"`` item is reported
+        ready without I/O for the same reason: GitHub's ``blockedBy``
+        connection lives on the ``Issue`` GraphQL type, not ``PullRequest``
+        (``repository.issue(number:)`` resolves ``null`` for a PR number), so
+        a native issue-dependency graph is not a fact a PR carries.
+
+        ``collect_pool`` carries the connection from its authoritative
+        ``issue_view`` into the item, so this decision performs no I/O and adds
+        no round-trip per candidate. An unavailable connection is represented
+        explicitly by :meth:`BlockedByRead.unprovable`, which becomes
+        ``readiness_unprovable`` rather than silently admitting a candidate
+        whose blockers were never checked.
+        """
+        ref = item.ref
+        if item.kind == "pr" or not isinstance(ref, int):
+            return Readiness.ready()
+        return decide_readiness(item.blocked_by)
 
     def _detect_pr_advances(
         self, pool: list[AfkReadyItem]
@@ -1429,3 +1533,8 @@ class PrdsIssueSource:
         """
         _ = ref
         _ = body
+
+    def readiness(self, item: AfkReadyItem) -> Readiness:
+        """Always ready — local markdown carries no native dependency graph."""
+        _ = item
+        return Readiness.ready()

@@ -273,11 +273,12 @@ git-loopy skills edit --global
 
 Opens the searchable multi-select picker, validates, then saves **one** policy
 atomically. Both renderings of the picker — the full-screen one from the
-optional `[tui]` extra and the plain numbered one everywhere else — drive the
+full-screen Textual picker on a terminal and the plain numbered one everywhere
+else — drive the
 same selection model and obey the same rules; the keys for each are in
 [`docs/skills-setup.md`](skills-setup.md#the-skill-picker-has-two-renderings-and-one-set-of-rules).
-The full-screen picker is **optional, never required**: without the extra the
-plain picker runs and returns the same selection.
+The full-screen picker is used on a terminal; the plain picker is used
+otherwise and returns the same selection.
 
 Two rules are enforced *in the picker*, not at save time:
 
@@ -394,7 +395,7 @@ when the repository carries Config, otherwise global.
 | --- | --- |
 | Confirm | the selection is saved; the Run continues on it and is never asked again |
 | Cancel | **nothing is written and nothing is started** — the Run exits non-zero so no Iteration proceeds on a policy you declined to choose |
-| No TTY, or `--no-interactive` | nothing is prompted or persisted; the Run proceeds on the Minimal Skill policy and warns, naming `git-loopy skills edit` as the fix |
+| No TTY | nothing is prompted or persisted; the Run proceeds on the Minimal Skill policy and warns, naming `git-loopy skills edit` as the fix |
 
 Automation therefore never blocks on the question, and never answers it either.
 

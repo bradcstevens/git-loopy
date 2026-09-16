@@ -4,7 +4,7 @@ The rule under test is one sentence, and it is the **reversal** of the one #379
 shipped: **Routing** resolves at **Pickup**, every unit of work has a pickup, so
 the pair a Pickup resolved is the pair its session runs on — a serial
 **Iteration** exactly as much as a **Lane**. Nothing about routing, the
-**Measured routing** tier included, is inert at ``parallel == 1`` any more.
+**Measured routing** tier included, applies in every mode.
 """
 
 from __future__ import annotations
@@ -58,9 +58,7 @@ def test_routing_is_in_force_in_serial_and_in_parallel_mode() -> None:
     configures a ``[routing]`` table and types ``git-loopy`` sees it take
     effect, which is the whole of ADR-0037.
     """
-    assert routing_scope.routing_in_force(routing_scope.SERIAL_PARALLELISM)
-    assert routing_scope.routing_in_force(2)
-    assert routing_scope.routing_in_force(9)
+    assert routing_scope.routing_in_force()
 
 
 def test_nothing_here_refuses_or_notes_a_serial_run() -> None:
@@ -73,7 +71,7 @@ def test_nothing_here_refuses_or_notes_a_serial_run() -> None:
     """
     assert not hasattr(routing_scope, "calibration_refusal")
     assert not hasattr(routing_scope, "SERIAL_INERT_NOTE")
-    assert routing_scope.__all__ == ["SERIAL_PARALLELISM", "routing_in_force"]
+    assert routing_scope.__all__ == ["routing_in_force"]
 
 
 def test_the_operator_reference_declares_that_routing_applies_in_serial() -> None:

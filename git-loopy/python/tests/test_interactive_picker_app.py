@@ -1,7 +1,7 @@
 """Pilot tests for ``git_loopy.interactive.picker_app`` (issue #24).
 
-Gated behind ``pytest.importorskip("textual")`` so the base (no ``[tui]`` extra)
-install skips them. They drive the real :class:`ModelPickerApp` via Textual's
+These run against the base Textual dependency. They drive the real
+:class:`ModelPickerApp` via Textual's
 Pilot to prove the acceptance behaviours that need a running app:
 
 * selecting an enabled model with efforts advances to stage 2 and returns the
@@ -17,14 +17,14 @@ The pure projection + the orchestration/fallback are unit-tested (ungated) in
 
 from __future__ import annotations
 
-import pytest
-
-pytest.importorskip("textual")
-
+from textual.app import App  # noqa: E402
 from textual.widgets import DataTable  # noqa: E402
 
 from git_loopy.interactive.models import ModelChoice, Selection  # noqa: E402
-from git_loopy.interactive.picker_app import ModelPickerApp  # noqa: E402
+from git_loopy.interactive.picker_app import (  # noqa: E402
+    ModelPickerApp,
+    ModelPickerScreen,
+)
 
 
 def _choice(
@@ -45,6 +45,21 @@ def _choice(
         selectable=selectable,
         policy_state="enabled" if selectable else "disabled",
     )
+
+
+async def test_screen_can_be_hosted_and_driven_directly() -> None:
+    screen = ModelPickerScreen([_choice("a", efforts=("high",))])
+
+    class Host(App[None]):
+        def on_mount(self) -> None:
+            self.push_screen(screen)
+
+    async with Host().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert screen._chosen is not None
+    assert screen._chosen.id == "a"
 
 
 async def test_select_model_then_effort_returns_selection() -> None:

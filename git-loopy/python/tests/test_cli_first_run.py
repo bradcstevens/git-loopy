@@ -3,12 +3,12 @@
 The very first ``git-loopy`` invocation on an interactive TTY — with **no**
 persisted Config resolving in either scope — sets itself up by auto-running the
 ``init`` wizard, then continues into the loop. A non-interactive run (no TTY or
-``GIT_LOOPY_INTERACTIVE=0``) never prompts: it falls back to the built-in
+never prompts: it falls back to the built-in
 defaults so CI never hangs on the wizard. Cancelling the auto-run wizard aborts
 the whole command (writes nothing, runs nothing, non-zero exit).
 
 This slice is the **dispatch wiring in** :func:`git_loopy.cli.main` plus the
-TTY / ``GIT_LOOPY_INTERACTIVE`` decision (:func:`git_loopy.cli._should_auto_init`);
+TTY decision (:func:`git_loopy.cli._should_auto_init`);
 it reuses the wizard (#53) and the Config loader/resolver (#51). All tests drive
 ``main(argv)`` with injected TTY-ness + stdin — no real TTY is ever touched.
 """
@@ -27,7 +27,7 @@ from git_loopy.config import RunConfig
 
 
 # ---------------------------------------------------------------------------
-# The pure gate: _should_auto_init(tables, interactive, stdin_isatty)
+# The pure gate: _should_auto_init(tables, stdin_isatty)
 # ---------------------------------------------------------------------------
 
 
@@ -38,35 +38,24 @@ def _tables(*, project: dict[str, object] | None = None,
 
 def test_auto_init_when_no_config_and_tty() -> None:
     """No Config anywhere + an interactive TTY + no opt-out => auto-init."""
-    assert cli_module._should_auto_init(_tables(), None, True) is True
-
-
-def test_auto_init_when_interactive_intent_true() -> None:
-    """An explicit interactive intent (True) still auto-inits on a TTY."""
-    assert cli_module._should_auto_init(_tables(), True, True) is True
-
-
-def test_no_auto_init_when_interactive_opted_out() -> None:
-    """GIT_LOOPY_INTERACTIVE=0 / --no-interactive (intent False) never prompts."""
-    assert cli_module._should_auto_init(_tables(), False, True) is False
+    assert cli_module._should_auto_init(_tables(), True) is True
 
 
 def test_no_auto_init_without_a_tty() -> None:
-    """No TTY never prompts, even with an interactive intent (can't prompt)."""
-    assert cli_module._should_auto_init(_tables(), None, False) is False
-    assert cli_module._should_auto_init(_tables(), True, False) is False
+    """No TTY never prompts because the wizard cannot ask questions."""
+    assert cli_module._should_auto_init(_tables(), False) is False
 
 
 def test_no_auto_init_when_project_config_present() -> None:
     """Any resolved Config (project scope) sends a bare run straight to the loop."""
     tables = _tables(project={"model": "gpt-5.4"})
-    assert cli_module._should_auto_init(tables, None, True) is False
+    assert cli_module._should_auto_init(tables, True) is False
 
 
 def test_no_auto_init_when_global_config_present() -> None:
     """Any resolved Config (global scope) sends a bare run straight to the loop."""
     tables = _tables(global_={"model": "gpt-5.4"})
-    assert cli_module._should_auto_init(tables, None, True) is False
+    assert cli_module._should_auto_init(tables, True) is False
 
 
 # ---------------------------------------------------------------------------
@@ -110,11 +99,21 @@ def _install_fake_loop_run(
     monkeypatch.setattr(loop_module, "run", fake_run)
 
 
+def _install_fake_tty_sidecar(
+    monkeypatch: pytest.MonkeyPatch, captured: list[RunConfig]
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "_run_tty_sidecar",
+        lambda config, **_: captured.append(config) or 0,
+        raising=False,
+    )
+
+
 def _clear_run_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (
         "GIT_LOOPY_MODEL",
         "GIT_LOOPY_REASONING_EFFORT",
-        "GIT_LOOPY_INTERACTIVE",
         "GIT_LOOPY_MODEL_SELECT",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -131,7 +130,7 @@ def test_bare_first_run_on_tty_runs_wizard_then_loop(
     """
     _clear_run_env(monkeypatch)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda intent: False)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
     monkeypatch.setattr("sys.stdin", _FakeStdin(isatty=True))
 
     calls: list[dict[str, Any]] = []
@@ -162,13 +161,42 @@ def test_bare_first_run_on_tty_runs_wizard_then_loop(
     assert cfg.model == "gpt-5.4"  # the loop uses the wizard-written Config
 
 
+def test_bare_first_run_on_tty_runs_wizard_then_detaches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _clear_run_env(monkeypatch)
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: True)
+    monkeypatch.setattr("sys.stdin", _FakeStdin(isatty=True))
+
+    def fake_run_init(**kwargs: Any) -> int:
+        cfg_dir = tmp_path / "git-loopy"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "config.toml").write_text(
+            'model = "gpt-5.4"\nenabled_skills = ["tdd"]\n'
+        )
+        return 0
+
+    monkeypatch.setattr("git_loopy.init.run_init", fake_run_init)
+    sidecar_calls: list[RunConfig] = []
+    _install_fake_tty_sidecar(monkeypatch, sidecar_calls)
+    direct_calls: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, direct_calls)
+
+    rc = cli_module.main([])
+
+    assert rc == 0
+    assert direct_calls == []
+    assert sidecar_calls[0].model == "gpt-5.4"
+
+
 def test_bare_first_run_without_tty_uses_defaults_and_never_prompts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """No TTY: fall back to built-in defaults and never run the wizard (CI safe)."""
     _clear_run_env(monkeypatch)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda intent: False)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
     monkeypatch.setattr("sys.stdin", _FakeStdin(isatty=False))
 
     called: list[dict[str, Any]] = []
@@ -186,31 +214,6 @@ def test_bare_first_run_without_tty_uses_defaults_and_never_prompts(
     assert cfg.model == cli_module._DEFAULT_MODEL
 
 
-def test_bare_first_run_interactive_zero_skips_wizard(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """``GIT_LOOPY_INTERACTIVE=0`` opts out of the wizard even on a TTY."""
-    _clear_run_env(monkeypatch)
-    monkeypatch.setenv("GIT_LOOPY_INTERACTIVE", "0")
-    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda intent: False)
-    monkeypatch.setattr("sys.stdin", _FakeStdin(isatty=True))
-
-    called: list[dict[str, Any]] = []
-    monkeypatch.setattr(
-        "git_loopy.init.run_init", lambda **kw: called.append(kw) or 0
-    )
-    captured: list[tuple[RunConfig, Any]] = []
-    _install_fake_loop_run(monkeypatch, captured)
-
-    rc = cli_module.main([])
-
-    assert rc == 0
-    assert called == []
-    cfg, _driver = captured[0]
-    assert cfg.model == cli_module._DEFAULT_MODEL
-
-
 def test_bare_first_run_cancel_aborts_nonzero_and_never_runs_loop(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -221,7 +224,7 @@ def test_bare_first_run_cancel_aborts_nonzero_and_never_runs_loop(
     """
     _clear_run_env(monkeypatch)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda intent: False)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
     monkeypatch.setattr("sys.stdin", _FakeStdin(isatty=True, data=""))
     captured: list[tuple[RunConfig, Any]] = []
     _install_fake_loop_run(monkeypatch, captured)
@@ -244,7 +247,7 @@ def test_bare_run_with_project_config_skips_wizard(
         'model = "gpt-5.4"\nenabled_skills = ["tdd"]\n'
     )
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda intent: False)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
     monkeypatch.setattr("sys.stdin", _FakeStdin(isatty=True))
 
     called: list[dict[str, Any]] = []
@@ -274,7 +277,7 @@ def test_bare_run_with_global_config_skips_wizard(
     )
     monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda intent: False)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
     monkeypatch.setattr("sys.stdin", _FakeStdin(isatty=True))
 
     called: list[dict[str, Any]] = []
@@ -328,4 +331,3 @@ def test_bare_run_malformed_routing_prints_clean_error_not_traceback(
     assert "git-loopy: error:" in err
     assert "routing.planning" in err
     assert "Traceback" not in err
-

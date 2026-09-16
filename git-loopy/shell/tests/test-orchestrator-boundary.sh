@@ -67,6 +67,9 @@ EOF
 set -euo pipefail
 printf '%s\n' "$*" >>"$FAKE_GH_LOG"
 case "${1-} ${2-}" in
+  "--version ")
+    printf 'gh version %s (fixture)\n' "${FAKE_GH_VERSION:-2.94.0}"
+    ;;
   "auth status")
     exit "${FAKE_GH_AUTH_STATUS:-0}"
     ;;
@@ -80,10 +83,14 @@ case "${1-} ${2-}" in
     fi
     count=$((count + 1))
     printf '%s\n' "$count" >"$FAKE_GH_LIST_COUNT"
-    cat "$FAKE_GH_LIST_JSON"
+    jq -c 'map(if has("blockedBy") then . else . + {
+      blockedBy: {totalCount: 0, nodes: []}
+    } end)' "$FAKE_GH_LIST_JSON"
     ;;
   "issue view")
-    cat "$FAKE_GH_VIEW_DIR/${3}.json"
+    jq -c 'if has("blockedBy") then . else . + {
+      blockedBy: {totalCount: 0, nodes: []}
+    } end' "$FAKE_GH_VIEW_DIR/${3}.json"
     ;;
   *)
     printf 'unexpected gh invocation: %s\n' "$*" >&2
@@ -216,6 +223,9 @@ EOF
 set -euo pipefail
 printf '%s\n' "$*" >>"$FAKE_GH_LOG"
 case "${1-} ${2-}" in
+  "--version ")
+    printf 'gh version %s (fixture)\n' "${FAKE_GH_VERSION:-2.94.0}"
+    ;;
   "auth status")
     exit "${FAKE_GH_AUTH_STATUS:-0}"
     ;;
@@ -232,11 +242,15 @@ case "${1-} ${2-}" in
     if [[ -n "${FAKE_GH_EMPTY_AFTER:-}" ]] && ((count > FAKE_GH_EMPTY_AFTER)); then
       printf '[]\n'
     else
-      cat "$FAKE_GH_LIST_JSON"
+      jq -c 'map(if has("blockedBy") then . else . + {
+        blockedBy: {totalCount: 0, nodes: []}
+      } end)' "$FAKE_GH_LIST_JSON"
     fi
     ;;
   "issue view")
-    cat "$FAKE_GH_VIEW_DIR/${3}.json"
+    jq -c 'if has("blockedBy") then . else . + {
+      blockedBy: {totalCount: 0, nodes: []}
+    } end' "$FAKE_GH_VIEW_DIR/${3}.json"
     ;;
   "issue close")
     if [[ "${FAKE_GH_CLOSE_STATUS:-0}" != "0" ]]; then
@@ -540,6 +554,34 @@ assert_contains "$(<"$FAKE_GH_LOG")" "auth status" "GitHub auth preflight"
 assert_contains "$(<"$FAKE_GH_LOG")" "repo view" "GitHub repo preflight"
 assert_contains "$(<"$FAKE_GH_LOG")" "issue list" "GitHub Pool collection"
 
+# Readiness is collection-carried, so an old gh must fail before it can turn an
+# unsupported `blockedBy` field into a false empty Pool.
+repo="$temp_dir/readiness-preflight"
+fake_bin="$temp_dir/readiness-preflight-bin"
+make_repo "$repo"
+write_fake_tools "$fake_bin"
+printf '[]\n' >"$temp_dir/readiness-preflight-list.json"
+mkdir -p "$temp_dir/readiness-preflight-views"
+export FAKE_GH_LOG="$temp_dir/readiness-preflight-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/readiness-preflight-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/readiness-preflight-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/readiness-preflight-views"
+export FAKE_GH_VERSION="2.93.9"
+set +e
+run_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/readiness-preflight.stdout" \
+  "$temp_dir/readiness-preflight.stderr"
+status=$?
+set -e
+unset FAKE_GH_VERSION
+[[ "$status" -ne 0 ]] || fail "old gh was accepted for a Readiness collection"
+assert_contains "$(<"$temp_dir/readiness-preflight.stderr")" \
+  "cannot read issue dependencies (blockedBy)" \
+  "old gh readiness preflight explains the missing capability"
+if grep -q '^issue list ' "$FAKE_GH_LOG"; then
+  fail "old gh reached Pool collection"
+fi
+
 export GIT_LOOPY_MODEL="env-model"
 export GIT_LOOPY_REASONING_EFFORT="high"
 export GIT_LOOPY_ISSUE_SOURCE="prds"
@@ -751,9 +793,8 @@ jq -se '
 # decision nobody can audit. The binding is a record of its own — which issue,
 # why it was chosen, and where it sat in the order — emitted after the
 # activation that publishes it, so it never describes a binding the rest of the
-# stream does not contain. This port admits every candidate, so it binds and
-# never skips; `wrapper.pickup.skipped` is carried in the vocabulary and
-# produced the day this port gains something to refuse.
+# stream does not contain. This ready-only scenario binds without a Readiness
+# skip; the blocked Pickup scenario below covers the other half of the walk.
 jq -se '
   ([.[] | select(.type == "wrapper.pickup.bound")] | length == 2)
   and ([.[] | select(.type == "wrapper.pickup.bound")]
@@ -787,6 +828,183 @@ assert_equal "1" "${#cap_replay[@]}" "turn Run replay file count"
 cmp -s "$temp_dir/github-cap.stdout" "${cap_replay[0]}" ||
   fail "turn Run stream and replay differ"
 
+rm -f "$FAKE_GH_LIST_COUNT"
+
+# ADR-0047: Pickup decides Readiness from the `blockedBy` connection collection
+# carried. A Blocked head remains in the Pool, emits the shared skip Event, and
+# never starts a session; Pickup binds the next admissible candidate instead.
+repo="$temp_dir/readiness-pickup"
+fake_bin="$temp_dir/readiness-pickup-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+cat >"$temp_dir/readiness-pickup-list.json" <<'EOF'
+[
+  {
+    "number": 51,
+    "title": "Waiting on dependency",
+    "body": "## What to build\nWait.\n\n## Acceptance criteria\n- Wait.",
+    "labels": [{"name": "ready-for-agent"}],
+    "state": "OPEN",
+    "url": "https://example.invalid/issues/51",
+    "createdAt": "2026-03-01T00:00:00Z",
+    "blockedBy": {
+      "totalCount": 1,
+      "nodes": [{
+        "id": "blocker-50",
+        "number": 50,
+        "state": "OPEN",
+        "title": "Dependency",
+        "url": "https://github.com/example/repo/issues/50"
+      }]
+    }
+  },
+  {
+    "number": 52,
+    "title": "Ready work",
+    "body": "## What to build\nShip it.\n\n## Acceptance criteria\n- Done.",
+    "labels": [{"name": "ready-for-agent"}],
+    "state": "OPEN",
+    "url": "https://example.invalid/issues/52",
+    "createdAt": "2026-03-02T00:00:00Z",
+    "blockedBy": {"totalCount": 0, "nodes": []}
+  }
+]
+EOF
+mkdir -p "$temp_dir/readiness-pickup-views"
+for issue in 51 52; do
+  jq --argjson issue "$issue" '.[] | select(.number == $issue) | . + {comments: []}' \
+    "$temp_dir/readiness-pickup-list.json" \
+    >"$temp_dir/readiness-pickup-views/$issue.json"
+done
+export FAKE_GH_LOG="$temp_dir/readiness-pickup-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/readiness-pickup-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/readiness-pickup-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/readiness-pickup-views"
+setup_copilot_env "readiness-pickup"
+export FAKE_COPILOT_COMMITS=1
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/readiness-pickup.stdout" \
+  "$temp_dir/readiness-pickup.stderr" 1; then
+  fail "Readiness Pickup Run did not exit 0: $(<"$temp_dir/readiness-pickup.stderr")"
+fi
+unset FAKE_COPILOT_COMMITS
+jq -se '
+  ([.[] | select(.type == "wrapper.afk_ready.collected") | .issues] == [[51, 52]])
+  and ([.[] | select(.type == "wrapper.pickup.skipped")
+       | {type, issue, reason, position, considered}] == [{
+    type: "wrapper.pickup.skipped",
+    issue: 51,
+    reason: "blocked_by_open_dependency: example/repo#50",
+    position: 1,
+    considered: 2
+  }])
+  and ([.[] | select(.type == "wrapper.pickup.bound")] | length == 1)
+  and ([.[] | select(.type == "wrapper.pickup.bound")]
+    | all(.issue == 52 and .position == 2 and .considered == 2))
+  and ([.[] | select(.type == "wrapper.strike")] | length == 0)
+' "$temp_dir/readiness-pickup.stdout" >/dev/null ||
+  fail "blocked head was not skipped before the next admissible Pickup"
+assert_contains "$(<"$temp_dir/readiness-pickup.stderr")" \
+  "serial Pickup skipped #51 — blocked by open dependency: example/repo#50" \
+  "Pickup names the blocker it passed over"
+assert_contains "$(<"$FAKE_GH_LOG")" \
+  "issue list --state open --label ready-for-agent --limit 100 --json number,title,body,labels,state,url,createdAt,blockedBy" \
+  "Pool collection carries blockedBy"
+if grep -q '^api graphql' "$FAKE_GH_LOG"; then
+  fail "Readiness paid a dedicated GraphQL dependency round-trip"
+fi
+assert_equal "1" "$(<"$FAKE_COPILOT_CALLS")" \
+  "blocked candidate never started a session"
+
+# A Pool containing only Blocked candidates is still non-empty and its skipped
+# candidates charge no Strike, so no session is spent rediscovering the fact.
+# Wrapper contract §10/§14.3: a Pickup that walked a non-empty Pool of open
+# blocker refusals ends waiting on blockers (exit 1), rather than reporting an
+# empty queue or an operator-repairable all-skipped Run.
+repo="$temp_dir/readiness-all-blocked"
+fake_bin="$temp_dir/readiness-all-blocked-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+jq '[.[0]]' "$temp_dir/readiness-pickup-list.json" \
+  >"$temp_dir/readiness-all-blocked-list.json"
+mkdir -p "$temp_dir/readiness-all-blocked-views"
+cp "$temp_dir/readiness-pickup-views/51.json" \
+  "$temp_dir/readiness-all-blocked-views/51.json"
+export FAKE_GH_LOG="$temp_dir/readiness-all-blocked-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/readiness-all-blocked-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/readiness-all-blocked-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/readiness-all-blocked-views"
+setup_copilot_env "readiness-all-blocked"
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/readiness-all-blocked.stdout" \
+  "$temp_dir/readiness-all-blocked.stderr" 5
+status=$?
+set -e
+assert_equal "1" "$status" \
+  "an all-Blocked Pool aborts the Run instead of reporting a finished queue"
+[[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
+  fail "all-Blocked Pool started a session"
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.skipped")] | length == 1)
+  and ([.[] | select(.type == "wrapper.pickup.bound")] | length == 0)
+  and ([.[] | select(.type == "wrapper.strike")] | length == 0)
+  and ([.[] | select(.type == "wrapper.iteration.end") | .outcome]
+    == ["all_blocked"])
+  and (.[-1].type == "wrapper.run.end")
+  and (.[-1].outcome == "all_blocked")
+  and (.[-1].iterations_run == 1)
+' "$temp_dir/readiness-all-blocked.stdout" >/dev/null ||
+  fail "all-Blocked Pool did not end the Run waiting on blockers without a Strike"
+assert_contains "$(<"$temp_dir/readiness-all-blocked.stderr")" \
+  "waiting on blockers" \
+  "the all-blocked ending tells the operator why work did not start"
+
+# A Pool that mixes a proven blocker with a read the Runner could not prove is
+# still all-skipped: "waiting" must not hide work an operator can repair.
+repo="$temp_dir/readiness-mixed-skips"
+fake_bin="$temp_dir/readiness-mixed-skips-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+jq '[.[0], (.[1] | .blockedBy = {totalCount: 1, nodes: []})]' \
+  "$temp_dir/readiness-pickup-list.json" \
+  >"$temp_dir/readiness-mixed-skips-list.json"
+mkdir -p "$temp_dir/readiness-mixed-skips-views"
+jq '.[0] + {comments: []}' "$temp_dir/readiness-pickup-list.json" \
+  >"$temp_dir/readiness-mixed-skips-views/51.json"
+jq '.[1] | .blockedBy = {totalCount: 1, nodes: []} | . + {comments: []}' \
+  "$temp_dir/readiness-pickup-list.json" \
+  >"$temp_dir/readiness-mixed-skips-views/52.json"
+export FAKE_GH_LOG="$temp_dir/readiness-mixed-skips-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/readiness-mixed-skips-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/readiness-mixed-skips-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/readiness-mixed-skips-views"
+setup_copilot_env "readiness-mixed-skips"
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/readiness-mixed-skips.stdout" \
+  "$temp_dir/readiness-mixed-skips.stderr" 5
+status=$?
+set -e
+assert_equal "1" "$status" "a mixed blocked Pool exits nonzero"
+[[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
+  fail "a mixed blocked Pool started a session"
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.skipped") | .reason] ==
+    ["blocked_by_open_dependency: example/repo#50", "readiness_unprovable"])
+  and ([.[] | select(.type == "wrapper.pickup.bound")] | length == 0)
+  and ([.[] | select(.type == "wrapper.strike")] | length == 0)
+  and ([.[] | select(.type == "wrapper.iteration.end") | .outcome] ==
+    ["all_skipped"])
+  and (.[-1].type == "wrapper.run.end")
+  and (.[-1].outcome == "all_skipped")
+' "$temp_dir/readiness-mixed-skips.stdout" >/dev/null ||
+  fail "a mixed blocked Pool did not preserve the all-skipped ending"
+
+export FAKE_GH_LOG="$temp_dir/github-cap-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/github-cap-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/github-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
 rm -f "$FAKE_GH_LIST_COUNT"
 setup_copilot_env "github-default"
 export FAKE_COPILOT_COMMITS=0
@@ -840,6 +1058,7 @@ expected_commit_seq="$(
     "wrapper.commit.recorded",
     "wrapper.commit.recorded",
     "wrapper.iteration.end",
+    "wrapper.stop.requested",
     "wrapper.run.end"
   ]'
 )"
@@ -2116,7 +2335,7 @@ jq -se '
   }
 
   head='{"number": 9, "labels": [{"name": "ready-for-agent"}]}'
-  _git_loopy_emit_pickup_bound 1 9 "$head" 3 "2026-02-01T00:00:00Z" ||
+  _git_loopy_emit_pickup_bound 1 9 "$head" 1 3 "2026-02-01T00:00:00Z" ||
     fail "the shell Pickup record could not be emitted"
   assert_equal \
     '{"considered":3,"issue":9,"position":1,"reason":"order","type":"wrapper.pickup.bound"}' \
@@ -2124,11 +2343,113 @@ jq -se '
     "the shell Pickup record for an ordered head"
 
   head='{"number": 9, "labels": [{"name": "ready-for-agent"}, {"name": "priority"}]}'
-  _git_loopy_emit_pickup_bound 1 9 "$head" 3 "2026-02-01T00:00:00Z" ||
+  _git_loopy_emit_pickup_bound 1 9 "$head" 1 3 "2026-02-01T00:00:00Z" ||
     fail "the shell Pickup record could not be emitted for a Priority head"
   assert_equal "priority" "$(jq -r '.reason' <<<"$emitted")" \
     "a Priority head is bound because it carried the label, not because of order"
 ) || fail "the shell Pickup record does not say why it bound what it bound"
+
+# ADR-0047 / §3.3.1: **Readiness** is asked of a *candidate*, and what the answer
+# depends on is the source it came from. The GitHub source carries a `blockedBy`
+# connection collection already paid for; the local-markdown source has no native
+# dependency graph at all, so it has nothing to be **Blocked** by. Naming that
+# seam keeps the source question out of the Pickup walk, where it would otherwise
+# read as a second opinion about which backend is running.
+(
+  # shellcheck source=../lib/orchestrator.sh
+  source "$port_dir/lib/orchestrator.sh"
+
+  GIT_LOOPY_ISSUE_SOURCE="github"
+  blocked='{"number": 51, "blocked_by": {"totalCount": 1, "nodes": [{
+    "id": "n", "number": 50, "state": "OPEN", "title": "t",
+    "url": "https://github.com/example/repo/issues/50"}]}}'
+  assert_equal \
+    '{"admissible":false,"blockers":["example/repo#50"],"skip_reason":"blocked_by_open_dependency","verdict":"blocked"}' \
+    "$(jq -cS . <<<"$(git_loopy_candidate_readiness "$blocked")")" \
+    "a GitHub candidate is judged on the connection its collection carried"
+
+  unread='{"number": 52}'
+  assert_equal "readiness_unprovable" \
+    "$(jq -r '.skip_reason' <<<"$(git_loopy_candidate_readiness "$unread")")" \
+    "a GitHub candidate whose connection never arrived is not proven ready"
+
+  GIT_LOOPY_ISSUE_SOURCE="prds"
+  markdown='{"ref": "prds/feature/001-thing.md", "title": "t", "body": "b"}'
+  assert_equal \
+    '{"admissible":true,"blockers":[],"skip_reason":null,"verdict":"ready"}' \
+    "$(jq -cS . <<<"$(git_loopy_candidate_readiness "$markdown")")" \
+    "a local-markdown candidate has no dependency graph and is ready"
+) || fail "the shell Readiness seam does not answer per candidate source"
+
+# #438's preflight safeguard: `blockedBy` rides the collection read, and a `gh`
+# that cannot serve the field fails *inside* that read -- which this port's
+# collection reports as an empty **Pool**, i.e. as a finished Run. The floor is
+# established once, before a Pool exists. It is asserted through
+# `GIT_LOOPY_MIN_GH_VERSION_FOR_READINESS` rather than against transcribed
+# numbers, because a gate that agreed with a copy of the constant would keep
+# agreeing after the constant moved.
+(
+  # shellcheck source=../lib/orchestrator.sh
+  source "$port_dir/lib/orchestrator.sh"
+
+  stub_version=""
+  gh() {
+    [[ "${1-}" == "--version" ]] || return 90
+    printf 'gh version %s (2026-01-01)\nhttps://github.com/cli/cli/releases/tag/v%s\n' \
+      "$stub_version" "$stub_version"
+  }
+
+  GIT_LOOPY_MIN_GH_VERSION_FOR_READINESS="3.10.2"
+  for accepted in 3.10.2 3.10.3 3.11.0 4.0.0; do
+    stub_version="$accepted"
+    git_loopy_verify_readiness_capability 2>/dev/null ||
+      fail "gh $accepted was refused against a 3.10.2 Readiness floor"
+  done
+  for refused in 3.10.1 3.9.99 2.94.0 1.99.99; do
+    stub_version="$refused"
+    if git_loopy_verify_readiness_capability 2>/dev/null; then
+      fail "gh $refused was accepted against a 3.10.2 Readiness floor"
+    fi
+  done
+
+  GIT_LOOPY_MIN_GH_VERSION_FOR_READINESS="2.94.0"
+  stub_version="2.94.0"
+  git_loopy_verify_readiness_capability 2>/dev/null ||
+    fail "gh 2.94.0 -- the release that added blockedBy -- was refused"
+  stub_version="2.93.9"
+  message="$(git_loopy_verify_readiness_capability 2>&1)" &&
+    fail "gh 2.93.9 was accepted for a Readiness collection"
+  assert_contains "$message" "gh 2.93.9 cannot read issue dependencies (blockedBy)" \
+    "the refusal names the gh that cannot answer"
+  assert_contains "$message" "requires gh >= 2.94.0" \
+    "the refusal names the floor the operator must reach"
+
+  # `gh` does not ship these shapes today, but the gate is the one thing standing
+  # between an operator and a Run that reports "no work" when it means "I could
+  # not ask" -- so it may not refuse a capable `gh` over how the number was
+  # written. A component is decimal however it is spelled (bare arithmetic reads
+  # `08` as a bad octal literal and aborts), and a build with a fourth component
+  # is still the release its first three name.
+  stub_version="2.08.0"
+  if git_loopy_verify_readiness_capability 2>/dev/null; then
+    fail "gh 2.08.0 was accepted: 8 was not compared numerically against 94"
+  fi
+  stub_version="2.094.0"
+  git_loopy_verify_readiness_capability 2>/dev/null ||
+    fail "gh 2.094.0 was refused: a zero-padded component is still 94"
+  stub_version="2.94.0.1"
+  git_loopy_verify_readiness_capability 2>/dev/null ||
+    fail "gh 2.94.0.1 was refused: a fourth component is not a fourth opinion"
+
+  gh() { return 91; }
+  if git_loopy_verify_readiness_capability 2>/dev/null; then
+    fail "a gh that could not report its version was accepted"
+  fi
+  gh() { printf 'not a version string\n'; }
+  if git_loopy_verify_readiness_capability 2>/dev/null; then
+    fail "an unparseable gh version was accepted"
+  fi
+) || fail "the shell Readiness preflight does not follow its named gh floor"
 
 # A **Pickup** is *prospective*: it names the issue as the work on it begins, so
 # Active time starts at the binding. Only the three after-the-fact fallbacks are

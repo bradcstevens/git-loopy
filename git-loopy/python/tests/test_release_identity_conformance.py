@@ -78,7 +78,6 @@ def _prepare_family_member(
             "HOME": str(tmp_path / "missing-home"),
             "XDG_CONFIG_HOME": str(config_home),
             "GIT_LOOPY_ISSUE_SOURCE": "unavailable",
-            "GIT_LOOPY_INTERACTIVE": "1",
             "GIT_LOOPY_MAX_NMT_STRIKES": "not-an-integer",
             "VERSION_TOOL_LOG": str(tool_log),
             "PYTHONDONTWRITEBYTECODE": "1",

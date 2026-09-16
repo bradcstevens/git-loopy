@@ -24,8 +24,11 @@ from git_loopy.git import (
     GitClient,
     GitError,
     SubprocessGitClient,
+    Worktree,
     integration_branch_name,
+    is_reserved_branch,
     lane_branch_name,
+    reserved_worktrees,
 )
 
 # --------------------------------------------------------------------------- #
@@ -900,6 +903,273 @@ def test_lane_branch_name_is_pure_string_policy() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Remote contribution fetch                                                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_remote_ref_probe_and_sha_pinned_fetch_materialize_a_local_branch(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _init_repo(source)
+    completion_sha = _commit(source, "host contribution")
+    remote = tmp_path / "host.git"
+    subprocess.run(
+        ["git", "clone", "--bare", str(source), str(remote)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    consumer = tmp_path / "consumer"
+    subprocess.run(
+        ["git", "clone", str(remote), str(consumer)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    client = SubprocessGitClient(consumer)
+    destination = "git-loopy/RUN/materialized/issue-42"
+
+    assert client.probe_remote_ref(str(remote), "refs/heads/main") == completion_sha
+    client.fetch_sha(str(remote), completion_sha, destination)
+
+    assert client.resolve_ref(destination) == completion_sha
+
+
+# --------------------------------------------------------------------------- #
+# The reserved branch namespace and workspace placement (#449)                 #
+# --------------------------------------------------------------------------- #
+
+
+def test_reserved_namespace_covers_every_branch_git_loopy_cuts() -> None:
+    """Both workspace kinds land inside the namespace reclamation may select."""
+    assert is_reserved_branch(lane_branch_name("RUNA", 1))
+    assert is_reserved_branch(integration_branch_name("RUNA", 1))
+
+
+def test_reserved_namespace_never_claims_an_operators_branch() -> None:
+    """The prefix is matched at the start, so a merely-similar name is not ours."""
+    assert not is_reserved_branch("main")
+    assert not is_reserved_branch("feature/lane-work")
+    # Contains "git-loopy/" but does not start with it — an operator's branch.
+    assert not is_reserved_branch("operator/git-loopy/experiment")
+
+
+def test_reserved_worktrees_reads_the_branch_and_ignores_the_path() -> None:
+    """The pure selector: same directory, opposite verdicts, decided by branch."""
+    legacy = Path("/tmp/repo.worktrees/RUNOLD")
+    ours = Worktree(path=legacy / "issue-7", branch=lane_branch_name("RUNOLD", 7))
+    theirs = Worktree(path=legacy / "spike", branch="spike/hand-rolled")
+    detached = Worktree(path=legacy / "bisect", branch=None)
+
+    assert reserved_worktrees([ours, theirs, detached]) == [ours]
+
+
+def test_common_git_dir_is_the_same_directory_from_every_worktree(
+    tmp_path: Path,
+) -> None:
+    """A linked worktree resolves the *shared* git dir, not its own admin dir."""
+    repo, siblings, client = _sibling_worktree_repo(tmp_path)
+    lane = client.add_worktree(
+        siblings / "lane-7", branch=lane_branch_name("RUN", 7), base="main"
+    )
+
+    assert client.common_git_dir() == (repo / ".git").resolve()
+    assert lane.common_git_dir() == client.common_git_dir()
+
+
+def test_lane_workspace_in_the_git_dir_survives_working_tree_hygiene(
+    tmp_path: Path,
+) -> None:
+    """A live Lane workspace is invisible to status, staging, and clean (#449).
+
+    The placement defect this fixes was hygiene, not isolation: a workspace
+    beside or inside the working tree shows up as untracked content, gets
+    staged by ``git add -A``, or is destroyed by ``git clean -ffxd`` — the very
+    commands an agent's own feedback loops run. Under the common git directory
+    it is not content in any working tree, so all three pass over it and no
+    ``.gitignore`` entry is needed to make that true.
+    """
+    repo, _siblings, client = _sibling_worktree_repo(tmp_path)
+    branch = lane_branch_name("RUN123", 7)
+    workspace = client.common_git_dir() / "git-loopy" / "RUN123" / "issue-7"
+
+    lane = client.add_worktree(workspace, branch=branch, base="main")
+    (lane.root / "in-progress.txt").write_text("uncommitted Lane work\n")
+
+    # Nothing was ignored into invisibility — the repo has no ignore file at all.
+    assert not (repo / ".gitignore").exists()
+    status = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert status.stdout == "", (
+        f"live Lane workspace surfaced in status: {status.stdout}"
+    )
+
+    staged = subprocess.run(
+        ["git", "-C", str(repo), "add", "-A"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "embedded git repository" not in staged.stderr
+    # `add -A` reached nothing: the index still matches HEAD.
+    after_add = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert after_add.stdout == "", f"git add -A reached the workspace: {after_add.stdout}"
+
+    subprocess.run(
+        ["git", "-C", str(repo), "clean", "-ffxd"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert workspace.is_dir(), "git clean destroyed a live Lane workspace"
+    assert (lane.root / "in-progress.txt").exists()
+    assert lane.current_branch() == branch
+
+
+def test_workspaces_are_private_to_each_clone(tmp_path: Path) -> None:
+    """Two clones get their own workspaces and neither can see the other's."""
+    repo_a = tmp_path / "clone-a"
+    repo_b = tmp_path / "clone-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    _init_repo(repo_a)
+    _init_repo(repo_b)
+    _commit(repo_a, "base")
+    _commit(repo_b, "base")
+    client_a = SubprocessGitClient(repo_a)
+    client_b = SubprocessGitClient(repo_b)
+    branch = lane_branch_name("RUN", 7)
+    workspace_a = client_a.common_git_dir() / "git-loopy" / "RUN" / "issue-7"
+    workspace_b = client_b.common_git_dir() / "git-loopy" / "RUN" / "issue-7"
+
+    # Same run_id and same issue: only the placement keeps them apart.
+    client_a.add_worktree(workspace_a, branch=branch, base="main")
+    client_b.add_worktree(workspace_b, branch=branch, base="main")
+
+    assert workspace_a != workspace_b
+    registered_a = {Path(p).resolve() for p in _worktree_paths(repo_a)}
+    registered_b = {Path(p).resolve() for p in _worktree_paths(repo_b)}
+    assert workspace_a.resolve() in registered_a
+    assert workspace_a.resolve() not in registered_b
+    assert workspace_b.resolve() in registered_b
+    assert workspace_b.resolve() not in registered_a
+
+
+def test_list_worktrees_reports_the_branch_each_worktree_is_on(
+    tmp_path: Path,
+) -> None:
+    """Enumeration carries the branch, which is what decides ownership."""
+    repo, _siblings, client = _sibling_worktree_repo(tmp_path)
+    branch = lane_branch_name("RUN", 7)
+    workspace = client.common_git_dir() / "git-loopy" / "RUN" / "issue-7"
+    client.add_worktree(workspace, branch=branch, base="main")
+
+    listed = client.list_worktrees()
+
+    by_path = {w.path.resolve(): w.branch for w in listed}
+    assert by_path[workspace.resolve()] == branch
+    # The main worktree is enumerated too, on the branch it has checked out.
+    assert by_path[repo.resolve()] == "main"
+
+
+def test_list_worktrees_reads_a_path_containing_a_newline(tmp_path: Path) -> None:
+    """A newline in a workspace directory must not mispair a path with a branch.
+
+    A legal (if perverse) path, and the reason the listing is read
+    NUL-delimited: a line-oriented parse would split this record in two and
+    hand the branch to the wrong worktree — the one mistake a branch-decides-
+    ownership rule cannot survive.
+    """
+    repo, siblings, client = _sibling_worktree_repo(tmp_path)
+    awkward = siblings / "lane\nwith-newline"
+    branch = lane_branch_name("RUN", 7)
+    client.add_worktree(awkward, branch=branch, base="main")
+
+    listed = client.list_worktrees()
+
+    by_path = {w.path.resolve(): w.branch for w in listed}
+    assert by_path[awkward.resolve()] == branch
+    assert by_path[repo.resolve()] == "main"
+    assert [w.path.resolve() for w in reserved_worktrees(listed)] == [
+        awkward.resolve()
+    ]
+
+
+def test_list_worktrees_reports_no_branch_for_a_detached_worktree(
+    tmp_path: Path,
+) -> None:
+    """A detached worktree carries no branch, so it can never be ours."""
+    repo, siblings, client = _sibling_worktree_repo(tmp_path)
+    detached = siblings / "operator-bisect"
+    detached.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "--detach", str(detached), "main"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    listed = client.list_worktrees()
+
+    branches = {w.path.resolve(): w.branch for w in listed}
+    assert branches[detached.resolve()] is None
+    assert reserved_worktrees(listed) == []
+
+
+def test_reserved_worktrees_selects_legacy_residue_by_branch_never_by_path(
+    tmp_path: Path,
+) -> None:
+    """Legacy residue is claimed by its branch; a co-located operator tree is not.
+
+    The legacy sibling ``<repo>.worktrees/`` directory is not git-loopy's to
+    sweep by location: an operator's own worktrees could be interleaved with
+    the runner's in the very same directory. Ownership therefore reads the
+    branch — which selects a stale Lane wherever it sits, and passes over a
+    neighbour that merely shares its parent directory.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    _commit(repo, "base", file_name="base.txt")
+    client = SubprocessGitClient(repo)
+
+    # The legacy sibling directory, holding one of each kind of worktree.
+    legacy = tmp_path / "repo.worktrees" / "RUNOLD"
+    stale_lane = legacy / "issue-7"
+    operators_own = legacy / "spike"
+    client.add_worktree(stale_lane, branch=lane_branch_name("RUNOLD", 7), base="main")
+    client.add_worktree(operators_own, branch="spike/hand-rolled", base="main")
+    # ...and a current workspace in the new, git-dir-owned location.
+    current = client.common_git_dir() / "git-loopy" / "RUNNEW" / "integrate" / "issue-9"
+    client.add_worktree(
+        current, branch=integration_branch_name("RUNNEW", 9), base="main"
+    )
+
+    selected = reserved_worktrees(client.list_worktrees())
+
+    selected_paths = {w.path.resolve() for w in selected}
+    assert stale_lane.resolve() in selected_paths, "stale Lane residue was not claimed"
+    assert current.resolve() in selected_paths
+    # Never matched: the operator's worktree in the very same legacy directory,
+    # and the main worktree on the base branch.
+    assert operators_own.resolve() not in selected_paths
+    assert repo.resolve() not in selected_paths
+    assert all(is_reserved_branch(w.branch or "") for w in selected)
+
+
+# --------------------------------------------------------------------------- #
 # Worktree lifecycle (Parallel-mode Lanes, ADR-0008)                          #
 # --------------------------------------------------------------------------- #
 
@@ -907,8 +1177,11 @@ def test_lane_branch_name_is_pure_string_policy() -> None:
 def _sibling_worktree_repo(tmp_path: Path) -> tuple[Path, Path, SubprocessGitClient]:
     """Init a repo in ``tmp_path/repo`` with one commit; return (repo, sibling, client).
 
-    ``sibling`` is a directory *outside* the repo (``tmp_path/worktrees``) where a
-    Lane worktree lives — never nested inside the repo, per ADR-0008.
+    ``sibling`` is a directory outside the repo (``tmp_path/worktrees``) that the
+    lifecycle tests below cut worktrees into. It exercises the *mechanic* —
+    ``add_worktree`` works at any path — and is not where a Run places a **Lane
+    workspace**; that placement is fixed by ``_lane_worktree_path`` and pinned by
+    the tests above.
     """
     repo = tmp_path / "repo"
     repo.mkdir()

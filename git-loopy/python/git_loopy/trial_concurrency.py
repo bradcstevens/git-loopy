@@ -57,7 +57,6 @@ from git_loopy.staircase import Candidate
 
 __all__ = [
     "CONCURRENCY_ENV",
-    "LANE_CAP_ENV",
     "TrialResult",
     "TrialRequest",
     "TrialRunner",
@@ -74,11 +73,6 @@ __all__ = [
 #: rather than one contribution's — so a host that sustains six Lanes may
 #: sustain fewer Trials.
 CONCURRENCY_ENV = "GIT_LOOPY_CALIBRATE_CONCURRENCY"
-
-#: The **Lane cap** this falls back to. Calibration is a Parallel-mode feature
-#: (#379), so an operator who reached it has already stated what this host can
-#: take; asking a second time by default would be asking twice.
-LANE_CAP_ENV = "GIT_LOOPY_MAX_PARALLEL"
 
 
 @dataclass(frozen=True)
@@ -335,21 +329,18 @@ def resolve_trial_concurrency(
     repository:
 
     1. :data:`CONCURRENCY_ENV`.
-    2. :data:`LANE_CAP_ENV`, the **Lane cap** an operator already set to reach
-       Parallel mode at all (#379).
-    3. ``1`` — serial.
+    2. ``1`` — serial.
 
-    A malformed or sub-1 value at either tier **degrades to the next**, exactly
-    as :func:`git_loopy.cli._resolve_parallel` degrades to serial: a stray env
-    value should cost an operator concurrency, never the Calibration they asked
-    for.
+    A malformed or sub-1 value degrades to serial: a stray setting should cost
+    an operator concurrency, never the Calibration they asked for.
     """
     if ceiling < 1:
         raise ValueError(f"ceiling must be ≥ 1, got {ceiling}")
-    for name in (CONCURRENCY_ENV, LANE_CAP_ENV):
-        value = _positive_int(env.get(name))
-        if value is not None:
-            return TrialConcurrency(requested=value, ceiling=ceiling, source=name)
+    value = _positive_int(env.get(CONCURRENCY_ENV))
+    if value is not None:
+        return TrialConcurrency(
+            requested=value, ceiling=ceiling, source=CONCURRENCY_ENV
+        )
     return TrialConcurrency(requested=1, ceiling=ceiling, source="default")
 
 

@@ -9,8 +9,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::event::{
-    CommitRecorded, ContextWindowSample, Event, EventPayload, InsightCapabilities, IssueRef,
-    IterationEnd, IterationIssue, IterationSummary, Pickup,
+    CommitRecorded, ContextWindowSample, Event, EventPayload, ExecutionHostDeclaration,
+    InsightCapabilities, IssueRef, IterationEnd, IterationIssue, IterationSummary, Pickup,
+    StopRequested,
 };
 use crate::timestamp::Timestamp;
 
@@ -25,6 +26,18 @@ pub(crate) const STATUS_ADVANCED: &str = "advanced";
 /// Run statuses shown in the header band.
 pub(crate) const RUN_STARTING: &str = "starting";
 pub(crate) const RUN_RUNNING: &str = "running";
+pub(crate) const RUN_DRAINING: &str = "draining";
+/// The second operator Stop: cancellation requested, salvage and finalization
+/// still running. Not terminal — the Run's own outcome ends it.
+pub(crate) const RUN_STOPPING: &str = "stopping";
+
+/// The active Wind-down as Events, rather than the local Dashboard, established it.
+#[derive(Clone, Debug)]
+pub(crate) struct WindDown {
+    pub(crate) cause: String,
+    pub(crate) stage: String,
+    pub(crate) draining: i64,
+}
 
 /// The Log-line kind for a key structured Event (a commit, a tool call).
 const LOG_EVENT: &str = "event";
@@ -43,6 +56,43 @@ pub struct RunInputs {
     pub model: Option<String>,
     /// The resolved reasoning effort for the Run.
     pub reasoning_effort: Option<String>,
+}
+
+/// Execution-host provenance folded from the Event stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecutionHostProvenance {
+    pub placement: String,
+    pub isolation_grade: String,
+    pub capacity: Option<i64>,
+    pub starting_lane_limit: Option<i64>,
+}
+
+impl Default for ExecutionHostProvenance {
+    fn default() -> Self {
+        Self {
+            placement: "unknown".to_string(),
+            isolation_grade: "unknown".to_string(),
+            capacity: None,
+            starting_lane_limit: None,
+        }
+    }
+}
+
+impl From<&ExecutionHostDeclaration> for ExecutionHostProvenance {
+    fn from(declaration: &ExecutionHostDeclaration) -> Self {
+        Self {
+            placement: declaration
+                .placement
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+            isolation_grade: declaration
+                .isolation_grade
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+            capacity: declaration.capacity,
+            starting_lane_limit: declaration.starting_lane_limit,
+        }
+    }
 }
 
 impl RunInputs {
@@ -256,6 +306,10 @@ pub struct DashboardState {
     iteration_started_monotonic: Option<f64>,
     pub(crate) iteration: i64,
     pub(crate) capabilities: InsightCapabilities,
+    execution_host: ExecutionHostProvenance,
+    contribution_hosts: BTreeMap<String, String>,
+    pub(crate) wind_down: Option<WindDown>,
+    pub(crate) wind_down_observed: bool,
     pub(crate) context_window: Option<ContextWindowSample>,
     pub(crate) active_ref: Option<IssueRef>,
     /// Ledger entries keyed by identity, with first-seen order preserved.
@@ -304,6 +358,10 @@ impl DashboardState {
             iteration_started_monotonic: None,
             iteration: 0,
             capabilities: InsightCapabilities::default(),
+            execution_host: ExecutionHostProvenance::default(),
+            contribution_hosts: BTreeMap::new(),
+            wind_down: None,
+            wind_down_observed: false,
             context_window: None,
             active_ref: None,
             order: Vec::new(),
@@ -330,6 +388,35 @@ impl DashboardState {
     /// The Run's resolved reasoning effort.
     pub fn reasoning_effort(&self) -> Option<&str> {
         self.inputs.reasoning_effort.as_deref()
+    }
+
+    /// The selected host, or `unknown` where a legacy trace did not declare one.
+    pub fn execution_host(&self) -> &ExecutionHostProvenance {
+        &self.execution_host
+    }
+
+    /// One contribution's placement, or `unknown` where its legacy stamp is absent.
+    pub fn contribution_host(&self, contribution_id: &str) -> &str {
+        self.contribution_hosts
+            .get(contribution_id)
+            .map(String::as_str)
+            .unwrap_or("unknown")
+    }
+
+    /// The trace-derived Wind-down, or `None` for an observed lift or legacy silence.
+    pub fn wind_down(&self) -> Option<(&str, &str, i64)> {
+        self.wind_down.as_ref().map(|wind_down| {
+            (
+                wind_down.cause.as_str(),
+                wind_down.stage.as_str(),
+                wind_down.draining,
+            )
+        })
+    }
+
+    /// Whether this trace has made any Wind-down assertion.
+    pub fn wind_down_observed(&self) -> bool {
+        self.wind_down_observed
     }
 
     /// Fold one Event into the live model.
@@ -375,6 +462,17 @@ impl DashboardState {
                 }
                 if let Some(limit) = start.max_nmt_strikes {
                     self.max_strikes = limit;
+                }
+                if let Some(execution_host) = &start.execution_host {
+                    self.execution_host = ExecutionHostProvenance::from(execution_host);
+                }
+            }
+            EventPayload::ContributionStart(start) => {
+                if let Some(contribution_id) = &start.contribution_id {
+                    self.contribution_hosts.insert(
+                        contribution_id.clone(),
+                        start.host.clone().unwrap_or_else(|| "unknown".to_string()),
+                    );
                 }
             }
             EventPayload::IterationStart => {
@@ -439,8 +537,56 @@ impl DashboardState {
                 self.ended_at = now.or(self.ended_at);
                 self.ended_monotonic = now_monotonic.or(self.ended_monotonic);
             }
+            EventPayload::StopRequested(stop) => self.record_wind_down(stop),
+            EventPayload::StopLifted(stop)
+                if self
+                    .wind_down
+                    .as_ref()
+                    .is_some_and(|wind_down| wind_down.cause == "strike_limit")
+                    && stop.cause.as_deref() == Some("strike_limit") =>
+            {
+                if stop.draining.is_some_and(|count| count >= 0) {
+                    self.wind_down = None;
+                    self.wind_down_observed = true;
+                    self.status = RUN_RUNNING.to_string();
+                }
+            }
+            EventPayload::StopLifted(_) => {}
             EventPayload::Other => {}
         }
+    }
+
+    fn record_wind_down(&mut self, stop: &StopRequested) {
+        let (Some(cause), Some(stage), Some(draining)) =
+            (stop.cause.as_deref(), stop.stage.as_deref(), stop.draining)
+        else {
+            return;
+        };
+        if !matches!(cause, "operator_stop" | "strike_limit" | "iteration_cap")
+            || !matches!(stage, "drain" | "cancel")
+            || draining < 0
+            || (stage == "cancel" && cause != "operator_stop")
+        {
+            return;
+        }
+        if self
+            .wind_down
+            .as_ref()
+            .is_some_and(|current| current.stage == "cancel" && stage == "drain")
+        {
+            return;
+        }
+        self.wind_down = Some(WindDown {
+            cause: cause.to_string(),
+            stage: stage.to_string(),
+            draining,
+        });
+        self.wind_down_observed = true;
+        self.status = match stage {
+            "drain" => RUN_DRAINING.to_string(),
+            "cancel" => RUN_STOPPING.to_string(),
+            _ => unreachable!("validated above"),
+        };
     }
 
     /// Resolve an instant onto the monotonic axis.

@@ -97,6 +97,8 @@ __all__ = [
 # lockstep by ``test_state_event_type_constants_match_events``.
 _RUN_START = "wrapper.run.start"
 _RUN_END = "wrapper.run.end"
+_STOP_REQUESTED = "wrapper.stop.requested"
+_STOP_LIFTED = "wrapper.stop.lifted"
 _ISSUE_ACTIVATED = "wrapper.issue.activated"
 _ITERATION_START = "wrapper.iteration.start"
 _STRIKE = "wrapper.strike"
@@ -193,6 +195,13 @@ RETROACTIVE_BINDING_SOURCES = frozenset({"closure", "commit", "single_member_poo
 _STATUS_STARTING = "starting"
 #: Status while the loop is driving iterations.
 _STATUS_RUNNING = "running"
+#: Status after the first operator Stop: work is still draining.
+_STATUS_DRAINING = "draining"
+#: Status after the second operator Stop: cancellation has been requested and
+#: the Run is salvaging and finalizing what it interrupted. Deliberately not
+#: terminal — cancellation is requested, not awaited, so the header must keep
+#: ticking until the Run's own ``wrapper.run.end`` says it is over.
+_STATUS_STOPPING = "stopping"
 #: Terminal status when the user Stops (``q`` / ``Ctrl+C``) — distinct from the
 #: loop's own natural outcomes (``empty_pool`` / ``iteration_cap`` / ...), which
 #: arrive as the ``wrapper.run.end`` ``outcome``.
@@ -327,6 +336,25 @@ class ContextWindowSnapshot:
 
 
 @dataclass(frozen=True)
+class ExecutionHostSnapshot:
+    """The selected Execution host as the Run announced it."""
+
+    placement: str = "unknown"
+    isolation_grade: str = "unknown"
+    capacity: int | None = None
+    starting_lane_limit: int | None = None
+
+
+@dataclass(frozen=True)
+class WindDownSnapshot:
+    """The active Run-scoped **Wind-down**, as the trace announced it."""
+
+    cause: str
+    stage: str
+    draining: int
+
+
+@dataclass(frozen=True)
 class ResolvedRoute:
     """The **Routing resolution** one **Pickup** reached (contract 1.21).
 
@@ -366,6 +394,56 @@ class IssueContribution:
 def _default_wall_clock() -> datetime:
     """Local wall-clock time, used for the human-readable run-start stamp."""
     return datetime.now().astimezone()
+
+
+def _observed_count(value: object) -> int | None:
+    """Return a non-negative count, never mistaking a boolean for one."""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def _wind_down_snapshot(event: Mapping[str, object]) -> WindDownSnapshot | None:
+    """Decode only a legal Wind-down latch from an additive Event stream."""
+    cause = event.get("cause")
+    stage = event.get("stage")
+    draining = _observed_count(event.get("draining"))
+    if (
+        cause not in {"operator_stop", "strike_limit", "iteration_cap"}
+        or stage not in {"drain", "cancel"}
+        or draining is None
+        or (stage == "cancel" and cause != "operator_stop")
+    ):
+        return None
+    return WindDownSnapshot(cause=cause, stage=stage, draining=draining)
+
+
+_WIND_DOWN_STAGE_ORDER = {"drain": 0, "cancel": 1}
+
+
+def _execution_host_snapshot(value: object) -> ExecutionHostSnapshot:
+    """Decode the additive Run declaration without treating silence as local."""
+    if not isinstance(value, Mapping):
+        return ExecutionHostSnapshot()
+    placement = value.get("placement")
+    isolation_grade = value.get("isolation_grade")
+    capacity = value.get("capacity")
+    starting_lane_limit = value.get("starting_lane_limit")
+    return ExecutionHostSnapshot(
+        placement=placement if isinstance(placement, str) else "unknown",
+        isolation_grade=(
+            isolation_grade if isinstance(isolation_grade, str) else "unknown"
+        ),
+        capacity=(
+            capacity if isinstance(capacity, int) and not isinstance(capacity, bool) else None
+        ),
+        starting_lane_limit=(
+            starting_lane_limit
+            if isinstance(starting_lane_limit, int)
+            and not isinstance(starting_lane_limit, bool)
+            else None
+        ),
+    )
 
 
 @dataclass
@@ -445,6 +523,14 @@ class LiveRunState:
         #: that routes publishes a resolution on every bound Pickup, including
         #: the one an explicit ``--model`` pinned.
         self.routing_available: bool | None = None
+        # An absent declaration is historical silence, not evidence the Run used
+        # the local host.
+        self.execution_host = ExecutionHostSnapshot()
+        # None is historical silence: a trace that predates Wind-down says
+        # neither that the Run was healthy nor that it was stopped.
+        self.wind_down: WindDownSnapshot | None = None
+        self.wind_down_observed = False
+        self._contribution_hosts: dict[str, str] = {}
         self.context_window: ContextWindowSnapshot | None = None
         self.peak_context_window: ContextWindowSnapshot | None = None
 
@@ -588,6 +674,12 @@ class LiveRunState:
             issue = event.get("issue")
             if issue is None:
                 return
+            contribution_id = event.get("contribution_id")
+            if isinstance(contribution_id, str):
+                host = event.get("host")
+                self._contribution_hosts[contribution_id] = (
+                    host if isinstance(host, str) else "unknown"
+                )
             self._mark_started()
             self.status = _STATUS_RUNNING
             self._begin_contribution(self._normalize_ref(issue), now)
@@ -601,6 +693,7 @@ class LiveRunState:
         if etype == _RUN_START:
             self._mark_started()
             self.status = _STATUS_RUNNING
+            self.execution_host = _execution_host_snapshot(event.get("execution_host"))
             capabilities = event.get("insight_capabilities")
             if isinstance(capabilities, Mapping):
                 available = capabilities.get("context_window")
@@ -623,6 +716,32 @@ class LiveRunState:
             self.iteration = _coerce_int(event.get("iter"), self.iteration)
             self.status = _STATUS_RUNNING
             self._begin_iteration(now)
+        elif etype == _STOP_REQUESTED:
+            wind_down = _wind_down_snapshot(event)
+            if wind_down is None:
+                return
+            if (
+                self.wind_down is not None
+                and _WIND_DOWN_STAGE_ORDER[wind_down.stage]
+                < _WIND_DOWN_STAGE_ORDER[self.wind_down.stage]
+            ):
+                return
+            self.wind_down = wind_down
+            self.wind_down_observed = True
+            if wind_down.stage == "drain":
+                self.mark_draining()
+            elif wind_down.stage == "cancel":
+                self.mark_stopping()
+        elif etype == _STOP_LIFTED:
+            if (
+                self.wind_down is not None
+                and self.wind_down.cause == "strike_limit"
+                and event.get("cause") == "strike_limit"
+                and _observed_count(event.get("draining")) is not None
+            ):
+                self.wind_down = None
+                self.wind_down_observed = True
+                self.status = _STATUS_RUNNING
         elif etype == _AFK_READY_COLLECTED:
             self._record_pool(event.get("issues"), now)
         elif etype == _PICKUP_BOUND:
@@ -733,6 +852,21 @@ class LiveRunState:
         self._scan_for_marker(delta)
 
     # -- driver-facing controls --------------------------------------------
+
+    def mark_draining(self) -> None:
+        """Record the first operator Stop while the Run finishes live work."""
+        self.status = _STATUS_DRAINING
+
+    def mark_stopping(self) -> None:
+        """Record the second operator Stop while the Run winds itself down.
+
+        Deliberately **not** :meth:`mark_stopped`. Cancellation is requested
+        and not awaited (ADR-0043), so the Run is still salvaging workspaces
+        and cutting the blameless **Summary** rows for the contributions it
+        interrupted. Freezing the header here would report a Run as over while
+        the very record the second stage exists to produce is still arriving.
+        """
+        self.status = _STATUS_STOPPING
 
     def mark_stopped(self) -> None:
         """Record a user **Stop** (``q`` / ``Ctrl+C``) as the terminal status.
@@ -1354,6 +1488,10 @@ class LiveRunState:
         self._lane_streams.pop(key, None)
         self._lane_commits.pop(key, None)
         self._lane_touch(key, now)
+
+    def contribution_host(self, contribution_id: str) -> str:
+        """Return the stamped placement, or ``unknown`` for legacy records."""
+        return self._contribution_hosts.get(contribution_id, "unknown")
 
     def _finalize_contribution(
         self, key: int | str, event: Mapping[str, Any], now: float

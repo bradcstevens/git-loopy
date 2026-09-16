@@ -68,11 +68,13 @@ __all__ = [
     "INTEGRATION_HIGH_WATER",
     "PARKED",
     "PHASE_DRAINING_FOR_ABORT",
+    "PHASE_DRAINING_FOR_STOP",
     "PHASE_DRAINING_FOR_SERIAL",
     "PHASE_ROLLING",
     "PHASE_ROLLING_REFILL_TURN",
     "PHASE_SERIAL_OWNERSHIP",
     "REASON_CHECKPOINT_FAILED",
+    "REASON_OPERATOR_STOP",
     "REASON_PUBLISHED",
     "REASON_SERIAL_FALLBACK",
     "REASON_UNCHANGED_BRANCH",
@@ -85,6 +87,7 @@ __all__ = [
     "SERIAL_LATCH_NOT_PARALLEL_SAFE",
     "SERIAL_LATCH_REASONS",
     "STRIKE_ADD",
+    "STRIKE_NONE",
     "STRIKE_RESET",
     "SerialFallback",
     "TERMINAL",
@@ -97,6 +100,7 @@ REASON_PUBLISHED = "published"
 REASON_UNCHANGED_BRANCH = "unchanged_branch"
 REASON_CHECKPOINT_FAILED = "checkpoint_failed"
 REASON_SERIAL_FALLBACK = "serial_fallback"
+REASON_OPERATOR_STOP = "operator_stop"
 
 # Why refill stopped (#219 §5.1-5.3, #356). Every latch has exactly one of
 # these causes, and the operator's reading of each differs: a serial-required
@@ -118,6 +122,7 @@ SERIAL_LATCH_REASONS: tuple[str, ...] = (
 # still owns the machine, because serial **Iterations** tick the same one.
 STRIKE_RESET = "reset"
 STRIKE_ADD = "+1"
+STRIKE_NONE = "none"
 
 # What finishing Lane work did with the contribution (#219 §3.8-3.9, §4.2-4.3).
 ADMITTED = "admitted"
@@ -138,6 +143,7 @@ PHASE_DRAINING_FOR_SERIAL = "draining_for_serial"
 PHASE_SERIAL_OWNERSHIP = "serial_ownership"
 PHASE_ROLLING_REFILL_TURN = "rolling_refill_turn"
 PHASE_DRAINING_FOR_ABORT = "draining_for_abort"
+PHASE_DRAINING_FOR_STOP = "draining_for_stop"
 
 # #304: why a **Parallel mode** Run is about to work a serial **Iteration**
 # instead of a **Lane**. A closed vocabulary — the operator's next move differs
@@ -251,8 +257,9 @@ class Contribution:
         published: ``True`` only after green publication *and* verified closure.
         reason: The terminal disposition, one of the ``REASON_*`` constants.
             ``None`` while the contribution is still open.
-        strike_reaction: :data:`STRIKE_RESET` or :data:`STRIKE_ADD`, recorded
-            once at finalization. ``None`` while open.
+        strike_reaction: :data:`STRIKE_RESET`, :data:`STRIKE_ADD`, or
+            :data:`STRIKE_NONE`, recorded once at finalization. ``None`` while
+            open.
     """
 
     contribution_id: str
@@ -272,8 +279,8 @@ class RollingScheduler:
     Args:
         diag: Diagnostics logger.
         pool: The **Pool** candidate cache and pickup seam.
-        lane_cap: The configured **Lane cap** — a strict upper bound for the
-            whole Run, never mutated (#219 §6).
+        lane_cap: The bound **Execution host**'s declared capacity — a strict
+            upper bound for the whole Run, never mutated (#219 §6).
         max_iterations: The Run's iteration cap; ``0`` means unbounded.
         concurrency: The bounded adaptive policy that owns the *effective* Lane
             limit. Defaults to one with no operator budgets configured, which
@@ -299,18 +306,22 @@ class RollingScheduler:
         default_factory=list, init=False
     )
     _abort_latched: bool = field(default=False, init=False)
+    _stop_latched: bool = field(default=False, init=False)
     _phase: str = field(default=PHASE_ROLLING, init=False)
     _worked: set[int | str] = field(default_factory=set, init=False)
     _in_setup: set[int | str] = field(default_factory=set, init=False)
     _next_contribution: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
-        # Compose the Run-scoped worked-issue guard into the Pool's eligibility
-        # predicate (#219 §2.15). The guard deliberately does not live in the
-        # cache: it is Run state this scheduler owns, and a cache could only
-        # ever approximate it.
+        # Compose the Run-scoped worked-issue guard into both Pool predicates
+        # (#219 §2.15). The guard deliberately does not live in the cache: it
+        # is Run state this scheduler owns, and a cache could only ever
+        # approximate it. A candidate unready only because it is **Blocked**
+        # remains cacheable; one this Run already claimed does not.
         inner = self.pool.eligible
         self.pool.eligible = lambda c: inner(c) and self._unclaimed(c)
+        cache_inner = self.pool.cacheable
+        self.pool.cacheable = lambda c: cache_inner(c) and self._unclaimed(c)
         self._controller = self.concurrency or ConcurrencyController(
             configured_lane_cap=self.lane_cap
         )
@@ -319,11 +330,12 @@ class RollingScheduler:
         """Whether this Run has neither worked ``candidate`` nor reserved it.
 
         Two distinct claims, because they have different lifetimes.
-        :attr:`_worked` is #219 §1.7's monotonic guard: it latches at agent
-        session start and never releases. :attr:`_in_setup` covers the window a
-        reservation is still provisional — the candidate is gone from the cache
-        but a membership refresh would re-list it, and §3.3 makes it eligible
-        again only if that setup *fails*.
+        :attr:`_worked` latches at an Agent session start. A host result proving
+        that no session started releases it again; every actual session keeps
+        the guard for the Run. :attr:`_in_setup` covers the window a reservation
+        is still provisional — the candidate is gone from the cache but a
+        membership refresh would re-list it, and §3.3 makes it eligible again
+        only if that setup *fails*.
         """
         return candidate.ref not in self._worked and candidate.ref not in self._in_setup
 
@@ -332,10 +344,10 @@ class RollingScheduler:
         """The current effective Lane concurrency (#219 §6).
 
         The number :attr:`refillable` is bounded by, and the only Lane limit
-        that moves: the configured :attr:`lane_cap` is a strict upper bound for
-        the whole Run. A Run starts at the static-safe ``min(lane_cap, 3)`` and
-        stays there unless :meth:`observe_pressure` gives the controller
-        authoritative evidence to contract or expand.
+        that moves: the host-declared :attr:`lane_cap` is a strict upper bound
+        for the whole Run. A load-observable host starts at that capacity;
+        otherwise the controller starts at the static-safe
+        ``min(lane_cap, 3)``.
         """
         return self._controller.effective_limit
 
@@ -432,7 +444,7 @@ class RollingScheduler:
             # refill turn §5.9 grants after a serial Iteration is the deliberate
             # exception — it runs before any remaining demand may relatch.
             return 0
-        if self._abort_latched:
+        if self._abort_latched or self._stop_latched:
             # §7.7: drain-confirmed abort stops refill but cancels nothing.
             return 0
         if len(self._admitted) >= INTEGRATION_HIGH_WATER:
@@ -458,6 +470,8 @@ class RollingScheduler:
             return self._phase
         if self._serial_latched:
             return PHASE_DRAINING_FOR_SERIAL
+        if self._stop_latched:
+            return PHASE_DRAINING_FOR_STOP
         if self._abort_latched:
             return PHASE_DRAINING_FOR_ABORT
         return PHASE_ROLLING
@@ -646,6 +660,47 @@ class RollingScheduler:
         self._parked.sort(key=lambda entry: (entry[0], _ref_sort_key(entry[1].ref)))
         return PARKED
 
+    def finish_terminal_failure(
+        self, contribution: Contribution, *, reoffer: bool, reason: str
+    ) -> str:
+        """Finalize a contribution terminally without local work signals.
+
+        Two callers reach a terminal disposition without passing the Lane-work
+        boundary: a host-reported terminal failure, and the Run-exit
+        reclamation that closes out whatever an abnormally terminated Run left
+        open (#452). Both know the contribution is over and neither has a
+        ``changed`` / ``checkpoint_ok`` pair to resolve it with.
+
+        The host failure's three-class vocabulary is intentionally not emitted
+        here: #453 owns widening the contribution-end event reasons. Until then,
+        the caller maps the host's failure onto one of the terminal reasons the
+        wire already publishes, which keeps the wire unchanged while the Run
+        still takes a distinct, non-Integration control-flow path.
+
+        A host that never started or stalled did not start an Agent session.
+        Undo the provisional session claim so the Pool can offer its issue again;
+        a breach keeps the claim because that Agent session did run.
+
+        The contribution is withdrawn from the **Integration backlog** and the
+        parked FIFO first. A contribution interrupted after admission is still
+        held by both, and leaving it there would keep the pipeline reading
+        un-drained after every Lane it can still account for has been closed.
+
+        Args:
+            reoffer: Whether the issue returns to the **Pool** unspent.
+            reason: The already-published terminal reason to finalize with.
+        """
+        if contribution in self._admitted:
+            self._admitted.remove(contribution)
+        self._parked = [
+            entry for entry in self._parked if entry[1] is not contribution
+        ]
+        self._finalize(contribution, reason=reason)
+        if reoffer:
+            self._units_spent -= 1
+            self._worked.discard(contribution.ref)
+        return TERMINAL
+
     def finalize(
         self,
         contribution: Contribution,
@@ -683,7 +738,7 @@ class RollingScheduler:
             self._admitted.remove(contribution)
         terminal = REASON_PUBLISHED if published else (reason or REASON_SERIAL_FALLBACK)
         self._finalize(contribution, reason=terminal)
-        if published:
+        if published and not self._stop_latched:
             # §7.7: a green publication during an abort drain cancels it.
             self._abort_latched = False
         elif terminal == REASON_SERIAL_FALLBACK:
@@ -731,7 +786,7 @@ class RollingScheduler:
         """Whether validated serial demand has stopped refill (#219 §5.3)."""
         return self._serial_latched
 
-    def strike_limit_reached(self) -> None:
+    def strike_limit_reached(self) -> bool:
         """Latch the drain-confirmed abort (#219 §7.7).
 
         Stops new reservations and refill, but cancels nothing: every started
@@ -740,7 +795,19 @@ class RollingScheduler:
         The Run exits stuck only at full quiescence with the limit still
         reached, which is why this is a latch rather than an immediate exit.
         """
+        if self._abort_latched:
+            return False
         self._abort_latched = True
+        return True
+
+    def request_stop_drain(self) -> None:
+        """Latch the operator's deliberate drain without cancelling live work."""
+        self._stop_latched = True
+
+    @property
+    def stop_latched(self) -> bool:
+        """Whether an operator Stop has stopped all future Lane reservations."""
+        return self._stop_latched
 
     @property
     def abort_latched(self) -> bool:
@@ -758,13 +825,20 @@ class RollingScheduler:
         """
         return self.pool.confirm_empty()
 
+    def confirm_terminal_outcome(self) -> str | None:
+        """Return the authoritative terminal reason for the Lane half of the Pool."""
+        return self.pool.confirm_terminal_outcome()
+
     def _finalize(self, contribution: Contribution, *, reason: str) -> None:
         """Close a contribution exactly once and record its Strike reaction."""
         contribution.published = reason == REASON_PUBLISHED
         contribution.reason = reason
-        contribution.strike_reaction = (
-            STRIKE_RESET if contribution.published else STRIKE_ADD
-        )
+        if reason == REASON_OPERATOR_STOP:
+            contribution.strike_reaction = STRIKE_NONE
+        else:
+            contribution.strike_reaction = (
+                STRIKE_RESET if contribution.published else STRIKE_ADD
+            )
         self._open.pop(contribution.contribution_id, None)
         self._release_lane(contribution)
         self._finalized.append(contribution)

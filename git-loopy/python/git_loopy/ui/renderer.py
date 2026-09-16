@@ -72,6 +72,8 @@ from git_loopy.events import (
     WRAPPER_RUN_START,
     WRAPPER_SERIAL_REQUESTED,
     WRAPPER_STRIKE,
+    WRAPPER_STOP_LIFTED,
+    WRAPPER_STOP_REQUESTED,
 )
 
 from git_loopy.usage import BillingSample
@@ -389,8 +391,8 @@ class Renderer:
     def _on_concurrency_changed(self, event: dict[str, Any]) -> None:
         """Name the signal that moved the effective **Lane** limit (#219 §6, #309).
 
-        The configured **Lane cap** is a safety ceiling, not a utilization
-        promise, so a Run narrowing itself is correct behaviour — but a Run
+        The bound **Execution host**'s capacity is a safety ceiling, not a
+        utilization promise, so a Run narrowing itself is correct behaviour — but a Run
         that narrows *silently* is indistinguishable from Parallel mode being
         broken, which is the same reporting failure #304 fixed for a Run that
         never engaged a Lane at all. Each pressure gets its own words because
@@ -413,6 +415,31 @@ class Renderer:
         text.append(
             f"  {effective} of {configured}  ({cause})", style=STYLES["meta"]
         )
+        self.console.print(text)
+
+    def _on_stop_requested(self, event: dict[str, Any]) -> None:
+        """Announce the Run-owned Wind-down latch at the terminal."""
+        cause = event.get("cause")
+        stage = event.get("stage")
+        draining = event.get("draining")
+        if not isinstance(cause, str) or not isinstance(stage, str):
+            return
+        text = Text()
+        text.append("⏳ ", style=STYLES["warning"])
+        text.append("wind-down ", style=STYLES["warning"])
+        text.append(f"{cause.replace('_', ' ')} / {stage}", style=STYLES["warning"])
+        if isinstance(draining, int) and not isinstance(draining, bool):
+            text.append(
+                f"  ({draining} contribution{'s' if draining != 1 else ''} in flight)",
+                style=STYLES["meta"],
+            )
+        self.console.print(text)
+
+    def _on_stop_lifted(self, event: dict[str, Any]) -> None:
+        text = Text()
+        text.append("✓ ", style=STYLES["success"])
+        text.append("wind-down lifted", style=STYLES["success"])
+        text.append("  (strike limit)", style=STYLES["meta"])
         self.console.print(text)
 
     def _on_run_end(self, event: dict[str, Any]) -> None:
@@ -1128,6 +1155,8 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_AUTO_CLOSE: Renderer._on_auto_close,
     WRAPPER_PR_ADVANCED: Renderer._on_pr_advanced,
     WRAPPER_STRIKE: Renderer._on_strike,
+    WRAPPER_STOP_REQUESTED: Renderer._on_stop_requested,
+    WRAPPER_STOP_LIFTED: Renderer._on_stop_lifted,
     WRAPPER_ASK_USER_ATTEMPTED: Renderer._on_ask_user_attempted,
     ASSISTANT_REASONING: Renderer._on_assistant_reasoning,
     ASSISTANT_MESSAGE: Renderer._on_assistant_message,

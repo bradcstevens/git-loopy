@@ -140,6 +140,86 @@ def test_strike_updates_count_and_max() -> None:
     assert state.max_strikes == 5
 
 
+def test_wind_down_is_folded_from_the_trace_and_a_strike_lift_clears_it() -> None:
+    """A Dashboard learns a revocable Strike drain only from Run Events."""
+    state = _make_state()
+    state.render({"type": events_module.WRAPPER_RUN_START})
+
+    # A trace from before Wind-down existed says nothing about why a Run later
+    # interrupted; it is not silently upgraded into an operator Stop.
+    assert state.wind_down is None
+
+    state.render(
+        {
+            "type": events_module.WRAPPER_STOP_REQUESTED,
+            "cause": "strike_limit",
+            "stage": "drain",
+            "draining": 2,
+        }
+    )
+
+    assert state.status == "draining"
+    assert state.wind_down is not None
+    assert state.wind_down.cause == "strike_limit"
+    assert state.wind_down.stage == "drain"
+    assert state.wind_down.draining == 2
+
+    state.render(
+        {
+            "type": events_module.WRAPPER_STOP_LIFTED,
+            "cause": "strike_limit",
+            "draining": 1,
+        }
+    )
+
+    assert state.status == "running"
+    assert state.wind_down is None
+
+    state.render({"type": events_module.WRAPPER_RUN_END, "outcome": "interrupted"})
+    assert state.status == "interrupted"
+    assert state.wind_down is None
+
+
+def test_wind_down_never_regresses_or_lifts_an_operator_stop() -> None:
+    state = _make_state()
+    state.render(
+        {
+            "type": events_module.WRAPPER_STOP_REQUESTED,
+            "cause": "strike_limit",
+            "stage": "drain",
+            "draining": 2,
+        }
+    )
+    state.render(
+        {
+            "type": events_module.WRAPPER_STOP_REQUESTED,
+            "cause": "operator_stop",
+            "stage": "cancel",
+            "draining": 2,
+        }
+    )
+    state.render(
+        {
+            "type": events_module.WRAPPER_STOP_REQUESTED,
+            "cause": "iteration_cap",
+            "stage": "drain",
+            "draining": 0,
+        }
+    )
+    state.render(
+        {
+            "type": events_module.WRAPPER_STOP_LIFTED,
+            "cause": "strike_limit",
+            "draining": 1,
+        }
+    )
+
+    assert state.wind_down is not None
+    assert state.wind_down.cause == "operator_stop"
+    assert state.wind_down.stage == "cancel"
+    assert state.status == "stopping"
+
+
 def test_run_end_sets_terminal_status_from_outcome() -> None:
     state = _make_state()
     state.render({"type": events_module.WRAPPER_RUN_START, "max_nmt_strikes": 3})
@@ -315,6 +395,54 @@ def test_context_window_capability_distinguishes_unavailable_from_no_sample() ->
     assert "context —" in format_header(state)
 
 
+def test_mark_draining_keeps_the_run_live() -> None:
+    clock = _FakeClock()
+    state = _make_state(monotonic=clock)
+    state.render({"type": events_module.WRAPPER_RUN_START})
+    clock.advance(5)
+
+    state.mark_draining()
+    clock.advance(3)
+
+    assert state.status == "draining"
+    assert state.elapsed_seconds() == 8.0
+    assert state.ended is False
+
+
+def test_the_second_stop_is_still_a_live_run_until_it_ends() -> None:
+    """Cancellation is requested, not awaited: the wind-down is watchable.
+
+    The header has to say the Run is stopping without saying it stopped, or the
+    operator reads a frozen ``stopped`` while salvage is still running and the
+    Summary rows for what they interrupted are still arriving.
+    """
+    clock = _FakeClock()
+    state = _make_state(monotonic=clock)
+    state.render({"type": events_module.WRAPPER_RUN_START})
+    clock.advance(5)
+
+    state.render(
+        {
+            "type": events_module.WRAPPER_STOP_REQUESTED,
+            "cause": "operator_stop",
+            "stage": "cancel",
+            "draining": 1,
+        }
+    )
+    clock.advance(3)
+
+    assert state.status == "stopping"
+    assert state.elapsed_seconds() == 8.0
+    assert state.ended is False
+
+    state.render(
+        {"type": events_module.WRAPPER_RUN_END, "outcome": "operator_stop"}
+    )
+
+    assert state.status == "operator_stop"
+    assert state.ended is True
+
+
 # ---------------------------------------------------------------------------
 # Protocol conformance + import guard
 # ---------------------------------------------------------------------------
@@ -329,6 +457,7 @@ def test_state_event_type_constants_match_events() -> None:
     """The locally re-declared literals must equal the events.py contract."""
     assert state_module._RUN_START == events_module.WRAPPER_RUN_START
     assert state_module._RUN_END == events_module.WRAPPER_RUN_END
+    assert state_module._STOP_REQUESTED == events_module.WRAPPER_STOP_REQUESTED
     assert state_module._ISSUE_ACTIVATED == events_module.WRAPPER_ISSUE_ACTIVATED
     assert state_module._ITERATION_START == events_module.WRAPPER_ITERATION_START
     assert state_module._STRIKE == events_module.WRAPPER_STRIKE

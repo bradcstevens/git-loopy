@@ -187,6 +187,27 @@ async def test_cancelled_picker_falls_back_silently() -> None:
     assert warn.messages == []
 
 
+async def test_picker_runtime_failure_falls_back_with_warning() -> None:
+    warn = _Warn()
+
+    async def fetch() -> list:
+        return [_model("gpt-5.4", efforts=["high"])]
+
+    async def broken(choices, *, cursor) -> Selection:
+        raise ModuleNotFoundError("No module named 'textual'")
+
+    model, effort = await resolve_run_model(
+        _config("claude-opus-4.8", "max"),
+        warn=warn,
+        fetch=fetch,
+        run_app=broken,
+    )
+
+    assert (model, effort) == ("claude-opus-4.8", "max")
+    assert len(warn.messages) == 1
+    assert "could not start" in warn.messages[0]
+
+
 async def test_selection_with_no_effort_is_preserved() -> None:
     async def fetch() -> list:
         return [_model("claude-sonnet-4.5")]  # reasoning-incapable
@@ -238,11 +259,10 @@ async def test_fetch_live_models_uses_throwaway_client_context() -> None:
 
 
 def test_picker_module_does_not_import_textual_at_top() -> None:
-    """picker.py stays importable (and fallback-testable) without the [tui] extra.
+    """picker.py keeps Textual lazy at module import time.
 
-    Textual is imported lazily inside the default ``run_app`` only on the success
-    path that actually shows the picker, so this module — and its fallback path —
-    import cleanly in the base install.
+    Textual is imported lazily inside the default ``run_app`` only on the path
+    that actually shows the picker, so this module imports cleanly.
     """
     import ast
     from pathlib import Path

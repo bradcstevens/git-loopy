@@ -95,6 +95,8 @@ pub struct Event {
 pub enum EventPayload {
     /// `wrapper.run.start`
     RunStart(RunStart),
+    /// `wrapper.contribution.start`
+    ContributionStart(ContributionStart),
     /// `wrapper.iteration.start`
     IterationStart,
     /// `wrapper.afk_ready.collected`
@@ -119,6 +121,10 @@ pub enum EventPayload {
     IterationEnd(Box<IterationEnd>),
     /// `wrapper.run.end`
     RunEnd(RunEnd),
+    /// `wrapper.stop.requested`
+    StopRequested(StopRequested),
+    /// `wrapper.stop.lifted`
+    StopLifted(StopLifted),
     /// Any other Event type in the supported schema.
     Other,
 }
@@ -132,6 +138,31 @@ pub struct RunStart {
     /// The configured consecutive-Strike limit.
     #[serde(default)]
     pub max_nmt_strikes: Option<i64>,
+    /// The selected Execution host, declared once for the Run.
+    #[serde(default)]
+    pub execution_host: Option<ExecutionHostDeclaration>,
+}
+
+/// The Execution host facts announced on `wrapper.run.start`.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ExecutionHostDeclaration {
+    #[serde(default)]
+    pub placement: Option<String>,
+    #[serde(default)]
+    pub isolation_grade: Option<String>,
+    #[serde(default)]
+    pub capacity: Option<i64>,
+    #[serde(default)]
+    pub starting_lane_limit: Option<i64>,
+}
+
+/// The placement stamp on one `wrapper.contribution.start`.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ContributionStart {
+    #[serde(default)]
+    pub contribution_id: Option<String>,
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 /// Per-Orchestrator Insight capabilities declared at Run start.
@@ -461,6 +492,29 @@ pub struct RunEnd {
     pub outcome: Option<String>,
 }
 
+/// The two-stage operator Stop transition.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct StopRequested {
+    /// Why this Run stopped starting new work.
+    #[serde(default)]
+    pub cause: Option<String>,
+    /// `drain` preserves all started work; `cancel` ends active agent sessions.
+    #[serde(default)]
+    pub stage: Option<String>,
+    /// Contributions still in flight when the latch became true.
+    #[serde(default)]
+    pub draining: Option<i64>,
+}
+
+/// A revocable Strike drain clearing after a green publication.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct StopLifted {
+    #[serde(default)]
+    pub cause: Option<String>,
+    #[serde(default)]
+    pub draining: Option<i64>,
+}
+
 impl Event {
     /// Decode one Event from its JSON representation.
     ///
@@ -498,6 +552,7 @@ impl Event {
 fn decode_payload(kind: &str, value: &Value) -> EventPayload {
     match kind {
         "wrapper.run.start" => EventPayload::RunStart(decode_or_default(value)),
+        "wrapper.contribution.start" => EventPayload::ContributionStart(decode_or_default(value)),
         "wrapper.iteration.start" => EventPayload::IterationStart,
         "wrapper.afk_ready.collected" => EventPayload::AfkReadyCollected(decode_or_default(value)),
         "wrapper.issue.activated" => match serde_json::from_value(value.clone()) {
@@ -524,6 +579,8 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.strike" => EventPayload::Strike(decode_or_default(value)),
         "wrapper.iteration.end" => EventPayload::IterationEnd(Box::new(decode_or_default(value))),
         "wrapper.run.end" => EventPayload::RunEnd(decode_or_default(value)),
+        "wrapper.stop.requested" => EventPayload::StopRequested(decode_or_default(value)),
+        "wrapper.stop.lifted" => EventPayload::StopLifted(decode_or_default(value)),
         _ => EventPayload::Other,
     }
 }

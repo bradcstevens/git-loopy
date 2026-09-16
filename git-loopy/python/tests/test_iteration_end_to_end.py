@@ -77,6 +77,8 @@ from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy.emit import EventEmitter
 from git_loopy.events import REDACTED_SECRET
 from git_loopy.persist import WritersBundle, create_writers
+from git_loopy.readiness import BlockedByRead, BlockerNode
+from git_loopy.run_control import is_run_alive
 from git_loopy.session import SKILL_TOOL_NAME
 from git_loopy.sinks import SinkFanout
 from git_loopy.skill_catalog import build_skill_catalog
@@ -416,6 +418,9 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
     assert len(jsonl_files) == 1, (
         f"expected exactly one JSONL log; got {jsonl_files}"
     )
+    control_path = jsonl_files[0].with_suffix(".control")
+    assert control_path.exists()
+    assert is_run_alive(control_path) is False
     log_lines = jsonl_files[0].read_text(encoding="utf-8").splitlines()
     assert log_lines, "JSONL log must not be empty"
     events_seen: list[dict[str, Any]] = []
@@ -503,6 +508,7 @@ def test_loop_runs_one_iteration_end_to_end(tmp_path, monkeypatch, capsys) -> No
         "integration_backlog": True,
         "adaptive_lane_limit": True,
         "contribution_events": True,
+        "execution_hosts": ["local", "github-actions"],
     }
     iteration_end = next(
         event
@@ -682,6 +688,17 @@ def _read_events(tmp_path: Path) -> list[dict[str, Any]]:
         for line in logs[0].read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+
+
+def _write_runnable_feedback_loop(repo_root: Path) -> None:
+    """Declare the minimum valid Integration gate for a synthetic Run repository."""
+    (repo_root / "AGENTS.md").write_text(
+        "## Feedback loops\n\n"
+        "| Loop | Command |\n"
+        "| --- | --- |\n"
+        "| Tests | `uv run pytest` |\n",
+        encoding="utf-8",
+    )
 
 
 def test_loop_reports_pool_exclusions_as_events(tmp_path, monkeypatch) -> None:
@@ -1355,6 +1372,34 @@ def test_loop_preflight_failure_when_gh_not_authed(tmp_path, monkeypatch) -> Non
     assert len(fake_client.created) == 0
 
 
+def test_loop_refuses_a_repository_without_runnable_feedback_loops(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A Run stops before its first session when Integration could never gate."""
+    (tmp_path / "AGENTS.md").unlink()
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
+
+    fake_git = FakeGitClient(tmp_path)
+    fake_client = FakeCopilotClient(scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_github_client",
+        lambda: FakeGitHubClient(
+            repo=gh_module.Repo(owner="x", name="y", default_branch="main")
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    assert asyncio.run(loop_module.run(RunConfig(issue_source="github"))) == 1
+    assert fake_client.start_call_count == 0
+    assert fake_client.created == []
+    assert "Add AGENTS.md with at least one runnable command" in capsys.readouterr().err
+
+
 def test_loop_aborts_after_max_nmt_strikes(tmp_path, monkeypatch) -> None:
     """Three consecutive no-progress iterations abort the loop with exit 1.
 
@@ -1574,6 +1619,201 @@ def test_loop_multiple_iterations_until_cap(tmp_path, monkeypatch) -> None:
     json_files = list((tmp_path / ".git-loopy" / "runs").glob("*.json"))
     payload = json.loads(json_files[0].read_text(encoding="utf-8"))
     assert len(payload["iterations"]) == 3
+    events = _read_events(tmp_path)
+    assert [
+        (event["cause"], event["stage"], event["draining"])
+        for event in events
+        if event["type"] == "wrapper.stop.requested"
+    ] == [("iteration_cap", "drain", 0)]
+
+
+# ---------------------------------------------------------------------------
+# The two Stop stages on a serial Iteration (#454, ADR-0043)
+# ---------------------------------------------------------------------------
+
+
+class _HeldSerialClient(FakeCopilotClient):
+    """A client whose session parks until the test lets it go.
+
+    A serial **Iteration** has no **Execution host** at all, so the two Stop
+    stages have to reach it through the session itself: the first must let the
+    Iteration in flight run to completion, the second must cancel it.
+    """
+
+    def __init__(self, started: asyncio.Event, release: asyncio.Event) -> None:
+        super().__init__(scripted_events=[])
+        self._started = started
+        self._release = release
+
+    async def create_session(self, **kwargs: Any) -> FakeCopilotSession:
+        session = await super().create_session(**kwargs)
+        work = session.send_and_wait
+
+        async def hold_until_stopped(
+            prompt: str, *, timeout: float = 60.0, **extra: Any
+        ) -> SessionEvent | None:
+            self._started.set()
+            await self._release.wait()
+            return await work(prompt, timeout=timeout, **extra)
+
+        session.send_and_wait = hold_until_stopped  # type: ignore[method-assign]
+        return session
+
+
+def _capture_serial_loops(monkeypatch) -> list["loop_module._Loop"]:
+    """Hand a test the live serial loop, so it can gesture a **Stop** at it."""
+    built: list[loop_module._Loop] = []
+    real_loop = loop_module._Loop
+
+    def capture(*args: Any, **kwargs: Any) -> loop_module._Loop:
+        instance = real_loop(*args, **kwargs)
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr(loop_module, "_Loop", capture)
+    return built
+
+
+def _wire_serial_stop_run(
+    tmp_path: Path, monkeypatch, *, issues: list[int]
+) -> tuple[FakeGitClient, asyncio.Event, asyncio.Event, list["loop_module._Loop"]]:
+    """Wire a serial Run whose one live session parks on demand."""
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
+
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(n) for n in issues],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    started, release = asyncio.Event(), asyncio.Event()
+    fake_client = _HeldSerialClient(started, release)
+    fake_client.on_send = lambda: fake_git.simulate_agent_commit(subject="progress")
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    return fake_git, started, release, _capture_serial_loops(monkeypatch)
+
+
+def test_the_first_stop_finishes_the_serial_iteration_and_starts_no_more(
+    tmp_path, monkeypatch
+) -> None:
+    """Stage one on the path that has no Lane at all (#454, ADR-0043).
+
+    The Iteration in flight runs to completion — its commit still counts — and
+    the round after it never opens, even though the cap left room for two more.
+    """
+    fake_git, started, release, built = _wire_serial_stop_run(
+        tmp_path, monkeypatch, issues=[42, 43]
+    )
+    cfg = RunConfig(issue_source="github", max_iterations=3, max_nmt_strikes=3)
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        assert built
+        built[0].request_stop_drain()
+        release.set()
+        return await asyncio.wait_for(run_task, timeout=5)
+
+    assert asyncio.run(scenario()) == 1
+
+    events = _read_events(tmp_path)
+    assert [
+        (event["cause"], event["stage"], event["draining"])
+        for event in events
+        if event["type"] == "wrapper.stop.requested"
+    ] == [("operator_stop", "drain", 0)]
+    iteration_ends = [e for e in events if e["type"] == "wrapper.iteration.end"]
+    assert len(iteration_ends) == 1, "the started Iteration ran to completion"
+    assert [e["type"] for e in events].count("wrapper.commit.recorded") == 1
+    (run_end,) = [e for e in events if e["type"] == "wrapper.run.end"]
+    assert run_end["outcome"] == "operator_stop"
+    assert run_end["iterations_run"] == 1
+
+
+def test_the_second_stop_cancels_the_serial_session_and_charges_no_strike(
+    tmp_path, monkeypatch
+) -> None:
+    """Stage two on a serial Iteration: cancelled, recorded, and blameless.
+
+    The Iteration is ended by a human, so it is not evidence that the Run was
+    getting nowhere: the **Strike** counter must not move, exactly as a stopped
+    **Lane contribution**'s does not.
+    """
+    _fake_git, started, _release, built = _wire_serial_stop_run(
+        tmp_path, monkeypatch, issues=[42]
+    )
+    cfg = RunConfig(issue_source="github", max_iterations=3, max_nmt_strikes=3)
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        assert built
+        built[0].request_stop_drain()
+        await asyncio.sleep(0)
+        assert not run_task.done(), "the first Stop cancels nothing"
+        built[0].request_stop_cancel()
+        return await asyncio.wait_for(run_task, timeout=5)
+
+    assert asyncio.run(scenario()) == 1
+
+    events = _read_events(tmp_path)
+    assert [
+        (event["cause"], event["stage"], event["draining"])
+        for event in events
+        if event["type"] == "wrapper.stop.requested"
+    ] == [
+        ("operator_stop", "drain", 0),
+        ("operator_stop", "cancel", 0),
+    ]
+    assert [e for e in events if e["type"] == "wrapper.strike"] == []
+    (run_end,) = [e for e in events if e["type"] == "wrapper.run.end"]
+    assert run_end["outcome"] == "operator_stop"
+
+
+def test_second_stop_before_serial_send_starts_no_agent_session(
+    tmp_path, monkeypatch
+) -> None:
+    """A cancellation request that wins setup must prevent the next agent turn."""
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_github_client",
+        lambda: FakeGitHubClient(
+            repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+            issues=[_make_issue(42)],
+        ),
+    )
+    built = _capture_serial_loops(monkeypatch)
+
+    class _StoppingBeforeSendClient(FakeCopilotClient):
+        async def create_session(self, **kwargs: Any) -> FakeCopilotSession:
+            session = await super().create_session(**kwargs)
+            assert built
+            built[0].request_stop_drain()
+            built[0].request_stop_cancel()
+            return session
+
+    fake_client = _StoppingBeforeSendClient(scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=3)
+        )
+    )
+
+    assert exit_code == 1
+    assert fake_client.created[0].send_and_wait_calls == []
+    events = _read_events(tmp_path)
+    assert [event for event in events if event["type"] == "wrapper.strike"] == []
+    (run_end,) = [event for event in events if event["type"] == "wrapper.run.end"]
+    assert run_end["outcome"] == "operator_stop"
 
 
 # ---------------------------------------------------------------------------
@@ -2351,6 +2591,7 @@ def _wire_multi_issue_github(
     issues: list[gh_module.Issue],
 ) -> tuple[FakeCopilotClient, FakeGitHubClient]:
     """Wire a Run whose Pool holds several candidates, so selection is visible."""
+    _write_runnable_feedback_loop(tmp_path)
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
     monkeypatch.setattr(
@@ -2366,7 +2607,13 @@ def _wire_multi_issue_github(
     return fake_client, fake_gh
 
 
-def _dated(number: int, created_at: str, *, labels: list[str] | None = None):
+def _dated(
+    number: int,
+    created_at: str,
+    *,
+    labels: list[str] | None = None,
+    blocked_by: BlockedByRead | None = None,
+):
     issue = _make_issue(number)
     return gh_module.Issue(
         number=issue.number,
@@ -2377,6 +2624,7 @@ def _dated(number: int, created_at: str, *, labels: list[str] | None = None):
         url=issue.url,
         created_at=created_at,
         comments=(),
+        blocked_by=blocked_by if blocked_by is not None else BlockedByRead(total_count=0, nodes=()),
     )
 
 
@@ -2737,7 +2985,7 @@ def test_the_routed_pair_is_resolved_at_pickup(tmp_path, monkeypatch) -> None:
     )
 
     assert fake_client.create_calls[0]["model"] == "gpt-5-mini"
-    assert routing_scope.routing_in_force(1)
+    assert routing_scope.routing_in_force()
 
 
 def test_a_working_marker_naming_another_issue_does_not_rebind(
@@ -3380,6 +3628,233 @@ def test_a_defeated_issue_leaves_the_pool_whole(tmp_path, monkeypatch) -> None:
     assert collected == [[7, 31], [7, 31], [7, 31]]
 
 
+# ---------------------------------------------------------------------------
+# **Readiness** (#438, ADR-0047, Wrapper contract §3.3.1): a candidate carrying
+# an open native `blocked_by` dependency is not admissible at **Pickup**. The
+# runner passes it over and binds the next candidate instead -- in milliseconds,
+# never spending an agent session discovering the blocker for itself.
+# ---------------------------------------------------------------------------
+
+
+def test_a_blocked_candidate_is_passed_over_for_the_next_admissible_one(
+    tmp_path, monkeypatch
+) -> None:
+    """The whole ticket, end to end: #438's first property, demonstrated.
+
+    Issue 7 is the head of the order and carries an open native blocker.
+    **Pickup** passes it over -- costing no agent session at all -- and binds
+    issue 31 instead, the next candidate in §3.2's order.
+    """
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                blocked_by=BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+                ),
+            ),
+            _dated(31, "2026-05-01T00:00:00Z"),
+        ],
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    )
+
+    assert exit_code == 0
+    assert [(e["type"], e["issue"]) for e in _pickup_events(tmp_path)] == [
+        ("wrapper.pickup.skipped", 7),
+        ("wrapper.pickup.bound", 31),
+    ]
+    skip = next(e for e in _pickup_events(tmp_path) if e["type"] == "wrapper.pickup.skipped")
+    assert skip["reason"] == "blocked_by_open_dependency: acme/widgets#93"
+
+
+def test_readiness_is_asked_before_routing_resolves(tmp_path, monkeypatch) -> None:
+    """#438: a candidate about to be passed over must not first pay to route.
+
+    Issue 7 carries both an open blocker *and* a ``task-type:`` label that
+    would refuse to resolve a **Routed pair** were routing ever asked. If
+    readiness were checked after routing, the walk would pay for (and report)
+    the routing refusal instead; asked first, it never reaches routing at all,
+    and the skip names the blocker rather than a routing complaint.
+    """
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                labels=["ready-for-agent", "task-type:not-a-real-key"],
+                blocked_by=BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+                ),
+            ),
+            _dated(31, "2026-05-01T00:00:00Z"),
+        ],
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    skip = next(e for e in _pickup_events(tmp_path) if e["type"] == "wrapper.pickup.skipped")
+    assert skip["issue"] == 7
+    assert skip["reason"] == "blocked_by_open_dependency: acme/widgets#93"
+    assert "routing refused" not in skip["reason"]
+
+
+def test_a_blocked_candidate_leaves_the_pool_whole_and_charges_no_strike(
+    tmp_path, monkeypatch
+) -> None:
+    """#438's second property: never attempted, so never charged.
+
+    Mirrors :func:`test_a_defeated_issue_leaves_the_pool_whole` for the
+    **Attempt lifecycle**: a blocked candidate stays in the **Pool** (the
+    closure whitelist, the collection Event and the emptiness test all still
+    see it), and -- unlike an Attempt-lifecycle skip, which follows a real
+    stall -- a readiness skip charges no **Strike** at all, because the issue
+    was never attempted.
+    """
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                blocked_by=BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+                ),
+            ),
+            _dated(31, "2026-05-01T00:00:00Z"),
+        ],
+    )
+
+    asyncio.run(
+        loop_module.run(
+            RunConfig(issue_source="github", max_iterations=1, max_nmt_strikes=9)
+        )
+    )
+
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    types_seen = {event["type"] for event in events}
+    # Pool retention: the collection Event still names the blocked issue.
+    collected = [e["issues"] for e in events if e["type"] == "wrapper.afk_ready.collected"]
+    assert collected == [[7, 31]]
+    # No Strike: a readiness skip was never an attempt.
+    assert "wrapper.strike" not in types_seen
+    iteration_end = next(e for e in events if e["type"] == "wrapper.iteration.end")
+    assert iteration_end["summary"]["strikes"] == 0
+
+
+def test_an_all_blocked_pool_ends_waiting_on_blockers(tmp_path, monkeypatch) -> None:
+    """A non-empty Pool with only proven open blockers is not all-skipped."""
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                blocked_by=BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+                ),
+            )
+        ],
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=5))
+    )
+
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    assert exit_code == loop_module.exit_code_for("all_blocked")
+    assert [event["type"] for event in events].count("wrapper.pickup.skipped") == 1
+    assert not any(event["type"] == "wrapper.pickup.bound" for event in events)
+    assert not any(event["type"] == "wrapper.strike" for event in events)
+    assert next(
+        event for event in events if event["type"] == "wrapper.iteration.end"
+    )["outcome"] == "all_blocked"
+    run_end = next(event for event in events if event["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "all_blocked"
+    assert run_end["iterations_run"] == 1
+
+
+def test_a_blocked_and_unroutable_pool_remains_all_skipped(
+    tmp_path, monkeypatch
+) -> None:
+    """Waiting must not hide a refusal an operator can repair."""
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                blocked_by=BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+                ),
+            ),
+            _dated(
+                31,
+                "2026-05-01T00:00:00Z",
+                labels=["ready-for-agent", "task-type:not-a-real-key"],
+            ),
+        ],
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=5))
+    )
+
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    assert exit_code == loop_module.exit_code_for("all_skipped")
+    skip_reasons = [
+        event["reason"]
+        for event in events
+        if event["type"] == "wrapper.pickup.skipped"
+    ]
+    assert skip_reasons[0] == "blocked_by_open_dependency: acme/widgets#93"
+    assert skip_reasons[1].startswith("routing refused:")
+    assert next(
+        event for event in events if event["type"] == "wrapper.run.end"
+    )["outcome"] == "all_skipped"
+
+
+def test_a_candidate_whose_blockers_all_closed_is_admitted_normally(
+    tmp_path, monkeypatch
+) -> None:
+    """Readiness clears itself: nobody edited the issue, its blocker closed."""
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(
+                7,
+                "2026-01-01T00:00:00Z",
+                blocked_by=BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="acme/widgets#90", state="closed"),),
+                ),
+            )
+        ],
+    )
+
+    asyncio.run(loop_module.run(RunConfig(issue_source="github", max_iterations=1)))
+
+    assert [(e["type"], e["issue"]) for e in _pickup_events(tmp_path)] == [
+        ("wrapper.pickup.bound", 7),
+    ]
+
+
 def test_the_skip_names_the_ending_that_defeated_the_issue(
     tmp_path, monkeypatch
 ) -> None:
@@ -3738,6 +4213,7 @@ def _wire_classifier_run(
     label_client: _RecordingTaskTypeLabelClient | None = None,
 ) -> tuple[_ClassifyingCopilotClient, _RecordingTaskTypeLabelClient]:
     """One unlabelled issue, one scriptable harness, one watchable tracker write."""
+    _write_runnable_feedback_loop(tmp_path)
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
     monkeypatch.setattr(

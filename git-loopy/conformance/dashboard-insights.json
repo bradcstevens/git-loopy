@@ -1,7 +1,7 @@
 {
   "fixture_schema_version": "1.4",
-  "wrapper_contract_version": "2.0",
-  "event_schema_version": "1.1",
+  "wrapper_contract_version": "2.4",
+  "event_schema_version": "1.2",
   "semantic_contract": {
     "dashboard_band_order": [
       "header",
@@ -373,7 +373,7 @@
           "run_id": "01HXR0000000000000000000DD",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.9.0",
+          "release_version": "0.10.0-dev.1",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -389,7 +389,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "max_nmt_strikes": 3
         },
@@ -762,7 +763,7 @@
           "run_id": "01HXR0000000000000000000EE",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.9.0",
+          "release_version": "0.10.0-dev.1",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -779,7 +780,8 @@
             "rolling_dispatch": false,
             "integration_backlog": false,
             "adaptive_lane_limit": false,
-            "contribution_events": false
+            "contribution_events": false,
+            "execution_hosts": []
           },
           "rate_card": null,
           "max_nmt_strikes": 3,
@@ -1306,7 +1308,7 @@
           "run_id": "01HXR0000000000000000000FF",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.9.0",
+          "release_version": "0.10.0-dev.1",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -1322,7 +1324,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "max_nmt_strikes": 3
         },
@@ -1798,7 +1801,7 @@
           "run_id": "01HXR0000000000000000000LN",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.9.0",
+          "release_version": "0.10.0-dev.1",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -1815,7 +1818,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "rate_card": {
             "models": {
@@ -2963,7 +2967,7 @@
           "run_id": "01HXR0000000000000000000WC",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.9.0",
+          "release_version": "0.10.0-dev.1",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -2980,7 +2984,8 @@
             "rolling_dispatch": false,
             "integration_backlog": false,
             "adaptive_lane_limit": false,
-            "contribution_events": false
+            "contribution_events": false,
+            "execution_hosts": []
           },
           "rate_card": null,
           "max_nmt_strikes": 3
@@ -3390,7 +3395,7 @@
           "run_id": "01HXR0000000000000000000RC",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.9.0",
+          "release_version": "0.10.0-dev.1",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -3407,7 +3412,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "rate_card": null,
           "max_nmt_strikes": 3
@@ -3858,7 +3864,7 @@
           "run_id": "01HXR0000000000000000000SP",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.9.0",
+          "release_version": "0.10.0-dev.1",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -3874,7 +3880,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "max_nmt_strikes": 3
         },
@@ -4247,7 +4254,7 @@
           "run_id": "01HXR0000000000000000000PK",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.9.0",
+          "release_version": "0.10.0-dev.1",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -4263,7 +4270,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "max_nmt_strikes": 3
         },
@@ -4677,7 +4685,7 @@
           "run_id": "01HXR0000000000000000000RT",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.9.0",
+          "release_version": "0.10.0-dev.1",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -4693,7 +4701,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "max_nmt_strikes": 3
         },
@@ -5552,7 +5561,7 @@
           "run_id": "01HXR0000000000000000000RI",
           "iter": null,
           "type": "wrapper.run.start",
-          "release_version": "0.9.0",
+          "release_version": "0.10.0-dev.1",
           "schema_version": 1,
           "insight_capabilities": {
             "agent_output": true,
@@ -5568,7 +5577,8 @@
             "rolling_dispatch": true,
             "integration_backlog": true,
             "adaptive_lane_limit": true,
-            "contribution_events": true
+            "contribution_events": true,
+            "execution_hosts": ["local"]
           },
           "max_nmt_strikes": 3
         },

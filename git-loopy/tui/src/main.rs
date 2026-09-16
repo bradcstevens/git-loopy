@@ -1,17 +1,18 @@
 //! The standalone `git-loopy-tui` helper.
 //!
-//! Deliberately thin: it parses arguments, streams a JSONL Event trace from
-//! standard input through the library's reducer, and writes the projected
-//! semantic view as JSON. Every semantic decision lives in the library, so the
-//! future in-process Rust Orchestrator embeds the identical behaviour instead
-//! of a fork (ADR-0013).
+//! Deliberately thin: it parses arguments, either streams a JSONL Event trace
+//! from standard input or follows one on disk, and then projects or renders
+//! through the shared library. Every semantic decision lives in the library, so
+//! the future in-process Rust Orchestrator embeds the identical behaviour
+//! instead of a fork (ADR-0013).
 //!
 //! Rendering itself is the library's, so the future in-process Rust
 //! Orchestrator draws through the identical code (ADR-0013); this target only
 //! decides *where* the frames go.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -34,14 +35,22 @@ use ratatui::crossterm::terminal::{
 use ratatui::crossterm::ExecutableCommand;
 use ratatui::Terminal;
 
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+
 const USAGE: &str = "\
 usage: git-loopy-tui [options] < events.jsonl
+       git-loopy-tui --attach TRACE --control CONTROL [options]
 
 Reads a git-loopy Event trace as JSON Lines on standard input. By default it
 writes the projected semantic Dashboard view as JSON on standard output; with
 --render it draws the live Dashboard on the controlling terminal instead.
+Attach mode replays and follows a local trace from its beginning on the
+controlling terminal until wrapper.run.end or control-lock release.
 
 options:
+      --attach TRACE            replay and follow this local JSONL trace
+      --control CONTROL         the Run control artifact that reports liveness
       --render                  draw the Dashboard on the controlling terminal
       --render-at INSTANT       project as of this RFC 3339 instant
                                 (default: the last readable Event's instant)
@@ -55,7 +64,7 @@ options:
       --version                 print the version and exit
   -h, --help                    print this help and exit
 
-controls (--render):
+controls (--render, --attach):
   up/down, k/j              move through the Queue
   home/end, g/G             jump to its head or tail
   enter, right, l           open the selected issue's Log
@@ -63,12 +72,13 @@ controls (--render):
   drag the Activity header  size the Activity band
   click it, or a            collapse the band to its header, or restore it
   shift+up, shift+down      size it a row at a time, with no mouse at all
-  q, ctrl-c                 hand the terminal back and stop
+  q, ctrl-c                 hand the terminal back and stop the client
 ";
 
 /// Malformed usage, matching the family's locked CLI framing.
 const EXIT_USAGE: u8 = 2;
 
+#[derive(Debug)]
 struct Options {
     render_at: Option<Timestamp>,
     render_at_monotonic: Option<f64>,
@@ -76,8 +86,16 @@ struct Options {
     drill_in: IssueRef,
     inputs: RunInputs,
     render: bool,
+    attach: Option<AttachPaths>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AttachPaths {
+    trace: PathBuf,
+    control: PathBuf,
+}
+
+#[derive(Debug)]
 enum Invocation {
     Project(Box<Options>),
     Print(String),
@@ -92,6 +110,13 @@ fn main() -> ExitCode {
             print!("{text}");
             ExitCode::SUCCESS
         }
+        Ok(Invocation::Project(options)) if options.attach.is_some() => match attach(&options) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("git-loopy-tui: {message}");
+                ExitCode::from(EXIT_NO_TERMINAL)
+            }
+        },
         Ok(Invocation::Project(options)) if options.render => match render(&options) {
             Ok(()) => ExitCode::SUCCESS,
             Err(message) => {
@@ -119,6 +144,8 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
     let mut model = None;
     let mut reasoning_effort = None;
     let mut render = false;
+    let mut attach = None;
+    let mut control = None;
 
     let mut arguments = arguments.peekable();
     while let Some(argument) = arguments.next() {
@@ -159,6 +186,8 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
                     .parse::<i32>()
                     .map_err(|_| format!("--utc-offset-minutes is not a number: {raw}"))?;
             }
+            "--attach" => attach = Some(PathBuf::from(value()?)),
+            "--control" => control = Some(PathBuf::from(value()?)),
             "--render" => render = true,
             "--issue" => drill_in = Some(IssueRef::parse(&value()?)),
             "--model" => model = Some(value()?),
@@ -166,6 +195,22 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
             other => return Err(format!("unrecognized option: {other}")),
         }
     }
+
+    if control.is_some() && attach.is_none() {
+        return Err("--control requires --attach".to_string());
+    }
+    if attach.is_some() && render_at.is_some() {
+        return Err("--attach cannot be combined with --render-at".to_string());
+    }
+    if attach.is_some() && render_at_monotonic.is_some() {
+        return Err("--attach cannot be combined with --render-at-monotonic".to_string());
+    }
+    let attach = match (attach, control) {
+        (Some(trace), Some(control)) => Some(AttachPaths { trace, control }),
+        (Some(_), None) => return Err("--attach requires --control".to_string()),
+        (None, None) => None,
+        (None, Some(_)) => unreachable!("--control without --attach already returned"),
+    };
 
     Ok(Invocation::Project(Box::new(Options {
         render_at,
@@ -177,6 +222,7 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
             reasoning_effort,
         },
         render,
+        attach,
     })))
 }
 
@@ -236,6 +282,22 @@ fn project(options: &Options) {
     let _ = writeln!(stdout, "{rendered}");
 }
 
+fn dashboard_session(options: &Options, capabilities: TerminalCapabilities) -> DashboardSession {
+    let mut session = DashboardSession::new(
+        options.inputs.clone(),
+        options.zone,
+        options.drill_in.clone(),
+    )
+    .with_capabilities(capabilities);
+    if let Some(monotonic) = options.render_at_monotonic {
+        session.render_at_monotonic(monotonic);
+    }
+    if let Some(instant) = options.render_at {
+        session.render_at(instant);
+    }
+    session
+}
+
 /// The bounded buffer's depth, in pending inputs.
 ///
 /// Deep enough that an ordinary burst of agent output never makes a reader
@@ -249,6 +311,9 @@ const TICK: Duration = Duration::from_millis(500);
 
 /// How long the terminal reader waits before checking whether to stop.
 const POLL: Duration = Duration::from_millis(100);
+
+/// How long attach mode waits before checking whether its trace grew.
+const ATTACH_POLL: Duration = Duration::from_millis(100);
 
 /// Draw the live Dashboard on the controlling terminal until end of input.
 ///
@@ -264,18 +329,7 @@ const POLL: Duration = Duration::from_millis(100);
 fn render(options: &Options) -> Result<(), String> {
     install_restoration_hook();
     let mut surface = CrosstermSurface::open(terminal_capabilities())?;
-    let mut session = DashboardSession::new(
-        options.inputs.clone(),
-        options.zone,
-        options.drill_in.clone(),
-    )
-    .with_capabilities(surface.capabilities);
-    if let Some(monotonic) = options.render_at_monotonic {
-        session.render_at_monotonic(monotonic);
-    }
-    if let Some(instant) = options.render_at {
-        session.render_at(instant);
-    }
+    let mut session = dashboard_session(options, surface.capabilities);
 
     let pending = Arc::new(Pending::new(INPUT_CAPACITY));
     let stopping = Arc::new(AtomicBool::new(false));
@@ -286,6 +340,37 @@ fn render(options: &Options) -> Result<(), String> {
         .map_err(|error| format!("the presentation input failed: {error}"));
     stopping.store(true, Ordering::Relaxed);
     outcome
+}
+
+#[cfg(unix)]
+fn attach(options: &Options) -> Result<(), String> {
+    install_restoration_hook();
+    let mut surface = CrosstermSurface::open(terminal_capabilities())?;
+    let mut session = dashboard_session(options, surface.capabilities);
+    let paths = options
+        .attach
+        .as_ref()
+        .expect("attach mode always carries its paths")
+        .clone();
+
+    let pending = Arc::new(Pending::new(INPUT_CAPACITY));
+    let stopping = Arc::new(AtomicBool::new(false));
+    read_the_attached_trace(
+        Arc::clone(&pending),
+        Arc::clone(&stopping),
+        AttachFollower::new(paths.trace, paths.control),
+    );
+    read_the_keyboard(Arc::clone(&pending), Arc::clone(&stopping));
+
+    let outcome = drive_dashboard(&mut surface, &mut session, Pending::drain(&pending))
+        .map_err(|error| format!("the presentation input failed: {error}"));
+    stopping.store(true, Ordering::Relaxed);
+    outcome
+}
+
+#[cfg(not(unix))]
+fn attach(_options: &Options) -> Result<(), String> {
+    Err("attach mode is not supported on this platform".to_string())
 }
 
 /// The bounded buffer, plus the one condition both sides wait on.
@@ -364,6 +449,125 @@ fn read_the_trace(pending: Arc<Pending>) {
         }
         pending.offer(Input::EndOfTrace);
     });
+}
+
+/// The local trace follower attach mode drives from.
+#[cfg(unix)]
+struct AttachFollower {
+    trace: PathBuf,
+    control: PathBuf,
+    offset: u64,
+    carry: String,
+    finished: bool,
+}
+
+#[cfg(unix)]
+struct AttachPoll {
+    lines: Vec<String>,
+    finished: bool,
+}
+
+#[cfg(unix)]
+impl AttachFollower {
+    fn new(trace: PathBuf, control: PathBuf) -> Self {
+        Self {
+            trace,
+            control,
+            offset: 0,
+            carry: String::new(),
+            finished: false,
+        }
+    }
+
+    fn poll(&mut self) -> io::Result<AttachPoll> {
+        if self.finished {
+            return Ok(AttachPoll {
+                lines: Vec::new(),
+                finished: true,
+            });
+        }
+
+        let mut lines = self.read_available_lines()?;
+        if let Some(position) = lines.iter().position(|line| is_run_end_line(line)) {
+            lines.truncate(position + 1);
+            self.finished = true;
+            return Ok(AttachPoll {
+                lines,
+                finished: true,
+            });
+        }
+        if !control_owner_alive(&self.control)? {
+            self.finished = true;
+            return Ok(AttachPoll {
+                lines,
+                finished: true,
+            });
+        }
+        Ok(AttachPoll {
+            lines,
+            finished: false,
+        })
+    }
+
+    fn read_available_lines(&mut self) -> io::Result<Vec<String>> {
+        let mut chunk = String::new();
+        match File::open(&self.trace) {
+            Ok(mut trace) => {
+                trace.seek(SeekFrom::Start(self.offset))?;
+                trace.read_to_string(&mut chunk)?;
+                self.offset += chunk.len() as u64;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+
+        self.carry.push_str(&chunk);
+        let mut lines = Vec::new();
+        while let Some(newline) = self.carry.find('\n') {
+            let line = self.carry[..newline].trim_end_matches('\r').to_string();
+            self.carry.drain(..=newline);
+            lines.push(line);
+        }
+        Ok(lines)
+    }
+}
+
+/// The dedicated attach-mode trace reader.
+#[cfg(unix)]
+fn read_the_attached_trace(
+    pending: Arc<Pending>,
+    stopping: Arc<AtomicBool>,
+    mut follower: AttachFollower,
+) {
+    std::thread::spawn(move || {
+        while !stopping.load(Ordering::Relaxed) {
+            match follower.poll() {
+                Ok(chunk) => {
+                    let finished = chunk.finished;
+                    let idle = chunk.lines.is_empty();
+                    for line in chunk.lines {
+                        pending.offer(Input::Trace(line));
+                    }
+                    if finished {
+                        pending.offer(Input::EndOfTrace);
+                        return;
+                    }
+                    if idle {
+                        std::thread::sleep(ATTACH_POLL);
+                    }
+                }
+                Err(error) => {
+                    pending.offer(Input::Failed(format!("the Event trace broke: {error}")));
+                    return;
+                }
+            }
+        }
+    });
+}
+
+#[cfg(unix)]
+fn is_run_end_line(line: &str) -> bool {
+    matches!(Event::from_jsonl_line(line), Some(event) if event.kind == "wrapper.run.end")
 }
 
 /// The dedicated terminal reader.
@@ -474,6 +678,83 @@ fn host_instant() -> Timestamp {
             .map(|since| since.as_secs_f64())
             .unwrap_or_default(),
     )
+}
+
+#[cfg(unix)]
+fn control_owner_alive(path: &Path) -> io::Result<bool> {
+    let file = match OpenOptions::new().read(true).write(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    match lock_nonblocking(&file) {
+        Ok(()) => {
+            unlock(&file)?;
+            Ok(false)
+        }
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(unix)]
+fn lock_nonblocking(file: &File) -> io::Result<()> {
+    lock(file.as_raw_fd(), LOCK_EX | LOCK_NB)
+}
+
+#[cfg(unix)]
+fn unlock(file: &File) -> io::Result<()> {
+    lock(file.as_raw_fd(), LOCK_UN)
+}
+
+#[cfg(unix)]
+fn lock(fd: i32, operation: i32) -> io::Result<()> {
+    if unsafe { flock(fd, operation) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(unix)]
+const LOCK_EX: i32 = 2;
+#[cfg(unix)]
+const LOCK_NB: i32 = 4;
+#[cfg(unix)]
+const LOCK_UN: i32 = 8;
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn flock(fd: i32, operation: i32) -> i32;
+}
+
+#[cfg(all(test, unix))]
+struct ControlLock {
+    file: File,
+}
+
+#[cfg(all(test, unix))]
+impl ControlLock {
+    fn acquire(path: &Path) -> io::Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
+        lock(file.as_raw_fd(), LOCK_EX)?;
+        Ok(Self { file })
+    }
+}
+
+#[cfg(all(test, unix))]
+impl Drop for ControlLock {
+    fn drop(&mut self) {
+        let _ = unlock(&self.file);
+    }
 }
 
 /// Give the terminal back on the one exit path a `Drop` guard cannot reach.
@@ -623,3 +904,158 @@ impl Drop for CrosstermSurface {
 const CONTROLLING_TERMINAL: &str = "/dev/tty";
 #[cfg(windows)]
 const CONTROLLING_TERMINAL: &str = "CONOUT$";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+    static UNIQUE: AtomicU64 = AtomicU64::new(0);
+
+    fn invocation(arguments: &[&str]) -> Invocation {
+        parse(arguments.iter().map(|argument| argument.to_string())).expect("the arguments parse")
+    }
+
+    fn test_artifact_dir(name: &str) -> PathBuf {
+        let unique = UNIQUE.fetch_add(1, AtomicOrdering::Relaxed);
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("attach-tests")
+            .join(format!("{name}-{unique}"));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("the test directory is created");
+        path
+    }
+
+    fn append(path: &Path, text: &str) {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .expect("the fixture file opens for append");
+        file.write_all(text.as_bytes())
+            .expect("the fixture text is written");
+        file.sync_data().expect("the write reaches the filesystem");
+    }
+
+    #[test]
+    fn attach_mode_parses_its_trace_and_control_paths() {
+        let Invocation::Project(options) = invocation(&[
+            "--attach",
+            "run.trace.jsonl",
+            "--control",
+            "run.control",
+            "--issue",
+            "42",
+        ]) else {
+            panic!("attach mode is a projecting invocation");
+        };
+
+        let attach = options
+            .attach
+            .as_ref()
+            .expect("attach mode records its paths");
+        assert_eq!(attach.trace, PathBuf::from("run.trace.jsonl"));
+        assert_eq!(attach.control, PathBuf::from("run.control"));
+        assert!(!options.render, "attach mode is its own client mode");
+    }
+
+    #[test]
+    fn attach_mode_requires_its_control_artifact() {
+        let error = parse(
+            ["--attach", "run.trace.jsonl"]
+                .into_iter()
+                .map(|argument| argument.to_string()),
+        )
+        .expect_err("attach mode without a control artifact is malformed usage");
+
+        assert!(error.contains("--control"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn attach_mode_replays_existing_lines_then_waits_for_more_until_the_run_ends() {
+        let directory = test_artifact_dir("run-end");
+        let trace = directory.join("run.trace.jsonl");
+        let control = directory.join("run.control");
+        let _owner = ControlLock::acquire(&control).expect("the run owns its control lock");
+        let mut follower = AttachFollower::new(trace.clone(), control);
+
+        append(
+            &trace,
+            r#"{"type":"wrapper.run.start","ts":"2026-05-16T00:00:00.000Z"}"#,
+        );
+        append(&trace, "\n");
+        let first = follower.poll().expect("the first chunk is readable");
+        assert_eq!(
+            first.lines,
+            vec![r#"{"type":"wrapper.run.start","ts":"2026-05-16T00:00:00.000Z"}"#]
+        );
+        assert!(!first.finished, "a live run does not end at temporary EOF");
+
+        let second = follower.poll().expect("temporary EOF is not an error");
+        assert!(
+            second.lines.is_empty() && !second.finished,
+            "EOF while the owner still holds the control lock is only temporary"
+        );
+
+        append(&trace, r#"{"type":"agent.output","text":"still running"}"#);
+        append(
+            &trace,
+            "\n{\"type\":\"wrapper.run.end\",\"ts\":\"2026-05-16T00:00:03.000Z\"",
+        );
+        let third = follower
+            .poll()
+            .expect("a partial line is kept pending until it completes");
+        assert_eq!(
+            third.lines,
+            vec![r#"{"type":"agent.output","text":"still running"}"#]
+        );
+        assert!(!third.finished);
+
+        append(&trace, ",\"outcome\":\"ok\"}\n");
+        let fourth = follower.poll().expect("the final line is read once");
+        assert_eq!(
+            fourth.lines,
+            vec![r#"{"type":"wrapper.run.end","ts":"2026-05-16T00:00:03.000Z","outcome":"ok"}"#]
+        );
+        assert!(fourth.finished, "the run-end event ends attach mode");
+
+        let fifth = follower.poll().expect("a finished follower stays finished");
+        assert!(fifth.lines.is_empty() && fifth.finished);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn attach_mode_stops_when_the_control_lock_releases() {
+        let directory = test_artifact_dir("control-release");
+        let trace = directory.join("run.trace.jsonl");
+        let control = directory.join("run.control");
+        let owner = ControlLock::acquire(&control).expect("the run owns its control lock");
+        let mut follower = AttachFollower::new(trace.clone(), control);
+
+        append(
+            &trace,
+            r#"{"type":"wrapper.run.start","ts":"2026-05-16T00:00:00.000Z"}"#,
+        );
+        append(&trace, "\n");
+        let started = follower.poll().expect("the trace is readable");
+        assert_eq!(
+            started.lines,
+            vec![r#"{"type":"wrapper.run.start","ts":"2026-05-16T00:00:00.000Z"}"#]
+        );
+        assert!(!started.finished);
+
+        drop(owner);
+        let ended = follower
+            .poll()
+            .expect("a released control lock ends attach mode cleanly");
+        assert!(
+            ended.lines.is_empty() && ended.finished,
+            "the client exits when the run's control owner is gone"
+        );
+    }
+}

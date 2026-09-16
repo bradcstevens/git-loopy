@@ -48,11 +48,11 @@ from git_loopy.session_outcome import SessionOutcome
 __all__ = ["EscalationLedger"]
 
 # The built-in rung itself is `git_loopy.cli._DEFAULT_ESCALATION_RUNG`, beside
-# the **Default pair** it is defined one rung above (ADR-0036) and beside the
-# only code that reads it. It is not here because this module imports
-# `SessionOutcome` and so, transitively, the harness SDK: a constant `resolve_
-# config` needs would drag that whole import onto the subcommand-dispatch path
-# that `test_dispatch_does_not_import_sdk` keeps fast.
+# the **Default pair** it now *equals* (ADR-0056, superseding ADR-0036's one
+# rung above) and beside the only code that reads it. It is not here because
+# this module imports `SessionOutcome` and so, transitively, the harness SDK: a
+# constant `resolve_config` needs would drag that whole import onto the
+# subcommand-dispatch path that `test_dispatch_does_not_import_sdk` keeps fast.
 
 
 @dataclass
