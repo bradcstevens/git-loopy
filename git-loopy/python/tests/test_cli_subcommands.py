@@ -267,6 +267,37 @@ def test_main_doctor_routes_to_reporter_without_starting_the_loop(
     assert captured == []
 
 
+def test_main_doctor_resolves_the_same_config_a_run_resolves(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """ADR-0055: doctor shares the Run's Config resolution, overlay-free."""
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "config.toml").write_text(
+        'enabled_skills = ["tdd"]\ndeny_skills = ["handoff"]\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+    seen: list[RunConfig] = []
+
+    from git_loopy import doctorcmd
+
+    def fake_run_doctor(*, config: RunConfig, repo_root: Path, env: Any) -> int:
+        seen.append(config)
+        return 0
+
+    monkeypatch.setattr(doctorcmd, "run_doctor", fake_run_doctor)
+
+    assert cli_module.main(["doctor"]) == 0
+    assert captured == []
+    (resolved,) = seen
+    assert resolved.skill_policy.project.present is True
+    assert resolved.skill_policy.project.names == ("tdd",)
+    assert resolved.deny_skills == frozenset({"handoff"})
+    assert resolved.skill_policy.enable_skills == frozenset()
+    assert resolved.skill_policy.disable_skills == frozenset()
+
+
 def test_main_info_reports_stable_json_and_never_runs_the_loop(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

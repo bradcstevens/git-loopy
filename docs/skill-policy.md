@@ -431,10 +431,29 @@ the installed Skill catalog.
 git-loopy doctor
 ```
 
-Each blocking row names the Skill, the blocker in operator terms, the policy
-scope, and the Config path to correct. A clean policy prints one success line
-and exits `0`; any blocker exits non-zero, which makes it suitable for a
-scripted pre-Run check.
+Each blocking row names the Skill, the blocker in operator terms, the surface
+that carries it, and what to correct there:
+
+```
+ghost-skill | enabled Skill has no catalog winner | project policy | Config: <repo>/git-loopy/config.toml
+ghost-skill | enabled Skill has no catalog winner | environment replacement | Environment: GIT_LOOPY_ENABLED_SKILLS
+tdd         | Required Skill is disabled          | legacy deny guard       | Deny guard: deny_skills or GIT_LOOPY_DENY_SKILLS
+```
+
+The surface matters because the ones in [Configuring a policy](#configuring-a-policy)
+do not merge: `GIT_LOOPY_ENABLED_SKILLS` replaces the base outright, so while it
+is set the saved Config is not what a Run reads — and editing it would leave the
+Run failing exactly as before. For the same reason a Required Skill that a deny
+guard or a `--disable-skill` overlay *subtracted* names that guard rather than
+the base policy, which already lists the Skill and would be a dead end. A
+blocker under the **Minimal Skill policy** names the project Config, the scope
+`git-loopy skills edit` writes by default inside a repository.
+
+A clean policy prints one success line and exits `0`; any blocker exits
+non-zero, which makes it suitable for a scripted pre-Run check. A failure it
+cannot attribute to a policy surface at all — an unreadable `PROMPT.md`, a
+corrupt installed Skill catalog — is reported as one `doctor could not resolve
+the Skill policy` line rather than mislabelled as a policy blocker.
 
 | Message on stderr | Why | Recovery |
 | --- | --- | --- |

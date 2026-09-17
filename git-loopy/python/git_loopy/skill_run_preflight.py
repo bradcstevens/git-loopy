@@ -19,9 +19,11 @@ from .skill_policy import (
     EffectiveSkillPolicy,
     SkillCatalog,
     SkillPolicyResolutionError,
+    SkillPolicySurface,
     collect_project_skill_tracking,
     find_skill_policy_blockers,
     resolve_skill_policy,
+    select_skill_policy_surface,
 )
 
 CatalogDiscoverer = Callable[..., Awaitable[SkillCatalog]]
@@ -56,6 +58,7 @@ class RunSkillPolicyPreflight:
     catalog: SkillCatalog
     blockers: tuple[SkillPolicyResolutionError, ...]
     migration_warning: bool
+    surface: SkillPolicySurface
 
 
 def _minimal_catalog(installed_skills_dir: Path, workspace: Path) -> SkillCatalog:
@@ -156,6 +159,7 @@ async def resolve_run_skill_policy_preflight(
         catalog=catalog,
         blockers=blockers,
         migration_warning=required.migration_warning,
+        surface=select_skill_policy_surface(inputs),
     )
 
 

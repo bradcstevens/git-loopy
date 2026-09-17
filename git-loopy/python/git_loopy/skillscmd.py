@@ -22,6 +22,7 @@ from .skill_catalog import (
     discover_skill_catalog,
 )
 from .skill_policy import (
+    ENABLED_SKILLS_ENV,
     SkillCatalog,
     SkillPolicyResolutionError,
     collect_project_skill_tracking,
@@ -371,10 +372,10 @@ def _configured_names(
     env: Mapping[str, str],
     required_skills: Iterable[str],
 ) -> tuple[str, ...]:
-    if "GIT_LOOPY_ENABLED_SKILLS" in env:
+    if ENABLED_SKILLS_ENV in env:
         return tuple(
             item
-            for raw in env.get("GIT_LOOPY_ENABLED_SKILLS", "").split(",")
+            for raw in env.get(ENABLED_SKILLS_ENV, "").split(",")
             if (item := raw.strip())
         )
     tables = settings.load_configs(repo_root, env)

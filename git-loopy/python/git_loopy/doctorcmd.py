@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import AsyncExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Callable, Mapping
@@ -13,16 +14,23 @@ from .copilot_client import make_copilot_client
 from .git import GitClient, SubprocessGitClient
 from .prompt import PromptMetadataError, load_prompt
 from .settings import global_config_path, project_config_path
-from .skill_catalog import discover_skill_catalog
+from .skill_catalog import (
+    SdkSkillSurfaceError,
+    SkillCatalogError,
+    discover_skill_catalog,
+)
 from .skill_install import installed_catalog_dir
 from .skill_policy import (
+    DENY_SKILLS_ENV,
+    ENABLED_SKILLS_ENV,
     MissingEnabledSkills,
     MissingRequiredSkills,
     SkillCatalog,
     SkillInventoryUnavailable,
     SkillPolicyResolutionError,
-    SkillPolicyScope,
+    SkillPolicySurface,
     UntrackedProjectSkills,
+    attribute_subtracted_skill,
 )
 from .skill_run_preflight import (
     CatalogDiscoverer,
@@ -47,8 +55,6 @@ def run_doctor(
 ) -> int:
     """Report the shared Run Skill-policy preflight without mutating state."""
     environment = os.environ if env is None else env
-    policy_scope = _policy_scope(config)
-    config_path = _policy_config_path(policy_scope, repo_root, environment)
 
     try:
         prompt = (
@@ -74,7 +80,14 @@ def run_doctor(
                 discoverer=discoverer,
             )
         )
-    except (OSError, PromptMetadataError, RuntimeError, TimeoutError) as exc:
+    except (
+        OSError,
+        PromptMetadataError,
+        RuntimeError,
+        SdkSkillSurfaceError,
+        SkillCatalogError,
+        TimeoutError,
+    ) as exc:
         output_fn(f"git-loopy: doctor could not resolve the Skill policy: {exc}")
         return 1
 
@@ -84,9 +97,11 @@ def run_doctor(
 
     for blocker in resolution.blockers:
         for name in blocker.names or ("Skill policy",):
+            surface = _carrier(blocker, name, config=config, base=resolution.surface)
             output_fn(
                 f"{name} | {_blocker_description(blocker)} | "
-                f"{_scope_label(policy_scope)} | Config: {config_path}"
+                f"{_surface_label(surface)} | "
+                f"{_surface_remedy(surface, repo_root, environment)}"
             )
     return 1
 
@@ -104,59 +119,88 @@ async def _resolve(
     """Open only a catalog-discovery session and close it before reporting."""
     with TemporaryDirectory(prefix="git-loopy-doctor-") as temporary:
         workspace = Path(temporary)
-        try:
-            async with client_factory() as client:
-                return await resolve_run_skill_policy_preflight(
-                    client,
-                    config=config,
-                    git=git,
-                    prompt_text=prompt_text,
-                    repo_root=repo_root,
-                    installed_skills_dir=installed_skills_dir,
-                    workspace=workspace,
-                    discoverer=discoverer,
-                )
-        except (OSError, RuntimeError, TimeoutError):
+        async with AsyncExitStack() as stack:
+            try:
+                client: Any = await stack.enter_async_context(client_factory())
+            except (OSError, RuntimeError, TimeoutError):
+                client, discovery = None, _unavailable_catalog
+            else:
+                discovery = discoverer
             return await resolve_run_skill_policy_preflight(
-                None,
+                client,
                 config=config,
                 git=git,
                 prompt_text=prompt_text,
                 repo_root=repo_root,
                 installed_skills_dir=installed_skills_dir,
                 workspace=workspace,
-                discoverer=_unavailable_catalog,
+                discoverer=discovery,
             )
+    raise AssertionError("unreachable: the exit stack never suppresses")
 
 
 async def _unavailable_catalog(_client: object, **_kwargs: object) -> SkillCatalog:
-    """Route client startup failures through the shared inventory fallback."""
+    """Route client startup failures through the shared inventory fallback.
+
+    Reported as an unavailable inventory rather than as a resolution failure
+    because that is precisely what a Copilot the Runner cannot start is. Every
+    *other* failure stays outside this seam, so it can never be laundered into
+    a diagnosis that sends an operator to reinstall a working Copilot.
+    """
     raise RuntimeError("Copilot Skill inventory is unavailable")
 
 
-def _policy_scope(config: RunConfig) -> SkillPolicyScope:
-    inputs = config.skill_policy
-    if inputs.project.present:
-        return SkillPolicyScope.PROJECT
-    if inputs.global_.present:
-        return SkillPolicyScope.GLOBAL
-    return SkillPolicyScope.MINIMAL
+def _carrier(
+    blocker: SkillPolicyResolutionError,
+    name: str,
+    *,
+    config: RunConfig,
+    base: SkillPolicySurface,
+) -> SkillPolicySurface:
+    """Name the surface an operator corrects to clear this one Skill's row.
+
+    Only a Required Skill missing from the effective set can have been taken
+    away by a surface other than the base one, so it is the only row whose
+    carrier is worth a second question.
+    """
+    if not isinstance(blocker, MissingRequiredSkills):
+        return base
+    subtracted = attribute_subtracted_skill(
+        name,
+        config.skill_policy,
+        legacy_denied=config.deny_skills,
+    )
+    return base if subtracted is None else subtracted
 
 
-def _policy_config_path(
-    scope: SkillPolicyScope,
+def _surface_label(surface: SkillPolicySurface) -> str:
+    """Name the surface in the operator's terms, not the resolver's."""
+    if surface is SkillPolicySurface.ENVIRONMENT:
+        return "environment replacement"
+    if surface is SkillPolicySurface.MINIMAL:
+        return "Minimal fallback"
+    if surface is SkillPolicySurface.DENY_GUARD:
+        return "legacy deny guard"
+    if surface is SkillPolicySurface.DISABLE_OVERLAY:
+        return "disable overlay"
+    return f"{surface.value} policy"
+
+
+def _surface_remedy(
+    surface: SkillPolicySurface,
     repo_root: Path,
     env: Mapping[str, str],
-) -> Path:
-    if scope is SkillPolicyScope.GLOBAL:
-        return global_config_path(env)
-    return project_config_path(repo_root)
-
-
-def _scope_label(scope: SkillPolicyScope) -> str:
-    if scope is SkillPolicyScope.MINIMAL:
-        return "Minimal fallback"
-    return f"{scope.value} policy"
+) -> str:
+    """Name what an operator edits to clear a blocker this surface carries."""
+    if surface is SkillPolicySurface.ENVIRONMENT:
+        return f"Environment: {ENABLED_SKILLS_ENV}"
+    if surface is SkillPolicySurface.DENY_GUARD:
+        return f"Deny guard: deny_skills or {DENY_SKILLS_ENV}"
+    if surface is SkillPolicySurface.DISABLE_OVERLAY:
+        return "Overlay: --disable-skill"
+    if surface is SkillPolicySurface.GLOBAL:
+        return f"Config: {global_config_path(env)}"
+    return f"Config: {project_config_path(repo_root)}"
 
 
 def _blocker_description(blocker: SkillPolicyResolutionError) -> str:

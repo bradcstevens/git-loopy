@@ -109,6 +109,8 @@ from git_loopy.routing_scope import routing_in_force
 from git_loopy.rate_card import resolve_rate_card
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
 from git_loopy.skill_policy import (
+    DENY_SKILLS_ENV,
+    ENABLED_SKILLS_ENV,
     SkillPolicyStartupState,
     classify_skill_policy_startup,
 )
@@ -1992,7 +1994,7 @@ def resolve_config(
         args.deny_tools, "GIT_LOOPY_DENY_TOOLS", "deny_tools", env, project, global_
     )
     deny_skills = _resolve_denylist(
-        args.deny_skills, "GIT_LOOPY_DENY_SKILLS", "deny_skills", env, project, global_
+        args.deny_skills, DENY_SKILLS_ENV, "deny_skills", env, project, global_
     )
     project_enabled = settings.table_optional_str_list(
         project, "enabled_skills", scope="project"
@@ -2010,8 +2012,8 @@ def resolve_config(
             names=tuple(global_enabled or ()),
         ),
         environment=SkillPolicyInput(
-            present="GIT_LOOPY_ENABLED_SKILLS" in env,
-            names=tuple(_parse_csv_env(env.get("GIT_LOOPY_ENABLED_SKILLS"))),
+            present=ENABLED_SKILLS_ENV in env,
+            names=tuple(_parse_csv_env(env.get(ENABLED_SKILLS_ENV))),
         ),
         enable_skills=frozenset(args.enable_skills),
         disable_skills=frozenset(args.disable_skills),
