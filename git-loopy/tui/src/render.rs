@@ -515,6 +515,7 @@ fn draw_header(
     ];
     segments.extend(routing_segment(header).map(|note| (5, note)));
     segments.extend(rate_card_segment(header).map(|note| (6, note)));
+    segments.extend(parallel_segment(header));
     segments.extend(diagnostic_segment(diagnostics).map(|note| (0, note)));
     let progress = fitted_line(segments, area, glyphs);
 
@@ -657,6 +658,47 @@ fn rate_card_segment(header: &Header) -> Option<String> {
     match header.rate_card.availability {
         "available" => Some("rate card recorded".to_string()),
         "unavailable" => Some("rate card unavailable".to_string()),
+        _ => None,
+    }
+}
+
+fn parallel_segment(header: &Header) -> Option<(u8, String)> {
+    let parallel = &header.parallel;
+    if parallel.availability != "available" {
+        return None;
+    }
+
+    // Healthy capacity yields to declarative notes; an interrupted dispatch
+    // takes their place because the operator needs its cause to steer the Run.
+    if let Some(reason) = parallel.serial_fallback_reason.as_deref() {
+        return Some((4, format!("serial fallback: {reason}")));
+    }
+
+    if parallel.refill_stopped {
+        let serial_required = parallel
+            .serial_required
+            .map(|count| format!("{count} serial-required"))
+            .unwrap_or_else(|| "serial-required work".to_string());
+        return Some((4, format!("lane refill stopped: {serial_required}")));
+    }
+
+    if parallel.degraded {
+        return Some((
+            4,
+            match parallel.degraded_reason.as_deref() {
+                Some(reason) => format!("parallel degraded: {reason}"),
+                None => "parallel degraded".to_string(),
+            },
+        ));
+    }
+
+    match (
+        parallel.effective_lane_limit,
+        parallel.configured_lane_limit,
+    ) {
+        (Some(effective), Some(configured)) => {
+            Some((7, format!("lanes {effective} of {configured}")))
+        }
         _ => None,
     }
 }

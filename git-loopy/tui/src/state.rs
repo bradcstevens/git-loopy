@@ -193,8 +193,6 @@ pub(crate) struct ParallelPosture {
     pub(crate) serial_fallback_reason: Option<String>,
     /// How many serial-required items the latest latching peek saw.
     pub(crate) serial_required: Option<i64>,
-    /// The first serial-required issue the latest latching peek named.
-    pub(crate) serial_required_issue: Option<IssueRef>,
     /// Whether Lane refill is currently stopped for serial-required work.
     pub(crate) refill_stopped: bool,
 }
@@ -571,9 +569,6 @@ impl DashboardState {
                 }
                 if let Some(seen) = requested.serial_required {
                     self.parallel.serial_required = seen;
-                }
-                if let Some(issue) = requested.issue.clone() {
-                    self.parallel.serial_required_issue = issue;
                 }
             }
             EventPayload::Other => {}

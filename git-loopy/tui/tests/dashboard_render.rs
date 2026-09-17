@@ -9,8 +9,9 @@
 
 use git_loopy_tui::{
     draw_dashboard, draw_frame, drive_dashboard, project_run_view, DashboardFrame,
-    DashboardSession, DashboardState, DashboardSurface, Event, Input, IssueRef, RunInputs, RunView,
-    Screen, TerminalCapabilities, Timestamp, ViewContext, Zone,
+    DashboardSession, DashboardState, DashboardSurface, Event, Input, IssueRef,
+    ParallelDeclaration, RunInputs, RunView, Screen, TerminalCapabilities, Timestamp, ViewContext,
+    Zone,
 };
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -643,8 +644,13 @@ fn an_unreadable_line_never_stops_the_render() {
 }
 
 /// The whole terminal, as one reviewable text grid.
-fn frame_text(case_id: &str, capabilities: TerminalCapabilities) -> String {
-    let mut text = render_lines(&fixture_view(case_id), 200, 36, capabilities).join("\n");
+fn frame_text(
+    view: &RunView,
+    columns: u16,
+    rows: u16,
+    capabilities: TerminalCapabilities,
+) -> String {
+    let mut text = render_lines(view, columns, rows, capabilities).join("\n");
     text.push('\n');
     text
 }
@@ -653,7 +659,12 @@ fn frame_text(case_id: &str, capabilities: TerminalCapabilities) -> String {
 fn a_wide_terminal_lays_out_every_band_in_the_locked_order() {
     assert_snapshot(
         "wide-available-capabilities",
-        frame_text("baseline-closed-iteration", TerminalCapabilities::default()),
+        frame_text(
+            &fixture_view("baseline-closed-iteration"),
+            200,
+            36,
+            TerminalCapabilities::default(),
+        ),
     );
 }
 
@@ -662,7 +673,9 @@ fn a_wide_terminal_lays_out_the_same_bands_when_nothing_can_be_measured() {
     assert_snapshot(
         "wide-unavailable-capabilities",
         frame_text(
-            "native-orchestrator-unavailable-capabilities",
+            &fixture_view("native-orchestrator-unavailable-capabilities"),
+            200,
+            36,
             TerminalCapabilities::default(),
         ),
     );
@@ -745,5 +758,157 @@ fn the_header_states_what_the_run_knows_about_its_own_prices() {
         !band(&lines, "git-loopy")[1].contains("rate card"),
         "an undeclared card states nothing, in:\n{}",
         lines.join("\n")
+    );
+}
+
+#[test]
+fn the_header_shows_a_healthy_parallel_run_with_its_effective_and_configured_lane_limits() {
+    let mut view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    view.dashboard.header.parallel = ParallelDeclaration {
+        availability: "available",
+        configured_lane_limit: Some(3),
+        effective_lane_limit: Some(2),
+        pressure: None,
+        degraded: false,
+        degraded_reason: None,
+        serial_fallback_reason: None,
+        serial_required: None,
+        refill_stopped: false,
+    };
+
+    let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
+    assert!(
+        band(&lines, "git-loopy")[1].contains("lanes 2 of 3"),
+        "the Header makes the healthy Lane ceiling legible, in:\n{}",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn the_header_is_silent_when_parallel_was_never_declared() {
+    let lines = render_lines(
+        &fixture_view("baseline-closed-iteration"),
+        200,
+        36,
+        TerminalCapabilities::default(),
+    );
+    assert!(
+        !band(&lines, "git-loopy")[1].contains("lanes")
+            && !band(&lines, "git-loopy")[1].contains("parallel"),
+        "a serial Run has no Parallel posture segment, in:\n{}",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn the_header_promotes_a_parallel_degradation_with_its_reason() {
+    let mut view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    view.dashboard.header.parallel = ParallelDeclaration {
+        availability: "available",
+        configured_lane_limit: Some(3),
+        effective_lane_limit: None,
+        pressure: None,
+        degraded: true,
+        degraded_reason: Some("host capacity exhausted".to_string()),
+        serial_fallback_reason: None,
+        serial_required: None,
+        refill_stopped: false,
+    };
+
+    let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
+    assert!(
+        band(&lines, "git-loopy")[1].contains("parallel degraded: host capacity exhausted"),
+        "the Header carries the degradation reason, in:\n{}",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn the_header_promotes_a_serial_fallback_with_its_reason() {
+    let mut view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    view.dashboard.header.parallel = ParallelDeclaration {
+        availability: "available",
+        configured_lane_limit: Some(3),
+        effective_lane_limit: None,
+        pressure: None,
+        degraded: false,
+        degraded_reason: None,
+        serial_fallback_reason: Some("parallel-safe pool drained".to_string()),
+        serial_required: None,
+        refill_stopped: false,
+    };
+
+    let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
+    assert!(
+        band(&lines, "git-loopy")[1].contains("serial fallback: parallel-safe pool drained"),
+        "the Header carries the serial fallback reason, in:\n{}",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn the_header_states_that_lane_refill_stopped_for_serial_required_work() {
+    let mut view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    view.dashboard.header.parallel = ParallelDeclaration {
+        availability: "available",
+        configured_lane_limit: Some(3),
+        effective_lane_limit: Some(1),
+        pressure: Some("integration_backlog".to_string()),
+        degraded: false,
+        degraded_reason: None,
+        serial_fallback_reason: None,
+        serial_required: Some(2),
+        refill_stopped: true,
+    };
+
+    let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
+    assert!(
+        band(&lines, "git-loopy")[1].contains("lane refill stopped: 2 serial-required"),
+        "the Header explains why no further Lane starts, in:\n{}",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn parallel_posture_snapshots_pin_its_responsive_priority() {
+    let healthy = ParallelDeclaration {
+        availability: "available",
+        configured_lane_limit: Some(3),
+        effective_lane_limit: Some(2),
+        pressure: None,
+        degraded: false,
+        degraded_reason: None,
+        serial_fallback_reason: None,
+        serial_required: None,
+        refill_stopped: false,
+    };
+    let degraded = ParallelDeclaration {
+        availability: "available",
+        configured_lane_limit: Some(3),
+        effective_lane_limit: None,
+        pressure: None,
+        degraded: true,
+        degraded_reason: Some("host capacity exhausted".to_string()),
+        serial_fallback_reason: None,
+        serial_required: None,
+        refill_stopped: false,
+    };
+
+    let mut healthy_view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    healthy_view.dashboard.header.parallel = healthy;
+    assert_snapshot(
+        "parallel-posture-healthy-wide",
+        frame_text(&healthy_view, 160, 16, TerminalCapabilities::default()),
+    );
+    assert_snapshot(
+        "parallel-posture-healthy-narrow",
+        frame_text(&healthy_view, 110, 16, TerminalCapabilities::default()),
+    );
+
+    let mut degraded_view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    degraded_view.dashboard.header.parallel = degraded;
+    assert_snapshot(
+        "parallel-posture-degraded-narrow",
+        frame_text(&degraded_view, 100, 16, TerminalCapabilities::default()),
     );
 }
