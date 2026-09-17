@@ -798,8 +798,10 @@ def run_init(
     # An injected runner is the test/caller seam and always wins; only a caller
     # that left the default in place is asking the environment which runner to
     # use (issue #506's opt-in, removed with the numbered renderers in #508).
+    uses_textual_wizard = False
     if wizard_runner is _default_wizard_runner:
         wizard_runner = select_wizard_runner(env)
+        uses_textual_wizard = wizard_runner is not _default_wizard_runner
 
     if default_model is None:
         default_model = _DEFAULT_MODEL
@@ -951,17 +953,22 @@ def run_init(
                 runner_options.update(
                     input_fn=input_fn, output_fn=output_fn, warn=warn
                 )
+            elif uses_textual_wizard:
+                # The alternate runner needs presentation context, but #504's
+                # injected WizardRunner seam remains its original small contract.
+                runner_options.update(
+                    scope_paths={
+                        option: _resolve_targets(option, repo_root, env).config_path
+                        for option in scope_options
+                    },
+                    skill_selection_model=build_skill_selection_model,
+                )
             answers = wizard_runner(
                 scope_options=scope_options,
-                scope_paths={
-                    option: _resolve_targets(option, repo_root, env).config_path
-                    for option in scope_options
-                },
                 model_choices=model_choices,
                 default_model=default_model,
                 default_effort=default_effort,  # type: ignore[arg-type]
                 rebuild_skill_selection=rebuild_skill_selection,
-                skill_selection_model=build_skill_selection_model,
                 scope_locked=scope is not None,
                 **runner_options,
             )

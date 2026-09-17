@@ -2300,6 +2300,45 @@ def test_run_init_revalidates_when_the_runner_changes_the_scaffold_decision(
 # ---------------------------------------------------------------------------
 
 
+def test_run_init_keeps_the_wizard_runner_contract_for_injected_adapters(
+    tmp_path: Path,
+) -> None:
+    """Adding the alternate runner must not add keywords to #504's seam."""
+
+    def legacy_runner(
+        *,
+        scope_options: Sequence[str],
+        model_choices: Sequence[ModelChoice],
+        default_model: str,
+        default_effort: str | None,
+        rebuild_skill_selection: Any,
+        scope_locked: bool,
+    ) -> init_module.InitAnswers:
+        del (
+            scope_options,
+            model_choices,
+            default_model,
+            default_effort,
+            rebuild_skill_selection,
+            scope_locked,
+        )
+        return _answers(scope="project", model="claude-opus-4.8", effort="max")
+
+    out = _Output()
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            wizard_runner=legacy_runner,
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            **_packaged(tmp_path),
+        )
+
+    assert rc == 0
+
+
 def test_run_init_selects_the_textual_runner_when_the_operator_opts_in(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

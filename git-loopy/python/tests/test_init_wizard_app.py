@@ -413,6 +413,46 @@ async def test_review_back_control_returns_to_the_selected_step() -> None:
     assert app.return_value is None
 
 
+async def test_review_back_to_model_preserves_the_selected_effort() -> None:
+    app = _app(choices=(_choice("model"), _choice("other", ("low", "high"))))
+    async with app.run_test() as pilot:
+        await pilot.press("enter")  # scope
+        await pilot.press("down", "enter")  # model -> effort
+        await pilot.press("up", "enter")  # low
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        review = app.screen.query_one("#wizard-review", DataTable)
+        model_row = next(
+            index
+            for index in range(review.row_count)
+            if str(review.get_row_at(index)[0]) == "model"
+        )
+        await pilot.press(*(["down"] * model_row), "b")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        efforts = app.screen.query_one("#picker-efforts", DataTable)
+        assert efforts.cursor_row == 0
+        await pilot.press("enter", "ctrl+s", "enter")
+
+    assert app.return_value is not None
+    assert (app.return_value.model, app.return_value.effort) == ("other", "low")
+
+
+async def test_review_back_to_an_unchanged_scope_keeps_selected_skills() -> None:
+    app = _app()
+    async with app.run_test() as pilot:
+        await _reach_skills(pilot)
+        await pilot.press("space", "enter")
+        await pilot.pause()
+        await pilot.press("b")
+        await pilot.press("enter", "ctrl+s", "enter")
+
+    assert app.return_value is not None
+    assert app.return_value.enabled_skills == ("codebase-design", "tdd")
+
+
 def test_wizard_import_graph_never_reaches_live_run_state() -> None:
     """Setup must not couple to the Run, so hosting it in the Dashboard cannot.
 

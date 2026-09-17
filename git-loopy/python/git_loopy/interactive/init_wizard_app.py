@@ -332,9 +332,9 @@ class InitWizardApp(App["InitAnswers | None"]):
 
     def _show_model(self) -> None:
         choices = tuple(
-            replace(choice, default_effort=self._default_effort)
-            if choice.id == self._default_model
-            and self._default_effort in choice.supported_efforts
+            replace(choice, default_effort=self._selection.effort)
+            if choice.id == self._selection.model
+            and self._selection.effort in choice.supported_efforts
             else choice
             for choice in self._model_choices
         )
@@ -442,8 +442,10 @@ class InitWizardApp(App["InitAnswers | None"]):
         if result in (_BACK, _CANCEL):
             self.exit(None)
         else:
-            self._scope = str(result)
-            self._skills = None
+            selected_scope = str(result)
+            if selected_scope != self._scope:
+                self._scope = selected_scope
+                self._skills = None
             self._show_model()
 
     def _on_model(self, result: object) -> None:
