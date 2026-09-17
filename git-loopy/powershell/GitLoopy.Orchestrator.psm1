@@ -3851,6 +3851,8 @@ function Invoke-GitLoopyAutoClose {
         [Parameter(Mandatory)]
         [psobject]$Config,
         [Parameter(Mandatory)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory)]
         [int]$Iteration,
         [AllowEmptyCollection()]
         [object[]]$Pool,
@@ -3878,6 +3880,45 @@ function Invoke-GitLoopyAutoClose {
             -Commits $Commits
         if ($Closed) {
             $Closures += 1
+            $Item = @(
+                $Pool | Where-Object {
+                    $_ -is [Collections.IDictionary] -and
+                    $_.Contains("number") -and
+                    [int]$_["number"] -eq $Issue
+                }
+            ) | Select-Object -First 1
+            if ($null -eq $Item) {
+                [Console]::Error.WriteLine(
+                    "git-loopy: Release line did not advance after closing #${Issue}: " +
+                    "the closed issue was absent from the Pool."
+                )
+                continue
+            }
+            try {
+                $Advance = Invoke-GitLoopyRepositoryReleaseLineAdvance `
+                    -RepositoryRoot $RepoRoot `
+                    -Labels @($Item["labels"])
+            }
+            catch {
+                [Console]::Error.WriteLine(
+                    "git-loopy: Release line did not advance after closing #${Issue}: " +
+                    "$($_.Exception.Message)"
+                )
+                continue
+            }
+            if ($null -eq $Advance) {
+                continue
+            }
+            Write-GitLoopyEvent `
+                -Context $Context `
+                -Type $EventTypes["WRAPPER_RELEASE_ADVANCED"] `
+                -Iteration $Iteration `
+                -Payload ([ordered]@{
+                    bump_class = $Advance.BumpClass
+                    issue = $Issue
+                    release_target = $Advance.Target
+                    release_version = $Advance.Version
+                })
         }
     }
     return $Closures
@@ -4391,6 +4432,7 @@ function Invoke-GitLoopyDiscoveryLoop {
             -Context $Context `
             -EventTypes $EventTypes `
             -Config $Config `
+            -RepoRoot $Preflight.RepoRoot `
             -Iteration $Iteration `
             -Pool $Pool `
             -Commits $NewCommits
