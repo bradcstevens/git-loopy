@@ -34,6 +34,7 @@ _PYTHON_LOCKFILE = Path("git-loopy/python/uv.lock")
 _RUST_MANIFEST = Path("git-loopy/tui/Cargo.toml")
 _RUST_LOCKFILE = Path("git-loopy/tui/Cargo.lock")
 _TUI_PROBE = Path("git-loopy/tui/README.md")
+_RELEASE_NOTES_DIRECTORY = Path("docs/releases")
 RELEASE_VERSION_PATHS: tuple[Path, ...] = (
     Path("VERSION"),
     _PYTHON_SOURCE_VERSION,
@@ -105,6 +106,20 @@ class _ReleaseVersionUpdate:
     content: str
 
 
+@dataclass(frozen=True)
+class _ReleaseNoteSnapshot:
+    path: Path
+    content: str | None
+
+
+@dataclass(frozen=True)
+class ReleaseNotesWrite:
+    """One Release-note update and the paths its Release commit must carry."""
+
+    commit_paths: tuple[Path, ...]
+    snapshots: tuple[_ReleaseNoteSnapshot, ...]
+
+
 def resolve_bump_class(labels: Sequence[str]) -> str:
     """Return an issue's one closed ``semver:`` bump class.
 
@@ -155,6 +170,48 @@ def advance_release_line(
     target = ".".join(str(part) for part in max(current, candidate))
     counter = current_counter + (bump_class != "none")
     return ReleaseLine(target=target, counter=counter)
+
+
+def promote_release_line(release_line: ReleaseLine, bump_class: str) -> ReleaseLine:
+    """Cut a stable Release from the one Bump class exempt from a milestone.
+
+    A `major` publishes on the label alone; every other class stays on its
+    `dev.N` line until the `vX.Y.Z` milestone it promised closes
+    ([ADR-0052](../../../docs/adr/0052-the-release-line-advances-per-issue.md)).
+    Callers ask this rather than testing the class themselves, so *which* class
+    is exempt is one decision rather than one per call site.
+    """
+    if bump_class not in BUMP_CLASS_KEYS:
+        raise ReleaseVersionError(f"unknown Release-line bump class {bump_class!r}")
+    if bump_class != "major":
+        return release_line
+    return ReleaseLine(target=release_line.target, counter=0)
+
+
+def release_line_commit_subject(version: str) -> str:
+    """Word the commit that moves the Release line to ``version``.
+
+    A **Promotion** and an advance are different events in the domain, so they
+    read differently in `git log`: only a stable value was cut from its line.
+    """
+    verb = "advance" if is_prerelease(version) else "promote"
+    return f"chore(release): {verb} Release line to {version}"
+
+
+def promote_closed_milestone(
+    current_version: str, milestone_title: str, milestone_state: str
+) -> str | None:
+    """Return the stable Release a matching closed milestone promotes, if any.
+
+    Deliberately separate from :func:`advance_release_line`: a prerelease takes
+    no milestone input at any point, while a milestone-close event may promote
+    only the exact `dev.N` target its own title names.
+    """
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)-dev\.(0|[1-9][0-9]*)", current_version)
+    if match is None or milestone_state.casefold() != "closed":
+        return None
+    target = match.group(1)
+    return target if milestone_title == f"v{target}" else None
 
 
 def release_line_from_version(
@@ -438,6 +495,206 @@ def write_repository_release_version(repository_root: Path, version: str) -> Non
     _apply_release_version_updates(updates)
 
 
+def write_repository_release_notes(
+    repository_root: Path,
+    advanced_line: ReleaseLine,
+    release_line: ReleaseLine,
+) -> ReleaseNotesWrite:
+    """Write one development fragment and, on Promotion, a stable draft.
+
+    The caller supplies both lines because a `major` first advances to a
+    `dev.N` fragment and then promotes that same target to stable. The stable
+    draft composes every fragment for its target unless a human already wrote
+    the stable note, which remains publication input unchanged.
+    """
+    repository_root = repository_root.resolve()
+    fragment_path = _release_notes_path(repository_root, advanced_line.version)
+    fragment_content = (
+        _read_metadata_text(fragment_path, "Release-note fragment")
+        if fragment_path.exists()
+        else _release_note_fragment_content(advanced_line)
+    )
+    updates = (
+        []
+        if fragment_path.exists()
+        else [_ReleaseVersionUpdate(fragment_path, fragment_content)]
+    )
+    commit_paths = [fragment_path.relative_to(repository_root)]
+
+    if release_line.counter == 0:
+        stable_path = _release_notes_path(repository_root, release_line.version)
+        commit_paths.append(stable_path.relative_to(repository_root))
+        if not stable_path.exists():
+            updates.append(
+                _ReleaseVersionUpdate(
+                    stable_path,
+                    _compose_stable_release_notes(
+                        repository_root,
+                        release_line.version,
+                        release_line.target,
+                        advanced_line.version,
+                        fragment_content,
+                    ),
+                )
+            )
+
+    snapshots = tuple(
+        _ReleaseNoteSnapshot(
+            update.path,
+            _read_metadata_text(update.path, "Release-note fragment")
+            if update.path.exists()
+            else None,
+        )
+        for update in updates
+    )
+    _apply_release_note_updates(updates, snapshots)
+    return ReleaseNotesWrite(tuple(commit_paths), snapshots)
+
+
+def restore_repository_release_notes(notes_write: ReleaseNotesWrite) -> None:
+    """Restore the Release-note state captured before a refused Release commit."""
+    updates = tuple(
+        _ReleaseVersionUpdate(snapshot.path, snapshot.content)
+        for snapshot in notes_write.snapshots
+        if snapshot.content is not None
+    )
+    restored_paths = {update.path for update in updates}
+    _apply_release_note_updates(
+        updates,
+        tuple(
+            _ReleaseNoteSnapshot(path, _read_metadata_text(path, "Release-note fragment"))
+            for path in restored_paths
+        ),
+    )
+    for snapshot in notes_write.snapshots:
+        if snapshot.content is None:
+            try:
+                snapshot.path.unlink(missing_ok=True)
+            except OSError as exc:
+                raise ReleaseVersionError(
+                    f"cannot remove generated Release note {snapshot.path}: {exc}"
+                ) from exc
+
+
+def _release_notes_path(repository_root: Path, version: str) -> Path:
+    _validate_semver(version, "Release-note version")
+    return repository_root / _RELEASE_NOTES_DIRECTORY / f"v{version}.md"
+
+
+def _release_note_fragment_content(release_line: ReleaseLine) -> str:
+    return (
+        f"# git-loopy {release_line.version}\n\n"
+        "This development fragment advances the Release line to "
+        f"`{release_line.version}` on the way to stable `{release_line.target}`.\n"
+    )
+
+
+def _compose_stable_release_notes(
+    repository_root: Path,
+    stable_version: str,
+    target: str,
+    pending_version: str,
+    pending_content: str,
+) -> str:
+    fragments: dict[str, tuple[int, str]] = {}
+    pattern = re.compile(
+        rf"^v{re.escape(target)}-dev\.(0|[1-9][0-9]*)\.md$"
+    )
+    release_directory = repository_root / _RELEASE_NOTES_DIRECTORY
+    if release_directory.is_dir():
+        for path in release_directory.iterdir():
+            match = pattern.fullmatch(path.name)
+            if match is not None and path.is_file():
+                fragments[path.stem.removeprefix("v")] = (
+                    int(match.group(1)),
+                    _read_metadata_text(path, "Release-note fragment"),
+                )
+    pending_counter = _release_note_counter(pending_version, target)
+    fragments[pending_version] = (pending_counter, pending_content)
+
+    lines = [
+        f"# git-loopy {stable_version}",
+        "",
+        f"git-loopy {stable_version} was promoted from the committed development fragments below.",
+    ]
+    if not fragments:
+        return "\n".join(
+            [
+                *lines,
+                "",
+                "No development fragments were available when this stable draft was composed.",
+                "",
+            ]
+        )
+    lines.extend(("", "## Development fragments"))
+    for version, (_counter, content) in sorted(
+        fragments.items(), key=lambda item: (item[1][0], item[0])
+    ):
+        body = _release_note_body(content)
+        lines.extend(("", f"### {version}", "", body or "No additional notes were recorded in this fragment."))
+    return "\n".join([*lines, ""])
+
+
+def _release_note_counter(version: str, target: str) -> int:
+    match = re.fullmatch(
+        rf"{re.escape(target)}-dev\.(0|[1-9][0-9]*)",
+        version,
+    )
+    if match is None:
+        raise ReleaseVersionError(
+            f"development Release-note version {version!r} does not match target {target!r}"
+        )
+    return int(match.group(1))
+
+
+def _release_note_body(content: str) -> str:
+    lines = content.replace("\r\n", "\n").splitlines()
+    if lines and lines[0].startswith("# "):
+        lines.pop(0)
+    return "\n".join(lines).strip()
+
+
+def _apply_release_note_updates(
+    updates: Sequence[_ReleaseVersionUpdate],
+    snapshots: Sequence[_ReleaseNoteSnapshot],
+) -> None:
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for update in updates:
+            update.path.parent.mkdir(parents=True, exist_ok=True)
+            staged.append((update.path, _stage_release_note_content(update.path, update.content)))
+        for target, replacement in staged:
+            os.replace(replacement, target)
+    except OSError as exc:
+        for snapshot in snapshots:
+            if snapshot.content is None:
+                snapshot.path.unlink(missing_ok=True)
+            else:
+                replacement = _stage_release_note_content(snapshot.path, snapshot.content)
+                os.replace(replacement, snapshot.path)
+        raise ReleaseVersionError(f"cannot write Release notes: {exc}") from exc
+    finally:
+        _remove_staged_release_version_paths(tuple(path for _target, path in staged))
+
+
+def _stage_release_note_content(target: Path, content: str) -> Path:
+    mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o644
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        newline="",
+        dir=target.parent,
+        prefix=f".{target.name}.",
+        suffix=".git-loopy-release",
+        delete=False,
+    ) as staged:
+        os.chmod(staged.name, mode)
+        staged.write(content)
+        staged.flush()
+        os.fsync(staged.fileno())
+    return Path(staged.name)
+
+
 def _python_distribution_version(version: str) -> str:
     match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:-dev\.(\d+))?", version)
     if match is None:
@@ -623,7 +880,7 @@ def _remove_staged_release_version_files(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Validate git-loopy Release version metadata."
+        description="Validate or promote git-loopy Release version metadata."
     )
     parser.add_argument(
         "--repository-root",
@@ -635,17 +892,87 @@ def _build_parser() -> argparse.ArgumentParser:
         "--publication-version",
         help="optional publication metadata value to compare with VERSION",
     )
+    parser.add_argument(
+        "--promote-milestone",
+        help="closed vX.Y.Z milestone that may promote the current Release line",
+    )
+    parser.add_argument(
+        "--milestone-state",
+        default="CLOSED",
+        help="state of --promote-milestone (default: CLOSED)",
+    )
+    parser.add_argument(
+        "--github-output",
+        type=Path,
+        help="optional GitHub Actions output file for the Promotion result",
+    )
     return parser
 
 
+def _write_promotion_output(
+    path: Path, promoted: str | None, fragment_path: Path | None
+) -> None:
+    """Append one Promotion decision to a GitHub Actions step output file.
+
+    Appended rather than written: a step's output file is shared with whatever
+    else that step reports, and a Promotion that silently truncated its
+    neighbours would be discovered by the workflow reading a stale value.
+    The commit subject travels with the decision so the workflow commits a
+    Promotion in exactly the words a Runner does.
+    """
+    lines = [f"promoted={'true' if promoted is not None else 'false'}"]
+    if promoted is not None:
+        lines += [
+            f"version={promoted}",
+            f"subject={release_line_commit_subject(promoted)}",
+            f"notes_path={_RELEASE_NOTES_DIRECTORY / f'v{promoted}.md'}",
+            f"fragment_path={fragment_path}",
+        ]
+    try:
+        with path.open("a", encoding="utf-8") as output:
+            output.write("".join(f"{line}\n" for line in lines))
+    except OSError as exc:
+        raise ReleaseVersionError(
+            f"cannot write GitHub Promotion output {path}: {exc}"
+        ) from exc
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the repository Release version validator."""
+    """Validate repository metadata or promote a matching closed milestone."""
     args = _build_parser().parse_args(argv)
     try:
-        validate_repository_release_version(
+        fragment_path: Path | None = None
+        current_version = validate_repository_release_version(
             args.repository_root,
             publication_version=args.publication_version,
         )
+        promoted = (
+            promote_closed_milestone(
+                current_version,
+                args.promote_milestone,
+                args.milestone_state,
+            )
+            if args.promote_milestone is not None
+            else None
+        )
+        if promoted is not None:
+            current_line = ReleaseLine(
+                target=promoted,
+                counter=_release_note_counter(current_version, promoted),
+            )
+            write_repository_release_version(args.repository_root, promoted)
+            try:
+                notes_write = write_repository_release_notes(
+                    args.repository_root,
+                    current_line,
+                    ReleaseLine(target=promoted, counter=0),
+                )
+                fragment_path = notes_write.commit_paths[0]
+            except ReleaseVersionError:
+                write_repository_release_version(args.repository_root, current_version)
+                raise
+        if args.github_output is not None:
+            _write_promotion_output(args.github_output, promoted, fragment_path)
     except ReleaseVersionError as exc:
         print(f"release version validation failed: {exc}", file=sys.stderr)
         return 1

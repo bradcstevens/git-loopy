@@ -143,12 +143,12 @@ def inspect_release_tag(repository_root: Path, tag_ref: str) -> SourceRelease:
         notes_text = notes.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         raise SourceReleaseError(
-            f"Release {tag} requires committed UTF-8 edited release notes at "
+            f"Release {tag} requires committed UTF-8 authored release notes at "
             f"{notes_path}: {exc}"
         ) from exc
     if not notes_text.strip():
         raise SourceReleaseError(
-            f"Release {tag} requires non-empty edited release notes at {notes_path}"
+            f"Release {tag} requires non-empty authored release notes at {notes_path}"
         )
     _run_git(repository_root, "cat-file", "-e", f"{commit}:{notes_path.as_posix()}")
     if _git_text(
@@ -160,7 +160,7 @@ def inspect_release_tag(repository_root: Path, tag_ref: str) -> SourceRelease:
         notes_path.as_posix(),
     ):
         raise SourceReleaseError(
-            f"edited release notes must be committed before tagging: {notes_path}"
+            f"authored release notes must be committed before tagging: {notes_path}"
         )
 
     prerelease = is_prerelease(version)
