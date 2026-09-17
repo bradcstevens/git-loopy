@@ -632,7 +632,7 @@ non-UTF-8, or unavailable Release metadata.
 The source-release verifier
 [`python/git_loopy/source_release.py`](../python/git_loopy/source_release.py)
 uses the same fixture to reject lightweight or mismatched tags, missing explicit
-Release-version bumps, missing edited notes, metadata drift, and drift in any
+Release-version bumps, missing authored notes, metadata drift, and drift in any
 real Orchestrator `--version` output. It generates
 and verifies the tagged source archive before
 [`source-release.yml`](../../.github/workflows/source-release.yml) creates a

@@ -4,6 +4,14 @@
 > This decision references Workflow Continuation, which has since been decommissioned.
 > The reasoning below is preserved as the record of what was decided at the time.
 
+> **Note (superseded in part by [ADR-0052](0052-the-release-line-advances-per-issue.md)):**
+> This decision requires *edited* `docs/releases/v<VERSION>.md` notes. The requirement has
+> since relaxed to *authored and committed*: an agent writes a `dev.N` fragment on every
+> Release-line advance and composes a stable draft on Promotion, a human note present
+> beforehand is preserved, and publication never waits on a person to write prose. The
+> notes must still exist, be non-empty, and be committed at the tag. The reasoning below is
+> preserved as the record of what was decided at the time.
+
 
 Git-loopy publishes one shared Semantic Versioning Release version for every
 Orchestrator, packaged Skill set, and TUI helper included in a distribution,

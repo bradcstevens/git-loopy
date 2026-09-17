@@ -2,12 +2,20 @@
 
 Each Release-line advance writes an agent-authored `dev.N` fragment at
 `docs/releases/v<VERSION>.md`. A **Promotion** composes the fragments for its
-target into the stable draft at the same conventional location; an existing
-human-authored stable note is preserved. The matching annotated `v<VERSION>` tag
-publishes the committed note verbatim as the GitHub Release description after
-the full Runner-family Conformance gate and tagged source archive identity checks
-pass. Publication requires authored, committed UTF-8 notes, never edited prose
-from a human.
+target into the stable draft at the same conventional location; a stable note a
+human already wrote there is preserved rather than overwritten, because the
+generated draft is a floor and not a replacement. The matching annotated
+`v<VERSION>` tag publishes the committed note verbatim as the GitHub Release
+description after the full Runner-family Conformance gate and tagged source
+archive identity checks pass.
+
+Publication requires notes that were **authored and committed** — non-empty,
+UTF-8, and present in the tagged tree. It does not require that a human edited
+them. That requirement used to be the only thing standing between a tag and
+publication, which made it the de facto human gate an unattended Release line
+cannot have (ADR-0052). A human may still replace any draft before its
+Promotion, and should when the Release deserves an essay; publication simply
+never waits for one.
 
 The source-only path relies on GitHub's automatic source archives. It does not
 publish package-channel metadata, signed platform artifacts, or a TUI helper.

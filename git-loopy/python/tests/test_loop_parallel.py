@@ -2876,6 +2876,66 @@ def test_parallel_integration_applies_only_bumped_release_lines_after_publicatio
     assert fake_gh.issue_view(42).state == "CLOSED"
 
 
+def test_parallel_integration_preserves_a_human_stable_release_note(
+    tmp_path, monkeypatch
+) -> None:
+    """A stable note a human already wrote survives the Promotion that ships it.
+
+    The generated draft is a floor, not a replacement (ADR-0052). A `major`
+    reaches stable under the Run itself, so the Promotion that would compose a
+    draft runs while the human's essay is already sitting at the conventional
+    location -- and overwriting it there would destroy prose nothing else holds
+    a copy of. The preserved note is still committed, because publication reads
+    what the tag carries rather than what the worktree happens to hold.
+    """
+    fake_git = _wire_repo(tmp_path)
+    _wire_release_distribution(tmp_path)
+    essay = "# git-loopy 2.0.0\n\nA human release essay.\n"
+    stable_note = tmp_path / "docs/releases/v2.0.0.md"
+    stable_note.parent.mkdir(parents=True, exist_ok=True)
+    stable_note.write_text(essay, encoding="utf-8")
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe", "semver:major"])
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 0
+
+    assert validate_repository_release_version(tmp_path) == "2.0.0"
+    assert stable_note.read_text(encoding="utf-8") == essay
+    committed_paths = [paths for _message, paths in fake_git.commit_paths_calls]
+    assert len(committed_paths) == 1
+    assert "docs/releases/v2.0.0.md" in committed_paths[0]
+    # The advance still authors its own fragment: the human wrote the stable
+    # note, not the development one the next Promotion composes from.
+    assert (tmp_path / "docs/releases/v2.0.0-dev.1.md").exists()
+    assert "docs/releases/v2.0.0-dev.1.md" in committed_paths[0]
+
+
 def test_parallel_integration_restores_the_release_line_when_its_commit_fails(
     tmp_path, monkeypatch
 ) -> None:
@@ -3104,12 +3164,15 @@ def test_parallel_integration_advances_the_release_line_holding_the_integration_
 def test_parallel_no_lane_contribution_carries_a_release_version_change(
     tmp_path, monkeypatch
 ) -> None:
-    """Version files move on base only -- never inside a Lane or its stage.
+    """Version files and Release notes move on base only -- never in a Lane.
 
     Bumping inside a Lane's contribution would have every Lane touch the same
     version-bearing files, conflicting on every Integration on hunks whose
     conflict carries no meaning and spending the bounded auto-resolution budget
-    reconciling version numbers (ADR-0052).
+    reconciling version numbers (ADR-0052). The `dev.N` notes fragment each
+    advance authors rides in that same Release commit and inherits the rule: a
+    Lane that wrote its own fragment would collide with every sibling Lane the
+    same way, and the fragment names a Release version a Lane cannot know.
     """
     fake_git = _wire_repo(tmp_path)
     _wire_release_distribution(tmp_path)
@@ -3175,10 +3238,15 @@ def test_parallel_no_lane_contribution_carries_a_release_version_change(
         for message, _paths in client.commit_paths_calls
     ]
     assert lane_side_writes == []
-    # Base did, twice -- one per bumped contribution.
+    # Base did, twice -- one per bumped contribution, each carrying the version
+    # copies and the one `dev.N` fragment that advance authored.
     assert [paths for _message, paths in fake_git.commit_paths_calls] == [
-        tuple(str(path) for path in RELEASE_VERSION_PATHS)
-    ] * 2
+        (
+            *(str(path) for path in RELEASE_VERSION_PATHS),
+            f"docs/releases/v{version}.md",
+        )
+        for version in ("1.3.0-dev.1", "1.3.0-dev.2")
+    ]
 
 
 def _release_line_after_run(
