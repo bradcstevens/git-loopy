@@ -727,15 +727,21 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help="Emit the stable installation-inventory JSON document.",
     )
 
-    sub.add_parser(
+    doctor = sub.add_parser(
         "doctor",
         help="Report Skill-policy blockers before starting a Run.",
         description=(
             "Resolve the same Skill policy a Run preflight resolves and report "
-            "every blocker. This report-only command never starts a Run, opens "
-            "a picker, writes Config, changes Copilot settings, or refreshes "
-            "the installed Skill catalog."
+            "every blocker. `--apply` atomically repairs missing enabled names "
+            "and disabled Required Skills in the saved policy that carries them. "
+            "Doctor never starts a Run, opens a picker, changes Copilot settings, "
+            "or refreshes the installed Skill catalog."
         ),
+    )
+    doctor.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply the printed repair to the saved Skill policy when it is safe.",
     )
 
     sweep = sub.add_parser(
@@ -1053,8 +1059,7 @@ def _run_info(
 
 
 def _run_doctor(args: argparse.Namespace) -> int:
-    """Dispatch the read-only Skill-policy preflight report."""
-    del args
+    """Dispatch the Skill-policy preflight report and optional repair."""
     from git_loopy import doctorcmd
 
     try:
@@ -1079,7 +1084,12 @@ def _run_doctor(args: argparse.Namespace) -> int:
     except settings.SettingsError as exc:
         print(f"git-loopy: error: {exc}", file=sys.stderr)
         return 1
-    return doctorcmd.run_doctor(config=config, repo_root=repo_root, env=os.environ)
+    return doctorcmd.run_doctor(
+        config=config,
+        repo_root=repo_root,
+        env=os.environ,
+        apply=args.apply,
+    )
 
 
 def _display_identity(value: object) -> str:

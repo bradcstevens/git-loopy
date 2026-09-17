@@ -424,8 +424,8 @@ exactly as it found it, so the fix is always yours to make deliberately.
 `git-loopy doctor` is the report half of Skill-policy recovery, following the
 same report-first shape as `git-loopy labels`. It resolves the exact Skill
 policy a Run preflight resolves, without starting a Run, opening a picker,
-spending AI Credits, writing Config, changing Copilot settings, or refreshing
-the installed Skill catalog.
+spending AI Credits, changing Copilot settings, or refreshing the installed
+Skill catalog.
 
 ```bash
 git-loopy doctor
@@ -449,6 +449,28 @@ the base policy, which already lists the Skill and would be a dead end. A
 blocker under the **Minimal Skill policy** names the project Config, the scope
 `git-loopy skills edit` writes by default inside a repository.
 
+### Repair a saved policy
+
+```bash
+git-loopy doctor --apply
+```
+
+`--apply` prints its exact `Add:` and `Remove:` delta before it atomically
+writes the saved policy that carries every repairable blocker. It removes
+enabled names with no catalog winner and adds a catalog-backed **Required Skill**
+that the saved project or global policy omitted. It preserves every other Config
+key and never changes Copilot's own settings.
+
+An environment replacement, an overlay, or a deprecated deny guard is not a
+saved policy, so `--apply` reports its normal remedy and writes nothing. The
+same is true for an untracked project Skill and an unavailable inventory: the
+former must be versioned with `git add` and a commit (or disabled with
+`git-loopy skills edit`), while the latter requires Copilot CLI access to be
+restored. If no saved policy exists, doctor says so rather than creating one.
+When every reported blocker is repairable, the write leaves the next `doctor`
+and the next Run preflight clean; re-running `doctor --apply` then writes
+nothing.
+
 A clean policy prints one success line and exits `0`; any blocker exits
 non-zero, which makes it suitable for a scripted pre-Run check. A failure it
 cannot attribute to a policy surface at all — an unreadable `PROMPT.md`, a
@@ -460,7 +482,7 @@ the Skill policy` line rather than mislabelled as a policy blocker.
 | `Enabled Skills are missing from the catalog` | a configured name resolves to nothing — a personal Skill you never installed here, a plugin you removed, or a typo | `git-loopy skills list` to see the real names, then `git-loopy skills edit` to drop or correct it |
 | `Required Skills are disabled` | the effective set omits a name the active `PROMPT.md` declares in `required-skills` — a `--disable-skill` overlay, a legacy deny guard, or a `GIT_LOOPY_ENABLED_SKILLS` / `enabled_skills` value that simply does not list it | if the base came from the environment, correct or unset `GIT_LOOPY_ENABLED_SKILLS`; otherwise `git-loopy skills edit` and re-enable it, or drop the overlay / `deny_skills` entry causing the subtraction |
 | `Enabled project Skills are not git-tracked` | a policy enables a Skill whose winning source is `project` and that is not committed, so it would not exist for a collaborator. No current Run can reach this: [ADR-0025](adr/0025-installed-skill-catalog.md) removed the project Skill source, and the check is kept only so a Runner that still exposes one fails closed | `git add` and commit the Skill, or `git-loopy skills edit` to disable it |
-| `Skill inventory is unavailable for explicit policy names` | you supplied an explicit policy but the Copilot inventory could not be resolved — Copilot missing, unauthenticated, or failing to start | fix the Copilot CLI installation / auth, then re-run; `git-loopy skills list` reports the same discovery failure in isolation |
+| `Skill inventory is unavailable for explicit policy names` | you supplied an explicit policy but the Copilot inventory could not be resolved — Copilot missing, unauthenticated, or failing to start | restore Copilot CLI access, then re-run `git-loopy doctor`; `git-loopy skills list` reports the same discovery failure in isolation |
 
 Preflight failures exit `1` and print
 `git-loopy: Skill policy preflight failed: <message>. Inspect the catalog and

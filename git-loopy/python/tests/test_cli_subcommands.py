@@ -73,6 +73,13 @@ def test_subcommand_parser_parses_info_json() -> None:
 def test_subcommand_parser_parses_doctor() -> None:
     args = cli_module.build_subcommand_parser().parse_args(["doctor"])
     assert args.command == "doctor"
+    assert args.apply is False
+
+
+def test_subcommand_parser_parses_doctor_apply() -> None:
+    args = cli_module.build_subcommand_parser().parse_args(["doctor", "--apply"])
+    assert args.command == "doctor"
+    assert args.apply is True
 
 
 def test_subcommand_parser_parses_sweep_dry_run() -> None:
@@ -282,7 +289,10 @@ def test_main_doctor_resolves_the_same_config_a_run_resolves(
 
     from git_loopy import doctorcmd
 
-    def fake_run_doctor(*, config: RunConfig, repo_root: Path, env: Any) -> int:
+    def fake_run_doctor(
+        *, config: RunConfig, repo_root: Path, env: Any, apply: bool
+    ) -> int:
+        assert apply is False
         seen.append(config)
         return 0
 
