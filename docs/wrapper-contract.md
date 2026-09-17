@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.4 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.5 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -600,8 +600,8 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 | `GIT_LOOPY_INTERACTIVE`        | 2     | auto (TTY)       | MUST be honoured only by a member whose declared parallel capability manifest exposes this operator choice; Python still ignores it because terminal selection is structural: a TTY detaches the worker and keeps the parent as the attach client, while non-TTY stays on the direct line printer. |
 | `GIT_LOOPY_MODEL_SELECT`       | 3     | off              | `1` enters the startup model picker (**ModelSelectionMode**). |
 | `GIT_LOOPY_DENY_TOOLS`         | 1     | empty            | Denylist of tools (set *union* across config tiers).          |
-| `GIT_LOOPY_DENY_SKILLS`        | 1     | empty            | Deprecated denylist of skills (set *union* across config tiers); subtracts only (§16). |
-| `GIT_LOOPY_ENABLED_SKILLS`     | 3     | unset            | Exact replacement of the configured base **Skill policy** for one Run; an explicit empty value is a real empty policy (§16). |
+| `GIT_LOOPY_DENY_SKILLS`        | 1     | empty            | Deprecated denylist of skills (set *union* across config tiers); subtracts only (§17). |
+| `GIT_LOOPY_ENABLED_SKILLS`     | 3     | unset            | Exact replacement of the configured base **Skill policy** for one Run; an explicit empty value is a real empty policy (§17). |
 | `GIT_LOOPY_SEND_TIMEOUT_SECONDS`| 1    | impl default     | Per-iteration agent send timeout.                             |
 | `GIT_LOOPY_OTEL_ENABLED`       | 4     | off              | `1` enables OTLP export (or `OTEL_EXPORTER_OTLP_ENDPOINT`).    |
 | `GIT_LOOPY_MAX_PARALLEL`       | 5     | `1`              | MUST be honoured only by a member whose declared parallel capability manifest exposes an operator-selected Lane count; Python refuses it because its Execution host declares the ceiling. |
@@ -638,7 +638,7 @@ contribution-scoped: it names work that never became a **Lane contribution**, so
 collecting Iteration's `iter` and no contribution identity.
 Dashboard Insight additions within compatibility schema 1 are `wrapper.issue.activated`,
 `agent.output`, and `usage.context_window`; `wrapper.skill_policy.resolved` is the redacted
-Run-scoped record of the frozen **Effective Skill policy** (§16). Rolling-dispatch additions
+Run-scoped record of the frozen **Effective Skill policy** (§17). Rolling-dispatch additions
 within compatibility schema 1 are listed under *Rolling-dispatch contribution lifecycle* below.
 Producing these additive events is capability-dependent. TTY attach-client failures are local UI
 failures only: they emit no special Event and do not change the worker's own Run record.
@@ -1167,7 +1167,7 @@ Each Orchestrator MUST pass the language-neutral fixtures in the
   (§12).
 - **Skill policy** — base-scope selection, explicit empty policy, environment replacement, Run
   overlays, disable-wins, legacy subtraction, Minimal fallback, the four validation failures, and
-  the redacted resolved-policy projection (§16).
+  the redacted resolved-policy projection (§17).
 
 The suite is the generalized successor to the cross-runner parity test ADR-0002 deleted. A
 conformance fixture change is the canonical way to evolve the contract.
@@ -1515,7 +1515,32 @@ remain usable when Event-schema and capability negotiation prove compatibility, 
 Orchestrator MUST warn that the Release versions differ. Release equality alone MUST NOT establish
 cross-release compatibility.
 
-## 16. Closed-world Skill policy (Skill-policy rollout, MUST)
+## 16. Release-line advancement (MUST)
+
+Every **Orchestrator** MUST advance the **Release line** for a closed issue
+with a Bump class other than `semver:none`, after its Integration has published
+the issue and while holding the `_integration_lock` that serializes Integration
+([ADR-0009](adr/0009-runner-driven-integration-and-auto-resolution.md)). The
+advance derives its Release target by ratcheting the closed Bump-class labels
+and increments that target's `dev.N` counter; it MUST NOT be performed in a
+Lane contribution. The resulting Release-line commit is therefore a
+post-Integration fact, not work a Lane proposes.
+
+After a successful Release-line commit, the Orchestrator MUST emit
+`wrapper.release.advanced` with the closed `issue`, its `bump_class`, the
+ratcheted `release_target`, and the committed `release_version`. A
+`semver:none` issue and a failed advance emit no such Event. A closed
+`vX.Y.Z` milestone may **Promote** the current development line to stable, but
+does not select the target; `semver:major` is deliberately exempt from that
+milestone trigger and may Promote unattended. [ADR-0052](adr/0052-the-release-line-advances-per-issue.md)
+records both the ratchet and that unattended-major consequence as deliberate.
+
+What happens when a human closes a milestone-bearing issue outside a **Run** is
+open: this contract does not say whether that closure advances the Release
+line. See ADR-0052's [Still open](adr/0052-the-release-line-advances-per-issue.md#still-open)
+section.
+
+## 17. Closed-world Skill policy (Skill-policy rollout, MUST)
 
 A Run's capability set is a **contract**, not an accident of the operator's machine. Every
 Orchestrator MUST resolve exactly which canonical Skill names a Run may load, freeze that answer
@@ -1561,7 +1586,7 @@ MUST remain distinguishable all the way from Config parsing to the resolver.
 (including an explicit empty value). Replacement changes the *names*, not the *selection*:
 `base_scope` and `fallback` describe which scope the base came from, so an environment
 replacement over a project policy still reports `project`, and an environment replacement with no
-configured scope at all still reports `minimal`. §16.6's startup classification — not
+configured scope at all still reports `minimal`. §17.6's startup classification — not
 `base_scope` — is what answers "was this installation ever configured".
 
 The repeatable `--enable-skill` and `--disable-skill` flags are temporary Run **overlays** applied
@@ -1637,7 +1662,7 @@ prevent.
 which Skills a Run *may* use. A consulted name is per-Iteration observed behaviour, a policy name
 is Run-level availability, and neither may be derived from the other.
 
-## 17. Changing this contract
+## 18. Changing this contract
 
 1. Update this document and bump the **Contract version**.
 2. Add or update the corresponding **Conformance** fixture(s).

@@ -17,21 +17,23 @@ cannot have (ADR-0052). A human may still replace any draft before its
 Promotion, and should when the Release deserves an essay; publication simply
 never waits for one.
 
+A `vX.Y.Z-dev.N` version is the current **development prerelease** on the path
+to stable `vX.Y.Z`: `N` counts Release-line advances against that target. It
+is published for source identity and release-note history, but is not on any
+package channel. Only a stable Promotion can update those channels.
+
 The source-only path relies on GitHub's automatic source archives. It does not
 publish package-channel metadata, signed platform artifacts, or a TUI helper.
 
-## What a Release owes
+## Release target and Promotion
 
-A `vX.Y.Z` **GitHub milestone** is the one record of what a Release is answerable
-for. An issue carrying that milestone is owed to that Release; an issue carrying
-none is backlog — real work, committed to nothing. Nothing infers this from a
-label, a PRD, or a Wayfinder map: `ready-for-agent` says an agent *could* start,
-not that a Release is *waiting*, and the two answer different questions.
+A closed issue's **Bump class** label advances the Release line after
+Integration. The Release target is the ratchet across those labels, while the
+`dev.N` counter records each advance; see [ADR-0052](../adr/0052-the-release-line-advances-per-issue.md).
+An issue's milestone neither selects nor records that target.
 
-The milestone is assigned when the work is claimed, not when the issue is filed,
-so a backlog with no milestones is the normal resting state rather than a lapse.
-A milestone is closed when its content is on `main`. Closing the milestone starts
-the unattended **Promotion**: the matching `dev.N` line becomes stable,
+A `vX.Y.Z` **GitHub milestone** is solely the **Promotion** trigger. Closing it
+starts the unattended Promotion: the matching `dev.N` line becomes stable,
 `release-promotion.yml` commits it as `chore(release): promote Release line to
 <VERSION>`, and its annotated `v<VERSION>` tag starts publication. A `major`
 **Bump class** is exempt from the milestone and reaches that same stable state
@@ -41,18 +43,13 @@ says at the head: a Run lands a Release-line commit per closed issue and pushes
 once per Iteration, so a stable cut is routinely followed into the same push by
 the next issue's `dev.N`.
 
-Because the milestone is a promise about a Release, it is only ever one that
-exists. List them rather than inventing one:
+Promotion only accepts a milestone that exists. List them rather than inventing
+one:
 
 ```sh
 gh api repos/{owner}/{repo}/milestones --jq '.[] | "\(.title)\t\(.state)"'
 gh issue edit <number> --milestone "vX.Y.Z"
 ```
-
-Three kinds of issue are deliberately left unmilestoned until a human moves them:
-`wayfinder:grilling` decisions, whose outcome is unknown until the session runs;
-`ready-for-human` issues, which are blocked on a judgment rather than on capacity;
-and any PRD whose remaining scope has not been chartered into live tickets.
 
 ### The Promotion publishes it
 
@@ -76,6 +73,13 @@ human gate this design declined.
 
 Prereleases take no part in any of it. They consult no milestone, this workflow
 tags none, and none reaches a package channel.
+
+### Open boundary
+
+What happens when a human closes a milestone-bearing issue outside a **Run**
+remains open. The Release line advances post-Integration; whether an
+out-of-Run closure advances it or only a Run can do so is deliberately
+undecided ([ADR-0052](../adr/0052-the-release-line-advances-per-issue.md)).
 
 ## Platform trust for helper artifacts
 

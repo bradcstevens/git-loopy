@@ -88,11 +88,11 @@ All five canonical triage roles use their default label strings (`needs-triage`,
 
 ### Release milestones
 
-A `vX.Y.Z` GitHub milestone is what marks an issue as owed to a Release. An issue
-with no milestone is backlog: real, but not committed to anything. Assign one only
-when the work is actually claimed by that Release, and never invent a milestone —
-`gh api repos/{owner}/{repo}/milestones --jq '.[].title'` lists the ones that exist.
-See `docs/releases/README.md#what-a-release-owes`.
+A `vX.Y.Z` GitHub milestone is solely the **Promotion** trigger: closing it
+promotes the current matching `dev.N` Release line to stable. The Release target
+is instead ratcheted from closed issues' **Bump class** labels. Never invent a
+milestone — `gh api repos/{owner}/{repo}/milestones --jq '.[].title'` lists the
+ones that exist. See `docs/releases/README.md#release-target-and-promotion`.
 
 ### Domain docs
 
