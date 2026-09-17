@@ -308,6 +308,30 @@ def test_main_doctor_resolves_the_same_config_a_run_resolves(
     assert resolved.skill_policy.disable_skills == frozenset()
 
 
+def test_main_doctor_apply_passes_the_repair_flag_through(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--apply` is the only thing that lets doctor write; it must reach it."""
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+    seen: list[bool] = []
+
+    from git_loopy import doctorcmd
+
+    def fake_run_doctor(
+        *, config: RunConfig, repo_root: Path, env: Any, apply: bool
+    ) -> int:
+        seen.append(apply)
+        return 0
+
+    monkeypatch.setattr(doctorcmd, "run_doctor", fake_run_doctor)
+
+    assert cli_module.main(["doctor", "--apply"]) == 0
+    assert seen == [True]
+    assert captured == []
+
+
 def test_main_info_reports_stable_json_and_never_runs_the_loop(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

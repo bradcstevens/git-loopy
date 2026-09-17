@@ -461,15 +461,20 @@ enabled names with no catalog winner and adds a catalog-backed **Required Skill*
 that the saved project or global policy omitted. It preserves every other Config
 key and never changes Copilot's own settings.
 
-An environment replacement, an overlay, or a deprecated deny guard is not a
-saved policy, so `--apply` reports its normal remedy and writes nothing. The
-same is true for an untracked project Skill and an unavailable inventory: the
-former must be versioned with `git add` and a commit (or disabled with
-`git-loopy skills edit`), while the latter requires Copilot CLI access to be
-restored. If no saved policy exists, doctor says so rather than creating one.
+A candidate repair is only written once the same resolver that produced the
+report agrees it clears **every** reported blocker, so a partial repair is never
+written: an enabled name that has no catalog winner but came from an
+`--enable-skill` overlay, a Required Skill a deny guard or `--disable-skill`
+subtracts, an untracked project Skill, and an unavailable inventory all leave
+the Config untouched and keep their own remedy. An environment replacement is
+not a saved policy at all, so `--apply` reports its remedy and writes nothing,
+and where no saved policy exists doctor says so rather than creating one.
+
 When every reported blocker is repairable, the write leaves the next `doctor`
-and the next Run preflight clean; re-running `doctor --apply` then writes
-nothing.
+and the next Run preflight clean; re-running `doctor --apply` then reports a
+healthy policy and writes nothing. A repair whose removals empty the list writes
+an explicit `enabled_skills = []` rather than dropping the key, because dropping
+it would hand the decision to a different surface instead of repairing this one.
 
 A clean policy prints one success line and exits `0`; any blocker exits
 non-zero, which makes it suitable for a scripted pre-Run check. A failure it

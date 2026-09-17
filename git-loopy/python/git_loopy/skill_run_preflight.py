@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from .config import RunConfig
+from .config import RunConfig, SkillPolicyInputs
 from .prompt import resolve_required_skills
 from .skill_catalog import (
     SkillCatalogError,
@@ -59,6 +59,30 @@ class RunSkillPolicyPreflight:
     blockers: tuple[SkillPolicyResolutionError, ...]
     migration_warning: bool
     surface: SkillPolicySurface
+    inputs: SkillPolicyInputs
+    required_skills: tuple[str, ...]
+    legacy_denied: tuple[str, ...]
+    tracked_project_skills: frozenset[str]
+
+    def blockers_for(
+        self,
+        inputs: SkillPolicyInputs,
+    ) -> tuple[SkillPolicyResolutionError, ...]:
+        """Judge a candidate policy against the facts this preflight judged.
+
+        The one way to ask "would this policy start a Run?" without resolving a
+        second, differently-informed preflight: a repair proposed by
+        ``git-loopy doctor`` is only a repair if the resolver that reported the
+        blockers agrees they are gone, and it must agree about the same catalog,
+        the same Required Skills, and the same tracking facts to mean anything.
+        """
+        return find_skill_policy_blockers(
+            inputs,
+            catalog=self.catalog,
+            required_skills=self.required_skills,
+            legacy_denied=self.legacy_denied,
+            tracked_project_skills=self.tracked_project_skills,
+        )
 
 
 def _minimal_catalog(installed_skills_dir: Path, workspace: Path) -> SkillCatalog:
@@ -137,11 +161,12 @@ async def resolve_run_skill_policy_preflight(
         discoverer=discoverer,
     )
     tracked = collect_project_skill_tracking(catalog, git)
+    legacy_denied = tuple(config.deny_skills)
     blockers = find_skill_policy_blockers(
         inputs,
         catalog=catalog,
         required_skills=required.required_skills,
-        legacy_denied=config.deny_skills,
+        legacy_denied=legacy_denied,
         tracked_project_skills=tracked,
     )
     return RunSkillPolicyPreflight(
@@ -152,7 +177,7 @@ async def resolve_run_skill_policy_preflight(
                 inputs,
                 catalog=catalog,
                 required_skills=required.required_skills,
-                legacy_denied=config.deny_skills,
+                legacy_denied=legacy_denied,
                 tracked_project_skills=tracked,
             )
         ),
@@ -160,6 +185,10 @@ async def resolve_run_skill_policy_preflight(
         blockers=blockers,
         migration_warning=required.migration_warning,
         surface=select_skill_policy_surface(inputs),
+        inputs=inputs,
+        required_skills=tuple(required.required_skills),
+        legacy_denied=legacy_denied,
+        tracked_project_skills=tracked,
     )
 
 

@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import os
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Callable, Iterable, Mapping
 
-from .config import RunConfig
+from .config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from .copilot_client import make_copilot_client
 from .git import GitClient, SubprocessGitClient
 from .prompt import PromptMetadataError, load_prompt
@@ -71,10 +71,6 @@ class SkillPolicyRepairPlan:
             SkillPolicySurface.PROJECT,
             SkillPolicySurface.GLOBAL,
         }
-
-    @property
-    def is_noop(self) -> bool:
-        return self.current == self.proposed
 
 
 def run_doctor(
@@ -139,7 +135,7 @@ def run_doctor(
 
     for blocker in resolution.blockers:
         for name in blocker.names or ("Skill policy",):
-            surface = _carrier(blocker, name, config=config, base=resolution.surface)
+            surface = _carrier(blocker, name, resolution=resolution)
             output_fn(
                 f"{name} | {_blocker_description(blocker)} | "
                 f"{_surface_label(surface)} | "
@@ -148,16 +144,13 @@ def run_doctor(
     if not apply:
         return 1
 
-    plan = plan_skill_policy_repair(resolution, config=config)
+    plan = plan_skill_policy_repair(resolution)
     if not plan.has_saved_policy:
         output_fn("No saved Skill policy to repair.")
         return 1
     if plan.unresolved:
         output_fn("No repair was applied; resolve the reported blockers first.")
         return 1
-    if plan.is_noop:
-        output_fn("No Skill policy changes to apply.")
-        return 0
 
     path = _policy_path(plan.surface, repo_root, environment)
     _render_repair_plan(plan, output_fn=output_fn)
@@ -170,48 +163,68 @@ def run_doctor(
 
 def plan_skill_policy_repair(
     resolution: RunSkillPolicyPreflight,
-    *,
-    config: RunConfig,
 ) -> SkillPolicyRepairPlan:
-    """Plan only repairs a saved policy can prove will clear."""
+    """Plan only repairs the shared resolver agrees would clear every blocker.
+
+    The candidate is proposed from the two blocker classes a saved policy can
+    own — an enabled name the catalog has no winner for, and a Required Skill
+    the policy simply never listed — and is then handed straight back to
+    :meth:`RunSkillPolicyPreflight.blockers_for`. Nothing is written unless the
+    resolver that produced the report says the candidate is clean, which is what
+    makes "a repair that leaves a blocker standing is a failure" structural
+    rather than a case analysis that has to anticipate every surface.
+    """
     surface = resolution.surface
-    current = _saved_policy_names(surface, config)
-    additions: set[str] = set()
-    removals: set[str] = set()
-    unresolved = False
+    current = tuple(_saved_policy_names(surface, resolution.inputs))
+    plan = SkillPolicyRepairPlan(
+        surface=surface,
+        current=current,
+        proposed=current,
+        unresolved=True,
+    )
+    if not plan.has_saved_policy:
+        return plan
 
+    enabled = set(current)
     for blocker in resolution.blockers:
-        for name in blocker.names:
-            carrier = _carrier(blocker, name, config=config, base=surface)
-            if isinstance(blocker, MissingEnabledSkills) and carrier is surface:
-                if surface in {SkillPolicySurface.PROJECT, SkillPolicySurface.GLOBAL}:
-                    removals.add(name)
-                    continue
-            elif isinstance(blocker, MissingRequiredSkills) and carrier is surface:
-                if (
-                    surface in {SkillPolicySurface.PROJECT, SkillPolicySurface.GLOBAL}
-                    and name in resolution.catalog.winners
-                ):
-                    additions.add(name)
-                    continue
-            unresolved = True
+        if isinstance(blocker, MissingEnabledSkills):
+            enabled.difference_update(blocker.names)
+        elif isinstance(blocker, MissingRequiredSkills):
+            enabled.update(
+                name for name in blocker.names if name in resolution.catalog.winners
+            )
 
+    proposed = tuple(enabled)
+    candidate = _with_saved_names(resolution.inputs, surface, proposed)
     return SkillPolicyRepairPlan(
         surface=surface,
         current=current,
-        proposed=tuple((set(current) - removals).union(additions)),
-        unresolved=unresolved,
+        proposed=proposed,
+        unresolved=bool(resolution.blockers_for(candidate)),
     )
+
+
+def _with_saved_names(
+    inputs: SkillPolicyInputs,
+    surface: SkillPolicySurface,
+    names: Iterable[str],
+) -> SkillPolicyInputs:
+    """Return the same Run inputs with one saved scope's names replaced."""
+    replacement = SkillPolicyInput(present=True, names=tuple(names))
+    if surface is SkillPolicySurface.GLOBAL:
+        return replace(inputs, global_=replacement)
+    assert surface is SkillPolicySurface.PROJECT
+    return replace(inputs, project=replacement)
 
 
 def _saved_policy_names(
     surface: SkillPolicySurface,
-    config: RunConfig,
+    inputs: SkillPolicyInputs,
 ) -> Iterable[str]:
     if surface is SkillPolicySurface.PROJECT:
-        return config.skill_policy.project.names
+        return inputs.project.names
     if surface is SkillPolicySurface.GLOBAL:
-        return config.skill_policy.global_.names
+        return inputs.global_.names
     return ()
 
 
@@ -286,8 +299,7 @@ def _carrier(
     blocker: SkillPolicyResolutionError,
     name: str,
     *,
-    config: RunConfig,
-    base: SkillPolicySurface,
+    resolution: RunSkillPolicyPreflight,
 ) -> SkillPolicySurface:
     """Name the surface an operator corrects to clear this one Skill's row.
 
@@ -296,13 +308,13 @@ def _carrier(
     carrier is worth a second question.
     """
     if not isinstance(blocker, MissingRequiredSkills):
-        return base
+        return resolution.surface
     subtracted = attribute_subtracted_skill(
         name,
-        config.skill_policy,
-        legacy_denied=config.deny_skills,
+        resolution.inputs,
+        legacy_denied=resolution.legacy_denied,
     )
-    return base if subtracted is None else subtracted
+    return resolution.surface if subtracted is None else subtracted
 
 
 def _surface_label(surface: SkillPolicySurface) -> str:

@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 
 from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy.doctorcmd import run_doctor
+from git_loopy import cli as cli_module
 from git_loopy import settings
 from git_loopy.git import GitError
 from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
@@ -264,6 +265,179 @@ def test_doctor_apply_does_not_write_a_policy_replaced_by_environment(
         "No saved Skill policy to repair.",
     ]
     assert settings.load_config_table(config_path)["enabled_skills"] == ["kept"]
+
+
+def test_doctor_apply_refuses_a_repair_the_saved_policy_cannot_clear(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config_path = repo / "git-loopy" / "config.toml"
+    settings.write_config(config_path, {"enabled_skills": ["kept"]})
+    output: list[str] = []
+
+    async def discoverer(_client: object, **_kwargs: object) -> SkillCatalog:
+        return _catalog(kept=SkillCatalogWinner("kept", "packaged"))
+
+    code = run_doctor(
+        config=RunConfig(
+            skill_policy=SkillPolicyInputs(
+                project=SkillPolicyInput(present=True, names=("kept",)),
+                enable_skills=frozenset({"ghost"}),
+            )
+        ),
+        repo_root=repo,
+        env={},
+        client_factory=_CatalogClient,
+        discoverer=discoverer,
+        git=FakeGitClient(repo),
+        prompt_text="---\nrequired-skills: []\n---\n",
+        installed_skills_dir=tmp_path / "installed",
+        output_fn=output.append,
+        apply=True,
+    )
+
+    assert code == 1
+    assert output == [
+        "ghost | enabled Skill has no catalog winner | project policy | "
+        f"Config: {config_path}",
+        "No repair was applied; resolve the reported blockers first.",
+    ]
+    assert settings.load_config_table(config_path)["enabled_skills"] == ["kept"]
+
+
+def test_doctor_apply_refuses_a_nameless_blocker_over_an_empty_saved_policy(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config_path = repo / "git-loopy" / "config.toml"
+    settings.write_config(config_path, {"enabled_skills": []})
+    output: list[str] = []
+
+    async def unavailable(_client: object, **_kwargs: object) -> SkillCatalog:
+        raise RuntimeError("Copilot is unavailable")
+
+    code = run_doctor(
+        config=RunConfig(
+            skill_policy=SkillPolicyInputs(
+                project=SkillPolicyInput(present=True, names=())
+            )
+        ),
+        repo_root=repo,
+        env={},
+        client_factory=_CatalogClient,
+        discoverer=unavailable,
+        git=FakeGitClient(repo),
+        prompt_text="---\nrequired-skills: []\n---\n",
+        installed_skills_dir=tmp_path / "installed",
+        output_fn=output.append,
+        apply=True,
+    )
+
+    assert code == 1
+    assert output == [
+        "Skill policy | Skill inventory is unavailable | project policy | "
+        "Fix: restore Copilot CLI access, then re-run `git-loopy doctor`.",
+        "No repair was applied; resolve the reported blockers first.",
+    ]
+
+
+def test_doctor_apply_writes_an_explicitly_empty_policy_when_every_name_is_a_ghost(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config_path = repo / "git-loopy" / "config.toml"
+    settings.write_config(config_path, {"model": "gpt-5.4", "enabled_skills": ["ghost"]})
+    output: list[str] = []
+
+    async def discoverer(_client: object, **_kwargs: object) -> SkillCatalog:
+        return _catalog(other=SkillCatalogWinner("other", "packaged"))
+
+    code = run_doctor(
+        config=_config("ghost"),
+        repo_root=repo,
+        env={},
+        client_factory=_CatalogClient,
+        discoverer=discoverer,
+        git=FakeGitClient(repo),
+        prompt_text="---\nrequired-skills: []\n---\n",
+        installed_skills_dir=tmp_path / "installed",
+        output_fn=output.append,
+        apply=True,
+    )
+
+    assert code == 0
+    assert output[-3:] == [
+        "Skill policy repair for the project policy:",
+        "Remove: ghost",
+        f"Saved repaired project Skill policy to {config_path}",
+    ]
+    assert settings.load_config_table(config_path) == {
+        "model": "gpt-5.4",
+        "enabled_skills": [],
+    }
+
+
+def _config_from_disk(repo: Path, env: dict[str, str]) -> RunConfig:
+    """Resolve the Run Config exactly as ``git-loopy doctor`` resolves it."""
+    tables = settings.load_configs(repo, env)
+    return cli_module.resolve_config(
+        cli_module.build_parser().parse_args([]),
+        env,
+        project=tables.project,
+        global_=tables.global_,
+        measured=tables.measured,
+        measured_provisional=tables.measured_provisional,
+    ).run
+
+
+def test_doctor_is_clean_and_idempotent_after_an_applied_repair(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+    config_path = repo / "git-loopy" / "config.toml"
+    settings.write_config(config_path, {"enabled_skills": ["ghost"]})
+    written: list[Path] = []
+
+    async def discoverer(_client: object, **_kwargs: object) -> SkillCatalog:
+        return _catalog(required=SkillCatalogWinner("required", "packaged"))
+
+    def doctor(*, apply: bool, output: list[str]) -> int:
+        def writer(path: Path, values: dict[str, object]) -> None:
+            written.append(path)
+            settings.write_config_atomic(path, values)
+
+        return run_doctor(
+            config=_config_from_disk(repo, env),
+            repo_root=repo,
+            env=env,
+            client_factory=_CatalogClient,
+            discoverer=discoverer,
+            git=FakeGitClient(repo),
+            prompt_text="---\nrequired-skills:\n  - required\n---\n",
+            installed_skills_dir=tmp_path / "installed",
+            output_fn=output.append,
+            apply=apply,
+            writer=writer,
+        )
+
+    repaired: list[str] = []
+    assert doctor(apply=True, output=repaired) == 0
+    assert written == [config_path]
+
+    report: list[str] = []
+    assert doctor(apply=False, output=report) == 0
+    assert report == ["Skill policy is healthy; a Run would not be blocked."]
+
+    again: list[str] = []
+    assert doctor(apply=True, output=again) == 0
+    assert again == ["Skill policy is healthy; no changes to apply."]
+    assert written == [config_path]
+    assert settings.load_config_table(config_path)["enabled_skills"] == ["required"]
 
 
 def test_doctor_apply_is_a_noop_after_a_clean_repair(tmp_path: Path) -> None:
