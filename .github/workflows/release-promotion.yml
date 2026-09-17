@@ -1,0 +1,87 @@
+name: Promote Release line
+
+on:
+  milestone:
+    types: [closed]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: >-
+      github.event_name == 'push' ||
+      startsWith(github.event.milestone.title, 'v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.repository.default_branch }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Promote matching closed milestone
+        id: milestone
+        if: github.event_name == 'milestone'
+        env:
+          MILESTONE_TITLE: ${{ github.event.milestone.title }}
+          MILESTONE_STATE: ${{ github.event.milestone.state }}
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.release_version
+          --repository-root .
+          --promote-milestone "$MILESTONE_TITLE"
+          --milestone-state "$MILESTONE_STATE"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Find an untagged stable Release
+        id: stable
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] &&
+            ! git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            printf 'promoted=true\nversion=%s\n' "$version" >>"$GITHUB_OUTPUT"
+          else
+            printf 'promoted=false\n' >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit milestone Promotion
+        if: steps.milestone.outputs.promoted == 'true'
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- \
+            VERSION \
+            git-loopy/python/git_loopy/__init__.py \
+            git-loopy/python/git_loopy/VERSION \
+            git-loopy/python/pyproject.toml \
+            git-loopy/python/uv.lock \
+            git-loopy/tui/Cargo.toml \
+            git-loopy/tui/Cargo.lock \
+            git-loopy/tui/README.md
+          git commit -m "chore(release): promote Release line to ${{ steps.milestone.outputs.version }}"
+
+      - name: Tag and publish stable Release
+        if: >-
+          steps.milestone.outputs.promoted == 'true' ||
+          steps.stable.outputs.promoted == 'true'
+        env:
+          VERSION: ${{ steps.milestone.outputs.version || steps.stable.outputs.version }}
+        run: |
+          git tag -a "v$VERSION" -m "Release $VERSION"
+          if [[ "${{ github.event_name }}" == "milestone" ]]; then
+            git push origin HEAD:main
+          fi
+          git push origin "v$VERSION"

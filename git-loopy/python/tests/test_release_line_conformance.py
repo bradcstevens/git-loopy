@@ -12,6 +12,8 @@ from git_loopy.release_version import (
     BUMP_CLASS_KEYS,
     BumpClassError,
     advance_release_line,
+    promote_closed_milestone,
+    promote_major_release_line,
     resolve_bump_class,
 )
 
@@ -78,6 +80,36 @@ def test_fixture_release_counter_counts_bumps(case: dict[str, Any]) -> None:
     assert release_line.target == case["new_target"]
     assert release_line.counter == case["new_counter"]
     assert release_line.version == case["resulting_version"]
+
+
+@pytest.mark.parametrize(
+    "case", _python_cases("promotion_cases"), ids=lambda case: case["id"]
+)
+def test_fixture_closed_milestone_promotes_only_its_current_release_line(
+    case: dict[str, Any],
+) -> None:
+    assert (
+        promote_closed_milestone(
+            case["current_version"],
+            case["milestone_title"],
+            case["milestone_state"],
+        )
+        == case["resulting_version"]
+    )
+
+
+@pytest.mark.parametrize(
+    "case", _python_cases("major_promotion_cases"), ids=lambda case: case["id"]
+)
+def test_fixture_major_bump_promotes_without_a_milestone(case: dict[str, Any]) -> None:
+    advanced = advance_release_line(
+        case["last_stable_version"],
+        case["current_target"],
+        case["current_counter"],
+        case["bump_class"],
+    )
+
+    assert promote_major_release_line(advanced).version == case["resulting_version"]
 
 
 @pytest.mark.parametrize(

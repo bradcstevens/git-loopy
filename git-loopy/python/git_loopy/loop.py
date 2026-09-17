@@ -175,6 +175,7 @@ from git_loopy.release_version import (
     ReleaseVersionError,
     advance_release_line,
     is_prerelease,
+    promote_major_release_line,
     read_release_version,
     read_runtime_release_version,
     release_line_from_version,
@@ -4928,6 +4929,8 @@ class _ParallelLoop:
                 current_line.counter,
                 bump_class,
             )
+            if bump_class == "major":
+                next_line = promote_major_release_line(next_line)
             write_repository_release_version(self._repo_root, next_line.version)
         except (ReleaseVersionError, git_module.GitError) as exc:
             # `git_module.GitError` reaches here from the tag read behind
@@ -4949,6 +4952,8 @@ class _ParallelLoop:
             return None
 
         self._release_line = next_line
+        if bump_class == "major":
+            self._last_stable_release_version = next_line.target
         return next_line, bump_class
 
     def _read_release_line(self) -> tuple[str, ReleaseLine]:

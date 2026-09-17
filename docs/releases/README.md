@@ -18,9 +18,11 @@ not that a Release is *waiting*, and the two answer different questions.
 
 The milestone is assigned when the work is claimed, not when the issue is filed,
 so a backlog with no milestones is the normal resting state rather than a lapse.
-A milestone is closed when its content is on `main`, which is not the same event
-as its being published — content can sit merged and unreleased, and the milestone
-records delivery while the `v<VERSION>` tag records publication.
+A milestone is closed when its content is on `main`. Closing the milestone starts
+the unattended **Promotion**: the matching `dev.N` line becomes stable,
+`release-promotion.yml` commits it, and its annotated `v<VERSION>` tag starts
+publication. A major Bump class reaches the same stable state without a
+milestone; an untagged stable value on `main` is tagged by that workflow.
 
 Because the milestone is a promise about a Release, it is only ever one that
 exists. List them rather than inventing one:

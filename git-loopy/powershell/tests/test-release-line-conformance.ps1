@@ -72,6 +72,26 @@ foreach ($Group in @("ratchet_cases", "counter_cases")) {
     }
 }
 
+foreach ($Case in Get-PowerShellCases "promotion_cases") {
+    Assert-Equal $Case["resulting_version"] (
+        Get-GitLoopyClosedMilestonePromotion `
+            -CurrentVersion $Case["current_version"] `
+            -MilestoneTitle $Case["milestone_title"] `
+            -MilestoneState $Case["milestone_state"]
+    ) "closed milestone Promotion: $($Case["id"])"
+}
+
+foreach ($Case in Get-PowerShellCases "major_promotion_cases") {
+    $Advanced = Invoke-GitLoopyReleaseLineAdvance `
+        -LastStableVersion $Case["last_stable_version"] `
+        -CurrentTarget $Case["current_target"] `
+        -CurrentCounter $Case["current_counter"] `
+        -BumpClass $Case["bump_class"]
+    Assert-Equal $Case["resulting_version"] (
+        (Invoke-GitLoopyMajorReleaseLinePromotion -ReleaseLine $Advanced).Version
+    ) "major Bump-class Promotion: $($Case["id"])"
+}
+
 foreach ($Case in Get-PowerShellCases "order_independence_cases") {
     foreach ($Order in @($Case["integration_orders"])) {
         $Target = [string]$Case["current_target"]
@@ -154,6 +174,16 @@ try {
     Assert-Equal "chore(release): advance Release line to 1.3.0-dev.2" (
         (& git -C $Scratch log -1 --format=%s)
     ) "the Release line is committed after every metadata copy changes"
+    $Major = Invoke-GitLoopyRepositoryReleaseLineAdvance `
+        -RepositoryRoot $Scratch -Labels @("semver:major")
+    Assert-Equal "2.0.0" $Major.Version (
+        "a major Bump class cuts stable without a milestone"
+    )
+    $PostPromotion = Invoke-GitLoopyRepositoryReleaseLineAdvance `
+        -RepositoryRoot $Scratch -Labels @("semver:patch")
+    Assert-Equal "2.0.1-dev.1" $PostPromotion.Version (
+        "the issue after a major Promotion starts a fresh dev.N counter"
+    )
     $ReleaseCommitCount = [int](& git -C $Scratch rev-list --count HEAD)
     Assert-Equal $null (
         Invoke-GitLoopyRepositoryReleaseLineAdvance `

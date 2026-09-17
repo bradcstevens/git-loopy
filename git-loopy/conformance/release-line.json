@@ -165,6 +165,43 @@
       "distributions": ["python", "shell", "powershell"]
     }
   ],
+  "promotion_cases": [
+    {
+      "id": "matching-closed-milestone-promotes-the-current-release-line",
+      "current_version": "0.10.0-dev.3",
+      "milestone_title": "v0.10.0",
+      "milestone_state": "CLOSED",
+      "resulting_version": "0.10.0",
+      "distributions": ["python", "shell", "powershell"]
+    },
+    {
+      "id": "an-open-matching-milestone-does-not-promote",
+      "current_version": "0.10.0-dev.3",
+      "milestone_title": "v0.10.0",
+      "milestone_state": "OPEN",
+      "resulting_version": null,
+      "distributions": ["python", "shell", "powershell"]
+    },
+    {
+      "id": "a-closed-milestone-for-another-target-does-not-promote",
+      "current_version": "0.10.0-dev.3",
+      "milestone_title": "v0.9.2",
+      "milestone_state": "CLOSED",
+      "resulting_version": null,
+      "distributions": ["python", "shell", "powershell"]
+    }
+  ],
+  "major_promotion_cases": [
+    {
+      "id": "a-major-bump-promotes-without-a-milestone",
+      "last_stable_version": "0.9.1",
+      "current_target": "0.9.1",
+      "current_counter": 0,
+      "bump_class": "major",
+      "resulting_version": "1.0.0",
+      "distributions": ["python", "shell", "powershell"]
+    }
+  ],
   "order_independence_cases": [
     {
       "id": "one-minor-and-two-patches-produce-one-release-line",

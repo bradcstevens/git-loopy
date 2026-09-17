@@ -157,6 +157,27 @@ def advance_release_line(
     return ReleaseLine(target=target, counter=counter)
 
 
+def promote_major_release_line(release_line: ReleaseLine) -> ReleaseLine:
+    """Cut a stable Release from a major Bump class without a milestone."""
+    return ReleaseLine(target=release_line.target, counter=0)
+
+
+def promote_closed_milestone(
+    current_version: str, milestone_title: str, milestone_state: str
+) -> str | None:
+    """Return the stable Release a matching closed milestone promotes, if any.
+
+    This is intentionally separate from :func:`advance_release_line`: a
+    prerelease has no milestone input, while a milestone-close event may promote
+    only the exact `dev.N` target it names.
+    """
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)-dev\.(0|[1-9][0-9]*)", current_version)
+    if match is None or milestone_state.casefold() != "closed":
+        return None
+    target = match.group(1)
+    return target if milestone_title == f"v{target}" else None
+
+
 def release_line_from_version(
     version: str, *, last_stable_version: str | None = None
 ) -> tuple[str, ReleaseLine]:
@@ -623,7 +644,7 @@ def _remove_staged_release_version_files(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Validate git-loopy Release version metadata."
+        description="Validate or promote git-loopy Release version metadata."
     )
     parser.add_argument(
         "--repository-root",
@@ -635,17 +656,53 @@ def _build_parser() -> argparse.ArgumentParser:
         "--publication-version",
         help="optional publication metadata value to compare with VERSION",
     )
+    parser.add_argument(
+        "--promote-milestone",
+        help="closed vX.Y.Z milestone that may promote the current Release line",
+    )
+    parser.add_argument(
+        "--milestone-state",
+        default="CLOSED",
+        help="state of --promote-milestone (default: CLOSED)",
+    )
+    parser.add_argument(
+        "--github-output",
+        type=Path,
+        help="optional GitHub Actions output file for the Promotion result",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the repository Release version validator."""
+    """Validate repository metadata or promote a matching closed milestone."""
     args = _build_parser().parse_args(argv)
     try:
-        validate_repository_release_version(
+        current_version = validate_repository_release_version(
             args.repository_root,
             publication_version=args.publication_version,
         )
+        promoted = (
+            promote_closed_milestone(
+                current_version,
+                args.promote_milestone,
+                args.milestone_state,
+            )
+            if args.promote_milestone is not None
+            else None
+        )
+        if promoted is not None:
+            write_repository_release_version(args.repository_root, promoted)
+        if args.github_output is not None:
+            output = (
+                f"promoted={'true' if promoted is not None else 'false'}\n"
+                + (f"version={promoted}\n" if promoted is not None else "")
+            )
+            try:
+                args.github_output.write_text(output, encoding="utf-8")
+            except OSError as exc:
+                raise ReleaseVersionError(
+                    f"cannot write GitHub Promotion output {args.github_output}: {exc}"
+                ) from exc
     except ReleaseVersionError as exc:
         print(f"release version validation failed: {exc}", file=sys.stderr)
         return 1

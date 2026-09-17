@@ -264,12 +264,13 @@ def test_no_fixture_other_than_release_version_contains_live_release_version() -
 
 def _write_release_distribution(root: Path, version: str = "1.2.3-dev.4") -> None:
     _write_repository_metadata(root, version)
+    python_version = version.replace("-dev.", ".dev")
     (root / "git-loopy/python/uv.lock").write_text(
         '\n'.join(
             (
                 "[[package]]",
                 'name = "git-loopy"',
-                'version = "1.2.3.dev4"',
+                f'version = "{python_version}"',
                 'source = { editable = "." }',
                 "",
             )
@@ -355,6 +356,50 @@ def test_release_line_reader_continues_a_dev_counter_from_its_stable_release() -
     assert last_stable == "1.2.3"
     assert release_line.target == "1.3.0"
     assert release_line.counter == 7
+
+
+def test_release_promotion_cli_stabilizes_only_a_matching_closed_milestone(
+    tmp_path: Path,
+) -> None:
+    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    output = tmp_path / "github-output"
+
+    result = _run_validator(
+        tmp_path,
+        "--promote-milestone",
+        "v1.3.0",
+        "--milestone-state",
+        "CLOSED",
+        "--github-output",
+        str(output),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert result.stderr == ""
+    assert validate_repository_release_version(tmp_path) == "1.3.0"
+    assert output.read_text(encoding="utf-8") == "promoted=true\nversion=1.3.0\n"
+
+
+def test_release_promotion_cli_leaves_an_unmatched_milestone_prerelease_untouched(
+    tmp_path: Path,
+) -> None:
+    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    output = tmp_path / "github-output"
+
+    result = _run_validator(
+        tmp_path,
+        "--promote-milestone",
+        "v1.2.4",
+        "--milestone-state",
+        "CLOSED",
+        "--github-output",
+        str(output),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert validate_repository_release_version(tmp_path) == "1.3.0-dev.7"
+    assert output.read_text(encoding="utf-8") == "promoted=false\n"
 
 
 def test_release_writer_refuses_invalid_semver_without_touching_distribution(

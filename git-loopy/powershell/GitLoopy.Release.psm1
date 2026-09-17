@@ -177,6 +177,46 @@ function Invoke-GitLoopyReleaseLineAdvance {
     }
 }
 
+function Invoke-GitLoopyMajorReleaseLinePromotion {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [object]$ReleaseLine
+    )
+
+    return [pscustomobject]@{
+        Target = $ReleaseLine.Target
+        Counter = [bigint]0
+        Version = $ReleaseLine.Target
+    }
+}
+
+function Get-GitLoopyClosedMilestonePromotion {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$CurrentVersion,
+        [Parameter(Mandatory)]
+        [string]$MilestoneTitle,
+        [Parameter(Mandatory)]
+        [string]$MilestoneState
+    )
+
+    $Match = [regex]::Match(
+        $CurrentVersion,
+        "\A((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-dev\.(?:0|[1-9][0-9]*)\z",
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    )
+    if (
+        -not $Match.Success -or
+        -not $MilestoneState.Equals("closed", [StringComparison]::OrdinalIgnoreCase) -or
+        $MilestoneTitle -cne "v$($Match.Groups[1].Value)"
+    ) {
+        return $null
+    }
+    return $Match.Groups[1].Value
+}
+
 function Assert-GitLoopyReleaseLineVersion {
     param(
         [Parameter(Mandatory)]
@@ -488,6 +528,9 @@ function Invoke-GitLoopyRepositoryReleaseLineAdvance {
         -CurrentTarget $script:ReleaseTarget `
         -CurrentCounter $script:ReleaseCounter `
         -BumpClass $BumpClass
+    if ($BumpClass -ceq "major") {
+        $NextLine = Invoke-GitLoopyMajorReleaseLinePromotion -ReleaseLine $NextLine
+    }
     $PreviousVersion = if ($script:ReleaseCounter -eq 0) {
         $script:ReleaseTarget
     }
@@ -505,6 +548,9 @@ function Invoke-GitLoopyRepositoryReleaseLineAdvance {
         if ($LASTEXITCODE -eq 0) {
             $script:ReleaseTarget = $NextLine.Target
             $script:ReleaseCounter = $NextLine.Counter
+            if ($BumpClass -ceq "major") {
+                $script:ReleaseLastStable = $NextLine.Target
+            }
             return [pscustomobject]@{
                 BumpClass = $BumpClass
                 Target = $NextLine.Target
@@ -533,6 +579,8 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyReleaseVersion",
     "Resolve-GitLoopyBumpClass",
     "Invoke-GitLoopyReleaseLineAdvance",
+    "Invoke-GitLoopyMajorReleaseLinePromotion",
+    "Get-GitLoopyClosedMilestonePromotion",
     "Set-GitLoopyRepositoryReleaseVersion",
     "Invoke-GitLoopyRepositoryReleaseLineAdvance"
 )

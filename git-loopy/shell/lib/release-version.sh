@@ -202,6 +202,32 @@ git_loopy_advance_release_line() {
     '{target: $target, counter: $counter, version: $version}'
 }
 
+git_loopy_promote_major_release_line() {
+  local release_line="${1:?Release line is required}"
+  local target
+  target="$(jq -er '.target' <<<"$release_line")" || return 1
+  jq -cn --arg target "$target" \
+    '{target: $target, counter: 0, version: $target}'
+}
+
+git_loopy_promote_closed_milestone() {
+  local current_version="${1:?current Release version is required}"
+  local milestone_title="${2:?milestone title is required}"
+  local milestone_state="${3:?milestone state is required}"
+  local target
+  if [[ "${milestone_state,,}" != "closed" ]] ||
+    [[ ! "$current_version" =~ ^((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-dev\.(0|[1-9][0-9]*)$ ]]; then
+    jq -cn null
+    return 0
+  fi
+  target="${BASH_REMATCH[1]}"
+  if [[ "$milestone_title" != "v$target" ]]; then
+    jq -cn null
+    return 0
+  fi
+  jq -cn --arg version "$target" '$version'
+}
+
 _git_loopy_release_line_from_version() {
   local repository_root="${1:?repository root is required}"
   local version="${2:?Release version is required}"
@@ -473,6 +499,9 @@ git_loopy_advance_repository_release_line() {
       "$GIT_LOOPY_RELEASE_COUNTER" \
       "$bump_class"
   )" || return 1
+  if [[ "$bump_class" == "major" ]]; then
+    next_line="$(git_loopy_promote_major_release_line "$next_line")" || return 1
+  fi
   local next_version
   next_version="$(jq -r '.version' <<<"$next_line")" || return 1
   git_loopy_write_repository_release_version "$repository_root" "$next_version" || return 1
@@ -494,6 +523,9 @@ git_loopy_advance_repository_release_line() {
 
   GIT_LOOPY_RELEASE_TARGET="$(jq -r '.target' <<<"$next_line")"
   GIT_LOOPY_RELEASE_COUNTER="$(jq -r '.counter' <<<"$next_line")"
+  if [[ "$bump_class" == "major" ]]; then
+    GIT_LOOPY_RELEASE_LAST_STABLE="$GIT_LOOPY_RELEASE_TARGET"
+  fi
   GIT_LOOPY_RELEASE_ADVANCE_JSON="$(jq -cn \
     --argjson line "$next_line" --arg bump_class "$bump_class" \
     '$line + {bump_class: $bump_class}'

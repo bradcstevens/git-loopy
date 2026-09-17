@@ -2757,6 +2757,11 @@ def test_parallel_integration_lands_and_closes_both_lanes(
             "1.2.4-dev.1",
             "chore(release): advance Release line to 1.2.4-dev.1",
         ),
+        (
+            "major",
+            "2.0.0",
+            "chore(release): advance Release line to 2.0.0",
+        ),
         ("none", "1.2.3", None),
     ),
 )
@@ -2835,9 +2840,9 @@ def test_parallel_integration_applies_only_bumped_release_lines_after_publicatio
             for key in ("issue", "bump_class", "release_target", "release_version")
         } == {
             "issue": 42,
-            "bump_class": "patch",
-            "release_target": "1.2.4",
-            "release_version": "1.2.4-dev.1",
+            "bump_class": bump_class,
+            "release_target": expected_version.split("-", 1)[0],
+            "release_version": expected_version,
         }
         event_types = [event["type"] for event in _logged_events(tmp_path)]
         release_index = event_types.index("wrapper.release.advanced")
@@ -3234,6 +3239,21 @@ def test_parallel_integration_order_does_not_change_the_resulting_release_line(
     assert minor_first == patch_first == "1.3.0-dev.2"
     assert minor_first_commits[0].endswith("1.3.0-dev.1")
     assert patch_first_commits[0].endswith("1.2.4-dev.1")
+
+
+def test_parallel_major_promotion_restarts_the_next_release_line(
+    tmp_path, monkeypatch
+) -> None:
+    """A major stable Release becomes the next line's fresh stable base."""
+    version, commits = _release_line_after_run(
+        tmp_path / "major-then-patch",
+        monkeypatch,
+        bump_classes={42: "major", 43: "patch"},
+    )
+
+    assert version == "2.0.1-dev.1"
+    assert commits[0].endswith("2.0.0")
+    assert commits[1].endswith("2.0.1-dev.1")
 
 
 def test_git_loopy_version_reports_the_line_a_run_advanced(
