@@ -289,6 +289,10 @@ def build_parser() -> argparse.ArgumentParser:
             "  update                         Refresh machine-local assets "
             "to this Release.\n"
             "                                 See `git-loopy update -h`.\n"
+            "  upgrade                        Move this installation to a "
+            "published Release, then\n"
+            "                                 update. See `git-loopy upgrade "
+            "-h`.\n"
             "  skills list                    Inspect the closed-world Skill "
             "policy.\n"
             "  skills edit                    Edit a project or global Skill "
@@ -560,6 +564,7 @@ _SUBCOMMANDS = (
     "calibrate",
     "info",
     "update",
+    "upgrade",
     "doctor",
     "sweep",
 )
@@ -614,7 +619,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{init,config,skills,labels,calibrate,info,update,doctor,sweep}",
+        metavar="{init,config,skills,labels,calibrate,info,update,upgrade,doctor,sweep}",
     )
 
     init = sub.add_parser(
@@ -771,6 +776,49 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         action="store_const",
         const="global",
         help="Repair the machine-global Config routing (the default).",
+    )
+
+    upgrade = sub.add_parser(
+        "upgrade",
+        help="Move this installation to a published Release, then update.",
+        description=(
+            "Replace the git-loopy artifact this command is running from with a "
+            "published Release, through the Install channel that placed it, and "
+            "then run `git-loopy update` from what the move installed. With no "
+            "flags it resolves the newest published Release. It moves exactly "
+            "that one artifact and needs no repository. An Install channel that "
+            "cannot be proven from the artifact's own location, or that cannot "
+            "be pinned to one Release, changes nothing and prints the exact "
+            "command to run instead."
+        ),
+    )
+    upgrade_target = upgrade.add_mutually_exclusive_group()
+    upgrade_target.add_argument(
+        "--to",
+        metavar="<version>",
+        help=(
+            "Move to this published Release version instead of the newest one. "
+            "Refused when no such Release is published."
+        ),
+    )
+    upgrade_target.add_argument(
+        "--edge",
+        "--ref",
+        dest="edge_ref",
+        metavar="<ref>",
+        help=(
+            "Move to this unreleased commit or ref. Naming it is the opt-in: "
+            "the result is an Edge install, identified by the ref rather than "
+            "by the Release version its source reports."
+        ),
+    )
+    upgrade.add_argument(
+        "--allow-downgrade",
+        action="store_true",
+        help=(
+            "Permit a move that is not provably forward of the installed "
+            "Release."
+        ),
     )
 
     doctor = sub.add_parser(
@@ -1133,6 +1181,17 @@ def _run_update(args: argparse.Namespace) -> int:
     return updatecmd.run_update(
         dry_run=bool(args.dry_run),
         project_root=project_root,
+    )
+
+
+def _run_upgrade(args: argparse.Namespace) -> int:
+    """Dispatch the distribution move, which is about the artifact, not a repo."""
+    from git_loopy import upgradecmd
+
+    return upgradecmd.run_upgrade(
+        to=args.to,
+        edge_ref=args.edge_ref,
+        allow_downgrade=bool(args.allow_downgrade),
     )
 
 
@@ -2362,6 +2421,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_info(sub_args)
         if sub_args.command == "update":
             return _run_update(sub_args)
+        if sub_args.command == "upgrade":
+            return _run_upgrade(sub_args)
         if sub_args.command == "doctor":
             return _run_doctor(sub_args)
         if sub_args.command == "sweep":

@@ -150,6 +150,54 @@ def test_update_help_does_not_deny_the_repository_its_own_flag_needs(
     assert "requires a repository" not in help_text
 
 
+def test_main_upgrade_moves_the_running_artifact_without_starting_the_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`upgrade` replaces this distribution; it never resolves a repository.
+
+    It is about the artifact the operator is running, so — like `update` — it
+    must not require them to be standing anywhere in particular, and the flags
+    reach the mutator exactly as typed.
+    """
+    from git_loopy import upgradecmd
+
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        cli_module,
+        "resolve_repo_root",
+        lambda: (_ for _ in ()).throw(AssertionError("upgrade needs no repository")),
+    )
+    monkeypatch.setattr(
+        upgradecmd, "run_upgrade", lambda **kwargs: captured.append(kwargs) or 0
+    )
+
+    assert cli_module.main(["upgrade", "--to", "1.2.0", "--allow-downgrade"]) == 0
+    assert captured == [
+        {"to": "1.2.0", "edge_ref": None, "allow_downgrade": True}
+    ]
+
+
+def test_subcommand_parser_parses_the_edge_opt_in_under_either_spelling() -> None:
+    """One flag, two spellings: naming the ref *is* the opt-in to unreleased code."""
+    parser = cli_module.build_subcommand_parser()
+    commit = "0123456789abcdef0123456789abcdef01234567"
+
+    edge = parser.parse_args(["upgrade", "--edge", commit])
+    ref = parser.parse_args(["upgrade", "--ref", commit])
+
+    assert edge.command == "upgrade"
+    assert edge.edge_ref == commit and ref.edge_ref == commit
+    assert edge.to is None and edge.allow_downgrade is False
+
+
+def test_subcommand_parser_refuses_a_named_release_and_an_edge_ref_together() -> None:
+    """Two landings cannot both be the one this move makes."""
+    with pytest.raises(SystemExit):
+        cli_module.build_subcommand_parser().parse_args(
+            ["upgrade", "--to", "1.2.0", "--edge", "abc1234"]
+        )
+
+
 def test_subcommand_parser_parses_doctor() -> None:
     args = cli_module.build_subcommand_parser().parse_args(["doctor"])
     assert args.command == "doctor"

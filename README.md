@@ -155,6 +155,14 @@ do not treat its source `VERSION` output as proof of Release identity:
 uv tool install "git+https://github.com/bradcstevens/git-loopy@<unreleased-commit-sha>#subdirectory=git-loopy/python"
 ```
 
+Once installed, `git-loopy upgrade` moves between Releases for you: it resolves
+the newest published Release (or the one `--to` names, or the ref `--edge`
+names), hands the move to the **Install channel** that placed the artifact it is
+running from, and then runs `git-loopy update`. A channel it cannot prove, or
+cannot pin to one Release, changes nothing and prints the exact command instead
+— see
+[moving between Releases](git-loopy/python/README.md#moving-between-releases-git-loopy-upgrade).
+
 ## The skills and their purpose
 
 These skills are small, composable disciplines rather than one monolithic

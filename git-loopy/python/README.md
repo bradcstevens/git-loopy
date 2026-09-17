@@ -263,6 +263,57 @@ vocabulary** on GitHub.
 
 ---
 
+## Moving between Releases (`git-loopy upgrade`)
+
+`git-loopy upgrade` replaces the git-loopy artifact it is **itself running from**
+with a published **Release version**, through the **Install channel** that placed
+it, and then runs `git-loopy update` from what the move installed — landing a new
+Release is precisely the event that invalidates the scaffolded assets. It needs
+no repository, and it moves nothing else: a clone-local helper, the shell
+Orchestrator's launcher, and anything else on your `PATH` are other channels'
+artifacts.
+
+```bash
+# Move to the newest published Release, then refresh machine-local assets.
+git-loopy upgrade
+
+# Pin a named published Release, or move deliberately backwards.
+git-loopy upgrade --to 0.9.0
+git-loopy upgrade --to 0.8.0 --allow-downgrade
+
+# Land unreleased code. Naming the ref is the opt-in.
+git-loopy upgrade --edge 0123456789abcdef0123456789abcdef01234567
+```
+
+| Flag | What it lands |
+| --- | --- |
+| *(none)* | The newest published Release — what GitHub calls the latest release, so never a draft and never a prerelease. |
+| `--to <version>` | That Release version, **verified published** first. A version nobody cut is refused here rather than becoming a failed install, or an **Edge install** you were never told about. |
+| `--edge <ref>` (alias `--ref`) | That commit or ref, reported as an **Edge install**: identify it by the ref, not by the `VERSION` its source reports. A ref spelled like a Release tag is refused and pointed at `--to`. |
+| `--allow-downgrade` | A move that is not provably forward of the installed Release. Required for an older Release, and for one whose direction cannot be established at all. |
+
+Already on the Release the move resolved? Nothing is re-installed: `upgrade` says
+so and names `git-loopy update` as the command that refreshes the assets.
+
+**The move is a process replacement, not a write.** The chain — the channel's
+install command, then `git-loopy update` — replaces the running `git-loopy`, so
+the executable Windows holds open is released with the process rather than
+written over while locked, and the chained `update` runs from the artifact the
+move installed.
+
+**A channel is used only when it can be proven and pinned.** Both questions have
+to answer yes, and each `no` changes nothing and prints the exact command
+instead:
+
+| Channel | What `upgrade` does |
+| --- | --- |
+| `uv-tool` | Performs the move: `uv tool install --force` against the pinned specifier. |
+| `homebrew` | Refuses: a formula installs whichever version it currently publishes, so performing it would report a Release identity `upgrade` did not place. Prints `brew upgrade git-loopy`. |
+| `installer-launcher` | Refuses: that launcher execs a clone you own, and moving it means updating that clone and re-running its installer — never something git-loopy does over your uncommitted work. |
+| `unproven` | Refuses: `uv tool install` and the shell installer can both place a `git-loopy` command in the same directory, so moving one of them would be a guess. Prints the `uv` command in case that is the one. |
+
+---
+
 ## First-run setup (`git-loopy init`)
 
 `git-loopy init` is an interactive wizard that installs the pinned Skill catalog
