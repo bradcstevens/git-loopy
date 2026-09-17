@@ -1,11 +1,35 @@
 name: Promote Release line
 
+# The unattended **Promotion** (ADR-0052): cutting a stable Release version from
+# a Release line, with nobody awake.
+#
+# Two events reach the same stable state. Closing a `vX.Y.Z` milestone promotes
+# the `dev.N` line that milestone named -- "whenever it makes sense" replaced by
+# a tracker event that already exists. A `major` Bump class is exempt from that
+# rule and reaches `main` already stable under a Run, so all this workflow owes
+# it is the tag. Prereleases consult no milestone and are tagged here at no
+# point, so they reach no package channel.
+#
+# Nothing here waits for a person: no protected environment, no review, no
+# approval. That is the decision ADR-0052 recorded as taken deliberately rather
+# than overlooked, and it is not to be re-added as an implementation detail.
+#
+# The tag is the whole point of the workflow. `source-release.yml` is
+# deliberately tag-only, so a Promotion that commits a stable `VERSION` and
+# pushes no tag publishes nothing -- and a tag pushed with the default
+# `GITHUB_TOKEN` creates no workflow run at all, which is worse: a stable tag
+# with no Release behind it and no red job to say so. The Promotion is therefore
+# refused before it mutates anything when no publication token is configured,
+# rather than half happening.
+
 on:
   milestone:
     types: [closed]
   push:
     branches: [main]
 
+# Every write here travels on the publication token rather than on this one, so
+# the workflow's own token stays read-only.
 permissions:
   contents: read
 
@@ -15,22 +39,48 @@ concurrency:
 
 jobs:
   promote:
+    name: Cut the stable Release a milestone or a major bump promised
+    # A milestone that is not a Release promise -- `Backlog`, `Q3` -- promotes
+    # nothing; every push to the trunk is inspected for an untagged stable value.
     if: >-
       github.event_name == 'push' ||
       startsWith(github.event.milestone.title, 'v')
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
+      # First, before the checkout: a Promotion is all-or-nothing. Committing a
+      # stable version to the trunk and then discovering there is no token to
+      # publish it with would leave `main` claiming a Release that does not
+      # exist.
+      - name: Require the publication token a Promotion cannot finish without
+        shell: bash
+        env:
+          RELEASE_PUBLICATION_TOKEN: ${{ secrets.RELEASE_PUBLICATION_TOKEN }}
+        run: |
+          if [[ -z "$RELEASE_PUBLICATION_TOKEN" ]]; then
+            echo "::error::RELEASE_PUBLICATION_TOKEN is unset: a v* tag pushed" \
+              "with GITHUB_TOKEN starts no publication run, so this Promotion" \
+              "would publish nothing. See docs/releases/README.md." >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'push' && github.sha || github.event.repository.default_branch }}
+          token: ${{ secrets.RELEASE_PUBLICATION_TOKEN }}
+
+      # `git tag -a` and `git commit` both refuse without one, and a GitHub
+      # runner configures none.
+      - name: Attribute the Promotion
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
       - name: Install uv
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
 
-      - name: Promote matching closed milestone
+      - name: Promote the line this closed milestone promised
         id: milestone
         if: github.event_name == 'milestone'
         env:
@@ -44,44 +94,49 @@ jobs:
           --milestone-state "$MILESTONE_STATE"
           --github-output "$GITHUB_OUTPUT"
 
-      - name: Find an untagged stable Release
-        id: stable
-        if: github.event_name == 'push'
+      # `-a` rather than a path list: the copies a Release version is written to
+      # are `release_version.RELEASE_VERSION_PATHS`, and a second list here would
+      # be one nothing keeps in step. The writer is the only thing that has
+      # touched this checkout.
+      - name: Publish the milestone Promotion to the trunk
+        if: steps.milestone.outputs.promoted == 'true'
+        shell: bash
+        env:
+          SUBJECT: ${{ steps.milestone.outputs.subject }}
+        run: |
+          git commit -aqm "$SUBJECT"
+          git push origin HEAD:main
+
+      # Every stable Release the trunk carries that no tag reaches yet, oldest
+      # first -- not the value at the head.
+      #
+      # A Run pushes once per Iteration and lands a Release-line commit per
+      # contribution, so a `major` Promotion is routinely followed by the next
+      # issue's `dev.N` advance inside the same push: reading `VERSION` alone
+      # would see a prerelease and drop the stable Release the exemption just
+      # cut, with nothing red to say so. Walking the commits instead also makes
+      # the step self-healing -- a tag this workflow failed to push is found
+      # again by the next push rather than lost -- and subsumes the milestone
+      # Promotion committed above, so both triggers publish by one mechanism.
+      - name: Tag every untagged stable Release and start its publication
         shell: bash
         run: |
-          version="$(tr -d '\r\n' < VERSION)"
-          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] &&
-            ! git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
-            printf 'promoted=true\nversion=%s\n' "$version" >>"$GITHUB_OUTPUT"
-          else
-            printf 'promoted=false\n' >>"$GITHUB_OUTPUT"
+          tagged=()
+          while IFS= read -r commit; do
+            version="$(git show "$commit:VERSION" | tr -d '\r\n')" || continue
+            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+            if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+              continue
+            fi
+            # Annotated, and on the commit that *declares* this version rather
+            # than on the head: `source-release.yml` verifies the tag object and
+            # refuses a tag whose tree disagrees with it.
+            git tag -a "v$version" -m "Release $version" "$commit"
+            tagged+=("refs/tags/v$version")
+          done < <(git log --format=%H --reverse HEAD --not --tags='v*' -- VERSION)
+          if [[ "${#tagged[@]}" -eq 0 ]]; then
+            echo "no untagged stable Release on the trunk; nothing to publish"
+            exit 0
           fi
-
-      - name: Commit milestone Promotion
-        if: steps.milestone.outputs.promoted == 'true'
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -- \
-            VERSION \
-            git-loopy/python/git_loopy/__init__.py \
-            git-loopy/python/git_loopy/VERSION \
-            git-loopy/python/pyproject.toml \
-            git-loopy/python/uv.lock \
-            git-loopy/tui/Cargo.toml \
-            git-loopy/tui/Cargo.lock \
-            git-loopy/tui/README.md
-          git commit -m "chore(release): promote Release line to ${{ steps.milestone.outputs.version }}"
-
-      - name: Tag and publish stable Release
-        if: >-
-          steps.milestone.outputs.promoted == 'true' ||
-          steps.stable.outputs.promoted == 'true'
-        env:
-          VERSION: ${{ steps.milestone.outputs.version || steps.stable.outputs.version }}
-        run: |
-          git tag -a "v$VERSION" -m "Release $VERSION"
-          if [[ "${{ github.event_name }}" == "milestone" ]]; then
-            git push origin HEAD:main
-          fi
-          git push origin "v$VERSION"
+          printf 'publishing %s\n' "${tagged[@]}"
+          git push origin "${tagged[@]}"

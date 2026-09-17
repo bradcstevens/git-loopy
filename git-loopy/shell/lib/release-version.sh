@@ -202,12 +202,37 @@ git_loopy_advance_release_line() {
     '{target: $target, counter: $counter, version: $version}'
 }
 
-git_loopy_promote_major_release_line() {
+git_loopy_promote_release_line() {
   local release_line="${1:?Release line is required}"
+  local bump_class="${2:?Bump class is required}"
   local target
+  # A `major` publishes on the label alone; every other Bump class stays on its
+  # `dev.N` line until the `vX.Y.Z` milestone it promised closes (ADR-0052).
+  # Callers ask this rather than testing the class themselves, so *which* class
+  # is exempt is one decision rather than one per call site.
+  case "$bump_class" in
+    major) ;;
+    minor | patch | none)
+      printf '%s\n' "$release_line"
+      return 0
+      ;;
+    *)
+      printf 'git-loopy: unknown Release-line Bump class %s\n' "$bump_class" >&2
+      return 1
+      ;;
+  esac
   target="$(jq -er '.target' <<<"$release_line")" || return 1
   jq -cn --arg target "$target" \
     '{target: $target, counter: 0, version: $target}'
+}
+
+git_loopy_release_line_commit_subject() {
+  local version="${1:?Release version is required}"
+  local verb="promote"
+  # A Promotion and an advance are different events in the domain, so they read
+  # differently in `git log`: only a stable value was cut from its line.
+  [[ "${version%%+*}" != *-* ]] || verb="advance"
+  printf 'chore(release): %s Release line to %s\n' "$verb" "$version"
 }
 
 git_loopy_promote_closed_milestone() {
@@ -499,15 +524,13 @@ git_loopy_advance_repository_release_line() {
       "$GIT_LOOPY_RELEASE_COUNTER" \
       "$bump_class"
   )" || return 1
-  if [[ "$bump_class" == "major" ]]; then
-    next_line="$(git_loopy_promote_major_release_line "$next_line")" || return 1
-  fi
+  next_line="$(git_loopy_promote_release_line "$next_line" "$bump_class")" || return 1
   local next_version
   next_version="$(jq -r '.version' <<<"$next_line")" || return 1
   git_loopy_write_repository_release_version "$repository_root" "$next_version" || return 1
   if ! git -C "$repository_root" add -- "${GIT_LOOPY_RELEASE_VERSION_PATHS[@]}" ||
     ! git -C "$repository_root" commit -m \
-      "chore(release): advance Release line to $next_version" \
+      "$(git_loopy_release_line_commit_subject "$next_version")" \
       -- "${GIT_LOOPY_RELEASE_VERSION_PATHS[@]}" >/dev/null; then
     git -C "$repository_root" reset -- "${GIT_LOOPY_RELEASE_VERSION_PATHS[@]}" ||
       printf 'git-loopy: Release metadata could not be unstaged after a refused commit\n' >&2
@@ -523,9 +546,10 @@ git_loopy_advance_repository_release_line() {
 
   GIT_LOOPY_RELEASE_TARGET="$(jq -r '.target' <<<"$next_line")"
   GIT_LOOPY_RELEASE_COUNTER="$(jq -r '.counter' <<<"$next_line")"
-  if [[ "$bump_class" == "major" ]]; then
+  # A Promotion is the new stable base the next issue ratchets from, and its
+  # `dev.N` counter has already restarted at zero.
+  ((GIT_LOOPY_RELEASE_COUNTER != 0)) ||
     GIT_LOOPY_RELEASE_LAST_STABLE="$GIT_LOOPY_RELEASE_TARGET"
-  fi
   GIT_LOOPY_RELEASE_ADVANCE_JSON="$(jq -cn \
     --argjson line "$next_line" --arg bump_class "$bump_class" \
     '$line + {bump_class: $bump_class}'

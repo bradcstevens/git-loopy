@@ -2760,7 +2760,7 @@ def test_parallel_integration_lands_and_closes_both_lanes(
         (
             "major",
             "2.0.0",
-            "chore(release): advance Release line to 2.0.0",
+            "chore(release): promote Release line to 2.0.0",
         ),
         ("none", "1.2.3", None),
     ),

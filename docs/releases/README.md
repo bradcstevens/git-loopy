@@ -20,9 +20,14 @@ The milestone is assigned when the work is claimed, not when the issue is filed,
 so a backlog with no milestones is the normal resting state rather than a lapse.
 A milestone is closed when its content is on `main`. Closing the milestone starts
 the unattended **Promotion**: the matching `dev.N` line becomes stable,
-`release-promotion.yml` commits it, and its annotated `v<VERSION>` tag starts
-publication. A major Bump class reaches the same stable state without a
-milestone; an untagged stable value on `main` is tagged by that workflow.
+`release-promotion.yml` commits it as `chore(release): promote Release line to
+<VERSION>`, and its annotated `v<VERSION>` tag starts publication. A `major`
+**Bump class** is exempt from the milestone and reaches that same stable state
+under a Run, so for it the workflow only tags. Either way it tags every stable
+Release the trunk carries that no tag reaches yet, rather than whatever `VERSION`
+says at the head: a Run lands a Release-line commit per closed issue and pushes
+once per Iteration, so a stable cut is routinely followed into the same push by
+the next issue's `dev.N`.
 
 Because the milestone is a promise about a Release, it is only ever one that
 exists. List them rather than inventing one:
@@ -36,6 +41,29 @@ Three kinds of issue are deliberately left unmilestoned until a human moves them
 `wayfinder:grilling` decisions, whose outcome is unknown until the session runs;
 `ready-for-human` issues, which are blocked on a judgment rather than on capacity;
 and any PRD whose remaining scope has not been chartered into live tickets.
+
+### The Promotion publishes it
+
+`release-promotion.yml` is what turns that closure into a Release, and nobody
+approves it: no protected environment, no review, no waiting. That is recorded in
+[ADR-0052](../adr/0052-the-release-line-advances-per-issue.md) as a consequence
+taken deliberately — an agent's inferred `semver:major` label can publish a
+breaking Release unattended — and it is not to be re-added as an implementation
+detail.
+
+A Promotion needs one credential: **`RELEASE_PUBLICATION_TOKEN`**, a repository
+secret carrying `contents: write`. Publication is entered by pushing an annotated
+`v<VERSION>` tag, and a tag pushed with the workflow's own `GITHUB_TOKEN` starts
+no workflow run at all — the Release pipeline would simply never happen, with
+nothing red to say so. The Promotion is therefore refused before it commits or
+tags anything when that secret is absent, rather than leaving `main` claiming a
+stable version that was never published. It is not a signing or channel
+credential and lives outside the protected `release` environment described below,
+because a Promotion that waited on that environment's reviewers would be the
+human gate this design declined.
+
+Prereleases take no part in any of it. They consult no milestone, this workflow
+tags none, and none reaches a package channel.
 
 ## Platform trust for helper artifacts
 

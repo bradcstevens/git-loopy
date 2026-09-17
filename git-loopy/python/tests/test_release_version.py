@@ -378,7 +378,33 @@ def test_release_promotion_cli_stabilizes_only_a_matching_closed_milestone(
     assert result.stdout == ""
     assert result.stderr == ""
     assert validate_repository_release_version(tmp_path) == "1.3.0"
-    assert output.read_text(encoding="utf-8") == "promoted=true\nversion=1.3.0\n"
+    assert output.read_text(encoding="utf-8") == (
+        "promoted=true\n"
+        "version=1.3.0\n"
+        "subject=chore(release): promote Release line to 1.3.0\n"
+    )
+
+
+def test_release_promotion_cli_appends_its_decision_to_a_shared_step_output(
+    tmp_path: Path,
+) -> None:
+    """A step's output file is shared, so a Promotion never truncates it."""
+    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    output = tmp_path / "github-output"
+    output.write_text("already=recorded\n", encoding="utf-8")
+
+    result = _run_validator(
+        tmp_path,
+        "--promote-milestone",
+        "v1.3.0",
+        "--milestone-state",
+        "CLOSED",
+        "--github-output",
+        str(output),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines()[0] == "already=recorded"
 
 
 def test_release_promotion_cli_leaves_an_unmatched_milestone_prerelease_untouched(

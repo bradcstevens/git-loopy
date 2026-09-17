@@ -25,6 +25,7 @@ $script:ReleaseLineInitialized = $false
 $script:ReleaseLastStable = $null
 $script:ReleaseTarget = $null
 $script:ReleaseCounter = [bigint]0
+$script:BumpClassKeys = [string[]]@("major", "minor", "patch", "none")
 
 function Get-GitLoopyReleaseVersion {
     [CmdletBinding()]
@@ -88,7 +89,7 @@ function Resolve-GitLoopyBumpClass {
             }
         }
     )
-    $Unknown = @($Keys | Where-Object { $_ -cnotin @("major", "minor", "patch", "none") })
+    $Unknown = @($Keys | Where-Object { $_ -cnotin $script:BumpClassKeys })
     if ($Unknown.Count -gt 0) {
         throw "Release-line Bump class: unknown_semver_key"
     }
@@ -137,7 +138,7 @@ function Invoke-GitLoopyReleaseLineAdvance {
         [string]$BumpClass
     )
 
-    if ($BumpClass -cnotin @("major", "minor", "patch", "none")) {
+    if ($BumpClass -cnotin $script:BumpClassKeys) {
         throw "unknown Release-line Bump class '$BumpClass'"
     }
     if (
@@ -177,13 +178,31 @@ function Invoke-GitLoopyReleaseLineAdvance {
     }
 }
 
-function Invoke-GitLoopyMajorReleaseLinePromotion {
+function Invoke-GitLoopyReleaseLinePromotion {
+    <#
+    .SYNOPSIS
+    Cut a stable Release from the one Bump class exempt from a milestone.
+
+    .DESCRIPTION
+    A `major` publishes on the label alone; every other class stays on its
+    `dev.N` line until the `vX.Y.Z` milestone it promised closes (ADR-0052).
+    Callers ask this rather than testing the class themselves, so *which* class
+    is exempt is one decision rather than one per call site.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [object]$ReleaseLine
+        [object]$ReleaseLine,
+        [Parameter(Mandatory)]
+        [string]$BumpClass
     )
 
+    if ($script:BumpClassKeys -cnotcontains $BumpClass) {
+        throw "unknown Release-line Bump class '$BumpClass'"
+    }
+    if ($BumpClass -cne "major") {
+        return $ReleaseLine
+    }
     return [pscustomobject]@{
         Target = $ReleaseLine.Target
         Counter = [bigint]0
@@ -191,7 +210,35 @@ function Invoke-GitLoopyMajorReleaseLinePromotion {
     }
 }
 
+function Get-GitLoopyReleaseLineCommitSubject {
+    <#
+    .SYNOPSIS
+    Word the commit that moves the Release line to one version.
+
+    .DESCRIPTION
+    A Promotion and an advance are different events in the domain, so they read
+    differently in `git log`: only a stable value was cut from its line.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Version
+    )
+
+    $Verb = if ($Version.Split("+")[0].Contains("-")) { "advance" } else { "promote" }
+    return "chore(release): $Verb Release line to $Version"
+}
+
 function Get-GitLoopyClosedMilestonePromotion {
+    <#
+    .SYNOPSIS
+    Return the stable Release a matching closed milestone promotes, if any.
+
+    .DESCRIPTION
+    Deliberately separate from the per-issue advance: a prerelease takes no
+    milestone input at any point, while a milestone-close event may promote only
+    the exact `dev.N` target its own title names.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -523,14 +570,15 @@ function Invoke-GitLoopyRepositoryReleaseLineAdvance {
         return $null
     }
     Initialize-GitLoopyReleaseLine -RepositoryRoot $RepositoryRoot
-    $NextLine = Invoke-GitLoopyReleaseLineAdvance `
-        -LastStableVersion $script:ReleaseLastStable `
-        -CurrentTarget $script:ReleaseTarget `
-        -CurrentCounter $script:ReleaseCounter `
+    $NextLine = Invoke-GitLoopyReleaseLinePromotion `
+        -ReleaseLine (
+            Invoke-GitLoopyReleaseLineAdvance `
+                -LastStableVersion $script:ReleaseLastStable `
+                -CurrentTarget $script:ReleaseTarget `
+                -CurrentCounter $script:ReleaseCounter `
+                -BumpClass $BumpClass
+        ) `
         -BumpClass $BumpClass
-    if ($BumpClass -ceq "major") {
-        $NextLine = Invoke-GitLoopyMajorReleaseLinePromotion -ReleaseLine $NextLine
-    }
     $PreviousVersion = if ($script:ReleaseCounter -eq 0) {
         $script:ReleaseTarget
     }
@@ -543,12 +591,15 @@ function Invoke-GitLoopyRepositoryReleaseLineAdvance {
         if ($LASTEXITCODE -ne 0) {
             throw "Release metadata could not be staged"
         }
-        & git -C $RepositoryRoot commit -m "chore(release): advance Release line to $($NextLine.Version)" `
-            -- $script:ReleaseVersionPaths | Out-Null
+        & git -C $RepositoryRoot commit -m (
+            Get-GitLoopyReleaseLineCommitSubject -Version $NextLine.Version
+        ) -- $script:ReleaseVersionPaths | Out-Null
         if ($LASTEXITCODE -eq 0) {
             $script:ReleaseTarget = $NextLine.Target
             $script:ReleaseCounter = $NextLine.Counter
-            if ($BumpClass -ceq "major") {
+            if ($NextLine.Counter -eq 0) {
+                # A Promotion is the new stable base the next issue ratchets
+                # from, and its `dev.N` counter has already restarted at zero.
                 $script:ReleaseLastStable = $NextLine.Target
             }
             return [pscustomobject]@{
@@ -579,7 +630,8 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyReleaseVersion",
     "Resolve-GitLoopyBumpClass",
     "Invoke-GitLoopyReleaseLineAdvance",
-    "Invoke-GitLoopyMajorReleaseLinePromotion",
+    "Invoke-GitLoopyReleaseLinePromotion",
+    "Get-GitLoopyReleaseLineCommitSubject",
     "Get-GitLoopyClosedMilestonePromotion",
     "Set-GitLoopyRepositoryReleaseVersion",
     "Invoke-GitLoopyRepositoryReleaseLineAdvance"

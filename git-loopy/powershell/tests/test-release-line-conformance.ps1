@@ -81,15 +81,16 @@ foreach ($Case in Get-PowerShellCases "promotion_cases") {
     ) "closed milestone Promotion: $($Case["id"])"
 }
 
-foreach ($Case in Get-PowerShellCases "major_promotion_cases") {
+foreach ($Case in Get-PowerShellCases "bump_promotion_cases") {
     $Advanced = Invoke-GitLoopyReleaseLineAdvance `
         -LastStableVersion $Case["last_stable_version"] `
         -CurrentTarget $Case["current_target"] `
         -CurrentCounter $Case["current_counter"] `
         -BumpClass $Case["bump_class"]
     Assert-Equal $Case["resulting_version"] (
-        (Invoke-GitLoopyMajorReleaseLinePromotion -ReleaseLine $Advanced).Version
-    ) "major Bump-class Promotion: $($Case["id"])"
+        (Invoke-GitLoopyReleaseLinePromotion `
+            -ReleaseLine $Advanced -BumpClass $Case["bump_class"]).Version
+    ) "Bump-class Promotion exemption: $($Case["id"])"
 }
 
 foreach ($Case in Get-PowerShellCases "order_independence_cases") {
@@ -179,6 +180,9 @@ try {
     Assert-Equal "2.0.0" $Major.Version (
         "a major Bump class cuts stable without a milestone"
     )
+    Assert-Equal "chore(release): promote Release line to 2.0.0" (
+        (& git -C $Scratch log -1 --format=%s)
+    ) "a stable cut is committed as a Promotion rather than an advance"
     $PostPromotion = Invoke-GitLoopyRepositoryReleaseLineAdvance `
         -RepositoryRoot $Scratch -Labels @("semver:patch")
     Assert-Equal "2.0.1-dev.1" $PostPromotion.Version (

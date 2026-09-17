@@ -157,9 +157,30 @@ def advance_release_line(
     return ReleaseLine(target=target, counter=counter)
 
 
-def promote_major_release_line(release_line: ReleaseLine) -> ReleaseLine:
-    """Cut a stable Release from a major Bump class without a milestone."""
+def promote_release_line(release_line: ReleaseLine, bump_class: str) -> ReleaseLine:
+    """Cut a stable Release from the one Bump class exempt from a milestone.
+
+    A `major` publishes on the label alone; every other class stays on its
+    `dev.N` line until the `vX.Y.Z` milestone it promised closes
+    ([ADR-0052](../../../docs/adr/0052-the-release-line-advances-per-issue.md)).
+    Callers ask this rather than testing the class themselves, so *which* class
+    is exempt is one decision rather than one per call site.
+    """
+    if bump_class not in BUMP_CLASS_KEYS:
+        raise ReleaseVersionError(f"unknown Release-line bump class {bump_class!r}")
+    if bump_class != "major":
+        return release_line
     return ReleaseLine(target=release_line.target, counter=0)
+
+
+def release_line_commit_subject(version: str) -> str:
+    """Word the commit that moves the Release line to ``version``.
+
+    A **Promotion** and an advance are different events in the domain, so they
+    read differently in `git log`: only a stable value was cut from its line.
+    """
+    verb = "advance" if is_prerelease(version) else "promote"
+    return f"chore(release): {verb} Release line to {version}"
 
 
 def promote_closed_milestone(
@@ -167,9 +188,9 @@ def promote_closed_milestone(
 ) -> str | None:
     """Return the stable Release a matching closed milestone promotes, if any.
 
-    This is intentionally separate from :func:`advance_release_line`: a
-    prerelease has no milestone input, while a milestone-close event may promote
-    only the exact `dev.N` target it names.
+    Deliberately separate from :func:`advance_release_line`: a prerelease takes
+    no milestone input at any point, while a milestone-close event may promote
+    only the exact `dev.N` target its own title names.
     """
     match = re.fullmatch(r"(\d+\.\d+\.\d+)-dev\.(0|[1-9][0-9]*)", current_version)
     if match is None or milestone_state.casefold() != "closed":
@@ -673,6 +694,30 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _write_promotion_output(path: Path, promoted: str | None) -> None:
+    """Append one Promotion decision to a GitHub Actions step output file.
+
+    Appended rather than written: a step's output file is shared with whatever
+    else that step reports, and a Promotion that silently truncated its
+    neighbours would be discovered by the workflow reading a stale value.
+    The commit subject travels with the decision so the workflow commits a
+    Promotion in exactly the words a Runner does.
+    """
+    lines = [f"promoted={'true' if promoted is not None else 'false'}"]
+    if promoted is not None:
+        lines += [
+            f"version={promoted}",
+            f"subject={release_line_commit_subject(promoted)}",
+        ]
+    try:
+        with path.open("a", encoding="utf-8") as output:
+            output.write("".join(f"{line}\n" for line in lines))
+    except OSError as exc:
+        raise ReleaseVersionError(
+            f"cannot write GitHub Promotion output {path}: {exc}"
+        ) from exc
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Validate repository metadata or promote a matching closed milestone."""
     args = _build_parser().parse_args(argv)
@@ -693,16 +738,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if promoted is not None:
             write_repository_release_version(args.repository_root, promoted)
         if args.github_output is not None:
-            output = (
-                f"promoted={'true' if promoted is not None else 'false'}\n"
-                + (f"version={promoted}\n" if promoted is not None else "")
-            )
-            try:
-                args.github_output.write_text(output, encoding="utf-8")
-            except OSError as exc:
-                raise ReleaseVersionError(
-                    f"cannot write GitHub Promotion output {args.github_output}: {exc}"
-                ) from exc
+            _write_promotion_output(args.github_output, promoted)
     except ReleaseVersionError as exc:
         print(f"release version validation failed: {exc}", file=sys.stderr)
         return 1

@@ -77,38 +77,39 @@ for group in ratchet_cases counter_cases; do
       "Release-line $group: $(jq -r '.id' <<<"$case_json")"
   done < <(shell_cases "$group")
   ((cases > 0)) || fail "release-line fixture declares no Shell $group"
-  done
+done
 
-  cases=0
-  while IFS= read -r case_json; do
-    cases=$((cases + 1))
-    assert_equal \
-      "$(jq -c '.resulting_version' <<<"$case_json")" \
-      "$(git_loopy_promote_closed_milestone \
-        "$(jq -r '.current_version' <<<"$case_json")" \
-        "$(jq -r '.milestone_title' <<<"$case_json")" \
-        "$(jq -r '.milestone_state' <<<"$case_json")")" \
-      "closed milestone Promotion: $(jq -r '.id' <<<"$case_json")"
-  done < <(shell_cases promotion_cases)
-  ((cases > 0)) || fail "release-line fixture declares no Shell Promotion cases"
+cases=0
+while IFS= read -r case_json; do
+  cases=$((cases + 1))
+  assert_equal \
+    "$(jq -c '.resulting_version' <<<"$case_json")" \
+    "$(git_loopy_promote_closed_milestone \
+      "$(jq -r '.current_version' <<<"$case_json")" \
+      "$(jq -r '.milestone_title' <<<"$case_json")" \
+      "$(jq -r '.milestone_state' <<<"$case_json")")" \
+    "closed milestone Promotion: $(jq -r '.id' <<<"$case_json")"
+done < <(shell_cases promotion_cases)
+((cases > 0)) || fail "release-line fixture declares no Shell Promotion cases"
 
-  cases=0
-  while IFS= read -r case_json; do
-    cases=$((cases + 1))
-    advanced="$(git_loopy_advance_release_line \
-      "$(jq -r '.last_stable_version' <<<"$case_json")" \
-      "$(jq -r '.current_target' <<<"$case_json")" \
-      "$(jq -r '.current_counter' <<<"$case_json")" \
-      "$(jq -r '.bump_class' <<<"$case_json")")"
-    assert_equal \
-      "$(jq -r '.resulting_version' <<<"$case_json")" \
-      "$(git_loopy_promote_major_release_line "$advanced" | jq -r '.version')" \
-      "major Bump-class Promotion: $(jq -r '.id' <<<"$case_json")"
-  done < <(shell_cases major_promotion_cases)
-  ((cases > 0)) || fail "release-line fixture declares no Shell major Promotion cases"
+cases=0
+while IFS= read -r case_json; do
+  cases=$((cases + 1))
+  advanced="$(git_loopy_advance_release_line \
+    "$(jq -r '.last_stable_version' <<<"$case_json")" \
+    "$(jq -r '.current_target' <<<"$case_json")" \
+    "$(jq -r '.current_counter' <<<"$case_json")" \
+    "$(jq -r '.bump_class' <<<"$case_json")")"
+  assert_equal \
+    "$(jq -r '.resulting_version' <<<"$case_json")" \
+    "$(git_loopy_promote_release_line \
+      "$advanced" "$(jq -r '.bump_class' <<<"$case_json")" | jq -r '.version')" \
+    "Bump-class Promotion exemption: $(jq -r '.id' <<<"$case_json")"
+done < <(shell_cases bump_promotion_cases)
+((cases > 0)) || fail "release-line fixture declares no Shell Bump-class Promotion cases"
 
-  cases=0
-  while IFS= read -r case_json; do
+cases=0
+while IFS= read -r case_json; do
   cases=$((cases + 1))
   outcomes='[]'
   while IFS= read -r integration_order; do
@@ -181,6 +182,10 @@ assert_equal \
 git_loopy_advance_repository_release_line "$scratch" '["semver:major"]' >/dev/null
 assert_equal "2.0.0" "$(git_loopy_read_release_version "$scratch/VERSION")" \
   "a major Bump class cuts stable without a milestone"
+assert_equal \
+  "chore(release): promote Release line to 2.0.0" \
+  "$(git -C "$scratch" log -1 --format=%s)" \
+  "a stable cut is committed as a Promotion rather than an advance"
 git_loopy_advance_repository_release_line "$scratch" '["semver:patch"]' >/dev/null
 assert_equal "2.0.1-dev.1" "$(git_loopy_read_release_version "$scratch/VERSION")" \
   "the issue after a major Promotion starts a fresh dev.N counter"
