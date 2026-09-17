@@ -1,5 +1,5 @@
-"""Report every Run precondition without creating a Run (#516, #519), and
-repair the saved Skill policy that stranded it on request (#517)."""
+"""Report every Run precondition without creating a Run (#516, #519), inspect
+the installed Skill catalog (#518), and repair the saved Skill policy on request (#517)."""
 
 from __future__ import annotations
 
@@ -21,7 +21,13 @@ from .skill_catalog import (
     SkillCatalogError,
     discover_skill_catalog,
 )
-from .skill_install import installed_catalog_dir
+from .skill_install import (
+    CatalogInstallStatus,
+    SkillInstallError,
+    inspect_installed_catalog,
+    installed_catalog_dir,
+    refresh_installed_catalog,
+)
 from .skill_policy import (
     DENY_SKILLS_ENV,
     ENABLED_SKILLS_ENV,
@@ -34,6 +40,7 @@ from .skill_policy import (
     UntrackedProjectSkills,
     attribute_subtracted_skill,
 )
+from .skill_source import SkillSourceError, read_skill_source_pin
 from .skill_run_preflight import (
     CatalogDiscoverer,
     RunSkillPolicyPreflight,
@@ -79,6 +86,45 @@ class SkillPolicyRepairPlan:
         }
 
 
+def _render_catalog_install_status(
+    status: CatalogInstallStatus, *, output_fn: Callable[[str], None]
+) -> None:
+    """Report the local install before using it to judge any policy name."""
+    if status.state == "matching":
+        output_fn(
+            "Skill catalog | matching | "
+            f"installed revision {status.pin.revision} matches the pinned revision."
+        )
+        return
+    if status.state == "absent":
+        output_fn(
+            "Skill catalog | absent | "
+            f"no catalog is installed for pinned revision {status.pin.revision}; "
+            "refresh with `git-loopy doctor --apply`."
+        )
+        return
+    assert status.installed is not None
+    if status.installed.revision == status.pin.revision:
+        output_fn(
+            "Skill catalog | drifted | "
+            "installed contents no longer match the record for pinned revision "
+            f"{status.pin.revision}; refresh with `git-loopy doctor --apply`."
+        )
+        return
+    output_fn(
+        "Skill catalog | drifted | "
+        f"installed revision {status.installed.revision} does not match pinned "
+        f"{status.pin.revision}; refresh with `git-loopy doctor --apply`."
+    )
+
+
+def _render_catalog_unverified(
+    detail: str, *, output_fn: Callable[[str], None]
+) -> None:
+    """Keep failed acquisition separate from a missing-Skill verdict."""
+    output_fn(f"Skill catalog | could not verify | Warning: {detail}")
+
+
 def run_doctor(
     *,
     config: RunConfig,
@@ -94,7 +140,7 @@ def run_doctor(
     writer: ConfigWriter = settings.write_config_atomic,
     environment_preflight_resolver: EnvironmentPreflightResolver | None = None,
 ) -> int:
-    """Report the Run's preflight, and explicitly repair only its Skill policy."""
+    """Report the Run's preflight; ``--apply`` refreshes before repairing policy."""
     environment = os.environ if env is None else env
     resolve_environment = (
         resolve_run_environment_preflight
@@ -120,6 +166,28 @@ def run_doctor(
             if installed_skills_dir is None
             else installed_skills_dir
         )
+        install_status = (
+            inspect_installed_catalog(read_skill_source_pin(), environment)
+            if installed_skills_dir is None
+            else None
+        )
+        if install_status is not None:
+            _render_catalog_install_status(install_status, output_fn=output_fn)
+            if apply:
+                try:
+                    refreshed = refresh_installed_catalog(
+                        install_status.pin, env=environment
+                    )
+                except SkillInstallError as exc:
+                    _render_catalog_unverified(str(exc), output_fn=output_fn)
+                    return 1
+                if refreshed.warning is not None:
+                    _render_catalog_unverified(refreshed.warning, output_fn=output_fn)
+                    return 1
+                install_status = inspect_installed_catalog(
+                    install_status.pin, environment
+                )
+                _render_catalog_install_status(install_status, output_fn=output_fn)
         bound_git = git or SubprocessGitClient(repo_root)
         factory = client_factory or (
             lambda: make_copilot_client(working_directory=repo_root, env=environment)
@@ -141,6 +209,7 @@ def run_doctor(
         RuntimeError,
         SdkSkillSurfaceError,
         SkillCatalogError,
+        SkillSourceError,
         TimeoutError,
     ) as exc:
         output_fn(f"git-loopy: doctor could not resolve the Skill policy: {exc}")
@@ -152,15 +221,30 @@ def run_doctor(
             if apply
             else "Skill policy is healthy; a Run would not be blocked."
         )
-        return 0 if environment_preflight.passed else 1
+        return (
+            0
+            if environment_preflight.passed
+            and (install_status is None or install_status.state == "matching")
+            else 1
+        )
 
     for blocker in resolution.blockers:
         for name in blocker.names or ("Skill policy",):
             surface = _carrier(blocker, name, resolution=resolution)
+            description = _blocker_description(blocker)
+            remedy = _surface_remedy(blocker, surface, repo_root, environment)
+            if (
+                install_status is not None
+                and install_status.state != "matching"
+                and isinstance(blocker, MissingEnabledSkills)
+            ):
+                description += f"; the installed catalog is {install_status.state}"
+                remedy = (
+                    "Fix: refresh the pinned Skill catalog with "
+                    "`git-loopy doctor --apply`; do not prune this policy name."
+                )
             output_fn(
-                f"{name} | {_blocker_description(blocker)} | "
-                f"{_surface_label(surface)} | "
-                f"{_surface_remedy(blocker, surface, repo_root, environment)}"
+                f"{name} | {description} | {_surface_label(surface)} | {remedy}"
             )
     if not apply:
         return 1

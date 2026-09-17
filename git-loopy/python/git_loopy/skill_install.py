@@ -37,7 +37,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Callable, Literal, Mapping
 
 from .settings import global_dir
 from .skill_source import (
@@ -93,6 +93,15 @@ class InstalledCatalog:
     def short_revision(self) -> str:
         """The installed revision abbreviated for human-facing summaries only."""
         return self.revision[:12]
+
+
+@dataclass(frozen=True)
+class CatalogInstallStatus:
+    """Whether the installed catalog is the intact catalog named by a pin."""
+
+    state: Literal["absent", "drifted", "matching"]
+    installed: InstalledCatalog | None
+    pin: SkillSourcePin
 
 
 @dataclass(frozen=True)
@@ -200,6 +209,18 @@ def read_install_record(env: Mapping[str, str]) -> InstalledCatalog | None:
         skills=_catalog_skills(root),
         sha256=str(digest),
     )
+
+
+def inspect_installed_catalog(
+    pin: SkillSourcePin, env: Mapping[str, str]
+) -> CatalogInstallStatus:
+    """Compare the local install to the pin without reaching its upstream."""
+    installed = read_install_record(env)
+    if installed is None:
+        return CatalogInstallStatus(state="absent", installed=None, pin=pin)
+    if installed.revision == pin.revision and _still_matches_record(installed):
+        return CatalogInstallStatus(state="matching", installed=installed, pin=pin)
+    return CatalogInstallStatus(state="drifted", installed=installed, pin=pin)
 
 
 def _write_install_record(env: Mapping[str, str], catalog: InstalledCatalog) -> None:

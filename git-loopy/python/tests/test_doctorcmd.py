@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
+import json
 from pathlib import Path
+import subprocess
 from tempfile import TemporaryDirectory
 from typing import Callable
 
@@ -14,6 +17,7 @@ from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy import cli as cli_module
 from git_loopy import doctorcmd
 from git_loopy import labels
+from git_loopy import skill_install
 from git_loopy.doctorcmd import run_doctor
 from git_loopy import settings
 from git_loopy.gh import Repo
@@ -24,6 +28,8 @@ from git_loopy.run_environment_preflight import (
 )
 from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
 from git_loopy.skill_run_preflight import resolve_run_skill_policy_preflight
+from git_loopy.skill_install import refresh_installed_catalog
+from git_loopy.skill_source import LicensePin, SkillSourcePin, read_skill_source_pin
 from tests.fakes import FakeGitClient
 
 
@@ -91,6 +97,8 @@ def _run(
     required: tuple[str, ...] = (),
     env: dict[str, str] | None = None,
     apply: bool = False,
+    use_default_installed_catalog: bool = False,
+    discoverer: Callable[..., object] | None = None,
     environment_resolver: Callable[..., RunEnvironmentPreflight] | None = None,
 ) -> tuple[int, list[str]]:
     repo = tmp_path / "repo"
@@ -98,15 +106,18 @@ def _run(
     installed = tmp_path / "installed"
     output: list[str] = []
 
-    async def discoverer(_client: object, **_kwargs: object) -> SkillCatalog:
+    async def catalog_discoverer(_client: object, **_kwargs: object) -> SkillCatalog:
         return catalog
 
+    options: dict[str, object] = {}
+    if not use_default_installed_catalog:
+        options["installed_skills_dir"] = installed
     code = run_doctor(
         config=config,
         repo_root=repo,
         env={} if env is None else env,
         client_factory=_CatalogClient,
-        discoverer=discoverer,
+        discoverer=catalog_discoverer if discoverer is None else discoverer,
         git=FakeGitClient(repo, tracked_paths=tracked_paths),
         prompt_text=(
             "---\nrequired-skills: []\n---\n"
@@ -115,7 +126,6 @@ def _run(
             + "".join(f"  - {name}\n" for name in required)
             + "---\n"
         ),
-        installed_skills_dir=installed,
         output_fn=output.append,
         apply=apply,
         environment_preflight_resolver=(
@@ -123,6 +133,7 @@ def _run(
             if environment_resolver is None
             else environment_resolver
         ),
+        **options,
     )
     return code, output
 
@@ -708,6 +719,257 @@ def test_doctor_reports_an_enabled_skill_without_a_catalog_winner(
         "removed-skill | enabled Skill has no catalog winner | project policy | "
         f"Config: {tmp_path / 'repo' / 'git-loopy' / 'config.toml'}"
     ]
+
+
+def test_doctor_attributes_a_missing_skill_to_a_drifted_installed_catalog(
+    tmp_path: Path,
+) -> None:
+    """A valid policy name is refreshed, never pruned, when its catalog is stale."""
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+    installed = skill_install.installed_catalog_dir(env)
+    (installed / "other").mkdir(parents=True)
+    (installed / "other" / "SKILL.md").write_text(
+        "---\nname: other\ndescription: A Skill.\n---\n", encoding="utf-8"
+    )
+    skill_install.install_record_path(env).write_text(
+        json.dumps(
+            {
+                "repository": "example/stale-skills",
+                "revision": "b" * 40,
+                "sha256": skill_install.catalog_digest(installed),
+            }
+        ),
+        encoding="utf-8",
+    )
+    pin = read_skill_source_pin()
+
+    code, output = _run(
+        tmp_path,
+        config=_config("removed-skill"),
+        catalog=_catalog(),
+        env=env,
+        use_default_installed_catalog=True,
+    )
+
+    assert code == 1
+    assert output[0] == (
+        "Skill catalog | drifted | "
+        f"installed revision {'b' * 40} does not match pinned {pin.revision}; "
+        "refresh with `git-loopy doctor --apply`."
+    )
+    assert output[1] == (
+        "removed-skill | enabled Skill has no catalog winner; "
+        "the installed catalog is drifted | project policy | "
+        "Fix: refresh the pinned Skill catalog with `git-loopy doctor --apply`; "
+        "do not prune this policy name."
+    )
+
+
+@pytest.mark.parametrize(
+    ("installed_revision", "state"),
+    [
+        (None, "absent"),
+        ("pin", "matching"),
+    ],
+)
+def test_doctor_reports_the_installed_catalog_state(
+    tmp_path: Path, installed_revision: str | None, state: str
+) -> None:
+    """The catalog report identifies whether this machine proves the pin."""
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+    pin = read_skill_source_pin()
+    if installed_revision is not None:
+        installed = skill_install.installed_catalog_dir(env)
+        (installed / "known").mkdir(parents=True)
+        (installed / "known" / "SKILL.md").write_text(
+            "---\nname: known\ndescription: A Skill.\n---\n", encoding="utf-8"
+        )
+        skill_install.install_record_path(env).write_text(
+            json.dumps(
+                {
+                    "repository": "example/known-skills",
+                    "revision": pin.revision,
+                    "sha256": skill_install.catalog_digest(installed),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    code, output = _run(
+        tmp_path,
+        config=_config("known"),
+        catalog=_catalog(known=SkillCatalogWinner("known", "packaged")),
+        env=env,
+        use_default_installed_catalog=True,
+    )
+
+    assert code == (1 if state == "absent" else 0)
+    assert output[0].startswith(f"Skill catalog | {state} |")
+    assert pin.revision in output[0]
+
+
+def test_doctor_reports_when_the_pinned_catalog_contents_have_drifted(
+    tmp_path: Path,
+) -> None:
+    """An edited catalog names its changed contents, not a false revision mismatch."""
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+    pin = read_skill_source_pin()
+    installed = skill_install.installed_catalog_dir(env)
+    (installed / "known").mkdir(parents=True)
+    skill = installed / "known" / "SKILL.md"
+    skill.write_text(
+        "---\nname: known\ndescription: Original Skill.\n---\n", encoding="utf-8"
+    )
+    skill_install.install_record_path(env).write_text(
+        json.dumps(
+            {
+                "repository": "example/known-skills",
+                "revision": pin.revision,
+                "sha256": skill_install.catalog_digest(installed),
+            }
+        ),
+        encoding="utf-8",
+    )
+    skill.write_text(
+        "---\nname: known\ndescription: Edited Skill.\n---\n", encoding="utf-8"
+    )
+
+    code, output = _run(
+        tmp_path,
+        config=_config("known"),
+        catalog=_catalog(known=SkillCatalogWinner("known", "packaged")),
+        env=env,
+        use_default_installed_catalog=True,
+    )
+
+    assert code == 1
+    assert output[0] == (
+        "Skill catalog | drifted | "
+        f"installed contents no longer match the record for pinned revision "
+        f"{pin.revision}; refresh with `git-loopy doctor --apply`."
+    )
+
+
+def _git(root: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args], cwd=root, capture_output=True, text=True, check=True
+    )
+    return completed.stdout.strip()
+
+
+def _write_upstream_skill(root: Path, name: str) -> None:
+    (root / "skills" / name).mkdir(parents=True, exist_ok=True)
+    (root / "skills" / name / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: A Skill.\n---\n",
+        encoding="utf-8",
+    )
+
+
+def _doctor_pin(upstream: Path, revision: str) -> SkillSourcePin:
+    license_text = "MIT License\n"
+    return SkillSourcePin(
+        schema_version=1,
+        repository="example/doctor-skills",
+        url=f"file://{upstream}",
+        revision=revision,
+        skills_directory="skills",
+        license=LicensePin(
+            spdx_id="MIT",
+            path="LICENSE",
+            sha256=hashlib.sha256(license_text.encode("utf-8")).hexdigest(),
+            required_text=("MIT License",),
+        ),
+        provenance_paths=("README.md",),
+    )
+
+
+def test_doctor_apply_refreshes_before_pruning_a_name_restored_by_the_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale catalog cannot turn a pinned Skill back into a policy deletion."""
+    upstream = tmp_path / "upstream"
+    upstream.mkdir()
+    _git(upstream, "init", "--quiet", "-b", "main")
+    _git(upstream, "config", "user.name", "Doctor Test")
+    _git(upstream, "config", "user.email", "doctor-test@example.invalid")
+    (upstream / "LICENSE").write_text("MIT License\n", encoding="utf-8")
+    (upstream / "README.md").write_text("# Skills\n", encoding="utf-8")
+    _write_upstream_skill(upstream, "other")
+    _git(upstream, "add", "-A")
+    _git(upstream, "commit", "--quiet", "-m", "publish old catalog")
+    old_pin = _doctor_pin(upstream, _git(upstream, "rev-parse", "HEAD"))
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+    refresh_installed_catalog(old_pin, env=env)
+
+    _write_upstream_skill(upstream, "restored")
+    _git(upstream, "add", "-A")
+    _git(upstream, "commit", "--quiet", "-m", "restore Skill")
+    pin = _doctor_pin(upstream, _git(upstream, "rev-parse", "HEAD"))
+    monkeypatch.setattr(doctorcmd, "read_skill_source_pin", lambda: pin)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config_path = repo / "git-loopy" / "config.toml"
+    settings.write_config(config_path, {"enabled_skills": ["restored"]})
+
+    async def discoverer(_client: object, **_kwargs: object) -> SkillCatalog:
+        installed = skill_install.installed_catalog_dir(env)
+        if (installed / "restored" / "SKILL.md").exists():
+            return _catalog(restored=SkillCatalogWinner("restored", "packaged"))
+        return _catalog()
+
+    code, output = _run(
+        tmp_path,
+        config=_config("restored"),
+        catalog=_catalog(),
+        env=env,
+        apply=True,
+        use_default_installed_catalog=True,
+        discoverer=discoverer,
+    )
+
+    assert code == 0
+    assert settings.load_config_table(config_path)["enabled_skills"] == ["restored"]
+    assert "Remove: restored" not in output
+
+
+def test_doctor_apply_does_not_judge_or_repair_a_policy_when_refresh_is_unverified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed refresh must not convert stale catalog absence into a deletion."""
+    upstream = tmp_path / "upstream"
+    upstream.mkdir()
+    _git(upstream, "init", "--quiet", "-b", "main")
+    _git(upstream, "config", "user.name", "Doctor Test")
+    _git(upstream, "config", "user.email", "doctor-test@example.invalid")
+    (upstream / "LICENSE").write_text("MIT License\n", encoding="utf-8")
+    (upstream / "README.md").write_text("# Skills\n", encoding="utf-8")
+    _write_upstream_skill(upstream, "other")
+    _git(upstream, "add", "-A")
+    _git(upstream, "commit", "--quiet", "-m", "publish old catalog")
+    old_pin = _doctor_pin(upstream, _git(upstream, "rev-parse", "HEAD"))
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+    refresh_installed_catalog(old_pin, env=env)
+    unreachable = _doctor_pin(tmp_path / "unreachable", "f" * 40)
+    monkeypatch.setattr(doctorcmd, "read_skill_source_pin", lambda: unreachable)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config_path = repo / "git-loopy" / "config.toml"
+    settings.write_config(config_path, {"enabled_skills": ["ghost"]})
+
+    code, output = _run(
+        tmp_path,
+        config=_config("ghost"),
+        catalog=_catalog(),
+        env=env,
+        apply=True,
+        use_default_installed_catalog=True,
+    )
+
+    assert code == 1
+    assert output[0].startswith("Skill catalog | drifted |")
+    assert output[1].startswith("Skill catalog | could not verify | Warning:")
+    assert len(output) == 2
+    assert settings.load_config_table(config_path)["enabled_skills"] == ["ghost"]
 
 
 def test_doctor_names_the_environment_replacement_that_carries_the_blocker(
