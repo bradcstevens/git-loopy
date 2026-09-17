@@ -6,9 +6,26 @@ from pathlib import Path
 
 from textual.widgets import DataTable, Static
 
-from git_loopy.interactive.init_wizard_app import InitWizardApp
+from git_loopy import init as init_module
+from git_loopy.interactive.init_wizard_app import (
+    InitWizardApp,
+    run_textual_init_wizard,
+)
 from git_loopy.interactive.models import ModelChoice
 from git_loopy.skillscmd import SkillSelectionModel, SkillSelectionRow
+
+
+def test_setup_runner_is_selectable_without_being_the_default() -> None:
+    assert init_module.select_wizard_runner({}) is init_module._default_wizard_runner
+    assert (
+        init_module.select_wizard_runner({"GIT_LOOPY_INIT_WIZARD": "0"})
+        is init_module._default_wizard_runner
+    )
+    for opt_in in ("1", "true", "Yes", "on", "textual"):
+        assert (
+            init_module.select_wizard_runner({"GIT_LOOPY_INIT_WIZARD": opt_in})
+            is run_textual_init_wizard
+        )
 
 
 def _choice(id: str, efforts: tuple[str, ...] = ("high",)) -> ModelChoice:
@@ -35,6 +52,7 @@ def _skills(enabled: tuple[str, ...] = ("tdd",)) -> SkillSelectionModel:
                 description="Test-driven development",
             ),
             SkillSelectionRow(name="codebase-design", source="packaged"),
+            SkillSelectionRow(name="quick-win", source="packaged"),
         ),
         enabled=enabled,
     )
@@ -97,7 +115,7 @@ async def test_escape_steps_back_and_cancels_from_first_available_step() -> None
     assert app.return_value is None
 
 
-async def test_ctrl_c_cancels_and_locked_scope_model_is_first_step() -> None:
+async def test_escape_on_the_first_step_cancels_when_scope_is_locked() -> None:
     app = _app(scope_locked=True)
     async with app.run_test() as pilot:
         await pilot.press("escape")
@@ -113,9 +131,15 @@ async def test_model_without_reasoning_effort_skips_its_effort_step() -> None:
         await pilot.pause()
         table = app.screen.query_one("#wizard-choices", DataTable)
         assert str(table.get_row_at(0)[0]).startswith("Use all recommended")
-        await pilot.press("ctrl+c")
+        await pilot.press("enter")  # routing
+        await pilot.press("enter")  # scaffold
+        await pilot.press("enter")  # Skills
+        await pilot.press("enter")  # review -> Save
+        await pilot.pause()
 
-    assert app.return_value is None
+    assert app.return_value is not None
+    assert app.return_value.model == "noreason"
+    assert app.return_value.effort is None
 
 
 async def test_review_lists_answers_and_back_returns_to_selected_step() -> None:
@@ -177,5 +201,178 @@ async def test_review_refuses_invalid_policy_from_shared_model() -> None:
             app.screen.query_one("#wizard-status", Static).render()
         )
         await pilot.press("q")
+
+    assert app.return_value is None
+
+
+async def _reach_skills(pilot) -> None:
+    """Walk the prefilled steps up to (and including) opening the Skill step."""
+    await pilot.press("enter")  # scope
+    await pilot.press("enter")  # model
+    await pilot.press("enter")  # effort
+    await pilot.press("enter")  # routing
+    await pilot.press("enter")  # scaffold
+    await pilot.pause()
+
+
+async def test_skill_step_filters_by_typing_without_dropping_a_selection() -> None:
+    """Typing narrows the view only; a Skill chosen before the filter is saved."""
+    app = _app()
+    async with app.run_test() as pilot:
+        await _reach_skills(pilot)
+        await pilot.press("space")  # codebase-design, the first row by name
+        await pilot.press("q", "u", "i")
+        await pilot.pause()
+        rows = app.screen.query_one("#skill-rows", DataTable)
+        assert [str(rows.get_row_at(i)[1]) for i in range(rows.row_count)] == [
+            "quick-win"
+        ]
+        await pilot.press("enter")  # confirm while the selection is off-screen
+        await pilot.pause()
+        review = app.screen.query_one("#wizard-review", DataTable)
+        assert "2 enabled" in str(review.get_row_at(review.row_count - 1)[1])
+        await pilot.press("enter")
+
+    assert app.return_value is not None
+    assert app.return_value.enabled_skills == ("codebase-design", "tdd")
+
+
+async def test_skill_step_refuses_a_required_row_and_shows_the_reason() -> None:
+    app = _app()
+    async with app.run_test() as pilot:
+        await _reach_skills(pilot)
+        rows = app.screen.query_one("#skill-rows", DataTable)
+        required = next(
+            index
+            for index in range(rows.row_count)
+            if str(rows.get_row_at(index)[1]) == "tdd"
+        )
+        assert str(rows.get_row_at(required)[4]) == "Required"
+        await pilot.press(*(["down"] * required))
+        await pilot.press("space")
+        await pilot.pause()
+        assert "tdd is a Required Skill" in app.screen.status
+        await pilot.press("enter")
+        await pilot.press("enter")
+
+    assert app.return_value is not None
+    assert app.return_value.enabled_skills == ("tdd",)
+
+
+async def test_ctrl_c_cancels_outright_from_a_step_in_the_middle() -> None:
+    app = _app()
+    async with app.run_test() as pilot:
+        await _reach_skills(pilot)
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+    assert app.return_value is None
+
+
+async def test_ctrl_c_cancels_outright_from_a_choice_step() -> None:
+    app = _app()
+    async with app.run_test() as pilot:
+        await pilot.press("enter")  # scope
+        await pilot.press("enter")  # model
+        await pilot.press("enter")  # effort -> routing
+        await pilot.pause()
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+    assert app.return_value is None
+
+
+async def test_review_cancel_control_produces_a_cancellation() -> None:
+    app = _app()
+    async with app.run_test() as pilot:
+        await _reach_review(pilot)
+        await pilot.click("#wizard-cancel")
+        await pilot.pause()
+
+    assert app.return_value is None
+
+
+async def test_review_save_control_commits_the_collected_answers() -> None:
+    app = _app()
+    async with app.run_test() as pilot:
+        await _reach_review(pilot)
+        await pilot.click("#wizard-save")
+        await pilot.pause()
+
+    assert app.return_value is not None
+    assert app.return_value.scope == "project"
+
+
+async def test_review_back_control_returns_to_the_selected_step() -> None:
+    app = _app()
+    async with app.run_test() as pilot:
+        await _reach_review(pilot)
+        review = app.screen.query_one("#wizard-review", DataTable)
+        model_row = next(
+            index
+            for index in range(review.row_count)
+            if str(review.get_row_at(index)[0]) == "model"
+        )
+        await pilot.press(*(["down"] * model_row))
+        await pilot.click("#wizard-back")
+        await pilot.pause()
+        assert app.screen.query("#picker-models")
+        await pilot.press("ctrl+c")
+
+    assert app.return_value is None
+
+
+def test_wizard_import_graph_never_reaches_live_run_state() -> None:
+    """Setup must not couple to the Run, so hosting it in the Dashboard cannot.
+
+    Asserted against the real import graph rather than the source text: a
+    transitive import would couple the wizard just as hard as a direct one.
+    """
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys;"
+        "import git_loopy.interactive.init_wizard_app;"
+        "print('git_loopy.interactive.state' in sys.modules)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == "False"
+
+
+async def test_review_back_on_the_config_row_returns_to_the_scope_step() -> None:
+    """The config path is what the scope decides, not a step of its own."""
+    app = _app()
+    async with app.run_test() as pilot:
+        await _reach_review(pilot)
+        review = app.screen.query_one("#wizard-review", DataTable)
+        config_row = next(
+            index
+            for index in range(review.row_count)
+            if str(review.get_row_at(index)[0]) == "config"
+        )
+        await pilot.press(*(["down"] * config_row))
+        await pilot.press("b")
+        await pilot.pause()
+        assert "Configure git-loopy" in str(app.screen.query_one(Static).render())
+        await pilot.press("ctrl+c")
+
+    assert app.return_value is None
+
+
+async def test_review_shortcut_on_the_review_screen_does_not_stack_a_second_one() -> None:
+    app = _app()
+    async with app.run_test() as pilot:
+        await _reach_review(pilot)
+        depth = len(app.screen_stack)
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert len(app.screen_stack) == depth
+        await pilot.press("ctrl+c")
 
     assert app.return_value is None

@@ -1,4 +1,34 @@
-"""Alternate Textual runner for the ``git-loopy init`` answer seam."""
+"""``git_loopy.interactive.init_wizard_app`` — the setup wizard (issue #506).
+
+One continuous, keyboard-driven walk through every question ``git-loopy init``
+asks — scope, model, reasoning effort, per-task-type routing, prompt scaffold,
+and **Skill policy** — ending on a review screen over ``Save`` / ``Back`` /
+``Cancel``. It is an *alternate* runner behind the single wizard-runner seam
+:func:`git_loopy.init.run_init` already owns (issue #504), selected by
+:func:`git_loopy.init.select_wizard_runner`; issue #508 makes it the default and
+deletes the numbered renderers it replaces.
+
+Keys: ``up``/``down`` move, ``space`` toggles a Skill, ``enter`` advances or
+confirms, ``esc`` goes back one step — and cancels on the first step, where
+there is nowhere back to — and ``ctrl+c`` always cancels outright. ``ctrl+s``
+jumps straight to review, which is answerable because every step is pre-filled
+with its default.
+
+The model and Skill steps *compose* the shared Screens
+(:class:`~git_loopy.interactive.picker_app.ModelPickerScreen`,
+:class:`~git_loopy.interactive.skill_picker_app.SkillPickerScreen`) rather than
+reimplementing selection, so the wizard and the standalone pickers cannot
+disagree; each subclass here redeclares only the keys whose *meaning* changes.
+The effort step is the composed Screen's own auto-skip: a model that supports no
+reasoning effort dismisses with ``effort=None``.
+
+Interface state — step order, which answer is current, the review cursor — lives
+in :class:`InitWizardApp`. There is no second model mirroring the widget tree:
+the **Skill policy**'s validity is still asked of
+:class:`~git_loopy.skillscmd.SkillSelectionModel`, which is a domain model rather
+than a widget one. Nothing here reads :mod:`git_loopy.interactive.state`, which
+is what keeps a later Dashboard-hosted wizard from coupling setup to the Run.
+"""
 
 from __future__ import annotations
 
@@ -101,16 +131,17 @@ class _WizardModelPickerScreen(ModelPickerScreen):
 
 
 class _WizardSkillPickerScreen(SkillPickerScreen):
-    """The shared Skill Screen with wizard-level back and cancel results."""
+    """The shared Skill Screen with wizard-level back and cancel results.
+
+    Only the two keys whose *meaning* changes are redeclared. ``space``,
+    ``enter``, ``up``, ``down`` and "anything else types into the search box"
+    are inherited, so the Skill step cannot drift from the standalone editor —
+    and no key the base leaves free to the search box is claimed here.
+    """
 
     BINDINGS = [
-        Binding("space", "toggle_skill", "Toggle", priority=True),
-        Binding("enter", "confirm", "Continue", priority=True),
-        Binding("up", "cursor_up", "Up", priority=True, show=False),
-        Binding("down", "cursor_down", "Down", priority=True, show=False),
         Binding("escape", "wizard_back", "Back", priority=True),
         Binding("ctrl+c", "wizard_cancel", "Cancel", priority=True, show=False),
-        Binding("q", "wizard_cancel", "Cancel"),
     ]
 
     def action_wizard_back(self) -> None:
@@ -131,8 +162,23 @@ class _Review:
     skills: SkillSelectionModel
 
 
-class _ReviewScreen(Screen[tuple[str, str] | object]):
-    """The collect-then-commit terminus and correction point."""
+def _describe_routing(routing: Mapping[str, tuple[str, str]] | None) -> str:
+    if routing is None:
+        return "disabled (existing routes are preserved)"
+    if not routing:
+        return "no task type routed"
+    return ", ".join(
+        f"{kind}: {model} @ {effort}" for kind, (model, effort) in routing.items()
+    )
+
+
+class _ReviewScreen(Screen["tuple[str, str] | object"]):
+    """The collect-then-commit terminus and correction point.
+
+    A full-screen application erases itself on exit, so this is the only place
+    the guarantee that nothing is written until every answer is in becomes
+    something an operator can see rather than a comment in :mod:`git_loopy.init`.
+    """
 
     BINDINGS = [
         Binding("enter", "save", "Save", priority=True),
@@ -145,9 +191,25 @@ class _ReviewScreen(Screen[tuple[str, str] | object]):
     def __init__(self, review: _Review) -> None:
         super().__init__()
         self._review = review
+        #: Each review line as ``(step, label, value)``. ``step`` is what a
+        #: ``Back`` resolves to, so the wizard routes on the step the row was
+        #: drawn *for* rather than on the text that happened to be rendered.
+        self._lines: tuple[tuple[str, str, str], ...] = (
+            ("scope", "scope", review.scope),
+            ("scope", "config", str(review.config_path)),
+            ("model", "model", review.model),
+            ("model", "effort", review.effort or "none"),
+            ("routing", "routing", _describe_routing(review.routing)),
+            (
+                "scaffold",
+                "scaffold",
+                "PROMPT.md" if review.scaffold else "no prompt scaffold",
+            ),
+            ("skills", "skills", f"{len(review.skills.enabled)} enabled"),
+        )
 
     def compose(self) -> ComposeResult:
-        yield Static("Review setup")
+        yield Static("Review setup — nothing is written until you save")
         yield DataTable(id=_REVIEW, cursor_type="row", zebra_stripes=True)
         yield Static("", id=_STATUS)
         yield Button("Save", id="wizard-save", variant="success")
@@ -159,25 +221,8 @@ class _ReviewScreen(Screen[tuple[str, str] | object]):
         table = self.query_one(f"#{_REVIEW}", DataTable)
         table.add_column("Setting")
         table.add_column("Value")
-        routing_value = (
-            "disabled (existing routes are preserved)"
-            if self._review.routing is None
-            else ", ".join(
-                f"{kind}: {model} @ {effort}"
-                for kind, (model, effort) in self._review.routing.items()
-            )
-        )
-        rows = (
-            ("scope", self._review.scope),
-            ("config", str(self._review.config_path)),
-            ("model", self._review.model),
-            ("effort", self._review.effort or "none"),
-            ("routing", routing_value),
-            ("scaffold", "PROMPT.md" if self._review.scaffold else "no prompt scaffold"),
-            ("skills", f"{len(self._review.skills.enabled)} enabled"),
-        )
-        for key, value in rows:
-            table.add_row(key, value, key=key)
+        for _step, label, value in self._lines:
+            table.add_row(label, value, key=label)
         table.focus()
 
     def action_save(self) -> None:
@@ -191,8 +236,8 @@ class _ReviewScreen(Screen[tuple[str, str] | object]):
 
     def action_back(self) -> None:
         table = self.query_one(f"#{_REVIEW}", DataTable)
-        index = max(table.cursor_row, 0)
-        self.dismiss(("back", str(table.get_row_at(index)[0])))
+        index = min(max(table.cursor_row, 0), len(self._lines) - 1)
+        self.dismiss(("back", self._lines[index][0]))
 
     def action_cancel(self) -> None:
         self.dismiss(_CANCEL)
@@ -260,6 +305,8 @@ class InitWizardApp(App["InitAnswers | None"]):
 
     def action_review(self) -> None:
         """Reach review directly because every setup question has a default."""
+        if isinstance(self.screen, _ReviewScreen):
+            return
         self._ensure_skills()
         self._show_review()
 
@@ -497,9 +544,7 @@ class InitWizardApp(App["InitAnswers | None"]):
             return
         destinations: dict[str, Callable[[], None]] = {
             "scope": self._show_scope_or_model,
-            "config": self._show_scope_or_model,
             "model": self._show_model,
-            "effort": self._show_model,
             "routing": self._show_routing,
             "scaffold": self._show_scaffold,
             "skills": self._show_skills,

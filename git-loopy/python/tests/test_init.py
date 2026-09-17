@@ -2019,3 +2019,74 @@ def test_run_init_revalidates_when_the_runner_changes_the_scaffold_decision(
     assert rc == 1
     assert not settings.project_config_path(tmp_path).exists()
     assert any("stale-skill" in message for message in warnings)
+
+
+# ---------------------------------------------------------------------------
+# The alternate Textual runner behind the same seam (issue #506)
+# ---------------------------------------------------------------------------
+
+
+def test_run_init_selects_the_textual_runner_when_the_operator_opts_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The opt-in reaches the alternate runner through the one seam.
+
+    Only ``InitWizardApp.run`` is stubbed, so the runner itself is called with
+    exactly the keyword arguments ``run_init`` passes every runner — which is
+    what makes this a contract test rather than a wiring test.
+    """
+    from git_loopy.interactive import init_wizard_app
+
+    seen: dict[str, Any] = {}
+
+    def _run(self: Any) -> Any:
+        seen["scope_paths"] = dict(self._scope_paths)
+        seen["default_model"] = self._default_model
+        return _answers(scope="project", model="claude-opus-4.8", effort="max")
+
+    monkeypatch.setattr(init_wizard_app.InitWizardApp, "run", _run)
+    env = _env(tmp_path)
+    env[init_module.WIZARD_ENV] = "textual"
+    out = _Output()
+
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            scope=None,
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=env,
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            **_packaged(tmp_path),
+        )
+
+    assert rc == 0
+    assert seen["scope_paths"]["project"] == settings.project_config_path(tmp_path)
+    assert seen["default_model"]
+    written = tomllib.loads(
+        settings.project_config_path(tmp_path).read_text(encoding="utf-8")
+    )
+    assert written["model"] == "claude-opus-4.8"
+
+
+def test_run_init_textual_cancellation_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from git_loopy.interactive import init_wizard_app
+
+    monkeypatch.setattr(init_wizard_app.InitWizardApp, "run", lambda self: None)
+    env = _env(tmp_path)
+    env[init_module.WIZARD_ENV] = "1"
+    out = _Output()
+
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            scope=None,
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=env,
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            **_packaged(tmp_path),
+        )
+
+    assert rc == 1
+    assert not settings.project_config_path(tmp_path).exists()

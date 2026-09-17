@@ -77,7 +77,7 @@ from git_loopy.interactive.models import (
     to_model_choices,
 )
 
-__all__ = ["collect_routing", "run_init", "InitCancelled"]
+__all__ = ["collect_routing", "run_init", "select_wizard_runner", "InitCancelled"]
 
 #: Tokens that cancel the wizard at any prompt (case-insensitive).
 _CANCEL_TOKENS = frozenset({"q", "quit"})
@@ -104,6 +104,29 @@ class InitAnswers:
 
 
 WizardRunner = Callable[..., InitAnswers | None]
+
+#: Env var that opts setup into the alternate Textual wizard runner (issue #506).
+#: The wizard arrives *beside* the numbered prompts rather than replacing them;
+#: issue #508 makes it the only runner and deletes this switch with the renderers
+#: it replaces.
+WIZARD_ENV = "GIT_LOOPY_INIT_WIZARD"
+
+_WIZARD_OPT_IN = frozenset({"1", "true", "yes", "on", "textual"})
+
+
+def select_wizard_runner(env: Mapping[str, str]) -> WizardRunner:
+    """Resolve which setup runner collects the answers.
+
+    Opt-in, like **ModelSelectionMode** (:func:`~git_loopy.interactive.detect.
+    resolve_model_selection`) and for the same reason: the alternate runner is
+    reachable by an operator who asks for it, and by nobody who does not.
+    """
+    if env.get(WIZARD_ENV, "").strip().lower() in _WIZARD_OPT_IN:
+        from git_loopy.interactive.init_wizard_app import run_textual_init_wizard
+
+        return run_textual_init_wizard
+    return _default_wizard_runner
+
 
 
 # ---------------------------------------------------------------------------
@@ -759,6 +782,12 @@ def run_init(
     the requested scope is unavailable. Never starts the loop.
     """
     from git_loopy.cli import _DEFAULT_MODEL, _DEFAULT_REASONING_EFFORT, _warn
+
+    # An injected runner is the test/caller seam and always wins; only a caller
+    # that left the default in place is asking the environment which runner to
+    # use (issue #506's opt-in, removed with the numbered renderers in #508).
+    if wizard_runner is _default_wizard_runner:
+        wizard_runner = select_wizard_runner(env)
 
     if default_model is None:
         default_model = _DEFAULT_MODEL

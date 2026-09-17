@@ -167,9 +167,17 @@ The wizard:
 - **Always writes `config.toml`** to that scope with your chosen `model` /
   `reasoning_effort`, seeded from the same live model list the `--select-model`
   picker uses, rendered as a plain numbered list by the current setup flow.
-- **Offers an alternate Textual runner** through the injected setup-runner
-  seam. It keeps the prefilled choices in one continuous flow with Back,
-  Cancel, and a review before anything is written.
+- **Offers a keyboard wizard behind `GIT_LOOPY_INIT_WIZARD=1`** — the same
+  questions as one continuous full-screen flow instead of six numbered lists.
+  `up`/`down` move, `space` toggles a Skill, `enter` advances, `esc` goes back a
+  step (and cancels on the first, where there is nowhere back to), `ctrl+c`
+  cancels outright, and `ctrl+s` jumps to the end. It composes the same model and
+  Skill pickers the rest of git-loopy uses, and ends on a review screen listing
+  scope, the config path it will write, model, effort, routing, scaffold, and how
+  many Skills are enabled, over `Save` / `Back` / `Cancel` — so collect-then-commit
+  is something you see rather than something you are promised. `Back` returns to
+  the step you picked, so correcting one answer does not restart setup. Off by
+  default while it lands beside the numbered prompts.
 - **Installs the workflow Skill catalog first**, before collecting anything —
   because the **Skill policy** you are about to choose is a choice among the
   installed catalog. It clones
