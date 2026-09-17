@@ -190,6 +190,30 @@ mutating command operate on the wrong artifact.
 
 ---
 
+## Refreshing machine-local assets (`git-loopy update`)
+
+`git-loopy update` refreshes the machine-local assets belonging to the installed
+**Release version** without changing that Release or requiring a repository. It
+refreshes the **installed catalog** and downloads the matching TUI helper into
+`<config-home>/git-loopy/bin/`.
+
+For the global `PROMPT.md` override, **Scaffold provenance** is the safety
+boundary: an `untouched` override is replaced with this Release's packaged
+prompt and its provenance advances. A `customized` override stays byte-identical;
+the command summarizes the upstream prompt changes since the Release recorded in
+its provenance. An `unrecorded` override is treated as customized and is never
+replaced.
+
+```bash
+git-loopy update
+```
+
+The command reports each changed asset and any asset it left alone. It never
+starts a Run or writes to the tracker; `git-loopy labels --apply` remains the
+only command that changes the **Label vocabulary** on GitHub.
+
+---
+
 ## First-run setup (`git-loopy init`)
 
 `git-loopy init` is an interactive wizard that installs the pinned Skill catalog

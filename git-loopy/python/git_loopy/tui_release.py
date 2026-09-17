@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -26,8 +27,10 @@ import tempfile
 import tomllib
 import zipfile
 from dataclasses import dataclass
+from http.client import HTTPException
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Sequence
+from urllib.request import urlopen
 
 from .events import EVENT_SCHEMA_VERSION
 from .release_version import ReleaseVersionError, is_prerelease, read_release_version
@@ -44,6 +47,9 @@ HELPER_MANIFEST_PATH = Path("git-loopy/tui/Cargo.toml")
 #: happens to need them.
 HELPER_COMMAND_NAME = "git-loopy-tui"
 _WINDOWS_EXECUTABLE_SUFFIX = ".exe"
+_RUNTIME_RELEASE_URL = (
+    "https://github.com/bradcstevens/git-loopy/releases/download/v{version}/{artifact}"
+)
 
 _HEX_DIGEST = re.compile("[0-9a-fA-F]{64}")
 
@@ -139,7 +145,11 @@ def _read_fixture(repository_root: Path) -> dict[str, Any]:
 
 def load_artifact_metadata(repository_root: Path) -> ArtifactMetadata:
     """Read the canonical artifact description from ``repository_root``."""
-    document = _read_fixture(repository_root)
+    return _parse_artifact_metadata(_read_fixture(repository_root))
+
+
+def _parse_artifact_metadata(document: dict[str, Any]) -> ArtifactMetadata:
+    """Turn one canonical artifact document into the runtime description."""
     aliases = document["host_aliases"]
     return ArtifactMetadata(
         command_name=str(document["command_name"]),
@@ -502,6 +512,147 @@ def machine_local_helper_paths(env: Mapping[str, str]) -> tuple[Path, ...]:
         bin_dir / HELPER_COMMAND_NAME,
         bin_dir / f"{HELPER_COMMAND_NAME}{_WINDOWS_EXECUTABLE_SUFFIX}",
     )
+
+
+def _host_libc() -> str | None:
+    """Normalize Python's libc spelling to the artifact description's vocabulary."""
+    library = platform.libc_ver()[0].strip().lower()
+    if "musl" in library:
+        return "musl"
+    if library in {"glibc", "gnu"}:
+        return "gnu"
+    return None
+
+
+def _runtime_artifact_for_host(
+    system: str,
+    machine: str,
+    libc: str | None,
+) -> PublishedArtifact:
+    """Resolve this package's published helper without requiring a source checkout."""
+    host_os = {
+        "darwin": "macos",
+        "macos": "macos",
+        "linux": "linux",
+        "windows": "windows",
+        "win32": "windows",
+    }.get(system.strip().lower())
+    host_arch = {
+        "aarch64": "arm64",
+        "arm64": "arm64",
+        "amd64": "x64",
+        "x64": "x64",
+        "x86_64": "x64",
+        "armv7": "armv7",
+        "armv7l": "armv7",
+    }.get(machine.strip().lower())
+    wanted_libc = (libc or "").strip().lower() or "musl"
+    triples = {
+        ("macos", "arm64", "any"): "aarch64-apple-darwin",
+        ("macos", "x64", "any"): "x86_64-apple-darwin",
+        ("windows", "x64", "any"): "x86_64-pc-windows-msvc",
+        ("linux", "arm64", "gnu"): "aarch64-unknown-linux-gnu",
+        ("linux", "x64", "gnu"): "x86_64-unknown-linux-gnu",
+        ("linux", "arm64", "musl"): "aarch64-unknown-linux-musl",
+        ("linux", "x64", "musl"): "x86_64-unknown-linux-musl",
+    }
+    key = (host_os, host_arch, wanted_libc if host_os == "linux" else "any")
+    triple = triples.get(key)
+    if triple is None:
+        deferred = {
+            ("windows", "arm64"): "Windows arm64 is deferred beyond Phase 2",
+            ("linux", "armv7"): "32-bit ARM Linux is deferred beyond Phase 2",
+        }.get((host_os, host_arch))
+        if deferred is not None:
+            raise TuiReleaseError(
+                f"no {HELPER_COMMAND_NAME} artifact for {system} {machine}: {deferred}"
+            )
+        raise TuiReleaseError(
+            f"no {HELPER_COMMAND_NAME} artifact is published for {system} {machine}"
+        )
+    extension = "zip" if host_os == "windows" else "tar.xz"
+    executable_name = (
+        f"{HELPER_COMMAND_NAME}{_WINDOWS_EXECUTABLE_SUFFIX}"
+        if host_os == "windows"
+        else HELPER_COMMAND_NAME
+    )
+    target = ArtifactTarget(
+        triple=triple,
+        os=host_os or "",
+        arch=host_arch or "",
+        libc=None if host_os != "linux" else wanted_libc,
+        runner="",
+        build="",
+        container=None,
+        packages_install=None,
+        requires_tool=None,
+    )
+    archive_name = f"{HELPER_COMMAND_NAME}-{triple}.{extension}"
+    return PublishedArtifact(
+        target=target,
+        archive_name=archive_name,
+        checksum_name=f"{archive_name}.sha256",
+        executable_name=executable_name,
+    )
+
+
+def refresh_machine_local_helper(
+    release_version: str,
+    env: Mapping[str, str],
+    *,
+    host_system: Callable[[], str] = platform.system,
+    host_machine: Callable[[], str] = platform.machine,
+    host_libc: Callable[[], str | None] = _host_libc,
+    artifact_resolver: Callable[
+        [str, str, str | None], PublishedArtifact
+    ] = _runtime_artifact_for_host,
+    download: Callable[[str], bytes] | None = None,
+) -> Path:
+    """Replace the machine-local helper with the verified installed Release artifact."""
+    artifact = artifact_resolver(host_system(), host_machine(), host_libc())
+    destination = global_dir(env) / "bin" / artifact.executable_name
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fetch = download or _download_release_file
+
+    with tempfile.TemporaryDirectory(
+        prefix=f".{HELPER_COMMAND_NAME}-", dir=destination.parent
+    ) as scratch_dir:
+        scratch = Path(scratch_dir)
+        archive = scratch / artifact.archive_name
+        checksum = scratch / artifact.checksum_name
+        archive.write_bytes(
+            fetch(
+                _runtime_release_artifact_url(release_version, artifact.archive_name)
+            )
+        )
+        checksum.write_bytes(
+            fetch(
+                _runtime_release_artifact_url(release_version, artifact.checksum_name)
+            )
+        )
+        verify_checksum(archive, checksum)
+        extracted = extract_helper(archive, artifact, scratch / "extracted")
+        probe = probe_runtime_helper(extracted)
+        if probe.reported_version != release_version:
+            raise TuiReleaseError(
+                f"release helper {artifact.archive_name} reports Release "
+                f"{probe.reported_version!r}, not {release_version!r}"
+            )
+        os.replace(extracted, destination)
+    return destination
+
+
+def _download_release_file(url: str) -> bytes:
+    """Download one public Release asset, surfacing transport failures to the caller."""
+    try:
+        with urlopen(url, timeout=30) as response:
+            return response.read()
+    except (OSError, HTTPException) as exc:
+        raise TuiReleaseError(f"cannot download release artifact {url}: {exc}") from exc
+
+
+def _runtime_release_artifact_url(release_version: str, artifact: str) -> str:
+    return _RUNTIME_RELEASE_URL.format(version=release_version, artifact=artifact)
 
 
 def _digest(path: Path) -> str:

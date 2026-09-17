@@ -286,6 +286,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  info                           Describe this installation's "
             "identity, channel, and assets.\n"
             "                                 See `git-loopy info -h`.\n"
+            "  update                         Refresh machine-local assets "
+            "to this Release.\n"
+            "                                 See `git-loopy update -h`.\n"
             "  skills list                    Inspect the closed-world Skill "
             "policy.\n"
             "  skills edit                    Edit a project or global Skill "
@@ -556,6 +559,7 @@ _SUBCOMMANDS = (
     "labels",
     "calibrate",
     "info",
+    "update",
     "doctor",
     "sweep",
 )
@@ -610,7 +614,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{init,config,skills,labels,calibrate,info,doctor,sweep}",
+        metavar="{init,config,skills,labels,calibrate,info,update,doctor,sweep}",
     )
 
     init = sub.add_parser(
@@ -730,6 +734,18 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Emit the stable installation-inventory JSON document.",
+    )
+
+    sub.add_parser(
+        "update",
+        help="Refresh machine-local assets to the installed Release.",
+        description=(
+            "Refresh the installed Skill catalog and TUI helper, and replace the "
+            "global PROMPT.md override only when Scaffold provenance proves it is "
+            "untouched. Customized or unrecorded prompt prose is left unchanged "
+            "and the upstream changes are reported. This command never starts a "
+            "Run, requires a repository, or writes to the tracker."
+        ),
     )
 
     doctor = sub.add_parser(
@@ -1076,6 +1092,13 @@ def _run_info(
             for asset in inventory.assets:
                 output_fn(f"  {asset.name}: {_display_asset(asset)}")
     return 0
+
+
+def _run_update(_args: argparse.Namespace) -> int:
+    """Dispatch the machine-local installation refresh."""
+    from git_loopy import updatecmd
+
+    return updatecmd.run_update()
 
 
 def _display_asset(asset: "InstalledAsset") -> str:
@@ -2302,6 +2325,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_calibrate(sub_args)
         if sub_args.command == "info":
             return _run_info(sub_args)
+        if sub_args.command == "update":
+            return _run_update(sub_args)
         if sub_args.command == "doctor":
             return _run_doctor(sub_args)
         if sub_args.command == "sweep":

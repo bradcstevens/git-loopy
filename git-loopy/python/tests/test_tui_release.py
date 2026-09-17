@@ -302,6 +302,107 @@ def _write_fake_helper(path: Path, *, version: str, script: str = "") -> Path:
     return path
 
 
+def test_refresh_machine_local_helper_replaces_it_with_this_releases_artifact(
+    tmp_path: Path,
+) -> None:
+    """A verified Release helper is installed into git-loopy's machine-local slot."""
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    artifact = tui_release.artifact_for(
+        metadata,
+        tui_release.select_target(metadata, system="Darwin", machine="arm64"),
+    )
+    helper = _write_fake_helper(
+        tmp_path / artifact.executable_name,
+        version="1.2.4",
+    )
+    archive = tmp_path / artifact.archive_name
+    with tarfile.open(archive, "w:xz") as bundle:
+        bundle.add(helper, arcname=artifact.executable_name)
+    checksum = tmp_path / artifact.checksum_name
+    checksum.write_text(
+        f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
+        encoding="utf-8",
+    )
+    downloads = {
+        tui_release.release_artifact_url(
+            metadata, release_version="1.2.4", artifact=artifact.archive_name
+        ): archive.read_bytes(),
+        tui_release.release_artifact_url(
+            metadata, release_version="1.2.4", artifact=artifact.checksum_name
+        ): checksum.read_bytes(),
+    }
+    config_home = tmp_path / "config-home"
+
+    installed = tui_release.refresh_machine_local_helper(
+        "1.2.4",
+        {"XDG_CONFIG_HOME": str(config_home)},
+        host_system=lambda: "Darwin",
+        host_machine=lambda: "arm64",
+        host_libc=lambda: None,
+        artifact_resolver=lambda _system, _machine, _libc: artifact,
+        download=downloads.__getitem__,
+    )
+
+    assert installed == config_home / "git-loopy" / "bin" / artifact.executable_name
+    assert installed.is_file()
+    assert tui_release.probe_runtime_helper(installed).reported_version == "1.2.4"
+
+
+@pytest.mark.parametrize(
+    "case",
+    FIXTURE["selection_cases"],
+    ids=lambda case: case["id"],
+)
+def test_runtime_helper_selection_agrees_with_the_canonical_artifact_description(
+    case: dict[str, Any],
+) -> None:
+    """An installed Runner has no checkout, so its built-in selector is held to it."""
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    if case["target"] is None:
+        with pytest.raises(tui_release.TuiReleaseError) as raised:
+            tui_release._runtime_artifact_for_host(
+                case["system"],
+                case["machine"],
+                case["libc"],
+            )
+        assert case["error"] in str(raised.value)
+        return
+    expected = tui_release.artifact_for(
+        metadata,
+        tui_release.select_target(
+            metadata,
+            system=case["system"],
+            machine=case["machine"],
+            libc=case["libc"],
+        ),
+    )
+
+    resolved = tui_release._runtime_artifact_for_host(
+        case["system"],
+        case["machine"],
+        case["libc"],
+    )
+
+    assert (
+        resolved.target.triple,
+        resolved.archive_name,
+        resolved.checksum_name,
+        resolved.executable_name,
+    ) == (
+        expected.target.triple,
+        expected.archive_name,
+        expected.checksum_name,
+        expected.executable_name,
+    )
+    assert tui_release._runtime_release_artifact_url("9.9.9", expected.archive_name) == (
+        tui_release.release_artifact_url(
+            metadata,
+            release_version="9.9.9",
+            artifact=expected.archive_name,
+        )
+    )
+
+
 def test_machine_local_helper_paths_sit_in_a_bin_directory_beside_the_config(
     tmp_path: Path,
 ) -> None:

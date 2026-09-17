@@ -70,6 +70,22 @@ def test_subcommand_parser_parses_info_json() -> None:
     assert args.json is True
 
 
+def test_main_update_runs_outside_a_git_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Update is machine-local, so it never asks the current directory for a repository."""
+    from git_loopy import updatecmd
+
+    monkeypatch.setattr(
+        cli_module,
+        "resolve_repo_root",
+        lambda: (_ for _ in ()).throw(AssertionError("update must not resolve a repository")),
+    )
+    monkeypatch.setattr(updatecmd, "run_update", lambda: 0)
+
+    assert cli_module.main(["update"]) == 0
+
+
 def test_subcommand_parser_parses_doctor() -> None:
     args = cli_module.build_subcommand_parser().parse_args(["doctor"])
     assert args.command == "doctor"
