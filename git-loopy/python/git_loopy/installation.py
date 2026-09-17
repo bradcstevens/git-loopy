@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Callable, Literal, Mapping
 from urllib.parse import unquote, urlparse
 
+from git_loopy import skill_install, tui_release
 from git_loopy.release_version import read_runtime_release_version
 from git_loopy.scaffold_provenance import (
     ScaffoldedAsset,
@@ -49,39 +50,60 @@ AssetClassification = Literal["untouched", "customized", "unrecorded"]
 class _ConfigHomeAsset:
     """One asset git-loopy installs, and what Scaffold provenance says about it.
 
-    ``filenames`` holds every name one asset answers to, most specific first, so
-    a platform that renames the artifact is still inventoried; the first name is
-    what an absent asset reports.  ``provenance_name`` is the record key when
-    Scaffold provenance covers the asset and ``None`` when it never does.  The
-    **installed catalog** and the TUI helper are machine-managed — a catalog
-    someone edits is re-cut wholesale (ADR-0025) — so the fail-safe that protects
-    operator prose does not apply.
+    ``locate`` resolves every path one asset answers to, most specific first, so
+    a platform that renames the artifact is still inventoried; the first path is
+    what an absent asset reports.  It is a resolver rather than a filename
+    because the location belongs to whichever module installs the asset — a
+    second spelling here is how ``info`` comes to report a path no Run reads.
+    ``provenance_name`` is the record key when Scaffold provenance covers the
+    asset and ``None`` when it never does.  The **installed catalog** and the TUI
+    helper are machine-managed — a catalog someone edits is re-cut wholesale
+    (ADR-0025) — so the fail-safe that protects operator prose does not apply.
     """
 
     name: str
-    filenames: tuple[str, ...]
+    locate: Callable[[Mapping[str, str]], tuple[Path, ...]]
     provenance_name: str | None
 
 
+def _covered(name: str) -> _ConfigHomeAsset:
+    """Declare an operator-editable asset Scaffold provenance records.
+
+    The record keys an asset by filename and digests ``<scope>/<name>``
+    (:mod:`git_loopy.scaffold_provenance`), so its key and its location are one
+    fact and are spelled once here.
+    """
+    return _ConfigHomeAsset(
+        name=name,
+        locate=lambda env: (global_dir(env) / name,),
+        provenance_name=name,
+    )
+
+
+def _tui_helper_paths(env: Mapping[str, str]) -> tuple[Path, ...]:
+    """Ask the module that owns where a helper is found.
+
+    Nothing installs a machine-local helper yet: the shell installer stages a
+    *clone-local* one and a package manager puts one on ``PATH``, neither of
+    which is git-loopy's to refresh or delete.  So the location this record hands
+    to ``update`` (#524) and ``uninstall`` (#529) is the one
+    :mod:`git_loopy.tui_release` declares, rather than a further spelling that
+    could only ever agree with it by luck.
+    """
+    return tui_release.machine_local_helper_paths(env)
+
+
 _CONFIG_HOME_ASSETS = (
-    _ConfigHomeAsset(
-        name="config.toml",
-        filenames=("config.toml",),
-        provenance_name="config.toml",
-    ),
-    _ConfigHomeAsset(
-        name="PROMPT.md",
-        filenames=("PROMPT.md",),
-        provenance_name="PROMPT.md",
-    ),
+    _covered("config.toml"),
+    _covered("PROMPT.md"),
     _ConfigHomeAsset(
         name="installed catalog",
-        filenames=("skills",),
+        locate=lambda env: (skill_install.installed_catalog_dir(env),),
         provenance_name=None,
     ),
     _ConfigHomeAsset(
         name="TUI helper",
-        filenames=("bin/git-loopy-tui", "bin/git-loopy-tui.exe"),
+        locate=_tui_helper_paths,
         provenance_name=None,
     ),
 )
@@ -197,16 +219,16 @@ def _inspect_assets(env: Mapping[str, str]) -> tuple[InstalledAsset, ...]:
     return tuple(
         _classify_asset(
             asset=asset,
-            path=_asset_path(scope_dir, asset),
+            path=_asset_path(env, asset),
             provenance=_recorded(provenance, asset),
         )
         for asset in _CONFIG_HOME_ASSETS
     )
 
 
-def _asset_path(scope_dir: Path, asset: _ConfigHomeAsset) -> Path:
-    """Resolve the name one asset actually answers to in this scope."""
-    candidates = tuple(scope_dir / filename for filename in asset.filenames)
+def _asset_path(env: Mapping[str, str], asset: _ConfigHomeAsset) -> Path:
+    """Resolve the path one asset actually answers to in this environment."""
+    candidates = asset.locate(env)
     for candidate in candidates:
         if candidate.exists():
             return candidate

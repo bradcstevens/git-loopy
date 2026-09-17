@@ -519,6 +519,48 @@ def test_main_info_exits_zero_when_inventory_cannot_be_read(
     assert "Release version: unknown" in output
 
 
+def test_main_info_classifies_the_running_operators_own_config_home(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """``info`` judges the environment the operator is actually running in.
+
+    Every other ``info`` test replaces the inventory wholesale, so nothing would
+    notice ``_run_info`` resolving assets against some other environment than
+    the process's own — and the drift an operator ran the command to see would
+    be reported from a config-home nobody has.
+    """
+    from git_loopy import scaffold_provenance
+
+    scope = tmp_path / "config-home" / "git-loopy"
+    config = scope / "config.toml"
+    prompt = scope / "PROMPT.md"
+    scope.mkdir(parents=True)
+    config.write_text("[run]\n", encoding="utf-8")
+    prompt.write_text("# scaffolded\n", encoding="utf-8")
+    scaffold_provenance.record_scaffolded_assets(
+        scope,
+        release_version="1.2.3",
+        assets={"config.toml": config, "PROMPT.md": prompt},
+        previous=None,
+    )
+    prompt.write_text("# scaffolded\n\nMy own Run instructions.\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config-home"))
+
+    assert cli_module.main(["info", "--json"]) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert [
+        (asset["name"], asset["path"], asset["present"], asset["classification"])
+        for asset in document["assets"]
+    ] == [
+        ("config.toml", str(config), True, "untouched"),
+        ("PROMPT.md", str(prompt), True, "customized"),
+        ("installed catalog", str(scope / "skills"), False, "unrecorded"),
+        ("TUI helper", str(scope / "bin" / "git-loopy-tui"), False, "unrecorded"),
+    ]
+
+
 def test_skills_edit_dispatches_selected_scope(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

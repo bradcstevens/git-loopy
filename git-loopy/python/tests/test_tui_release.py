@@ -302,6 +302,47 @@ def _write_fake_helper(path: Path, *, version: str, script: str = "") -> Path:
     return path
 
 
+def test_machine_local_helper_paths_sit_in_a_bin_directory_beside_the_config(
+    tmp_path: Path,
+) -> None:
+    """The one place the machine-local helper's location is spelled.
+
+    ``update`` installs it and ``uninstall`` removes it through the installation
+    inventory (ADR-0054), so the location is declared here, beside the two
+    locations :func:`resolve_runtime_helper` discovers, rather than in whichever
+    command happens to need it. It stays out of the directory a Run reads Config
+    from, and the Windows artifact is named because a machine-local helper that
+    inventoried only the extensionless name would be invisible on Windows.
+    """
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    _extension, windows_suffix = metadata.archive_formats["windows"]
+    config_home = tmp_path / "config-home"
+
+    paths = tui_release.machine_local_helper_paths({"XDG_CONFIG_HOME": str(config_home)})
+
+    bin_dir = config_home / "git-loopy" / "bin"
+    assert paths == (
+        bin_dir / metadata.command_name,
+        bin_dir / f"{metadata.command_name}{windows_suffix}",
+    )
+
+
+def test_the_runtime_helper_name_is_the_one_the_release_publishes() -> None:
+    """A Runner with no checkout still has to look for the published command.
+
+    Every location this module resolves — clone-local, ``PATH``, and the
+    machine-local copy — is built from ``HELPER_COMMAND_NAME``, which restates
+    what the canonical artifact description declares because an installed Runner
+    cannot read that file. A rename there would otherwise leave every one of
+    them looking for a command no Release publishes any more.
+    """
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    _extension, windows_suffix = metadata.archive_formats["windows"]
+
+    assert tui_release.HELPER_COMMAND_NAME == metadata.command_name
+    assert tui_release._WINDOWS_EXECUTABLE_SUFFIX == windows_suffix
+
+
 @pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
 def test_runtime_helper_prefers_the_clone_local_binary_over_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

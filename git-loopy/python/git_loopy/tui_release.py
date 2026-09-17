@@ -27,14 +27,24 @@ import tomllib
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .events import EVENT_SCHEMA_VERSION
 from .release_version import ReleaseVersionError, is_prerelease, read_release_version
+from .settings import global_dir
 
 
 ARTIFACT_METADATA_PATH = Path("git-loopy/conformance/tui-artifacts.json")
 HELPER_MANIFEST_PATH = Path("git-loopy/tui/Cargo.toml")
+
+#: The command every channel installs the helper under, and the suffix a Windows
+#: artifact carries. Both are declared by ``ARTIFACT_METADATA_PATH``, which needs
+#: a checkout to read — so an installed Runner that has no checkout spells them
+#: here, in the module that owns where a helper is found, rather than wherever it
+#: happens to need them.
+HELPER_COMMAND_NAME = "git-loopy-tui"
+_WINDOWS_EXECUTABLE_SUFFIX = ".exe"
+
 _HEX_DIGEST = re.compile("[0-9a-fA-F]{64}")
 
 
@@ -442,8 +452,8 @@ def resolve_runtime_helper(
     older, but that drift is surfaced with a warning rather than blocking the Run.
     Any probe failure or schema mismatch degrades to ``None``.
     """
-    clone_local = repository_root / ".git-loopy" / "bin" / "git-loopy-tui"
-    path_helper = shutil.which("git-loopy-tui")
+    clone_local = repository_root / ".git-loopy" / "bin" / HELPER_COMMAND_NAME
+    path_helper = shutil.which(HELPER_COMMAND_NAME)
     if clone_local.is_file() and os.access(clone_local, os.X_OK):
         candidates: tuple[tuple[str, Path], ...] = (("clone-local", clone_local),)
     elif path_helper:
@@ -475,6 +485,23 @@ def resolve_runtime_helper(
             )
         return probe.path
     return None
+
+
+def machine_local_helper_paths(env: Mapping[str, str]) -> tuple[Path, ...]:
+    """Every name the machine-local helper answers to, most specific first.
+
+    This is a third location, distinct from the two :func:`resolve_runtime_helper`
+    discovers: a clone-local helper belongs to one checkout and a ``PATH`` helper
+    belongs to the package manager that put it there, so neither is git-loopy's
+    own machine state to refresh or remove. This is the copy ADR-0054 hands to
+    ``update`` and ``uninstall``, beside the Config the same scope carries but in
+    a ``bin/`` directory, so an executable never lands where a Run reads Config.
+    """
+    bin_dir = global_dir(env) / "bin"
+    return (
+        bin_dir / HELPER_COMMAND_NAME,
+        bin_dir / f"{HELPER_COMMAND_NAME}{_WINDOWS_EXECUTABLE_SUFFIX}",
+    )
 
 
 def _digest(path: Path) -> str:

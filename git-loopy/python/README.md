@@ -126,6 +126,13 @@ provenance**:
 not installed this" stays distinguishable from "this is installed and nothing
 proves what it is". Plain text prints `not installed` for an absent asset.
 
+Every reported asset lives in the Config home, so the **TUI helper** row is the
+machine-local copy under `<config-home>/git-loopy/bin/` — the one ADR-0054 hands
+to `update` and `uninstall`. A clone-local helper in `.git-loopy/bin/`, or one a
+package manager put on `PATH`, is a different artifact through a different
+channel: a Run still attaches to it, and `info` deliberately does not report it
+as git-loopy's to refresh or remove.
+
 `--json` emits this stable schema. Fields with unknown facts are `null`; the
 `assets` array always lists the whole Config-home inventory, in a fixed order,
 whether or not each entry exists on disk. Each entry carries its stable display
