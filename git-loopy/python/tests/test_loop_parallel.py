@@ -2805,8 +2805,14 @@ def test_parallel_integration_applies_only_bumped_release_lines_after_publicatio
 
     assert exit_code == 0
     assert validate_repository_release_version(tmp_path) == expected_version
+    release_advanced = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.release.advanced"
+    ]
     if expected_commit is None:
         assert fake_git.commit_paths_calls == []
+        assert release_advanced == []
     else:
         assert fake_git.commit_paths_calls == [
             (
@@ -2823,6 +2829,22 @@ def test_parallel_integration_applies_only_bumped_release_lines_after_publicatio
                 ),
             )
         ]
+        assert len(release_advanced) == 1
+        assert {
+            key: release_advanced[0][key]
+            for key in ("issue", "bump_class", "release_target", "release_version")
+        } == {
+            "issue": 42,
+            "bump_class": "patch",
+            "release_target": "1.2.4",
+            "release_version": "1.2.4-dev.1",
+        }
+        event_types = [event["type"] for event in _logged_events(tmp_path)]
+        release_index = event_types.index("wrapper.release.advanced")
+        assert event_types[release_index - 1] == "wrapper.auto_close"
+        assert (
+            event_types.index("wrapper.integration.published") < release_index
+        )
     assert fake_gh.issue_view(42).state == "CLOSED"
 
 

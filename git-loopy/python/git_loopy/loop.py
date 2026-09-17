@@ -4790,6 +4790,9 @@ class _ParallelLoop:
             return False
         if not self._base_advanced(pre_base, ref):
             return False
+        self._emit_contribution_event(
+            contribution, events_module.WRAPPER_INTEGRATION_PUBLISHED
+        )
         self._land_lane(contribution, lane_work, pre_base)
         return True
 
@@ -4866,11 +4869,23 @@ class _ParallelLoop:
         pre_base: str,
     ) -> None:
         """Finish a green landing: advance the line, close the issue, reap the branch."""
-        self._advance_release_line(lane_work.item)
+        advanced = self._advance_release_line(lane_work.item)
         self._close_landed(lane_work.item, pre_base)
+        if advanced is not None:
+            next_line, bump_class = advanced
+            self._serial._emit(
+                events_module.WRAPPER_RELEASE_ADVANCED,
+                iter_num=None,
+                issue=lane_work.item.ref,
+                bump_class=bump_class,
+                release_target=next_line.target,
+                release_version=next_line.version,
+            )
         self._delete_branch_safely(contribution.ref, lane_work.branch)
 
-    def _advance_release_line(self, item: AfkReadyItem) -> None:
+    def _advance_release_line(
+        self, item: AfkReadyItem
+    ) -> tuple[ReleaseLine, str] | None:
         """Commit one bumped Release line after Integration has published it.
 
         Runs post-Integration inside ``self._integration_lock`` (ADR-0052,
@@ -4901,9 +4916,9 @@ class _ParallelLoop:
                 item.ref,
                 exc,
             )
-            return
+            return None
         if bump_class == "none":
-            return
+            return None
 
         try:
             last_stable, current_line = self._read_release_line()
@@ -4922,7 +4937,7 @@ class _ParallelLoop:
             self._diag.warning(
                 "integration #%s: Release line did not advance: %s", item.ref, exc
             )
-            return
+            return None
 
         try:
             self._git.commit_paths(
@@ -4931,9 +4946,10 @@ class _ParallelLoop:
             )
         except git_module.GitError as exc:
             self._restore_release_line(item.ref, current_line, exc)
-            return
+            return None
 
         self._release_line = next_line
+        return next_line, bump_class
 
     def _read_release_line(self) -> tuple[str, ReleaseLine]:
         """Return the Run's last stable Release version and its current line.

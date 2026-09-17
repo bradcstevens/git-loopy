@@ -1652,6 +1652,28 @@ def test_rolling_stream_orders_each_contribution_lifecycle() -> None:
     assert ordered_cases, "no pinned stream contains a Lane contribution"
 
 
+def test_rolling_stream_places_release_advance_after_integration_publication() -> None:
+    """A Release line advances only after its contribution reaches base."""
+    advances = 0
+    required = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_RELEASE_ADVANCED
+    ]["required_when_present"]
+    for case in _EVENT_SCHEMA["rolling_stream_cases"]:
+        for index, event in enumerate(case["events"]):
+            if event["type"] != events_module.WRAPPER_RELEASE_ADVANCED:
+                continue
+            advances += 1
+            assert index > 1, case["id"]
+            closed = case["events"][index - 1]
+            assert closed["type"] == events_module.WRAPPER_AUTO_CLOSE
+            assert event["issue"] == closed["issue"]
+            published = case["events"][index - 2]
+            assert published["type"] == events_module.WRAPPER_INTEGRATION_PUBLISHED
+            assert event["issue"] == published["issue"]
+            assert all(key in event for key in required)
+    assert advances, "no pinned rolling stream advances a Release line"
+
+
 def test_rolling_stream_respects_the_bounded_integration_backlog() -> None:
     """A pinned stream must be *reachable*, not merely well-ordered.
 
