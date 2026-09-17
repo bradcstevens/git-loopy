@@ -1,4 +1,4 @@
-"""Tests for the report-only Skill-policy preflight command (#516)."""
+"""Tests for the Skill-policy preflight command and its repair (#516, #517)."""
 
 from __future__ import annotations
 
@@ -341,6 +341,55 @@ def test_doctor_apply_repairs_only_missing_and_required_names(
         return resolution.blockers
 
     assert asyncio.run(resolves_after_repair()) == ()
+
+
+def test_doctor_apply_prints_the_delta_before_it_writes(tmp_path: Path) -> None:
+    """The operator reads the whole change before any of it reaches the Config.
+
+    Asserted from inside the write rather than from the finished transcript,
+    because a transcript ordered after the fact cannot tell a delta printed
+    first from one printed once the Config had already moved under the
+    operator.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config_path = repo / "git-loopy" / "config.toml"
+    settings.write_config(config_path, {"enabled_skills": ["ghost"]})
+    output: list[str] = []
+    printed_at_write: list[tuple[str, ...]] = []
+
+    def writer(path: Path, values: dict[str, object]) -> None:
+        printed_at_write.append(tuple(output))
+        settings.write_config_atomic(path, values)
+
+    code = run_doctor(
+        config=_config("ghost"),
+        repo_root=repo,
+        env={},
+        client_factory=_CatalogClient,
+        discoverer=_discoverer(
+            _catalog(required=SkillCatalogWinner("required", "packaged"))
+        ),
+        git=FakeGitClient(repo),
+        prompt_text="---\nrequired-skills:\n  - required\n---\n",
+        installed_skills_dir=tmp_path / "installed",
+        output_fn=output.append,
+        apply=True,
+        writer=writer,
+    )
+
+    assert code == 0
+    assert printed_at_write == [
+        (
+            "ghost | enabled Skill has no catalog winner | project policy | "
+            f"Config: {config_path}",
+            "required | Required Skill is disabled | project policy | "
+            f"Config: {config_path}",
+            "Skill policy repair for the project policy:",
+            "Add: required",
+            "Remove: ghost",
+        )
+    ]
 
 
 def test_doctor_apply_repairs_the_global_policy_that_carries_blockers(
@@ -990,3 +1039,101 @@ def test_doctor_does_not_create_config_or_an_installed_catalog(tmp_path: Path) -
     )
     assert not (repo / "git-loopy" / "config.toml").exists()
     assert not installed.exists()
+
+
+class _LifecycleOnlyClient:
+    """A Copilot client that refuses every call but the async context manager.
+
+    ADR-0015 keeps git-loopy's Skill policy import-only, so the repair
+    `--apply` performs is a write to git-loopy's own Config and never to
+    Copilot's enabled/disabled state. The only route to that state is the
+    client API, so any attribute reach past the lifecycle is the mutation
+    risk itself — this double turns one into a test failure rather than a
+    live side effect on the operator's Copilot.
+    """
+
+    def __init__(self) -> None:
+        self.lifecycle: list[str] = []
+
+    async def __aenter__(self) -> _LifecycleOnlyClient:
+        self.lifecycle.append("start")
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        self.lifecycle.append("stop")
+
+    def __getattr__(self, name: str) -> object:
+        raise AssertionError(
+            f"doctor must not call the Copilot client API: {name}"
+        )
+
+
+def test_doctor_apply_repairs_without_reaching_copilots_own_settings(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config_path = repo / "git-loopy" / "config.toml"
+    settings.write_config(config_path, {"enabled_skills": ["ghost"]})
+    clients: list[_LifecycleOnlyClient] = []
+
+    def factory() -> _LifecycleOnlyClient:
+        client = _LifecycleOnlyClient()
+        clients.append(client)
+        return client
+
+    async def discoverer(client: object, **_kwargs: object) -> SkillCatalog:
+        assert isinstance(client, _LifecycleOnlyClient)
+        return _catalog(required=SkillCatalogWinner("required", "packaged"))
+
+    code = run_doctor(
+        config=_config("ghost"),
+        repo_root=repo,
+        env={"HOME": str(home), "XDG_CONFIG_HOME": str(tmp_path / "xdg")},
+        client_factory=factory,
+        discoverer=discoverer,
+        git=FakeGitClient(repo),
+        prompt_text="---\nrequired-skills:\n  - required\n---\n",
+        installed_skills_dir=tmp_path / "installed",
+        output_fn=lambda _line: None,
+        apply=True,
+    )
+
+    assert code == 0
+    assert settings.load_config_table(config_path)["enabled_skills"] == ["required"]
+    assert [client.lifecycle for client in clients] == [["start", "stop"]]
+    assert not (home / ".copilot").exists()
+
+
+def test_doctor_apply_replaces_the_saved_policy_rather_than_rewriting_it(
+    tmp_path: Path,
+) -> None:
+    """The default repair lands as a replacement, never as an in-place rewrite.
+
+    A Config truncated and rewritten under a reader is a policy that can be
+    read half-repaired, which is worse than the blocker `--apply` was asked to
+    clear. Observed as the file behind the path changing identity, because
+    that is the difference between the atomic replace and a rewrite an
+    operator could otherwise never tell apart from the finished contents.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config_path = repo / "git-loopy" / "config.toml"
+    settings.write_config(config_path, {"model": "gpt-5.4", "enabled_skills": ["ghost"]})
+    original = config_path.stat().st_ino
+
+    code, _output = _run(
+        tmp_path,
+        config=_config("ghost"),
+        catalog=_catalog(),
+        apply=True,
+    )
+
+    assert code == 0
+    assert settings.load_config_table(config_path) == {
+        "model": "gpt-5.4",
+        "enabled_skills": [],
+    }
+    assert config_path.stat().st_ino != original
+    assert list(config_path.parent.iterdir()) == [config_path]

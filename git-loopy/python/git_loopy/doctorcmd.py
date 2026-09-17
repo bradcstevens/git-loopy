@@ -1,4 +1,5 @@
-"""Report every Run precondition without creating a Run (#516, #519)."""
+"""Report every Run precondition without creating a Run (#516, #519), and
+repair the saved Skill policy that stranded it on request (#517)."""
 
 from __future__ import annotations
 
