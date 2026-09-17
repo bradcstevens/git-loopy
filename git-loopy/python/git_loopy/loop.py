@@ -5587,8 +5587,11 @@ async def run(
     environment_preflight = resolve_run_environment_preflight(
         repo_root=repo_root,
         issue_source=config.issue_source,
-        github_auth_status=(
-            None if github_client is None else github_client.auth_status
+        github_client=github_client,
+        label_client=(
+            gh_module.SubprocessLabelClient()
+            if isinstance(github_client, gh_module.SubprocessGitHubClient)
+            else None
         ),
     )
     if not environment_preflight.passed:

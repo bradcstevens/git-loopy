@@ -729,13 +729,14 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
 
     doctor = sub.add_parser(
         "doctor",
-        help="Report Skill-policy blockers before starting a Run.",
+        help="Report Run-preflight blockers without starting a Run.",
         description=(
-            "Resolve the same Skill policy a Run preflight resolves and report "
-            "every blocker. `--apply` atomically repairs missing enabled names "
-            "and disabled Required Skills in the saved policy that carries them. "
-            "Doctor never starts a Run, opens a picker, changes Copilot settings, "
-            "or refreshes the installed Skill catalog."
+            "Resolve the same environment and Skill-policy preflight a Run "
+            "resolves and report every blocker. `--apply` atomically repairs "
+            "missing enabled names and disabled Required Skills in the saved "
+            "policy that carries them. Environment preconditions are report-only; "
+            "follow each row's remedy. Doctor never starts a Run, opens a picker, "
+            "changes Copilot settings, or refreshes the installed Skill catalog."
         ),
     )
     doctor.add_argument(

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from git_loopy.gh import GhError
+from git_loopy import labels
 from git_loopy.run_environment_preflight import resolve_run_environment_preflight
 
 
@@ -28,15 +29,59 @@ def test_environment_preflight_reports_an_all_clear_github_run(tmp_path: Path) -
     result = resolve_run_environment_preflight(
         repo_root=tmp_path,
         issue_source="github",
-        executable_finder=lambda name: "/tools/copilot" if name == "copilot" else None,
+        executable_finder=lambda name: f"/tools/{name}",
         github_auth_status=lambda: True,
     )
 
     assert result.passed
     assert [(check.name, check.passed, check.location) for check in result.checks] == [
+        ("git", True, Path("/tools/git")),
         ("copilot", True, Path("/tools/copilot")),
         ("github", True, None),
         ("feedback_loops", True, None),
+    ]
+
+
+def test_environment_preflight_reports_an_unauthorised_tracker_without_skipping_labels(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "AGENTS.md").write_text(
+        "## Feedback loops\n\n| Loop | Command |\n| --- | --- |\n| Tests | `uv run pytest` |\n",
+        encoding="utf-8",
+    )
+
+    class _Tracker:
+        def auth_status(self) -> bool:
+            return False
+
+    class _Labels:
+        def label_catalog(self) -> list[labels.TrackerLabel]:
+            return [
+                labels.TrackerLabel(spec.name, spec.color, spec.description)
+                for spec in labels.read_tracker_vocabulary(tmp_path)
+            ]
+
+    result = resolve_run_environment_preflight(
+        repo_root=tmp_path,
+        issue_source="github",
+        executable_finder=lambda name: f"/tools/{name}",
+        github_client=_Tracker(),
+        label_client=_Labels(),
+    )
+
+    assert [check.name for check in result.checks] == [
+        "git",
+        "copilot",
+        "gh",
+        "github",
+        "label_vocabulary",
+        "feedback_loops",
+    ]
+    assert [check.name for check in result.failures] == ["github"]
+    assert [check.location for check in result.checks[:3]] == [
+        Path("/tools/git"),
+        Path("/tools/copilot"),
+        Path("/tools/gh"),
     ]
 
 
@@ -82,7 +127,7 @@ def test_environment_preflight_reports_each_failed_condition(
     result = resolve_run_environment_preflight(
         repo_root=tmp_path,
         issue_source="github",
-        executable_finder=lambda _name: executable,
+        executable_finder=lambda name: "/tools/git" if name == "git" else executable,
         github_auth_status=lambda: authenticated,
     )
 
@@ -127,8 +172,9 @@ def test_environment_preflight_continues_after_failures_to_report_every_check(
         github_auth_status=lambda: calls.append("github") and False,
     )
 
-    assert calls == ["copilot", "github"]
+    assert calls == ["git", "copilot", "github"]
     assert [check.name for check in result.failures] == [
+        "git",
         "copilot",
         "github",
         "feedback_loops",

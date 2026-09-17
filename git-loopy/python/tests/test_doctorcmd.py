@@ -6,11 +6,18 @@ import asyncio
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import pytest
+
 from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
-from git_loopy.doctorcmd import run_doctor
 from git_loopy import cli as cli_module
+from git_loopy import doctorcmd
+from git_loopy.doctorcmd import run_doctor
 from git_loopy import settings
 from git_loopy.git import GitError
+from git_loopy.run_environment_preflight import (
+    RunEnvironmentCheck,
+    RunEnvironmentPreflight,
+)
 from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
 from git_loopy.skill_run_preflight import resolve_run_skill_policy_preflight
 from tests.fakes import FakeGitClient
@@ -42,6 +49,16 @@ class _UnavailableCatalogClient:
         return None
 
 
+@pytest.fixture(autouse=True)
+def _isolate_environment_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep Skill-policy tests independent of the host's Run environment."""
+    monkeypatch.setattr(
+        doctorcmd,
+        "resolve_run_environment_preflight",
+        lambda **_kwargs: RunEnvironmentPreflight(()),
+    )
+
+
 def _config(*names: str) -> RunConfig:
     return RunConfig(
         skill_policy=SkillPolicyInputs(
@@ -63,6 +80,7 @@ def _run(
     required: tuple[str, ...] = (),
     env: dict[str, str] | None = None,
     apply: bool = False,
+    environment_preflight: RunEnvironmentPreflight | None = None,
 ) -> tuple[int, list[str]]:
     repo = tmp_path / "repo"
     repo.mkdir(exist_ok=True)
@@ -89,8 +107,80 @@ def _run(
         installed_skills_dir=installed,
         output_fn=output.append,
         apply=apply,
+        environment_preflight_resolver=(
+            lambda **_kwargs: (
+                RunEnvironmentPreflight(())
+                if environment_preflight is None
+                else environment_preflight
+            )
+        ),
     )
     return code, output
+
+
+def test_doctor_reports_every_shared_environment_precondition(
+    tmp_path: Path,
+) -> None:
+    environment_preflight = RunEnvironmentPreflight(
+        checks=(
+            RunEnvironmentCheck(
+                name="git",
+                passed=False,
+                detail="git is not on PATH",
+                remedy="Install Git and re-run git-loopy.",
+            ),
+            RunEnvironmentCheck(
+                name="copilot",
+                passed=True,
+                detail="copilot resolved at /tools/copilot",
+                location=Path("/tools/copilot"),
+            ),
+            RunEnvironmentCheck(
+                name="gh",
+                passed=True,
+                detail="gh resolved at /tools/gh",
+                location=Path("/tools/gh"),
+            ),
+            RunEnvironmentCheck(
+                name="github",
+                passed=False,
+                detail="gh is not authenticated",
+                remedy="Run `gh auth login` and re-run git_loopy.",
+            ),
+            RunEnvironmentCheck(
+                name="label_vocabulary",
+                passed=False,
+                detail="Label vocabulary differs: priority",
+                remedy="Run `git-loopy labels --apply` to reconcile the Label vocabulary.",
+            ),
+            RunEnvironmentCheck(
+                name="feedback_loops",
+                passed=True,
+                detail="AGENTS.md declares 1 runnable feedback loop(s)",
+            ),
+        )
+    )
+
+    code, output = _run(
+        tmp_path,
+        config=_config("required"),
+        catalog=_catalog(required=SkillCatalogWinner("required", "packaged")),
+        required=("required",),
+        environment_preflight=environment_preflight,
+    )
+
+    assert code == 1
+    assert output == [
+        "git | failed | git is not on PATH. Install Git and re-run git-loopy.",
+        "copilot | passed | copilot resolved at /tools/copilot",
+        "gh | passed | gh resolved at /tools/gh",
+        "github | failed | gh is not authenticated. "
+        "Run `gh auth login` and re-run git_loopy.",
+        "label_vocabulary | failed | Label vocabulary differs: priority. "
+        "Run `git-loopy labels --apply` to reconcile the Label vocabulary.",
+        "feedback_loops | passed | AGENTS.md declares 1 runnable feedback loop(s)",
+        "Skill policy is healthy; a Run would not be blocked.",
+    ]
 
 
 def test_doctor_apply_repairs_only_missing_and_required_names(

@@ -38,10 +38,15 @@ from .skill_run_preflight import (
     RunSkillPolicyPreflight,
     resolve_run_skill_policy_preflight,
 )
+from .run_environment_preflight import (
+    RunEnvironmentPreflight,
+    resolve_run_environment_preflight,
+)
 from . import settings
 
 ClientFactory = Callable[[], Any]
 ConfigWriter = Callable[[Path, Mapping[str, object]], None]
+EnvironmentPreflightResolver = Callable[..., RunEnvironmentPreflight]
 
 
 @dataclass(frozen=True)
@@ -86,9 +91,24 @@ def run_doctor(
     output_fn: Callable[[str], None] = print,
     apply: bool = False,
     writer: ConfigWriter = settings.write_config_atomic,
+    environment_preflight_resolver: EnvironmentPreflightResolver | None = None,
 ) -> int:
-    """Report, and explicitly repair, the shared Run Skill-policy preflight."""
+    """Report the Run's preflight, and explicitly repair only its Skill policy."""
     environment = os.environ if env is None else env
+    resolve_environment = (
+        resolve_run_environment_preflight
+        if environment_preflight_resolver is None
+        else environment_preflight_resolver
+    )
+    environment_preflight = resolve_environment(
+        repo_root=repo_root,
+        issue_source=config.issue_source,
+    )
+    for check in environment_preflight.checks:
+        output_fn(
+            f"{check.name} | {'passed' if check.passed else 'failed'} | "
+            f"{check.message}"
+        )
 
     try:
         prompt = (
@@ -131,7 +151,7 @@ def run_doctor(
             if apply
             else "Skill policy is healthy; a Run would not be blocked."
         )
-        return 0
+        return 0 if environment_preflight.passed else 1
 
     for blocker in resolution.blockers:
         for name in blocker.names or ("Skill policy",):
@@ -158,7 +178,7 @@ def run_doctor(
     table["enabled_skills"] = list(plan.proposed)
     writer(path, table)
     output_fn(f"Saved repaired {plan.surface.value} Skill policy to {path}")
-    return 0
+    return 0 if environment_preflight.passed else 1
 
 
 def plan_skill_policy_repair(

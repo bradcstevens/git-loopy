@@ -421,17 +421,26 @@ exactly as it found it, so the fix is always yours to make deliberately.
 
 ### Check before starting a Run
 
-`git-loopy doctor` is the report half of Skill-policy recovery, following the
-same report-first shape as `git-loopy labels`. It resolves the exact Skill
-policy a Run preflight resolves, without starting a Run, opening a picker,
-spending AI Credits, changing Copilot settings, or refreshing the installed
-Skill catalog.
+`git-loopy doctor` is the report half of Run-preflight recovery, following the
+same report-first shape as `git-loopy labels`. It resolves the exact
+environment and Skill policy a Run preflight resolves, without starting a Run,
+opening a picker, spending AI Credits, changing Copilot settings, or refreshing
+the installed Skill catalog.
 
 ```bash
 git-loopy doctor
 ```
 
-Each blocking row names the Skill, the blocker in operator terms, the surface
+Every environment precondition gets its own row: `git`, `copilot`, and `gh`
+resolve through `PATH` and name their resolved locations; the GitHub tracker is
+checked for authentication and access to this repository; the complete
+**Label vocabulary** is compared with the tracker; and `AGENTS.md` must declare
+at least one runnable feedback loop. A failure names the command or operator
+action that owns its remedy. These rows are report-only, including under
+`doctor --apply`: use `git-loopy labels --apply` for Label-vocabulary drift and
+the row's stated command for host tooling or tracker access.
+
+Skill-policy rows name the Skill, the blocker in operator terms, the surface
 that carries it, and what to correct there:
 
 ```
@@ -470,13 +479,14 @@ the Config untouched and keep their own remedy. An environment replacement is
 not a saved policy at all, so `--apply` reports its remedy and writes nothing,
 and where no saved policy exists doctor says so rather than creating one.
 
-When every reported blocker is repairable, the write leaves the next `doctor`
-and the next Run preflight clean; re-running `doctor --apply` then reports a
-healthy policy and writes nothing. A repair whose removals empty the list writes
-an explicit `enabled_skills = []` rather than dropping the key, because dropping
-it would hand the decision to a different surface instead of repairing this one.
+When every reported Skill-policy blocker is repairable and every environment
+precondition passes, the write leaves the next `doctor` and the next Run
+preflight clean; re-running `doctor --apply` then reports a healthy policy and
+writes nothing. A repair whose removals empty the list writes an explicit
+`enabled_skills = []` rather than dropping the key, because dropping it would
+hand the decision to a different surface instead of repairing this one.
 
-A clean policy prints one success line and exits `0`; any blocker exits
+A clean preflight prints its passing rows and exits `0`; any blocker exits
 non-zero, which makes it suitable for a scripted pre-Run check. A failure it
 cannot attribute to a policy surface at all — an unreadable `PROMPT.md`, a
 corrupt installed Skill catalog — is reported as one `doctor could not resolve
