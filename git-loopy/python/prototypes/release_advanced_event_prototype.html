@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PROTOTYPE: Release advance Event</title>
+  <style>
+    body { background: #f6f8fa; color: #1f2328; font: 16px system-ui, sans-serif; margin: 0 auto; max-width: 760px; padding: 36px 20px; }
+    h1 { margin-bottom: 6px; }
+    section { background: white; border: 1px solid #d0d7de; border-radius: 8px; margin-top: 22px; padding: 20px; }
+    button { background: #0969da; border: 0; border-radius: 6px; color: white; cursor: pointer; margin: 4px 6px 4px 0; padding: 9px 12px; }
+    button.secondary { background: #57606a; }
+    dt { color: #57606a; font-weight: 600; margin-top: 12px; }
+    dd { margin: 3px 0; }
+    pre { background: #f6f8fa; overflow-x: auto; padding: 12px; }
+    .notice { color: #1a7f37; font-weight: 600; }
+    .tabs button { background: #8250df; }
+  </style>
+</head>
+<body>
+  <h1>PROTOTYPE: Release advance Event</h1>
+  <p>This throwaway demo asks whether an Integration that changes a Release line provides consumers enough information to observe the advance, while a <code>semver:none</code> closure remains silent.</p>
+
+  <section>
+    <h2>Current Release line</h2>
+    <dl>
+      <dt>Release target</dt><dd id="target"></dd>
+      <dt>Release version</dt><dd id="version"></dd>
+      <dt>Last outcome</dt><dd id="outcome"></dd>
+    </dl>
+    <h3>Most recent Event</h3>
+    <pre id="event"></pre>
+  </section>
+
+  <section>
+    <h2>Free play</h2>
+    <button onclick="dispatch({issue: 42, bumpClass: 'patch', target: '1.2.4'})">Integrate PATCH issue #42</button>
+    <button onclick="dispatch({issue: 43, bumpClass: 'minor', target: '1.3.0'})">Integrate MINOR issue #43</button>
+    <button class="secondary" onclick="dispatch({issue: 44, bumpClass: 'none'})">Close semver:none issue #44</button>
+    <button class="secondary" onclick="reset()">Reset</button>
+  </section>
+
+  <section>
+    <h2>Guided walkthroughs</h2>
+    <div class="tabs">
+      <button onclick="walkthrough('advance')">A changing line publishes one record</button>
+      <button onclick="walkthrough('none')">A no-change closure stays silent</button>
+    </div>
+    <p id="guide"></p>
+    <button id="step" onclick="nextStep()">Start walkthrough</button>
+  </section>
+
+  <script>
+    // Pure model: only a changed Release line produces the additive stream record.
+    const initialState = { target: "1.2.3", version: "1.2.3", event: null, outcome: "Awaiting an Integration." };
+
+    function reduce(state, action) {
+      if (action.bumpClass === "none") {
+        return { ...state, event: null, outcome: `Issue #${action.issue} closed with semver:none; no Release line or Event changed.` };
+      }
+      const counter = Number(state.version.match(/-dev\.(\d+)$/)?.[1] || 0) + 1;
+      const version = `${action.target}-dev.${counter}`;
+      return {
+        target: action.target,
+        version,
+        outcome: `Issue #${action.issue} advanced the Release line.`,
+        event: {
+          type: "wrapper.release.advanced",
+          bump_class: action.bumpClass,
+          issue: action.issue,
+          release_target: action.target,
+          release_version: version
+        }
+      };
+    }
+
+    let state = { ...initialState };
+    let steps = [];
+
+    function dispatch(action) {
+      state = reduce(state, action);
+      render();
+    }
+
+    function reset() {
+      state = { ...initialState };
+      steps = [];
+      document.getElementById("guide").textContent = "";
+      render();
+    }
+
+    function walkthrough(name) {
+      reset();
+      steps = name === "advance"
+        ? [{ issue: 42, bumpClass: "patch", target: "1.2.4" }]
+        : [{ issue: 44, bumpClass: "none" }];
+      document.getElementById("guide").textContent = name === "advance"
+        ? "Watch the record name its causing issue, applied Bump class, resolved Release target, and new dev.N version."
+        : "Watch the Release line remain unchanged and the Event panel remain empty.";
+      document.getElementById("step").textContent = "Apply next step";
+    }
+
+    function nextStep() {
+      const action = steps.shift();
+      if (action) dispatch(action);
+      document.getElementById("step").textContent = steps.length ? "Apply next step" : "Walkthrough complete";
+    }
+
+    function render() {
+      document.getElementById("target").textContent = state.target;
+      document.getElementById("version").textContent = state.version;
+      document.getElementById("outcome").textContent = state.outcome;
+      const event = document.getElementById("event");
+      event.textContent = state.event ? JSON.stringify(state.event, null, 2) : "No Event emitted.";
+      event.className = state.event ? "" : "notice";
+    }
+
+    render();
+  </script>
+</body>
+</html>
