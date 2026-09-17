@@ -98,6 +98,29 @@ def test_doctor_help_says_environment_preconditions_are_report_only(
     assert "A clean host exits 0; any failing precondition exits non-zero" in help_text
 
 
+def test_doctor_help_says_apply_refreshes_the_pinned_skill_catalog(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#518: the report reaches the network under `--apply`, so the help says so.
+
+    The default invocation still compares the installed catalog with the pinned
+    revision offline. Only `--apply` refreshes it, and it re-resolves afterwards
+    so a stale install can never be read as a policy name worth pruning.
+    """
+    monkeypatch.setenv("COLUMNS", "200")
+
+    with pytest.raises(SystemExit):
+        cli_module.build_subcommand_parser().parse_args(["doctor", "--help"])
+
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert (
+        "`--apply` first refreshes the installed Skill catalog to the pinned "
+        "revision and re-resolves" in help_text
+    )
+    assert "refreshes the installed Skill catalog." not in help_text
+
+
 def test_subcommand_parser_parses_sweep_dry_run() -> None:
     args = cli_module.build_subcommand_parser().parse_args(["sweep", "--dry-run"])
     assert args.command == "sweep"

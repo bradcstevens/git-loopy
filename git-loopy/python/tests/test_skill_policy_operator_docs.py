@@ -460,6 +460,33 @@ def test_operator_reference_documents_every_startup_state_and_fallback() -> None
     )
 
 
+def test_operator_reference_documents_every_installed_catalog_verdict() -> None:
+    """#518: doctor judges the install before it judges any Skill name.
+
+    "Missing from the catalog" has two causes an operator fixes in opposite
+    ways: a name that never existed is pruned, and a name the installed catalog
+    is simply too old to carry is *restored by a refresh*. Guidance naming only
+    one of them would send an operator to delete a valid selection to work
+    around a stale install, so every verdict ``CatalogInstallStatus`` can carry
+    has to be a verdict the reference explains.
+    """
+    repo_root = _repo_root_or_skip()
+    doc = _read(repo_root, OPERATOR_DOC)
+
+    from typing import get_args, get_type_hints
+
+    from git_loopy.skill_install import CatalogInstallStatus
+
+    verdicts = get_args(get_type_hints(CatalogInstallStatus)["state"])
+    assert verdicts, "CatalogInstallStatus must declare the verdicts doctor reports"
+
+    missing = sorted(verdict for verdict in verdicts if f"`{verdict}`" not in doc)
+    assert not missing, (
+        f"{OPERATOR_DOC} must document every installed-catalog verdict doctor "
+        f"can report against the pinned revision. Missing: {missing}"
+    )
+
+
 def test_operator_reference_covers_the_unattended_migration_path() -> None:
     """CI must never block on a policy question, and must say what it used.
 

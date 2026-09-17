@@ -424,8 +424,10 @@ exactly as it found it, so the fix is always yours to make deliberately.
 `git-loopy doctor` is the report half of Run-preflight recovery, following the
 same report-first shape as `git-loopy labels`. It resolves the exact
 environment and Skill policy a Run preflight resolves, without starting a Run,
-opening a picker, spending AI Credits, changing Copilot settings, or refreshing
-the installed Skill catalog.
+opening a picker, spending AI Credits, changing Copilot settings, or installing
+anything. It never refreshes the **installed catalog** either; only
+`doctor --apply` does (see
+[Refresh a stale installed catalog](#refresh-a-stale-installed-catalog)).
 
 ```bash
 git-loopy doctor
@@ -471,17 +473,69 @@ the base policy, which already lists the Skill and would be a dead end. A
 blocker under the **Minimal Skill policy** names the project Config, the scope
 `git-loopy skills edit` writes by default inside a repository.
 
+### Refresh a stale installed catalog
+
+Before doctor judges any Skill name it judges the install those names resolve
+against, because "missing from the catalog" has two causes that are repaired in
+opposite directions. The first Skill row of the report is that verdict, printed
+ahead of every policy row:
+
+```
+Skill catalog | matching | installed revision <sha> matches the pinned revision.
+Skill catalog | absent | no catalog is installed for pinned revision <sha>; refresh with `git-loopy doctor --apply`.
+Skill catalog | drifted | installed revision <sha> does not match pinned <sha>; refresh with `git-loopy doctor --apply`.
+```
+
+A `matching` install is the pinned revision *and* still holds exactly what its
+own record claims. `absent` means no usable install is recorded at all — never
+installed here, or an install whose record or Skill root has since been lost.
+`drifted` means a usable install that is not the pinned one: either an older
+revision, or the pinned revision whose contents were edited after it was
+written, and the row says which. Both non-matching verdicts exit non-zero on
+their own, because a Run resolves its Skills from that directory. The
+comparison is a read of the install record against the pinned revision, so
+plain `git-loopy doctor` reaches no network to make it and installs nothing.
+
+While the install is not `matching`, an enabled name with no catalog winner is
+attributed to the install rather than to the operator, and its remedy changes
+accordingly:
+
+```
+tdd | enabled Skill has no catalog winner; the installed catalog is drifted | project policy | Fix: refresh the pinned Skill catalog with `git-loopy doctor --apply`; do not prune this policy name.
+```
+
+Pruning that name would delete a valid selection to work around a stale install,
+so `doctor --apply` refreshes the pinned catalog **first** and re-resolves
+against the refreshed one before deciding any policy edit. A name the refreshed
+catalog carries is never removed, and if the refresh leaves the install still
+`absent` or `drifted` the repair is refused outright rather than contradicting
+the rows that just said not to prune.
+
+That refresh is the one part of doctor that reaches the pinned Skill source, and
+it refuses to guess when it cannot. An unreachable or failing upstream is
+reported as unverified — a warning, not a verdict — and doctor stops there:
+
+```
+Skill catalog | could not verify | Warning: could not refresh the Skill catalog from <repository>: <reason>
+```
+
+No Skill name is called missing from that state and no policy is written, which
+is what stops an offline laptop from being read as a Config full of Skills that
+no longer exist. Restore access to the pinned source and re-run.
+
 ### Repair a saved policy
 
 ```bash
 git-loopy doctor --apply
 ```
 
-`--apply` prints its exact `Add:` and `Remove:` delta before it atomically
-writes the saved policy that carries every repairable blocker. It removes
-enabled names with no catalog winner and adds a catalog-backed **Required Skill**
-that the saved project or global policy omitted. It preserves every other Config
-key and never changes Copilot's own settings.
+`--apply` refreshes the pinned Skill catalog first (see
+[Refresh a stale installed catalog](#refresh-a-stale-installed-catalog)), then
+prints its exact `Add:` and `Remove:` delta before it atomically writes the
+saved policy that carries every repairable blocker. It removes enabled names
+with no catalog winner and adds a catalog-backed **Required Skill** that the
+saved project or global policy omitted. It preserves every other Config key and
+never changes Copilot's own settings.
 
 A candidate repair is only written once the same resolver that produced the
 report agrees it clears **every** reported blocker, so a partial repair is never

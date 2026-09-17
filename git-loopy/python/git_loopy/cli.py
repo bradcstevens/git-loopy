@@ -739,18 +739,25 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "Resolve the same environment and Skill-policy preflight a Run "
             "resolves and report every blocker in one pass, rather than stopping "
             "at the first. A clean host exits 0; any failing precondition exits "
-            "non-zero. `--apply` atomically repairs missing enabled names and "
-            "disabled Required Skills in the saved policy that carries them, and "
-            "nothing else: Environment preconditions are report-only, including "
-            "under `--apply` — follow each row's stated remedy. Doctor never "
-            "starts a Run, opens a picker, changes Copilot settings, or refreshes "
-            "the installed Skill catalog."
+            "non-zero. The installed Skill catalog is compared with the revision "
+            "this Release pins and reported as absent, drifted, or matching "
+            "before any Skill name is judged, so a stale install is never "
+            "mistaken for a Skill that does not exist. `--apply` first refreshes "
+            "the installed Skill catalog to the pinned revision and re-resolves, "
+            "then atomically repairs missing enabled names and disabled Required "
+            "Skills in the saved policy that carries them, and nothing else: "
+            "Environment preconditions are report-only, including under "
+            "`--apply` — follow each row's stated remedy. Doctor never starts a "
+            "Run, opens a picker, or changes Copilot settings."
         ),
     )
     doctor.add_argument(
         "--apply",
         action="store_true",
-        help="Apply the printed repair to the saved Skill policy when it is safe.",
+        help=(
+            "Refresh the pinned Skill catalog, then apply the printed repair to "
+            "the saved Skill policy when it is safe."
+        ),
     )
 
     sweep = sub.add_parser(

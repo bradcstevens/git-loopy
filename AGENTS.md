@@ -50,6 +50,13 @@ blocking gate:
   caused. Its offline half — the immutable pin, the real fetch/checkout path over
   a `file://` remote, and every validation failure — is covered by
   `tests/test_skill_source.py` inside the Python suite row.
+- **`git-loopy doctor --apply`** refreshes that same catalog before it repairs a
+  Skill policy (#518), so it inherits the same exclusion for the same reason. Its
+  offline half — the pin comparison, the `absent`/`drifted`/`matching` verdicts,
+  the "refresh, do not prune" rule they impose on a missing-Skill row, and the
+  refresh itself over a `file://` remote — is covered by
+  `tests/test_skill_install.py` and `tests/test_doctorcmd.py` inside the Python
+  suite row.
 
 Commands resolve their tools through `PATH` and are relative to the repository root,
 because Integration runs them in a throwaway private worktree on whatever host the

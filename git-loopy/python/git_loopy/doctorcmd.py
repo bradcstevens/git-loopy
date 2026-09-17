@@ -134,7 +134,6 @@ def run_doctor(
     discoverer: CatalogDiscoverer = discover_skill_catalog,
     git: GitClient | None = None,
     prompt_text: str | None = None,
-    installed_skills_dir: Path | None = None,
     output_fn: Callable[[str], None] = print,
     apply: bool = False,
     writer: ConfigWriter = settings.write_config_atomic,
@@ -161,33 +160,31 @@ def run_doctor(
         prompt = (
             prompt_text if prompt_text is not None else load_prompt(repo_root, environment)
         )
-        catalog_dir = (
-            installed_catalog_dir(environment)
-            if installed_skills_dir is None
-            else installed_skills_dir
-        )
-        install_status = (
-            inspect_installed_catalog(read_skill_source_pin(), environment)
-            if installed_skills_dir is None
-            else None
-        )
-        if install_status is not None:
-            _render_catalog_install_status(install_status, output_fn=output_fn)
-            if apply:
-                try:
-                    refreshed = refresh_installed_catalog(
-                        install_status.pin, env=environment
-                    )
-                except SkillInstallError as exc:
-                    _render_catalog_unverified(str(exc), output_fn=output_fn)
-                    return 1
-                if refreshed.warning is not None:
-                    _render_catalog_unverified(refreshed.warning, output_fn=output_fn)
-                    return 1
-                install_status = inspect_installed_catalog(
-                    install_status.pin, environment
+        # The Skill root and the verdict passed on it are derived from one
+        # environment, never supplied separately: a caller able to point the
+        # catalog read at one directory while the pin was compared against
+        # another could silently switch off the whole stale-install guard and
+        # prune a policy name a refresh would have restored (#518).
+        catalog_dir = installed_catalog_dir(environment)
+        install_status = inspect_installed_catalog(read_skill_source_pin(), environment)
+        _render_catalog_install_status(install_status, output_fn=output_fn)
+        if apply:
+            try:
+                refreshed = refresh_installed_catalog(
+                    install_status.pin, env=environment
                 )
-                _render_catalog_install_status(install_status, output_fn=output_fn)
+            except SkillInstallError as exc:
+                _render_catalog_unverified(str(exc), output_fn=output_fn)
+                return 1
+            if refreshed.warning is not None:
+                _render_catalog_unverified(refreshed.warning, output_fn=output_fn)
+                return 1
+            refreshed_status = inspect_installed_catalog(
+                install_status.pin, environment
+            )
+            if refreshed_status.state != install_status.state:
+                _render_catalog_install_status(refreshed_status, output_fn=output_fn)
+            install_status = refreshed_status
         bound_git = git or SubprocessGitClient(repo_root)
         factory = client_factory or (
             lambda: make_copilot_client(working_directory=repo_root, env=environment)
@@ -223,8 +220,7 @@ def run_doctor(
         )
         return (
             0
-            if environment_preflight.passed
-            and (install_status is None or install_status.state == "matching")
+            if environment_preflight.passed and install_status.state == "matching"
             else 1
         )
 
@@ -233,10 +229,8 @@ def run_doctor(
             surface = _carrier(blocker, name, resolution=resolution)
             description = _blocker_description(blocker)
             remedy = _surface_remedy(blocker, surface, repo_root, environment)
-            if (
-                install_status is not None
-                and install_status.state != "matching"
-                and isinstance(blocker, MissingEnabledSkills)
+            if install_status.state != "matching" and isinstance(
+                blocker, MissingEnabledSkills
             ):
                 description += f"; the installed catalog is {install_status.state}"
                 remedy = (
@@ -247,6 +241,19 @@ def run_doctor(
                 f"{name} | {description} | {_surface_label(surface)} | {remedy}"
             )
     if not apply:
+        return 1
+
+    # The refresh above is what `--apply` offers a stale install, so reaching
+    # here on a verdict that is still not `matching` means it did not take. The
+    # names were judged against that install, and the rows above told the
+    # operator not to prune them, so the repair is refused rather than allowed
+    # to contradict the report that preceded it.
+    if install_status.state != "matching":
+        output_fn(
+            "No repair was applied; the installed Skill catalog is "
+            f"{install_status.state} and the reported names were judged against "
+            "it. Refresh it before repairing the policy."
+        )
         return 1
 
     plan = plan_skill_policy_repair(resolution)
