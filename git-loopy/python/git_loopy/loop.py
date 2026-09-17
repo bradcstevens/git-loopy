@@ -172,6 +172,7 @@ from git_loopy.rate_card import RateCard
 from git_loopy.release_version import (
     RELEASE_VERSION_PATHS,
     ReleaseLine,
+    ReleaseNotesWrite,
     ReleaseVersionError,
     advance_release_line,
     is_prerelease,
@@ -181,6 +182,8 @@ from git_loopy.release_version import (
     release_line_commit_subject,
     release_line_from_version,
     resolve_bump_class,
+    restore_repository_release_notes,
+    write_repository_release_notes,
     write_repository_release_version,
 )
 from git_loopy.run_control import RunControlArtifact
@@ -4922,19 +4925,34 @@ class _ParallelLoop:
         if bump_class == "none":
             return None
 
+        version_written = False
         try:
             last_stable, current_line = self._read_release_line()
-            next_line = promote_release_line(
-                advance_release_line(
-                    last_stable,
-                    current_line.target,
-                    current_line.counter,
-                    bump_class,
-                ),
+            advanced_line = advance_release_line(
+                last_stable,
+                current_line.target,
+                current_line.counter,
                 bump_class,
             )
+            next_line = promote_release_line(advanced_line, bump_class)
             write_repository_release_version(self._repo_root, next_line.version)
+            version_written = True
+            notes_write = write_repository_release_notes(
+                self._repo_root, advanced_line, next_line
+            )
         except (ReleaseVersionError, git_module.GitError) as exc:
+            if version_written:
+                try:
+                    write_repository_release_version(
+                        self._repo_root, current_line.version
+                    )
+                except ReleaseVersionError as rollback_exc:
+                    self._diag.error(
+                        "integration #%s: Release notes failed and the metadata "
+                        "rollback also failed: %s",
+                        item.ref,
+                        rollback_exc,
+                    )
             # `git_module.GitError` reaches here from the tag read behind
             # `_read_release_line`. It is caught for the same reason every other
             # fault here is: the merge is already published, so nothing this
@@ -4947,10 +4965,10 @@ class _ParallelLoop:
         try:
             self._git.commit_paths(
                 release_line_commit_subject(next_line.version),
-                RELEASE_VERSION_PATHS,
+                (*RELEASE_VERSION_PATHS, *notes_write.commit_paths),
             )
         except git_module.GitError as exc:
-            self._restore_release_line(item.ref, current_line, exc)
+            self._restore_release_line(item.ref, current_line, notes_write, exc)
             return None
 
         self._release_line = next_line
@@ -4987,7 +5005,11 @@ class _ParallelLoop:
         return self._last_stable_release_version, self._release_line
 
     def _restore_release_line(
-        self, ref: int | str, current_line: ReleaseLine, cause: git_module.GitError
+        self,
+        ref: int | str,
+        current_line: ReleaseLine,
+        notes_write: ReleaseNotesWrite,
+        cause: git_module.GitError,
     ) -> None:
         """Undo a refused Release commit in both the index and the working tree.
 
@@ -5000,7 +5022,7 @@ class _ParallelLoop:
         error an operator has to see: the trunk is then left mid-advance.
         """
         try:
-            self._git.unstage_paths(RELEASE_VERSION_PATHS)
+            self._git.unstage_paths((*RELEASE_VERSION_PATHS, *notes_write.commit_paths))
         except git_module.GitError as exc:
             self._diag.error(
                 "integration #%s: Release commit failed and its version paths "
@@ -5010,6 +5032,7 @@ class _ParallelLoop:
             )
         try:
             write_repository_release_version(self._repo_root, current_line.version)
+            restore_repository_release_notes(notes_write)
         except ReleaseVersionError as exc:
             self._diag.error(
                 "integration #%s: Release commit failed and its metadata rollback "

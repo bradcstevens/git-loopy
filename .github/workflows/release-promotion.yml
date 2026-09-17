@@ -103,7 +103,9 @@ jobs:
         shell: bash
         env:
           SUBJECT: ${{ steps.milestone.outputs.subject }}
+          NOTES_PATH: ${{ steps.milestone.outputs.notes_path }}
         run: |
+          git add -- "$NOTES_PATH"
           git commit -aqm "$SUBJECT"
           git push origin HEAD:main
 

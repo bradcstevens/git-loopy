@@ -2750,25 +2750,31 @@ def test_parallel_integration_lands_and_closes_both_lanes(
 
 
 @pytest.mark.parametrize(
-    ("bump_class", "expected_version", "expected_commit"),
+    ("bump_class", "expected_version", "expected_commit", "expected_note_paths"),
     (
         (
             "patch",
             "1.2.4-dev.1",
             "chore(release): advance Release line to 1.2.4-dev.1",
+            ("docs/releases/v1.2.4-dev.1.md",),
         ),
         (
             "major",
             "2.0.0",
             "chore(release): promote Release line to 2.0.0",
+            (
+                "docs/releases/v2.0.0-dev.1.md",
+                "docs/releases/v2.0.0.md",
+            ),
         ),
-        ("none", "1.2.3", None),
+        ("none", "1.2.3", None, ()),
     ),
 )
 def test_parallel_integration_applies_only_bumped_release_lines_after_publication(
     bump_class: str,
     expected_version: str,
     expected_commit: str | None,
+    expected_note_paths: tuple[str, ...],
     tmp_path, monkeypatch
 ) -> None:
     """Only a bumped green contribution commits a post-Integration Release line."""
@@ -2831,9 +2837,26 @@ def test_parallel_integration_applies_only_bumped_release_lines_after_publicatio
                     "git-loopy/tui/Cargo.toml",
                     "git-loopy/tui/Cargo.lock",
                     "git-loopy/tui/README.md",
+                    *expected_note_paths,
                 ),
             )
         ]
+        fragment_path = tmp_path / expected_note_paths[0]
+        assert fragment_path.read_text(encoding="utf-8") == (
+            f"# git-loopy {expected_version if bump_class == 'patch' else '2.0.0-dev.1'}\n\n"
+            "This development fragment advances the Release line to "
+            f"`{expected_version if bump_class == 'patch' else '2.0.0-dev.1'}` "
+            f"on the way to stable `{expected_version.split('-', 1)[0]}`.\n"
+        )
+        if bump_class == "major":
+            assert (tmp_path / expected_note_paths[1]).read_text(encoding="utf-8") == (
+                "# git-loopy 2.0.0\n\n"
+                "git-loopy 2.0.0 was promoted from the committed development fragments below.\n\n"
+                "## Development fragments\n\n"
+                "### 2.0.0-dev.1\n\n"
+                "This development fragment advances the Release line to "
+                "`2.0.0-dev.1` on the way to stable `2.0.0`.\n"
+            )
         assert len(release_advanced) == 1
         assert {
             key: release_advanced[0][key]
@@ -2906,8 +2929,12 @@ def test_parallel_integration_restores_the_release_line_when_its_commit_fails(
     # demote every later Integration in the Run (see test_git.py's real-git
     # proof of the same rule).
     assert fake_git.unstage_paths_calls == [
-        tuple(str(path) for path in RELEASE_VERSION_PATHS)
+        (
+            *(str(path) for path in RELEASE_VERSION_PATHS),
+            "docs/releases/v1.2.4-dev.1.md",
+        )
     ]
+    assert not (tmp_path / "docs/releases/v1.2.4-dev.1.md").exists()
     # The publication already happened and cannot be retracted; a Release line
     # that would not move is a diagnostic, never a veto on a landed issue.
     assert fake_gh.issue_view(42).state == "CLOSED"

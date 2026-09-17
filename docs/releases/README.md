@@ -1,9 +1,13 @@
 # Source Release notes
 
-Each source Release commit includes edited notes at `docs/releases/v<VERSION>.md`.
-The matching annotated `v<VERSION>` tag publishes those notes verbatim as the
-GitHub Release description after the full Runner-family Conformance gate and
-tagged source archive identity checks pass.
+Each Release-line advance writes an agent-authored `dev.N` fragment at
+`docs/releases/v<VERSION>.md`. A **Promotion** composes the fragments for its
+target into the stable draft at the same conventional location; an existing
+human-authored stable note is preserved. The matching annotated `v<VERSION>` tag
+publishes the committed note verbatim as the GitHub Release description after
+the full Runner-family Conformance gate and tagged source archive identity checks
+pass. Publication requires authored, committed UTF-8 notes, never edited prose
+from a human.
 
 The source-only path relies on GitHub's automatic source archives. It does not
 publish package-channel metadata, signed platform artifacts, or a TUI helper.
