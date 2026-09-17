@@ -25,6 +25,8 @@ $script:ReleaseLineInitialized = $false
 $script:ReleaseLastStable = $null
 $script:ReleaseTarget = $null
 $script:ReleaseCounter = [bigint]0
+$script:BumpClassKeys = [string[]]@("major", "minor", "patch", "none")
+$script:ReleaseNotesDirectory = "docs/releases"
 
 function Get-GitLoopyReleaseVersion {
     [CmdletBinding()]
@@ -88,7 +90,7 @@ function Resolve-GitLoopyBumpClass {
             }
         }
     )
-    $Unknown = @($Keys | Where-Object { $_ -cnotin @("major", "minor", "patch", "none") })
+    $Unknown = @($Keys | Where-Object { $_ -cnotin $script:BumpClassKeys })
     if ($Unknown.Count -gt 0) {
         throw "Release-line Bump class: unknown_semver_key"
     }
@@ -137,7 +139,7 @@ function Invoke-GitLoopyReleaseLineAdvance {
         [string]$BumpClass
     )
 
-    if ($BumpClass -cnotin @("major", "minor", "patch", "none")) {
+    if ($BumpClass -cnotin $script:BumpClassKeys) {
         throw "unknown Release-line Bump class '$BumpClass'"
     }
     if (
@@ -177,6 +179,92 @@ function Invoke-GitLoopyReleaseLineAdvance {
     }
 }
 
+function Invoke-GitLoopyReleaseLinePromotion {
+    <#
+    .SYNOPSIS
+    Cut a stable Release from the one Bump class exempt from a milestone.
+
+    .DESCRIPTION
+    A `major` publishes on the label alone; every other class stays on its
+    `dev.N` line until the `vX.Y.Z` milestone it promised closes (ADR-0052).
+    Callers ask this rather than testing the class themselves, so *which* class
+    is exempt is one decision rather than one per call site.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [object]$ReleaseLine,
+        [Parameter(Mandatory)]
+        [string]$BumpClass
+    )
+
+    if ($script:BumpClassKeys -cnotcontains $BumpClass) {
+        throw "unknown Release-line Bump class '$BumpClass'"
+    }
+    if ($BumpClass -cne "major") {
+        return $ReleaseLine
+    }
+    return [pscustomobject]@{
+        Target = $ReleaseLine.Target
+        Counter = [bigint]0
+        Version = $ReleaseLine.Target
+    }
+}
+
+function Get-GitLoopyReleaseLineCommitSubject {
+    <#
+    .SYNOPSIS
+    Word the commit that moves the Release line to one version.
+
+    .DESCRIPTION
+    A Promotion and an advance are different events in the domain, so they read
+    differently in `git log`: only a stable value was cut from its line.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Version
+    )
+
+    $Verb = if ($Version.Split("+")[0].Contains("-")) { "advance" } else { "promote" }
+    return "chore(release): $Verb Release line to $Version"
+}
+
+function Get-GitLoopyClosedMilestonePromotion {
+    <#
+    .SYNOPSIS
+    Return the stable Release a matching closed milestone promotes, if any.
+
+    .DESCRIPTION
+    Deliberately separate from the per-issue advance: a prerelease takes no
+    milestone input at any point, while a milestone-close event may promote only
+    the exact `dev.N` target its own title names.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$CurrentVersion,
+        [Parameter(Mandatory)]
+        [string]$MilestoneTitle,
+        [Parameter(Mandatory)]
+        [string]$MilestoneState
+    )
+
+    $Match = [regex]::Match(
+        $CurrentVersion,
+        "\A((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-dev\.(?:0|[1-9][0-9]*)\z",
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    )
+    if (
+        -not $Match.Success -or
+        -not $MilestoneState.Equals("closed", [StringComparison]::OrdinalIgnoreCase) -or
+        $MilestoneTitle -cne "v$($Match.Groups[1].Value)"
+    ) {
+        return $null
+    }
+    return $Match.Groups[1].Value
+}
+
 function Assert-GitLoopyReleaseLineVersion {
     param(
         [Parameter(Mandatory)]
@@ -185,6 +273,24 @@ function Assert-GitLoopyReleaseLineVersion {
 
     if ($Version -cnotmatch "\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-dev\.(?:0|[1-9][0-9]*))?\z") {
         throw "Release line must be a stable or -dev.N Semantic Versioning value"
+    }
+}
+
+function Get-GitLoopyUtf8FileContent {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+        [Parameter(Mandatory)]
+        [string]$Label
+    )
+
+    try {
+        return [Text.UTF8Encoding]::new($false, $true).GetString(
+            [IO.File]::ReadAllBytes($Path)
+        )
+    }
+    catch {
+        throw "cannot read $Label ${Path}: $($_.Exception.Message)"
     }
 }
 
@@ -206,6 +312,73 @@ function Get-GitLoopyPythonDistributionVersion {
         return "$($Match.Groups[1].Value).dev$($Match.Groups[2].Value)"
     }
     return $Match.Groups[1].Value
+}
+
+function Set-GitLoopyAtomicFileUpdates {
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$Updates,
+        [Parameter(Mandatory)]
+        [string]$Label
+    )
+
+    if ($Updates.Count -eq 0) {
+        return
+    }
+
+    $Staged = [Collections.Generic.List[object]]::new()
+    $TemporaryPaths = [Collections.Generic.List[string]]::new()
+    try {
+        foreach ($Update in $Updates) {
+            $Directory = Split-Path -Parent $Update.Path
+            if (
+                -not [string]::IsNullOrEmpty($Directory) -and
+                -not [IO.Directory]::Exists($Directory)
+            ) {
+                [IO.Directory]::CreateDirectory($Directory) | Out-Null
+            }
+            $Stage = "$($Update.Path).$([guid]::NewGuid()).git-loopy-release"
+            $Backup = "$($Update.Path).$([guid]::NewGuid()).git-loopy-release-original"
+            $HadOriginal = [IO.File]::Exists($Update.Path)
+            $TemporaryPaths.Add($Stage)
+            if ($HadOriginal) {
+                $TemporaryPaths.Add($Backup)
+            }
+            [IO.File]::WriteAllText($Stage, $Update.Content, [Text.UTF8Encoding]::new($false))
+            if ($HadOriginal) {
+                [IO.File]::Copy($Update.Path, $Backup)
+            }
+            $Staged.Add([pscustomobject]@{
+                Path = $Update.Path
+                Stage = $Stage
+                Backup = $Backup
+                HadOriginal = $HadOriginal
+            })
+        }
+        $Replaced = [Collections.Generic.List[object]]::new()
+        try {
+            foreach ($Update in $Staged) {
+                [IO.File]::Move($Update.Stage, $Update.Path, $true)
+                $Replaced.Add($Update)
+            }
+        }
+        catch {
+            for ($Index = $Replaced.Count - 1; $Index -ge 0; $Index--) {
+                $Update = $Replaced[$Index]
+                if ($Update.HadOriginal) {
+                    [IO.File]::Move($Update.Backup, $Update.Path, $true)
+                    continue
+                }
+                Remove-Item -LiteralPath $Update.Path -Force -ErrorAction SilentlyContinue
+            }
+            throw "cannot complete $Label write; all copies were restored: $($_.Exception.Message)"
+        }
+    }
+    finally {
+        foreach ($Path in $TemporaryPaths) {
+            Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Replace-GitLoopyReleaseValue {
@@ -395,37 +568,295 @@ function Set-GitLoopyRepositoryReleaseVersion {
         }
         $Updates.Add([pscustomobject]@{ Path = $Path; Content = $Updated })
     }
+    Set-GitLoopyAtomicFileUpdates -Updates $Updates.ToArray() -Label "Release version"
+}
 
-    $Staged = [Collections.Generic.List[object]]::new()
-    $TemporaryPaths = [Collections.Generic.List[string]]::new()
-    try {
-        foreach ($Update in $Updates) {
-            $Stage = "$($Update.Path).$([guid]::NewGuid()).git-loopy-release"
-            $Backup = "$($Update.Path).$([guid]::NewGuid()).git-loopy-release-original"
-            $TemporaryPaths.Add($Stage)
-            $TemporaryPaths.Add($Backup)
-            [IO.File]::WriteAllText($Stage, $Update.Content, [Text.UTF8Encoding]::new($false))
-            [IO.File]::Copy($Update.Path, $Backup)
-            $Staged.Add([pscustomobject]@{ Path = $Update.Path; Stage = $Stage; Backup = $Backup })
-        }
-        $Replaced = [Collections.Generic.List[object]]::new()
-        try {
-            foreach ($Update in $Staged) {
-                [IO.File]::Move($Update.Stage, $Update.Path, $true)
-                $Replaced.Add($Update)
+function Get-GitLoopyReleaseNotesRelativePath {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Version
+    )
+
+    Assert-GitLoopyReleaseLineVersion -Version $Version
+    return "$($script:ReleaseNotesDirectory)/v$Version.md"
+}
+
+function New-GitLoopyReleaseLineFragmentContent {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Version,
+        [Parameter(Mandatory)]
+        [string]$Target
+    )
+
+    return (
+        "# git-loopy $Version`n`n" +
+        "This development fragment advances the Release line to ``$Version`` " +
+        "on the way to stable ``$Target``.`n"
+    )
+}
+
+function Get-GitLoopyReleaseNotesBody {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Content
+    )
+
+    $Lines = [Collections.Generic.List[string]]::new()
+    foreach ($Line in ($Content.Replace("`r`n", "`n") -split "`n")) {
+        $Lines.Add($Line)
+    }
+    if ($Lines.Count -gt 0 -and $Lines[0].StartsWith("# ", [StringComparison]::Ordinal)) {
+        $Lines.RemoveAt(0)
+    }
+    while ($Lines.Count -gt 0 -and [string]::IsNullOrWhiteSpace($Lines[0])) {
+        $Lines.RemoveAt(0)
+    }
+    while (
+        $Lines.Count -gt 0 -and
+        [string]::IsNullOrWhiteSpace($Lines[$Lines.Count - 1])
+    ) {
+        $Lines.RemoveAt($Lines.Count - 1)
+    }
+    if ($Lines.Count -eq 0) {
+        return ""
+    }
+    return ($Lines.ToArray() -join "`n")
+}
+
+function Get-GitLoopyReleaseTargetFragments {
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepositoryRoot,
+        [Parameter(Mandatory)]
+        [string]$StableVersion,
+        [Parameter(Mandatory)]
+        [object[]]$PendingFragments
+    )
+
+    $Fragments = @{}
+    $ReleaseDir = Join-Path $RepositoryRoot $script:ReleaseNotesDirectory
+    $Pattern = '\Av' + [regex]::Escape($StableVersion) + '-dev\.(0|[1-9][0-9]*)\.md\z'
+    if ([IO.Directory]::Exists($ReleaseDir)) {
+        foreach ($Entry in Get-ChildItem -LiteralPath $ReleaseDir -File) {
+            $Match = [regex]::Match(
+                $Entry.Name,
+                $Pattern,
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            )
+            if (-not $Match.Success) {
+                continue
             }
-        }
-        catch {
-            foreach ($Update in $Replaced) {
-                [IO.File]::Move($Update.Backup, $Update.Path, $true)
+            $Version = $Entry.BaseName.Substring(1)
+            $Fragments[$Entry.Name] = [pscustomobject]@{
+                Name = $Entry.Name
+                Version = $Version
+                Counter = [bigint]::Parse(
+                    $Match.Groups[1].Value,
+                    [Globalization.CultureInfo]::InvariantCulture
+                )
+                Content = Get-GitLoopyUtf8FileContent `
+                    -Path $Entry.FullName `
+                    -Label "Release-note fragment"
             }
-            throw "cannot complete Release version write; all copies were restored: $($_.Exception.Message)"
         }
     }
-    finally {
-        foreach ($Path in $TemporaryPaths) {
-            Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    foreach ($Fragment in $PendingFragments) {
+        $Name = Split-Path -Leaf $Fragment.RelativePath
+        $Match = [regex]::Match(
+            $Name,
+            $Pattern,
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant
+        )
+        if (-not $Match.Success) {
+            throw "pending Release-note fragment $($Fragment.RelativePath) does not match stable Release $StableVersion"
         }
+        $Fragments[$Name] = [pscustomobject]@{
+            Name = $Name
+            Version = $Fragment.Version
+            Counter = [bigint]::Parse(
+                $Match.Groups[1].Value,
+                [Globalization.CultureInfo]::InvariantCulture
+            )
+            Content = $Fragment.Content
+        }
+    }
+    return @(
+        $Fragments.Values |
+            Sort-Object -Property @{ Expression = { $_.Counter } }, @{ Expression = { $_.Version } }
+    )
+}
+
+function New-GitLoopyStableReleaseNotesContent {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Version,
+        [Parameter(Mandatory)]
+        [object[]]$Fragments
+    )
+
+    $Lines = [Collections.Generic.List[string]]::new()
+    $Lines.Add("# git-loopy $Version")
+    $Lines.Add("")
+    $Lines.Add("git-loopy $Version was promoted from the committed development fragments below.")
+    if ($Fragments.Count -eq 0) {
+        $Lines.Add("")
+        $Lines.Add("No development fragments were available when this stable draft was composed.")
+        return ($Lines.ToArray() -join "`n") + "`n"
+    }
+    $Lines.Add("")
+    $Lines.Add("## Development fragments")
+    foreach ($Fragment in $Fragments) {
+        $Lines.Add("")
+        $Lines.Add("### $($Fragment.Version)")
+        $Lines.Add("")
+        $Body = Get-GitLoopyReleaseNotesBody -Content $Fragment.Content
+        if ([string]::IsNullOrWhiteSpace($Body)) {
+            $Lines.Add("No additional notes were recorded in this fragment.")
+            continue
+        }
+        foreach ($Line in ($Body -split "`n")) {
+            $Lines.Add($Line)
+        }
+    }
+    return ($Lines.ToArray() -join "`n") + "`n"
+}
+
+function New-GitLoopyFileSnapshot {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+        [Parameter(Mandatory)]
+        [string]$RelativePath
+    )
+
+    return [pscustomobject]@{
+        Path = $Path
+        RelativePath = $RelativePath
+        Existed = [IO.File]::Exists($Path)
+        Content = if ([IO.File]::Exists($Path)) {
+            Get-GitLoopyUtf8FileContent -Path $Path -Label "Release-managed file"
+        }
+        else {
+            $null
+        }
+    }
+}
+
+function Get-GitLoopyRepositoryReleaseNotesUpdate {
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepositoryRoot,
+        [Parameter(Mandatory)]
+        [object]$AdvancedLine,
+        [Parameter(Mandatory)]
+        [object]$ReleaseLine
+    )
+
+    $Root = [IO.Path]::GetFullPath($RepositoryRoot)
+    $Updates = [Collections.Generic.List[object]]::new()
+    $Snapshots = [Collections.Generic.List[object]]::new()
+    $RelativePaths = [Collections.Generic.List[string]]::new()
+
+    $FragmentRelativePath = Get-GitLoopyReleaseNotesRelativePath -Version $AdvancedLine.Version
+    $FragmentPath = Join-Path $Root $FragmentRelativePath
+    $RelativePaths.Add($FragmentRelativePath)
+    $CurrentFragment = if ([IO.File]::Exists($FragmentPath)) {
+        Get-GitLoopyUtf8FileContent -Path $FragmentPath -Label "Release-note fragment"
+    }
+    else {
+        $null
+    }
+    $FragmentContent = if ($null -eq $CurrentFragment) {
+        New-GitLoopyReleaseLineFragmentContent `
+            -Version $AdvancedLine.Version `
+            -Target $AdvancedLine.Target
+    }
+    else {
+        $CurrentFragment
+    }
+    if ($null -eq $CurrentFragment) {
+        $Updates.Add([pscustomobject]@{
+            Path = $FragmentPath
+            Content = $FragmentContent
+        })
+        $Snapshots.Add((New-GitLoopyFileSnapshot -Path $FragmentPath -RelativePath $FragmentRelativePath))
+    }
+    $PendingFragments = @([pscustomobject]@{
+        RelativePath = $FragmentRelativePath
+        Version = $AdvancedLine.Version
+        Content = $FragmentContent
+    })
+
+    if ($ReleaseLine.Counter -eq 0) {
+        $StableRelativePath = Get-GitLoopyReleaseNotesRelativePath -Version $ReleaseLine.Version
+        $StablePath = Join-Path $Root $StableRelativePath
+        if (-not [IO.File]::Exists($StablePath)) {
+            $StableContent = New-GitLoopyStableReleaseNotesContent `
+                -Version $ReleaseLine.Version `
+                -Fragments (Get-GitLoopyReleaseTargetFragments `
+                    -RepositoryRoot $Root `
+                    -StableVersion $ReleaseLine.Target `
+                    -PendingFragments $PendingFragments)
+            $Updates.Add([pscustomobject]@{
+                Path = $StablePath
+                Content = $StableContent
+            })
+            $Snapshots.Add((New-GitLoopyFileSnapshot -Path $StablePath -RelativePath $StableRelativePath))
+        }
+        # A human's draft must travel with its Promotion even though this writer
+        # deliberately does not replace its content.
+        $RelativePaths.Add($StableRelativePath)
+    }
+
+    return [pscustomobject]@{
+        Updates = $Updates.ToArray()
+        Snapshots = $Snapshots.ToArray()
+        RelativePaths = $RelativePaths.ToArray()
+    }
+}
+
+function Set-GitLoopyRepositoryReleaseNotes {
+    param(
+        [Parameter(Mandatory)]
+        [object]$NoteUpdate
+    )
+
+    Set-GitLoopyAtomicFileUpdates `
+        -Updates $NoteUpdate.Updates `
+        -Label "Release notes"
+}
+
+function Restore-GitLoopyFileSnapshots {
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$Snapshots,
+        [Parameter(Mandatory)]
+        [string]$Label
+    )
+
+    if ($Snapshots.Count -eq 0) {
+        return
+    }
+
+    $Updates = [Collections.Generic.List[object]]::new()
+    foreach ($Snapshot in $Snapshots) {
+        if (-not $Snapshot.Existed) {
+            continue
+        }
+        $Updates.Add([pscustomobject]@{
+            Path = $Snapshot.Path
+            Content = $Snapshot.Content
+        })
+    }
+    if ($Updates.Count -gt 0) {
+        Set-GitLoopyAtomicFileUpdates -Updates $Updates.ToArray() -Label $Label
+    }
+    foreach ($Snapshot in $Snapshots) {
+        if ($Snapshot.Existed -or -not [IO.File]::Exists($Snapshot.Path)) {
+            continue
+        }
+        Remove-Item -LiteralPath $Snapshot.Path -Force
     }
 }
 
@@ -459,8 +890,11 @@ function Initialize-GitLoopyReleaseLine {
     }
     else {
         $Tags = @(& git -C $RepositoryRoot tag --merged HEAD --list "v*" --sort=-version:refname)
-        $Tag = @($Tags | Where-Object { $_ -cmatch "^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$" }) |
-            Select-Object -First 1
+        $Tag = @(
+            @($Tags | Where-Object {
+                $_ -cmatch "^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
+            }) | Select-Object -First 1
+        )
         if ($Tag.Count -eq 0) {
             throw "a prerelease Release line requires a reachable stable Release tag"
         }
@@ -483,10 +917,13 @@ function Invoke-GitLoopyRepositoryReleaseLineAdvance {
         return $null
     }
     Initialize-GitLoopyReleaseLine -RepositoryRoot $RepositoryRoot
-    $NextLine = Invoke-GitLoopyReleaseLineAdvance `
+    $AdvancedLine = Invoke-GitLoopyReleaseLineAdvance `
         -LastStableVersion $script:ReleaseLastStable `
         -CurrentTarget $script:ReleaseTarget `
         -CurrentCounter $script:ReleaseCounter `
+        -BumpClass $BumpClass
+    $NextLine = Invoke-GitLoopyReleaseLinePromotion `
+        -ReleaseLine $AdvancedLine `
         -BumpClass $BumpClass
     $PreviousVersion = if ($script:ReleaseCounter -eq 0) {
         $script:ReleaseTarget
@@ -494,17 +931,29 @@ function Invoke-GitLoopyRepositoryReleaseLineAdvance {
     else {
         "$($script:ReleaseTarget)-dev.$($script:ReleaseCounter)"
     }
+    $NoteUpdate = Get-GitLoopyRepositoryReleaseNotesUpdate `
+        -RepositoryRoot $RepositoryRoot `
+        -AdvancedLine $AdvancedLine `
+        -ReleaseLine $NextLine
+    $CommitPaths = @($script:ReleaseVersionPaths + $NoteUpdate.RelativePaths)
     try {
         Set-GitLoopyRepositoryReleaseVersion -RepositoryRoot $RepositoryRoot -Version $NextLine.Version
-        & git -C $RepositoryRoot add -- $script:ReleaseVersionPaths | Out-Null
+        Set-GitLoopyRepositoryReleaseNotes -NoteUpdate $NoteUpdate
+        & git -C $RepositoryRoot add -- $CommitPaths | Out-Null
         if ($LASTEXITCODE -ne 0) {
             throw "Release metadata could not be staged"
         }
-        & git -C $RepositoryRoot commit -m "chore(release): advance Release line to $($NextLine.Version)" `
-            -- $script:ReleaseVersionPaths | Out-Null
+        & git -C $RepositoryRoot commit -m (
+            Get-GitLoopyReleaseLineCommitSubject -Version $NextLine.Version
+        ) -- $CommitPaths | Out-Null
         if ($LASTEXITCODE -eq 0) {
             $script:ReleaseTarget = $NextLine.Target
             $script:ReleaseCounter = $NextLine.Counter
+            if ($NextLine.Counter -eq 0) {
+                # A Promotion is the new stable base the next issue ratchets
+                # from, and its `dev.N` counter has already restarted at zero.
+                $script:ReleaseLastStable = $NextLine.Target
+            }
             return [pscustomobject]@{
                 BumpClass = $BumpClass
                 Target = $NextLine.Target
@@ -516,11 +965,14 @@ function Invoke-GitLoopyRepositoryReleaseLineAdvance {
     }
     catch {
         $Cause = $_.Exception
-        & git -C $RepositoryRoot reset -- $script:ReleaseVersionPaths | Out-Null
+        & git -C $RepositoryRoot reset -- $CommitPaths | Out-Null
         try {
             Set-GitLoopyRepositoryReleaseVersion `
                 -RepositoryRoot $RepositoryRoot `
                 -Version $PreviousVersion
+            Restore-GitLoopyFileSnapshots `
+                -Snapshots $NoteUpdate.Snapshots `
+                -Label "Release notes"
         }
         catch {
             throw "Release-line advance failed and its prior Release line could not be restored: $($_.Exception.Message)"
@@ -533,6 +985,9 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyReleaseVersion",
     "Resolve-GitLoopyBumpClass",
     "Invoke-GitLoopyReleaseLineAdvance",
+    "Invoke-GitLoopyReleaseLinePromotion",
+    "Get-GitLoopyReleaseLineCommitSubject",
+    "Get-GitLoopyClosedMilestonePromotion",
     "Set-GitLoopyRepositoryReleaseVersion",
     "Invoke-GitLoopyRepositoryReleaseLineAdvance"
 )

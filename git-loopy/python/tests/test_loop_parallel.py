@@ -2750,20 +2750,31 @@ def test_parallel_integration_lands_and_closes_both_lanes(
 
 
 @pytest.mark.parametrize(
-    ("bump_class", "expected_version", "expected_commit"),
+    ("bump_class", "expected_version", "expected_commit", "expected_note_paths"),
     (
         (
             "patch",
             "1.2.4-dev.1",
             "chore(release): advance Release line to 1.2.4-dev.1",
+            ("docs/releases/v1.2.4-dev.1.md",),
         ),
-        ("none", "1.2.3", None),
+        (
+            "major",
+            "2.0.0",
+            "chore(release): promote Release line to 2.0.0",
+            (
+                "docs/releases/v2.0.0-dev.1.md",
+                "docs/releases/v2.0.0.md",
+            ),
+        ),
+        ("none", "1.2.3", None, ()),
     ),
 )
 def test_parallel_integration_applies_only_bumped_release_lines_after_publication(
     bump_class: str,
     expected_version: str,
     expected_commit: str | None,
+    expected_note_paths: tuple[str, ...],
     tmp_path, monkeypatch
 ) -> None:
     """Only a bumped green contribution commits a post-Integration Release line."""
@@ -2826,18 +2837,35 @@ def test_parallel_integration_applies_only_bumped_release_lines_after_publicatio
                     "git-loopy/tui/Cargo.toml",
                     "git-loopy/tui/Cargo.lock",
                     "git-loopy/tui/README.md",
+                    *expected_note_paths,
                 ),
             )
         ]
+        fragment_path = tmp_path / expected_note_paths[0]
+        assert fragment_path.read_text(encoding="utf-8") == (
+            f"# git-loopy {expected_version if bump_class == 'patch' else '2.0.0-dev.1'}\n\n"
+            "This development fragment advances the Release line to "
+            f"`{expected_version if bump_class == 'patch' else '2.0.0-dev.1'}` "
+            f"on the way to stable `{expected_version.split('-', 1)[0]}`.\n"
+        )
+        if bump_class == "major":
+            assert (tmp_path / expected_note_paths[1]).read_text(encoding="utf-8") == (
+                "# git-loopy 2.0.0\n\n"
+                "git-loopy 2.0.0 was promoted from the committed development fragments below.\n\n"
+                "## Development fragments\n\n"
+                "### 2.0.0-dev.1\n\n"
+                "This development fragment advances the Release line to "
+                "`2.0.0-dev.1` on the way to stable `2.0.0`.\n"
+            )
         assert len(release_advanced) == 1
         assert {
             key: release_advanced[0][key]
             for key in ("issue", "bump_class", "release_target", "release_version")
         } == {
             "issue": 42,
-            "bump_class": "patch",
-            "release_target": "1.2.4",
-            "release_version": "1.2.4-dev.1",
+            "bump_class": bump_class,
+            "release_target": expected_version.split("-", 1)[0],
+            "release_version": expected_version,
         }
         event_types = [event["type"] for event in _logged_events(tmp_path)]
         release_index = event_types.index("wrapper.release.advanced")
@@ -2846,6 +2874,66 @@ def test_parallel_integration_applies_only_bumped_release_lines_after_publicatio
             event_types.index("wrapper.integration.published") < release_index
         )
     assert fake_gh.issue_view(42).state == "CLOSED"
+
+
+def test_parallel_integration_preserves_a_human_stable_release_note(
+    tmp_path, monkeypatch
+) -> None:
+    """A stable note a human already wrote survives the Promotion that ships it.
+
+    The generated draft is a floor, not a replacement (ADR-0052). A `major`
+    reaches stable under the Run itself, so the Promotion that would compose a
+    draft runs while the human's essay is already sitting at the conventional
+    location -- and overwriting it there would destroy prose nothing else holds
+    a copy of. The preserved note is still committed, because publication reads
+    what the tag carries rather than what the worktree happens to hold.
+    """
+    fake_git = _wire_repo(tmp_path)
+    _wire_release_distribution(tmp_path)
+    essay = "# git-loopy 2.0.0\n\nA human release essay.\n"
+    stable_note = tmp_path / "docs/releases/v2.0.0.md"
+    stable_note.parent.mkdir(parents=True, exist_ok=True)
+    stable_note.write_text(essay, encoding="utf-8")
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe", "semver:major"])
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 0
+
+    assert validate_repository_release_version(tmp_path) == "2.0.0"
+    assert stable_note.read_text(encoding="utf-8") == essay
+    committed_paths = [paths for _message, paths in fake_git.commit_paths_calls]
+    assert len(committed_paths) == 1
+    assert "docs/releases/v2.0.0.md" in committed_paths[0]
+    # The advance still authors its own fragment: the human wrote the stable
+    # note, not the development one the next Promotion composes from.
+    assert (tmp_path / "docs/releases/v2.0.0-dev.1.md").exists()
+    assert "docs/releases/v2.0.0-dev.1.md" in committed_paths[0]
 
 
 def test_parallel_integration_restores_the_release_line_when_its_commit_fails(
@@ -2901,8 +2989,12 @@ def test_parallel_integration_restores_the_release_line_when_its_commit_fails(
     # demote every later Integration in the Run (see test_git.py's real-git
     # proof of the same rule).
     assert fake_git.unstage_paths_calls == [
-        tuple(str(path) for path in RELEASE_VERSION_PATHS)
+        (
+            *(str(path) for path in RELEASE_VERSION_PATHS),
+            "docs/releases/v1.2.4-dev.1.md",
+        )
     ]
+    assert not (tmp_path / "docs/releases/v1.2.4-dev.1.md").exists()
     # The publication already happened and cannot be retracted; a Release line
     # that would not move is a diagnostic, never a veto on a landed issue.
     assert fake_gh.issue_view(42).state == "CLOSED"
@@ -3072,12 +3164,15 @@ def test_parallel_integration_advances_the_release_line_holding_the_integration_
 def test_parallel_no_lane_contribution_carries_a_release_version_change(
     tmp_path, monkeypatch
 ) -> None:
-    """Version files move on base only -- never inside a Lane or its stage.
+    """Version files and Release notes move on base only -- never in a Lane.
 
     Bumping inside a Lane's contribution would have every Lane touch the same
     version-bearing files, conflicting on every Integration on hunks whose
     conflict carries no meaning and spending the bounded auto-resolution budget
-    reconciling version numbers (ADR-0052).
+    reconciling version numbers (ADR-0052). The `dev.N` notes fragment each
+    advance authors rides in that same Release commit and inherits the rule: a
+    Lane that wrote its own fragment would collide with every sibling Lane the
+    same way, and the fragment names a Release version a Lane cannot know.
     """
     fake_git = _wire_repo(tmp_path)
     _wire_release_distribution(tmp_path)
@@ -3143,10 +3238,15 @@ def test_parallel_no_lane_contribution_carries_a_release_version_change(
         for message, _paths in client.commit_paths_calls
     ]
     assert lane_side_writes == []
-    # Base did, twice -- one per bumped contribution.
+    # Base did, twice -- one per bumped contribution, each carrying the version
+    # copies and the one `dev.N` fragment that advance authored.
     assert [paths for _message, paths in fake_git.commit_paths_calls] == [
-        tuple(str(path) for path in RELEASE_VERSION_PATHS)
-    ] * 2
+        (
+            *(str(path) for path in RELEASE_VERSION_PATHS),
+            f"docs/releases/v{version}.md",
+        )
+        for version in ("1.3.0-dev.1", "1.3.0-dev.2")
+    ]
 
 
 def _release_line_after_run(
@@ -3234,6 +3334,21 @@ def test_parallel_integration_order_does_not_change_the_resulting_release_line(
     assert minor_first == patch_first == "1.3.0-dev.2"
     assert minor_first_commits[0].endswith("1.3.0-dev.1")
     assert patch_first_commits[0].endswith("1.2.4-dev.1")
+
+
+def test_parallel_major_promotion_restarts_the_next_release_line(
+    tmp_path, monkeypatch
+) -> None:
+    """A major stable Release becomes the next line's fresh stable base."""
+    version, commits = _release_line_after_run(
+        tmp_path / "major-then-patch",
+        monkeypatch,
+        bump_classes={42: "major", 43: "patch"},
+    )
+
+    assert version == "2.0.1-dev.1"
+    assert commits[0].endswith("2.0.0")
+    assert commits[1].endswith("2.0.1-dev.1")
 
 
 def test_git_loopy_version_reports_the_line_a_run_advanced(

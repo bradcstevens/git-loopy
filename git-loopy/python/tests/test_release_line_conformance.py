@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,8 @@ from git_loopy.release_version import (
     BUMP_CLASS_KEYS,
     BumpClassError,
     advance_release_line,
+    promote_closed_milestone,
+    promote_release_line,
     resolve_bump_class,
 )
 
@@ -78,6 +81,57 @@ def test_fixture_release_counter_counts_bumps(case: dict[str, Any]) -> None:
     assert release_line.target == case["new_target"]
     assert release_line.counter == case["new_counter"]
     assert release_line.version == case["resulting_version"]
+
+
+@pytest.mark.parametrize(
+    "case", _python_cases("promotion_cases"), ids=lambda case: case["id"]
+)
+def test_fixture_closed_milestone_promotes_only_its_current_release_line(
+    case: dict[str, Any],
+) -> None:
+    assert (
+        promote_closed_milestone(
+            case["current_version"],
+            case["milestone_title"],
+            case["milestone_state"],
+        )
+        == case["resulting_version"]
+    )
+
+
+@pytest.mark.parametrize(
+    "case", _python_cases("bump_promotion_cases"), ids=lambda case: case["id"]
+)
+def test_fixture_only_a_major_bump_promotes_without_a_milestone(
+    case: dict[str, Any],
+) -> None:
+    advanced = advance_release_line(
+        case["last_stable_version"],
+        case["current_target"],
+        case["current_counter"],
+        case["bump_class"],
+    )
+
+    assert (
+        promote_release_line(advanced, case["bump_class"]).version
+        == case["resulting_version"]
+    )
+
+
+def test_every_prerelease_seam_takes_no_milestone_at_any_point() -> None:
+    """The milestone governs the stable line, and only the stable line.
+
+    A `dev.N` value is produced unattended, once per closed issue, from labels
+    alone -- so the seams that make one are pinned to accept nothing a tracker
+    would have to be asked for. Exactly one seam in the Release line reads a
+    milestone, and it only ever returns a stable value.
+    """
+    prerelease_seams = (resolve_bump_class, advance_release_line, promote_release_line)
+
+    for seam in prerelease_seams:
+        parameters = inspect.signature(seam).parameters
+        assert not [name for name in parameters if "milestone" in name], seam.__name__
+    assert "milestone_title" in inspect.signature(promote_closed_milestone).parameters
 
 
 @pytest.mark.parametrize(

@@ -80,7 +80,7 @@ def _tagged_repository(
         notes_path = root / "docs/releases" / f"v{authority_version}.md"
         notes_path.parent.mkdir(parents=True)
         notes_path.write_text(
-            f"# git-loopy {authority_version}\n\nEdited release notes.\n",
+            f"# git-loopy {authority_version}\n\nAgent-authored release notes.\n",
             encoding="utf-8",
         )
     else:

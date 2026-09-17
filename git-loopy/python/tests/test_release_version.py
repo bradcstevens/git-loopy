@@ -264,12 +264,13 @@ def test_no_fixture_other_than_release_version_contains_live_release_version() -
 
 def _write_release_distribution(root: Path, version: str = "1.2.3-dev.4") -> None:
     _write_repository_metadata(root, version)
+    python_version = version.replace("-dev.", ".dev")
     (root / "git-loopy/python/uv.lock").write_text(
         '\n'.join(
             (
                 "[[package]]",
                 'name = "git-loopy"',
-                'version = "1.2.3.dev4"',
+                f'version = "{python_version}"',
                 'source = { editable = "." }',
                 "",
             )
@@ -355,6 +356,153 @@ def test_release_line_reader_continues_a_dev_counter_from_its_stable_release() -
     assert last_stable == "1.2.3"
     assert release_line.target == "1.3.0"
     assert release_line.counter == 7
+
+
+def test_release_promotion_cli_stabilizes_only_a_matching_closed_milestone(
+    tmp_path: Path,
+) -> None:
+    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    notes = tmp_path / "docs/releases"
+    notes.mkdir(parents=True)
+    (notes / "v1.3.0-dev.1.md").write_text(
+        "# git-loopy 1.3.0-dev.1\n\nFirst development fragment.\n",
+        encoding="utf-8",
+    )
+    (notes / "v1.3.0-dev.7.md").write_text(
+        "# git-loopy 1.3.0-dev.7\n\nFinal development fragment.\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "github-output"
+
+    result = _run_validator(
+        tmp_path,
+        "--promote-milestone",
+        "v1.3.0",
+        "--milestone-state",
+        "CLOSED",
+        "--github-output",
+        str(output),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert result.stderr == ""
+    assert validate_repository_release_version(tmp_path) == "1.3.0"
+    assert (notes / "v1.3.0.md").read_text(encoding="utf-8") == (
+        "# git-loopy 1.3.0\n\n"
+        "git-loopy 1.3.0 was promoted from the committed development fragments below.\n\n"
+        "## Development fragments\n\n"
+        "### 1.3.0-dev.1\n\n"
+        "First development fragment.\n\n"
+        "### 1.3.0-dev.7\n\n"
+        "Final development fragment.\n"
+    )
+    assert output.read_text(encoding="utf-8") == (
+        "promoted=true\n"
+        "version=1.3.0\n"
+        "subject=chore(release): promote Release line to 1.3.0\n"
+        "notes_path=docs/releases/v1.3.0.md\n"
+        "fragment_path=docs/releases/v1.3.0-dev.7.md\n"
+    )
+
+
+def test_release_promotion_cli_appends_its_decision_to_a_shared_step_output(
+    tmp_path: Path,
+) -> None:
+    """A step's output file is shared, so a Promotion never truncates it."""
+    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    output = tmp_path / "github-output"
+    output.write_text("already=recorded\n", encoding="utf-8")
+
+    result = _run_validator(
+        tmp_path,
+        "--promote-milestone",
+        "v1.3.0",
+        "--milestone-state",
+        "CLOSED",
+        "--github-output",
+        str(output),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines()[0] == "already=recorded"
+
+
+def test_release_promotion_cli_outputs_the_synthesized_current_fragment_path(
+    tmp_path: Path,
+) -> None:
+    """A Promotion tells its workflow to stage every fragment it synthesized."""
+    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    notes = tmp_path / "docs/releases"
+    notes.mkdir(parents=True)
+    (notes / "v1.3.0-dev.1.md").write_text(
+        "# git-loopy 1.3.0-dev.1\n\nFirst development fragment.\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "github-output"
+
+    result = _run_validator(
+        tmp_path,
+        "--promote-milestone",
+        "v1.3.0",
+        "--milestone-state",
+        "CLOSED",
+        "--github-output",
+        str(output),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (notes / "v1.3.0-dev.7.md").is_file()
+    assert "fragment_path=docs/releases/v1.3.0-dev.7.md\n" in output.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_release_promotion_cli_preserves_a_human_authored_stable_note(
+    tmp_path: Path,
+) -> None:
+    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    notes = tmp_path / "docs/releases"
+    notes.mkdir(parents=True)
+    stable_note = notes / "v1.3.0.md"
+    stable_note.write_text(
+        "# git-loopy 1.3.0\n\nA human release essay.\n",
+        encoding="utf-8",
+    )
+
+    result = _run_validator(
+        tmp_path,
+        "--promote-milestone",
+        "v1.3.0",
+        "--milestone-state",
+        "CLOSED",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert stable_note.read_text(encoding="utf-8") == (
+        "# git-loopy 1.3.0\n\nA human release essay.\n"
+    )
+
+
+def test_release_promotion_cli_leaves_an_unmatched_milestone_prerelease_untouched(
+    tmp_path: Path,
+) -> None:
+    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    output = tmp_path / "github-output"
+
+    result = _run_validator(
+        tmp_path,
+        "--promote-milestone",
+        "v1.2.4",
+        "--milestone-state",
+        "CLOSED",
+        "--github-output",
+        str(output),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert validate_repository_release_version(tmp_path) == "1.3.0-dev.7"
+    assert output.read_text(encoding="utf-8") == "promoted=false\n"
 
 
 def test_release_writer_refuses_invalid_semver_without_touching_distribution(

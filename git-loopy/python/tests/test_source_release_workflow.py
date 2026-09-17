@@ -49,7 +49,7 @@ def test_tag_jobs_restore_the_annotated_tag_after_checkout() -> None:
         ]
 
 
-def test_publication_verifies_archive_identity_and_uses_edited_notes_only() -> None:
+def test_publication_verifies_archive_identity_and_uses_committed_authored_notes() -> None:
     workflow = _load_workflow()
     steps = workflow["jobs"]["publish"]["steps"]
     run_text = "\n".join(
