@@ -224,7 +224,7 @@ pub struct AfkReadyCollected {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct PoolRefreshed {
     /// Cache membership in stable FIFO order.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_issue_refs")]
     pub issues: Vec<IssueRef>,
 }
 
@@ -636,6 +636,20 @@ fn lenient_timestamp<'de, D: Deserializer<'de>>(
         .as_ref()
         .and_then(Value::as_str)
         .and_then(Timestamp::parse_rfc3339))
+}
+
+/// Decode a list of issue identities, dropping any element that names none.
+///
+/// A **Membership read** is add-only, so a list it could only partly name must
+/// still open the rows it *did* name: an incomplete read is simply a smaller one
+/// (ADR-0042), never a read that reports nothing at all. Deliberately not shared
+/// with `wrapper.afk_ready.collected`, whose handler *is* the `gone` sweep — a
+/// quietly smaller authoritative Pool would retire live rows.
+fn lenient_issue_refs<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<IssueRef>, D::Error> {
+    let refs = Vec::<Value>::deserialize(deserializer)?;
+    Ok(refs.iter().filter_map(IssueRef::from_value).collect())
 }
 
 /// Decode the per-issue rollup rows, dropping any row that names no issue.

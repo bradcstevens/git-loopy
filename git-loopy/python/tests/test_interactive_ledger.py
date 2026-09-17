@@ -410,6 +410,24 @@ def test_membership_read_never_sweeps_a_row_it_does_not_list() -> None:
     assert state.ledger[13].status == STATUS_GONE
 
 
+def test_membership_read_naming_one_unusable_ref_still_adds_the_rest() -> None:
+    """An incomplete **Membership read** is simply a smaller one (ADR-0042).
+
+    Add-only means a truncated or partly unreadable read can only under-report.
+    A ref that names no issue identity costs only itself: it opens no phantom
+    row of its own, and it never discards the refs the read *did* name.
+    """
+    state = _make_state()
+
+    state.render(
+        _ev(events_module.WRAPPER_POOL_REFRESHED, iter=None, issues=[61, None, 63])
+    )
+
+    assert list(state.ledger) == [61, 63]
+    assert state.ledger[61].status == STATUS_QUEUED
+    assert state.ledger[63].status == STATUS_QUEUED
+
+
 # ---------------------------------------------------------------------------
 # Stop freezes the active timer
 # ---------------------------------------------------------------------------

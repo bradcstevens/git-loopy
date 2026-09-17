@@ -1578,8 +1578,15 @@ class LiveRunState:
         It never sweeps and never sets ``_iter_pool``: this read is not an
         Iteration's input, and an issue it does not list has not left the Run's
         view — it was merely not eligible at the instant the read was taken.
+
+        An element that names no issue identity costs only itself. Add-only
+        means a partly unreadable read can only under-report, so it is simply a
+        smaller read — never one that discards the refs it did name, and never
+        one that opens a phantom row keyed by the thing it could not read.
         """
-        for ref in issues or ():
+        for ref in issues if isinstance(issues, list) else ():
+            if not isinstance(ref, (int, str)) or isinstance(ref, bool):
+                continue
             ref = self._normalize_ref(ref)
             if ref not in self.ledger:
                 self.ledger[ref] = IssueLedgerEntry(

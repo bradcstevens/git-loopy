@@ -547,6 +547,67 @@ fn a_membership_read_keeps_source_order_and_leaves_new_rows_unworked() {
     );
 }
 
+#[test]
+fn a_membership_read_naming_one_unusable_ref_still_adds_the_rest() {
+    let projected = reduce_jsonl(
+        &[r#"{"type":"wrapper.pool.refreshed","issues":[61,null,63]}"#],
+        IssueRef::number(61),
+    );
+
+    let issues: Vec<Value> = projected["dashboard"]["queue"]["rows"]
+        .as_array()
+        .expect("rows is a list")
+        .iter()
+        .map(|row| row["issue"].clone())
+        .collect();
+    assert_eq!(
+        issues,
+        vec![serde_json::json!(61), serde_json::json!(63)],
+        "an incomplete Membership read is simply a smaller one (ADR-0042): the \
+         ref it could not name costs only itself, never the rest of the read"
+    );
+    assert_eq!(queue_row(&projected, 61)["status"], "queued");
+    assert_eq!(queue_row(&projected, 63)["status"], "queued");
+}
+
+#[test]
+fn an_authoritative_pool_still_retires_a_row_only_a_membership_read_had_seen() {
+    let swept = reduce_jsonl(
+        &[
+            r#"{"type":"wrapper.iteration.start","iter":1}"#,
+            r#"{"type":"wrapper.pool.refreshed","issues":[70,71]}"#,
+            r#"{"type":"wrapper.afk_ready.collected","iter":1,"issues":[70]}"#,
+            r#"{"type":"wrapper.pool.refreshed","issues":[71]}"#,
+        ],
+        IssueRef::number(70),
+    );
+
+    assert_eq!(queue_row(&swept, 70)["status"], "queued");
+    assert_eq!(
+        queue_row(&swept, 71)["status"],
+        "gone",
+        "a row only a Membership read had seen still leaves the Run's view when \
+         the authoritative Pool stops listing it: one authority, one sweep"
+    );
+
+    let revived = reduce_jsonl(
+        &[
+            r#"{"type":"wrapper.iteration.start","iter":1}"#,
+            r#"{"type":"wrapper.pool.refreshed","issues":[70,71]}"#,
+            r#"{"type":"wrapper.afk_ready.collected","iter":1,"issues":[70]}"#,
+            r#"{"type":"wrapper.iteration.start","iter":2}"#,
+            r#"{"type":"wrapper.afk_ready.collected","iter":2,"issues":[70,71]}"#,
+        ],
+        IssueRef::number(70),
+    );
+
+    assert_eq!(
+        queue_row(&revived, 71)["status"],
+        "queued",
+        "and only the authoritative Pool brings it back"
+    );
+}
+
 // --------------------------------------------------------------------------
 // Pickup and skip records (#397)
 // --------------------------------------------------------------------------
