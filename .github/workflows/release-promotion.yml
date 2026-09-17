@@ -104,8 +104,9 @@ jobs:
         env:
           SUBJECT: ${{ steps.milestone.outputs.subject }}
           NOTES_PATH: ${{ steps.milestone.outputs.notes_path }}
+          FRAGMENT_PATH: ${{ steps.milestone.outputs.fragment_path }}
         run: |
-          git add -- "$NOTES_PATH"
+          git add -- "$NOTES_PATH" "$FRAGMENT_PATH"
           git commit -aqm "$SUBJECT"
           git push origin HEAD:main
 

@@ -199,6 +199,21 @@ git -C "$scratch" add -- \
 git -C "$scratch" commit -qm "seed accumulated Release-note fragments"
 preserve_notes="$(mktemp -d)"
 cp -R "$scratch/." "$preserve_notes"
+preserve_fragment="$(mktemp -d)"
+cp -R "$scratch/." "$preserve_fragment"
+authored_fragment=$'# git-loopy 2.0.0-dev.3\n\nAn authored final development fragment.'
+printf '%s\n' "$authored_fragment" >"$preserve_fragment/docs/releases/v2.0.0-dev.3.md"
+git_loopy_advance_repository_release_line "$preserve_fragment" '["semver:major"]' >/dev/null
+assert_equal "$authored_fragment" \
+  "$(cat "$preserve_fragment/docs/releases/v2.0.0-dev.3.md")" \
+  "a Promotion preserves an authored current development fragment"
+grep -Fqx "An authored final development fragment." \
+  "$preserve_fragment/docs/releases/v2.0.0.md" ||
+  fail "a stable draft composes the authored current development fragment"
+GIT_LOOPY_RELEASE_LINE_INITIALIZED=true
+GIT_LOOPY_RELEASE_LAST_STABLE="1.2.3"
+GIT_LOOPY_RELEASE_TARGET="1.3.0"
+GIT_LOOPY_RELEASE_COUNTER=2
 git_loopy_advance_repository_release_line "$scratch" '["semver:major"]' >/dev/null
 assert_equal "2.0.0" "$(git_loopy_read_release_version "$scratch/VERSION")" \
   "a major Bump class cuts stable without a milestone"
@@ -211,6 +226,8 @@ stable_notes="$(cat "$scratch/docs/releases/v2.0.0.md")"
   "$stable_notes" == *"Second accumulated fragment."* &&
   "$stable_notes" == *"2.0.0-dev.3"* ]] ||
   fail "a major Promotion composes accumulated development fragments into a stable draft"
+grep -Fqx "### 2.0.0-dev.3" "$scratch/docs/releases/v2.0.0.md" ||
+  fail "a generated development fragment keeps its Release version heading in the stable draft"
 git -C "$scratch" diff-tree --no-commit-id --name-only -r HEAD |
   grep -Fqx "docs/releases/v2.0.0-dev.3.md" ||
   fail "a major Promotion commit includes its final development fragment"
@@ -249,7 +266,7 @@ assert_equal "$release_commit_count" "$(git -C "$scratch" rev-list --count HEAD)
   "a deliberate no-bump does not create a Release commit"
 
 missing_metadata="$(mktemp -d)"
-trap 'rm -rf "$scratch" "$missing_metadata"' EXIT
+trap 'rm -rf "$scratch" "$preserve_notes" "$preserve_fragment" "$missing_metadata"' EXIT
 printf '1.2.3\n' >"$missing_metadata/VERSION"
 GIT_LOOPY_RELEASE_LINE_INITIALIZED=false
 GIT_LOOPY_RELEASE_LAST_STABLE=""

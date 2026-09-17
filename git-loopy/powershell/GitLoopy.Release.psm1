@@ -760,22 +760,27 @@ function Get-GitLoopyRepositoryReleaseNotesUpdate {
 
     $FragmentRelativePath = Get-GitLoopyReleaseNotesRelativePath -Version $AdvancedLine.Version
     $FragmentPath = Join-Path $Root $FragmentRelativePath
-    $FragmentContent = New-GitLoopyReleaseLineFragmentContent `
-        -Version $AdvancedLine.Version `
-        -Target $AdvancedLine.Target
+    $RelativePaths.Add($FragmentRelativePath)
     $CurrentFragment = if ([IO.File]::Exists($FragmentPath)) {
         Get-GitLoopyUtf8FileContent -Path $FragmentPath -Label "Release-note fragment"
     }
     else {
         $null
     }
-    if ($CurrentFragment -cne $FragmentContent) {
+    $FragmentContent = if ($null -eq $CurrentFragment) {
+        New-GitLoopyReleaseLineFragmentContent `
+            -Version $AdvancedLine.Version `
+            -Target $AdvancedLine.Target
+    }
+    else {
+        $CurrentFragment
+    }
+    if ($null -eq $CurrentFragment) {
         $Updates.Add([pscustomobject]@{
             Path = $FragmentPath
             Content = $FragmentContent
         })
         $Snapshots.Add((New-GitLoopyFileSnapshot -Path $FragmentPath -RelativePath $FragmentRelativePath))
-        $RelativePaths.Add($FragmentRelativePath)
     }
     $PendingFragments = @([pscustomobject]@{
         RelativePath = $FragmentRelativePath

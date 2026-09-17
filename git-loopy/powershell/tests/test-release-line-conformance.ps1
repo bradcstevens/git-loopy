@@ -290,6 +290,30 @@ try {
     Assert-Equal $true (
         $MajorCommitPaths -contains "docs/releases/v2.0.0.md"
     ) "the Promotion commit includes the composed stable note path"
+    $PreserveFragmentScratch = New-ReleaseLineScratchRepository `
+        -ScratchRoot $ScratchRoot `
+        -Version "1.3.0-dev.2" `
+        -ReachableStableTag "1.2.3"
+    $AuthoredFragment = "# git-loopy 2.0.0-dev.3`n`nAn authored final development fragment.`n"
+    Set-Utf8Text `
+        -Path (Join-Path $PreserveFragmentScratch "docs/releases/v2.0.0-dev.3.md") `
+        -Content $AuthoredFragment
+    Import-Module $ModulePath -Force
+    $PreservedFragmentMajor = Invoke-GitLoopyRepositoryReleaseLineAdvance `
+        -RepositoryRoot $PreserveFragmentScratch `
+        -Labels @("semver:major")
+    Assert-Equal "2.0.0" $PreservedFragmentMajor.Version (
+        "a Promotion cuts stable with an authored current development fragment"
+    )
+    Assert-Equal $AuthoredFragment (
+        Get-Utf8Text -Path (Join-Path $PreserveFragmentScratch "docs/releases/v2.0.0-dev.3.md")
+    ) "a Promotion preserves an authored current development fragment"
+    Assert-Contains "An authored final development fragment." (
+        Get-Utf8Text -Path (Join-Path $PreserveFragmentScratch "docs/releases/v2.0.0.md")
+    ) "the stable draft composes the authored current development fragment"
+    Assert-Equal $true (
+        (Get-HeadCommitPaths -RepositoryRoot $PreserveFragmentScratch) -contains "docs/releases/v2.0.0-dev.3.md"
+    ) "the Promotion commits its authored current development fragment"
     $PostPromotion = Invoke-GitLoopyRepositoryReleaseLineAdvance `
         -RepositoryRoot $Scratch -Labels @("semver:patch")
     Assert-Equal "2.0.1-dev.1" $PostPromotion.Version (

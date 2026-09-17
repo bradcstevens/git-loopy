@@ -140,8 +140,12 @@ def test_a_promoted_line_is_committed_in_the_words_the_runner_uses(
     assert commit["env"]["SUBJECT"] == "${{ steps.milestone.outputs.subject }}"
     assert "$SUBJECT" in commit["run"]
     assert "chore(release)" not in commit["run"]
-    assert 'git add -- "$NOTES_PATH"' in commit["run"]
+    assert 'git add -- "$NOTES_PATH" "$FRAGMENT_PATH"' in commit["run"]
     assert commit["env"]["NOTES_PATH"] == "${{ steps.milestone.outputs.notes_path }}"
+    assert (
+        commit["env"]["FRAGMENT_PATH"]
+        == "${{ steps.milestone.outputs.fragment_path }}"
+    )
 
 
 def test_a_stable_release_is_tagged_from_either_trigger_and_a_prerelease_never_is(

@@ -402,6 +402,7 @@ def test_release_promotion_cli_stabilizes_only_a_matching_closed_milestone(
         "version=1.3.0\n"
         "subject=chore(release): promote Release line to 1.3.0\n"
         "notes_path=docs/releases/v1.3.0.md\n"
+        "fragment_path=docs/releases/v1.3.0-dev.7.md\n"
     )
 
 
@@ -425,6 +426,36 @@ def test_release_promotion_cli_appends_its_decision_to_a_shared_step_output(
 
     assert result.returncode == 0, result.stderr
     assert output.read_text(encoding="utf-8").splitlines()[0] == "already=recorded"
+
+
+def test_release_promotion_cli_outputs_the_synthesized_current_fragment_path(
+    tmp_path: Path,
+) -> None:
+    """A Promotion tells its workflow to stage every fragment it synthesized."""
+    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    notes = tmp_path / "docs/releases"
+    notes.mkdir(parents=True)
+    (notes / "v1.3.0-dev.1.md").write_text(
+        "# git-loopy 1.3.0-dev.1\n\nFirst development fragment.\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "github-output"
+
+    result = _run_validator(
+        tmp_path,
+        "--promote-milestone",
+        "v1.3.0",
+        "--milestone-state",
+        "CLOSED",
+        "--github-output",
+        str(output),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (notes / "v1.3.0-dev.7.md").is_file()
+    assert "fragment_path=docs/releases/v1.3.0-dev.7.md\n" in output.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_release_promotion_cli_preserves_a_human_authored_stable_note(

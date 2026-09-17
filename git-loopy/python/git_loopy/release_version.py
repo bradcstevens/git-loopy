@@ -909,7 +909,9 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _write_promotion_output(path: Path, promoted: str | None) -> None:
+def _write_promotion_output(
+    path: Path, promoted: str | None, fragment_path: Path | None
+) -> None:
     """Append one Promotion decision to a GitHub Actions step output file.
 
     Appended rather than written: a step's output file is shared with whatever
@@ -924,6 +926,7 @@ def _write_promotion_output(path: Path, promoted: str | None) -> None:
             f"version={promoted}",
             f"subject={release_line_commit_subject(promoted)}",
             f"notes_path={_RELEASE_NOTES_DIRECTORY / f'v{promoted}.md'}",
+            f"fragment_path={fragment_path}",
         ]
     try:
         with path.open("a", encoding="utf-8") as output:
@@ -938,6 +941,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Validate repository metadata or promote a matching closed milestone."""
     args = _build_parser().parse_args(argv)
     try:
+        fragment_path: Path | None = None
         current_version = validate_repository_release_version(
             args.repository_root,
             publication_version=args.publication_version,
@@ -958,16 +962,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             write_repository_release_version(args.repository_root, promoted)
             try:
-                write_repository_release_notes(
+                notes_write = write_repository_release_notes(
                     args.repository_root,
                     current_line,
                     ReleaseLine(target=promoted, counter=0),
                 )
+                fragment_path = notes_write.commit_paths[0]
             except ReleaseVersionError:
                 write_repository_release_version(args.repository_root, current_version)
                 raise
         if args.github_output is not None:
-            _write_promotion_output(args.github_output, promoted)
+            _write_promotion_output(args.github_output, promoted, fragment_path)
     except ReleaseVersionError as exc:
         print(f"release version validation failed: {exc}", file=sys.stderr)
         return 1

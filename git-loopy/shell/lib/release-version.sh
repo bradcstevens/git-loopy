@@ -534,13 +534,19 @@ _git_loopy_compose_stable_release_notes() {
   for path in "$release_directory"/v"$target"-dev.*.md; do
     name="${path##*/}"
     if [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dev\.(0|[1-9][0-9]*)\.md$ ]]; then
-      fragments+=("${BASH_REMATCH[1]}"$'\t'"$path")
+      version="${name#v}"
+      version="${version%.md}"
+      fragments+=("${BASH_REMATCH[1]}"$'\t'"$version"$'\t'"$path")
     fi
   done
   shopt -u nullglob
   name="${fragment_path##*/}"
   [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dev\.(0|[1-9][0-9]*)\.md$ ]] || return 1
-  fragments+=("${BASH_REMATCH[1]}"$'\t'"$fragment_stage")
+  if [[ ! -f "$fragment_path" ]]; then
+    version="${name#v}"
+    version="${version%.md}"
+    fragments+=("${BASH_REMATCH[1]}"$'\t'"$version"$'\t'"$fragment_stage")
+  fi
 
   {
     printf '# git-loopy %s\n\n' "$stable_version"
@@ -550,9 +556,7 @@ _git_loopy_compose_stable_release_notes() {
       printf '\nNo development fragments were available when this stable draft was composed.\n'
     else
       printf '\n## Development fragments\n'
-      while IFS=$'\t' read -r counter path; do
-        version="${path##*/v}"
-        version="${version%.md}"
+      while IFS=$'\t' read -r counter version path; do
         printf '\n### %s\n\n' "$version"
         body="$(
           awk '
@@ -594,7 +598,14 @@ git_loopy_write_repository_release_notes() {
   release_directory="$(dirname "$fragment_path")"
   mkdir -p "$release_directory" || return 1
 
-  local -a paths=("$fragment_path") relatives=("$fragment_relative") commit_relatives=("$fragment_relative")
+  local -a paths=() relatives=() commit_relatives=("$fragment_relative")
+  local fragment_stage="$fragment_path"
+  if [[ -e "$fragment_path" ]]; then
+    [[ -f "$fragment_path" && -r "$fragment_path" ]] || return 1
+  else
+    paths+=("$fragment_path")
+    relatives+=("$fragment_relative")
+  fi
   local -a stages=() backups=() existed=()
   if [[ "$stable_counter" == "0" ]]; then
     stable_relative="$(_git_loopy_release_notes_relative_path "$stable_version")" || return 1
@@ -626,9 +637,10 @@ git_loopy_write_repository_release_notes() {
     fi
     if [[ "$path" == "$fragment_path" ]]; then
       _git_loopy_release_note_fragment_content "$advanced_version" "$target" >"$stage" || break
+      fragment_stage="$stage"
     else
       _git_loopy_compose_stable_release_notes \
-        "$repository_root" "$stable_version" "$target" "$fragment_path" "${stages[0]}" "$stage" ||
+        "$repository_root" "$stable_version" "$target" "$fragment_path" "$fragment_stage" "$stage" ||
         break
     fi
   done
