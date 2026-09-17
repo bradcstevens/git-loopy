@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>PROTOTYPE: update ownership</title>
+<style>
+  body { max-width: 780px; margin: 3rem auto; font: 16px/1.5 system-ui; color: #18212f; }
+  h1 { margin-bottom: .25rem; } .note { color: #52606d; }
+  section { margin-top: 2rem; padding: 1.25rem; border: 1px solid #d9e2ec; border-radius: .5rem; }
+  button { margin: .25rem; padding: .5rem .75rem; } dt { font-weight: 700; }
+  dd { margin: 0 0 .75rem; } .changed { color: #087f5b; } .kept { color: #9c2f18; }
+</style>
+<body>
+<h1>PROTOTYPE: Machine-local update</h1>
+<p class="note"><strong>Question:</strong> Can a Release update replace only an untouched prompt
+override while independently refreshing machine-managed assets, and leave all operator prose
+unchanged?</p>
+<section>
+  <h2>Current state</h2>
+  <dl id="state"></dl>
+</section>
+<section>
+  <h2>Free play</h2>
+  <button data-action="untouched">Prompt matches its scaffold record</button>
+  <button data-action="customized">Prompt was customized</button>
+  <button data-action="unrecorded">Prompt has no scaffold record</button>
+  <button data-action="reset">Reset</button>
+</section>
+<section>
+  <h2>Guided walkthroughs</h2>
+  <p><strong>Safe replacement:</strong> establish an untouched override, then apply update.</p>
+  <button data-action="untouched">1. Mark untouched</button>
+  <button data-action="update">2. Apply update</button>
+  <p><strong>Operator prose:</strong> mark the override customized, then apply update.</p>
+  <button data-action="customized">1. Mark customized</button>
+  <button data-action="update">2. Apply update</button>
+</section>
+<script>
+  // Pure state model: the decision that production code must retain.
+  const initial = () => ({
+    prompt: "absent", promptResult: "not evaluated",
+    catalog: "not refreshed", helper: "not refreshed"
+  });
+  function reduce(state, action) {
+    if (action === "reset") return initial();
+    if (["untouched", "customized", "unrecorded"].includes(action)) {
+      return {...state, prompt: action, promptResult: "awaiting update"};
+    }
+    if (action === "update") {
+      const replace = state.prompt === "untouched";
+      return {
+        ...state,
+        promptResult: replace ? "replaced with this Release" : "left byte-identical; upstream change reported",
+        catalog: "refreshed from this Release pin",
+        helper: "refreshed from this Release"
+      };
+    }
+    return state;
+  }
+  let state = initial();
+  const render = () => {
+    document.querySelector("#state").innerHTML = Object.entries(state).map(([key, value]) =>
+      `<dt>${key}</dt><dd class="${value.includes("left") ? "kept" : value.includes("refreshed") || value.includes("replaced") ? "changed" : ""}">${value}</dd>`
+    ).join("");
+  };
+  document.addEventListener("click", event => {
+    const action = event.target.dataset.action;
+    if (action) { state = reduce(state, action); render(); }
+  });
+  render();
+</script>
+</body>
