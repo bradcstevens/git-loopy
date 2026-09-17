@@ -372,6 +372,21 @@ def test_dump_config_toml_emits_routing_section_of_inline_tables() -> None:
     assert tomllib.loads(text) == values
 
 
+def test_dump_config_toml_quotes_a_routing_key_that_is_not_a_bare_toml_key() -> None:
+    import tomllib
+
+    values = {
+        "routing": {
+            "task-type:docs": {"model": "gpt-5.4", "effort": "high"},
+        }
+    }
+
+    text = settings.dump_config_toml(values)
+
+    assert '"task-type:docs" = { model = "gpt-5.4", effort = "high" }' in text
+    assert tomllib.loads(text) == values
+
+
 def test_dump_config_toml_places_table_sections_after_scalar_keys() -> None:
     # A top-level scalar must be emitted before any `[section]` header, else TOML
     # parses it as a member of that section.

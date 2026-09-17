@@ -736,7 +736,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help="Emit the stable installation-inventory JSON document.",
     )
 
-    sub.add_parser(
+    update = sub.add_parser(
         "update",
         help="Refresh machine-local assets to the installed Release.",
         description=(
@@ -746,6 +746,26 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "and the upstream changes are reported. This command never starts a "
             "Run, requires a repository, or writes to the tracker."
         ),
+    )
+    update.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report Config routing repairs without writing them or refreshing assets.",
+    )
+    update_scope = update.add_mutually_exclusive_group()
+    update_scope.add_argument(
+        "--project",
+        dest="config_scope",
+        action="store_const",
+        const="project",
+        help="Repair this repository's Config routing.",
+    )
+    update_scope.add_argument(
+        "--global",
+        dest="config_scope",
+        action="store_const",
+        const="global",
+        help="Repair the machine-global Config routing (the default).",
     )
 
     doctor = sub.add_parser(
@@ -1094,11 +1114,22 @@ def _run_info(
     return 0
 
 
-def _run_update(_args: argparse.Namespace) -> int:
+def _run_update(args: argparse.Namespace) -> int:
     """Dispatch the machine-local installation refresh."""
     from git_loopy import updatecmd
 
-    return updatecmd.run_update()
+    repo_root: Path | None = None
+    if args.config_scope == "project":
+        try:
+            repo_root = resolve_repo_root()
+        except RuntimeError as exc:
+            print(f"git-loopy: error: {exc}", file=sys.stderr)
+            return 1
+    return updatecmd.run_update(
+        dry_run=bool(args.dry_run),
+        config_scope=args.config_scope or "global",
+        repo_root=repo_root,
+    )
 
 
 def _display_asset(asset: "InstalledAsset") -> str:

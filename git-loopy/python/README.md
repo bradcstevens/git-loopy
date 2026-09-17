@@ -195,7 +195,9 @@ mutating command operate on the wrong artifact.
 `git-loopy update` refreshes the machine-local assets belonging to the installed
 **Release version** without changing that Release or requiring a repository. It
 refreshes the **installed catalog** and downloads the matching TUI helper into
-`<config-home>/git-loopy/bin/`.
+`<config-home>/git-loopy/bin/`. It also repairs Release-retired `[routing]` keys
+in the global Config by default; use `--project` inside a repository to repair
+that project's Config instead.
 
 That helper is one a Run attaches to. The Python Runner resolves a helper in this
 order, first hit wins:
@@ -223,15 +225,28 @@ there is nothing upstream to port. An `unrecorded` override is treated as
 customized and is never replaced.
 
 ```bash
+# Repair the machine-global Config and refresh installed assets.
 git-loopy update
+
+# Repair a repository Config, or preview either repair without writing anything.
+git-loopy update --project
+git-loopy update --global --dry-run
 ```
+
+The Config repair removes a key outside the closed taxonomy, and renames a
+legacy `task-type:<key>` spelling only when its bare current key is absent. A
+conflicting old and current key is reported without a guess. Before writing, the
+original Config is copied beside itself as `config.toml.bak` (with a numeric
+suffix when needed), and the command reports each changed key and backup path.
+`--dry-run` reports only the Config migration and writes or refreshes nothing.
 
 The command reports each changed asset and any asset it left alone, and exits
 non-zero when an asset could not be brought to the installed Release — including
-an **installed catalog** left behind its pinned revision because the source
-could not be reached, which is reported rather than passed off as a refresh. It
-never starts a Run or writes to the tracker; `git-loopy labels --apply` remains
-the only command that changes the **Label vocabulary** on GitHub.
+an ambiguous Config migration or an **installed catalog** left behind its pinned
+revision because the source could not be reached, which is reported rather than
+passed off as a refresh. It never starts a Run or writes to the tracker;
+`git-loopy labels --apply` remains the only command that changes the **Label
+vocabulary** on GitHub.
 
 ---
 

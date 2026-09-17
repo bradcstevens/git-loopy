@@ -302,20 +302,19 @@ def task_type_refusal(exc: TaskTypeError) -> str:
     set: the closure (#375) refuses an unknown key at every write seam, but a
     Config written before it already carries one, and every surface that reads
     that file — a Run, ``config list``, ``config get``, ``config routing set`` —
-    is refused by the same key. Without a stated remedy the operator is locked
-    out of the Config they have to correct, and hand-edited TOML is the only way
-    back.
+    is refused by the same key. ``git-loopy update`` repairs the Release-caused
+    violation before those surfaces resolve the Config again.
 
     The offending key is named because it is usually **not** the one that was
     typed: ``routing set docs`` against a Config carrying a legacy ``custom`` is
     refused by ``custom``, and a message naming only that reads as the tool
     rejecting ``docs``.
     """
-    scope = f" --{exc.scope}" if exc.scope is not None else ""
-    return (
-        f"{exc}. Clear it with `git-loopy config routing unset {exc.key}{scope}`, or "
-        f"edit the [routing] table in the file `git-loopy config path` names."
-    )
+    if exc.scope is not None:
+        remedy = f"`git-loopy update --{exc.scope}`"
+    else:
+        remedy = "`git-loopy update --project` or `git-loopy update --global`"
+    return f"{exc}. Run {remedy} to repair the retired Config key."
 
 
 #: Default SDK ``send_and_wait`` timeout (seconds). AFK iterations can run for

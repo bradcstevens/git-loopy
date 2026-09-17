@@ -496,20 +496,18 @@ def run_routing_unset(
 ) -> int:
     """Remove one task-type route from the chosen Config scope.
 
-    The one routing op open to a key outside the closed taxonomy, because it is
-    the remedy every other surface's refusal names (#375): a Config carrying a
-    pre-closure key is refused by ``routing set`` and by every read surface, so
-    if removal were refused too the only way to comply would be hand-edited
-    TOML. Sibling entries are rewritten untouched, valid or not — this op was
-    asked to remove one key, not to launder the file.
+    The one routing op open to a key outside the closed taxonomy. It remains a
+    precise manual edit, while ``git-loopy update`` owns the Release-caused
+    migration. Sibling entries are rewritten untouched, valid or not — this op
+    was asked to remove one key, not to launder the file.
 
     An out-of-taxonomy key with **no explicit scope** is cleared from *every*
     scope that carries it, because such a key is invalid in all of them and the
     refusal that sent the operator here cannot say which file it came from.
-    Scope otherwise defaults to project inside a repo, so the advertised remedy
-    would report success against the project file while a global key kept the
-    Run blocked. An explicit ``--project`` / ``--global`` still narrows it, and
-    a key inside the taxonomy is a scoped edit as before.
+    Scope otherwise defaults to project inside a repo, so an unscoped edit aimed
+    at a global legacy key would report success against the project file while
+    the global key kept the Run blocked. An explicit ``--project`` / ``--global``
+    still narrows it, and a key inside the taxonomy is a scoped edit as before.
 
     The key removed is the one **as spelled**, because a persisted table is read
     literally: ``task-type:docs`` and ``docs`` are two keys a Config can carry

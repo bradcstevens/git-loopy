@@ -76,14 +76,36 @@ def test_main_update_runs_outside_a_git_repository(
     """Update is machine-local, so it never asks the current directory for a repository."""
     from git_loopy import updatecmd
 
+    captured: list[dict[str, object]] = []
     monkeypatch.setattr(
         cli_module,
         "resolve_repo_root",
         lambda: (_ for _ in ()).throw(AssertionError("update must not resolve a repository")),
     )
-    monkeypatch.setattr(updatecmd, "run_update", lambda: 0)
+    monkeypatch.setattr(
+        updatecmd, "run_update", lambda **kwargs: captured.append(kwargs) or 0
+    )
 
     assert cli_module.main(["update"]) == 0
+    assert captured == [{"dry_run": False, "config_scope": "global", "repo_root": None}]
+
+
+def test_main_update_targets_project_config_only_when_requested(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Project Config repair is explicit; the ordinary update remains repo-free."""
+    from git_loopy import updatecmd
+
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        updatecmd, "run_update", lambda **kwargs: captured.append(kwargs) or 0
+    )
+
+    assert cli_module.main(["update", "--project", "--dry-run"]) == 0
+    assert captured == [
+        {"dry_run": True, "config_scope": "project", "repo_root": tmp_path}
+    ]
 
 
 def test_subcommand_parser_parses_doctor() -> None:
@@ -691,7 +713,7 @@ def test_main_refuses_a_persisted_task_type_outside_the_taxonomy(
     assert captured == []
 
 
-def test_main_refusal_names_the_command_that_clears_the_offending_route(
+def test_main_refusal_names_update_as_the_release_repair(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -699,8 +721,7 @@ def test_main_refusal_names_the_command_that_clears_the_offending_route(
     """A blocked Run is where the remedy matters most, so the Run path names it.
 
     The closed taxonomy (#375) stops a Run whose Config carries a pre-closure
-    routing key. Every other surface that could fix that Config refuses on the
-    same key, so the message has to carry the one command that does not.
+    routing key. The Release-owned repair is run before resolving Config again.
     """
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     settings.write_config(
@@ -711,7 +732,7 @@ def test_main_refusal_names_the_command_that_clears_the_offending_route(
     _install_fake_loop_run(monkeypatch, captured)
 
     assert cli_module.main([]) == 1
-    assert "config routing unset custom" in capsys.readouterr().err
+    assert "git-loopy update --project" in capsys.readouterr().err
     assert captured == []
 
 

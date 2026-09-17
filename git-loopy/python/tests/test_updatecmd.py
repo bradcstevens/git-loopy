@@ -557,3 +557,176 @@ def test_update_does_not_call_a_catalog_left_behind_the_pin_refreshed(
     assert helper_refreshed == ["1.2.4"]
     assert kept.warning in output
     assert skill_install.describe_refresh(kept) in output
+
+
+def test_update_removes_a_retired_global_route_and_backs_up_the_config(
+    tmp_path: Path,
+) -> None:
+    """A Release-retired route no longer locks every Config surface."""
+    from git_loopy import configcmd, settings, updatecmd
+
+    config_home = tmp_path / "config-home"
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+    config = settings.global_config_path(env)
+    settings.write_config(
+        config, {"routing": {"custom": {"model": "gpt-5.4", "effort": "high"}}}
+    )
+    output: list[str] = []
+
+    result = updatecmd.run_update(
+        env=env,
+        release_version_reader=lambda: "1.2.4",
+        packaged_prompt=tmp_path / "absent-PROMPT.md",
+        catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
+        helper_refresh=lambda _version, _env: tmp_path / "git-loopy-tui",
+        output_fn=output.append,
+    )
+
+    assert result == 0
+    assert "custom" not in config.read_text(encoding="utf-8")
+    backup = config.with_suffix(".toml.bak")
+    assert "custom" in backup.read_text(encoding="utf-8")
+    assert any("Removed retired routing key 'custom'" in line for line in output)
+    assert any(str(backup) in line for line in output)
+    kwargs = dict(repo_root=tmp_path, env=env, out=lambda _line: None, err=lambda _line: None)
+    assert configcmd.run_list(**kwargs) == 0
+    assert configcmd.run_get("task-type:docs", **kwargs) == 0
+    assert (
+        configcmd.run_routing_set(
+            "docs", "gpt-5.4", "high", scope="global", **kwargs
+        )
+        == 0
+    )
+
+
+def test_update_dry_run_reports_a_retired_route_without_writing(
+    tmp_path: Path,
+) -> None:
+    """Dry-run shows the exact Config repair without changing any asset."""
+    from git_loopy import settings, updatecmd
+
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
+    config = settings.global_config_path(env)
+    settings.write_config(
+        config, {"routing": {"custom": {"model": "gpt-5.4", "effort": "high"}}}
+    )
+    original = config.read_bytes()
+    output: list[str] = []
+
+    result = updatecmd.run_update(
+        env=env,
+        dry_run=True,
+        release_version_reader=lambda: (_ for _ in ()).throw(
+            updatecmd.ReleaseVersionError("unavailable")
+        ),
+        catalog_refresh=lambda _env: (_ for _ in ()).throw(
+            AssertionError("dry-run must not refresh the catalog")
+        ),
+        helper_refresh=lambda _version, _env: (_ for _ in ()).throw(
+            AssertionError("dry-run must not refresh the helper")
+        ),
+        output_fn=output.append,
+    )
+
+    assert result == 0
+    assert config.read_bytes() == original
+    assert not config.with_suffix(".toml.bak").exists()
+    assert any("Would remove retired routing key 'custom'" in line for line in output)
+
+
+def test_update_leaves_a_renamed_route_ambiguous_when_its_target_exists(
+    tmp_path: Path,
+) -> None:
+    """A migration never chooses between the old and new route values."""
+    from git_loopy import settings, updatecmd
+
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
+    config = settings.global_config_path(env)
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        '[routing]\ncustom = { model = "claude-opus-5", effort = "high" }\n'
+        '"task-type:docs" = { model = "gpt-5.4", effort = "high" }\n'
+        'docs = { model = "gpt-5-mini", effort = "medium" }\n',
+        encoding="utf-8",
+    )
+    output: list[str] = []
+
+    result = updatecmd.run_update(
+        env=env,
+        release_version_reader=lambda: "1.2.4",
+        packaged_prompt=tmp_path / "absent-PROMPT.md",
+        catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
+        helper_refresh=lambda _version, _env: tmp_path / "git-loopy-tui",
+        output_fn=output.append,
+    )
+
+    assert result == 1
+    repaired = settings.load_config_table(config)
+    assert settings.table_routing(repaired, scope="global") == {
+        "task-type:docs": ("gpt-5.4", "high"),
+        "docs": ("gpt-5-mini", "medium"),
+    }
+    assert "custom" in config.with_suffix(".toml.bak").read_text(encoding="utf-8")
+    assert any("task-type:docs" in line and "already configured" in line for line in output)
+    assert any("Removed retired routing key 'custom'" in line for line in output)
+
+
+def test_update_renames_an_unambiguous_route_in_the_project_scope(
+    tmp_path: Path,
+) -> None:
+    """A known old spelling moves to its current key without losing its route."""
+    from git_loopy import settings, updatecmd
+
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
+    config = settings.project_config_path(tmp_path)
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        '[routing]\n"task-type:docs" = { model = "gpt-5.4", effort = "high" }\n',
+        encoding="utf-8",
+    )
+    output: list[str] = []
+
+    result = updatecmd.run_update(
+        env=env,
+        config_scope="project",
+        repo_root=tmp_path,
+        release_version_reader=lambda: "1.2.4",
+        packaged_prompt=tmp_path / "absent-PROMPT.md",
+        catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
+        helper_refresh=lambda _version, _env: tmp_path / "git-loopy-tui",
+        output_fn=output.append,
+    )
+
+    assert result == 0
+    repaired = settings.load_config_table(config)
+    assert settings.table_routing(repaired, scope="project") == {
+        "docs": ("gpt-5.4", "high")
+    }
+    assert any("Renamed retired routing key 'task-type:docs' to 'docs'" in line for line in output)
+
+
+def test_update_leaves_a_clean_config_without_a_backup(tmp_path: Path) -> None:
+    """A current Config is reported but never rewritten for the sake of it."""
+    from git_loopy import settings, updatecmd
+
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
+    config = settings.global_config_path(env)
+    settings.write_config(
+        config, {"routing": {"docs": {"model": "gpt-5.4", "effort": "high"}}}
+    )
+    original = config.read_bytes()
+    output: list[str] = []
+
+    result = updatecmd.run_update(
+        env=env,
+        release_version_reader=lambda: "1.2.4",
+        packaged_prompt=tmp_path / "absent-PROMPT.md",
+        catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
+        helper_refresh=lambda _version, _env: tmp_path / "git-loopy-tui",
+        output_fn=output.append,
+    )
+
+    assert result == 0
+    assert config.read_bytes() == original
+    assert not config.with_suffix(".toml.bak").exists()
+    assert not any("Config" in line and "routing repair" in line for line in output)

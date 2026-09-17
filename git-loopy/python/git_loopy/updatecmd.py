@@ -9,10 +9,11 @@ import tempfile
 from difflib import SequenceMatcher
 from http.client import HTTPException
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Callable, Literal, Mapping
 from urllib.request import urlopen
 
 from git_loopy import skill_install, tui_release
+from git_loopy.config import TASK_TYPE_KEYS, TASK_TYPE_LABEL_PREFIX
 from git_loopy.prompt import packaged_prompt_path
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
 from git_loopy.scaffold_provenance import (
@@ -21,6 +22,7 @@ from git_loopy.scaffold_provenance import (
     read_scaffold_provenance,
     record_scaffolded_assets,
 )
+from git_loopy import settings
 from git_loopy.settings import global_dir, global_prompt_path
 
 #: Where a published Release keeps the shared prompt, relative to its source
@@ -42,6 +44,9 @@ def released_prompt_url(release_version: str) -> str:
 def run_update(
     *,
     env: Mapping[str, str] | None = None,
+    dry_run: bool = False,
+    config_scope: Literal["global", "project"] = "global",
+    repo_root: Path | None = None,
     release_version_reader: Callable[[], str] = read_runtime_release_version,
     packaged_prompt: Path | None = None,
     previous_prompt_fetcher: Callable[[str], str] | None = None,
@@ -52,6 +57,26 @@ def run_update(
 ) -> int:
     """Refresh mutable machine state without inspecting a repository or tracker."""
     environ = os.environ if env is None else env
+    if config_scope == "project" and repo_root is None:
+        output_fn("Could not repair the project Config: no repository was supplied.")
+        return 1
+    config_path = (
+        settings.global_config_path(environ)
+        if config_scope == "global"
+        else settings.project_config_path(repo_root)
+    )
+    try:
+        config_settled = _update_config(
+            path=config_path,
+            scope=config_scope,
+            dry_run=dry_run,
+            output_fn=output_fn,
+        )
+    except (OSError, settings.SettingsError) as exc:
+        output_fn(f"Could not repair the {config_scope} Config: {exc}")
+        config_settled = False
+    if dry_run:
+        return 0 if config_settled else 1
     try:
         release_version = release_version_reader()
     except ReleaseVersionError as exc:
@@ -94,7 +119,76 @@ def run_update(
     except (OSError, tui_release.TuiReleaseError) as exc:
         output_fn(f"Could not refresh the TUI helper: {exc}")
         helper_settled = False
-    return 0 if prompt_settled and catalog_settled and helper_settled else 1
+    return 0 if config_settled and prompt_settled and catalog_settled and helper_settled else 1
+
+
+def _update_config(
+    *,
+    path: Path,
+    scope: str,
+    dry_run: bool,
+    output_fn: Callable[[str], None],
+) -> bool:
+    """Repair unambiguous Release-retired routing keys in one Config scope."""
+    table = settings.load_config_table(path)
+    routing = settings.table_routing(table, scope=scope)
+    rewritten = dict(routing)
+    changes: list[str] = []
+    ambiguities: list[str] = []
+
+    for key in routing:
+        if key in TASK_TYPE_KEYS:
+            continue
+        candidate = key.removeprefix(TASK_TYPE_LABEL_PREFIX)
+        if (
+            key.startswith(TASK_TYPE_LABEL_PREFIX)
+            and candidate in TASK_TYPE_KEYS
+        ):
+            if candidate in routing:
+                ambiguities.append(
+                    f"Could not repair routing key {key!r} in the {scope} Config "
+                    f"({path}): it maps to {candidate!r}, which is already configured."
+                )
+                continue
+            rewritten.pop(key)
+            rewritten[candidate] = routing[key]
+            changes.append(f"Renamed retired routing key {key!r} to {candidate!r}")
+            continue
+        rewritten.pop(key)
+        changes.append(f"Removed retired routing key {key!r}")
+
+    for change in changes:
+        past_tense, remainder = change.split(" ", maxsplit=1)
+        rendered = change if not dry_run else f"{past_tense[:-1].lower()} {remainder}"
+        output_fn(f"{'Would ' if dry_run else ''}{rendered} in the {scope} Config ({path}).")
+    for message in ambiguities:
+        output_fn(message)
+    if not changes:
+        return not ambiguities
+    if dry_run:
+        return not ambiguities
+
+    backup = _backup_config(path)
+    table["routing"] = {
+        key: {"model": model, "effort": effort} for key, (model, effort) in rewritten.items()
+    }
+    if not rewritten:
+        table.pop("routing", None)
+    settings.write_config_atomic(path, table)
+    output_fn(f"Backed up the {scope} Config to {backup}.")
+    return not ambiguities
+
+
+def _backup_config(path: Path) -> Path:
+    """Copy a Config before its atomic replacement, retaining prior backups."""
+    source = path.resolve(strict=False) if path.is_symlink() else path
+    backup = source.with_suffix(f"{source.suffix}.bak")
+    index = 1
+    while backup.exists():
+        backup = source.with_suffix(f"{source.suffix}.bak.{index}")
+        index += 1
+    shutil.copy2(source, backup)
+    return backup
 
 
 def _update_prompt(

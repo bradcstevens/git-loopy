@@ -238,6 +238,13 @@ def _escape_str(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _format_key(key: str) -> str:
+    """Render a TOML bare key when possible, otherwise a quoted basic key."""
+    if key and all(character.isascii() and (character.isalnum() or character in "_-") for character in key):
+        return key
+    return f'"{_escape_str(key)}"'
+
+
 def _format_value(key: str, value: object) -> str:
     """Render one scalar / string-list value as its TOML literal.
 
@@ -356,7 +363,9 @@ def dump_config_toml(
             lines.append("")
         lines.append(f"[{key}]")
         for entry_key, entry in table.items():
-            lines.append(f"{entry_key} = {_format_inline_table(key, entry_key, entry)}")
+            lines.append(
+                f"{_format_key(entry_key)} = {_format_inline_table(key, entry_key, entry)}"
+            )
     return "\n".join(lines) + "\n"
 
 

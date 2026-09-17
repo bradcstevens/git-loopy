@@ -1253,10 +1253,10 @@ def test_a_read_surface_refuses_a_persisted_task_type_it_cannot_route(
         assert key in err.text
 
 
-def test_the_refusal_names_the_command_that_clears_the_offending_key(
+def test_the_refusal_names_update_as_the_release_repair(
     tmp_path: Path,
 ) -> None:
-    """A refusal an operator cannot act on is a lockout, so it names the remedy."""
+    """A retired Config key names the Release repair that owns it."""
     _legacy_routing_config(tmp_path)
     err = _Sink()
 
@@ -1265,13 +1265,13 @@ def test_the_refusal_names_the_command_that_clears_the_offending_key(
     )
 
     assert rc == 1
-    assert "config routing unset custom" in err.text
+    assert "git-loopy update --project" in err.text
 
 
-def test_a_global_legacy_route_names_the_global_recovery_command(
+def test_a_global_legacy_route_names_the_global_update_repair(
     tmp_path: Path,
 ) -> None:
-    """A recovery command must target the scope that carries the legacy key."""
+    """The repair command must target the scope that carries the legacy key."""
     env = _env(tmp_path)
     settings.write_config(
         settings.global_config_path(env),
@@ -1284,7 +1284,7 @@ def test_a_global_legacy_route_names_the_global_recovery_command(
     )
 
     assert rc == 1
-    assert "config routing unset custom --global" in err.text
+    assert "git-loopy update --global" in err.text
 
 
 def test_routing_unset_clears_a_key_outside_the_taxonomy(tmp_path: Path) -> None:
@@ -1321,7 +1321,7 @@ def test_routing_unset_leaves_the_taxonomy_closed_to_writes(tmp_path: Path) -> N
     assert not settings.project_config_path(tmp_path).exists()
 
 
-def test_a_write_refused_by_a_persisted_key_names_that_key_and_the_remedy(
+def test_a_write_refused_by_a_persisted_key_names_that_key_and_update(
     tmp_path: Path,
 ) -> None:
     """Setting a *valid* route is refused by a legacy sibling, so the error says which.
@@ -1340,7 +1340,7 @@ def test_a_write_refused_by_a_persisted_key_names_that_key_and_the_remedy(
     )
 
     assert rc == 1
-    assert "config routing unset custom" in err.text
+    assert "git-loopy update --project" in err.text
     assert "custom" in path.read_text(encoding="utf-8")  # refused, not laundered
 
 
