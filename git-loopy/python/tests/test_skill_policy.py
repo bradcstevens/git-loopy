@@ -254,6 +254,19 @@ def test_minimal_policy_uses_packaged_winners_when_inventory_is_unavailable() ->
     assert result.fallback is SkillPolicyFallback.MINIMAL
 
 
+def test_policy_resolution_preserves_one_shot_required_skill_iterables() -> None:
+    result = resolve_skill_policy(
+        SkillPolicyInputs(),
+        catalog=SkillCatalog(
+            winners={"required": SkillCatalogWinner("required", "packaged")}
+        ),
+        required_skills=(name for name in ("required",)),
+    )
+
+    assert result.enabled == ("required",)
+    assert result.required == ("required",)
+
+
 def test_project_tracking_evidence_uses_injected_git_client(tmp_path: Path) -> None:
     skill_path = tmp_path / ".copilot" / "skills" / "project"
     git = FakeGitClient(tmp_path, tracked_paths={skill_path})

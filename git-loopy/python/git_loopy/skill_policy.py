@@ -220,7 +220,20 @@ def resolve_skill_policy(
     tracked_project_skills: Iterable[str] = (),
 ) -> EffectiveSkillPolicy:
     """Resolve the selected configured scope into an Effective Skill policy."""
-    required = frozenset(required_skills)
+    required_names = tuple(required_skills)
+    legacy_denied_names = tuple(legacy_denied)
+    tracked_project_skill_names = tuple(tracked_project_skills)
+    blockers = find_skill_policy_blockers(
+        inputs,
+        catalog=catalog,
+        required_skills=required_names,
+        legacy_denied=legacy_denied_names,
+        tracked_project_skills=tracked_project_skill_names,
+    )
+    if blockers:
+        raise blockers[0]
+
+    required = frozenset(required_names)
     if inputs.project.present:
         scope = SkillPolicyScope.PROJECT
         enabled = set(inputs.project.names)
@@ -238,36 +251,8 @@ def resolve_skill_policy(
         enabled = set(inputs.environment.names)
     enabled.update(inputs.enable_skills)
     enabled.difference_update(inputs.disable_skills)
-    legacy_denied_names = frozenset(legacy_denied)
-    enabled.difference_update(legacy_denied_names)
-
-    explicit_policy = (
-        inputs.project.present
-        or inputs.global_.present
-        or inputs.environment.present
-        or bool(inputs.enable_skills)
-    )
-    if explicit_policy and not catalog.inventory_available:
-        raise SkillInventoryUnavailable(enabled)
-
-    missing_enabled = enabled.difference(catalog.winners)
-    if missing_enabled and not catalog.inventory_available:
-        raise SkillInventoryUnavailable(missing_enabled)
-    if missing_enabled:
-        raise MissingEnabledSkills(missing_enabled)
-
-    missing_required = required.difference(enabled)
-    if missing_required:
-        raise MissingRequiredSkills(missing_required)
-
-    tracked = frozenset(tracked_project_skills)
-    untracked_project = {
-        name
-        for name in enabled
-        if catalog.winners[name].source_kind == "project" and name not in tracked
-    }
-    if untracked_project:
-        raise UntrackedProjectSkills(untracked_project)
+    legacy_denied_set = frozenset(legacy_denied_names)
+    enabled.difference_update(legacy_denied_set)
 
     source_kinds = {
         name: catalog.winners[name].source_kind
@@ -276,8 +261,68 @@ def resolve_skill_policy(
     return EffectiveSkillPolicy(
         enabled=tuple(enabled),
         required=tuple(required),
-        legacy_denied=tuple(legacy_denied_names),
+        legacy_denied=tuple(legacy_denied_set),
         source_kinds=source_kinds,
         base_scope=scope,
         fallback=fallback_state,
     )
+
+
+def find_skill_policy_blockers(
+    inputs: SkillPolicyInputs,
+    *,
+    catalog: SkillCatalog,
+    required_skills: Iterable[str],
+    legacy_denied: Iterable[str] = (),
+    tracked_project_skills: Iterable[str] = (),
+) -> tuple[SkillPolicyResolutionError, ...]:
+    """Return every independent blocker the Run policy resolver can raise.
+
+    The resolver still raises the first result to preserve the Run's existing
+    fail-fast behavior. Diagnostics consume the complete result so one
+    report can name every correction an operator must make before retrying.
+    """
+    required = frozenset(required_skills)
+    if inputs.project.present:
+        enabled = set(inputs.project.names)
+    elif inputs.global_.present:
+        enabled = set(inputs.global_.names)
+    else:
+        enabled = set(required)
+
+    if inputs.environment.present:
+        enabled = set(inputs.environment.names)
+    enabled.update(inputs.enable_skills)
+    enabled.difference_update(inputs.disable_skills)
+    enabled.difference_update(legacy_denied)
+
+    explicit_policy = (
+        inputs.project.present
+        or inputs.global_.present
+        or inputs.environment.present
+        or bool(inputs.enable_skills)
+    )
+    if explicit_policy and not catalog.inventory_available:
+        return (SkillInventoryUnavailable(enabled),)
+
+    missing_enabled = enabled.difference(catalog.winners)
+    if missing_enabled and not catalog.inventory_available:
+        return (SkillInventoryUnavailable(missing_enabled),)
+
+    blockers: list[SkillPolicyResolutionError] = []
+    if missing_enabled:
+        blockers.append(MissingEnabledSkills(missing_enabled))
+
+    missing_required = required.difference(enabled)
+    if missing_required:
+        blockers.append(MissingRequiredSkills(missing_required))
+
+    tracked = frozenset(tracked_project_skills)
+    untracked_project = {
+        name
+        for name in enabled.intersection(catalog.winners)
+        if catalog.winners[name].source_kind == "project" and name not in tracked
+    }
+    if untracked_project:
+        blockers.append(UntrackedProjectSkills(untracked_project))
+    return tuple(blockers)

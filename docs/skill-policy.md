@@ -419,6 +419,23 @@ Every one of these is raised at **preflight**, before the first work session,
 and **none of them rewrites your saved policy**. A failing Run leaves the Config
 exactly as it found it, so the fix is always yours to make deliberately.
 
+### Check before starting a Run
+
+`git-loopy doctor` is the report half of Skill-policy recovery, following the
+same report-first shape as `git-loopy labels`. It resolves the exact Skill
+policy a Run preflight resolves, without starting a Run, opening a picker,
+spending AI Credits, writing Config, changing Copilot settings, or refreshing
+the installed Skill catalog.
+
+```bash
+git-loopy doctor
+```
+
+Each blocking row names the Skill, the blocker in operator terms, the policy
+scope, and the Config path to correct. A clean policy prints one success line
+and exits `0`; any blocker exits non-zero, which makes it suitable for a
+scripted pre-Run check.
+
 | Message on stderr | Why | Recovery |
 | --- | --- | --- |
 | `Enabled Skills are missing from the catalog` | a configured name resolves to nothing — a personal Skill you never installed here, a plugin you removed, or a typo | `git-loopy skills list` to see the real names, then `git-loopy skills edit` to drop or correct it |
