@@ -102,21 +102,35 @@ for commands.
 `git-loopy info` describes the Python Runner artifact currently executing: its
 executable path, **Install channel** (only when that ownership can be proven),
 **Release version**, resolved commit, whether that commit is a published Release,
-and **Edge install** status. It also lists the Config-home assets git-loopy owns:
-the Config and prompt override, installed catalog, and TUI helper. Each reports
-whether its Scaffold provenance is `untouched`, `customized`, or `unrecorded`.
-It is read-only and always exits `0`; unavailable identity is reported as
-`unknown`, never treated as a health failure.
+and **Edge install** status. It also lists the Config-home assets git-loopy
+installs — the Config, the prompt override, the **installed catalog**, and the
+TUI helper — and what each one has drifted into. It is read-only and always
+exits `0`; unavailable identity is reported as `unknown`, never treated as a
+health failure, and no amount of drift changes the exit code.
 
 ```bash
 git-loopy info
 git-loopy info --json
 ```
 
+Each asset reports one classification, judged against its **Scaffold
+provenance**:
+
+| Classification | What it means |
+| --- | --- |
+| `untouched` | Scaffold provenance covers it and its content still matches what that **Release version** wrote, so a refresh can replace it. |
+| `customized` | Scaffold provenance covers it and cannot prove the content is git-loopy's — the content differs, no entry exists, or the record is unreadable. Treated as the operator's work, the fail-safe direction ADR-0054 asks for. |
+| `unrecorded` | Scaffold provenance records nothing about it: the **installed catalog** and the TUI helper, which are machine-managed and re-cut wholesale rather than authored, and anything that is not installed. |
+
+`present` is the separate fact of whether the asset is there at all, so "you have
+not installed this" stays distinguishable from "this is installed and nothing
+proves what it is". Plain text prints `not installed` for an absent asset.
+
 `--json` emits this stable schema. Fields with unknown facts are `null`; the
-`assets` array always lists the Config-home inventory. Each entry carries its
-stable display name, resolved path, classification, and originating Release
-when Scaffold provenance proves one.
+`assets` array always lists the whole Config-home inventory, in a fixed order,
+whether or not each entry exists on disk. Each entry carries its stable display
+name, resolved path, presence, classification, and originating Release when
+Scaffold provenance proves one.
 
 ```json
 {
@@ -132,24 +146,28 @@ when Scaffold provenance proves one.
     {
       "name": "config.toml",
       "path": "/home/operator/.config/git-loopy/config.toml",
+      "present": true,
       "classification": "untouched",
       "release_version": "0.9.0"
     },
     {
       "name": "PROMPT.md",
       "path": "/home/operator/.config/git-loopy/PROMPT.md",
+      "present": true,
       "classification": "customized",
-      "release_version": null
+      "release_version": "0.8.0"
     },
     {
       "name": "installed catalog",
       "path": "/home/operator/.config/git-loopy/skills",
+      "present": true,
       "classification": "unrecorded",
       "release_version": null
     },
     {
       "name": "TUI helper",
-      "path": "/home/operator/.config/git-loopy/git-loopy-tui",
+      "path": "/home/operator/.config/git-loopy/bin/git-loopy-tui",
+      "present": false,
       "classification": "unrecorded",
       "release_version": null
     }

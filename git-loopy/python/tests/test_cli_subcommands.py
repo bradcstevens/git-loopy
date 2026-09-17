@@ -366,6 +366,7 @@ def test_main_info_reports_stable_json_and_never_runs_the_loop(
             installation.InstalledAsset(
                 name="config.toml",
                 path=Path("/operator/.config/git-loopy/config.toml"),
+                present=True,
                 classification="untouched",
                 release_version="1.2.3",
             ),
@@ -379,6 +380,7 @@ def test_main_info_reports_stable_json_and_never_runs_the_loop(
         {
             "name": "config.toml",
             "path": "/operator/.config/git-loopy/config.toml",
+            "present": True,
             "classification": "untouched",
             "release_version": "1.2.3",
         }
@@ -403,18 +405,28 @@ def test_main_info_prints_every_identity_line_in_plain_text(
             installation.InstalledAsset(
                 name="config.toml",
                 path=Path("/operator/.config/git-loopy/config.toml"),
+                present=True,
                 classification="untouched",
                 release_version="1.2.3",
             ),
             installation.InstalledAsset(
                 name="PROMPT.md",
                 path=Path("/operator/.config/git-loopy/PROMPT.md"),
+                present=True,
                 classification="customized",
                 release_version="1.2.3",
             ),
             installation.InstalledAsset(
                 name="installed catalog",
                 path=Path("/operator/.config/git-loopy/skills"),
+                present=True,
+                classification="unrecorded",
+                release_version=None,
+            ),
+            installation.InstalledAsset(
+                name="TUI helper",
+                path=Path("/operator/.config/git-loopy/bin/git-loopy-tui"),
+                present=False,
                 classification="unrecorded",
                 release_version=None,
             ),
@@ -437,6 +449,7 @@ def test_main_info_prints_every_identity_line_in_plain_text(
         "  config.toml: untouched (Release 1.2.3)",
         "  PROMPT.md: customized (Release 1.2.3)",
         "  installed catalog: unrecorded",
+        "  TUI helper: not installed",
     ]
 
 

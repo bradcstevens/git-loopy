@@ -12,6 +12,7 @@ from typing import Mapping
 
 __all__ = [
     "RECORD_FILENAME",
+    "SCAFFOLDED_ASSET_NAMES",
     "ScaffoldProvenance",
     "ScaffoldProvenanceError",
     "ScaffoldedAsset",
@@ -23,7 +24,11 @@ __all__ = [
 
 RECORD_FILENAME = "scaffold-provenance.json"
 _SCHEMA_VERSION = 1
-_SCAFFOLDED_ASSET_NAMES = frozenset({"config.toml", "PROMPT.md"})
+
+#: The operator-editable assets ``init`` writes, and therefore the only ones a
+#: record may name. Published because a consumer that reports drift has to
+#: enumerate exactly these — a covered asset nothing inventories drifts unseen.
+SCAFFOLDED_ASSET_NAMES = frozenset({"config.toml", "PROMPT.md"})
 
 
 class ScaffoldProvenanceError(ValueError):
@@ -76,7 +81,7 @@ def read_scaffold_provenance(scope_dir: Path) -> ScaffoldProvenance | None:
     for name, raw_asset in raw_assets.items():
         if (
             not isinstance(name, str)
-            or name not in _SCAFFOLDED_ASSET_NAMES
+            or name not in SCAFFOLDED_ASSET_NAMES
             or not isinstance(raw_asset, dict)
         ):
             raise ScaffoldProvenanceError(f"{path} has an invalid asset entry")

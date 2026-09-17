@@ -34,7 +34,8 @@ old bash launcher is retired):
 
 * ``--version`` — print the distribution Release version and exit before Run
   discovery, configuration, dependencies, or services.
-* ``info`` — describe the installation identity and exit successfully.
+* ``info`` — describe the installation identity, channel, and assets, then exit
+  successfully.
 * ``doctor`` — report every Run precondition without starting a Run.
 * Positional ``<max-iterations>`` — ``0`` (or omitted) means unlimited.
 * ``--model ID`` — per-run model override (top of the precedence chain).
@@ -116,6 +117,7 @@ from git_loopy.skill_policy import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; keeps dispatch import-light
+    from git_loopy.installation import InstalledAsset
     from git_loopy.labels import LabelBootstrapClient
     from git_loopy.rate_card import RateCard
     from git_loopy.staircase import PriceStaircase
@@ -282,7 +284,7 @@ def build_parser() -> argparse.ArgumentParser:
             "set / get / list / edit / path.\n"
             "                                 See `git-loopy config -h`.\n"
             "  info                           Describe this installation's "
-            "identity and channel.\n"
+            "identity, channel, and assets.\n"
             "                                 See `git-loopy info -h`.\n"
             "  skills list                    Inspect the closed-world Skill "
             "policy.\n"
@@ -713,12 +715,15 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
 
     info = sub.add_parser(
         "info",
-        help="Describe this installation's artifact, channel, and identity.",
+        help="Describe this installation's artifact, channel, identity, and assets.",
         description=(
             "Report the installed artifact, the Install channel when it can be "
-            "proven, Release version, resolved commit, and Edge-install status. "
-            "This command describes facts only and exits successfully even when "
-            "some identity facts are unavailable."
+            "proven, Release version, resolved commit, and Edge-install status, "
+            "then every Config-home asset git-loopy installs and whether it is "
+            "untouched, customized, or unrecorded against its Scaffold "
+            "provenance. This command describes facts only and exits "
+            "successfully even when some identity facts are unavailable and "
+            "however far the assets have drifted."
         ),
     )
     info.add_argument(
@@ -1062,13 +1067,17 @@ def _run_info(
         if inventory.assets:
             output_fn("Assets:")
             for asset in inventory.assets:
-                release = (
-                    f" (Release {asset.release_version})"
-                    if asset.release_version is not None
-                    else ""
-                )
-                output_fn(f"  {asset.name}: {asset.classification}{release}")
+                output_fn(f"  {asset.name}: {_display_asset(asset)}")
     return 0
+
+
+def _display_asset(asset: "InstalledAsset") -> str:
+    """Report drift only for an asset that is there to have drifted."""
+    if not asset.present:
+        return "not installed"
+    if asset.release_version is None:
+        return asset.classification
+    return f"{asset.classification} (Release {asset.release_version})"
 
 
 def _run_doctor(args: argparse.Namespace) -> int:

@@ -1,9 +1,14 @@
-"""Read the identity half of git-loopy's installation inventory.
+"""Read git-loopy's installation inventory: its identity, and what has drifted.
 
 The inventory is deliberately descriptive: callers receive unknown facts as
 ``None`` rather than an exception or an inferred channel.  Commands that need a
 safe mutation boundary can therefore share this record without treating an
 unproven installation as one they own.
+
+The same rule governs the config-home assets.  An asset is reported as the
+operator's work whenever Scaffold provenance covers it and cannot prove the
+content is git-loopy's, so a refresh built on this record errs toward leaving
+prose alone (ADR-0054).
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ from urllib.parse import unquote, urlparse
 from git_loopy.release_version import read_runtime_release_version
 from git_loopy.scaffold_provenance import (
     ScaffoldedAsset,
+    ScaffoldProvenance,
     ScaffoldProvenanceError,
     read_scaffold_provenance,
 )
@@ -36,13 +42,49 @@ __all__ = [
 
 INSTALLATION_SCHEMA_VERSION = 1
 _COMMIT = re.compile(r"[0-9a-f]{7,64}\Z", re.IGNORECASE)
-_CONFIG_HOME_ASSETS = (
-    ("config.toml", "config.toml"),
-    ("PROMPT.md", "PROMPT.md"),
-    ("installed catalog", "skills"),
-    ("TUI helper", "git-loopy-tui"),
-)
 AssetClassification = Literal["untouched", "customized", "unrecorded"]
+
+
+@dataclass(frozen=True)
+class _ConfigHomeAsset:
+    """One asset git-loopy installs, and what Scaffold provenance says about it.
+
+    ``filenames`` holds every name one asset answers to, most specific first, so
+    a platform that renames the artifact is still inventoried; the first name is
+    what an absent asset reports.  ``provenance_name`` is the record key when
+    Scaffold provenance covers the asset and ``None`` when it never does.  The
+    **installed catalog** and the TUI helper are machine-managed — a catalog
+    someone edits is re-cut wholesale (ADR-0025) — so the fail-safe that protects
+    operator prose does not apply.
+    """
+
+    name: str
+    filenames: tuple[str, ...]
+    provenance_name: str | None
+
+
+_CONFIG_HOME_ASSETS = (
+    _ConfigHomeAsset(
+        name="config.toml",
+        filenames=("config.toml",),
+        provenance_name="config.toml",
+    ),
+    _ConfigHomeAsset(
+        name="PROMPT.md",
+        filenames=("PROMPT.md",),
+        provenance_name="PROMPT.md",
+    ),
+    _ConfigHomeAsset(
+        name="installed catalog",
+        filenames=("skills",),
+        provenance_name=None,
+    ),
+    _ConfigHomeAsset(
+        name="TUI helper",
+        filenames=("bin/git-loopy-tui", "bin/git-loopy-tui.exe"),
+        provenance_name=None,
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -59,14 +101,16 @@ class InstalledAsset:
 
     name: str
     path: Path
+    present: bool
     classification: AssetClassification
     release_version: str | None
 
-    def json_dict(self) -> dict[str, str | None]:
+    def json_dict(self) -> dict[str, str | bool | None]:
         """Return this asset's documented JSON representation."""
         return {
             "name": self.name,
             "path": str(self.path),
+            "present": self.present,
             "classification": self.classification,
             "release_version": self.release_version,
         }
@@ -142,8 +186,8 @@ def _inspect_assets(env: Mapping[str, str]) -> tuple[InstalledAsset, ...]:
     """Classify the fixed config-home inventory from its scoped provenance.
 
     Inventory remains total when its evidence is unreadable.  A mutator must
-    still surface that error, but this descriptive seam has no proof that an
-    existing asset is ours, so it classifies it as customized.
+    still surface that error, but this descriptive seam has no proof that a
+    covered asset is ours, so it classifies it as customized.
     """
     scope_dir = global_dir(env)
     try:
@@ -152,32 +196,57 @@ def _inspect_assets(env: Mapping[str, str]) -> tuple[InstalledAsset, ...]:
         provenance = None
     return tuple(
         _classify_asset(
-            name=name,
-            path=scope_dir / filename,
-            provenance=None if provenance is None else provenance.assets.get(filename),
+            asset=asset,
+            path=_asset_path(scope_dir, asset),
+            provenance=_recorded(provenance, asset),
         )
-        for name, filename in _CONFIG_HOME_ASSETS
+        for asset in _CONFIG_HOME_ASSETS
     )
+
+
+def _asset_path(scope_dir: Path, asset: _ConfigHomeAsset) -> Path:
+    """Resolve the name one asset actually answers to in this scope."""
+    candidates = tuple(scope_dir / filename for filename in asset.filenames)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _recorded(
+    provenance: ScaffoldProvenance | None, asset: _ConfigHomeAsset
+) -> ScaffoldedAsset | None:
+    if provenance is None or asset.provenance_name is None:
+        return None
+    return provenance.assets.get(asset.provenance_name)
 
 
 def _classify_asset(
     *,
-    name: str,
+    asset: _ConfigHomeAsset,
     path: Path,
     provenance: ScaffoldedAsset | None,
 ) -> InstalledAsset:
-    """Keep absent assets distinct while treating missing proof as operator work."""
-    if not path.exists():
+    """Report what Scaffold provenance proves, failing safe only where it can.
+
+    An asset provenance never covers is ``unrecorded`` however it looks on disk:
+    claiming it as the operator's would be a fail-safe against a risk that does
+    not exist, and would refuse a refresh that is machine-managed by design.
+    """
+    present = path.exists()
+    if asset.provenance_name is None or not present:
         return InstalledAsset(
-            name=name,
+            name=asset.name,
             path=path,
+            present=present,
             classification="unrecorded",
             release_version=None,
         )
     if provenance is None:
         return InstalledAsset(
-            name=name,
+            name=asset.name,
             path=path,
+            present=True,
             classification="customized",
             release_version=None,
         )
@@ -185,14 +254,16 @@ def _classify_asset(
         digest = _digest(path)
     except OSError:
         return InstalledAsset(
-            name=name,
+            name=asset.name,
             path=path,
+            present=True,
             classification="customized",
             release_version=provenance.release_version,
         )
     return InstalledAsset(
-        name=name,
+        name=asset.name,
         path=path,
+        present=True,
         classification="untouched" if digest == provenance.sha256 else "customized",
         release_version=provenance.release_version,
     )
