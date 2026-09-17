@@ -87,6 +87,7 @@ __all__ = [
     "WRAPPER_COMMIT_RECORDED",
     "WRAPPER_PUSH_RECORDED",
     "WRAPPER_AUTO_CLOSE",
+    "WRAPPER_RELEASE_ADVANCED",
     "WRAPPER_PR_ADVANCED",
     "WRAPPER_STRIKE",
     "WRAPPER_ASK_USER_ATTEMPTED",
@@ -295,6 +296,7 @@ WRAPPER_COMMIT_RECORDED = "wrapper.commit.recorded"
 # Checkpoint emits nothing — see ``_Loop._maybe_push``.
 WRAPPER_PUSH_RECORDED = "wrapper.push.recorded"
 WRAPPER_AUTO_CLOSE = "wrapper.auto_close"
+WRAPPER_RELEASE_ADVANCED = "wrapper.release.advanced"
 WRAPPER_PR_ADVANCED = "wrapper.pr.advanced"
 WRAPPER_STRIKE = "wrapper.strike"
 WRAPPER_ASK_USER_ATTEMPTED = "wrapper.ask_user.attempted"

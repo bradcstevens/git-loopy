@@ -113,6 +113,7 @@ jobs:
             git-loopy/shell/tests/test-event-conformance.sh
             git-loopy/shell/tests/test-orchestrator-conformance.sh
             git-loopy/shell/tests/test-orchestrator-boundary.sh
+            git-loopy/shell/tests/test-release-line-conformance.sh
             git-loopy/shell/tests/test-tui-install.sh
           )
           EXECUTED=0
