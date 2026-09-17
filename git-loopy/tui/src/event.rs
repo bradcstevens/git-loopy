@@ -103,6 +103,8 @@ pub enum EventPayload {
     AfkReadyCollected(AfkReadyCollected),
     /// `wrapper.pool.refreshed`
     PoolRefreshed(PoolRefreshed),
+    /// `wrapper.release.advanced`
+    ReleaseAdvanced(ReleaseAdvanced),
     /// `wrapper.issue.activated`
     IssueActivated(IssueActivated),
     /// `wrapper.pickup.bound`
@@ -226,6 +228,17 @@ pub struct PoolRefreshed {
     /// Cache membership in stable FIFO order.
     #[serde(default, deserialize_with = "lenient_issue_refs")]
     pub issues: Vec<IssueRef>,
+}
+
+/// One successfully committed **Release line** advance.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ReleaseAdvanced {
+    /// The highest stable version this Release line targets.
+    #[serde(default)]
+    pub release_target: Option<String>,
+    /// The current prerelease version, including its `dev.N` counter.
+    #[serde(default)]
+    pub release_version: Option<String>,
 }
 
 /// The authoritative Active-issue binding for one Iteration.
@@ -566,6 +579,7 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.iteration.start" => EventPayload::IterationStart,
         "wrapper.afk_ready.collected" => EventPayload::AfkReadyCollected(decode_or_default(value)),
         "wrapper.pool.refreshed" => EventPayload::PoolRefreshed(decode_or_default(value)),
+        "wrapper.release.advanced" => EventPayload::ReleaseAdvanced(decode_or_default(value)),
         "wrapper.issue.activated" => match serde_json::from_value(value.clone()) {
             Ok(activated) => EventPayload::IssueActivated(activated),
             // An activation naming no usable issue binds nothing; it is

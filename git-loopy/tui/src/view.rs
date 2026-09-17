@@ -118,6 +118,8 @@ pub struct Header {
     pub active_issue: Option<IssueRef>,
     pub active_seconds: Option<f64>,
     pub context_fill: ContextFill,
+    pub release_target: Option<String>,
+    pub release_version: Option<String>,
     pub cost: Declaration,
     pub rate_card: Declaration,
     pub routing: Declaration,
@@ -359,6 +361,14 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
         }),
         active_issue: active,
         context_fill: context_fill(state),
+        release_target: state
+            .release_line
+            .as_ref()
+            .and_then(|advance| advance.release_target.clone()),
+        release_version: state
+            .release_line
+            .as_ref()
+            .and_then(|advance| advance.release_version.clone()),
         cost: Declaration::from_capability(state.capabilities.cost),
         rate_card: Declaration::from_capability(state.capabilities.rate_card),
         routing: Declaration::from_capability(state.capabilities.routing),

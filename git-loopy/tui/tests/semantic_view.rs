@@ -202,6 +202,38 @@ fn reduce_jsonl(events: &[&str], drill_in: IssueRef) -> Value {
     view(&state, &ctx, drill_in)
 }
 
+#[test]
+fn a_release_line_advance_replaces_the_headers_placeholder_with_its_latest_value() {
+    let no_advance = reduce_jsonl(
+        &[r#"{"type":"wrapper.run.start","run_id":"run-1"}"#],
+        IssueRef::number(42),
+    );
+    assert!(
+        no_advance["dashboard"]["header"]["release_target"].is_null(),
+        "a Run has no Release target until a successful advance records one"
+    );
+    assert!(
+        no_advance["dashboard"]["header"]["release_version"].is_null(),
+        "a Run has no Release version until a successful advance records one"
+    );
+
+    let advanced = reduce_jsonl(
+        &[
+            r#"{"type":"wrapper.release.advanced","bump_class":"patch","issue":42,"release_target":"1.2.4","release_version":"1.2.4-dev.1"}"#,
+            r#"{"type":"wrapper.release.advanced","bump_class":"minor","issue":43,"release_target":"1.3.0","release_version":"1.3.0-dev.2"}"#,
+        ],
+        IssueRef::number(42),
+    );
+    assert_eq!(
+        advanced["dashboard"]["header"]["release_target"],
+        serde_json::json!("1.3.0")
+    );
+    assert_eq!(
+        advanced["dashboard"]["header"]["release_version"],
+        serde_json::json!("1.3.0-dev.2")
+    );
+}
+
 fn queue_row(projected: &Value, issue: i64) -> &Value {
     projected["dashboard"]["queue"]["rows"]
         .as_array()

@@ -106,6 +106,7 @@ _STRIKE = "wrapper.strike"
 # pool, commits, closures, and per-iteration boundaries all flow through the
 # same #22 fan-out, so the ledger folds out of them with no new plumbing.
 _AFK_READY_COLLECTED = "wrapper.afk_ready.collected"
+_RELEASE_ADVANCED = "wrapper.release.advanced"
 #: One **Membership read** (#481, ADR-0042): the shallow, non-authoritative
 #: read **Rolling dispatch** takes *during* a unit of work. It is add-only —
 #: it may open a ``queued`` row for a ref this Run has not seen and may touch
@@ -529,6 +530,11 @@ class LiveRunState:
         #: that routes publishes a resolution on every bound Pickup, including
         #: the one an explicit ``--model`` pinned.
         self.routing_available: bool | None = None
+        #: The latest successfully committed **Release line** this Run announced.
+        #: Both parts update together: a partial Event must not create a Release
+        #: line from telemetry the Orchestrator did not complete.
+        self.release_target: str | None = None
+        self.release_version: str | None = None
         # An absent declaration is historical silence, not evidence the Run used
         # the local host.
         self.execution_host = ExecutionHostSnapshot()
@@ -752,6 +758,12 @@ class LiveRunState:
             self._record_pool(event.get("issues"), now)
         elif etype == _POOL_REFRESHED:
             self._record_membership(event.get("issues"), now)
+        elif etype == _RELEASE_ADVANCED:
+            release_target = event.get("release_target")
+            release_version = event.get("release_version")
+            if isinstance(release_target, str) and isinstance(release_version, str):
+                self.release_target = release_target
+                self.release_version = release_version
         elif etype == _PICKUP_BOUND:
             self._record_pickup_line(
                 event.get("issue"), _log_pickup_bound_text(event), now

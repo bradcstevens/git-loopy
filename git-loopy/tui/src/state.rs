@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::event::{
     CommitRecorded, ContextWindowSample, Event, EventPayload, ExecutionHostDeclaration,
     InsightCapabilities, IssueRef, IterationEnd, IterationIssue, IterationSummary, Pickup,
-    StopRequested,
+    ReleaseAdvanced, StopRequested,
 };
 use crate::timestamp::Timestamp;
 
@@ -311,6 +311,8 @@ pub struct DashboardState {
     pub(crate) wind_down: Option<WindDown>,
     pub(crate) wind_down_observed: bool,
     pub(crate) context_window: Option<ContextWindowSample>,
+    /// The last successfully committed **Release line** this Run announced.
+    pub(crate) release_line: Option<ReleaseAdvanced>,
     pub(crate) active_ref: Option<IssueRef>,
     /// Ledger entries keyed by identity, with first-seen order preserved.
     pub(crate) order: Vec<IssueRef>,
@@ -363,6 +365,7 @@ impl DashboardState {
             wind_down: None,
             wind_down_observed: false,
             context_window: None,
+            release_line: None,
             active_ref: None,
             order: Vec::new(),
             ledger: BTreeMap::new(),
@@ -485,6 +488,12 @@ impl DashboardState {
             }
             EventPayload::AfkReadyCollected(pool) => self.record_pool(&pool.issues),
             EventPayload::PoolRefreshed(membership) => self.record_membership(&membership.issues),
+            EventPayload::ReleaseAdvanced(advance)
+                if advance.release_target.is_some() && advance.release_version.is_some() =>
+            {
+                self.release_line = Some(advance.clone());
+            }
+            EventPayload::ReleaseAdvanced(_) => {}
             EventPayload::IssueActivated(activated) => {
                 self.authoritative_binding = true;
                 if self.active_ref.is_none() {
