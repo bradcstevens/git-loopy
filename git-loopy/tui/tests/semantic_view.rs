@@ -191,6 +191,17 @@ fn reduce(events: &[Value], drill_in: IssueRef) -> Value {
     view(&state, &ctx, drill_in)
 }
 
+/// Drive raw JSONL Events through the public decoder and reducer.
+fn reduce_jsonl(events: &[&str], drill_in: IssueRef) -> Value {
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    for line in events {
+        let event = Event::from_jsonl_line(line).expect("fixture Event line decodes");
+        state.apply(&event);
+    }
+    let ctx = context("2026-05-16T00:01:00.000Z", 0);
+    view(&state, &ctx, drill_in)
+}
+
 fn queue_row(projected: &Value, issue: i64) -> &Value {
     projected["dashboard"]["queue"]["rows"]
         .as_array()
@@ -460,47 +471,30 @@ fn one_issue_the_harness_could_not_price_leaves_every_other_row_reported() {
 
 #[test]
 fn a_membership_read_only_adds_queued_rows_to_the_queue() {
-    let events = vec![
-        serde_json::json!({"type": "wrapper.iteration.start", "iter": 1}),
-        serde_json::json!({
-            "type": "wrapper.afk_ready.collected",
-            "iter": 1,
-            "issues": [42, 43, 44, 45, 47, 48]
-        }),
-        serde_json::json!({"type": "wrapper.issue.activated", "iter": 1, "issue": 42}),
-        serde_json::json!({
-            "type": "wrapper.iteration.end",
-            "iter": 1,
-            "issues": [
-                {"issue": 42, "status": "closed"},
-                {"issue": 43, "status": "advanced"},
-                {"issue": 44, "status": "no-progress"}
-            ]
-        }),
-        serde_json::json!({
-            "type": "agent.output",
-            "lane_issue": 47,
-            "text": "working"
-        }),
-        serde_json::json!({
-            "type": "wrapper.afk_ready.collected",
-            "iter": 2,
-            "issues": [42, 43, 44, 47, 48]
-        }),
-        serde_json::json!({
-            "type": "wrapper.pool.refreshed",
-            "iter": null,
-            "issues": [42, 43, 44, 45, 46, 47]
-        }),
-    ];
-
-    let projected = reduce(&events, IssueRef::number(46));
+    let projected = reduce_jsonl(
+        &[
+            r#"{"type":"wrapper.iteration.start","iter":1}"#,
+            r#"{"type":"wrapper.afk_ready.collected","iter":1,"issues":[42,43,44,45,47,48]}"#,
+            r#"{"type":"wrapper.issue.activated","iter":1,"issue":42}"#,
+            r#"{"type":"wrapper.iteration.end","iter":1,"issues":[{"issue":42,"status":"closed"},{"issue":43,"status":"advanced"},{"issue":44,"status":"no-progress"}]}"#,
+            r#"{"type":"agent.output","lane_issue":47,"text":"working"}"#,
+            r#"{"type":"usage.tokens","lane_issue":47,"input":8,"output":3,"credits":1.5,"premium_requests":2.0}"#,
+            r#"{"type":"wrapper.afk_ready.collected","iter":2,"issues":[42,43,44,47,48]}"#,
+            r#"{"type":"wrapper.pool.refreshed","issues":[42,43,44,45,46,47]}"#,
+        ],
+        IssueRef::number(47),
+    );
 
     assert_eq!(queue_row(&projected, 42)["status"], "closed");
     assert_eq!(queue_row(&projected, 43)["status"], "advanced");
     assert_eq!(queue_row(&projected, 44)["status"], "no-progress");
     assert_eq!(queue_row(&projected, 45)["status"], "gone");
     assert_eq!(queue_row(&projected, 47)["status"], "active");
+    assert_eq!(queue_row(&projected, 47)["tokens_in"], 8);
+    assert_eq!(queue_row(&projected, 47)["tokens_out"], 3);
+    assert_eq!(queue_row(&projected, 47)["credits"], 1.5);
+    assert_eq!(queue_row(&projected, 47)["premium_requests"], 2.0);
+    assert_eq!(log_texts(&projected), ["working"]);
     assert_eq!(
         queue_row(&projected, 48)["status"],
         "queued",
@@ -513,6 +507,44 @@ fn a_membership_read_only_adds_queued_rows_to_the_queue() {
     assert_eq!(queued["iteration_count"], 0);
     assert!(queued["tokens_in"].is_null());
     assert!(queued["tokens_out"].is_null());
+}
+
+#[test]
+fn a_membership_read_keeps_source_order_and_leaves_new_rows_unworked() {
+    let projected = reduce_jsonl(
+        &[r#"{"type":"wrapper.pool.refreshed","issues":[49,10,51]}"#],
+        IssueRef::number(10),
+    );
+
+    let issues: Vec<Value> = projected["dashboard"]["queue"]["rows"]
+        .as_array()
+        .expect("rows is a list")
+        .iter()
+        .map(|row| row["issue"].clone())
+        .collect();
+    assert_eq!(
+        issues,
+        vec![
+            serde_json::json!(49),
+            serde_json::json!(10),
+            serde_json::json!(51)
+        ]
+    );
+
+    let queued = queue_row(&projected, 10);
+    assert_eq!(queued["status"], "queued");
+    assert!(queued["started_at"].is_null());
+    assert_eq!(queued["active_seconds"], 0.0);
+    assert_eq!(queued["iteration_count"], 0);
+    assert!(queued["tokens_in"].is_null());
+    assert!(queued["tokens_out"].is_null());
+    assert!(queued["credits"].is_null());
+    assert!(queued["premium_requests"].is_null());
+    assert_eq!(
+        projected["drill_in"]["iteration_breakdown"]["rows"],
+        serde_json::json!([]),
+        "a queued-only row has no contribution or Consumption"
+    );
 }
 
 // --------------------------------------------------------------------------
