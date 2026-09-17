@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>PROTOTYPE - Init wizard navigation</title>
+<style>
+  body { font: 16px system-ui; max-width: 760px; margin: 3rem auto; color: #172033; }
+  button { margin: .25rem; padding: .45rem .7rem; } pre { background: #f2f5fa; padding: 1rem; }
+  .notice { color: #8a4b00; font-weight: bold; }
+</style>
+<h1>PROTOTYPE: init wizard navigation</h1>
+<p>This throwaway demo asks whether a prefilled setup flow can go back without losing a later
+Skill policy, while Escape cancels only at its first available step.</p>
+<p class="notice" id="notice"></p>
+<h2>Current setup state</h2>
+<pre id="state"></pre>
+<h2>Free play</h2>
+<button onclick="act('advance')">Enter: advance</button>
+<button onclick="act('back')">Esc: back</button>
+<button onclick="act('toggle')">Space: toggle codebase-design</button>
+<button onclick="act('scope')">Choose global scope</button>
+<button onclick="act('locked')">Lock scope</button>
+<button onclick="reset()">Reset</button>
+<h2>Guided walkthroughs</h2>
+<p><button onclick="scenario('preserve')">Edit Skills, return from review, preserve edit</button>
+<button onclick="scenario('back')">Back to scope, then cancel</button>
+<button onclick="scenario('locked')">Locked scope: cancel from model</button></p>
+<script>
+  const steps = ["scope", "model", "routing", "scaffold", "skills", "review"];
+  let state;
+  function reset() {
+    state = { step: "scope", scope: "project", scopeLocked: false, scaffold: true,
+      enabledSkills: ["tdd"], cancelled: false, saved: false, message: "Prefilled setup." };
+    render();
+  }
+  function firstStep() { return state.scopeLocked ? "model" : "scope"; }
+  function act(action) {
+    if (state.cancelled || state.saved) return;
+    if (action === "scope") { state.scope = "global"; state.message = "Scope changed."; }
+    if (action === "locked") { state.scopeLocked = true; state.step = "model"; state.message = "Scope locked; model is first."; }
+    if (action === "toggle" && state.step === "skills") {
+      state.enabledSkills = state.enabledSkills.includes("codebase-design")
+        ? ["tdd"] : ["tdd", "codebase-design"];
+      state.message = "Skill policy changed.";
+    }
+    if (action === "advance") {
+      const index = steps.indexOf(state.step);
+      state.step = index === steps.length - 1 ? "review" : steps[index + 1];
+      state.message = state.step === "review" ? "Review shows the collected answers." : "Advanced.";
+    }
+    if (action === "back") {
+      if (state.step === firstStep()) {
+        state.cancelled = true; state.message = "Cancelled; nothing is written.";
+      } else {
+        state.step = steps[steps.indexOf(state.step) - 1];
+        state.message = "Moved back; collected answers survive.";
+      }
+    }
+    render();
+  }
+  function scenario(name) {
+    reset();
+    if (name === "preserve") {
+      ["advance", "advance", "advance", "advance"].forEach(act);
+      act("toggle"); act("advance"); act("back");
+      state.step = "skills"; state.message = "The selected Skill remains enabled after review Back.";
+    }
+    if (name === "back") { act("advance"); act("back"); act("back"); }
+    if (name === "locked") { act("locked"); act("back"); }
+    render();
+  }
+  function render() {
+    notice.textContent = state.message;
+    document.querySelector("#state").textContent = JSON.stringify(state, null, 2);
+  }
+  reset();
+</script>
+</html>
