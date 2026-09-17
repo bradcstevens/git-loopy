@@ -31,6 +31,7 @@ declare -Ar GIT_LOOPY_EVENT_TYPES=(
   [WRAPPER_COMMIT_RECORDED]="wrapper.commit.recorded"
   [WRAPPER_PUSH_RECORDED]="wrapper.push.recorded"
   [WRAPPER_AUTO_CLOSE]="wrapper.auto_close"
+  [WRAPPER_RELEASE_ADVANCED]="wrapper.release.advanced"
   [WRAPPER_PR_ADVANCED]="wrapper.pr.advanced"
   [WRAPPER_STRIKE]="wrapper.strike"
   [WRAPPER_ASK_USER_ATTEMPTED]="wrapper.ask_user.attempted"

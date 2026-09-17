@@ -19,6 +19,8 @@ bash_bin="$(command -v bash)"
 
 # shellcheck disable=SC1091
 source "$script_dir/sigpipe.sh"
+# shellcheck disable=SC1091
+source "$port_dir/lib/release-version.sh"
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -1735,6 +1737,73 @@ for sha in $close_shas; do
 done
 assert_contains "$close_comment" "gh issue reopen 41" \
   "closure comment documents how to reopen"
+
+# A successful serial closure is this Orchestrator's post-publication seam. It
+# owns no **Lane** or **Integration** stage, so the equivalent must advance the
+# Release line only after `gh issue close` has accepted the issue -- never from
+# an agent's untrusted commit message.
+repo="$temp_dir/release-line"
+fake_bin="$temp_dir/release-line-bin"
+make_real_repo "$repo"
+for path in "${GIT_LOOPY_RELEASE_VERSION_PATHS[@]}"; do
+  mkdir -p "$repo/$(dirname "$path")"
+  cp "$(cd "$port_dir/../.." && pwd)/$path" "$repo/$path"
+done
+git_loopy_write_repository_release_version "$repo" "1.2.3"
+git -C "$repo" add -A
+git -C "$repo" commit -qm "seed Release metadata"
+write_turn_tools "$fake_bin"
+cat >"$temp_dir/release-line-list.json" <<'EOF'
+[
+  {
+    "number": 41,
+    "title": "Patch",
+    "body": "## What to build\nShip it.\n\n## Acceptance criteria\n- Done.",
+    "labels": [{"name": "ready-for-agent"}, {"name": "semver:patch"}],
+    "state": "OPEN",
+    "url": "https://example.invalid/issues/41"
+  }
+]
+EOF
+mkdir -p "$temp_dir/release-line-views"
+jq '.[0]' "$temp_dir/release-line-list.json" >"$temp_dir/release-line-views/41.json"
+export FAKE_GH_LOG="$temp_dir/release-line-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/release-line-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/release-line-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/release-line-views"
+export FAKE_GH_CLOSED="$temp_dir/release-line-closed.log"
+setup_copilot_env "release-line"
+export FAKE_COPILOT_PLAN_DIR="$temp_dir/release-line-plan"
+mkdir -p "$FAKE_COPILOT_PLAN_DIR/1"
+cat >"$FAKE_COPILOT_PLAN_DIR/1/1.msg" <<'EOF'
+fix: land the patch
+
+Closes #41
+EOF
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/release-line.stdout" \
+  "$temp_dir/release-line.stderr" 1; then
+  fail "release-line turn Run did not exit 0: $(<"$temp_dir/release-line.stderr")"
+fi
+unset FAKE_COPILOT_PLAN_DIR FAKE_GH_CLOSED
+assert_equal "1.2.4-dev.1" "$(git_loopy_read_release_version "$repo/VERSION")" \
+  "a closed patch issue advances every Release metadata copy: $(<"$temp_dir/release-line.stderr")"
+jq -se '
+  ([.[] | .type] | index("wrapper.auto_close"))
+  < ([.[] | .type] | index("wrapper.release.advanced"))
+  and ([.[] | select(.type == "wrapper.release.advanced")]
+    == [{
+      ts: ([.[] | select(.type == "wrapper.release.advanced")][0].ts),
+      run_id: ([.[] | select(.type == "wrapper.release.advanced")][0].run_id),
+      iter: 1,
+      type: "wrapper.release.advanced",
+      bump_class: "patch",
+      issue: 41,
+      release_target: "1.2.4",
+      release_version: "1.2.4-dev.1"
+    }])
+' "$temp_dir/release-line.stdout" >/dev/null ||
+  fail "the post-closure Release advance did not emit its pinned payload"
 
 # Progress resets the Strike counter: a no-progress Iteration records a Strike,
 # the next Iteration's agent commit clears it, and a following no-progress

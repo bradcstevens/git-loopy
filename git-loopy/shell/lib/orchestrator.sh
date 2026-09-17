@@ -2728,6 +2728,7 @@ git_loopy_close_one_issue() {
     "$payload" \
     "$closed_at" || return 1
   _GIT_LOOPY_AUTO_CLOSURES=$((_GIT_LOOPY_AUTO_CLOSURES + 1))
+  _GIT_LOOPY_LAST_CLOSED_REF="$issue"
 }
 
 git_loopy_pool_actionable_close_refs() {
@@ -2765,6 +2766,7 @@ git_loopy_auto_close_pool_issues() {
   local commits_json="$2"
   _GIT_LOOPY_AUTO_CLOSURES=0
   _GIT_LOOPY_FIRST_CLOSED_REF=""
+  _GIT_LOOPY_LAST_CLOSED_REF=""
   [[ "$GIT_LOOPY_ISSUE_SOURCE" == "github" ]] || return 0
 
   local actionable
@@ -2774,6 +2776,41 @@ git_loopy_auto_close_pool_issues() {
   while IFS= read -r ref; do
     [[ -n "$ref" ]] || continue
     git_loopy_close_one_issue "$iteration" "$ref" "$commits_json" || return 1
+    [[ "$_GIT_LOOPY_LAST_CLOSED_REF" == "$ref" ]] || continue
+
+    local labels release_line
+    labels="$(
+      jq -c --argjson issue "$ref" '
+        [
+          .[] | select(.number == $issue) | .labels[]?
+          | if type == "object" then .name else . end
+        ]
+      ' <<<"$GIT_LOOPY_POOL_JSON"
+    )" || return 1
+    if ! git_loopy_advance_repository_release_line \
+      "$GIT_LOOPY_REPO_ROOT" "$labels" >/dev/null; then
+      printf 'git-loopy: Release line did not advance after closing #%s.\n' \
+        "$ref" >&2
+      continue
+    fi
+    release_line="$GIT_LOOPY_RELEASE_ADVANCE_JSON"
+    [[ "$release_line" != "null" ]] || continue
+    local release_payload
+    release_payload="$(
+      jq -cn \
+        --argjson issue "$ref" \
+        --argjson release_line "$release_line" \
+        '{
+          issue: $issue,
+          bump_class: $release_line.bump_class,
+          release_target: $release_line.target,
+          release_version: $release_line.version
+        }'
+    )" || return 1
+    git_loopy_emit_event \
+      "${GIT_LOOPY_EVENT_TYPES[WRAPPER_RELEASE_ADVANCED]}" \
+      "$iteration" \
+      "$release_payload" || return 1
   done < <(jq -r '.[]' <<<"$actionable")
 }
 
