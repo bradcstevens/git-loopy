@@ -129,7 +129,12 @@ def select_wizard_runner(env: Mapping[str, str]) -> WizardRunner:
     reachable by an operator who asks for it, and by nobody who does not.
     """
     if env.get(WIZARD_ENV, "").strip().lower() in _WIZARD_OPT_IN:
-        from git_loopy.interactive.init_wizard_app import run_textual_init_wizard
+        try:
+            from git_loopy.interactive.init_wizard_app import run_textual_init_wizard
+        except ModuleNotFoundError as exc:
+            if exc.name != "textual":
+                raise
+            return _default_wizard_runner
 
         return run_textual_init_wizard
     return _default_wizard_runner

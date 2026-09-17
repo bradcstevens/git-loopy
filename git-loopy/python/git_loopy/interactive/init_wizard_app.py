@@ -380,8 +380,19 @@ class InitWizardApp(App["InitAnswers | None"]):
         )
 
     def _show_route_model(self) -> None:
-        key, (model, effort) = tuple(RECOMMENDED_ROUTING.items())[self._route_index]
-        choices = tuple(choice for choice in self._model_choices if choice.supported_efforts)
+        key, recommended = tuple(RECOMMENDED_ROUTING.items())[self._route_index]
+        model, effort = (
+            self._routing.get(key, recommended)
+            if self._routing is not None
+            else recommended
+        )
+        choices = tuple(
+            replace(choice, default_effort=effort)
+            if choice.id == model and effort in choice.supported_efforts
+            else choice
+            for choice in self._model_choices
+            if choice.supported_efforts
+        )
         self.push_screen(
             _WizardModelPickerScreen(
                 choices,
@@ -459,7 +470,7 @@ class InitWizardApp(App["InitAnswers | None"]):
             self._routing = None
             self._show_scaffold()
         else:
-            self._routing = self._routing or {}
+            self._routing = dict(RECOMMENDED_ROUTING)
             self._route_index = 0
             self._show_route_action()
 
@@ -474,7 +485,11 @@ class InitWizardApp(App["InitAnswers | None"]):
         if result is _CANCEL:
             self.exit(None)
         elif result is _BACK:
-            self._show_routing()
+            if self._route_index:
+                self._route_index -= 1
+                self._show_route_action()
+            else:
+                self._show_routing()
         elif result == "override":
             self._show_route_model()
         else:

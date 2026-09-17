@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import builtins
 from pathlib import Path
 
 from textual.widgets import DataTable, Static
 
 from git_loopy import init as init_module
+from git_loopy.config import RECOMMENDED_ROUTING
 from git_loopy.interactive.init_wizard_app import (
     InitWizardApp,
     run_textual_init_wizard,
@@ -26,6 +28,22 @@ def test_setup_runner_is_selectable_without_being_the_default() -> None:
             init_module.select_wizard_runner({"GIT_LOOPY_INIT_WIZARD": opt_in})
             is run_textual_init_wizard
         )
+
+
+def test_setup_runner_falls_back_when_textual_is_not_installed(monkeypatch) -> None:
+    import_module = builtins.__import__
+
+    def import_without_textual(name, *args, **kwargs):
+        if name == "git_loopy.interactive.init_wizard_app":
+            raise ModuleNotFoundError("No module named 'textual'", name="textual")
+        return import_module(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_textual)
+
+    assert (
+        init_module.select_wizard_runner({"GIT_LOOPY_INIT_WIZARD": "textual"})
+        is init_module._default_wizard_runner
+    )
 
 
 def _choice(id: str, efforts: tuple[str, ...] = ("high",)) -> ModelChoice:
@@ -140,6 +158,79 @@ async def test_model_without_reasoning_effort_skips_its_effort_step() -> None:
     assert app.return_value is not None
     assert app.return_value.model == "noreason"
     assert app.return_value.effort is None
+
+
+async def test_custom_routing_keeps_recommended_routes_by_default() -> None:
+    app = _app()
+    async with app.run_test() as pilot:
+        await pilot.press("enter", "enter", "enter")  # scope, model, effort
+        await pilot.press("down", "down", "enter")  # custom routing
+        for _ in RECOMMENDED_ROUTING:
+            await pilot.press("enter")
+        await pilot.press("enter", "enter", "enter")  # scaffold, Skills, Save
+        await pilot.pause()
+
+    assert app.return_value is not None
+    assert app.return_value.routing == dict(RECOMMENDED_ROUTING)
+
+
+async def test_review_shortcut_preserves_prefilled_custom_routing() -> None:
+    app = _app()
+    async with app.run_test() as pilot:
+        await pilot.press("enter", "enter", "enter")  # scope, model, effort
+        await pilot.press("down", "down", "enter")  # custom routing
+        await pilot.press("ctrl+s", "enter")
+        await pilot.pause()
+
+    assert app.return_value is not None
+    assert app.return_value.routing == dict(RECOMMENDED_ROUTING)
+
+
+async def test_route_override_prefills_the_recommended_effort() -> None:
+    app = _app(choices=(_choice("claude-opus-5", ("high", "xhigh", "max")),))
+    async with app.run_test() as pilot:
+        await pilot.press("enter", "enter", "enter")  # scope, model, effort
+        await pilot.press("down", "down", "enter")  # custom routing
+        await pilot.press("down", "down", "enter")  # planning: override
+        await pilot.press("enter")  # recommended model
+        await pilot.pause()
+
+        effort_table = app.screen.query_one("#picker-efforts", DataTable)
+        assert effort_table.cursor_row == 1  # planning's recommended "xhigh"
+        await pilot.press("ctrl+c")
+
+    assert app.return_value is None
+
+
+async def test_escape_in_custom_routing_returns_to_the_previous_task_type() -> None:
+    app = _app()
+    async with app.run_test() as pilot:
+        await pilot.press("enter", "enter", "enter")  # scope, model, effort
+        await pilot.press("down", "down", "enter")  # custom routing
+        await pilot.press("enter")  # planning: keep recommended
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert "task-type:planning" in str(app.screen.query_one(Static).render())
+        await pilot.press("ctrl+c")
+
+    assert app.return_value is None
+
+
+async def test_custom_routing_back_keeps_an_explicitly_skipped_route() -> None:
+    app = _app()
+    async with app.run_test() as pilot:
+        await pilot.press("enter", "enter", "enter")  # scope, model, effort
+        await pilot.press("down", "down", "enter")  # custom routing
+        await pilot.press("down", "enter")  # planning: do not configure
+        await pilot.press("escape")
+        await pilot.pause()
+
+        choices = app.screen.query_one("#wizard-choices", DataTable)
+        assert choices.cursor_row == 1
+        await pilot.press("ctrl+c")
+
+    assert app.return_value is None
 
 
 async def test_review_lists_answers_and_back_returns_to_selected_step() -> None:
