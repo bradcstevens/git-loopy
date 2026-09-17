@@ -26,6 +26,29 @@ def _refreshed_catalog(root: Path) -> RefreshOutcome:
     )
 
 
+def _absent_config(config_home: Path) -> str:
+    """The verdict ``update`` reports over a config-home with no Config at all.
+
+    Every asset test below runs against one, so the Config repair leads their
+    report with this line. It is deliberately not the clean-Config verdict:
+    ``update`` names each asset it left alone — and says "PROMPT.md is not
+    installed" rather than calling an absent prompt untouched — so a Config that
+    is not there has to be reported as not there.
+    """
+    return (
+        "The global Config is not installed "
+        f"({config_home / 'git-loopy' / 'config.toml'})."
+    )
+
+
+def _clean_config(config_home: Path) -> str:
+    """The verdict over a global Config that exists and has nothing retired."""
+    return (
+        "No retired routing keys in the global Config "
+        f"({config_home / 'git-loopy' / 'config.toml'})."
+    )
+
+
 def test_update_replaces_an_untouched_prompt_override(tmp_path: Path) -> None:
     """An override still matching Scaffold provenance moves to this Release."""
     from git_loopy import scaffold_provenance, skill_install, updatecmd
@@ -61,6 +84,7 @@ def test_update_replaces_an_untouched_prompt_override(tmp_path: Path) -> None:
     assert provenance is not None
     assert provenance.assets["PROMPT.md"].release_version == "1.2.4"
     assert output == [
+        _absent_config(config_home),
         "Updated PROMPT.md to Release 1.2.4.",
         skill_install.describe_refresh(catalog),
         f"Updated TUI helper: {tmp_path / 'git-loopy-tui'}",
@@ -103,8 +127,9 @@ def test_update_preserves_a_customized_prompt_and_reports_upstream_changes(
 
     assert result == 0
     assert prompt.read_bytes() == original
-    assert output[0] == "Left customized PROMPT.md from Release 1.2.3 unchanged."
-    assert output[1] == (
+    assert output[0] == _absent_config(config_home)
+    assert output[1] == "Left customized PROMPT.md from Release 1.2.3 unchanged."
+    assert output[2] == (
         "Upstream PROMPT.md changes since Release 1.2.3: 1 line added, 1 line removed."
     )
 
@@ -133,7 +158,8 @@ def test_update_treats_an_unrecorded_prompt_as_customized(tmp_path: Path) -> Non
 
     assert result == 0
     assert prompt.read_bytes() == original
-    assert output[0] == "Left unrecorded PROMPT.md unchanged; treating it as customized."
+    assert output[0] == _absent_config(config_home)
+    assert output[1] == "Left unrecorded PROMPT.md unchanged; treating it as customized."
 
 
 def test_update_refreshes_managed_assets_when_upstream_prompt_summary_fails(
@@ -176,7 +202,7 @@ def test_update_refreshes_managed_assets_when_upstream_prompt_summary_fails(
 
     assert result == 1
     assert refreshed == ["catalog", "helper"]
-    assert output[1] == "Could not summarize upstream PROMPT.md changes: offline"
+    assert output[2] == "Could not summarize upstream PROMPT.md changes: offline"
 
 
 def test_a_failed_record_write_leaves_a_prompt_the_next_update_will_not_replace(
@@ -247,7 +273,8 @@ def test_a_failed_record_write_leaves_a_prompt_the_next_update_will_not_replace(
         == 0
     )
     assert prompt.read_text(encoding="utf-8") == "# Current Release\n"
-    assert output[0] == "Left customized PROMPT.md from Release 1.2.3 unchanged."
+    assert output[0] == _clean_config(config_home)
+    assert output[1] == "Left customized PROMPT.md from Release 1.2.3 unchanged."
 
 
 def test_update_drives_the_real_refreshers_when_no_seam_is_injected(
@@ -303,8 +330,8 @@ def test_update_drives_the_real_refreshers_when_no_seam_is_injected(
     assert result == 0
     assert refreshed_with == [env]
     assert installed_with == [("1.2.4", env)]
-    assert catalog.short_revision in output[1] and catalog.repository in output[1]
-    assert output[2] == (
+    assert catalog.short_revision in output[2] and catalog.repository in output[2]
+    assert output[3] == (
         f"Updated TUI helper: {config_home / 'git-loopy' / 'bin' / 'git-loopy-tui'}"
     )
 
@@ -424,8 +451,9 @@ def test_update_reports_no_upstream_changes_for_prose_scaffolded_at_this_release
 
     assert result == 0
     assert prompt.read_bytes() == original
-    assert output[0] == "Left customized PROMPT.md from Release 1.2.4 unchanged."
-    assert output[1] == (
+    assert output[0] == _absent_config(config_home)
+    assert output[1] == "Left customized PROMPT.md from Release 1.2.4 unchanged."
+    assert output[2] == (
         "No upstream PROMPT.md changes: it was scaffolded from the installed "
         "Release 1.2.4."
     )
@@ -562,8 +590,14 @@ def test_update_does_not_call_a_catalog_left_behind_the_pin_refreshed(
 def test_update_removes_a_retired_global_route_and_backs_up_the_config(
     tmp_path: Path,
 ) -> None:
-    """A Release-retired route no longer locks every Config surface."""
-    from git_loopy import configcmd, settings, updatecmd
+    """A Release-retired route no longer locks every Config surface.
+
+    The four surfaces #375 names are a Run, ``config list``, ``config get`` and
+    ``config routing set``. All four are exercised here, because "repaired" is a
+    claim about the file being *readable again*, not about one key being gone.
+    """
+    from git_loopy import cli, configcmd, settings, updatecmd
+    from git_loopy.config import TaskTypeError
 
     config_home = tmp_path / "config-home"
     env = {"XDG_CONFIG_HOME": str(config_home)}
@@ -572,6 +606,21 @@ def test_update_removes_a_retired_global_route_and_backs_up_the_config(
         config, {"routing": {"custom": {"model": "gpt-5.4", "effort": "high"}}}
     )
     output: list[str] = []
+
+    def _resolve_a_run() -> None:
+        """Exactly what ``cli.main`` does before a Run starts."""
+        tables = settings.load_configs(tmp_path, env)
+        cli.resolve_config(
+            cli.build_parser().parse_args([]),
+            env,
+            project=tables.project,
+            global_=tables.global_,
+            measured=tables.measured,
+            measured_provisional=tables.measured_provisional,
+        )
+
+    with pytest.raises(TaskTypeError):
+        _resolve_a_run()
 
     result = updatecmd.run_update(
         env=env,
@@ -588,6 +637,7 @@ def test_update_removes_a_retired_global_route_and_backs_up_the_config(
     assert "custom" in backup.read_text(encoding="utf-8")
     assert any("Removed retired routing key 'custom'" in line for line in output)
     assert any(str(backup) in line for line in output)
+    _resolve_a_run()
     kwargs = dict(repo_root=tmp_path, env=env, out=lambda _line: None, err=lambda _line: None)
     assert configcmd.run_list(**kwargs) == 0
     assert configcmd.run_get("task-type:docs", **kwargs) == 0
@@ -597,6 +647,87 @@ def test_update_removes_a_retired_global_route_and_backs_up_the_config(
         )
         == 0
     )
+
+
+def test_update_preserves_a_config_section_this_build_has_no_reader_for(
+    tmp_path: Path,
+) -> None:
+    """The repair rewrites a file written by an older Release, sight unseen.
+
+    That is the whole premise — so a section this build has no name for is
+    exactly what it must expect to find, and preserve. Deciding a section's
+    entry shape from a list of known names refused the rewrite instead, leaving
+    the operator as locked out as before with a backup nothing could use.
+    """
+    from git_loopy import settings, updatecmd
+
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
+    config = settings.global_config_path(env)
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        '[retired_block]\nattempts = 3\nlabel = "legacy"\n\n'
+        '[routing]\ncustom = { model = "gpt-5.4", effort = "high" }\n',
+        encoding="utf-8",
+    )
+    output: list[str] = []
+
+    result = updatecmd.run_update(
+        env=env,
+        release_version_reader=lambda: "1.2.4",
+        packaged_prompt=tmp_path / "absent-PROMPT.md",
+        catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
+        helper_refresh=lambda _version, _env: tmp_path / "git-loopy-tui",
+        output_fn=output.append,
+    )
+
+    assert result == 0
+    repaired = settings.load_config_table(config)
+    assert repaired["retired_block"] == {"attempts": 3, "label": "legacy"}
+    assert settings.table_routing(repaired, scope="global") == {}
+
+
+def test_update_repairs_a_config_that_also_carries_an_escalation_rung(
+    tmp_path: Path,
+) -> None:
+    """The repair rewrites the whole file, so it has to preserve the rest of it.
+
+    ``[escalation]`` (#408) is a section of scalars, not of inline tables. A
+    writer that forced every section into inline tables refused the rewrite, so
+    the one command that exists to end the lockout failed on any Config that
+    also names an **Escalation rung** — leaving a backup nothing had named.
+    """
+    from git_loopy import settings, updatecmd
+
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
+    config = settings.global_config_path(env)
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        'model = "gpt-5.4"\n\n'
+        "[escalation]\nenabled = true\n"
+        'model = "claude-opus-5"\neffort = "xhigh"\n\n'
+        '[routing]\ncustom = { model = "gpt-5.4", effort = "high" }\n',
+        encoding="utf-8",
+    )
+    output: list[str] = []
+
+    result = updatecmd.run_update(
+        env=env,
+        release_version_reader=lambda: "1.2.4",
+        packaged_prompt=tmp_path / "absent-PROMPT.md",
+        catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
+        helper_refresh=lambda _version, _env: tmp_path / "git-loopy-tui",
+        output_fn=output.append,
+    )
+
+    assert result == 0
+    repaired = settings.load_config_table(config)
+    assert settings.table_routing(repaired, scope="global") == {}
+    assert settings.table_escalation(repaired, scope="global") == (
+        True,
+        ("claude-opus-5", "xhigh"),
+    )
+    assert repaired["model"] == "gpt-5.4"
+    assert any("Removed retired routing key 'custom'" in line for line in output)
 
 
 def test_update_dry_run_reports_a_retired_route_without_writing(
@@ -632,12 +763,24 @@ def test_update_dry_run_reports_a_retired_route_without_writing(
     assert config.read_bytes() == original
     assert not config.with_suffix(".toml.bak").exists()
     assert any("Would remove retired routing key 'custom'" in line for line in output)
+    # A preview that silently covers only one of `update`'s four assets has to
+    # say so, or an operator reads a clean dry run as the whole command's verdict.
+    assert output[-1] == (
+        "Dry run: no file was written, and the prompt override, Skill catalog "
+        "and TUI helper were not inspected."
+    )
 
 
 def test_update_leaves_a_renamed_route_ambiguous_when_its_target_exists(
     tmp_path: Path,
 ) -> None:
-    """A migration never chooses between the old and new route values."""
+    """A migration never chooses between the old and new route values.
+
+    The report has to stay actionable, because the key it declines keeps every
+    Config surface refused and ``task_type_refusal`` now sends the operator
+    *here*. A message that only says "could not" would leave two commands
+    pointing at each other — the lockout #375 recorded, one indirection longer.
+    """
     from git_loopy import settings, updatecmd
 
     env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
@@ -669,6 +812,24 @@ def test_update_leaves_a_renamed_route_ambiguous_when_its_target_exists(
     assert "custom" in config.with_suffix(".toml.bak").read_text(encoding="utf-8")
     assert any("task-type:docs" in line and "already configured" in line for line in output)
     assert any("Removed retired routing key 'custom'" in line for line in output)
+    assert any(
+        "git-loopy config routing unset 'task-type:docs' --global" in line
+        for line in output
+    )
+
+    # The remedy the message names has to be the one that works, or `update`
+    # has only moved the lockout one command further away.
+    from git_loopy import configcmd
+
+    surfaces = dict(repo_root=tmp_path, env=env, out=lambda _l: None, err=lambda _l: None)
+    assert configcmd.run_list(**surfaces) == 1  # still refused by 'task-type:docs'
+    assert (
+        configcmd.run_routing_unset("task-type:docs", scope="global", **surfaces) == 0
+    )
+    assert configcmd.run_list(**surfaces) == 0
+    assert settings.table_routing(
+        settings.load_config_table(config), scope="global"
+    ) == {"docs": ("gpt-5-mini", "medium")}
 
 
 def test_update_renames_an_unambiguous_route_in_the_project_scope(
@@ -688,8 +849,7 @@ def test_update_renames_an_unambiguous_route_in_the_project_scope(
 
     result = updatecmd.run_update(
         env=env,
-        config_scope="project",
-        repo_root=tmp_path,
+        project_root=tmp_path,
         release_version_reader=lambda: "1.2.4",
         packaged_prompt=tmp_path / "absent-PROMPT.md",
         catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
@@ -705,8 +865,55 @@ def test_update_renames_an_unambiguous_route_in_the_project_scope(
     assert any("Renamed retired routing key 'task-type:docs' to 'docs'" in line for line in output)
 
 
+def test_a_failed_config_write_names_its_backup_and_claims_no_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The backup is the operator's way back, so it is named the moment it exists.
+
+    Reporting it only after the replacement it protects meant a failed write
+    left a ``.bak`` nothing had accounted for — beside a Config still carrying
+    the retired key, under a report that said the key had been removed.
+    """
+    from git_loopy import settings, updatecmd
+
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
+    config = settings.global_config_path(env)
+    settings.write_config(
+        config, {"routing": {"custom": {"model": "gpt-5.4", "effort": "high"}}}
+    )
+    original = config.read_bytes()
+    monkeypatch.setattr(
+        settings,
+        "write_config_atomic",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("read-only")),
+    )
+    output: list[str] = []
+
+    result = updatecmd.run_update(
+        env=env,
+        release_version_reader=lambda: "1.2.4",
+        packaged_prompt=tmp_path / "absent-PROMPT.md",
+        catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
+        helper_refresh=lambda _version, _env: tmp_path / "git-loopy-tui",
+        output_fn=output.append,
+    )
+
+    backup = config.with_suffix(".toml.bak")
+    assert result == 1
+    assert config.read_bytes() == original
+    assert backup.read_bytes() == original
+    assert any(str(backup) in line for line in output)
+    assert not any("Removed retired routing key" in line for line in output)
+    assert any("Could not repair the global Config" in line for line in output)
+
+
 def test_update_leaves_a_clean_config_without_a_backup(tmp_path: Path) -> None:
-    """A current Config is reported but never rewritten for the sake of it."""
+    """A current Config is *reported*, never rewritten for the sake of it.
+
+    ``update`` names every asset it changed and every asset it left alone, so
+    the Config has to say so too, and name the file it judged — an operator with
+    both scopes otherwise cannot tell a clean Config from an unexamined one.
+    """
     from git_loopy import settings, updatecmd
 
     env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
@@ -729,4 +936,7 @@ def test_update_leaves_a_clean_config_without_a_backup(tmp_path: Path) -> None:
     assert result == 0
     assert config.read_bytes() == original
     assert not config.with_suffix(".toml.bak").exists()
-    assert not any("Config" in line and "routing repair" in line for line in output)
+    assert any(
+        "No retired routing keys in the global Config" in line and str(config) in line
+        for line in output
+    )

@@ -193,11 +193,11 @@ mutating command operate on the wrong artifact.
 ## Refreshing machine-local assets (`git-loopy update`)
 
 `git-loopy update` refreshes the machine-local assets belonging to the installed
-**Release version** without changing that Release or requiring a repository. It
-refreshes the **installed catalog** and downloads the matching TUI helper into
-`<config-home>/git-loopy/bin/`. It also repairs Release-retired `[routing]` keys
-in the global Config by default; use `--project` inside a repository to repair
-that project's Config instead.
+**Release version** without changing that Release. It refreshes the **installed
+catalog**, downloads the matching TUI helper into `<config-home>/git-loopy/bin/`,
+and repairs Release-retired `[routing]` keys in the global Config. Only
+`--project` — which repairs a *tracked* file, and is the one exception to
+ADR-0054's machine-local scope — needs a repository.
 
 That helper is one a Run attaches to. The Python Runner resolves a helper in this
 order, first hit wins:
@@ -235,14 +235,27 @@ git-loopy update --global --dry-run
 
 The Config repair removes a key outside the closed taxonomy, and renames a
 legacy `task-type:<key>` spelling only when its bare current key is absent. A
-conflicting old and current key is reported without a guess. Before writing, the
-original Config is copied beside itself as `config.toml.bak` (with a numeric
-suffix when needed), and the command reports each changed key and backup path.
-`--dry-run` reports only the Config migration and writes or refreshes nothing.
+conflicting old and current key is **reported, never guessed at**: the file
+keeps both, the command exits non-zero, and the message names
+`git-loopy config routing unset '<key>' --<scope>` so the operator decides which
+route survives.
+
+Before the file is replaced, the original is copied beside itself as
+`config.toml.bak` (with a numeric suffix when one already exists) and that path
+is reported straight away — a write that then fails must not leave a backup
+nothing accounted for. The repair then rewrites the Config **in canonical
+form**, so any comments it carried survive only in that backup; the command says
+so whenever it writes. Each changed key is reported afterwards, in the tense the
+run earned: `Removed`/`Renamed` once the write lands, `Would remove`/`Would
+rename` under `--dry-run`.
+
+A scope with nothing retired says so and is not rewritten, and a scope with no
+Config at all is reported as not installed rather than as clean. `--dry-run`
+covers the Config alone and names the assets it left uninspected.
 
 The command reports each changed asset and any asset it left alone, and exits
 non-zero when an asset could not be brought to the installed Release — including
-an ambiguous Config migration or an **installed catalog** left behind its pinned
+an ambiguous Config repair or an **installed catalog** left behind its pinned
 revision because the source could not be reached, which is reported rather than
 passed off as a refresh. It never starts a Run or writes to the tracker;
 `git-loopy labels --apply` remains the only command that changes the **Label

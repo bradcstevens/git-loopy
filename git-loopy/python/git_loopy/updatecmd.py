@@ -9,7 +9,7 @@ import tempfile
 from difflib import SequenceMatcher
 from http.client import HTTPException
 from pathlib import Path
-from typing import Callable, Literal, Mapping
+from typing import Callable, Mapping, NamedTuple, Sequence
 from urllib.request import urlopen
 
 from git_loopy import skill_install, tui_release
@@ -45,8 +45,7 @@ def run_update(
     *,
     env: Mapping[str, str] | None = None,
     dry_run: bool = False,
-    config_scope: Literal["global", "project"] = "global",
-    repo_root: Path | None = None,
+    project_root: Path | None = None,
     release_version_reader: Callable[[], str] = read_runtime_release_version,
     packaged_prompt: Path | None = None,
     previous_prompt_fetcher: Callable[[str], str] | None = None,
@@ -55,15 +54,24 @@ def run_update(
     helper_refresh: Callable[[str, Mapping[str, str]], Path] | None = None,
     output_fn: Callable[[str], None] = print,
 ) -> int:
-    """Refresh mutable machine state without inspecting a repository or tracker."""
+    """Refresh mutable machine state, and repair the Config a Release retired.
+
+    ``project_root`` is the one parameter that chooses which **Config** scope is
+    repaired: ``None`` — the default — repairs the machine-global one, and a
+    repository root repairs that project's. Naming the scope and the repository
+    separately would let them disagree, and would make "project scope, no
+    repository" a state this function has to have an answer for.
+
+    Only the global scope is the machine-local state ADR-0054 scopes ``update``
+    to; ``--project`` is an explicit opt-in to a *tracked* file, mirroring
+    ``uninstall --all``, and is never reached by a bare ``git-loopy update``.
+    """
     environ = os.environ if env is None else env
-    if config_scope == "project" and repo_root is None:
-        output_fn("Could not repair the project Config: no repository was supplied.")
-        return 1
+    config_scope = "global" if project_root is None else "project"
     config_path = (
         settings.global_config_path(environ)
-        if config_scope == "global"
-        else settings.project_config_path(repo_root)
+        if project_root is None
+        else settings.project_config_path(project_root)
     )
     try:
         config_settled = _update_config(
@@ -73,9 +81,13 @@ def run_update(
             output_fn=output_fn,
         )
     except (OSError, settings.SettingsError) as exc:
-        output_fn(f"Could not repair the {config_scope} Config: {exc}")
+        output_fn(f"Could not repair the {config_scope} Config ({config_path}): {exc}")
         config_settled = False
     if dry_run:
+        output_fn(
+            "Dry run: no file was written, and the prompt override, Skill "
+            "catalog and TUI helper were not inspected."
+        )
         return 0 if config_settled else 1
     try:
         release_version = release_version_reader()
@@ -129,54 +141,118 @@ def _update_config(
     dry_run: bool,
     output_fn: Callable[[str], None],
 ) -> bool:
-    """Repair unambiguous Release-retired routing keys in one Config scope."""
+    """Repair unambiguous Release-retired routing keys in one Config scope.
+
+    Returns whether the scope *settled*: a Config with nothing to repair and one
+    fully repaired both settle, and only a key this cannot decide for the
+    operator does not. Past tense is printed after the write lands, never before
+    it, and the backup is named the moment it exists rather than after the
+    replacement it protects — a failed write must not leave a ``.bak`` nothing
+    accounted for.
+    """
     table = settings.load_config_table(path)
     routing = settings.table_routing(table, scope=scope)
-    rewritten = dict(routing)
-    changes: list[str] = []
-    ambiguities: list[str] = []
+    repairs, ambiguous = _plan_routing_repairs(routing)
+    location = f"the {scope} Config ({path})"
 
+    if not repairs and not ambiguous:
+        output_fn(
+            f"No retired routing keys in {location}."
+            if path.exists()
+            else f"The {scope} Config is not installed ({path})."
+        )
+    elif repairs and dry_run:
+        for repair in repairs:
+            output_fn(f"{repair.describe(applied=False)} in {location}.")
+    elif repairs:
+        backup = _backup_config(path)
+        output_fn(f"Backed up {location} to {backup}.")
+        output_fn(
+            "The repair rewrites the Config in canonical form, so any comments "
+            "it carried survive only in that backup."
+        )
+        rewritten = _apply_routing_repairs(routing, repairs)
+        if rewritten:
+            table["routing"] = {
+                key: {"model": model, "effort": effort}
+                for key, (model, effort) in rewritten.items()
+            }
+        else:
+            table.pop("routing", None)
+        settings.write_config_atomic(path, table)
+        for repair in repairs:
+            output_fn(f"{repair.describe(applied=True)} in {location}.")
+
+    for key, candidate in ambiguous:
+        output_fn(
+            f"Could not repair routing key {key!r} in {location}: it maps to "
+            f"{candidate!r}, which is already configured. Keep the route you "
+            f"want and clear the other with "
+            f"`git-loopy config routing unset {key!r} --{scope}`."
+        )
+    return not ambiguous
+
+
+class _RoutingRepair(NamedTuple):
+    """One mechanically decidable change to a Config's ``[routing]`` table.
+
+    Attributes:
+        key: The retired key **as spelled** in the file, which is how every
+            refusal names it and the only spelling a persisted table is read by.
+        replacement: The current key the route moves to, or ``None`` when the
+            key is outside the closed taxonomy altogether and the route goes
+            with it — there is no current key to carry it.
+    """
+
+    key: str
+    replacement: str | None
+
+    def describe(self, *, applied: bool) -> str:
+        """Render this repair in the tense the caller has earned."""
+        if self.replacement is None:
+            verb = "Removed" if applied else "Would remove"
+            return f"{verb} retired routing key {self.key!r}"
+        verb = "Renamed" if applied else "Would rename"
+        return f"{verb} retired routing key {self.key!r} to {self.replacement!r}"
+
+
+def _plan_routing_repairs(
+    routing: Mapping[str, tuple[str, str]],
+) -> tuple[list[_RoutingRepair], list[tuple[str, str]]]:
+    """Decide each retired key's repair, or report it as one nobody can decide.
+
+    Two things are mechanically decidable, and nothing else is: a key outside
+    the closed taxonomy carries no route worth keeping, and a ``task-type:``
+    spelling is the prefix ``_routing_key`` already strips off the command line.
+    A prefixed key whose bare form is *also* configured is neither — choosing
+    between two authored routes is a value the operator did not state, so it is
+    returned as an ambiguity and the file keeps both.
+    """
+    repairs: list[_RoutingRepair] = []
+    ambiguous: list[tuple[str, str]] = []
     for key in routing:
         if key in TASK_TYPE_KEYS:
             continue
         candidate = key.removeprefix(TASK_TYPE_LABEL_PREFIX)
-        if (
-            key.startswith(TASK_TYPE_LABEL_PREFIX)
-            and candidate in TASK_TYPE_KEYS
-        ):
-            if candidate in routing:
-                ambiguities.append(
-                    f"Could not repair routing key {key!r} in the {scope} Config "
-                    f"({path}): it maps to {candidate!r}, which is already configured."
-                )
-                continue
-            rewritten.pop(key)
-            rewritten[candidate] = routing[key]
-            changes.append(f"Renamed retired routing key {key!r} to {candidate!r}")
-            continue
-        rewritten.pop(key)
-        changes.append(f"Removed retired routing key {key!r}")
+        if not key.startswith(TASK_TYPE_LABEL_PREFIX) or candidate not in TASK_TYPE_KEYS:
+            repairs.append(_RoutingRepair(key, None))
+        elif candidate in routing:
+            ambiguous.append((key, candidate))
+        else:
+            repairs.append(_RoutingRepair(key, candidate))
+    return repairs, ambiguous
 
-    for change in changes:
-        past_tense, remainder = change.split(" ", maxsplit=1)
-        rendered = change if not dry_run else f"{past_tense[:-1].lower()} {remainder}"
-        output_fn(f"{'Would ' if dry_run else ''}{rendered} in the {scope} Config ({path}).")
-    for message in ambiguities:
-        output_fn(message)
-    if not changes:
-        return not ambiguities
-    if dry_run:
-        return not ambiguities
 
-    backup = _backup_config(path)
-    table["routing"] = {
-        key: {"model": model, "effort": effort} for key, (model, effort) in rewritten.items()
-    }
-    if not rewritten:
-        table.pop("routing", None)
-    settings.write_config_atomic(path, table)
-    output_fn(f"Backed up the {scope} Config to {backup}.")
-    return not ambiguities
+def _apply_routing_repairs(
+    routing: Mapping[str, tuple[str, str]], repairs: Sequence[_RoutingRepair]
+) -> dict[str, tuple[str, str]]:
+    """Rewrite a routing table by its planned repairs, leaving siblings verbatim."""
+    rewritten = dict(routing)
+    for repair in repairs:
+        pair = rewritten.pop(repair.key)
+        if repair.replacement is not None:
+            rewritten[repair.replacement] = pair
+    return rewritten
 
 
 def _backup_config(path: Path) -> Path:

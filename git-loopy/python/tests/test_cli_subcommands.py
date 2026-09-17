@@ -87,7 +87,7 @@ def test_main_update_runs_outside_a_git_repository(
     )
 
     assert cli_module.main(["update"]) == 0
-    assert captured == [{"dry_run": False, "config_scope": "global", "repo_root": None}]
+    assert captured == [{"dry_run": False, "project_root": None}]
 
 
 def test_main_update_targets_project_config_only_when_requested(
@@ -103,9 +103,51 @@ def test_main_update_targets_project_config_only_when_requested(
     )
 
     assert cli_module.main(["update", "--project", "--dry-run"]) == 0
-    assert captured == [
-        {"dry_run": True, "config_scope": "project", "repo_root": tmp_path}
-    ]
+    assert captured == [{"dry_run": True, "project_root": tmp_path}]
+
+
+def test_main_update_project_refuses_outside_a_repository(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--project` repairs a tracked file, so it is the one `update` needing a repo.
+
+    ADR-0054 scopes `update` to machine-local state; the amendment for #527 adds
+    project scope as an explicit opt-in. That makes "this command never requires
+    a repository" true of every invocation but this one, which must refuse
+    rather than silently fall back to the global Config the operator did not ask
+    for.
+    """
+    from git_loopy import updatecmd
+
+    monkeypatch.setattr(
+        cli_module,
+        "resolve_repo_root",
+        lambda: (_ for _ in ()).throw(RuntimeError("not a git repository")),
+    )
+    monkeypatch.setattr(
+        updatecmd,
+        "run_update",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("update --project must not repair some other scope")
+        ),
+    )
+
+    assert cli_module.main(["update", "--project"]) == 1
+    assert "not a git repository" in capsys.readouterr().err
+
+
+def test_update_help_does_not_deny_the_repository_its_own_flag_needs(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The blanket denial `--project` contradicts must not come back."""
+    monkeypatch.setenv("COLUMNS", "200")
+
+    with pytest.raises(SystemExit):
+        cli_module.build_subcommand_parser().parse_args(["update", "--help"])
+
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "requires a repository" not in help_text
 
 
 def test_subcommand_parser_parses_doctor() -> None:
