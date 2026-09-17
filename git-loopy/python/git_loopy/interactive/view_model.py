@@ -113,6 +113,8 @@ def _header(state: LiveRunState) -> dict[str, Any]:
             state.context_window,
             available=state.context_window_available,
         ),
+        "release_target": state.release_target,
+        "release_version": state.release_version,
         # Cost is unknown for more than one reason, and only the Run-start
         # declaration carries which (ADR-0026): a nulled figure cannot, because
         # the Wrapper contract lets a producer signal an unobservable
