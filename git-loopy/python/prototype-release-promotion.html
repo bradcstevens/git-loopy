@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>PROTOTYPE - Release-line promotion</title>
+<style>
+  body { max-width: 760px; margin: 40px auto; font: 16px/1.5 system-ui; color: #172033; }
+  h1 { color: #185a9d; } section, .state { border: 1px solid #cbd5e1; border-radius: 8px; padding: 18px; margin: 18px 0; }
+  button { background: #185a9d; border: 0; border-radius: 5px; color: white; cursor: pointer; margin: 4px; padding: 9px 12px; }
+  button:hover { background: #124778; } dl { display: grid; grid-template-columns: 160px 1fr; margin: 0; } dt { font-weight: 700; } dd { margin: 0; }
+  .note { color: #475569; } #change { font-weight: 700; }
+</style>
+<body>
+<h1>Release-line promotion prototype</h1>
+<p><strong>Question:</strong> Does separating label-driven prerelease advances from Promotion let a closed
+<code>vX.Y.Z</code> milestone cut only its matching stable Release, while a major Bump class is exempt and
+the next line starts fresh?</p>
+<section class="state">
+  <h2>Current Release line</h2>
+  <dl id="state"></dl>
+  <p id="change"></p>
+</section>
+<section>
+  <h2>Free play</h2>
+  <p class="note">Closing a normal issue never receives milestone state. A major closes its stable Release immediately.</p>
+  <button data-bump="patch">Close PATCH issue</button>
+  <button data-bump="minor">Close MINOR issue</button>
+  <button data-bump="major">Close MAJOR issue</button>
+  <button data-milestone="matching">Close matching target milestone</button>
+  <button data-milestone="other">Close another milestone</button>
+  <button id="reset">Reset</button>
+</section>
+<section>
+  <h2>Guided walkthroughs</h2>
+  <p><strong>Milestone promotion:</strong> close a MINOR issue, then close its matching target milestone. The
+  prerelease was formed without reading any milestone; the separate tracker event promotes it.</p>
+  <button id="walk-milestone">Run milestone path</button>
+  <p><strong>Major exemption:</strong> close a MAJOR issue. It cuts stable without a milestone event.</p>
+  <button id="walk-major">Run major path</button>
+  <p><strong>Fresh line:</strong> finish a milestone Promotion, then close a PATCH issue. It starts at dev.1
+  from the new stable Release.</p>
+  <button id="walk-fresh">Run fresh-line path</button>
+</section>
+<script>
+// Pure model: the page only displays transitions made by these functions.
+const releaseModel = (() => {
+  const initial = () => ({ lastStable: "0.9.1", target: "0.9.1", counter: 0, note: "Ready for a new Release line." });
+  const parts = version => version.split(".").map(Number);
+  const version = state => state.counter ? `${state.target}-dev.${state.counter}` : state.target;
+  const bumpTarget = (stable, bump) => {
+    const [major, minor, patch] = parts(stable);
+    return { major: `${major + 1}.0.0`, minor: `${major}.${minor + 1}.0`, patch: `${major}.${minor}.${patch + 1}` }[bump];
+  };
+  const promote = (state, reason) => ({ lastStable: state.target, target: state.target, counter: 0, note: `Promoted ${state.target} to stable: ${reason}` });
+  const closeIssue = (state, bump) => {
+    const target = [state.target, bumpTarget(state.lastStable, bump)].sort((a, b) => {
+      const left = parts(a), right = parts(b);
+      return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
+    }).pop();
+    const advanced = { ...state, target, counter: state.counter + 1, note: `Advanced from the ${bump} Bump class; no milestone was read.` };
+    return bump === "major" ? promote(advanced, "major Bump class exemption") : advanced;
+  };
+  const closeMilestone = (state, title) =>
+    state.counter && title === `v${state.target}`
+      ? promote(state, `closed milestone ${title}`)
+      : { ...state, note: `Milestone ${title} does not promote this Release line.` };
+  return { initial, version, closeIssue, closeMilestone };
+})();
+
+let state = releaseModel.initial();
+function render() {
+  document.querySelector("#state").innerHTML = [
+    ["Last stable Release", state.lastStable],
+    ["Release target", state.target],
+    ["dev.N counter", state.counter],
+    ["Current Release version", releaseModel.version(state)]
+  ].map(([term, value]) => `<dt>${term}</dt><dd>${value}</dd>`).join("");
+  document.querySelector("#change").textContent = state.note;
+}
+document.querySelectorAll("[data-bump]").forEach(button => button.onclick = () => { state = releaseModel.closeIssue(state, button.dataset.bump); render(); });
+document.querySelectorAll("[data-milestone]").forEach(button => button.onclick = () => {
+  const title = button.dataset.milestone === "matching" ? `v${state.target}` : "v9.9.9";
+  state = releaseModel.closeMilestone(state, title); render();
+});
+document.querySelector("#reset").onclick = () => { state = releaseModel.initial(); render(); };
+document.querySelector("#walk-milestone").onclick = () => { state = releaseModel.closeIssue(releaseModel.initial(), "minor"); state = releaseModel.closeMilestone(state, `v${state.target}`); render(); };
+document.querySelector("#walk-major").onclick = () => { state = releaseModel.closeIssue(releaseModel.initial(), "major"); render(); };
+document.querySelector("#walk-fresh").onclick = () => { state = releaseModel.closeIssue(releaseModel.initial(), "minor"); state = releaseModel.closeMilestone(state, `v${state.target}`); state = releaseModel.closeIssue(state, "patch"); render(); };
+render();
+</script>
+</body>
