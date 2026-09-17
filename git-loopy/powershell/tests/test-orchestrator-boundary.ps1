@@ -4773,6 +4773,106 @@ Start-Sleep -Seconds $Sleep
     Assert-True (-not [IO.File]::Exists($env:FAKE_COPILOT_CALLS)) (
         "mixed blocked Pool starts no agent session"
     )
+
+    # A successful serial closure is this Orchestrator's post-publication seam.
+    # It owns no Lane or Integration stage, so it advances only after `gh issue
+    # close` accepts the issue, never from an agent's untrusted commit message.
+    $ReleaseRepo = Join-Path $TempDir "release-line"
+    $ReleaseBin = Join-Path $TempDir "release-line-bin"
+    New-RealTestRepo -Root $ReleaseRepo
+    $RepositoryRoot = (Resolve-Path (Join-Path $PortDir "../..")).Path
+    foreach ($RelativePath in @(
+        "VERSION",
+        "git-loopy/python/git_loopy/__init__.py",
+        "git-loopy/python/git_loopy/VERSION",
+        "git-loopy/python/pyproject.toml",
+        "git-loopy/python/uv.lock",
+        "git-loopy/tui/Cargo.toml",
+        "git-loopy/tui/Cargo.lock",
+        "git-loopy/tui/README.md"
+    )) {
+        $Destination = Join-Path $ReleaseRepo $RelativePath
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $Destination)) | Out-Null
+        [IO.File]::Copy((Join-Path $RepositoryRoot $RelativePath), $Destination)
+    }
+    Import-Module (Join-Path $PortDir "GitLoopy.Release.psm1") -Force
+    Set-GitLoopyRepositoryReleaseVersion -RepositoryRoot $ReleaseRepo -Version "1.2.3"
+    & git -C $ReleaseRepo add -A
+    & git -C $ReleaseRepo commit -qm "seed Release metadata"
+    Write-TurnTools -BinDir $ReleaseBin
+    $ReleaseList = Join-Path $TempDir "release-line-list.json"
+    $ReleaseViews = Join-Path $TempDir "release-line-views"
+    [IO.Directory]::CreateDirectory($ReleaseViews) | Out-Null
+    $ReleaseIssue = [ordered]@{
+        number = 41
+        title = "Patch"
+        body = "## What to build`nShip it.`n`n## Acceptance criteria`n- Done."
+        labels = @(
+            [ordered]@{ name = "ready-for-agent" },
+            [ordered]@{ name = "semver:patch" }
+        )
+        state = "OPEN"
+        url = "https://example.invalid/issues/41"
+        createdAt = "2026-01-01T00:00:00Z"
+        blockedBy = [ordered]@{ totalCount = 0; nodes = @() }
+        comments = @()
+    }
+    [IO.File]::WriteAllText(
+        $ReleaseList,
+        (@($ReleaseIssue) | ConvertTo-Json -Depth 10 -AsArray)
+    )
+    [IO.File]::WriteAllText(
+        (Join-Path $ReleaseViews "41.json"),
+        ($ReleaseIssue | ConvertTo-Json -Depth 10)
+    )
+    $env:FAKE_GH_LOG = Join-Path $TempDir "release-line-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "release-line-list.count"
+    $env:FAKE_GH_LIST_JSON = $ReleaseList
+    $env:FAKE_GH_VIEW_DIR = $ReleaseViews
+    $env:FAKE_GH_CLOSED = Join-Path $TempDir "release-line-closed.txt"
+    Set-CopilotEnv -Prefix "release-line"
+    $env:FAKE_COPILOT_PLAN_DIR = Join-Path $TempDir "release-line-plan"
+    [IO.Directory]::CreateDirectory((Join-Path $env:FAKE_COPILOT_PLAN_DIR "1")) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $env:FAKE_COPILOT_PLAN_DIR "1/1.msg"),
+        "fix: land the patch`n`nCloses #41`n"
+    )
+    $ReleaseStdout = Join-Path $TempDir "release-line.stdout"
+    $ReleaseStderr = Join-Path $TempDir "release-line.stderr"
+    Assert-Equal 0 (
+        Invoke-Entrypoint `
+            -Repo $ReleaseRepo `
+            -FakeBin $ReleaseBin `
+            -StdoutPath $ReleaseStdout `
+            -StderrPath $ReleaseStderr `
+            -Arguments @("1")
+    ) "a closed patch advances the Release line"
+    Assert-Equal "1.2.4-dev.1" (
+        Get-GitLoopyReleaseVersion -Path (Join-Path $ReleaseRepo "VERSION")
+    ) (
+        "the serial post-publication seam writes the next Release version: " +
+        [IO.File]::ReadAllText($ReleaseStderr)
+    )
+    $ReleaseEvents = Read-Events -Path $ReleaseStdout
+    $AutoCloseIndex = [array]::IndexOf(
+        [object[]]@($ReleaseEvents | ForEach-Object { $_["type"] }),
+        "wrapper.auto_close"
+    )
+    $ReleaseAdvanceIndex = [array]::IndexOf(
+        [object[]]@($ReleaseEvents | ForEach-Object { $_["type"] }),
+        "wrapper.release.advanced"
+    )
+    Assert-True ($AutoCloseIndex -ge 0 -and $AutoCloseIndex -lt $ReleaseAdvanceIndex) (
+        "the Release Event follows the successful source closure"
+    )
+    $ReleaseAdvance = @(
+        $ReleaseEvents | Where-Object { $_["type"] -ceq "wrapper.release.advanced" }
+    )
+    Assert-Equal 1 $ReleaseAdvance.Count "one Release Event is emitted"
+    Assert-Equal "patch" $ReleaseAdvance[0]["bump_class"] "the Event pins the Bump class"
+    Assert-Equal 41 $ReleaseAdvance[0]["issue"] "the Event names the closed issue"
+    Assert-Equal "1.2.4" $ReleaseAdvance[0]["release_target"] "the Event pins the target"
+    Assert-Equal "1.2.4-dev.1" $ReleaseAdvance[0]["release_version"] "the Event pins dev.N"
 }
 finally {
     foreach ($Name in @(
