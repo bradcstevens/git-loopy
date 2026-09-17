@@ -53,6 +53,15 @@ _RUNTIME_RELEASE_URL = (
 
 _HEX_DIGEST = re.compile("[0-9a-fA-F]{64}")
 
+#: The discovery ranks that are components of one packaged distribution, and the
+#: repair each one's Release drift has. Wrapper contract §15 refuses both rather
+#: than attaching; only a ``PATH`` helper, which belongs to a separate
+#: installation, may attach across a Release difference.
+_DISTRIBUTION_HELPER_REPAIRS = {
+    "clone-local": "",
+    "machine-local": " Run `git-loopy update` to refresh it.",
+}
+
 
 class TuiReleaseError(ValueError):
     """The helper's release metadata is missing, unreadable, or inconsistent."""
@@ -451,21 +460,33 @@ def resolve_runtime_helper(
     *,
     release_version: str,
     warn: Callable[[str], None],
+    env: Mapping[str, str] | None = None,
     event_schema_version: int = EVENT_SCHEMA_VERSION,
     timeout: float = 5.0,
 ) -> Path | None:
     """Find and validate the helper a TTY Run may attach with.
 
     Discovery follows the shell family's runtime convention: a clone-local helper
-    at ``.git-loopy/bin/git-loopy-tui`` wins over ``PATH``. The clone-local helper
-    must prove it belongs to this same Release; a PATH helper may be newer or
-    older, but that drift is surfaced with a warning rather than blocking the Run.
-    Any probe failure or schema mismatch degrades to ``None``.
+    at ``.git-loopy/bin/git-loopy-tui`` wins over ``PATH``. Between them sits the
+    machine-local helper ``git-loopy update`` installs (ADR-0054) — a location
+    this Runner's own installation lifecycle owns and no other member writes,
+    which is why it is a rank here rather than a change to that shared
+    convention. Both of those are components of one packaged distribution, so
+    Wrapper contract §15 refuses either on Release drift; a ``PATH`` helper is a
+    separate installation and may be newer or older, so its drift is surfaced
+    with a warning instead. Any probe failure or schema mismatch degrades to
+    ``None``.
     """
-    clone_local = repository_root / ".git-loopy" / "bin" / HELPER_COMMAND_NAME
+    environ = os.environ if env is None else env
+    clone_local = _executable(
+        (repository_root / ".git-loopy" / "bin" / HELPER_COMMAND_NAME,)
+    )
+    machine_local = _executable(machine_local_helper_paths(environ))
     path_helper = shutil.which(HELPER_COMMAND_NAME)
-    if clone_local.is_file() and os.access(clone_local, os.X_OK):
+    if clone_local is not None:
         candidates: tuple[tuple[str, Path], ...] = (("clone-local", clone_local),)
+    elif machine_local is not None:
+        candidates = (("machine-local", machine_local),)
     elif path_helper:
         candidates = (("PATH", Path(path_helper)),)
     else:
@@ -480,19 +501,21 @@ def resolve_runtime_helper(
         except TuiReleaseError as exc:
             warn(f"ignoring the {origin} git-loopy-tui helper ({exc}).")
             continue
-        if origin == "clone-local" and probe.reported_version != release_version:
+        if probe.reported_version == release_version:
+            return probe.path
+        if origin in _DISTRIBUTION_HELPER_REPAIRS:
             warn(
-                "ignoring the clone-local git-loopy-tui helper "
+                f"ignoring the {origin} git-loopy-tui helper "
                 f"({helper}) because it reports Release {probe.reported_version!r}, "
                 f"not this Runner's {release_version!r}."
+                f"{_DISTRIBUTION_HELPER_REPAIRS[origin]}"
             )
             return None
-        if origin == "PATH" and probe.reported_version != release_version:
-            warn(
-                "the PATH git-loopy-tui helper "
-                f"({helper}) reports Release {probe.reported_version!r}, not "
-                f"this Runner's {release_version!r}; attaching anyway."
-            )
+        warn(
+            f"the {origin} git-loopy-tui helper "
+            f"({helper}) reports Release {probe.reported_version!r}, not "
+            f"this Runner's {release_version!r}; attaching anyway."
+        )
         return probe.path
     return None
 
@@ -500,18 +523,27 @@ def resolve_runtime_helper(
 def machine_local_helper_paths(env: Mapping[str, str]) -> tuple[Path, ...]:
     """Every name the machine-local helper answers to, most specific first.
 
-    This is a third location, distinct from the two :func:`resolve_runtime_helper`
-    discovers: a clone-local helper belongs to one checkout and a ``PATH`` helper
-    belongs to the package manager that put it there, so neither is git-loopy's
-    own machine state to refresh or remove. This is the copy ADR-0054 hands to
-    ``update`` and ``uninstall``, beside the Config the same scope carries but in
-    a ``bin/`` directory, so an executable never lands where a Run reads Config.
+    This is a third location, distinct from the clone-local and ``PATH`` helpers
+    :func:`resolve_runtime_helper` also discovers: a clone-local helper belongs
+    to one checkout and a ``PATH`` helper belongs to the package manager that put
+    it there, so neither is git-loopy's own machine state to refresh or remove.
+    This is the copy ADR-0054 hands to ``update`` and ``uninstall``, beside the
+    Config the same scope carries but in a ``bin/`` directory, so an executable
+    never lands where a Run reads Config.
     """
     bin_dir = global_dir(env) / "bin"
     return (
         bin_dir / HELPER_COMMAND_NAME,
         bin_dir / f"{HELPER_COMMAND_NAME}{_WINDOWS_EXECUTABLE_SUFFIX}",
     )
+
+
+def _executable(candidates: tuple[Path, ...]) -> Path | None:
+    """Return the first candidate this host can actually run."""
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 def _host_libc() -> str | None:

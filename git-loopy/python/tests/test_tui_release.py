@@ -302,10 +302,16 @@ def _write_fake_helper(path: Path, *, version: str, script: str = "") -> Path:
     return path
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
 def test_refresh_machine_local_helper_replaces_it_with_this_releases_artifact(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A verified Release helper is installed into git-loopy's machine-local slot."""
+    """A verified Release helper lands where a Run then attaches to it.
+
+    The install and the discovery are asserted together because they are only
+    one feature: a refresh that wrote anywhere else would leave the operator
+    running the same stale interface it claimed to have replaced.
+    """
     metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
     artifact = tui_release.artifact_for(
         metadata,
@@ -332,10 +338,12 @@ def test_refresh_machine_local_helper_replaces_it_with_this_releases_artifact(
         ): checksum.read_bytes(),
     }
     config_home = tmp_path / "config-home"
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
 
     installed = tui_release.refresh_machine_local_helper(
         "1.2.4",
-        {"XDG_CONFIG_HOME": str(config_home)},
+        env,
         host_system=lambda: "Darwin",
         host_machine=lambda: "arm64",
         host_libc=lambda: None,
@@ -343,9 +351,18 @@ def test_refresh_machine_local_helper_replaces_it_with_this_releases_artifact(
         download=downloads.__getitem__,
     )
 
-    assert installed == config_home / "git-loopy" / "bin" / artifact.executable_name
+    assert installed in tui_release.machine_local_helper_paths(env)
     assert installed.is_file()
     assert tui_release.probe_runtime_helper(installed).reported_version == "1.2.4"
+    assert (
+        tui_release.resolve_runtime_helper(
+            tmp_path / "repo",
+            release_version="1.2.4",
+            warn=lambda message: pytest.fail(message),
+            env=env,
+        )
+        == installed
+    )
 
 
 @pytest.mark.parametrize(
@@ -481,6 +498,110 @@ def test_runtime_helper_rejects_a_clone_local_release_mismatch(
     assert len(warnings) == 1
     assert "clone-local" in warnings[0]
     assert "9.9.9" in warnings[0]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_runtime_helper_attaches_to_the_helper_update_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The helper ``update`` refreshes is one a Run can actually attach with.
+
+    ``update`` (ADR-0054) installs into the machine-local slot, which nothing
+    else writes.  A Run that could not discover it there would leave the
+    Dashboard stuck behind the Orchestrator no matter how often the operator
+    refreshed the helper.
+    """
+    config_home = tmp_path / "config-home"
+    machine_local = _write_fake_helper(
+        tui_release.machine_local_helper_paths({"XDG_CONFIG_HOME": str(config_home)})[0],
+        version="1.2.3",
+    )
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+    warnings: list[str] = []
+
+    helper = tui_release.resolve_runtime_helper(
+        tmp_path / "repo",
+        release_version="1.2.3",
+        warn=warnings.append,
+        env={"XDG_CONFIG_HOME": str(config_home)},
+    )
+
+    assert helper == machine_local
+    assert warnings == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_runtime_helper_ranks_clone_local_then_machine_local_then_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The order only means something when more than one candidate exists.
+
+    Machine-local sitting *above* ``PATH`` is the whole point of refreshing it:
+    an operator who runs ``update`` and then keeps attaching to the older helper
+    another package manager put on their ``PATH`` got nothing for it.  Each rank
+    is therefore taken away in turn rather than tested alone.
+    """
+    version = "1.2.3"
+    config_home = tmp_path / "config-home"
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+    repo_root = tmp_path / "repo"
+    clone_local = _write_fake_helper(
+        repo_root / ".git-loopy/bin/git-loopy-tui", version=version
+    )
+    machine_local = _write_fake_helper(
+        tui_release.machine_local_helper_paths(env)[0], version=version
+    )
+    path_helper = _write_fake_helper(tmp_path / "path-bin/git-loopy-tui", version=version)
+    monkeypatch.setenv("PATH", str(path_helper.parent))
+
+    def resolve() -> Path | None:
+        return tui_release.resolve_runtime_helper(
+            repo_root,
+            release_version=version,
+            warn=lambda message: pytest.fail(message),
+            env=env,
+        )
+
+    assert resolve() == clone_local
+    clone_local.unlink()
+    assert resolve() == machine_local
+    machine_local.unlink()
+    assert resolve() == path_helper
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_runtime_helper_fails_closed_on_a_machine_local_release_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """git-loopy's own artifact is held to Release equality, and names its repair.
+
+    The machine-local helper is a component of this packaged distribution, so
+    the Wrapper contract requires exact Release equality and a fail-closed
+    response to drift — unlike a ``PATH`` helper, which another package manager
+    owns and which may attach with a warning. The one thing that produces this
+    state is an ``upgrade`` that has outrun its ``update``, so the warning says
+    so rather than only reporting the two versions.
+    """
+    config_home = tmp_path / "config-home"
+    _write_fake_helper(
+        tui_release.machine_local_helper_paths({"XDG_CONFIG_HOME": str(config_home)})[0],
+        version="9.9.9",
+    )
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+    warnings: list[str] = []
+
+    helper = tui_release.resolve_runtime_helper(
+        tmp_path / "repo",
+        release_version="1.2.3",
+        warn=warnings.append,
+        env={"XDG_CONFIG_HOME": str(config_home)},
+    )
+
+    assert helper is None
+    assert len(warnings) == 1
+    assert "machine-local" in warnings[0]
+    assert "9.9.9" in warnings[0]
+    assert "git-loopy update" in warnings[0]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")

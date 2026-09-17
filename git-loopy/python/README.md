@@ -197,20 +197,41 @@ mutating command operate on the wrong artifact.
 refreshes the **installed catalog** and downloads the matching TUI helper into
 `<config-home>/git-loopy/bin/`.
 
+That helper is one a Run attaches to. The Python Runner resolves a helper in this
+order, first hit wins:
+
+| Rank | Source | Path |
+| --- | --- | --- |
+| 1 | clone-local | `<repo>/.git-loopy/bin/git-loopy-tui` — what the shell and PowerShell installers stage for that clone |
+| 2 | machine-local | `<config-home>/git-loopy/bin/git-loopy-tui` — what `update` installs |
+| 3 | `PATH` | the first `git-loopy-tui` on your `PATH` |
+
+Ranks 1 and 2 are components of a packaged distribution, so Wrapper contract
+[§15](../../docs/wrapper-contract.md#15-release-and-compatibility-identity-must)
+requires exact Release-version equality and both are **refused** on drift, leaving
+the Run in plain text. A `PATH` helper is someone else's installation, so drift
+there is only a warning. A machine-local refusal names `git-loopy update` as its
+repair, because an `upgrade` that has outrun its `update` is the one thing that
+produces it.
+
 For the global `PROMPT.md` override, **Scaffold provenance** is the safety
 boundary: an `untouched` override is replaced with this Release's packaged
 prompt and its provenance advances. A `customized` override stays byte-identical;
 the command summarizes the upstream prompt changes since the Release recorded in
-its provenance. An `unrecorded` override is treated as customized and is never
-replaced.
+its provenance, and says so plainly when that Release is the installed one and
+there is nothing upstream to port. An `unrecorded` override is treated as
+customized and is never replaced.
 
 ```bash
 git-loopy update
 ```
 
-The command reports each changed asset and any asset it left alone. It never
-starts a Run or writes to the tracker; `git-loopy labels --apply` remains the
-only command that changes the **Label vocabulary** on GitHub.
+The command reports each changed asset and any asset it left alone, and exits
+non-zero when an asset could not be brought to the installed Release — including
+an **installed catalog** left behind its pinned revision because the source
+could not be reached, which is reported rather than passed off as a refresh. It
+never starts a Run or writes to the tracker; `git-loopy labels --apply` remains
+the only command that changes the **Label vocabulary** on GitHub.
 
 ---
 

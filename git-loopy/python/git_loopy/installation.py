@@ -83,10 +83,10 @@ def _covered(name: str) -> _ConfigHomeAsset:
 def _tui_helper_paths(env: Mapping[str, str]) -> tuple[Path, ...]:
     """Ask the module that owns where a helper is found.
 
-    Nothing installs a machine-local helper yet: the shell installer stages a
-    *clone-local* one and a package manager puts one on ``PATH``, neither of
-    which is git-loopy's to refresh or delete.  So the location this record hands
-    to ``update`` (#524) and ``uninstall`` (#529) is the one
+    ``git-loopy update`` installs the machine-local helper and ``uninstall``
+    (#529) removes it, while the shell installer stages a *clone-local* one and a
+    package manager puts one on ``PATH`` — neither of which is git-loopy's to
+    refresh or delete.  So the location this record reports is the one
     :mod:`git_loopy.tui_release` declares, rather than a further spelling that
     could only ever agree with it by luck.
     """

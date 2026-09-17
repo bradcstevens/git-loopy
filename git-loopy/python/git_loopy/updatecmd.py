@@ -13,15 +13,30 @@ from typing import Callable, Mapping
 from urllib.request import urlopen
 
 from git_loopy import skill_install, tui_release
+from git_loopy.prompt import packaged_prompt_path
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
 from git_loopy.scaffold_provenance import (
     ScaffoldProvenance,
     ScaffoldProvenanceError,
-    invalidate_scaffold_provenance,
     read_scaffold_provenance,
     record_scaffolded_assets,
 )
 from git_loopy.settings import global_dir, global_prompt_path
+
+#: Where a published Release keeps the shared prompt, relative to its source
+#: tree.  An installed Runner has no checkout to look it up in, so a customized
+#: override's upstream summary is read over the network from this path; a test
+#: holds the spelling to the tracked file wherever a checkout is available.
+RELEASED_PROMPT_PATH = "git-loopy/PROMPT.md"
+_RELEASED_PROMPT_URL = (
+    "https://raw.githubusercontent.com/bradcstevens/git-loopy/"
+    f"v{{version}}/{RELEASED_PROMPT_PATH}"
+)
+
+
+def released_prompt_url(release_version: str) -> str:
+    """The published source location of one Release's shared prompt."""
+    return _RELEASED_PROMPT_URL.format(version=release_version)
 
 
 def run_update(
@@ -30,7 +45,8 @@ def run_update(
     release_version_reader: Callable[[], str] = read_runtime_release_version,
     packaged_prompt: Path | None = None,
     previous_prompt_fetcher: Callable[[str], str] | None = None,
-    catalog_refresh: Callable[[Mapping[str, str]], str] | None = None,
+    catalog_refresh: Callable[[Mapping[str, str]], skill_install.RefreshOutcome]
+    | None = None,
     helper_refresh: Callable[[str, Mapping[str, str]], Path] | None = None,
     output_fn: Callable[[str], None] = print,
 ) -> int:
@@ -43,10 +59,10 @@ def run_update(
         return 1
     scope = global_dir(environ)
     prompt = global_prompt_path(environ)
-    source = packaged_prompt or Path(__file__).with_name("PROMPT.md")
+    source = packaged_prompt or packaged_prompt_path()
 
     try:
-        prompt_updated = _update_prompt(
+        prompt_settled = _update_prompt(
             prompt=prompt,
             source=source,
             release_version=release_version,
@@ -56,25 +72,29 @@ def run_update(
         )
     except (OSError, UnicodeError, ScaffoldProvenanceError) as exc:
         output_fn(f"Could not update PROMPT.md: {exc}")
-        prompt_updated = False
+        prompt_settled = False
 
     refresh_catalog = catalog_refresh or _refresh_catalog
     try:
-        output_fn(refresh_catalog(environ))
-        catalog_updated = True
+        outcome = refresh_catalog(environ)
     except (OSError, skill_install.SkillInstallError) as exc:
         output_fn(f"Could not refresh the installed Skill catalog: {exc}")
-        catalog_updated = False
+        catalog_settled = False
+    else:
+        if outcome.warning is not None:
+            output_fn(outcome.warning)
+        output_fn(skill_install.describe_refresh(outcome))
+        catalog_settled = outcome.warning is None
 
     refresh_helper = helper_refresh or tui_release.refresh_machine_local_helper
     try:
         helper = refresh_helper(release_version, environ)
         output_fn(f"Updated TUI helper: {helper}")
-        helper_updated = True
+        helper_settled = True
     except (OSError, tui_release.TuiReleaseError) as exc:
         output_fn(f"Could not refresh the TUI helper: {exc}")
-        helper_updated = False
-    return 0 if prompt_updated and catalog_updated and helper_updated else 1
+        helper_settled = False
+    return 0 if prompt_settled and catalog_settled and helper_settled else 1
 
 
 def _update_prompt(
@@ -86,6 +106,12 @@ def _update_prompt(
     previous_prompt_fetcher: Callable[[str], str],
     output_fn: Callable[[str], None],
 ) -> bool:
+    """Bring the prompt override into agreement with the installed Release.
+
+    Returns whether the override *settled* — which for a customized or
+    unrecorded one means being left byte-identical, the outcome ADR-0054 asks
+    for. Only a failure to reach a verdict is ``False``.
+    """
     recorded = None if previous is None else previous.assets.get("PROMPT.md")
     if not prompt.exists():
         output_fn("PROMPT.md is not installed.")
@@ -97,6 +123,12 @@ def _update_prompt(
         output_fn(
             f"Left customized PROMPT.md from Release {recorded.release_version} unchanged."
         )
+        if recorded.release_version == release_version:
+            output_fn(
+                "No upstream PROMPT.md changes: it was scaffolded from the "
+                f"installed Release {release_version}."
+            )
+            return True
         try:
             old_prompt = previous_prompt_fetcher(recorded.release_version)
             current_prompt = source.read_text(encoding="utf-8")
@@ -113,10 +145,16 @@ def _update_prompt(
 
     staged = _stage_prompt(source, prompt)
     try:
-        invalidate_scaffold_provenance(prompt.parent)
         os.replace(staged, prompt)
     finally:
         staged.unlink(missing_ok=True)
+    # The record is written last and atomically, so the only state a failure
+    # between these two steps can leave is a record describing the *previous*
+    # content: a digest that no longer matches, which every consumer reads as
+    # customized and none will replace. Removing the record first would fail
+    # safe for this prompt too, but it would take every other asset's entry
+    # with it — including the Config's, which is what a Release-retired key is
+    # repaired against.
     record_scaffolded_assets(
         prompt.parent,
         release_version=release_version,
@@ -127,8 +165,9 @@ def _update_prompt(
     return True
 
 
-def _refresh_catalog(env: Mapping[str, str]) -> str:
-    return skill_install.describe_refresh(skill_install.refresh_installed_catalog(env=env))
+def _refresh_catalog(env: Mapping[str, str]) -> skill_install.RefreshOutcome:
+    """Bring the installed catalog to the pinned revision, or report why not."""
+    return skill_install.refresh_installed_catalog(env=env)
 
 
 def _digest(path: Path) -> str:
@@ -158,10 +197,7 @@ def _stage_prompt(source: Path, destination: Path) -> Path:
 
 def _fetch_released_prompt(release_version: str) -> str:
     """Read the prior Release's packaged prompt to summarize upstream drift."""
-    url = (
-        "https://raw.githubusercontent.com/bradcstevens/git-loopy/"
-        f"v{release_version}/git-loopy/PROMPT.md"
-    )
+    url = released_prompt_url(release_version)
     try:
         with urlopen(url, timeout=15) as response:
             return response.read().decode("utf-8")
