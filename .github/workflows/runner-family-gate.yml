@@ -198,4 +198,5 @@ jobs:
           Invoke-Suite git-loopy/powershell/tests/test-event-conformance.ps1
           Invoke-Suite git-loopy/powershell/tests/test-orchestrator-conformance.ps1
           Invoke-Suite git-loopy/powershell/tests/test-orchestrator-boundary.ps1
+          Invoke-Suite git-loopy/powershell/tests/test-release-line-conformance.ps1
           Invoke-Suite git-loopy/powershell/tests/test-tui-install.ps1
