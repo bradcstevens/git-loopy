@@ -362,6 +362,19 @@ def _make_execution_host(
     raise ValueError(f"no adapter exists for execution host {placement!r}")
 
 
+def _make_label_client() -> gh_module.SubprocessLabelClient:
+    """Construct the per-invocation **Label vocabulary** reader for Run preflight.
+
+    Its own factory for the reason :func:`_make_task_type_label_client` has one:
+    the loop reads issues through the GitHub client, and every Pool-collecting
+    fake in the suite is asserted against exactly that seam. Preflight needs to
+    read the repository's labels as well, and widening the issue-reading seam to
+    carry it would make every such fake answer for a question it has nothing to
+    do with. Monkeypatchable on the same terms as its neighbours.
+    """
+    return gh_module.SubprocessLabelClient()
+
+
 def _make_task_type_label_client() -> gh_module.SubprocessTaskTypeLabelClient:
     """Construct the per-invocation **Task-type classifier** label writer (#409).
 
@@ -5589,9 +5602,7 @@ async def run(
         issue_source=config.issue_source,
         github_client=github_client,
         label_client=(
-            gh_module.SubprocessLabelClient()
-            if isinstance(github_client, gh_module.SubprocessGitHubClient)
-            else None
+            _make_label_client() if config.issue_source == "github" else None
         ),
     )
     if not environment_preflight.passed:

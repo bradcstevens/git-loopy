@@ -433,12 +433,25 @@ git-loopy doctor
 
 Every environment precondition gets its own row: `git`, `copilot`, and `gh`
 resolve through `PATH` and name their resolved locations; the GitHub tracker is
-checked for authentication and access to this repository; the complete
-**Label vocabulary** is compared with the tracker; and `AGENTS.md` must declare
-at least one runnable feedback loop. A failure names the command or operator
-action that owns its remedy. These rows are report-only, including under
-`doctor --apply`: use `git-loopy labels --apply` for Label-vocabulary drift and
-the row's stated command for host tooling or tracker access.
+checked for authentication *and* for access to this repository; the tracker must
+carry the Labels a Run **reads**; and `AGENTS.md` must declare at least one
+runnable feedback loop. Every one of them is evaluated in a single pass, so one
+failure never hides the next, and each failing row names the command or operator
+action that owns its remedy.
+
+The Label row judges the presence of the names a Run reads and cannot create for
+itself — the triage roles, `parallel-safe`, `priority`, and `ready-for-agent`,
+the Label the Pool query filters on. It deliberately ignores two things the Run
+does not need. The `task-type:` and `semver:` taxonomies are *created on the way
+in*, so their absence stops nothing. And a drifted colour or description cannot
+stop a Run either, because a Run reads and writes Labels by name; drift stays
+`git-loopy labels`' business.
+
+These rows are report-only, including under `doctor --apply` — a repair lives
+where its cause lives, and a host's tooling, a tracker credential, and the Label
+vocabulary are each already owned by something else. Use
+`git-loopy labels --apply` for a missing Label and the row's stated command for
+host tooling or tracker access.
 
 Skill-policy rows name the Skill, the blocker in operator terms, the surface
 that carries it, and what to correct there:

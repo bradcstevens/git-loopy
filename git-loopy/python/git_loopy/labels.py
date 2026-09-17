@@ -79,6 +79,7 @@ __all__ = [
     "MAX_DESCRIPTION_LENGTH",
     "bootstrap_labels",
     "read_tracker_vocabulary",
+    "read_run_required_vocabulary",
     "reconcile_labels",
 ]
 
@@ -249,6 +250,35 @@ def read_tracker_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
         PRIORITY_ROLE,
         *TASK_TYPE_LABELS,
         *SEMVER_LABELS,
+    )
+
+
+def read_run_required_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
+    """Return the labels a Run needs the tracker to **already** carry.
+
+    The vocabulary minus the two closed classifier taxonomies, because those are
+    minted on the way in:
+    :meth:`~git_loopy.gh.SubprocessTaskTypeLabelClient.apply_issue_label` creates
+    the label before it attaches it, and both writers treat a failure as
+    non-fatal — no label is worth an **Iteration**. A Run therefore never needs a
+    ``task-type:`` or ``semver:`` label to pre-exist, and a preflight that
+    refused one would be judging something the Run does not (ADR-0055).
+
+    What is left is what a Run only ever *reads*: the triage roles, the
+    ``parallel-safe`` and ``priority`` assertions, and — load-bearingly —
+    ``ready-for-agent``, the label the **Pool** query filters on.
+
+    The exclusion is derived from the taxonomies themselves rather than spelled
+    out, so a new task type or **Bump class** cannot quietly become a Run
+    precondition.
+
+    Args:
+        repo_root: Repository root to read the documented triage mapping under,
+            or ``None`` when there is no repository.
+    """
+    minted = {spec.role for spec in (*TASK_TYPE_LABELS, *SEMVER_LABELS)}
+    return tuple(
+        spec for spec in read_tracker_vocabulary(repo_root) if spec.role not in minted
     )
 
 

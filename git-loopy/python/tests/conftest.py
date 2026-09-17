@@ -111,6 +111,50 @@ def _declare_runnable_feedback_loop_for_run_tests(
 
 
 @pytest.fixture(autouse=True)
+def _close_the_tracker_label_read(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Close the last wire a Run preflight reaches for: the tracker's labels.
+
+    Since #519 every github-source Run reads the repository's labels at
+    preflight to check the vocabulary it needs is present, through
+    :func:`git_loopy.loop._make_label_client`. Left alone that runs ``gh`` in the
+    process cwd — this checkout — so a Run test would read real labels and pass
+    for a reason that has nothing to do with the test.
+
+    Unconditional rather than allow-listed, in the shape of
+    :func:`_refuse_remote_skill_acquisition` above: a module that drives a Run
+    without being listed in :data:`_RUN_TEST_MODULES` fails loudly and says what
+    to do, instead of quietly succeeding on whoever's machine has ``gh``
+    authenticated.
+    """
+    from git_loopy import labels
+
+    class _StockedTracker:
+        """The vocabulary a synthetic Run repository is entitled to assume."""
+
+        def label_catalog(self) -> list[labels.TrackerLabel]:
+            return [
+                labels.TrackerLabel(spec.name, spec.color, spec.description)
+                for spec in labels.read_tracker_vocabulary(None)
+            ]
+
+    class _RefusedTracker:
+        def label_catalog(self) -> list[labels.TrackerLabel]:
+            raise AssertionError(
+                f"{request.path.name} drove a Run that read the tracker's labels; "
+                "the suite never reaches the network. Add the module to "
+                "tests/conftest.py's _RUN_TEST_MODULES, or inject a label client."
+            )
+
+    monkeypatch.setattr(
+        importlib.import_module("git_loopy.loop"),
+        "_make_label_client",
+        _StockedTracker if request.path.name in _RUN_TEST_MODULES else _RefusedTracker,
+    )
+
+
+@pytest.fixture(autouse=True)
 def installed_skill_catalog(
     _isolate_global_config: None, monkeypatch: pytest.MonkeyPatch
 ) -> "skill_install.InstalledCatalog":

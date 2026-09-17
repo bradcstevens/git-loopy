@@ -35,7 +35,7 @@ old bash launcher is retired):
 * ``--version`` — print the distribution Release version and exit before Run
   discovery, configuration, dependencies, or services.
 * ``info`` — describe the installation identity and exit successfully.
-* ``doctor`` — report Skill-policy blockers without starting a Run.
+* ``doctor`` — report every Run precondition without starting a Run.
 * Positional ``<max-iterations>`` — ``0`` (or omitted) means unlimited.
 * ``--model ID`` — per-run model override (top of the precedence chain).
 * ``--reasoning-effort EFFORT`` — per-run reasoning-effort override.
@@ -732,11 +732,14 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help="Report Run-preflight blockers without starting a Run.",
         description=(
             "Resolve the same environment and Skill-policy preflight a Run "
-            "resolves and report every blocker. `--apply` atomically repairs "
-            "missing enabled names and disabled Required Skills in the saved "
-            "policy that carries them. Environment preconditions are report-only; "
-            "follow each row's remedy. Doctor never starts a Run, opens a picker, "
-            "changes Copilot settings, or refreshes the installed Skill catalog."
+            "resolves and report every blocker in one pass, rather than stopping "
+            "at the first. A clean host exits 0; any failing precondition exits "
+            "non-zero. `--apply` atomically repairs missing enabled names and "
+            "disabled Required Skills in the saved policy that carries them, and "
+            "nothing else: Environment preconditions are report-only, including "
+            "under `--apply` — follow each row's stated remedy. Doctor never "
+            "starts a Run, opens a picker, changes Copilot settings, or refreshes "
+            "the installed Skill catalog."
         ),
     )
     doctor.add_argument(
@@ -1060,7 +1063,7 @@ def _run_info(
 
 
 def _run_doctor(args: argparse.Namespace) -> int:
-    """Dispatch the Skill-policy preflight report and optional repair."""
+    """Dispatch the Run-preflight report and the optional Skill-policy repair."""
     from git_loopy import doctorcmd
 
     try:

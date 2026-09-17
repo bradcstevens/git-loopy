@@ -84,12 +84,18 @@ def test_subcommand_parser_parses_doctor_apply() -> None:
 
 def test_doctor_help_says_environment_preconditions_are_report_only(
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("COLUMNS", "200")
+
     with pytest.raises(SystemExit):
         cli_module.build_subcommand_parser().parse_args(["doctor", "--help"])
 
     help_text = " ".join(capsys.readouterr().out.split())
-    assert "Environment preconditions are report-only" in help_text
+    assert "Environment preconditions are report-only, including under `--apply`" in (
+        help_text
+    )
+    assert "A clean host exits 0; any failing precondition exits non-zero" in help_text
 
 
 def test_subcommand_parser_parses_sweep_dry_run() -> None:

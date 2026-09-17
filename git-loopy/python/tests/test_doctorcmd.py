@@ -3,20 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Callable
 
 import pytest
 
 from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy import cli as cli_module
 from git_loopy import doctorcmd
+from git_loopy import labels
 from git_loopy.doctorcmd import run_doctor
 from git_loopy import settings
+from git_loopy.gh import Repo
 from git_loopy.git import GitError
 from git_loopy.run_environment_preflight import (
-    RunEnvironmentCheck,
     RunEnvironmentPreflight,
+    resolve_run_environment_preflight,
 )
 from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
 from git_loopy.skill_run_preflight import resolve_run_skill_policy_preflight
@@ -71,6 +75,13 @@ def _catalog(**winners: SkillCatalogWinner) -> SkillCatalog:
     return SkillCatalog(winners=winners)
 
 
+def _discoverer(catalog: SkillCatalog) -> Callable[..., object]:
+    async def discoverer(_client: object, **_kwargs: object) -> SkillCatalog:
+        return catalog
+
+    return discoverer
+
+
 def _run(
     tmp_path: Path,
     *,
@@ -80,7 +91,7 @@ def _run(
     required: tuple[str, ...] = (),
     env: dict[str, str] | None = None,
     apply: bool = False,
-    environment_preflight: RunEnvironmentPreflight | None = None,
+    environment_resolver: Callable[..., RunEnvironmentPreflight] | None = None,
 ) -> tuple[int, list[str]]:
     repo = tmp_path / "repo"
     repo.mkdir(exist_ok=True)
@@ -108,57 +119,70 @@ def _run(
         output_fn=output.append,
         apply=apply,
         environment_preflight_resolver=(
-            lambda **_kwargs: (
-                RunEnvironmentPreflight(())
-                if environment_preflight is None
-                else environment_preflight
-            )
+            (lambda **_kwargs: RunEnvironmentPreflight(()))
+            if environment_resolver is None
+            else environment_resolver
         ),
     )
     return code, output
 
 
-def test_doctor_reports_every_shared_environment_precondition(
+class _FakeTracker:
+    def __init__(self, *, authenticated: bool) -> None:
+        self._authenticated = authenticated
+
+    def auth_status(self) -> bool:
+        return self._authenticated
+
+    def repo_view(self) -> Repo:
+        return Repo(owner="octo", name="repo", default_branch="main")
+
+
+def _complete_label_tracker(repo_root: Path) -> object:
+    vocabulary = labels.read_tracker_vocabulary(repo_root)
+
+    class _Tracker:
+        def label_catalog(self) -> list[labels.TrackerLabel]:
+            return [
+                labels.TrackerLabel(spec.name, spec.color, spec.description)
+                for spec in vocabulary
+            ]
+
+    return _Tracker()
+
+
+def _host(
+    repo_root: Path,
+    *,
+    missing_tool: str,
+    authenticated: bool,
+) -> Callable[..., RunEnvironmentPreflight]:
+    """Answer `doctor` from the shared Run seam, with only the host faked out."""
+    return functools.partial(
+        resolve_run_environment_preflight,
+        executable_finder=lambda name: (
+            None if name == missing_tool else f"/tools/{name}"
+        ),
+        github_client=_FakeTracker(authenticated=authenticated),
+        label_client=_complete_label_tracker(repo_root),
+    )
+
+
+def test_doctor_reports_a_missing_tool_and_an_unauthorised_tracker_in_one_pass(
     tmp_path: Path,
 ) -> None:
-    environment_preflight = RunEnvironmentPreflight(
-        checks=(
-            RunEnvironmentCheck(
-                name="git",
-                passed=False,
-                detail="git is not on PATH",
-                remedy="Install Git and re-run git-loopy.",
-            ),
-            RunEnvironmentCheck(
-                name="copilot",
-                passed=True,
-                detail="copilot resolved at /tools/copilot",
-                location=Path("/tools/copilot"),
-            ),
-            RunEnvironmentCheck(
-                name="gh",
-                passed=True,
-                detail="gh resolved at /tools/gh",
-                location=Path("/tools/gh"),
-            ),
-            RunEnvironmentCheck(
-                name="github",
-                passed=False,
-                detail="gh is not authenticated",
-                remedy="Run `gh auth login` and re-run git_loopy.",
-            ),
-            RunEnvironmentCheck(
-                name="label_vocabulary",
-                passed=False,
-                detail="Label vocabulary differs: priority",
-                remedy="Run `git-loopy labels --apply` to reconcile the Label vocabulary.",
-            ),
-            RunEnvironmentCheck(
-                name="feedback_loops",
-                passed=True,
-                detail="AGENTS.md declares 1 runnable feedback loop(s)",
-            ),
-        )
+    """Every precondition is reported, and `doctor` reads them from the Run's seam.
+
+    Driven through the real :func:`resolve_run_environment_preflight` rather
+    than a stand-in, so a row `doctor` clears is provably a row the Run's own
+    preflight cleared (ADR-0055).
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text(
+        "## Feedback loops\n\n| Loop | Command |\n| --- | --- |\n"
+        "| Tests | `uv run pytest` |\n",
+        encoding="utf-8",
     )
 
     code, output = _run(
@@ -166,20 +190,98 @@ def test_doctor_reports_every_shared_environment_precondition(
         config=_config("required"),
         catalog=_catalog(required=SkillCatalogWinner("required", "packaged")),
         required=("required",),
-        environment_preflight=environment_preflight,
+        environment_resolver=_host(repo, missing_tool="copilot", authenticated=False),
     )
 
     assert code == 1
     assert output == [
-        "git | failed | git is not on PATH. Install Git and re-run git-loopy.",
-        "copilot | passed | copilot resolved at /tools/copilot",
+        "git | passed | git resolved at /tools/git",
+        "copilot | failed | copilot is not on PATH. "
+        "Install the GitHub Copilot CLI and re-run git-loopy.",
         "gh | passed | gh resolved at /tools/gh",
         "github | failed | gh is not authenticated. "
-        "Run `gh auth login` and re-run git_loopy.",
-        "label_vocabulary | failed | Label vocabulary differs: priority. "
-        "Run `git-loopy labels --apply` to reconcile the Label vocabulary.",
+        "Run `gh auth login` and re-run git-loopy.",
+        "label_vocabulary | passed | the tracker carries all "
+        f"{len(labels.read_run_required_vocabulary(repo))} Labels a Run reads",
         "feedback_loops | passed | AGENTS.md declares 1 runnable feedback loop(s)",
         "Skill policy is healthy; a Run would not be blocked.",
+    ]
+
+
+def test_doctor_clears_a_fully_configured_host(tmp_path: Path) -> None:
+    """A host with every precondition satisfied is told so, and exits 0."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text(
+        "## Feedback loops\n\n| Loop | Command |\n| --- | --- |\n"
+        "| Tests | `uv run pytest` |\n",
+        encoding="utf-8",
+    )
+
+    code, output = _run(
+        tmp_path,
+        config=_config("required"),
+        catalog=_catalog(required=SkillCatalogWinner("required", "packaged")),
+        required=("required",),
+        environment_resolver=_host(repo, missing_tool="", authenticated=True),
+    )
+
+    assert code == 0
+    assert not any("| failed |" in line for line in output)
+    assert output[-1] == "Skill policy is healthy; a Run would not be blocked."
+
+
+def test_doctor_apply_leaves_environment_rows_reported_and_unrepaired(
+    tmp_path: Path,
+) -> None:
+    """`--apply` owns the saved Skill policy and nothing else on the host.
+
+    The Skill repair it does own still lands, while the environment row is only
+    ever reported — `--apply` never installs a tool or touches the tracker — and
+    still decides the verdict, so a repaired policy cannot green a broken host.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text(
+        "## Feedback loops\n\n| Loop | Command |\n| --- | --- |\n"
+        "| Tests | `uv run pytest` |\n",
+        encoding="utf-8",
+    )
+    config_path = repo / "git-loopy" / "config.toml"
+    settings.write_config(config_path, {"enabled_skills": ["ghost"]})
+    output: list[str] = []
+
+    code = run_doctor(
+        config=_config("ghost"),
+        repo_root=repo,
+        env={},
+        client_factory=_CatalogClient,
+        discoverer=_discoverer(_catalog()),
+        git=FakeGitClient(repo),
+        prompt_text="---\nrequired-skills: []\n---\n",
+        installed_skills_dir=tmp_path / "installed",
+        output_fn=output.append,
+        apply=True,
+        environment_preflight_resolver=_host(
+            repo, missing_tool="git", authenticated=True
+        ),
+    )
+
+    assert code == 1
+    assert settings.load_config_table(config_path) == {"enabled_skills": []}
+    assert (
+        "git | failed | git is not on PATH. Install Git and re-run git-loopy."
+        in output
+    )
+    repaired = [
+        line
+        for line in output
+        if line.startswith(("Skill policy repair", "Add:", "Remove:", "Saved repaired"))
+    ]
+    assert repaired == [
+        "Skill policy repair for the project policy:",
+        "Remove: ghost",
+        f"Saved repaired project Skill policy to {config_path}",
     ]
 
 

@@ -1,4 +1,4 @@
-"""Report Skill-policy blockers without creating a Run (#516)."""
+"""Report every Run precondition without creating a Run (#516, #519)."""
 
 from __future__ import annotations
 
