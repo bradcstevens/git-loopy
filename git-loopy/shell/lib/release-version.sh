@@ -76,6 +76,13 @@ fi
 : "${GIT_LOOPY_RELEASE_TARGET:=}"
 : "${GIT_LOOPY_RELEASE_COUNTER:=0}"
 : "${GIT_LOOPY_RELEASE_ADVANCE_JSON:=null}"
+if ! declare -p GIT_LOOPY_RELEASE_NOTE_PATHS >/dev/null 2>&1; then
+  declare -a GIT_LOOPY_RELEASE_NOTE_PATHS=()
+  declare -a GIT_LOOPY_RELEASE_NOTE_COMMIT_PATHS=()
+  declare -a GIT_LOOPY_RELEASE_NOTE_BACKUPS=()
+  declare -a GIT_LOOPY_RELEASE_NOTE_EXISTED=()
+fi
+: "${GIT_LOOPY_RELEASE_NOTES_DIRECTORY:=docs/releases}"
 
 git_loopy_resolve_bump_class() {
   local labels_json="${1:?issue labels JSON is required}"
@@ -498,6 +505,183 @@ git_loopy_write_repository_release_version() {
   rm -f "${originals[@]}"
 }
 
+_git_loopy_release_notes_relative_path() {
+  local version="${1:?Release version is required}"
+  _git_loopy_validate_release_line_version "$version" || return 1
+  printf '%s/v%s.md\n' "$GIT_LOOPY_RELEASE_NOTES_DIRECTORY" "$version"
+}
+
+_git_loopy_release_note_fragment_content() {
+  local version="${1:?Release version is required}"
+  local target="${2:?Release target is required}"
+  printf '# git-loopy %s\n\n' "$version"
+  printf 'This development fragment advances the Release line to `%s` on the way to stable `%s`.\n' \
+    "$version" "$target"
+}
+
+_git_loopy_compose_stable_release_notes() {
+  local repository_root="${1:?repository root is required}"
+  local stable_version="${2:?stable Release version is required}"
+  local target="${3:?Release target is required}"
+  local fragment_path="${4:?development fragment path is required}"
+  local fragment_stage="${5:?staged development fragment is required}"
+  local destination="${6:?stable Release-note destination is required}"
+  local release_directory="$repository_root/$GIT_LOOPY_RELEASE_NOTES_DIRECTORY"
+  local path name counter version body
+  local -a fragments=()
+
+  shopt -s nullglob
+  for path in "$release_directory"/v"$target"-dev.*.md; do
+    name="${path##*/}"
+    if [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dev\.(0|[1-9][0-9]*)\.md$ ]]; then
+      fragments+=("${BASH_REMATCH[1]}"$'\t'"$path")
+    fi
+  done
+  shopt -u nullglob
+  name="${fragment_path##*/}"
+  [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dev\.(0|[1-9][0-9]*)\.md$ ]] || return 1
+  fragments+=("${BASH_REMATCH[1]}"$'\t'"$fragment_stage")
+
+  {
+    printf '# git-loopy %s\n\n' "$stable_version"
+    printf 'git-loopy %s was promoted from the committed development fragments below.\n' \
+      "$stable_version"
+    if ((${#fragments[@]} == 0)); then
+      printf '\nNo development fragments were available when this stable draft was composed.\n'
+    else
+      printf '\n## Development fragments\n'
+      while IFS=$'\t' read -r counter path; do
+        version="${path##*/v}"
+        version="${version%.md}"
+        printf '\n### %s\n\n' "$version"
+        body="$(
+          awk '
+            NR == 1 && /^# / { next }
+            !started && /^[[:space:]]*$/ { next }
+            { started = 1; print }
+          ' "$path"
+        )"
+        if [[ -n "$body" ]]; then
+          printf '%s\n' "$body"
+        else
+          printf 'No additional notes were recorded in this fragment.\n'
+        fi
+      done < <(printf '%s\n' "${fragments[@]}" | sort -n -k1,1)
+    fi
+  } >"$destination"
+}
+
+git_loopy_write_repository_release_notes() {
+  local repository_root="${1:?repository root is required}"
+  local advanced_line="${2:?advanced Release line is required}"
+  local release_line="${3:?Release line is required}"
+  local advanced_version target stable_version stable_counter
+  advanced_version="$(jq -er '.version' <<<"$advanced_line")" || return 1
+  target="$(jq -er '.target' <<<"$advanced_line")" || return 1
+  stable_version="$(jq -er '.version' <<<"$release_line")" || return 1
+  stable_counter="$(jq -er '.counter' <<<"$release_line")" || return 1
+  _git_loopy_validate_release_line_version "$advanced_version" || return 1
+  _git_loopy_release_target_parts "$target" "Release target" >/dev/null || return 1
+
+  GIT_LOOPY_RELEASE_NOTE_PATHS=()
+  GIT_LOOPY_RELEASE_NOTE_COMMIT_PATHS=()
+  GIT_LOOPY_RELEASE_NOTE_BACKUPS=()
+  GIT_LOOPY_RELEASE_NOTE_EXISTED=()
+
+  local fragment_relative fragment_path stable_relative stable_path release_directory
+  fragment_relative="$(_git_loopy_release_notes_relative_path "$advanced_version")" || return 1
+  fragment_path="$repository_root/$fragment_relative"
+  release_directory="$(dirname "$fragment_path")"
+  mkdir -p "$release_directory" || return 1
+
+  local -a paths=("$fragment_path") relatives=("$fragment_relative") commit_relatives=("$fragment_relative")
+  local -a stages=() backups=() existed=()
+  if [[ "$stable_counter" == "0" ]]; then
+    stable_relative="$(_git_loopy_release_notes_relative_path "$stable_version")" || return 1
+    stable_path="$repository_root/$stable_relative"
+    commit_relatives+=("$stable_relative")
+    [[ -e "$stable_path" ]] || {
+      paths+=("$stable_path")
+      relatives+=("$stable_relative")
+    }
+  fi
+
+  local index path stage backup
+  for ((index = 0; index < ${#paths[@]}; index++)); do
+    path="${paths[index]}"
+    mkdir -p "$(dirname "$path")" || break
+    stage="$(mktemp "$(dirname "$path")/.git-loopy-release.$(basename "$path").XXXXXX")" ||
+      break
+    stages+=("$stage")
+    if [[ -e "$path" ]]; then
+      [[ -f "$path" && -r "$path" ]] || break
+      backup="$(mktemp "$(dirname "$path")/.git-loopy-release-original.$(basename "$path").XXXXXX")" ||
+        break
+      cp -p "$path" "$backup" || break
+      backups+=("$backup")
+      existed+=("true")
+    else
+      backups+=("")
+      existed+=("false")
+    fi
+    if [[ "$path" == "$fragment_path" ]]; then
+      _git_loopy_release_note_fragment_content "$advanced_version" "$target" >"$stage" || break
+    else
+      _git_loopy_compose_stable_release_notes \
+        "$repository_root" "$stable_version" "$target" "$fragment_path" "${stages[0]}" "$stage" ||
+        break
+    fi
+  done
+  if ((index != ${#paths[@]})); then
+    rm -f "${stages[@]}" "${backups[@]}"
+    return 1
+  fi
+
+  for ((index = 0; index < ${#paths[@]}; index++)); do
+    mv "${stages[index]}" "${paths[index]}" || {
+      local restored
+      for ((restored = 0; restored < index; restored++)); do
+        if [[ "${existed[restored]}" == "true" ]]; then
+          mv "${backups[restored]}" "${paths[restored]}" ||
+            printf 'git-loopy: cannot restore Release note %s\n' "${paths[restored]}" >&2
+        else
+          rm -f "${paths[restored]}"
+        fi
+      done
+      rm -f "${stages[@]}" "${backups[@]}"
+      return 1
+    }
+  done
+
+  GIT_LOOPY_RELEASE_NOTE_PATHS=("${relatives[@]}")
+  GIT_LOOPY_RELEASE_NOTE_COMMIT_PATHS=("${commit_relatives[@]}")
+  GIT_LOOPY_RELEASE_NOTE_BACKUPS=("${backups[@]}")
+  GIT_LOOPY_RELEASE_NOTE_EXISTED=("${existed[@]}")
+}
+
+_git_loopy_discard_repository_release_note_backups() {
+  rm -f "${GIT_LOOPY_RELEASE_NOTE_BACKUPS[@]}"
+  GIT_LOOPY_RELEASE_NOTE_PATHS=()
+  GIT_LOOPY_RELEASE_NOTE_COMMIT_PATHS=()
+  GIT_LOOPY_RELEASE_NOTE_BACKUPS=()
+  GIT_LOOPY_RELEASE_NOTE_EXISTED=()
+}
+
+_git_loopy_restore_repository_release_notes() {
+  local repository_root="${1:?repository root is required}"
+  local index path
+  for ((index = 0; index < ${#GIT_LOOPY_RELEASE_NOTE_PATHS[@]}; index++)); do
+    path="$repository_root/${GIT_LOOPY_RELEASE_NOTE_PATHS[index]}"
+    if [[ "${GIT_LOOPY_RELEASE_NOTE_EXISTED[index]}" == "true" ]]; then
+      mv "${GIT_LOOPY_RELEASE_NOTE_BACKUPS[index]}" "$path" ||
+        printf 'git-loopy: cannot restore Release note %s\n' "$path" >&2
+    else
+      rm -f "$path"
+    fi
+  done
+  _git_loopy_discard_repository_release_note_backups
+}
+
 git_loopy_advance_repository_release_line() {
   local repository_root="${1:?repository root is required}"
   local labels_json="${2:?issue labels JSON is required}"
@@ -516,23 +700,36 @@ git_loopy_advance_repository_release_line() {
     _git_loopy_release_line_from_version "$repository_root" "$current_version" || return 1
   fi
 
-  local next_line
-  next_line="$(
+  local advanced_line next_line
+  advanced_line="$(
     git_loopy_advance_release_line \
       "$GIT_LOOPY_RELEASE_LAST_STABLE" \
       "$GIT_LOOPY_RELEASE_TARGET" \
       "$GIT_LOOPY_RELEASE_COUNTER" \
       "$bump_class"
   )" || return 1
-  next_line="$(git_loopy_promote_release_line "$next_line" "$bump_class")" || return 1
+  next_line="$(git_loopy_promote_release_line "$advanced_line" "$bump_class")" || return 1
   local next_version
   next_version="$(jq -r '.version' <<<"$next_line")" || return 1
   git_loopy_write_repository_release_version "$repository_root" "$next_version" || return 1
-  if ! git -C "$repository_root" add -- "${GIT_LOOPY_RELEASE_VERSION_PATHS[@]}" ||
+  if ! git_loopy_write_repository_release_notes \
+    "$repository_root" "$advanced_line" "$next_line"; then
+    local previous_version="$GIT_LOOPY_RELEASE_TARGET"
+    ((GIT_LOOPY_RELEASE_COUNTER == 0)) ||
+      previous_version+="-dev.$GIT_LOOPY_RELEASE_COUNTER"
+    git_loopy_write_repository_release_version "$repository_root" "$previous_version" ||
+      printf 'git-loopy: Release metadata could not be restored after a refused note write\n' >&2
+    return 1
+  fi
+  local -a commit_paths=(
+    "${GIT_LOOPY_RELEASE_VERSION_PATHS[@]}"
+    "${GIT_LOOPY_RELEASE_NOTE_COMMIT_PATHS[@]}"
+  )
+  if ! git -C "$repository_root" add -- "${commit_paths[@]}" ||
     ! git -C "$repository_root" commit -m \
       "$(git_loopy_release_line_commit_subject "$next_version")" \
-      -- "${GIT_LOOPY_RELEASE_VERSION_PATHS[@]}" >/dev/null; then
-    git -C "$repository_root" reset -- "${GIT_LOOPY_RELEASE_VERSION_PATHS[@]}" ||
+      -- "${commit_paths[@]}" >/dev/null; then
+    git -C "$repository_root" reset -- "${commit_paths[@]}" ||
       printf 'git-loopy: Release metadata could not be unstaged after a refused commit\n' >&2
     local previous_version="$GIT_LOOPY_RELEASE_TARGET"
     ((GIT_LOOPY_RELEASE_COUNTER == 0)) ||
@@ -541,8 +738,10 @@ git_loopy_advance_repository_release_line() {
       "$repository_root" \
       "$previous_version" ||
       printf 'git-loopy: Release metadata could not be restored after a refused commit\n' >&2
+    _git_loopy_restore_repository_release_notes "$repository_root"
     return 1
   fi
+  _git_loopy_discard_repository_release_note_backups
 
   GIT_LOOPY_RELEASE_TARGET="$(jq -r '.target' <<<"$next_line")"
   GIT_LOOPY_RELEASE_COUNTER="$(jq -r '.counter' <<<"$next_line")"

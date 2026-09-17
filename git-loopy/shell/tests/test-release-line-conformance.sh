@@ -141,7 +141,9 @@ done < <(shell_cases order_independence_cases)
 # the advance visible. Drive its public seam in a real repository so a staging or
 # commit regression cannot hide behind a pure ratchet test.
 scratch="$(mktemp -d)"
-trap 'rm -rf "$scratch"' EXIT
+missing_metadata=""
+preserve_notes=""
+trap 'rm -rf "$scratch" "$missing_metadata" "$preserve_notes"' EXIT
 for path in "${GIT_LOOPY_RELEASE_VERSION_PATHS[@]}"; do
   mkdir -p "$scratch/$(dirname "$path")"
   cp "$repository_root/$path" "$scratch/$path"
@@ -153,6 +155,7 @@ git -C "$scratch" config user.email tester@example.invalid
 git -C "$scratch" config user.name "Test Runner"
 git -C "$scratch" add -A
 git -C "$scratch" commit -qm "initial Release metadata"
+git -C "$scratch" tag v1.2.3
 git_loopy_advance_repository_release_line "$scratch" '["semver:patch"]' >/dev/null
 assert_equal \
   '{"target":"1.2.4","counter":1,"version":"1.2.4-dev.1","bump_class":"patch"}' \
@@ -172,6 +175,13 @@ assert_equal "1.2.4.dev1" \
     gsub(/"/, "", $3); print $3; exit
   }' "$scratch/git-loopy/python/uv.lock")" \
   "the Python lockfile uses its normalized Release version"
+assert_equal \
+  $'# git-loopy 1.2.4-dev.1\n\nThis development fragment advances the Release line to `1.2.4-dev.1` on the way to stable `1.2.4`.' \
+  "$(cat "$scratch/docs/releases/v1.2.4-dev.1.md")" \
+  "an advance writes its committed development Release-note fragment"
+git -C "$scratch" diff-tree --no-commit-id --name-only -r HEAD |
+  grep -Fqx "docs/releases/v1.2.4-dev.1.md" ||
+  fail "the advance commit includes its development Release-note fragment"
 git_loopy_advance_repository_release_line "$scratch" '["semver:minor"]' >/dev/null
 assert_equal "1.3.0-dev.2" "$(git_loopy_read_release_version "$scratch/VERSION")" \
   "a second closure keeps the in-Run Release target and counter without a stable tag"
@@ -179,6 +189,16 @@ assert_equal \
   "chore(release): advance Release line to 1.3.0-dev.2" \
   "$(git -C "$scratch" log -1 --format=%s)" \
   "the Release line is committed after every metadata copy changed"
+mkdir -p "$scratch/docs/releases"
+printf '# git-loopy 2.0.0-dev.1\n\nFirst accumulated fragment.\n' \
+  >"$scratch/docs/releases/v2.0.0-dev.1.md"
+printf '# git-loopy 2.0.0-dev.2\n\nSecond accumulated fragment.\n' \
+  >"$scratch/docs/releases/v2.0.0-dev.2.md"
+git -C "$scratch" add -- \
+  docs/releases/v2.0.0-dev.1.md docs/releases/v2.0.0-dev.2.md
+git -C "$scratch" commit -qm "seed accumulated Release-note fragments"
+preserve_notes="$(mktemp -d)"
+cp -R "$scratch/." "$preserve_notes"
 git_loopy_advance_repository_release_line "$scratch" '["semver:major"]' >/dev/null
 assert_equal "2.0.0" "$(git_loopy_read_release_version "$scratch/VERSION")" \
   "a major Bump class cuts stable without a milestone"
@@ -186,6 +206,38 @@ assert_equal \
   "chore(release): promote Release line to 2.0.0" \
   "$(git -C "$scratch" log -1 --format=%s)" \
   "a stable cut is committed as a Promotion rather than an advance"
+stable_notes="$(cat "$scratch/docs/releases/v2.0.0.md")"
+[[ "$stable_notes" == *"First accumulated fragment."* &&
+  "$stable_notes" == *"Second accumulated fragment."* &&
+  "$stable_notes" == *"2.0.0-dev.3"* ]] ||
+  fail "a major Promotion composes accumulated development fragments into a stable draft"
+git -C "$scratch" diff-tree --no-commit-id --name-only -r HEAD |
+  grep -Fqx "docs/releases/v2.0.0-dev.3.md" ||
+  fail "a major Promotion commit includes its final development fragment"
+git -C "$scratch" diff-tree --no-commit-id --name-only -r HEAD |
+  grep -Fqx "docs/releases/v2.0.0.md" ||
+  fail "a major Promotion commit includes its generated stable draft"
+printf '# Human release essay\n\nThis is deliberately not generated.\n' \
+  >"$preserve_notes/docs/releases/v2.0.0.md"
+GIT_LOOPY_RELEASE_LINE_INITIALIZED=false
+GIT_LOOPY_RELEASE_LAST_STABLE=""
+GIT_LOOPY_RELEASE_TARGET=""
+GIT_LOOPY_RELEASE_COUNTER=0
+git_loopy_advance_repository_release_line "$preserve_notes" '["semver:major"]' >/dev/null
+assert_equal \
+  $'# Human release essay\n\nThis is deliberately not generated.' \
+  "$(cat "$preserve_notes/docs/releases/v2.0.0.md")" \
+  "a human stable Release note is preserved when a major promotes"
+git -C "$preserve_notes" diff-tree --no-commit-id --name-only -r HEAD |
+  grep -Fqx "docs/releases/v2.0.0-dev.3.md" ||
+  fail "a Promotion with human notes still commits its development fragment"
+git -C "$preserve_notes" diff-tree --no-commit-id --name-only -r HEAD |
+  grep -Fqx "docs/releases/v2.0.0.md" ||
+  fail "a Promotion must commit its preserved human stable Release note"
+GIT_LOOPY_RELEASE_LINE_INITIALIZED=true
+GIT_LOOPY_RELEASE_LAST_STABLE="2.0.0"
+GIT_LOOPY_RELEASE_TARGET="2.0.0"
+GIT_LOOPY_RELEASE_COUNTER=0
 git_loopy_advance_repository_release_line "$scratch" '["semver:patch"]' >/dev/null
 assert_equal "2.0.1-dev.1" "$(git_loopy_read_release_version "$scratch/VERSION")" \
   "the issue after a major Promotion starts a fresh dev.N counter"
