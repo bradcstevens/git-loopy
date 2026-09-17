@@ -362,11 +362,27 @@ def test_main_info_reports_stable_json_and_never_runs_the_loop(
         resolved_commit=None,
         published=None,
         edge_install=None,
+        assets=(
+            installation.InstalledAsset(
+                name="config.toml",
+                path=Path("/operator/.config/git-loopy/config.toml"),
+                classification="untouched",
+                release_version="1.2.3",
+            ),
+        ),
     )
     monkeypatch.setattr(installation, "inspect_installation", lambda **_kwargs: expected)
 
     assert cli_module.main(["info", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out) == expected.json_dict()
+    document = json.loads(capsys.readouterr().out)
+    assert document["assets"] == [
+        {
+            "name": "config.toml",
+            "path": "/operator/.config/git-loopy/config.toml",
+            "classification": "untouched",
+            "release_version": "1.2.3",
+        }
+    ]
 
 
 def test_main_info_prints_every_identity_line_in_plain_text(
@@ -383,6 +399,26 @@ def test_main_info_prints_every_identity_line_in_plain_text(
         resolved_commit="a" * 40,
         published=False,
         edge_install=True,
+        assets=(
+            installation.InstalledAsset(
+                name="config.toml",
+                path=Path("/operator/.config/git-loopy/config.toml"),
+                classification="untouched",
+                release_version="1.2.3",
+            ),
+            installation.InstalledAsset(
+                name="PROMPT.md",
+                path=Path("/operator/.config/git-loopy/PROMPT.md"),
+                classification="customized",
+                release_version="1.2.3",
+            ),
+            installation.InstalledAsset(
+                name="installed catalog",
+                path=Path("/operator/.config/git-loopy/skills"),
+                classification="unrecorded",
+                release_version=None,
+            ),
+        ),
     )
     monkeypatch.setattr(
         installation, "inspect_installation", lambda **_kwargs: inventory
@@ -397,6 +433,10 @@ def test_main_info_prints_every_identity_line_in_plain_text(
         f"Resolved commit: {'a' * 40}",
         "Published Release: no",
         "Edge install: yes",
+        "Assets:",
+        "  config.toml: untouched (Release 1.2.3)",
+        "  PROMPT.md: customized (Release 1.2.3)",
+        "  installed catalog: unrecorded",
     ]
 
 

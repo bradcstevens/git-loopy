@@ -102,8 +102,11 @@ for commands.
 `git-loopy info` describes the Python Runner artifact currently executing: its
 executable path, **Install channel** (only when that ownership can be proven),
 **Release version**, resolved commit, whether that commit is a published Release,
-and **Edge install** status. It is read-only and always exits `0`; unavailable
-identity is reported as `unknown`, never treated as a health failure.
+and **Edge install** status. It also lists the Config-home assets git-loopy owns:
+the Config and prompt override, installed catalog, and TUI helper. Each reports
+whether its Scaffold provenance is `untouched`, `customized`, or `unrecorded`.
+It is read-only and always exits `0`; unavailable identity is reported as
+`unknown`, never treated as a health failure.
 
 ```bash
 git-loopy info
@@ -111,8 +114,9 @@ git-loopy info --json
 ```
 
 `--json` emits this stable schema. Fields with unknown facts are `null`; the
-`assets` array is intentionally empty until the installation inventory's
-Config-home asset half lands.
+`assets` array always lists the Config-home inventory. Each entry carries its
+stable display name, resolved path, classification, and originating Release
+when Scaffold provenance proves one.
 
 ```json
 {
@@ -124,7 +128,32 @@ Config-home asset half lands.
   "resolved_commit": "0123456789abcdef0123456789abcdef01234567",
   "published": true,
   "edge_install": false,
-  "assets": []
+  "assets": [
+    {
+      "name": "config.toml",
+      "path": "/home/operator/.config/git-loopy/config.toml",
+      "classification": "untouched",
+      "release_version": "0.9.0"
+    },
+    {
+      "name": "PROMPT.md",
+      "path": "/home/operator/.config/git-loopy/PROMPT.md",
+      "classification": "customized",
+      "release_version": null
+    },
+    {
+      "name": "installed catalog",
+      "path": "/home/operator/.config/git-loopy/skills",
+      "classification": "unrecorded",
+      "release_version": null
+    },
+    {
+      "name": "TUI helper",
+      "path": "/home/operator/.config/git-loopy/git-loopy-tui",
+      "classification": "unrecorded",
+      "release_version": null
+    }
+  ]
 }
 ```
 

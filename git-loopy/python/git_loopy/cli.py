@@ -1059,6 +1059,15 @@ def _run_info(
         output_fn(f"Resolved commit: {_display_identity(inventory.resolved_commit)}")
         output_fn(f"Published Release: {_display_identity(inventory.published)}")
         output_fn(f"Edge install: {_display_identity(inventory.edge_install)}")
+        if inventory.assets:
+            output_fn("Assets:")
+            for asset in inventory.assets:
+                release = (
+                    f" (Release {asset.release_version})"
+                    if asset.release_version is not None
+                    else ""
+                )
+                output_fn(f"  {asset.name}: {asset.classification}{release}")
     return 0
 
 

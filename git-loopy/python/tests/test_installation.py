@@ -283,6 +283,137 @@ def test_inventory_reports_vcs_commit_with_unknown_publication(
     assert inventory.edge_install is None
 
 
+def test_inventory_classifies_config_home_assets_from_scaffold_provenance(
+    tmp_path: Path,
+) -> None:
+    """The inventory resolves assets only through its injected environment."""
+    from git_loopy import scaffold_provenance
+
+    config_home = tmp_path / "config-home"
+    scope = config_home / "git-loopy"
+    config = scope / "config.toml"
+    prompt = scope / "PROMPT.md"
+    catalog = scope / "skills"
+    helper = scope / "git-loopy-tui"
+    catalog.mkdir(parents=True)
+    config.write_text("[run]\n", encoding="utf-8")
+    prompt.write_text("# Prompt\n", encoding="utf-8")
+    helper.touch()
+    scaffold_provenance.record_scaffolded_assets(
+        scope,
+        release_version="1.2.3",
+        assets={"config.toml": config, "PROMPT.md": prompt},
+        previous=None,
+    )
+
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(config_home)},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.assets == (
+        installation.InstalledAsset(
+            name="config.toml",
+            path=config,
+            classification="untouched",
+            release_version="1.2.3",
+        ),
+        installation.InstalledAsset(
+            name="PROMPT.md",
+            path=prompt,
+            classification="untouched",
+            release_version="1.2.3",
+        ),
+        installation.InstalledAsset(
+            name="installed catalog",
+            path=catalog,
+            classification="customized",
+            release_version=None,
+        ),
+        installation.InstalledAsset(
+            name="TUI helper",
+            path=helper,
+            classification="customized",
+            release_version=None,
+        ),
+    )
+
+
+def test_inventory_classifies_changed_assets_as_customized(tmp_path: Path) -> None:
+    from git_loopy import scaffold_provenance
+
+    scope = tmp_path / "config-home" / "git-loopy"
+    config = scope / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[run]\n", encoding="utf-8")
+    scaffold_provenance.record_scaffolded_assets(
+        scope,
+        release_version="1.2.3",
+        assets={"config.toml": config},
+        previous=None,
+    )
+    config.write_text("[run]\nmodel = 'custom'\n", encoding="utf-8")
+
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.assets[0].classification == "customized"
+
+
+def test_inventory_treats_an_asset_without_provenance_as_customized(
+    tmp_path: Path,
+) -> None:
+    scope = tmp_path / "config-home" / "git-loopy"
+    config = scope / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[run]\n", encoding="utf-8")
+
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.assets[0].classification == "customized"
+
+
+def test_inventory_keeps_assets_when_scaffold_provenance_cannot_be_read(
+    tmp_path: Path,
+) -> None:
+    scope = tmp_path / "config-home" / "git-loopy"
+    config = scope / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[run]\n", encoding="utf-8")
+    (scope / "scaffold-provenance.json").write_text("{", encoding="utf-8")
+
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.assets[0].classification == "customized"
+
+
+def test_inventory_reports_an_absent_asset_as_unrecorded(tmp_path: Path) -> None:
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert [asset.classification for asset in inventory.assets] == [
+        "unrecorded",
+        "unrecorded",
+        "unrecorded",
+        "unrecorded",
+    ]
+
+
 def test_inventory_json_shape_is_stable(tmp_path: Path) -> None:
     commit = "d" * 40
     _repository, executable = _write_checkout(
@@ -304,7 +435,32 @@ def test_inventory_json_shape_is_stable(tmp_path: Path) -> None:
         "resolved_commit": commit,
         "published": True,
         "edge_install": False,
-        "assets": [],
+        "assets": [
+            {
+                "name": "config.toml",
+                "path": str(tmp_path / "home/.config/git-loopy/config.toml"),
+                "classification": "unrecorded",
+                "release_version": None,
+            },
+            {
+                "name": "PROMPT.md",
+                "path": str(tmp_path / "home/.config/git-loopy/PROMPT.md"),
+                "classification": "unrecorded",
+                "release_version": None,
+            },
+            {
+                "name": "installed catalog",
+                "path": str(tmp_path / "home/.config/git-loopy/skills"),
+                "classification": "unrecorded",
+                "release_version": None,
+            },
+            {
+                "name": "TUI helper",
+                "path": str(tmp_path / "home/.config/git-loopy/git-loopy-tui"),
+                "classification": "unrecorded",
+                "release_version": None,
+            },
+        ],
     }
 
 
