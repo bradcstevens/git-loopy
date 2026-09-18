@@ -176,6 +176,112 @@ _DEFAULT_REASONING_EFFORT = "max"
 _DEFAULT_ESCALATION_RUNG: tuple[str, str] = (_DEFAULT_MODEL, "max")
 
 
+@dataclasses.dataclass(frozen=True)
+class _CommandSpec:
+    """One root management command's stable discovery metadata."""
+
+    name: str
+    category: str
+    summary: str
+
+
+_COMMAND_SPECS = (
+    _CommandSpec(
+        "init",
+        "Getting started",
+        "First-run setup wizard for Config and Skill policy.",
+    ),
+    _CommandSpec(
+        "config",
+        "Configuration",
+        "Manage persisted Config and per-task-type routing.",
+    ),
+    _CommandSpec(
+        "skills",
+        "Configuration",
+        "skills list, skills edit, and skills sync for the closed-world Skill policy.",
+    ),
+    _CommandSpec(
+        "labels",
+        "Repository maintenance",
+        "Report or reconcile the tracker Label vocabulary.",
+    ),
+    _CommandSpec(
+        "doctor",
+        "Repository maintenance",
+        "Report Run-preflight blockers without starting a Run.",
+    ),
+    _CommandSpec(
+        "sweep",
+        "Repository maintenance",
+        "Reclaim dead-Run Lane workspaces and reserved branches.",
+    ),
+    _CommandSpec(
+        "calibrate",
+        "Repository maintenance",
+        "Measure or inspect Routed-pair Calibration.",
+    ),
+    _CommandSpec(
+        "info",
+        "Installation",
+        "Describe this installation's artifact, channel, identity, and assets.",
+    ),
+    _CommandSpec(
+        "update",
+        "Installation",
+        "Refresh machine-local assets to the installed Release.",
+    ),
+    _CommandSpec(
+        "upgrade",
+        "Installation",
+        "Move this installation to a published Release, then update.",
+    ),
+    _CommandSpec(
+        "uninstall",
+        "Installation",
+        "Remove this installation's machine-local state.",
+    ),
+    _CommandSpec(
+        "commands",
+        "Discovery",
+        "Emit the machine-readable command inventory for shell completions.",
+    ),
+)
+_COMMAND_BY_NAME = MappingProxyType({command.name: command for command in _COMMAND_SPECS})
+
+
+def _commands_by_category() -> dict[str, list[_CommandSpec]]:
+    """Group command metadata while preserving category and command order."""
+    categories: dict[str, list[_CommandSpec]] = {}
+    for command in _COMMAND_SPECS:
+        categories.setdefault(command.category, []).append(command)
+    return categories
+
+
+def _command_help() -> str:
+    """Render the management surface from the command inventory."""
+    lines = ["Commands by category:"]
+    categories = _commands_by_category()
+    for category, commands in categories.items():
+        lines.extend(("", f"{category}:"))
+        lines.extend(
+            f"  {command.name:<10} {command.summary}" for command in commands
+        )
+    return "\n".join(lines)
+
+
+def _command_inventory() -> dict[str, object]:
+    """Return the stable schema consumed by shell completion generators."""
+    return {
+        "schema_version": 1,
+        "commands": [
+            dataclasses.asdict(command)
+            for commands in _commands_by_category().values()
+            for command in commands
+        ],
+    }
+
+
 def resolve_repo_root(start: Path | None = None) -> Path:
     """Resolve the enclosing git repository's top-level directory.
 
@@ -274,46 +380,16 @@ def _parse_issue_pin(raw: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     """Construct the argparse parser for the ``git-loopy`` console script."""
+    # The root help is another view of the actual subcommand parser. Refuse a
+    # stale command inventory rather than advertising a command that cannot run.
+    build_subcommand_parser()
     parser = argparse.ArgumentParser(
         prog="git-loopy",
         description=(
             "Autonomous AFK loop on the GitHub Copilot Python SDK."
         ),
         epilog=(
-            "Subcommands:\n"
-            "  init                           First-run setup wizard: write "
-            "config.toml (+ optional\n"
-            "                                 PROMPT.md / skills) into a scope, "
-            "then exit.\n"
-            "                                 See `git-loopy init -h`.\n"
-            "  config                         Manage persisted settings: "
-            "set / get / list / edit / path.\n"
-            "                                 See `git-loopy config -h`.\n"
-            "  info                           Describe this installation's "
-            "identity, channel, and assets.\n"
-            "                                 See `git-loopy info -h`.\n"
-            "  update                         Refresh machine-local assets "
-            "to this Release.\n"
-            "                                 See `git-loopy update -h`.\n"
-            "  upgrade                        Move this installation to a "
-            "published Release, then\n"
-            "                                 update. See `git-loopy upgrade "
-            "-h`.\n"
-            "  skills list                    Inspect the closed-world Skill "
-            "policy.\n"
-            "  skills edit                    Edit a project or global Skill "
-            "policy.\n"
-            "  skills sync                    Re-copy Copilot's Skill baseline "
-            "after confirmation.\n"
-            "                                 See `git-loopy skills -h`.\n"
-            "  calibrate --status             What this repository's corpus "
-            "supports per Task type.\n"
-            "  calibrate --dry-run            What a Calibration would cost, "
-            "before it spends.\n"
-            "  calibrate [<task-type>]        Measure it. Spends AI Credits, "
-            "and asks first.\n"
-            "                                 See `git-loopy calibrate -h`.\n"
-            "\n"
+            f"{_command_help()}\n\n"
             "Environment variables:\n"
             "  GIT_LOOPY_MODEL              Copilot model id override "
             "(bare base id, e.g. claude-opus-4.8).\n"
@@ -586,19 +662,7 @@ def build_parser() -> argparse.ArgumentParser:
 #: They are kept out of :func:`build_parser` because argparse cannot host an
 #: optional positional (``<max-iterations>``) alongside ``add_subparsers`` in one
 #: parser without misreading ``git-loopy 5`` as an invalid subcommand choice.
-_SUBCOMMANDS = (
-    "init",
-    "config",
-    "skills",
-    "labels",
-    "calibrate",
-    "info",
-    "update",
-    "upgrade",
-    "uninstall",
-    "doctor",
-    "sweep",
-)
+_SUBCOMMANDS = tuple(command.name for command in _COMMAND_SPECS)
 
 
 def _add_scope_flags(
@@ -631,6 +695,16 @@ def _add_scope_flags(
     )
 
 
+def _add_command(
+    subcommands: argparse._SubParsersAction[argparse.ArgumentParser],
+    name: str,
+    **kwargs: object,
+) -> argparse.ArgumentParser:
+    """Register a command with the discovery metadata that describes it."""
+    command = _COMMAND_BY_NAME[name]
+    return subcommands.add_parser(command.name, help=command.summary, **kwargs)
+
+
 def build_subcommand_parser() -> argparse.ArgumentParser:
     """Construct the parser for management commands.
 
@@ -650,19 +724,11 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar=(
-            "{init,config,skills,labels,calibrate,info,update,upgrade,uninstall,"
-            "doctor,sweep}"
-        ),
     )
 
-    init = sub.add_parser(
+    init = _add_command(
+        sub,
         "init",
-        help=(
-            "First-run setup: write config.toml (+ optionally an editable "
-            "PROMPT.md override and git-loopy's agent skills) into a scope, then "
-            "exit."
-        ),
         description=(
             "Interactive first-run setup wizard. Chooses a scope (global or "
             "project), seeds model / reasoning effort from the live model list, "
@@ -688,9 +754,25 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    skills = sub.add_parser(
+    commands = _add_command(
+        sub,
+        "commands",
+        description=(
+            "Emit the stable command inventory consumed by shell completions. "
+            "This is deliberately not a second human-facing command listing; "
+            "use `git-loopy help` or `git-loopy --help` for that."
+        ),
+    )
+    commands.add_argument(
+        "--json",
+        action="store_true",
+        required=True,
+        help="Emit the stable command-inventory JSON document.",
+    )
+
+    skills = _add_command(
+        sub,
         "skills",
-        help="Inspect and manage git-loopy's closed-world Skill policy.",
         description=(
             "Inspect the normalized Skill catalog and git-loopy policy state. "
             "Catalog discovery is read-only and never changes Copilot settings."
@@ -731,9 +813,9 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     )
     _add_scope_flags(skills_sync)
 
-    labels_cmd = sub.add_parser(
+    labels_cmd = _add_command(
+        sub,
         "labels",
-        help="Report — and optionally fix — the tracker against the Label vocabulary.",
         description=(
             "Compare this repository's tracker with the Label vocabulary a Run "
             "reads: the five triage roles (under the strings "
@@ -756,9 +838,9 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    info = sub.add_parser(
+    info = _add_command(
+        sub,
         "info",
-        help="Describe this installation's artifact, channel, identity, and assets.",
         description=(
             "Report the installed artifact, the Install channel when it can be "
             "proven, Release version, resolved commit, and Edge-install status, "
@@ -775,9 +857,9 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help="Emit the stable installation-inventory JSON document.",
     )
 
-    update = sub.add_parser(
+    update = _add_command(
+        sub,
         "update",
-        help="Refresh machine-local assets to the installed Release.",
         description=(
             "Refresh the installed Skill catalog and TUI helper, replace the "
             "global PROMPT.md override only when Scaffold provenance proves it "
@@ -812,9 +894,9 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help="Repair the machine-global Config routing (the default).",
     )
 
-    upgrade = sub.add_parser(
+    upgrade = _add_command(
+        sub,
         "upgrade",
-        help="Move this installation to a published Release, then update.",
         description=(
             "Replace the git-loopy artifact this command is running from with a "
             "published Release, through the Install channel that placed it, and "
@@ -855,9 +937,9 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    uninstall = sub.add_parser(
+    uninstall = _add_command(
+        sub,
         "uninstall",
-        help="Remove this installation's machine-local state.",
         description=(
             "List and confirm removal of the executable through its proven Install "
             "channel, the global config-home, installed Skill catalog and record, "
@@ -880,9 +962,9 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help="Confirm the printed removal plan without being asked.",
     )
 
-    doctor = sub.add_parser(
+    doctor = _add_command(
+        sub,
         "doctor",
-        help="Report Run-preflight blockers without starting a Run.",
         description=(
             "Resolve the same environment and Skill-policy preflight a Run "
             "resolves and report every blocker in one pass, rather than stopping "
@@ -908,19 +990,16 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    sweep = sub.add_parser(
-        "sweep",
-        help="Reclaim dead-Run Lane workspaces and resolved reserved branches.",
-    )
+    sweep = _add_command(sub, "sweep")
     sweep.add_argument(
         "--dry-run",
         action="store_true",
         help="Report exactly what this sweep would remove without changing it.",
     )
 
-    config = sub.add_parser(
+    config = _add_command(
+        sub,
         "config",
-        help="Manage persisted settings, including per-task-type routing.",
         description=(
             "Manage persisted Config without hand-finding the file, and inspect "
             "the effective settings a run will use. Hand-editing config.toml "
@@ -1036,9 +1115,9 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     )
     _add_scope_flags(routing_recommended, suppress_default=True)
 
-    calibrate = sub.add_parser(
+    calibrate = _add_command(
+        sub,
         "calibrate",
-        help="Measure the Routed pair per Task type, or inspect what that would cost.",
         description=(
             "Measure the cheapest pair that clears the gate, per Task type, and "
             "write the winner into the committed measured-routing artifact. The "
@@ -1102,6 +1181,14 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "the AI-Credit and wall-clock ceilings, and the maximum Trial count."
         ),
     )
+    registered = set(sub.choices)
+    declared = {command.name for command in _COMMAND_SPECS}
+    if registered != declared:
+        raise RuntimeError(
+            "command inventory and parser registration disagree: "
+            f"missing parsers {sorted(declared - registered)!r}; "
+            f"undeclared parsers {sorted(registered - declared)!r}"
+        )
     return parser
 
 
@@ -1150,6 +1237,14 @@ def _run_init(args: argparse.Namespace) -> int:
         # when setup is not running inside one.
         label_client=_make_label_client() if repo_root is not None else None,
     )
+
+
+def _run_commands(_args: argparse.Namespace) -> int:
+    """Emit the shell-completion command inventory."""
+    import json
+
+    print(json.dumps(_command_inventory(), sort_keys=True))
+    return 0
 
 
 def _run_labels(args: argparse.Namespace) -> int:
@@ -2605,6 +2700,10 @@ def main(argv: list[str] | None = None) -> int:
     """
     argv = list(sys.argv[1:] if argv is None else argv)
 
+    if argv == ["help"]:
+        build_parser().print_help()
+        return 0
+
     # Pre-dispatch on the first token: a reserved subcommand
     # routes to its own parser, so the bare run's optional positional
     # <max-iterations> can coexist with subcommands (argparse cannot host both
@@ -2614,6 +2713,8 @@ def main(argv: list[str] | None = None) -> int:
         sub_args = build_subcommand_parser().parse_args(argv)
         if sub_args.command == "init":
             return _run_init(sub_args)
+        if sub_args.command == "commands":
+            return _run_commands(sub_args)
         if sub_args.command == "skills":
             return _run_skills(sub_args)
         if sub_args.command == "labels":
@@ -2632,7 +2733,9 @@ def main(argv: list[str] | None = None) -> int:
             return _run_doctor(sub_args)
         if sub_args.command == "sweep":
             return _run_sweep(sub_args)
-        return _run_config(sub_args)
+        if sub_args.command == "config":
+            return _run_config(sub_args)
+        raise AssertionError(f"undispatched command {sub_args.command!r}")
 
     parser = build_parser()
     args = parser.parse_args(argv)

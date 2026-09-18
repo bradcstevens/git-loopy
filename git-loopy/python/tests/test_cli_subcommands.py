@@ -43,6 +43,147 @@ def test_bare_parser_positional_with_flags() -> None:
     assert args.model == "gpt-5.4"
 
 
+def test_help_is_an_exact_alias_for_root_help(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COLUMNS", "200")
+
+    assert cli_module.main(["help"]) == 0
+    alias_help = capsys.readouterr().out
+
+    with pytest.raises(SystemExit) as raised:
+        cli_module.main(["--help"])
+
+    assert raised.value.code == 0
+    assert capsys.readouterr().out == alias_help
+
+
+def test_root_help_groups_every_shipped_command_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COLUMNS", "200")
+
+    help_text = cli_module.build_parser().format_help().split(
+        "Environment variables:", maxsplit=1
+    )[0]
+    expected_categories = {
+        "Getting started": ("init",),
+        "Configuration": ("config", "skills"),
+        "Repository maintenance": ("labels", "doctor", "sweep", "calibrate"),
+        "Installation": ("info", "update", "upgrade", "uninstall"),
+        "Discovery": ("commands",),
+    }
+    subparsers = next(
+        action
+        for action in cli_module.build_subcommand_parser()._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+
+    for category, commands in expected_categories.items():
+        assert help_text.count(f"\n{category}:\n") == 1
+        for command in commands:
+            assert help_text.count(f"\n  {command:<10}") == 1
+    assert set(subparsers.choices) == {
+        command for commands in expected_categories.values() for command in commands
+    }
+
+
+def test_command_help_keeps_a_category_together_when_inventory_order_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "_COMMAND_SPECS",
+        (
+            *cli_module._COMMAND_SPECS,
+            cli_module._CommandSpec(
+                "lanes",
+                "Configuration",
+                "Inspect Lane workspaces.",
+            ),
+        ),
+    )
+
+    help_text = cli_module._command_help()
+
+    assert help_text.count("\nConfiguration:\n") == 1
+    assert "\n  lanes      Inspect Lane workspaces." in help_text
+    assert [
+        command["name"] for command in cli_module._command_inventory()["commands"]
+    ] == [
+        "init",
+        "config",
+        "skills",
+        "lanes",
+        "labels",
+        "doctor",
+        "sweep",
+        "calibrate",
+        "info",
+        "update",
+        "upgrade",
+        "uninstall",
+        "commands",
+    ]
+
+
+def test_command_inventory_refuses_a_command_without_a_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "_COMMAND_SPECS",
+        (
+            *cli_module._COMMAND_SPECS,
+            cli_module._CommandSpec(
+                "lanes",
+                "Repository maintenance",
+                "Inspect Lane workspaces.",
+            ),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="missing parsers \\['lanes'\\]"):
+        cli_module.build_subcommand_parser()
+
+
+def test_commands_json_emits_the_documented_complete_command_inventory(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert cli_module.main(["commands", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == 1
+    assert [(entry["name"], entry["category"]) for entry in payload["commands"]] == [
+        ("init", "Getting started"),
+        ("config", "Configuration"),
+        ("skills", "Configuration"),
+        ("labels", "Repository maintenance"),
+        ("doctor", "Repository maintenance"),
+        ("sweep", "Repository maintenance"),
+        ("calibrate", "Repository maintenance"),
+        ("info", "Installation"),
+        ("update", "Installation"),
+        ("upgrade", "Installation"),
+        ("uninstall", "Installation"),
+        ("commands", "Discovery"),
+    ]
+    assert all(set(entry) == {"name", "category", "summary"} for entry in payload["commands"])
+
+
+def test_commands_requires_json_instead_of_printing_a_second_listing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        cli_module.main(["commands"])
+
+    assert raised.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "required" in captured.err
+
+
 # ---------------------------------------------------------------------------
 # The subcommand parser reserves both init and config (add_subparsers)
 # ---------------------------------------------------------------------------

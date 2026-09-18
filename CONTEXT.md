@@ -659,6 +659,12 @@ whole precedence chain (not one file); `path` prints the resolved location(s); `
 scope's file in `$EDITOR`. Scope selection mirrors **init**.
 _Avoid_: config command as a synonym for the persisted **Config** itself.
 
+**commands (subcommand)**:
+The schema-versioned, machine-readable inventory of the Python Runner's root management-command
+surface. It is consumed by shell completions; `help` and `--help` are the human-facing,
+category-grouped rendering of that same inventory.
+_Avoid_: command list, command reference; a second human-facing help surface.
+
 **Install channel**:
 The mechanism that put one git-loopy artifact on a machine and is therefore the only thing entitled
 to replace or remove it — a `uv` tool install, a Homebrew formula, or an installer-placed launcher.

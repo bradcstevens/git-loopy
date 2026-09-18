@@ -95,6 +95,41 @@ for commands.
 
 ---
 
+## Finding commands
+
+`git-loopy help` is an alias for `git-loopy --help`. Both print the same
+category-grouped management-command surface; the bare `git-loopy` invocation
+continues to start a Run.
+
+Shell completions and other machine consumers can read that same surface with:
+
+```bash
+git-loopy commands --json
+```
+
+It emits this stable, ordered document:
+
+```json
+{
+  "schema_version": 1,
+  "commands": [
+    {
+      "name": "init",
+      "category": "Getting started",
+      "summary": "First-run setup wizard for Config and Skill policy."
+    }
+  ]
+}
+```
+
+`commands` contains every root management command exactly once, in the order
+shown by root help. Each command object always has the string `name`,
+`category`, and `summary` fields. `schema_version` changes only for an
+incompatible shape change. `git-loopy commands` without `--json` refuses rather
+than becoming a second human-facing listing.
+
+---
+
 ## Installation identity (`git-loopy info`)
 
 `git-loopy info` describes the Python Runner artifact currently executing: its
