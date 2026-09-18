@@ -47,6 +47,7 @@ CLI flag / env var still overrides it (ADR-0006's chain is unchanged).
 
 from __future__ import annotations
 
+import inspect
 import os
 import shutil
 from dataclasses import dataclass
@@ -657,6 +658,30 @@ class _ScopeUnavailable(Exception):
     """Raised when the project scope is requested outside a git repository."""
 
 
+def _runner_context(
+    wizard_runner: WizardRunner, offered: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Narrow optional context to the keywords this runner actually names.
+
+    #504's seam contract is the six answers every runner collects; everything
+    else is presentation one particular runner needs — the numbered renderer's
+    ``input_fn`` / ``output_fn`` / ``warn``, the Textual wizard's ``scope_paths``
+    / ``skill_selection_model``. Offering those by *signature* rather than by how
+    :func:`run_init` came to hold the runner is what makes an injected wizard the
+    same runner as an opted-into one, while an adapter written against the bare
+    contract is still called with exactly that contract.
+
+    A runner that only forwards ``**kwargs`` is deliberately offered nothing: it
+    has named none of this, and the one in-tree example of that shape supplies
+    its own ``input_fn`` / ``output_fn``, which a silent extra would collide with.
+    """
+    try:
+        parameters = inspect.signature(wizard_runner).parameters
+    except (TypeError, ValueError):  # a callable with no introspectable signature
+        return {}
+    return {name: value for name, value in offered.items() if name in parameters}
+
+
 def _default_wizard_runner(
     *,
     scope_options: Sequence[str],
@@ -664,8 +689,6 @@ def _default_wizard_runner(
     default_model: str,
     default_effort: str | None,
     rebuild_skill_selection: Callable[..., tuple[str, ...]],
-    scope_paths: Mapping[str, Path] | None = None,
-    skill_selection_model: Callable[..., Any] | None = None,
     scope_locked: bool = False,
     input_fn: Callable[[str], str] = input,
     output_fn: Callable[[str], None] = print,
@@ -676,7 +699,6 @@ def _default_wizard_runner(
     This is deliberately a boring adapter: issue 504 moves the seam, while the
     Textual application and removal of these renderers belong to later issues.
     """
-    del scope_paths, skill_selection_model
     if scope_locked:
         # The operator already fixed the scope with a flag, so there is nothing
         # to ask. A *single* option is not the same thing: outside a repository
@@ -798,10 +820,8 @@ def run_init(
     # An injected runner is the test/caller seam and always wins; only a caller
     # that left the default in place is asking the environment which runner to
     # use (issue #506's opt-in, removed with the numbered renderers in #508).
-    uses_textual_wizard = False
     if wizard_runner is _default_wizard_runner:
         wizard_runner = select_wizard_runner(env)
-        uses_textual_wizard = wizard_runner is not _default_wizard_runner
 
     if default_model is None:
         default_model = _DEFAULT_MODEL
@@ -948,21 +968,19 @@ def run_init(
                         f"cannot establish a Skill policy: {type(exc).__name__}: {exc}"
                     ) from exc
 
-            runner_options: dict[str, Any] = {}
-            if wizard_runner is _default_wizard_runner:
-                runner_options.update(
-                    input_fn=input_fn, output_fn=output_fn, warn=warn
-                )
-            elif uses_textual_wizard:
-                # The alternate runner needs presentation context, but #504's
-                # injected WizardRunner seam remains its original small contract.
-                runner_options.update(
-                    scope_paths={
+            runner_options = _runner_context(
+                wizard_runner,
+                {
+                    "input_fn": input_fn,
+                    "output_fn": output_fn,
+                    "warn": warn,
+                    "scope_paths": {
                         option: _resolve_targets(option, repo_root, env).config_path
                         for option in scope_options
                     },
-                    skill_selection_model=build_skill_selection_model,
-                )
+                    "skill_selection_model": build_skill_selection_model,
+                },
+            )
             answers = wizard_runner(
                 scope_options=scope_options,
                 model_choices=model_choices,

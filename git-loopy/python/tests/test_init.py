@@ -2339,6 +2339,42 @@ def test_run_init_keeps_the_wizard_runner_contract_for_injected_adapters(
     assert rc == 0
 
 
+def test_run_init_offers_presentation_context_to_any_runner_that_declares_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An *injected* Textual wizard is the same runner as an opted-into one.
+
+    The presentation context belongs to the runner that asked for it, not to the
+    way ``run_init`` came to hold that runner — so keying it on the environment
+    opt-in leaves the only caller that injects the wizard (a test, and #508's
+    default) calling it with keywords it cannot satisfy.
+    """
+    from git_loopy.interactive import init_wizard_app
+
+    seen: dict[str, Any] = {}
+
+    def _run(self: Any) -> Any:
+        seen["scope_paths"] = dict(self._scope_paths)
+        return _answers(scope="project", model="claude-opus-4.8", effort="max")
+
+    monkeypatch.setattr(init_wizard_app.InitWizardApp, "run", _run)
+    out = _Output()
+
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            scope=None,
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            wizard_runner=init_wizard_app.run_textual_init_wizard,
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            **_packaged(tmp_path),
+        )
+
+    assert rc == 0
+    assert seen["scope_paths"]["project"] == settings.project_config_path(tmp_path)
+
+
 def test_run_init_selects_the_textual_runner_when_the_operator_opts_in(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

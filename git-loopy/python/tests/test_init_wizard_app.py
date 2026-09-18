@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+from dataclasses import replace
 from pathlib import Path
 
 from textual.widgets import DataTable, Static
@@ -137,6 +138,63 @@ async def test_escape_on_the_first_step_cancels_when_scope_is_locked() -> None:
     app = _app(scope_locked=True)
     async with app.run_test() as pilot:
         await pilot.press("escape")
+        await pilot.pause()
+
+    assert app.return_value is None
+
+
+async def test_scope_step_explains_a_scope_that_is_not_available() -> None:
+    """Outside a repository the project scope still has something to say.
+
+    The numbered runner shows it as an unavailable row rather than omitting it,
+    so an operator learns *why* only one scope is on offer; the wizard that
+    replaces that runner has to keep the explanation, not just the choice.
+    """
+    app = InitWizardApp(
+        scope_options=("global",),
+        scope_paths={"global": Path("/home/.config/git-loopy/config.toml")},
+        model_choices=(_choice("model"),),
+        default_model="model",
+        default_effort="high",
+        build_skill_selection=lambda _scaffold, _scope: _skills(),
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.screen.query_one("#wizard-choices", DataTable)
+        rendered = [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+        assert any("not in a git repository" in line for line in rendered)
+        assert table.cursor_row == rendered.index(
+            next(line for line in rendered if line.startswith("global"))
+        )
+        await pilot.press("up")  # onto the unavailable row
+        await pilot.press("enter")  # a no-op, exactly as a disabled model row is
+        await pilot.pause()
+        assert app.screen.query("#wizard-choices")
+        await pilot.click("#wizard-choices", offset=(1, 1))  # the mouse refuses it too
+        await pilot.pause()
+        assert app.screen.query("#wizard-choices")
+        await pilot.press("ctrl+c")
+
+    assert app.return_value is None
+
+
+async def test_a_catalog_with_nothing_selectable_still_opens_and_cancels() -> None:
+    """A policy that disables every model leaves setup cancellable, not crashed.
+
+    The composed model Screen already refuses to select a disabled row, so the
+    degenerate catalog has to *reach* that refusal: pre-filling the wizard by
+    looking for a selectable row that does not exist must not fail before the
+    first screen is even drawn.
+    """
+    disabled = replace(_choice("model"), selectable=False, policy_state="disabled")
+    app = _app(choices=(disabled,), scope_locked=True)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app.screen.query("#picker-models")
+        await pilot.press("enter")  # a no-op on a disabled row
+        await pilot.pause()
+        assert app.screen.query("#picker-models")
+        await pilot.press("ctrl+c")
         await pilot.pause()
 
     assert app.return_value is None
@@ -504,6 +562,61 @@ async def test_review_shortcut_on_the_review_screen_does_not_stack_a_second_one(
         await pilot.press("ctrl+s")
         await pilot.pause()
         assert len(app.screen_stack) == depth
+        await pilot.press("ctrl+c")
+
+    assert app.return_value is None
+
+
+async def test_review_shortcut_replaces_the_open_step_rather_than_burying_it() -> None:
+    """The jump to review leaves the step it left, so Back can still walk back."""
+    app = _app()
+    async with app.run_test() as pilot:
+        await pilot.press("enter")  # scope -> model
+        await pilot.pause()
+        depth = len(app.screen_stack)
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert len(app.screen_stack) == depth
+        await pilot.press("ctrl+c")
+
+    assert app.return_value is None
+
+
+async def test_review_shortcut_from_the_skill_step_keeps_its_toggles() -> None:
+    """A Skill toggle is a finished answer, so jumping to review carries it."""
+    app = _app()
+    async with app.run_test() as pilot:
+        await _reach_skills(pilot)
+        await pilot.press("space")  # codebase-design, the first row by name
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        review = app.screen.query_one("#wizard-review", DataTable)
+        assert "2 enabled" in str(review.get_row_at(review.row_count - 1)[1])
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert app.return_value is not None
+    assert app.return_value.enabled_skills == ("codebase-design", "tdd")
+
+
+async def test_review_shortcut_from_a_filtered_skill_step_leaves_no_filter_behind() -> None:
+    """Only the selection travels; the search box is the Screen's own state."""
+    app = _app()
+    async with app.run_test() as pilot:
+        await _reach_skills(pilot)
+        await pilot.press("q", "u", "i")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        review = app.screen.query_one("#wizard-review", DataTable)
+        skills_row = next(
+            index
+            for index in range(review.row_count)
+            if str(review.get_row_at(index)[0]) == "skills"
+        )
+        await pilot.press(*(["down"] * skills_row), "b")
+        await pilot.pause()
+        rows = app.screen.query_one("#skill-rows", DataTable)
+        assert rows.row_count == 3
         await pilot.press("ctrl+c")
 
     assert app.return_value is None

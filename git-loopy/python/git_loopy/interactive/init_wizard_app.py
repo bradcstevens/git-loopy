@@ -36,6 +36,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Sequence
 
+from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -59,6 +60,23 @@ _CHOICES = "wizard-choices"
 _REVIEW = "wizard-review"
 _STATUS = "wizard-status"
 
+#: Every scope the scope step can *show*, in the order it shows them. The wizard
+#: is handed only the **available** ones, so — exactly as the numbered renderer
+#: does — it derives the unavailable rows from this full set rather than being
+#: told about them: a project scope that is simply missing explains nothing to an
+#: operator wondering why only one row is on offer.
+_SCOPES = ("project", "global")
+
+
+def _scope_label(scope: str, *, available: bool) -> str:
+    if scope == "project":
+        return (
+            "project (this repository)"
+            if available
+            else "project (unavailable: not in a git repository)"
+        )
+    return "global (this machine)"
+
 
 class _ChoiceScreen(Screen[object]):
     """A prefilled single-choice wizard step."""
@@ -73,12 +91,22 @@ class _ChoiceScreen(Screen[object]):
     ]
 
     def __init__(
-        self, title: str, choices: Sequence[tuple[str, str]], *, default: int = 0
+        self,
+        title: str,
+        choices: Sequence[tuple[str, str]],
+        *,
+        default: int = 0,
+        selectable: Sequence[bool] | None = None,
     ) -> None:
         super().__init__()
         self._title = title
         self._choices = tuple(choices)
         self._default = default
+        self._selectable = (
+            tuple(selectable)
+            if selectable is not None
+            else (True,) * len(self._choices)
+        )
 
     def compose(self) -> ComposeResult:
         yield Static(self._title)
@@ -88,8 +116,8 @@ class _ChoiceScreen(Screen[object]):
     def on_mount(self) -> None:
         table = self.query_one(f"#{_CHOICES}", DataTable)
         table.add_column("Choice")
-        for value, label in self._choices:
-            table.add_row(label, key=value)
+        for (value, label), selectable in zip(self._choices, self._selectable):
+            table.add_row(label if selectable else Text(label, style="dim"), key=value)
         if table.row_count:
             table.move_cursor(row=self._default)
         table.focus()
@@ -101,9 +129,7 @@ class _ChoiceScreen(Screen[object]):
         self.query_one(f"#{_CHOICES}", DataTable).action_cursor_down()
 
     def action_confirm(self) -> None:
-        table = self.query_one(f"#{_CHOICES}", DataTable)
-        if 0 <= table.cursor_row < len(self._choices):
-            self.dismiss(self._choices[table.cursor_row][0])
+        self._pick(self.query_one(f"#{_CHOICES}", DataTable).cursor_row)
 
     def action_back(self) -> None:
         self.dismiss(_BACK)
@@ -111,10 +137,21 @@ class _ChoiceScreen(Screen[object]):
     def action_cancel(self) -> None:
         self.dismiss(_CANCEL)
 
+    def _pick(self, index: int) -> None:
+        """Dismiss with the row's value; an unavailable row is a no-op.
+
+        Same rule as a policy-disabled model row in
+        :class:`~git_loopy.interactive.picker_app.ModelPickerScreen`: the row
+        stays visible because it is the only thing that explains why the choice
+        is not on offer, and selecting it does nothing. Keyboard and mouse both
+        arrive here, so the refusal cannot be reachable by only one of them.
+        """
+        if 0 <= index < len(self._choices) and self._selectable[index]:
+            self.dismiss(self._choices[index][0])
+
     @on(DataTable.RowSelected, f"#{_CHOICES}")
     def _on_selected(self, event: DataTable.RowSelected) -> None:
-        if event.row_key.value is not None:
-            self.dismiss(str(event.row_key.value))
+        self._pick(event.cursor_row)
 
 
 class _WizardModelPickerScreen(ModelPickerScreen):
@@ -291,7 +328,14 @@ class InitWizardApp(App["InitAnswers | None"]):
         index = default_cursor_index(self._model_choices, preferred=self._default_model)
         choice = self._model_choices[index]
         if not choice.selectable:
-            choice = next(option for option in self._model_choices if option.selectable)
+            # A catalog with nothing selectable is a policy that disabled every
+            # model. The composed Screen already refuses to select such a row, so
+            # the pre-fill keeps the highlighted one and lets the operator meet
+            # that refusal — rather than failing before a screen is drawn.
+            choice = next(
+                (option for option in self._model_choices if option.selectable),
+                choice,
+            )
         effort = (
             self._default_effort
             if choice.id == self._default_model
@@ -304,9 +348,27 @@ class InitWizardApp(App["InitAnswers | None"]):
         self._show_scope_or_model()
 
     def action_review(self) -> None:
-        """Reach review directly because every setup question has a default."""
+        """Reach review directly because every setup question has a default.
+
+        The open step is *replaced*, not buried: pushing review over a live step
+        would leave it mounted under a screen the operator can never return to,
+        and grow the stack on every jump.
+
+        What the departing step contributes differs by what it holds, not by
+        special pleading. A Skill toggle is already a finished answer, so the
+        Screen's own selection travels (its search box does not — that is the
+        Screen's view state, and the wizard keeps an unfiltered model exactly as
+        :meth:`_on_skills` does). The model step's answer is one decision in two
+        stages and is genuinely unfinished until the effort stage confirms, so a
+        half-made choice is left behind rather than guessed at, and the step
+        keeps the default it was pre-filled with.
+        """
         if isinstance(self.screen, _ReviewScreen):
             return
+        if isinstance(self.screen, _WizardSkillPickerScreen):
+            self._skills = replace(self.screen.selection, query="")
+        if len(self.screen_stack) > 1:
+            self.pop_screen()
         self._ensure_skills()
         self._show_review()
 
@@ -314,18 +376,18 @@ class InitWizardApp(App["InitAnswers | None"]):
         if self._scope_locked:
             self._show_model()
             return
-        choices = tuple(
-            (
-                scope,
-                "project (this repository)" if scope == "project" else "global (this machine)",
-            )
-            for scope in self._scope_options
-        )
+        choices: list[tuple[str, str]] = []
+        selectable: list[bool] = []
+        for scope in _SCOPES:
+            available = scope in self._scope_options
+            choices.append((scope, _scope_label(scope, available=available)))
+            selectable.append(available)
         self.push_screen(
             _ChoiceScreen(
                 "Configure git-loopy for which scope?",
                 choices,
-                default=self._scope_options.index(self._scope),
+                default=_SCOPES.index(self._scope),
+                selectable=selectable,
             ),
             self._on_scope,
         )
