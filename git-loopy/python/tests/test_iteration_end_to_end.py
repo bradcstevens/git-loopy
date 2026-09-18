@@ -2698,7 +2698,7 @@ def test_a_priority_issue_is_bound_ahead_of_older_ones(tmp_path, monkeypatch) ->
 
 def test_the_pickup_precedes_the_session_it_bound_for(tmp_path, monkeypatch) -> None:
     """§8: an operator replaying the stream sees the binding, then the work."""
-    _wire_multi_issue_github(
+    fake_client, _ = _wire_multi_issue_github(
         tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
     )
 
@@ -2758,7 +2758,7 @@ def test_a_pool_whose_every_candidate_is_skipped_ends_the_run_all_skipped(
     no-progress no longer charging the ceiling, an Iteration that spends no
     session could otherwise spin until the Iteration cap.
     """
-    _wire_multi_issue_github(
+    fake_client, _ = _wire_multi_issue_github(
         tmp_path,
         monkeypatch,
         [
@@ -3222,7 +3222,7 @@ def test_a_serial_binding_publishes_the_pair_it_resolved_and_why(
     instant. The trace is the audit surface: after the fact, this is what names
     the model that worked the issue and whether a label chose it.
     """
-    _wire_multi_issue_github(
+    fake_client, _ = _wire_multi_issue_github(
         tmp_path,
         monkeypatch,
         [
@@ -3240,6 +3240,7 @@ def test_a_serial_binding_publishes_the_pair_it_resolved_and_why(
                 issue_source="github",
                 max_iterations=1,
                 routing={"docs": ("gpt-5-mini", "medium")},
+                context_tier="long_context",
             )
         )
     )
@@ -3251,8 +3252,11 @@ def test_a_serial_binding_publishes_the_pair_it_resolved_and_why(
     assert bound["routing_source"] == "routed"
     assert bound["task_type_keys"] == ["docs"]
     assert bound["gate_warnings"] == []
-    assert bound["context_tier"] == "default"
+    assert bound["context_tier"] == "long_context"
     assert bound["lifecycle_position"] == "fresh"
+    assert fake_client.create_calls[0]["model"] == "gpt-5-mini"
+    assert fake_client.create_calls[0]["reasoning_effort"] == "medium"
+    assert fake_client.create_calls[0]["context_tier"] == "long_context"
 
 
 def test_an_unlabelled_binding_says_the_fallback_rather_than_staying_silent(

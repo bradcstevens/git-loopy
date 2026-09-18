@@ -40,6 +40,7 @@ old bash launcher is retired):
 * Positional ``<max-iterations>`` — ``0`` (or omitted) means unlimited.
 * ``--model ID`` — per-run model override (top of the precedence chain).
 * ``--reasoning-effort EFFORT`` — per-run reasoning-effort override.
+* ``--context-tier TIER`` — run-wide context-tier constraint.
 * ``-v`` / ``-vv`` / ``-vvv`` — verbosity ladder owned by the renderer.
 * ``--no-reasoning`` — suppresses assistant reasoning output.
 * ``--deny-tool TOOL`` — repeatable; permission-handler denylist.
@@ -60,6 +61,8 @@ Env vars:
   ``claude-opus-4.7-xhigh`` → ``xhigh``), or — on a pure default invocation
   — from the kit default, then gates it against the model's supported set (a
   model that supports no reasoning-effort configuration is sent ``None``).
+* ``GIT_LOOPY_CONTEXT_TIER`` — Root-session context tier (``default`` or
+  ``long_context``), without suppressing per-task-type routing.
 * ``GIT_LOOPY_ISSUE_SOURCE`` — ``github`` (default, GitHub issues backend) or
   ``prds`` (legacy local-markdown ``prds/<feature>/NNN-*.md`` backend).
 * ``GIT_LOOPY_MAX_NMT_STRIKES`` — strike threshold (integer ≥ 1).
@@ -91,6 +94,8 @@ from typing import TYPE_CHECKING, Callable, Collection, Literal, Mapping
 from git_loopy import settings
 from git_loopy.config import (
     DEFAULT_SEND_TIMEOUT_SECONDS,
+    CONTEXT_TIERS,
+    DEFAULT_CONTEXT_TIER,
     MODEL_REASONING_EFFORTS,
     TASK_TYPE_KEYS,
     REASONING_EFFORT_ORDER,
@@ -317,6 +322,9 @@ def build_parser() -> argparse.ArgumentParser:
             "GIT_LOOPY_MODEL suffix\n"
             "                              (e.g. "
             "claude-opus-4.7-xhigh → xhigh) then gated per model.\n"
+            "  GIT_LOOPY_CONTEXT_TIER       Root-session context tier "
+            "(default|long_context). Does not\n"
+            "                              suppress per-task-type routing.\n"
             "  GIT_LOOPY_CLASSIFIER_MODEL   Model the Task-type classifier "
             "runs on. NOT\n"
             "                              GIT_LOOPY_MODEL: unset falls back "
@@ -410,6 +418,19 @@ def build_parser() -> argparse.ArgumentParser:
             "over GIT_LOOPY_REASONING_EFFORT, config, and the default. Still "
             "gated per model: a model that supports no reasoning effort drops "
             "it." % "|".join(REASONING_EFFORT_ORDER)
+        ),
+    )
+    parser.add_argument(
+        "--context-tier",
+        dest="context_tier",
+        default=None,
+        type=str.lower,
+        choices=sorted(CONTEXT_TIERS),
+        metavar="TIER",
+        help=(
+            "Run-wide context-tier override (default|long_context). Wins over "
+            "GIT_LOOPY_CONTEXT_TIER and Config without suppressing per-task-type "
+            "static routes."
         ),
     )
     parser.add_argument(
@@ -2134,6 +2155,41 @@ def _resolve_model_and_effort(
     return gated.model, gated.effort
 
 
+def _resolve_context_tier(
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> str:
+    """Resolve the run-wide context tier without changing route selection.
+
+    The tier is a constraint on every resulting **Routing resolution**, not a
+    model/effort override. It therefore follows the scalar precedence chain but
+    deliberately stays outside ``routing_suppressed_by``.
+    """
+    flag = getattr(args, "context_tier", None)
+    if flag is not None:
+        return _validate_context_tier(flag, source="--context-tier")
+    raw = env.get("GIT_LOOPY_CONTEXT_TIER")
+    if raw is not None and raw.strip():
+        return _validate_context_tier(raw.strip(), source="GIT_LOOPY_CONTEXT_TIER")
+    for scope, table in (("project", project), ("global", global_)):
+        value = settings.table_str(table, "context_tier", scope=scope)
+        if value is not None:
+            return _validate_context_tier(value.strip(), source=f"{scope} config context_tier")
+    return DEFAULT_CONTEXT_TIER
+
+
+def _validate_context_tier(value: str, *, source: str) -> str:
+    normalized = value.lower()
+    if normalized not in CONTEXT_TIERS:
+        raise SystemExit(
+            f"git-loopy: error: {source} must be one of "
+            f"{sorted(CONTEXT_TIERS)}, got {value!r}"
+        )
+    return normalized
+
+
 @dataclasses.dataclass(frozen=True)
 class ResolvedConfig:
     """The fully-resolved Run configuration and routing provenance.
@@ -2251,6 +2307,7 @@ def resolve_config(
     if effort_flag is not None:
         effort_raw = effort_flag
     model, reasoning_effort = _resolve_model_and_effort(model_raw, effort_raw, warn=warn)
+    context_tier = _resolve_context_tier(args, env, project, global_)
     execution_host_flag = getattr(args, "execution_host", None)
     execution_host = (
         execution_host_flag
@@ -2297,6 +2354,7 @@ def resolve_config(
         execution_host=execution_host,
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
         routing=routing,
+        context_tier=context_tier,
         routing_suppressed=suppressed_by is not None,
         skill_policy=skill_policy,
         classifier_model=classifier_model,

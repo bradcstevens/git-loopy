@@ -192,7 +192,7 @@ pub struct QueueRow {
     pub premium_requests: Option<f64>,
 }
 
-/// One issue's **Routed pair** and the **Routing source** that chose it.
+/// One issue's **Routing resolution** and the **Routing source** that chose it.
 ///
 /// A `null` half is a *value*: the backend chooses. The record itself is
 /// optional, and its absence is the only "nothing is known here" — an issue no
@@ -202,6 +202,8 @@ pub struct QueueRow {
 pub struct RouteView {
     pub model: Option<String>,
     pub effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_tier: Option<String>,
     pub source: Option<String>,
 }
 
@@ -210,6 +212,7 @@ impl RouteView {
         Self {
             model: route.model.clone(),
             effort: route.effort.clone(),
+            context_tier: route.context_tier.clone(),
             source: route.source.clone(),
         }
     }

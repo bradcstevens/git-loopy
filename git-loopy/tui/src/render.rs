@@ -101,11 +101,9 @@ const QUEUE_COLUMNS: [Column; 11] = [
 
 /// The width the Route cell is laid out in.
 ///
-/// Wide enough for the pairs the family actually routes to — `claude-opus-5 @
-/// max` is the longest thing the built-in **Escalation rung** and the shipped
-/// `[routing]` table can produce — and no wider, because every column after it
-/// is one a narrower terminal gives up to pay for it.
-const ROUTE_WIDTH: u16 = 19;
+/// Wide enough for the longest shipped model/effort pair plus an explicit
+/// `long_context` tier. Narrow terminals shed lower-priority columns first.
+const ROUTE_WIDTH: u16 = 34;
 
 /// The locked Summary columns, in the locked order.
 ///
@@ -592,9 +590,10 @@ fn cost_placeholder<'a>(header: &Header, glyphs: &'a Glyphs) -> &'a str {
     }
 }
 
-/// One issue's **Routed pair**, as a cell: the pair, never the provenance.
+/// One issue's **Routing resolution**, as a cell: its settings, never provenance.
 ///
-/// `model @ effort` is the family's one spelling of a pair — the same one the
+/// `model @ effort` is the family's spelling of a pair; a non-default context tier
+/// uses a compact spelling so it remains readable in the fixed Route column. The pair is the
 /// `[routing]` table an operator writes uses, and the same one the line printer
 /// prints — so a Queue cell and a stdout line name one thing one way. The
 /// **Routing source** travels in the projection beside it and is deliberately
@@ -608,11 +607,19 @@ fn route(route: Option<&RouteView>, unknown: &str) -> String {
     let Some(route) = route else {
         return unknown.to_string();
     };
-    format!(
-        "{} @ {}",
-        route.model.clone().unwrap_or_else(|| "(backend)".into()),
-        route.effort.clone().unwrap_or_else(|| "(backend)".into()),
-    )
+    match &route.context_tier {
+        Some(context_tier) => format!(
+            "{}@{}/{}",
+            route.model.clone().unwrap_or_else(|| "(backend)".into()),
+            route.effort.clone().unwrap_or_else(|| "(backend)".into()),
+            context_tier,
+        ),
+        None => format!(
+            "{} @ {}",
+            route.model.clone().unwrap_or_else(|| "(backend)".into()),
+            route.effort.clone().unwrap_or_else(|| "(backend)".into()),
+        ),
+    }
 }
 
 /// What an empty Route cell says on this Run.

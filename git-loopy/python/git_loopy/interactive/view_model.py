@@ -157,11 +157,14 @@ def _route(route: ResolvedRoute | None) -> dict[str, Any] | None:
     """
     if route is None:
         return None
-    return {
+    projected = {
         "model": route.model,
         "effort": route.effort,
         "source": route.source,
     }
+    if route.context_tier is not None:
+        projected["context_tier"] = route.context_tier
+    return projected
 
 
 def _context_fill(

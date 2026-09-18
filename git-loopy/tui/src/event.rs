@@ -291,6 +291,9 @@ pub struct Pickup {
     /// an effort the model refuses.
     #[serde(default, deserialize_with = "reported")]
     pub effort: Option<Option<String>>,
+    /// The root-session context tier completing the **Routing resolution**.
+    #[serde(default)]
+    pub context_tier: Option<String>,
     /// Which **Routing source** chose the pair (`routed`, one of the
     /// `defaulted_*` fallbacks, or `escalated`). Spelled in full on the wire
     /// because this record's own `reason` already answers "why" about the

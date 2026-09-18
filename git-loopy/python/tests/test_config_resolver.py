@@ -147,6 +147,24 @@ def test_project_overrides_global_key_by_key() -> None:
     assert resolved.run.issue_source == "prds"
 
 
+def test_context_tier_has_its_own_precedence_and_never_suppresses_static_routes() -> None:
+    """A context-only override constrains every static route without disabling it."""
+    resolved = _resolve(
+        ["--context-tier", "long_context"],
+        env={"GIT_LOOPY_CONTEXT_TIER": "default"},
+        project={
+            "context_tier": "default",
+            "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
+        },
+        global_={"context_tier": "default"},
+        warn=lambda _message: None,
+    )
+
+    assert resolved.run.context_tier == "long_context"
+    assert dict(resolved.run.routing) == {"docs": ("gpt-5-mini", "medium")}
+    assert resolved.run.routing_suppressed is False
+
+
 # ---------------------------------------------------------------------------
 # Full precedence ladder: CLI flag > env > project > global > default.
 # ---------------------------------------------------------------------------

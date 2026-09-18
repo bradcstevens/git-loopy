@@ -376,6 +376,7 @@ class ResolvedRoute:
     model: str | None
     effort: str | None
     source: str | None
+    context_tier: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2061,16 +2062,24 @@ def _pickup_route(event: Mapping[str, Any]) -> ResolvedRoute | None:
     a value — the backend chooses — and is what makes the *presence* test, not
     the truthiness of the halves, the one that decides.
     """
-    keys = ("model", "effort", "routing_source")
+    keys = ("model", "effort", "context_tier", "routing_source")
     if not any(key in event for key in keys):
         return None
     model = event.get("model")
     effort = event.get("effort")
+    context_tier = event.get("context_tier")
     source = event.get("routing_source")
     return ResolvedRoute(
         model=model if isinstance(model, str) else None,
         effort=effort if isinstance(effort, str) else None,
         source=source if isinstance(source, str) else None,
+        # The default tier was historically implicit in Dashboard projections.
+        # An explicit non-default tier is the operator-facing constraint.
+        context_tier=(
+            context_tier
+            if isinstance(context_tier, str) and context_tier != "default"
+            else None
+        ),
     )
 
 

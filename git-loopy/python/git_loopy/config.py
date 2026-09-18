@@ -644,10 +644,9 @@ class RunConfig:
         context_tier: Root-session context tier (ADR-0017). Run-level rather than
             a ``[routing]`` entry — it does not vary by **Task type** — and gated
             per-Iteration once the routed model resolves, because its validity
-            depends on that model. Nothing configures it yet: the operator-facing
-            dial (flag, env, Config) is ADR-0017's own outstanding half, so it
-            holds :data:`DEFAULT_CONTEXT_TIER` for every Run today and the
-            resolver simply reports what it was handed.
+            depends on that model. ``--context-tier`` / ``GIT_LOOPY_CONTEXT_TIER``
+            / Config resolve it through the ordinary precedence chain, but it is
+            not a model/effort override and therefore never suppresses routing.
         routing_suppressed: ``True`` only when an explicit model or effort
             override suppressed routing run-wide. Kept on the effective config
             so the per-issue resolver can report that distinct fallback source.

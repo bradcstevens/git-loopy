@@ -50,6 +50,7 @@ from git_loopy.config import (
     RECOMMENDED_ROUTING,
     REASONING_EFFORT_ORDER,
     REASONING_EFFORTS,
+    CONTEXT_TIERS,
     SUPPORTED_MODELS,
     TASK_TYPE_KEYS,
     TASK_TYPE_LABEL_PREFIX,
@@ -111,6 +112,16 @@ def _coerce_effort(raw: str) -> str:
         raise ConfigCommandError(
             f"reasoning_effort must be one of "
             f"{', '.join(REASONING_EFFORT_ORDER)} (got {raw!r})"
+        )
+    return value
+
+
+def _coerce_context_tier(raw: str) -> str:
+    value = raw.strip().lower()
+    if value not in CONTEXT_TIERS:
+        raise ConfigCommandError(
+            f"context_tier must be one of {', '.join(sorted(CONTEXT_TIERS))} "
+            f"(got {raw!r})"
         )
     return value
 
@@ -211,6 +222,7 @@ _KEYS: dict[str, _Key] = {
     for key in (
         _Key("model", _coerce_str, lambda rc: rc.run.model),
         _Key("reasoning_effort", _coerce_effort, lambda rc: rc.run.reasoning_effort),
+        _Key("context_tier", _coerce_context_tier, lambda rc: rc.run.context_tier),
         # The **Task-type classifier**'s own pair (#377, ADR-0029). Two keys of
         # its own rather than a reuse of the run-wide pair: a classifier that
         # borrowed `model` would let the run-wide default determine the Task

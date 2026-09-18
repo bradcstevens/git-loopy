@@ -713,6 +713,7 @@ def test_parallel_lanes_open_sessions_with_per_issue_routed_model(
         model="claude-opus-4.8",
         reasoning_effort="max",
         routing={"docs": ("gpt-5-mini", "medium")},
+        context_tier="long_context",
         issue_source="github",
         max_iterations=2,
         max_nmt_strikes=3,
@@ -732,9 +733,11 @@ def test_parallel_lanes_open_sessions_with_per_issue_routed_model(
     # The routed Lane (task-type:docs) opened on the routed (model, effort)...
     assert by_dir["issue-42"]["model"] == "gpt-5-mini"
     assert by_dir["issue-42"]["reasoning_effort"] == "medium"
+    assert by_dir["issue-42"]["context_tier"] == "long_context"
     # ...while the unlabelled Lane opened on the global default.
     assert by_dir["issue-43"]["model"] == "claude-opus-4.8"
     assert by_dir["issue-43"]["reasoning_effort"] == "max"
+    assert by_dir["issue-43"]["context_tier"] == "long_context"
 
 
 def test_parallel_auto_resolution_session_reuses_lane_routed_model(

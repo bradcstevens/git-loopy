@@ -70,6 +70,7 @@ def test_registry_covers_exactly_the_persisted_schema() -> None:
     assert set(configcmd.SETTABLE_KEYS) == {
         "model",
         "reasoning_effort",
+        "context_tier",
         "classifier_model",
         "classifier_effort",
         "issue_source",
@@ -110,10 +111,13 @@ def test_coerce_enum_keys_validate_choices() -> None:
     assert configcmd.coerce_value("reasoning_effort", "MiNiMaL") == "minimal"
     assert configcmd.coerce_value("reasoning_effort", "NONE") == "none"
     assert configcmd.coerce_value("issue_source", "prds") == "prds"
+    assert configcmd.coerce_value("context_tier", "LONG_CONTEXT") == "long_context"
     with pytest.raises(configcmd.ConfigCommandError):
         configcmd.coerce_value("reasoning_effort", "ultra")
     with pytest.raises(configcmd.ConfigCommandError):
         configcmd.coerce_value("issue_source", "gitlab")
+    with pytest.raises(configcmd.ConfigCommandError):
+        configcmd.coerce_value("context_tier", "largest")
 
 
 def test_coerce_csv_keys_split_into_string_lists() -> None:

@@ -163,7 +163,7 @@ impl BilledTotal {
 }
 
 /// The **Routing resolution** one **Pickup** reached, as the Dashboard reads
-/// it: the gated pair and the **Routing source** that chose it.
+/// it: the gated pair, context tier, and **Routing source** that chose it.
 ///
 /// `model` and `effort` are nullable *values* rather than absences — a
 /// resolution that named neither is the backend being left to choose — which is
@@ -173,6 +173,7 @@ impl BilledTotal {
 pub(crate) struct ResolvedRoute {
     pub(crate) model: Option<String>,
     pub(crate) effort: Option<String>,
+    pub(crate) context_tier: Option<String>,
     pub(crate) source: Option<String>,
 }
 
@@ -183,12 +184,22 @@ impl ResolvedRoute {
     /// Runner that routes nothing emits the binding exactly as it always did
     /// and must not be read as having routed to a null pair.
     fn from_pickup(pickup: &Pickup) -> Option<Self> {
-        if pickup.model.is_none() && pickup.effort.is_none() && pickup.routing_source.is_none() {
+        if pickup.model.is_none()
+            && pickup.effort.is_none()
+            && pickup.context_tier.is_none()
+            && pickup.routing_source.is_none()
+        {
             return None;
         }
         Some(Self {
             model: pickup.model.clone().flatten(),
             effort: pickup.effort.clone().flatten(),
+            // `default` was historically implicit in the Dashboard. Retain that
+            // compact projection while making an explicit non-default tier visible.
+            context_tier: pickup
+                .context_tier
+                .clone()
+                .filter(|context_tier| context_tier != "default"),
             source: pickup.routing_source.clone(),
         })
     }

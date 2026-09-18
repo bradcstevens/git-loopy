@@ -21,9 +21,10 @@ root [`README.md`](../../README.md) for positioning, and
 
 `git-loopy` is the canonical command for the Python member. Shell, PowerShell,
 and Rust Orchestrators are planned around the same contract
-([ADR-0013](../../docs/adr/0013-multi-language-runner-family.md)). Model and
-reasoning effort are set with per-Run `--model` / `--reasoning-effort` flags or
-persisted `config.toml` values.
+([ADR-0013](../../docs/adr/0013-multi-language-runner-family.md)). Model,
+reasoning effort, and context tier are set with per-Run `--model`,
+`--reasoning-effort`, and `--context-tier` flags or persisted `config.toml`
+values.
 
 ---
 
@@ -555,6 +556,7 @@ Copilot, network access, or the TUI.
 | --------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GIT_LOOPY_MODEL`                           | `claude-opus-5`                | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `GIT_LOOPY_REASONING_EFFORT` for backward compatibility. With ModelSelectionMode enabled (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`) this value is the startup picker's pre-selected cursor and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly. |
 | `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, case-insensitive (the `--reasoning-effort` flag overrides this). Explicit `none` requests no reasoning; an omitted value lets the backend choose when no configured/default effort applies. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A model without configurable reasoning (`auto`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
+| `GIT_LOOPY_CONTEXT_TIER`                    | `default`                       | Root-session tier: `default` or `long_context`. `--context-tier` wins, then this value, project Config, global Config, and the default. It constrains every **Routing resolution**, including a legacy `[routing]` model/effort pair, but does **not** suppress per-task-type routing. |
 | `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type** and **Bump-class classifiers** run on. Each reads an unlabelled issue's own content and writes a closed `task-type:` or `semver:` label back at **Pickup** (ADR-0029, ADR-0052). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
 | `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort both classifiers run at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
@@ -572,14 +574,16 @@ Copilot, network access, or the TUI.
 | `GIT_LOOPY_MODEL_SELECT`              | unset (picker off)             | Truthy (`1`, `true`, `yes`, `on`) opts the interactive run into **ModelSelectionMode** — the one-time startup model + reasoning-effort picker. Off by default, so an ordinary interactive run goes straight to the loop on the configured model/effort with no prompt. The `--select-model` / `--no-select-model` flag **wins** over this env var when the two disagree. When requested on a non-TTY run, the run warns and falls back to the configured model. |
 
 CLI flags (`--version`, `--model ID`, `--reasoning-effort EFFORT`,
+`--context-tier TIER`,
 `-v` / `-vv` / `-vvv`,
 `--no-reasoning`, `--enable-skill` / `--disable-skill`, `--deny-tool`,
 `--deny-skill` (deprecated), `--select-model` / `--no-select-model`,
 `--issue N`)
 are the runner's only non-positional flags. `--model` / `--reasoning-effort`
 are per-run overrides at the **top** of the precedence chain (they win over
-env, project / global config, and the built-in default). See `git-loopy --help`
-for the full list.
+env, project / global config, and the built-in default). `--context-tier`
+follows that precedence for the run-wide work-tier constraint without
+suppressing a static route. See `git-loopy --help` for the full list.
 
 `--issue N` **pins** one issue for one invocation (ADR-0032): the run works
 issue `N` instead of the head of the selection order, and every other issue
@@ -618,6 +622,7 @@ lower-cased):
 ```toml
 model = "gpt-5.6-sol"
 reasoning_effort = "max"
+context_tier = "long_context"
 classifier_model = "gpt-5.4-mini"
 classifier_effort = "low"
 issue_source = "github"
@@ -631,7 +636,7 @@ deny_tools = ["bash"]
 deny_skills = []   # deprecated final guard — prefer omitting from enabled_skills
 ```
 
-The **persisted** knobs are `model`, `reasoning_effort`, `classifier_model`,
+The **persisted** knobs are `model`, `reasoning_effort`, `context_tier`, `classifier_model`,
 `classifier_effort`, `issue_source`,
 `include_prs`, `max_nmt_strikes`, `demotion_threshold`, `otel_enabled`,
 `send_timeout_seconds`, `enabled_skills`, and the two denylists. The
@@ -719,8 +724,10 @@ git-loopy config edit --global
 - **Routing takes effect in every mode.** A **Routed pair** is resolved *per
   issue* at **Pickup**, and every unit of work has a pickup: a serial Iteration
   binds one issue before its session starts exactly as a **Parallel mode**
-  **Lane** does, so the pair the Pickup resolved is the pair the session runs on
-  with one Lane (the serial fallback) and at any width. The whole chain, the
+  **Lane** does, so the model/effort pair and run-level context tier the Pickup
+  resolved are the settings the session runs on with one Lane (the serial
+  fallback) and at any width. A static `[routing]` pair inherits that tier;
+  dynamic routing is not activated by this configuration. The whole chain, the
   `measured` tier included, is live out of the box, so `get` / `list` report a
   winning tier with nothing to qualify it. Until ADR-0037 routing was scoped to
   Parallel mode and the serial loop discarded the pair it had just resolved —
@@ -749,7 +756,7 @@ git-loopy config edit --global
   set.
 
 The settable keys are exactly the [persisted knobs](#persistent-config-configtoml)
-above (`model`, `reasoning_effort`, `classifier_model`, `classifier_effort`,
+above (`model`, `reasoning_effort`, `context_tier`, `classifier_model`, `classifier_effort`,
 `issue_source`, `max_nmt_strikes`, `demotion_threshold`,
 `include_prs`, `otel_enabled`, `send_timeout_seconds`,
 `deny_tools`, `deny_skills`). Per-run-only knobs are never persisted, so they are

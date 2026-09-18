@@ -204,6 +204,35 @@ fn the_queue_band_lists_every_issue_in_the_locked_columns() {
 }
 
 #[test]
+fn the_queue_shows_an_explicit_long_context_route_in_full() {
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    let pickup = Event::from_jsonl_line(
+        r#"{"type":"wrapper.pickup.bound","issue":42,"reason":"order","model":"gpt-5-mini","effort":"medium","context_tier":"long_context","routing_source":"routed"}"#,
+    )
+    .expect("Pickup decodes");
+    state.apply(&pickup);
+    let view = project_run_view(
+        &state,
+        &ViewContext {
+            now: Timestamp::parse_rfc3339("2026-05-16T00:00:00.000Z").expect("timestamp parses"),
+            now_monotonic: None,
+            zone: Zone::from_offset_minutes(0),
+            capabilities: TerminalCapabilities::default(),
+        },
+        &IssueRef::number(42),
+    );
+
+    let lines = render_lines(&view, 200, 44, TerminalCapabilities::default());
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("gpt-5-mini@medium/long_context")),
+        "the explicit context tier must not be clipped out of the Route cell"
+    );
+}
+
+#[test]
 fn a_queue_row_shows_the_unknown_placeholder_for_every_unmeasured_cell() {
     let view = fixture_view("native-orchestrator-unavailable-capabilities");
     let lines = render_lines(&view, 160, 40, TerminalCapabilities::default());

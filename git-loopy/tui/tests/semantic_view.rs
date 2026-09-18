@@ -811,3 +811,32 @@ fn a_pickup_record_missing_its_order_still_names_the_issue() {
 
     assert_eq!(log_texts(&projected), ["Pickup: bound #7 (order)"]);
 }
+
+#[test]
+fn a_routed_pickup_projects_its_context_tier() {
+    let projected = reduce(
+        &[serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z",
+            "run_id": "r1",
+            "iter": 1,
+            "type": "wrapper.pickup.bound",
+            "issue": 7,
+            "reason": "order",
+            "model": "gpt-5-mini",
+            "effort": "medium",
+            "context_tier": "long_context",
+            "routing_source": "routed"
+        })],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(
+        projected["dashboard"]["queue"]["rows"][0]["route"],
+        serde_json::json!({
+            "model": "gpt-5-mini",
+            "effort": "medium",
+            "context_tier": "long_context",
+            "source": "routed"
+        })
+    );
+}

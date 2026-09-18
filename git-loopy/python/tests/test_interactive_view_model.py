@@ -105,3 +105,31 @@ def test_the_rate_card_is_declared_beside_cost_and_never_costs_a_figure() -> Non
     )
     assert row["credits"] == 1.5
     assert row["premium_requests"] == 2.0
+
+
+def test_a_routed_pickup_projects_its_explicit_context_tier() -> None:
+    """The Dashboard reads the same non-default tier the Pickup bound."""
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
+
+    state = LiveRunState()
+    state.render(
+        {
+            "type": "wrapper.pickup.bound",
+            "iter": 1,
+            "issue": 42,
+            "reason": "order",
+            "model": "gpt-5-mini",
+            "effort": "medium",
+            "context_tier": "long_context",
+            "routing_source": "routed",
+        }
+    )
+
+    row = project_run_view(state, None, issue=42)["dashboard"]["queue"]["rows"][0]
+    assert row["route"] == {
+        "model": "gpt-5-mini",
+        "effort": "medium",
+        "context_tier": "long_context",
+        "source": "routed",
+    }
