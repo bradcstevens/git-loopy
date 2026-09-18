@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import importlib
 import os
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -92,6 +93,26 @@ def _refuse_live_model_listing(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(model_listing, "fetch_live_models", _refuse)
+
+
+@pytest.fixture(autouse=True)
+def _declare_external_tools_for_run_tests(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve fake Run tools without relying on the developer's installed CLI."""
+    if request.path.name not in _RUN_TEST_MODULES:
+        return
+    loop = importlib.import_module("git_loopy.loop")
+    monkeypatch.setattr(
+        loop,
+        "resolve_run_environment_preflight",
+        partial(
+            loop.resolve_run_environment_preflight,
+            executable_finder=lambda name: str(tmp_path / "tools" / name),
+        ),
+    )
 
 
 @pytest.fixture(autouse=True)

@@ -420,7 +420,7 @@ function Replace-GitLoopyPackageReleaseValue {
         [string]$Path
     )
 
-    $Headers = [regex]::Matches($Content, "(?m)^\[\[package\]\]$")
+    $Headers = [regex]::Matches($Content, "(?m)^\[\[package\]\](?=\r?$)")
     $PackageSections = @()
     for ($Index = 0; $Index -lt $Headers.Count; $Index++) {
         $Start = $Headers[$Index].Index
@@ -431,7 +431,9 @@ function Replace-GitLoopyPackageReleaseValue {
             $Content.Length
         }
         $Section = $Content.Substring($Start, $End - $Start)
-        if ($Section -cmatch ('(?m)^name\s*=\s*"' + [regex]::Escape($PackageName) + '"$')) {
+        if ($Section -cmatch (
+            '(?m)^name\s*=\s*"' + [regex]::Escape($PackageName) + '"(?=\r?$)'
+        )) {
             $PackageSections += [pscustomobject]@{ Start = $Start; End = $End }
         }
     }
@@ -442,7 +444,7 @@ function Replace-GitLoopyPackageReleaseValue {
     $Section = $Content.Substring($Match.Start, $Match.End - $Match.Start)
     $Updated = Replace-GitLoopyReleaseValue `
         -Content $Section `
-        -Pattern ('^version\s*=\s*"' + [regex]::Escape($Expected) + '"$') `
+        -Pattern ('^version\s*=\s*"' + [regex]::Escape($Expected) + '"(?=\r?$)') `
         -Replacement ('version = "' + $Version + '"') `
         -Path $Path `
         -Label "$PackageName Release version"
@@ -461,13 +463,13 @@ function Replace-GitLoopyProjectReleaseValue {
         [string]$Path
     )
 
-    $Match = [regex]::Match($Content, '(?ms)^\[project\]$(.*?)(?=^\[|\z)')
+    $Match = [regex]::Match($Content, '(?ms)^\[project\](?=\r?$)(.*?)(?=^\[|\z)')
     if (-not $Match.Success) {
         throw "cannot find [project] metadata in $Path"
     }
     $Updated = Replace-GitLoopyReleaseValue `
         -Content $Match.Groups[1].Value `
-        -Pattern ('^version\s*=\s*"' + [regex]::Escape($Expected) + '"$') `
+        -Pattern ('^version\s*=\s*"' + [regex]::Escape($Expected) + '"(?=\r?$)') `
         -Replacement ('version = "' + $Version + '"') `
         -Path $Path `
         -Label "Python package Release version"
@@ -487,13 +489,13 @@ function Replace-GitLoopyTuiManifestReleaseValue {
         [string]$Path
     )
 
-    $Match = [regex]::Match($Content, '(?ms)^\[package\]$(.*?)(?=^\[|\z)')
+    $Match = [regex]::Match($Content, '(?ms)^\[package\](?=\r?$)(.*?)(?=^\[|\z)')
     if (-not $Match.Success) {
         throw "cannot find [package] metadata in $Path"
     }
     $Updated = Replace-GitLoopyReleaseValue `
         -Content $Match.Groups[1].Value `
-        -Pattern ('^version\s*=\s*"' + [regex]::Escape($Expected) + '"$') `
+        -Pattern ('^version\s*=\s*"' + [regex]::Escape($Expected) + '"(?=\r?$)') `
         -Replacement ('version = "' + $Version + '"') `
         -Path $Path `
         -Label "TUI manifest Release version"

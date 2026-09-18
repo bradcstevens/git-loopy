@@ -96,7 +96,9 @@ function New-ReleaseLineScratchRepository {
         [string]$ScratchRoot,
         [string]$Version,
         [AllowNull()]
-        [string]$ReachableStableTag
+        [string]$ReachableStableTag,
+        [ValidateSet("LF", "CRLF")]
+        [string]$LineEnding = "LF"
     )
 
     $Scratch = Join-Path $ScratchRoot ([guid]::NewGuid().Guid)
@@ -105,6 +107,11 @@ function New-ReleaseLineScratchRepository {
         $Destination = Join-Path $Scratch $Path
         [IO.Directory]::CreateDirectory((Split-Path -Parent $Destination)) | Out-Null
         [IO.File]::Copy((Join-Path $RepositoryRoot $Path), $Destination)
+        if ($LineEnding -ceq "CRLF") {
+            Set-Utf8Text `
+                -Path $Destination `
+                -Content ((Get-Utf8Text -Path $Destination) -replace '\r?\n', "`r`n")
+        }
     }
     Set-GitLoopyRepositoryReleaseVersion -RepositoryRoot $Scratch -Version $Version
     & git -C $Scratch init -q
@@ -239,6 +246,21 @@ try {
             '(?s)name = "git-loopy".*?version = "([^"]+)"'
         ).Groups[1].Value
     ) "the Python lockfile copy normalizes dev.N"
+
+    $CrLfScratch = New-ReleaseLineScratchRepository `
+        -ScratchRoot $ScratchRoot `
+        -Version "1.2.3" `
+        -ReachableStableTag "1.2.3" `
+        -LineEnding "CRLF"
+    $CrLfProject = Get-Utf8Text -Path (
+        Join-Path $CrLfScratch "git-loopy/python/pyproject.toml"
+    )
+    Assert-Equal "1.2.3" (
+        [regex]::Match($CrLfProject, '(?m)^version = "([^"]+)"').Groups[1].Value
+    ) "a CRLF Python project manifest advances its Release version"
+    Assert-Equal $false (
+        [regex]::IsMatch($CrLfProject, '(?<!\r)\n')
+    ) "a CRLF Python project manifest preserves its line endings"
 
     $SecondAdvance = Invoke-GitLoopyRepositoryReleaseLineAdvance `
         -RepositoryRoot $Scratch -Labels @("semver:minor")
