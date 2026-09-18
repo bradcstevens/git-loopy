@@ -96,15 +96,34 @@ tune the Run instructions. This installs the commands but does not configure
 their issue tracker, labels, or domain layout - that is
 [Part 2](#part-2--configure-this-repo-with-setup-git-loopy-skills).
 
-Interactive `init` also establishes the scope's **Skill policy** — the
-closed-world set of Skills a Run may expose — through the same searchable
-picker as [`git-loopy skills edit`](../git-loopy/python/README.md). It is seeded
-from an existing lower-scope git-loopy policy, or, when none exists, from a
-fresh Copilot Skill baseline; Required Skills cannot be saved disabled, and an
-enabled project Skill that is not git-tracked blocks the save. `git-loopy init
---yes` persists the **Minimal Skill policy** — exactly the Required Skills —
-without contacting the machine's Copilot inventory, which keeps a first CI setup
-reproducible. Change a saved policy later with `git-loopy skills edit`.
+Interactive `init` opens one continuous wizard that establishes the scope's
+**Skill policy** — the closed-world set of Skills a Run may expose — through the
+same searchable picker as [`git-loopy skills edit`](../git-loopy/python/README.md).
+It is seeded from an existing lower-scope git-loopy policy, or, when none
+exists, from a fresh Copilot Skill baseline; Required Skills cannot be saved
+disabled, and an enabled project Skill that is not git-tracked blocks the save.
+Change a saved policy later with `git-loopy skills edit`.
+
+#### Navigating the setup wizard
+
+Use `up` and `down` to move, `space` to toggle a Skill, and `enter` to confirm
+the current step. `esc` goes back; at the first step, where there is nowhere to
+go back to, it cancels setup. `ctrl+c` cancels outright from any step.
+
+The wizard ends on a review screen. Check the proposed scope, config path,
+model, effort, routing, scaffold, and enabled-Skill count there: nothing is
+written until you select `Save`. `Back` returns to the preceding step, and
+`Cancel` leaves the configuration unchanged.
+
+For unattended setup, run `git-loopy init --yes`. It persists the built-in
+default model and effort and the **Minimal Skill policy** — exactly the Required
+Skills — without contacting the machine's Copilot inventory, which keeps a first
+CI setup reproducible. Piping answers into `git-loopy init` is no longer
+supported; without a terminal and without `--yes`, it fails with:
+
+```text
+git-loopy: error: init requires an interactive terminal; use --yes for non-interactive setup.
+```
 
 Setup is where a policy is *established*; everything else about operating one —
 the Config surfaces, the `git-loopy skills` commands, the resolved-policy audit
