@@ -349,6 +349,266 @@ def test_uninstall_refuses_a_global_scope_that_contains_preserved_project_files(
     assert executable.exists()
 
 
+def test_uninstall_names_the_clone_the_shell_installers_launcher_leaves_behind(
+    tmp_path: Path,
+) -> None:
+    """Removing a shim is not removing the clone it execs, and must not claim so."""
+    from git_loopy import uninstallcmd
+
+    clone = tmp_path / "clone"
+    (clone / "git-loopy" / "shell").mkdir(parents=True)
+    launcher = tmp_path / ".local" / "bin" / "git-loopy"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text(
+        '#!/usr/bin/env bash\n'
+        f'exec "{clone}/git-loopy/shell/git-loopy.sh" "$@"\n',
+        encoding="utf-8",
+    )
+    commands: list[tuple[str, ...]] = []
+    output: list[str] = []
+
+    result = uninstallcmd.run_uninstall(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=launcher,
+        confirm=lambda _prompt: True,
+        channel_uninstaller=lambda command: (
+            commands.append(tuple(command)),
+            launcher.unlink(),
+        ),
+        output_fn=output.append,
+    )
+
+    report = "\n".join(output)
+    assert result == 0
+    assert commands == [("rm", "-f", str(launcher))]
+    assert not launcher.exists()
+    assert clone.exists()
+    assert "Install channel" not in report
+    assert "launcher" in report
+    assert "clone" in report
+
+
+def test_uninstall_treats_an_unprovable_lane_as_live_without_advisory_locks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Lane whose liveness cannot be read is never proven dead, as in Sweep."""
+    from git_loopy import run_control, uninstallcmd
+
+    repo = tmp_path / "repo"
+    (repo / ".git-loopy" / "logs").mkdir(parents=True)
+    lane = tmp_path / "repo.worktrees" / "RUNLIVE" / "issue-529"
+    lane.mkdir(parents=True)
+
+    class Git:
+        def list_worktrees(self) -> list[object]:
+            from git_loopy.git import Worktree
+
+            return [Worktree(repo, "main"), Worktree(lane, "git-loopy/RUNLIVE/issue-529")]
+
+    monkeypatch.setattr(run_control, "_fcntl", None)
+    monkeypatch.setattr(uninstallcmd, "SubprocessGitClient", lambda _root: Git())
+
+    with pytest.raises(OSError):
+        uninstallcmd.find_live_lanes(repo)
+
+
+def test_uninstall_removes_nothing_when_the_plan_is_declined(tmp_path: Path) -> None:
+    """Listing a plan is not performing it; declining leaves every path alone."""
+    from git_loopy import uninstallcmd
+
+    env, executable = _uv_tool_executable(tmp_path)
+    config_home = Path(env["XDG_CONFIG_HOME"]) / "git-loopy"
+    catalog = config_home / "skills"
+    catalog.mkdir(parents=True)
+    record = config_home / "skill-catalog.json"
+    record.write_text("{}\n", encoding="utf-8")
+    output: list[str] = []
+
+    result = uninstallcmd.run_uninstall(
+        env=env,
+        executable_path=executable,
+        confirm=lambda _prompt: False,
+        channel_uninstaller=lambda _command: (_ for _ in ()).throw(
+            AssertionError("a declined plan must not remove the executable")
+        ),
+        output_fn=output.append,
+    )
+
+    assert result == 1
+    assert executable.exists()
+    assert catalog.exists()
+    assert record.exists()
+    report = "\n".join(output)
+    assert str(record) in report
+    assert "the removal plan was not confirmed" in report
+
+
+def test_uninstall_without_a_way_to_confirm_removes_nothing(tmp_path: Path) -> None:
+    """A non-terminal invocation has nobody to confirm to, so it changes nothing."""
+    from git_loopy import uninstallcmd
+
+    env, executable = _uv_tool_executable(tmp_path)
+    config_home = Path(env["XDG_CONFIG_HOME"]) / "git-loopy"
+    config_home.mkdir(parents=True)
+    output: list[str] = []
+
+    result = uninstallcmd.run_uninstall(
+        env=env,
+        executable_path=executable,
+        channel_uninstaller=lambda _command: (_ for _ in ()).throw(
+            AssertionError("an unconfirmable plan must not remove the executable")
+        ),
+        output_fn=output.append,
+    )
+
+    assert result == 1
+    assert executable.exists()
+    assert config_home.exists()
+    assert "needs confirmation" in "\n".join(output)
+
+
+def test_uninstall_refuses_a_config_home_that_is_itself_a_symlink(
+    tmp_path: Path,
+) -> None:
+    """Unlinking a redirected scope would orphan the tree it stands for."""
+    from git_loopy import uninstallcmd
+
+    env, executable = _uv_tool_executable(tmp_path)
+    target = tmp_path / "dotfiles" / "git-loopy"
+    (target / "skills").mkdir(parents=True)
+    (target / "skills" / "SKILL.md").touch()
+    (target / "skill-catalog.json").write_text("{}\n", encoding="utf-8")
+    (target / "config.toml").touch()
+    base = Path(env["XDG_CONFIG_HOME"])
+    base.mkdir(parents=True)
+    link = base / "git-loopy"
+    link.symlink_to(target, target_is_directory=True)
+    output: list[str] = []
+
+    result = uninstallcmd.run_uninstall(
+        env=env,
+        executable_path=executable,
+        confirm=lambda _prompt: (_ for _ in ()).throw(
+            AssertionError("a redirected scope must not reach confirmation")
+        ),
+        channel_uninstaller=lambda _command: (_ for _ in ()).throw(
+            AssertionError("a redirected scope must not remove the executable")
+        ),
+        output_fn=output.append,
+    )
+
+    assert result == 1
+    assert link.is_symlink()
+    assert (target / "skills" / "SKILL.md").exists()
+    assert (target / "skill-catalog.json").exists()
+    assert (target / "config.toml").exists()
+    assert executable.exists()
+    assert str(target) in "\n".join(output)
+
+
+def test_uninstall_removes_a_config_home_reached_through_a_symlinked_ancestor(
+    tmp_path: Path,
+) -> None:
+    """An operator who symlinks their own config base still owns what is under it."""
+    from git_loopy import uninstallcmd
+
+    real_base = tmp_path / "dotfiles" / "config"
+    real_base.mkdir(parents=True)
+    linked_base = tmp_path / "linked-config"
+    linked_base.symlink_to(real_base, target_is_directory=True)
+    config_home = real_base / "git-loopy"
+    config_home.mkdir()
+    (config_home / "config.toml").touch()
+
+    executable = tmp_path / "uv" / "tools" / "git-loopy" / "bin" / "git-loopy"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    output: list[str] = []
+
+    result = uninstallcmd.run_uninstall(
+        env={
+            "UV_TOOL_DIR": str(tmp_path / "uv" / "tools"),
+            "XDG_CONFIG_HOME": str(linked_base),
+        },
+        executable_path=executable,
+        confirm=lambda _prompt: True,
+        channel_uninstaller=lambda _command: executable.unlink(),
+        output_fn=output.append,
+    )
+
+    assert result == 0
+    assert not config_home.exists()
+    assert real_base.exists()
+
+
+def test_uninstall_refuses_a_global_scope_inside_a_repository_holding_no_assets(
+    tmp_path: Path,
+) -> None:
+    """Repository contents are protected by the repository, not by a sentinel."""
+    from git_loopy import uninstallcmd
+
+    env, executable = _uv_tool_executable(tmp_path)
+    repo = tmp_path / "repo"
+    tracked = repo / "git-loopy" / "python" / "cli.py"
+    tracked.parent.mkdir(parents=True)
+    tracked.write_text("tracked source\n", encoding="utf-8")
+
+    output: list[str] = []
+    result = uninstallcmd.run_uninstall(
+        env={**env, "XDG_CONFIG_HOME": str(repo)},
+        executable_path=executable,
+        repo_root=repo,
+        confirm=lambda _prompt: (_ for _ in ()).throw(
+            AssertionError("a scope inside a repository must not reach confirmation")
+        ),
+        channel_uninstaller=lambda _command: (_ for _ in ()).throw(
+            AssertionError("a scope inside a repository must not remove the executable")
+        ),
+        live_lanes=lambda _root: (),
+        output_fn=output.append,
+    )
+
+    assert result == 1
+    assert tracked.exists()
+    assert executable.exists()
+    assert str(repo) in "\n".join(output)
+
+
+def test_uninstall_all_refuses_a_global_scope_inside_a_repository(
+    tmp_path: Path,
+) -> None:
+    """``--all`` opts into three named paths, never their enclosing directory."""
+    from git_loopy import uninstallcmd
+
+    env, executable = _uv_tool_executable(tmp_path)
+    repo = tmp_path / "repo"
+    project_scope = repo / "git-loopy"
+    tracked = project_scope / "python" / "cli.py"
+    tracked.parent.mkdir(parents=True)
+    tracked.write_text("tracked source\n", encoding="utf-8")
+    (project_scope / "config.toml").touch()
+    (project_scope / "PROMPT.md").touch()
+
+    result = uninstallcmd.run_uninstall(
+        env={**env, "XDG_CONFIG_HOME": str(repo)},
+        executable_path=executable,
+        repo_root=repo,
+        all_=True,
+        confirm=lambda _prompt: (_ for _ in ()).throw(
+            AssertionError("--all must not widen past the paths it names")
+        ),
+        channel_uninstaller=lambda _command: (_ for _ in ()).throw(
+            AssertionError("--all must not remove the executable here")
+        ),
+        live_lanes=lambda _root: (),
+    )
+
+    assert result == 1
+    assert tracked.exists()
+    assert (project_scope / "config.toml").exists()
+    assert executable.exists()
+
+
 def test_uninstall_all_refuses_without_a_repository(tmp_path: Path) -> None:
     """An explicit request to reach project scope cannot silently omit it."""
     from git_loopy import uninstallcmd

@@ -24,11 +24,31 @@ _WINDOWS_COMMAND_CHARACTERS = frozenset("&|<>()%^!\"")
 
 
 @dataclass(frozen=True)
+class _ChannelRemoval:
+    """How one proven **Install channel**'s artifact comes off this machine.
+
+    ``residue`` names what the removal deliberately does *not* reach, so an
+    exit code never implies more was removed than was.
+    """
+
+    command: tuple[str, ...]
+    describes: str
+    residue: str = ""
+
+
+@dataclass(frozen=True)
 class _Removal:
-    """One filesystem path this command owns and may remove."""
+    """One filesystem path this command owns and may remove.
+
+    ``resolved`` is where the path landed when the plan was *printed*.  It is
+    recorded rather than recomputed because a removal is only entitled to run
+    against the filesystem the operator confirmed: a link swapped in afterwards
+    redirects the same spelling somewhere they never saw.
+    """
 
     description: str
     path: Path
+    resolved: Path
 
 
 def run_uninstall(
@@ -66,36 +86,17 @@ def run_uninstall(
         env=environ, executable_path=executable
     )
     command = _uninstall_command(inventory)
-    removals = _machine_removals(environ)
-    if all_ and repo_root is not None:
-        removals.extend(_project_removals(repo_root))
-    unsafe = next((removal for removal in removals if _has_symlink_ancestor(removal)), None)
-    if unsafe is not None:
-        output_fn(
-            f"Left git-loopy unchanged: {unsafe.path} passes through a symbolic link, "
-            "so it is not a removable installation path."
-        )
-        return 1
-    protected = _preserved_paths(
+    machine = _machine_removals(environ)
+    project = _project_removals(repo_root) if all_ and repo_root is not None else []
+    removals = machine + project
+    refusal = _unremovable(
+        machine=machine,
+        project=project,
         repo_root=repo_root,
-        all_=all_,
         executable=Path(inventory.executable),
     )
-    overlap = next(
-        (
-            (removal, path)
-            for removal in removals
-            for path in protected
-            if _would_remove(removal.path, path)
-        ),
-        None,
-    )
-    if overlap is not None:
-        removal, path = overlap
-        output_fn(
-            f"Left git-loopy unchanged: removing {removal.path} would also remove "
-            f"the preserved path {path}."
-        )
+    if refusal is not None:
+        output_fn(f"Left git-loopy unchanged: {refusal}")
         return 1
 
     if command is None:
@@ -115,10 +116,9 @@ def run_uninstall(
                 "git-loopy will not render a command for it."
             )
     else:
-        output_fn(
-            f"Will remove executable through the {inventory.install_channel.name} "
-            f"Install channel: {inventory.executable}"
-        )
+        output_fn(command.describes)
+        if command.residue:
+            output_fn(command.residue)
     for removal in removals:
         output_fn(f"Will remove {removal.description}: {removal.path}")
     if repo_root is not None and not all_:
@@ -133,11 +133,11 @@ def run_uninstall(
         return 1
     if repo_root is not None and _refuse_live_lanes(repo_root, lane_probe, output_fn):
         return 1
-    unsafe = next((removal for removal in removals if _has_symlink_ancestor(removal)), None)
-    if unsafe is not None:
+    moved = next((removal for removal in removals if _has_moved(removal)), None)
+    if moved is not None:
         output_fn(
-            f"Left git-loopy unchanged: {unsafe.path} changed to pass through a "
-            "symbolic link after confirmation."
+            f"Left git-loopy unchanged: {moved.path} no longer resolves to "
+            f"{moved.resolved}, so the confirmed plan is not the one that would run."
         )
         return 1
 
@@ -145,8 +145,9 @@ def run_uninstall(
         with hold_uninstall_lock(repo_root) as locked:
             if not locked:
                 output_fn(
-                    "Left git-loopy unchanged: a Run started during confirmation. "
-                    "Run `git-loopy sweep` after it has stopped."
+                    "Left git-loopy unchanged: could not take this repository's "
+                    "lifecycle lock, so a Run may have started during "
+                    "confirmation. Run `git-loopy sweep` after it has stopped."
                 )
                 return 1
             if _refuse_live_lanes(repo_root, lane_probe, output_fn):
@@ -167,7 +168,7 @@ def run_uninstall(
 
 def _remove_confirmed_plan(
     *,
-    command: Sequence[str] | None,
+    command: _ChannelRemoval | None,
     removals: Sequence[_Removal],
     channel_uninstaller: Callable[[Sequence[str]], None] | None,
     output_fn: Callable[[str], None],
@@ -176,7 +177,7 @@ def _remove_confirmed_plan(
     succeeded = True
     if command is not None:
         try:
-            (channel_uninstaller or _run_channel_uninstaller)(command)
+            (channel_uninstaller or _run_channel_uninstaller)(command.command)
         except (OSError, subprocess.CalledProcessError) as exc:
             output_fn(f"Could not remove the executable through its Install channel: {exc}")
             succeeded = False
@@ -185,8 +186,8 @@ def _remove_confirmed_plan(
 
     for removal in removals:
         try:
-            if _has_symlink_ancestor(removal):
-                raise OSError("path changed to pass through a symbolic link")
+            if _has_moved(removal):
+                raise OSError(f"path no longer resolves to {removal.resolved}")
             _remove_path(removal.path)
         except OSError as exc:
             output_fn(f"Could not remove {removal.description} ({removal.path}): {exc}")
@@ -195,7 +196,16 @@ def _remove_confirmed_plan(
 
 
 def find_live_lanes(repo_root: Path) -> tuple[Path, ...]:
-    """Return the clone's reserved worktrees whose owning Run still holds a lock."""
+    """Return the clone's reserved worktrees whose owning Run still holds a lock.
+
+    Liveness composes exactly as a Sweep's does (:func:`git_loopy.sweep`): any
+    locked artifact means live, any *unreadable* answer means unknown, and only
+    the complete absence of both proves the Run dead.  An absent artifact is
+    therefore probed rather than skipped, so a host without advisory locks keeps
+    its explicit unknown instead of silently reading every Lane as collectable —
+    uninstall removes strictly more than a sweep does and must be at least as
+    pessimistic.
+    """
     git = SubprocessGitClient(repo_root)
     worktrees = git.list_worktrees()
     control_dirs = tuple(worktree.path / ".git-loopy" / "logs" for worktree in worktrees)
@@ -206,15 +216,34 @@ def find_live_lanes(repo_root: Path) -> tuple[Path, ...]:
             continue
         run_id = match["run_id"]
         states = [
-            is_run_alive(control)
+            state
             for control_dir in control_dirs
-            for control in control_dir.glob(f"*-{run_id}.control")
+            for state in _control_states(control_dir, run_id)
         ]
         if any(state is True for state in states):
             live.append(worktree.path)
         elif any(state is None for state in states):
             raise OSError(f"Lane liveness is unavailable for {worktree.path}")
     return tuple(live)
+
+
+def _control_states(control_dir: Path, run_id: str) -> list[bool | None]:
+    """Read every liveness answer one directory holds for one Run."""
+    try:
+        matches = sorted(control_dir.glob(f"*-{run_id}.control"))
+    except OSError:
+        return [None]
+    if not matches:
+        matches = [control_dir / f"{run_id}.control"]
+    return [_liveness(path) for path in matches]
+
+
+def _liveness(control_path: Path) -> bool | None:
+    """Read one control artifact, treating an unreadable one as unknown."""
+    try:
+        return is_run_alive(control_path)
+    except OSError:
+        return None
 
 
 def _refuse_live_lanes(
@@ -243,30 +272,117 @@ def _refuse_live_lanes(
     return True
 
 
-def _uninstall_command(inventory: installation.Installation) -> tuple[str, ...] | None:
-    """Name the sole package manager command proven to own this executable."""
+def _uninstall_command(inventory: installation.Installation) -> _ChannelRemoval | None:
+    """Name what may remove this executable, and what that deliberately leaves.
+
+    A package manager owns its artifact end to end, so removing it through the
+    channel is the whole story.  The shell installer's launcher is not: it is a
+    two-line shim that ``exec``s a clone the operator owns (ADR-0054), and the
+    clone is theirs — so this removes exactly the shim, says so rather than
+    naming a channel that is not involved, and reports the residue instead of
+    letting an exit code imply it is gone.
+    """
     if not inventory.install_channel.proven:
         return None
-    commands = {
-        "uv-tool": ("uv", "tool", "uninstall", "git-loopy"),
-        "homebrew": ("brew", "uninstall", "git-loopy"),
-        "installer-launcher": ("rm", "-f", inventory.executable),
+    removals = {
+        "uv-tool": _ChannelRemoval(
+            command=("uv", "tool", "uninstall", "git-loopy"),
+            describes=(
+                "Will remove executable through the uv-tool Install channel: "
+                f"{inventory.executable}"
+            ),
+        ),
+        "homebrew": _ChannelRemoval(
+            command=("brew", "uninstall", "git-loopy"),
+            describes=(
+                "Will remove executable through the homebrew Install channel: "
+                f"{inventory.executable}"
+            ),
+        ),
+        "installer-launcher": _ChannelRemoval(
+            command=("rm", "-f", inventory.executable),
+            describes=(
+                "Will remove the launcher the shell installer placed: "
+                f"{inventory.executable}"
+            ),
+            residue=(
+                "Will keep the clone that launcher execs: it is yours, and "
+                "removing it is not something uninstall will do over your work."
+            ),
+        ),
     }
-    return commands.get(inventory.install_channel.name)
+    return removals.get(inventory.install_channel.name)
 
 
-def _preserved_paths(
+def _unremovable(
     *,
+    machine: Sequence[_Removal],
+    project: Sequence[_Removal],
     repo_root: Path | None,
-    all_: bool,
     executable: Path,
-) -> tuple[Path, ...]:
-    """Name present paths this invocation must not remove through a parent."""
-    preserved = [] if repo_root is None or all_ else [
-        removal.path for removal in _project_removals(repo_root)
-    ]
-    preserved.append(executable)
-    return tuple(preserved)
+) -> str | None:
+    """Name the first planned path this command has no standing to remove.
+
+    Four rules, each a sentence of ADR-0054 rather than a filesystem heuristic.
+    A **machine** removal that encloses the repository, or sits inside it, is
+    editing a repository's contents whatever it is called — and ``--all`` widens
+    the plan to three named project paths, never to the directory holding them.
+    A **project** removal that lands outside the repository is not that
+    repository's project scope.  A planned path that is a link standing in for a
+    directory is nobody's to resolve (:func:`_redirects_a_tree`).  And nothing
+    may take the executable out through a parent, because only a proven
+    **Install channel** removes that.
+    """
+    if repo_root is not None:
+        root = _resolved(repo_root)
+        for removal in machine:
+            if _encloses(removal.resolved, root):
+                return (
+                    f"removing the {removal.description} {removal.path} would "
+                    f"also remove {repo_root}; uninstall never edits a "
+                    "repository's contents."
+                )
+            if _encloses(root, removal.resolved):
+                return (
+                    f"the {removal.description} {removal.path} is inside "
+                    f"{repo_root}; uninstall never edits a repository's "
+                    "contents, so this scope must be removed by hand."
+                )
+        for removal in project:
+            if not _encloses(root, removal.resolved):
+                return (
+                    f"{removal.path} resolves to {removal.resolved}, outside "
+                    f"{repo_root}, so it is not this repository's project scope."
+                )
+    for removal in (*machine, *project):
+        if _redirects_a_tree(removal):
+            return (
+                f"the {removal.description} {removal.path} is a symbolic link "
+                f"to {removal.resolved}. Removing the link would orphan that "
+                "directory and following it would delete outside this plan, so "
+                "remove it yourself."
+            )
+    target = _resolved(executable)
+    for removal in (*machine, *project):
+        if _encloses(removal.resolved, target):
+            return (
+                f"removing {removal.path} would also remove the executable "
+                f"{executable}."
+            )
+    return None
+
+
+def _redirects_a_tree(removal: _Removal) -> bool:
+    """Whether a planned path is a link standing in for a directory elsewhere.
+
+    Neither answer available to :func:`_remove_path` is an uninstall here.
+    Unlinking leaves the directory the link stood for — the very state this
+    command reports as removed — while following the link deletes a tree the
+    printed plan never named, in a location that is frequently the operator's
+    own dotfiles repository.  A link to a *file* has no such asymmetry: the
+    link is the whole artifact at that location.
+    """
+    return removal.path.is_symlink() and removal.path.is_dir()
 
 
 def _unproven_uninstall_instruction(path: Path, *, windows: bool) -> str | None:
@@ -286,30 +402,38 @@ def _machine_removals(env: Mapping[str, str]) -> list[_Removal]:
     """Plan paths in child-first order before their enclosing config home."""
     scope = global_dir(env)
     candidates = (
-        _Removal(
-            "installed Skill catalog", skill_install.installed_catalog_dir(env)
-        ),
-        _Removal(
+        _plan("installed Skill catalog", skill_install.installed_catalog_dir(env)),
+        _plan(
             "installed Skill catalog record",
             skill_install.install_record_path(env),
         ),
         *(
-            _Removal("TUI helper", path)
+            _plan("TUI helper", path)
             for path in tui_release.machine_local_helper_paths(env)
         ),
-        _Removal("global config-home", scope),
+        _plan("global config-home", scope),
     )
-    return [removal for removal in candidates if removal.path.exists() or removal.path.is_symlink()]
+    return [removal for removal in candidates if _present(removal.path)]
 
 
 def _project_removals(repo_root: Path) -> list[_Removal]:
     """Plan only the two tracked project assets and the Run logs."""
     candidates = (
-        _Removal("project Config", repo_root / "git-loopy" / "config.toml"),
-        _Removal("project PROMPT.md", repo_root / "git-loopy" / "PROMPT.md"),
-        _Removal("Run logs", repo_root / ".git-loopy" / "logs"),
+        _plan("project Config", repo_root / "git-loopy" / "config.toml"),
+        _plan("project PROMPT.md", repo_root / "git-loopy" / "PROMPT.md"),
+        _plan("Run logs", repo_root / ".git-loopy" / "logs"),
     )
-    return [removal for removal in candidates if removal.path.exists() or removal.path.is_symlink()]
+    return [removal for removal in candidates if _present(removal.path)]
+
+
+def _plan(description: str, path: Path) -> _Removal:
+    """Record one planned path together with where it resolves right now."""
+    return _Removal(description=description, path=path, resolved=_resolved(path))
+
+
+def _present(path: Path) -> bool:
+    """Whether a planned path is there to remove, a broken link included."""
+    return path.exists() or path.is_symlink()
 
 
 def _report_preserved_project_scope(
@@ -325,24 +449,27 @@ def _run_channel_uninstaller(command: Sequence[str]) -> None:
     subprocess.run(list(command), check=True)
 
 
-def _has_symlink_ancestor(removal: _Removal) -> bool:
-    """Reject a planned path that resolves through a symbolic-link ancestor."""
-    path = Path(os.path.abspath(removal.path))
-    while True:
-        if path.is_symlink():
-            return True
-        if path.parent == path:
-            return False
-        path = path.parent
+def _has_moved(removal: _Removal) -> bool:
+    """Whether a planned path stopped landing where the printed plan said."""
+    return _resolved(removal.path) != removal.resolved
 
 
-def _would_remove(removal: Path, protected: Path) -> bool:
-    """Whether recursive removal of ``removal`` would include ``protected``."""
+def _resolved(path: Path) -> Path:
+    """Where a path actually lands, following every link on the way to it.
+
+    Resolution is deliberately total: an unreadable link is a path whose
+    destination is unknown, which the caller must be able to compare and refuse
+    rather than crash on.
+    """
     try:
-        protected.resolve().relative_to(removal.resolve())
-    except ValueError:
-        return False
-    return True
+        return path.resolve()
+    except OSError:
+        return Path(os.path.abspath(path))
+
+
+def _encloses(parent: Path, child: Path) -> bool:
+    """Whether recursive removal of ``parent`` would include ``child``."""
+    return child == parent or parent in child.parents
 
 
 def _remove_path(path: Path) -> None:

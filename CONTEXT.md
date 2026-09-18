@@ -677,6 +677,14 @@ Replacing the installed distribution with a different **Release version** throug
 channel**, then running **update**. Moves exactly one artifact: the one it is itself running from.
 _Avoid_: update, self-update, install.
 
+**uninstall (subcommand)**:
+Removing the machine-local state one installation owns — the executable through its proven
+**Install channel**, the global **scope**, the **installed catalog** and its record, and the TUI
+helper — after listing the whole plan and having it confirmed. Never edits a repository's contents:
+tracked **project scope** and the Run logs are reported and kept, and reached only by `--all`. A
+live **Lane** refuses the operation outright rather than collecting it (ADR-0054).
+_Avoid_: remove, clean, purge; sweep (that is reclaiming a *dead* Run's residue).
+
 **Edge install**:
 An installation sitting on an unreleased commit rather than a published **Release version**, where
 the version the distribution reports is not an identity. Reached only by explicit opt-in, and always

@@ -335,13 +335,27 @@ When run in a repository, the default also reports the project `config.toml`,
 explicit opt-in to remove those repository-owned paths and therefore requires a
 repository. A live **Lane** refuses the entire operation before confirmation and
 points at `git-loopy sweep`; uncommitted agent work is never treated as removal
-residue.
+residue, and a Lane whose liveness cannot be read counts as live.
+
+`--all` widens the plan to those three named paths and no further. Whatever the
+flag, `uninstall` refuses outright rather than removing a machine-local path that
+encloses your repository or sits inside it — a config-home configured under a
+checkout does not make that checkout git-loopy's to delete — and refuses a project
+path that resolves outside the repository. A path that is itself a symbolic link
+to a directory is refused too: unlinking it would orphan the tree it stands for
+and following it would delete somewhere the plan never named. Anything that stops
+resolving where the printed plan said it did, between the plan and your answer,
+refuses as well.
 
 If the executable's Install channel cannot be proven, `uninstall` leaves that
 executable in place, prints the exact manual removal command, and still removes
 the machine-local state it can prove belongs to git-loopy. It exits non-zero so
-automation cannot mistake that partial result for a complete uninstall. The
-command never writes to the tracker.
+automation cannot mistake that partial result for a complete uninstall.
+
+The shell installer's launcher is a shim that `exec`s a clone you own, so removing
+it is reported as removing the launcher — not as a channel uninstall — and the
+clone it pointed at is reported as deliberately kept. The command never writes to
+the tracker.
 
 ---
 

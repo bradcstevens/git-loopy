@@ -168,6 +168,13 @@ cannot pin to one Release, changes nothing and prints the exact command instead
 — see
 [moving between Releases](git-loopy/python/README.md#moving-between-releases-git-loopy-upgrade).
 
+`git-loopy uninstall` takes the same installation back off the machine through
+the same proven channel, together with the global config-home, the installed
+Skill catalog and the TUI helper. It prints the whole plan and waits for you to
+confirm it. Your repositories are never edited: tracked project files and Run
+logs are reported and kept unless you ask for them with `--all` — see
+[removing an installation](git-loopy/python/README.md#removing-a-machine-local-installation-git-loopy-uninstall).
+
 ## The skills and their purpose
 
 These skills are small, composable disciplines rather than one monolithic

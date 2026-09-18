@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import errno
 import os
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,19 @@ __all__ = [
     "hold_uninstall_lock",
     "is_run_alive",
 ]
+
+#: How long a starting Run offers to wait for an uninstall to finish before it
+#: gives up on the lifecycle lock and starts anyway. Short, because a Run that
+#: prints nothing is the failure this bound exists to prevent.
+_RUN_LOCK_TIMEOUT_SECONDS = 2.0
+_RUN_LOCK_POLL_SECONDS = 0.05
+
+#: Errnos that mean this filesystem cannot hold a directory lock at all, rather
+#: than that somebody else is holding one. ``ENOTSUP`` is ``EOPNOTSUPP`` on most
+#: platforms and is listed defensively for the ones where it is not.
+_UNSUPPORTED_LOCK_ERRNOS = frozenset(
+    {errno.ENOLCK, errno.EOPNOTSUPP, errno.ENOTSUP, errno.EINVAL, errno.ENOSYS}
+)
 
 
 def advisory_locking_available() -> bool:
@@ -121,20 +135,25 @@ def hold_uninstall_lock(repo_root: Path) -> Iterator[bool]:
     """Prevent a Run from becoming live while uninstall removes its state.
 
     A directory descriptor gives the Run and uninstall one advisory-lock target
-    without writing another untracked file into the consuming repository.
+    without writing another untracked file into the consuming repository.  Every
+    way of failing to *take* that lock yields ``False`` rather than raising:
+    uninstall answers an unavailable lock by refusing, and a caller cannot refuse
+    on behalf of a traceback.
     """
     if _fcntl is None:
         yield True
         return
-    fd = os.open(repo_root, os.O_RDONLY)
+    try:
+        fd = os.open(repo_root, os.O_RDONLY)
+    except OSError:
+        yield False
+        return
     acquired = False
     try:
         try:
             _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
         except OSError as exc:
-            if exc.errno not in {errno.EACCES, errno.EAGAIN}:
-                raise
-            yield False
+            yield _locks_unsupported(exc)
             return
         acquired = True
         yield True
@@ -144,20 +163,59 @@ def hold_uninstall_lock(repo_root: Path) -> Iterator[bool]:
         os.close(fd)
 
 
+def _locks_unsupported(exc: OSError) -> bool:
+    """Whether this failure says the *mechanism* is absent, not that it is held.
+
+    A host with no ``flock`` at all proceeds uncoordinated, so a mount whose
+    ``flock`` cannot work must proceed the same way.  Reporting it as contention
+    would refuse every uninstall in that repository forever, and send the
+    operator to a `git-loopy sweep` that can never clear it.
+    """
+    return exc.errno in _UNSUPPORTED_LOCK_ERRNOS
+
+
 def _hold_run_lock(trace_path: Path) -> int | None:
-    """Hold the repository's shared lifecycle lock for a normal Run."""
+    """Hold the repository's shared lifecycle lock for a normal Run.
+
+    The lock exists so ``uninstall`` can see a Run that is starting, which makes
+    it coordination a Run *offers* rather than one it depends on.  So every way
+    of not getting it — a root that cannot be opened, a filesystem with no
+    directory locks, or an uninstall currently holding it exclusively — answers
+    "no lock held" instead of propagating.  Failing a Run's start for any of
+    those would trade a rare coordination gap for an outage on the one path
+    every Run takes, and a Run wedged behind a package manager with no output
+    would be worse still.
+    """
     if _fcntl is None:
         return None
     root = _repository_root_for_trace(trace_path)
     if root is None:
         return None
-    fd = os.open(root, os.O_RDONLY)
     try:
-        _fcntl.flock(fd, _fcntl.LOCK_SH)
+        fd = os.open(root, os.O_RDONLY)
     except OSError:
-        os.close(fd)
-        raise
-    return fd
+        return None
+    if _flock_shared(fd):
+        return fd
+    os.close(fd)
+    return None
+
+
+def _flock_shared(fd: int) -> bool:
+    """Take a shared lock without ever waiting on an exclusive holder forever."""
+    assert _fcntl is not None
+    deadline = time.monotonic() + _RUN_LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            _fcntl.flock(fd, _fcntl.LOCK_SH | _fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                return False
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(_RUN_LOCK_POLL_SECONDS)
+            continue
+        return True
 
 
 def _release_repository_lock(fd: int | None) -> None:

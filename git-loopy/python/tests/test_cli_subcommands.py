@@ -201,6 +201,50 @@ def test_uninstall_is_a_machine_command_with_an_explicit_all_opt_in(
     assert captured[0]["confirm"]("ignored") is True
 
 
+@pytest.mark.parametrize("interactive", [True, False])
+def test_uninstall_only_offers_a_prompt_where_there_is_somebody_to_answer_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, interactive: bool
+) -> None:
+    """Without `--yes`, a terminal gets the prompt and a pipe gets no confirmer."""
+    from git_loopy import uninstallcmd
+
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli_module.sys.stdin, "isatty", lambda: interactive)
+    monkeypatch.setattr(
+        uninstallcmd, "run_uninstall", lambda **kwargs: captured.append(kwargs) or 0
+    )
+
+    assert cli_module.main(["uninstall"]) == 0
+    confirm = captured[0]["confirm"]
+    if interactive:
+        from git_loopy.calibration_run import interactive_confirm
+
+        assert confirm is interactive_confirm
+    else:
+        assert confirm is None
+
+
+def test_uninstall_runs_without_a_repository_at_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Uninstall is machine-local, so no repository is a plan, not a refusal."""
+    from git_loopy import uninstallcmd
+
+    captured: list[dict[str, object]] = []
+
+    def no_repo() -> Path:
+        raise RuntimeError("not a git repository")
+
+    monkeypatch.setattr(cli_module, "resolve_repo_root", no_repo)
+    monkeypatch.setattr(
+        uninstallcmd, "run_uninstall", lambda **kwargs: captured.append(kwargs) or 0
+    )
+
+    assert cli_module.main(["uninstall", "--yes"]) == 0
+    assert captured[0]["repo_root"] is None
+
+
 def test_subcommand_parser_parses_the_edge_opt_in_under_either_spelling() -> None:
     """One flag, two spellings: naming the ref *is* the opt-in to unreleased code."""
     parser = cli_module.build_subcommand_parser()

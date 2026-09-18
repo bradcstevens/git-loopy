@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import pytest
 from git_loopy.run_control import (
     RunControlArtifact,
     advisory_locking_available,
+    hold_uninstall_lock,
     is_run_alive,
 )
 
@@ -146,3 +148,74 @@ def test_sigkill_releases_the_control_lock_but_preserves_the_artifact(
         if process.poll() is None:
             os.kill(process.pid, 9)
             process.wait(timeout=5)
+
+
+def test_a_run_starts_even_when_the_repository_lock_cannot_be_taken(
+    tmp_path: Path,
+) -> None:
+    """Uninstall coordination is best-effort; it may never fail a Run's start."""
+    repo = tmp_path / "repo"
+    (repo / ".git-loopy" / "logs").mkdir(parents=True)
+    repo.chmod(0o311)
+    try:
+        control = RunControlArtifact.acquire(repo / ".git-loopy" / "logs" / "run.jsonl")
+    finally:
+        repo.chmod(0o755)
+    try:
+        assert is_run_alive(control.path) is True
+    finally:
+        control.close()
+
+
+def test_a_run_does_not_block_behind_an_uninstall_holding_the_repository(
+    tmp_path: Path,
+) -> None:
+    """A Run wedged with no output is worse than one that coordinates nothing."""
+    repo = tmp_path / "repo"
+    (repo / ".git-loopy" / "logs").mkdir(parents=True)
+    with hold_uninstall_lock(repo) as locked:
+        assert locked is True
+        control = RunControlArtifact.acquire(
+            repo / ".git-loopy" / "logs" / "run.jsonl"
+        )
+        control.close()
+
+
+def test_an_unopenable_repository_refuses_the_uninstall_lock(tmp_path: Path) -> None:
+    """A lock it cannot even attempt is reported, not raised at the caller."""
+    with hold_uninstall_lock(tmp_path / "absent") as locked:
+        assert locked is False
+
+
+def test_a_filesystem_without_locks_is_not_mistaken_for_a_running_uninstall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mount that cannot flock is a host without locks, not a busy repository."""
+    import fcntl
+
+    from git_loopy import run_control
+
+    def unsupported(_fd: int, _operation: int) -> None:
+        raise OSError(errno.ENOLCK, "No locks available")
+
+    monkeypatch.setattr(run_control._fcntl, "flock", unsupported)
+
+    with hold_uninstall_lock(tmp_path) as locked:
+        assert locked is True
+
+    assert fcntl is run_control._fcntl
+
+
+def test_a_busy_repository_still_refuses_the_uninstall_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contention keeps its distinct answer once unsupported locks are excused."""
+    from git_loopy import run_control
+
+    def contended(_fd: int, _operation: int) -> None:
+        raise OSError(errno.EAGAIN, "Resource temporarily unavailable")
+
+    monkeypatch.setattr(run_control._fcntl, "flock", contended)
+
+    with hold_uninstall_lock(tmp_path) as locked:
+        assert locked is False
