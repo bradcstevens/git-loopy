@@ -61,6 +61,7 @@ from git_loopy.sources import (
     PICKUP_VALIDATED,
     PoolCandidate,
     RollingIssueSource,
+    confirms_empty_pool,
     has_proven_open_blocker,
 )
 
@@ -355,6 +356,14 @@ class RollingPool:
         has no complete fact to report.
         """
         snapshot = self._refresh_now()
+        if confirms_empty_pool(
+            complete=snapshot.complete, remaining=len(self._entries)
+        ):
+            # The family rule, asked here and on the serial path (#541) so the
+            # two dispatch modes cannot drift apart on what "empty" means. A
+            # cache with no entries has no quarantined ones either, so the
+            # unresolved guard below is about survivors, not about this claim.
+            return "empty_pool"
         if not snapshot.complete:
             self.diag.warning(
                 "final Pool refresh was incomplete; not claiming an empty Pool"
@@ -368,8 +377,6 @@ class RollingPool:
                 ),
             )
             return None
-        if not self._entries:
-            return "empty_pool"
         if any(
             not entry.quarantined and self.eligible(entry.candidate)
             for entry in self._entries

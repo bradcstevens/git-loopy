@@ -5816,6 +5816,202 @@ def test_parallel_never_ends_empty_on_a_partial_pool_read(
     assert run_end["outcome"] == "empty_pool"
 
 
+class _ListRefusesWhenArmedGitHubClient(FakeGitHubClient):
+    """A tracker whose ``gh issue list`` refuses once, on demand.
+
+    The peer of :class:`_UnreadableOnceGitHubClient` for the *other* read
+    ``collect_pool`` makes. Armed rather than counted so a test can put the
+    refusal on one exact call — which is the whole point of #541's Parallel
+    half: the same transient failure means something different depending on
+    whether it lands on the driver's peek or inside the serial Iteration the
+    peek's evidence went on to grant.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._armed = False
+        self.list_refusals = 0
+
+    def arm(self) -> None:
+        self._armed = True
+
+    def issue_list(self, label: str, state: str = "open"):
+        if self._armed:
+            self._armed = False
+            self.list_refusals += 1
+            self.issue_list_calls.append((label, state))
+            raise gh_module.GhError(["gh", "issue", "list"], 1, "HTTP 502")
+        return super().issue_list(label, state)
+
+
+def test_parallel_recovers_when_a_granted_serial_turn_cannot_read_the_pool(
+    tmp_path, monkeypatch
+) -> None:
+    """Proof of work waiting outlives one refused read (#541, #219 §2.13).
+
+    A serial turn is granted only *after* the driver's peek latched serial
+    demand — so by the time the Iteration runs, the Run positively knows #44 is
+    in the **Pool**. If that Iteration's own ``gh issue list`` then gives out, it
+    has disproved nothing: it may not claim the Pool is empty (that is the #541
+    bug), and it equally may not end the Run, because the issue it would abandon
+    is one the Run can name.
+
+    The unreadable-Pool outcome is therefore terminal only where the serial
+    Iteration *is* the Run's whole view of the Pool. Here it is not, so the
+    driver polls, re-reads, and works #44 — otherwise a single 502 would decide
+    a Run's fate purely on which of two reads it happened to land on.
+    """
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = _ListRefusesWhenArmedGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(44, labels=["ready-for-agent"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+            serial_closes=True,
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    # Put the refusal inside the first serial Iteration's own collection —
+    # after the peek that proved #44 exists, before the Pickup that would bind
+    # it. A call counter could not name that moment; this can.
+    real_run_one_iteration = loop_module._Loop._run_one_iteration
+    armed = itertools.count(1)
+
+    async def _arm_then_iterate(self, iter_num: int):
+        if next(armed) == 1:
+            fake_gh.arm()
+        return await real_run_one_iteration(self, iter_num)
+
+    monkeypatch.setattr(
+        loop_module._Loop, "_run_one_iteration", _arm_then_iterate
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def _bounded() -> int:
+        # A Run that never re-reads would spin forever rather than terminate
+        # early, so bound it: hanging is a failure, not a pass.
+        return await asyncio.wait_for(loop_module.run(cfg), timeout=60)
+
+    exit_code = asyncio.run(_bounded())
+
+    # --- Non-vacuity: the serial Iteration's own Pool read really did refuse,
+    #     and that Iteration really did see nothing.
+    assert fake_gh.list_refusals == 1, "the serial Iteration's read never failed"
+    events = _logged_events(tmp_path)
+    collected = [e for e in events if e["type"] == "wrapper.afk_ready.collected"]
+    assert collected and collected[0]["issues"] == [], (
+        f"expected the first Iteration to collect nothing, got {collected}"
+    )
+
+    # --- The #541 regression itself, read off the Iteration that hit the failed
+    #     `gh issue list`: it must not record an empty Pool. Before the fix this
+    #     Iteration reported `empty_pool`, which the rollup normalizes to
+    #     `no_progress` — a Pool that was never read, filed as one that held
+    #     nothing.
+    iteration_ends = [e for e in events if e["type"] == "wrapper.iteration.end"]
+    assert iteration_ends, "expected the refused Iteration to still close"
+    assert iteration_ends[0]["outcome"] == "preflight_failed", (
+        f"the unread Pool was recorded as {iteration_ends[0]['outcome']!r}"
+    )
+
+    # --- #44 was not abandoned over one refused read.
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [44]
+    assert fake_gh.issue_view(44).state == "CLOSED"
+
+    # --- And the Run still ends truthfully, on a read that did complete.
+    assert exit_code == 0
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "empty_pool"
+
+
+def test_parallel_keeps_its_proven_empty_pool_when_the_fallback_read_gives_out(
+    tmp_path, monkeypatch
+) -> None:
+    """A proven-empty Pool survives a later read giving out (#541).
+
+    The other end of the same rule. When a Rolling Run finds no Lane work before
+    spending a unit, it hands the serial driver a **fallback** Iteration so the
+    Run ends on a collection rather than on a scheduler-only outcome. By then
+    the Pool's emptiness is already established twice over — the peek that read
+    the whole serial-required half, and the authoritative membership refresh the
+    terminal outcome rests on — so that Iteration is the accounting for a proven
+    fact, not the inquiry into it.
+
+    If *its* ``gh issue list`` gives out, nothing is overturned: a read that
+    proved nothing cannot unseat two reads that proved something. Ending at exit
+    ``1`` here would tell an operator to go repair a tracker that had just
+    answered the question twice.
+    """
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = _ListRefusesWhenArmedGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(fake_git=fake_git, scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    # Arm on the announcement the driver makes immediately before the fallback
+    # Iteration, so the refusal lands on that Iteration's collection and on no
+    # earlier read — the two reads that proved the Pool empty must stay intact
+    # for this test to be about anything.
+    real_report = loop_module._ParallelLoop._report_serial_fallback
+
+    def _arm_then_report(self, scheduler):
+        fake_gh.arm()
+        return real_report(self, scheduler)
+
+    monkeypatch.setattr(
+        loop_module._ParallelLoop, "_report_serial_fallback", _arm_then_report
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def _bounded() -> int:
+        return await asyncio.wait_for(loop_module.run(cfg), timeout=60)
+
+    exit_code = asyncio.run(_bounded())
+
+    # --- Non-vacuity: the fallback Iteration's own read really did refuse.
+    assert fake_gh.list_refusals == 1, "the fallback Iteration's read never failed"
+
+    # --- The Run reports what it proved, not what the last read failed to see.
+    assert exit_code == 0
+    events = _logged_events(tmp_path)
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "empty_pool"
+    assert fake_client.created == []
+
+
 class _TimelineFakeClient(_ParallelFakeClient):
     """A client that snapshots the live worktrees as each session is created.
 

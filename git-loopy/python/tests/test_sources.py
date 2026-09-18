@@ -784,6 +784,33 @@ class TestPoolCollectionShape:
 
 
 # --------------------------------------------------------------------------- #
+# confirms_empty_pool — the one emptiness rule both dispatch modes ask (#541)  #
+# --------------------------------------------------------------------------- #
+
+
+class TestConfirmsEmptyPool:
+    """Emptiness is a claim a *complete* read makes, never an absence of rows."""
+
+    def test_a_complete_read_that_found_nothing_is_empty(self) -> None:
+        assert sources_module.confirms_empty_pool(complete=True, remaining=0) is True
+
+    def test_a_failed_read_that_found_nothing_is_unknown(self) -> None:
+        """The #541 regression, stated at the rule rather than at a caller.
+
+        A failed ``gh issue list`` and a finished backlog produce the same zero
+        rows. Only ``complete`` tells them apart, so a caller that reads the
+        rows alone ends an unattended Run at exit ``0`` over work it never saw.
+        """
+        assert sources_module.confirms_empty_pool(complete=False, remaining=0) is False
+
+    def test_a_complete_read_with_survivors_is_not_empty(self) -> None:
+        assert sources_module.confirms_empty_pool(complete=True, remaining=1) is False
+
+    def test_an_incomplete_read_with_survivors_is_not_empty(self) -> None:
+        assert sources_module.confirms_empty_pool(complete=False, remaining=1) is False
+
+
+# --------------------------------------------------------------------------- #
 # GitHubIssueSource.handle_completions                                        #
 # --------------------------------------------------------------------------- #
 
@@ -1325,6 +1352,7 @@ class TestModuleStructure:
             "PoolCollection",
             "PoolExclusion",
             "afk_ready_exclusion",
+            "confirms_empty_pool",
             "in_selection_order",
             "is_lane_candidate",
             "is_afk_ready",

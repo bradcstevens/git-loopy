@@ -4156,6 +4156,59 @@ def test_an_empty_pool_still_ends_clean(tmp_path, monkeypatch) -> None:
     assert run_end["outcome"] == "empty_pool"
 
 
+def test_a_failed_pool_read_never_ends_a_run_as_an_empty_pool(
+    tmp_path, monkeypatch
+) -> None:
+    """A Pool nobody could read is unknown, not empty (#541, contract §2.1).
+
+    A failed Pool read degrades the collection to zero items, which is
+    byte-identical to a genuinely finished backlog. Reporting it as one ends an
+    unattended Run at exit ``0`` — "there is no work" — over a repository whose
+    work the runner simply failed to look at.
+
+    Driven through the PRDs backend because that is the source whose Run *is* a
+    plain serial one: its collection is the Run's whole view of the Pool, with
+    no Rolling membership cache holding separate evidence, so the Iteration's
+    verdict is the Run's verdict and the exit code is readable straight off it.
+    The shape under test is the same either way — a failed ``gh issue list`` and
+    this unreadable ``prds/`` root both yield ``PoolCollection(complete=False)``
+    with no items, which is exactly why the rule lives on the collection rather
+    than in one backend.
+    """
+    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
+    # A `prds/` the source refuses to walk: present, but not the directory it
+    # resolves to. `PrdsIssueSource.collect_pool` reports that as an incomplete
+    # collection rather than raising, so the loop sees zero items and no claim.
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / "prds").symlink_to(elsewhere, target_is_directory=True)
+
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_client = FakeCopilotClient(scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="prds", max_iterations=3))
+    )
+
+    assert exit_code != 0
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] != "empty_pool"
+    # `preflight_failed` is the reason #438 already spends on "the tracker
+    # cannot be read well enough to start"; a read that gives out later takes
+    # the same operator action, so it takes the same reason.
+    assert run_end["outcome"] == "preflight_failed"
+    assert exit_code == 1
+    # Terminal on the spot: re-reading a source that just refused would spend
+    # the Iteration cap and then exit 0 under `iteration_cap`.
+    assert len([e for e in events if e["type"] == "wrapper.iteration.start"]) == 1
+    # And no session was ever started for a Pool the Run could not read.
+    assert fake_client.created == []
+
+
 # ---------------------------------------------------------------------------
 # The Task-type classifier at Pickup (#409, ADR-0029)
 # ---------------------------------------------------------------------------

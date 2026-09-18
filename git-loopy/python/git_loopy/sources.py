@@ -92,6 +92,7 @@ __all__ = [
     "PoolCollection",
     "PoolExclusion",
     "afk_ready_exclusion",
+    "confirms_empty_pool",
     "in_selection_order",
     "is_lane_candidate",
     "is_afk_ready",
@@ -392,6 +393,35 @@ class PoolCollection:
         printing the same "no work" line for both.
         """
         return not self.items and bool(self.exclusions)
+
+
+def confirms_empty_pool(*, complete: bool, remaining: int) -> bool:
+    """Whether one read of the **Pool** may end a Run as an empty Pool.
+
+    The single rule both dispatch modes ask, so they cannot drift apart on what
+    "empty" means (#219 §2.13, Wrapper contract §2.1, ADR-0020): *only a
+    complete read that finds nothing* establishes emptiness. A failed or
+    truncated read that finds nothing is **unknown**, and unknown is not empty —
+    the two are byte-identical in the data, and reporting the first as the
+    second ends an unattended Run at the clean exit ``0`` that means "there is
+    no work", over a backlog the runner only failed to look at (#541).
+
+    Kept as a free function rather than a property of either read, because the
+    two reads are different shapes — a serial :class:`PoolCollection` and a
+    Rolling-dispatch membership cache — and the rule is about neither of them in
+    particular.
+
+    Args:
+        complete: Whether the read saw the whole Pool.
+        remaining: How many candidates survived it.
+
+    Returns:
+        ``True`` only when this read is authority for an empty Pool. Callers
+        with further evidence of their own — Rolling dispatch's unresolved
+        quarantined candidates — still owe their own checks; this answers the
+        one question they share.
+    """
+    return complete and remaining == 0
 
 
 @dataclass(frozen=True)

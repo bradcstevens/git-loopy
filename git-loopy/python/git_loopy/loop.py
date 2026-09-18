@@ -214,6 +214,7 @@ from git_loopy.sources import (
     PoolCollection,
     PrdsIssueSource,
     RollingIssueSource,
+    confirms_empty_pool,
     is_lane_candidate,
 )
 from git_loopy.skill_catalog import discover_skill_catalog as _discover_skill_catalog
@@ -812,6 +813,27 @@ RUN_OUTCOME_OPERATOR_STOP = "operator_stop"
 #: cap, before it runs; an interrupt lands inside one.
 _RUN_OUTCOMES_MID_ITERATION = frozenset({"iteration_cap", RUN_OUTCOME_INTERRUPTED})
 
+#: Serial-Iteration outcomes that end the Run on a **proven** fact about the
+#: Pool: it was walked to completion and every candidate in it was defeated
+#: (#413). Terminal wherever they arrive — including inside a Parallel Run's
+#: granted serial turn — because no later turn could read anything different,
+#: so carrying on would re-walk the same Pool until the iteration cap.
+_SERIAL_DEFEATED_OUTCOMES = frozenset({"all_skipped", "all_blocked"})
+
+#: The above plus #541's unreadable Pool, which proves nothing and so is
+#: terminal only where the serial Iteration *is* the Run's whole view of the
+#: Pool — :meth:`_Loop.drive` and :meth:`_ParallelLoop._drive_serial_only`.
+#: There, a driver that carried on would re-ask a source that just refused until
+#: the iteration cap turned the refusal into exit ``0``.
+#:
+#: Deliberately **not** consulted anywhere inside :meth:`_ParallelLoop._drive_rolling`,
+#: because that driver always holds evidence the Iteration's refusal must not
+#: overturn. At a *granted* serial turn it has latched proof that specific issues
+#: are waiting; at the serial *fallback* it has two complete same-turn reads
+#: proving the Pool empty. Ending on the refusal would make a Run's outcome
+#: depend on which of several reads a transient ``gh`` failure landed on.
+_SERIAL_TERMINAL_OUTCOMES = _SERIAL_DEFEATED_OUTCOMES | {"preflight_failed"}
+
 #: The **Wind-down** ladder as a rung lookup, derived from the family's ordered
 #: wire vocabulary so the order lives in one place (``events.WIND_DOWN_STAGES``)
 #: and this is only the index into it.
@@ -1379,6 +1401,13 @@ class _Loop:
                 excluded=len(collection.exclusions),
             )
             if not pool:
+                if not confirms_empty_pool(
+                    complete=collection.complete, remaining=len(pool)
+                ):
+                    # #541: a read that failed or stopped short found nothing
+                    # *and proved nothing*, so it may not end the Run on the
+                    # exit that means the backlog is finished.
+                    return self._finish_unreadable_pool_iteration(iter_num)
                 # Close the iteration cleanly so the snapshot lifecycle is
                 # consistent even on the empty-pool path.
                 self._finish_iteration(iter_num, outcome="empty_pool")
@@ -2020,6 +2049,44 @@ class _Loop:
         self._finish_iteration(iter_num, outcome=outcome)
         return (outcome, 0, 0)
 
+    def _finish_unreadable_pool_iteration(
+        self, iter_num: int
+    ) -> tuple[str, int, int]:
+        """End the Run on an Iteration whose Pool read proved nothing (#541).
+
+        Reached when the collection came back with no items *and* could not
+        claim to have seen the whole Pool — a failed ``gh issue list``, a
+        candidate whose authoritative read gave out, or a listing still full at
+        its ceiling. The data is byte-identical to a finished backlog, which is
+        exactly why it must not be reported as one: ``empty_pool`` exits ``0``
+        and tells an unattended caller the work is done.
+
+        It ends under ``preflight_failed`` rather than a reason of its own. The
+        Wrapper contract already spends that reason on "a precondition this Run
+        needs is not satisfied, and an operator can repair it" — which is what
+        an unreadable tracker is — and #438 put the *predictable* half of this
+        same hazard (a ``gh`` too old to report ``blockedBy``) behind it at
+        preflight. A capability that preflight cannot see, because it lives on
+        the server rather than in ``gh --version``, fails the same way for the
+        same reason; giving it a different reason would split one operator
+        action across two vocabularies.
+
+        Terminal on the spot rather than retried, for the reason
+        :meth:`_finish_unworked_iteration` is: no session runs, so no **Strike**
+        is charged, and a Run that kept re-asking a source which just refused
+        would spend its Iteration cap and then exit ``0`` under
+        ``iteration_cap`` — the clean exit this method exists to withhold.
+        """
+        self._diag.error(
+            "the Pool read completed no listing and returned no candidates; "
+            "an unreadable Pool is unknown, not empty, so this Run will not "
+            "report it as finished work. Check `gh auth status`, this host's "
+            "network path to the tracker, and whether the repository's host "
+            "supports issue dependencies, then re-run."
+        )
+        self._finish_iteration(iter_num, outcome="preflight_failed")
+        return ("preflight_failed", 0, 0)
+
     def _infer_active_binding(
         self,
         pool: list[AfkReadyItem],
@@ -2338,13 +2405,15 @@ class _Loop:
                         outcome_label = "empty_pool"
                         exit_code = exit_code_for("empty_pool")
                         break
-                    if outcome in {"all_skipped", "all_blocked"}:
+                    if outcome in _SERIAL_TERMINAL_OUTCOMES:
                         # #413: there *was* work and none of it could be taken.
                         # Distinct from `empty_pool` (which exits 0) because a
                         # Run that gave up is not a Run that finished, and
                         # distinct from `stuck` because the ceiling was never
                         # reached — a single defeated issue ends a Run whose
-                        # Pool held only that one.
+                        # Pool held only that one. #541 joins them with the Pool
+                        # that could not be read at all, for the same reason:
+                        # an unknown Pool is not a finished one.
                         outcome_label = outcome
                         exit_code = exit_code_for(outcome)
                         break
@@ -3027,7 +3096,7 @@ class _ParallelLoop:
                 )
             if outcome == "empty_pool":
                 return "empty_pool", exit_code_for("empty_pool"), iter_num
-            if outcome in {"all_skipped", "all_blocked"}:
+            if outcome in _SERIAL_TERMINAL_OUTCOMES:
                 return outcome, exit_code_for(outcome), iter_num
             if outcome == "aborted":
                 return "stuck", exit_code_for("stuck"), iter_num
@@ -3156,7 +3225,7 @@ class _ParallelLoop:
                                 stage="drain",
                                 draining=scheduler.open_count,
                             )
-                    if outcome in {"all_skipped", "all_blocked"}:
+                    if outcome in _SERIAL_DEFEATED_OUTCOMES:
                         # #413, and terminal *here* rather than latched for the
                         # idle-check, because the scheduler grants a serial turn
                         # only once every Lane has drained (`quiescent`): a
@@ -3174,7 +3243,14 @@ class _ParallelLoop:
                     # An `empty_pool` outcome is deliberately NOT terminal here:
                     # it is one Iteration's view of the Pool, and #219 §2.14
                     # ends a Run only on the final authoritative refresh the
-                    # idle-check below performs.
+                    # idle-check below performs. #541's `preflight_failed` is
+                    # not terminal here for a stronger version of the same
+                    # reason: this turn was granted because the driver had
+                    # already *seen* serial-required work, so an Iteration whose
+                    # own read gave out has disproved nothing, and ending the Run
+                    # would abandon issues the Run can name over one refused
+                    # `gh` call. Both fall through to the idle-check, which polls
+                    # until a read completes or the Run runs out of units.
                     scheduler.serial_finished()
                     continue
 
@@ -3239,7 +3315,24 @@ class _ParallelLoop:
                             )
                         if outcome == "aborted":
                             return "stuck", exit_code_for("stuck"), scheduler._units_spent
-                        if outcome in {"empty_pool", "all_skipped", "all_blocked"}:
+                        if outcome == "preflight_failed":
+                            # #541, and the one place where the Iteration's
+                            # refusal must NOT become the Run's answer. This
+                            # branch was entered on two complete same-turn reads
+                            # that each found nothing — the peek that saw the
+                            # whole serial-required half, and the authoritative
+                            # membership refresh behind `terminal_outcome` — so
+                            # the Pool's emptiness is already proven and this
+                            # Iteration was only ever the accounting for it. A
+                            # third read giving out overturns neither proof, and
+                            # reporting it would send an operator to repair a
+                            # tracker that had just answered twice.
+                            return (
+                                terminal_outcome,
+                                exit_code_for(terminal_outcome),
+                                scheduler._units_spent,
+                            )
+                        if outcome in _SERIAL_DEFEATED_OUTCOMES | {"empty_pool"}:
                             return (
                                 outcome,
                                 exit_code_for(outcome),

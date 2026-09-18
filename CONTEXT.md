@@ -179,9 +179,13 @@ the agent together in a single prompt; the agent picks one. **Rolling dispatch**
 keeps a continuously refreshed cache of *shallow* Pool membership and re-reads one
 candidate authoritatively immediately before reserving its **Lane** — membership alone is
 never authority to start a **Lane contribution**. An incomplete or failed read leaves the
-Pool's emptiness unknown rather than empty. A **Parallel mode** Run's Pool has two halves
-— **Parallel-safe** candidates and **serial-required** work — and may be called empty
-only once both have been seen.
+Pool's emptiness unknown rather than empty, in either mode and on the one rule both ask
+(`sources.confirms_empty_pool`): where that read is the Run's whole view of the Pool it
+ends the Run under `preflight_failed`, never on the exit `0` that says the work is
+finished, and where the Run has already *seen* work waiting it polls for a read that
+completes instead of abandoning what it can name. A **Parallel mode** Run's Pool has two
+halves — **Parallel-safe** candidates and **serial-required** work — and may be called
+empty only once both have been seen.
 _Avoid_: batch, backlog.
 
 **Pool exclusion**:
