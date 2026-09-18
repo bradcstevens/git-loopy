@@ -322,6 +322,7 @@ flowchart TD
 | [Concepts](docs/concepts.md) | The context model behind small issues and fresh Iterations |
 | [Wrapper contract](docs/wrapper-contract.md) | The behavior every Orchestrator must implement |
 | [Runner family](docs/runners.md) | The [Python](git-loopy/python/README.md), [shell](git-loopy/shell/README.md), and [PowerShell](git-loopy/powershell/README.md) Orchestrators |
+| [Installation lifecycle](git-loopy/python/README.md#installation-lifecycle) | Choosing Python Runner `update`, `upgrade`, or `uninstall` and their safeguards |
 | [Parallel mode](docs/parallel-mode.md) | Lanes, `parallel-safe`, and the Integration stage |
 | [Skill policy](docs/skill-policy.md) | The closed world of Skills a Run may load |
 | [Skills setup](docs/skills-setup.md) | Prerequisites and installing the skill catalog |

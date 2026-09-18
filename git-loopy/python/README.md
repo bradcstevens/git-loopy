@@ -28,6 +28,47 @@ values.
 
 ---
 
+## Installation lifecycle
+
+These commands are **Python Runner only**. The shell and PowerShell
+Orchestrators do not yet have the management-command dispatcher or the
+machine-local asset model needed to manage Config, prompt provenance, the
+installed catalog, and the TUI helper. They remain Runner-family members under
+the shared Wrapper contract; this lifecycle is deliberately not a contract
+obligation.
+
+Choose the command by what changed:
+
+| Command | What it does | Does not do |
+| --- | --- | --- |
+| `git-loopy update` | Refreshes the machine-local state the installed Release owns: the installed catalog, TUI helper, global prompt override when **Scaffold provenance** proves it untouched, and a Release-retired Config route. | Does not replace the distribution, start a Run, or write to the tracker. |
+| `git-loopy upgrade` | Replaces the executing distribution through its proven **Install channel**, then runs `update`. | Does not guess an Install channel, update a clone it does not own, or replace a second `git-loopy` artifact on `PATH`. |
+| `git-loopy uninstall` | Removes the distribution through its proven Install channel and the machine-local state. | Does not edit repository contents by default or remove a live Lane's work. |
+
+An **Edge install** is an explicit `upgrade --edge <ref>` landing on unreleased
+source. Identify it by its ref, not the source `VERSION`, because only a
+published Release has a Release-version identity. **Scaffold provenance** is
+the Release and digest git-loopy recorded when it scaffolded an asset; it is the
+proof that allows a prompt replacement without overwriting operator prose.
+
+| Command | Flags | Exit behavior | Worked example |
+| --- | --- | --- | --- |
+| `update` | `--global` (default), `--project`, `--dry-run` | `0` when the chosen Config scope settles and every refreshed asset reaches the installed Release; `1` for an ambiguous or failed repair or asset refresh. | `git-loopy update --project` |
+| `upgrade` | `--to <version>`, `--edge` / `--ref <ref>`, `--allow-downgrade` | `0` when already on the requested Release, or when the channel move and chained `update` both succeed; `1` when the target, direction, or channel cannot be proven, handoff fails, or the chained refresh fails. | `git-loopy upgrade --to 0.10.0` |
+| `uninstall` | `--all`, `--yes` / `-y` | `0` only when every planned removal succeeds; `1` for an unconfirmed plan, an unsafe path, a live or unreadable Lane, a channel that cannot be proven, or any incomplete removal. | `git-loopy uninstall --yes` |
+
+The refusals are intentional safeguards, not partial upgrades: a customized or
+unrecorded prompt is reported rather than overwritten; an unprovable Install
+channel prints a command for the operator instead of guessing; and tracked
+project scope plus Run logs stay out of an uninstall unless `--all` explicitly
+names the repository. If an old routing key locks the **Config** out of ordinary
+commands or a Run, use `git-loopy update` for global scope, or
+`git-loopy update --project` for the repository Config.
+
+The sections below give the complete behavior and constraints for each command.
+
+---
+
 ## One-time bootstrap
 
 ```bash
