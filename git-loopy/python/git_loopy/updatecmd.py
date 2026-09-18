@@ -179,7 +179,11 @@ def _update_config(
             }
         else:
             table.pop("routing", None)
-        settings.write_config_atomic(path, table)
+        settings.write_config_atomic(
+            path,
+            table,
+            normalize_enabled_skills=False,
+        )
         for repair in repairs:
             output_fn(f"{repair.describe(applied=True)} in {location}.")
 

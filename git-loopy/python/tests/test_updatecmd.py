@@ -730,6 +730,38 @@ def test_update_repairs_a_config_that_also_carries_an_escalation_rung(
     assert any("Removed retired routing key 'custom'" in line for line in output)
 
 
+def test_update_preserves_unrelated_skill_policy_values(
+    tmp_path: Path,
+) -> None:
+    """A routing repair does not normalize an unrelated saved Skill policy."""
+    from git_loopy import settings, updatecmd
+
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
+    config = settings.global_config_path(env)
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        'enabled_skills = ["zeta", "zeta", "alpha"]\n\n'
+        '[routing]\ncustom = { model = "gpt-5.4", effort = "high" }\n',
+        encoding="utf-8",
+    )
+
+    result = updatecmd.run_update(
+        env=env,
+        release_version_reader=lambda: "1.2.4",
+        packaged_prompt=tmp_path / "absent-PROMPT.md",
+        catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
+        helper_refresh=lambda _version, _env: tmp_path / "git-loopy-tui",
+        output_fn=lambda _line: None,
+    )
+
+    assert result == 0
+    assert settings.load_config_table(config)["enabled_skills"] == [
+        "zeta",
+        "zeta",
+        "alpha",
+    ]
+
+
 def test_update_dry_run_reports_a_retired_route_without_writing(
     tmp_path: Path,
 ) -> None:

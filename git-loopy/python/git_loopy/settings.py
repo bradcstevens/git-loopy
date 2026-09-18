@@ -350,11 +350,14 @@ def dump_config_toml(
     values: Mapping[str, object],
     *,
     header: Sequence[str] = (),
+    normalize_enabled_skills: bool = True,
 ) -> str:
     """Serialize a Config table to TOML text.
 
     Scalar / list values (``str`` / ``bool`` / ``int`` / ``float`` /
-    ``list[str]``) are emitted as flat ``key = value`` lines. A top-level
+    ``list[str]``) are emitted as flat ``key = value`` lines. ``enabled_skills`` is sorted and deduplicated by
+    default for the Config authoring paths; a targeted migration can retain its
+    unrelated authored value by disabling that normalization. A top-level
     ``dict`` value is emitted as a ``[section]`` block (issue #146) — the one
     bounded table extension — whose entries take their shape from their values,
     except in the sections :data:`_INLINE_TABLE_SECTIONS` holds to an inline
@@ -370,7 +373,11 @@ def dump_config_toml(
     scalars: list[tuple[str, object]] = []
     sections: list[tuple[str, Mapping[str, object]]] = []
     for key, value in values.items():
-        if key == "enabled_skills" and isinstance(value, list):
+        if (
+            normalize_enabled_skills
+            and key == "enabled_skills"
+            and isinstance(value, list)
+        ):
             if any(not isinstance(item, str) for item in value):
                 raise SettingsError(
                     "cannot serialize 'enabled_skills': only lists of strings are supported"
@@ -418,9 +425,14 @@ def write_config_atomic(
     values: Mapping[str, object],
     *,
     header: Sequence[str] = CONFIG_HEADER,
+    normalize_enabled_skills: bool = True,
 ) -> None:
     """Atomically replace one Config after fully serializing it beside the target."""
-    content = dump_config_toml(values, header=header)
+    content = dump_config_toml(
+        values,
+        header=header,
+        normalize_enabled_skills=normalize_enabled_skills,
+    )
     target = path.resolve(strict=False) if path.is_symlink() else path
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
