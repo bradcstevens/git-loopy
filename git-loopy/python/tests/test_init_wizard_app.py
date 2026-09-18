@@ -512,6 +512,173 @@ async def test_review_back_to_an_unchanged_scope_keeps_selected_skills() -> None
     assert app.return_value.enabled_skills == ("codebase-design", "tdd")
 
 
+async def test_changing_scaffold_rebuilds_required_skills_and_keeps_choices() -> None:
+    """The next Skill step answers to the instructions setup will leave behind."""
+
+    rebuilt_from: list[tuple[bool, str, tuple[str, ...]]] = []
+
+    def build(scaffold: bool, _scope: str) -> SkillSelectionModel:
+        required = "tdd" if scaffold else "prototype"
+        return SkillSelectionModel(
+            rows=(
+                SkillSelectionRow(name="codebase-design", source="packaged"),
+                SkillSelectionRow(
+                    name="prototype",
+                    source="packaged",
+                    required=required == "prototype",
+                ),
+                SkillSelectionRow(
+                    name="tdd",
+                    source="packaged",
+                    required=required == "tdd",
+                ),
+            ),
+            enabled=(required,),
+        )
+
+    def rebuild(
+        scaffold: bool, scope: str, enabled: tuple[str, ...]
+    ) -> SkillSelectionModel:
+        rebuilt_from.append((scaffold, scope, enabled))
+        return build(scaffold, scope)
+
+    app = InitWizardApp(
+        scope_options=("project", "global"),
+        scope_paths={
+            "project": Path("/repo/git-loopy/config.toml"),
+            "global": Path("/home/.config/git-loopy/config.toml"),
+        },
+        model_choices=(_choice("model"),),
+        default_model="model",
+        default_effort="high",
+        build_skill_selection=build,
+        rebuild_skill_selection=rebuild,
+    )
+    async with app.run_test() as pilot:
+        await _reach_skills(pilot)
+        await pilot.press("space", "enter")  # explicitly enable codebase-design
+        await pilot.press("down", "down", "down", "down", "down", "b")
+        await pilot.press("down", "enter")  # change scaffold to no
+        await pilot.pause()
+
+        rows = app.screen.query_one("#skill-rows", DataTable)
+        rendered = {
+            str(rows.get_row_at(index)[1]): rows.get_row_at(index)
+            for index in range(rows.row_count)
+        }
+        assert str(rendered["codebase-design"][0]) == "[x]"
+        assert str(rendered["prototype"][0]) == "[x]"
+        assert str(rendered["prototype"][4]) == "Required"
+        assert str(rendered["tdd"][0]) == "[x]"
+        await pilot.press("down", "space")
+        assert "prototype is a Required Skill" in app.screen.status
+        await pilot.press("enter")
+        await pilot.press("down", "down", "down", "down", "down", "b")
+        await pilot.press("up", "enter")  # restore scaffold
+        await pilot.pause()
+
+        rows = app.screen.query_one("#skill-rows", DataTable)
+        rendered = {
+            str(rows.get_row_at(index)[1]): rows.get_row_at(index)
+            for index in range(rows.row_count)
+        }
+        assert str(rendered["codebase-design"][0]) == "[x]"
+        assert str(rendered["prototype"][0]) == "[ ]"
+        await pilot.press("ctrl+c")
+
+    assert app.return_value is None
+    assert rebuilt_from == [
+        (False, "project", ("codebase-design", "tdd")),
+        (True, "project", ("codebase-design", "prototype", "tdd")),
+    ]
+
+
+async def test_returning_to_skills_with_unchanged_scaffold_does_not_rebuild() -> None:
+    rebuilt_from: list[tuple[bool, str, tuple[str, ...]]] = []
+
+    def rebuild(
+        scaffold: bool, scope: str, enabled: tuple[str, ...]
+    ) -> SkillSelectionModel:
+        rebuilt_from.append((scaffold, scope, enabled))
+        return _skills(enabled)
+
+    app = InitWizardApp(
+        scope_options=("project", "global"),
+        scope_paths={
+            "project": Path("/repo/git-loopy/config.toml"),
+            "global": Path("/home/.config/git-loopy/config.toml"),
+        },
+        model_choices=(_choice("model"),),
+        default_model="model",
+        default_effort="high",
+        build_skill_selection=lambda _scaffold, _scope: _skills(),
+        rebuild_skill_selection=rebuild,
+    )
+    async with app.run_test() as pilot:
+        await _reach_skills(pilot)
+        await pilot.press("space", "enter")
+        await pilot.press("down", "down", "down", "down", "down", "b")
+        await pilot.press("enter")  # retain the prefilled scaffold answer
+        await pilot.pause()
+
+        rows = app.screen.query_one("#skill-rows", DataTable)
+        assert str(rows.get_row_at(0)[0]) == "[x]"
+        await pilot.press("ctrl+c")
+
+    assert app.return_value is None
+    assert rebuilt_from == []
+
+
+async def test_review_refuses_a_rebuilt_policy_that_cannot_be_valid() -> None:
+    def build(scaffold: bool, _scope: str) -> SkillSelectionModel:
+        if scaffold:
+            return _skills()
+        return SkillSelectionModel(
+            rows=(
+                SkillSelectionRow(
+                    name="prototype",
+                    source="packaged",
+                    required=True,
+                    blocked_reason="not tracked by git",
+                ),
+                SkillSelectionRow(name="tdd", source="packaged"),
+            ),
+            enabled=("prototype",),
+        )
+
+    def rebuild(
+        scaffold: bool, scope: str, _enabled: tuple[str, ...]
+    ) -> SkillSelectionModel:
+        return build(scaffold, scope)
+
+    app = InitWizardApp(
+        scope_options=("project", "global"),
+        scope_paths={
+            "project": Path("/repo/git-loopy/config.toml"),
+            "global": Path("/home/.config/git-loopy/config.toml"),
+        },
+        model_choices=(_choice("model"),),
+        default_model="model",
+        default_effort="high",
+        build_skill_selection=build,
+        rebuild_skill_selection=rebuild,
+    )
+    async with app.run_test() as pilot:
+        await _reach_skills(pilot)
+        await pilot.press("enter")
+        await pilot.press("down", "down", "down", "down", "down", "b")
+        await pilot.press("down", "enter")  # change scaffold to no
+        await pilot.press("ctrl+s", "enter")
+        await pilot.pause()
+
+        assert "prototype is blocked: not tracked by git" in str(
+            app.screen.query_one("#wizard-status", Static).render()
+        )
+        await pilot.press("q")
+
+    assert app.return_value is None
+
+
 async def test_a_skill_policy_that_cannot_be_resolved_ends_setup_without_a_panic() -> (
     None
 ):

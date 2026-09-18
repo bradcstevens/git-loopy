@@ -55,7 +55,7 @@ from git_loopy.interactive.skill_picker_app import SkillPickerScreen
 from git_loopy.skillscmd import SkillSelectionModel, SkillSelectionResult
 
 if TYPE_CHECKING:
-    from git_loopy.init import InitAnswers
+    from git_loopy.init import InitAnswers, SkillSelectionRebuilder
 
 __all__ = ["InitWizardApp", "run_textual_init_wizard"]
 
@@ -312,6 +312,9 @@ class InitWizardApp(App["InitAnswers | None"]):
         default_model: str,
         default_effort: str | None,
         build_skill_selection: Callable[[bool, str], SkillSelectionModel],
+        rebuild_skill_selection: (
+            Callable[[bool, str, tuple[str, ...]], SkillSelectionModel] | None
+        ) = None,
         scope_locked: bool = False,
     ) -> None:
         super().__init__()
@@ -321,6 +324,7 @@ class InitWizardApp(App["InitAnswers | None"]):
         self._default_model = default_model
         self._default_effort = default_effort
         self._build_skill_selection = build_skill_selection
+        self._rebuild_skill_selection = rebuild_skill_selection
         self._scope_locked = scope_locked
         self._scope = self._scope_options[0]
         self._selection = self._initial_selection()
@@ -328,6 +332,8 @@ class InitWizardApp(App["InitAnswers | None"]):
         self._route_index = 0
         self._scaffold = True
         self._skills: SkillSelectionModel | None = None
+        self._selected_enabled: set[str] | None = None
+        self._disabled_by_operator: set[str] | None = None
         #: Why the Skill policy could not be resolved, if it could not. Kept
         #: rather than raised, because raising here is a Textual panic; see
         #: :meth:`_ensure_skills`.
@@ -375,7 +381,7 @@ class InitWizardApp(App["InitAnswers | None"]):
         if isinstance(self.screen, _ReviewScreen):
             return
         if isinstance(self.screen, _WizardSkillPickerScreen):
-            self._skills = replace(self.screen.selection, query="")
+            self._record_skill_selection(self.screen.selection)
         if len(self.screen_stack) > 1:
             self.pop_screen()
         self._show_review()
@@ -504,6 +510,55 @@ class InitWizardApp(App["InitAnswers | None"]):
             self._skill_failure = exc
             self.exit(None)
             return False
+        self._selected_enabled = set(self._skills.enabled)
+        self._disabled_by_operator = set()
+        return True
+
+    def _record_skill_selection(self, selection: SkillSelectionModel) -> None:
+        assert self._skills is not None
+        assert self._selected_enabled is not None
+        assert self._disabled_by_operator is not None
+        previous = set(self._skills.enabled)
+        selected = set(selection.enabled)
+        disabled = previous - selected
+        enabled = selected - previous
+        self._selected_enabled.difference_update(disabled)
+        self._selected_enabled.update(enabled)
+        self._disabled_by_operator.update(disabled)
+        self._disabled_by_operator.difference_update(enabled)
+        self._skills = replace(selection, query="")
+
+    def _rebuild_skills(self) -> bool:
+        """Rebuild the policy after an answer changes its Required Skills."""
+        assert self._skills is not None
+        assert self._selected_enabled is not None
+        assert self._disabled_by_operator is not None
+        try:
+            if self._rebuild_skill_selection is not None:
+                rebuilt = self._rebuild_skill_selection(
+                    self._scaffold, self._scope, self._skills.enabled
+                )
+            else:
+                rebuilt = self._build_skill_selection(self._scaffold, self._scope)
+            candidates = (
+                set(rebuilt.enabled) | self._selected_enabled
+            ) - self._disabled_by_operator
+            valid_enabled = {
+                row.name
+                for row in rebuilt.rows
+                if row.name in candidates and row.blocked_reason is None
+            }
+            self._selected_enabled.intersection_update(valid_enabled)
+            self._skills = replace(
+                rebuilt,
+                enabled=tuple(
+                    valid_enabled | {row.name for row in rebuilt.rows if row.required}
+                ),
+            )
+        except Exception as exc:  # re-raised verbatim by outcome()
+            self._skill_failure = exc
+            self.exit(None)
+            return False
         return True
 
     def outcome(self) -> InitAnswers | None:
@@ -551,6 +606,8 @@ class InitWizardApp(App["InitAnswers | None"]):
             if selected_scope != self._scope:
                 self._scope = selected_scope
                 self._skills = None
+                self._selected_enabled = None
+                self._disabled_by_operator = None
             self._show_model()
 
     def _on_model(self, result: object) -> None:
@@ -628,8 +685,11 @@ class InitWizardApp(App["InitAnswers | None"]):
         else:
             scaffold = result == "yes"
             if scaffold != self._scaffold:
-                self._skills = None
-            self._scaffold = scaffold
+                self._scaffold = scaffold
+                if self._skills is not None and not self._rebuild_skills():
+                    return
+            else:
+                self._scaffold = scaffold
             self._show_skills()
 
     def _on_skills(self, result: object) -> None:
@@ -639,7 +699,7 @@ class InitWizardApp(App["InitAnswers | None"]):
             self._show_scaffold()
         elif isinstance(result, SkillSelectionResult):
             assert self._skills is not None
-            self._skills = replace(self._skills, enabled=result.enabled)
+            self._record_skill_selection(replace(self._skills, enabled=result.enabled))
             self._show_review()
 
     def _on_review(self, result: tuple[str, str] | object) -> None:
@@ -681,12 +741,19 @@ def run_textual_init_wizard(
     model_choices: Sequence[ModelChoice],
     default_model: str,
     default_effort: str | None,
-    rebuild_skill_selection: Callable[..., tuple[str, ...]],
+    rebuild_skill_selection: SkillSelectionRebuilder,
     skill_selection_model: Callable[[bool, str], SkillSelectionModel],
     scope_locked: bool = False,
 ) -> InitAnswers | None:
     """Run the alternate fullscreen setup wizard and return its answer set."""
-    del rebuild_skill_selection
+
+    def rebuild(
+        scaffold: bool, scope: str, enabled: tuple[str, ...]
+    ) -> SkillSelectionModel:
+        rebuilt = rebuild_skill_selection(scaffold, scope, enabled)
+        assert isinstance(rebuilt, SkillSelectionModel)
+        return rebuilt
+
     app = InitWizardApp(
         scope_options=scope_options,
         scope_paths=scope_paths,
@@ -694,6 +761,7 @@ def run_textual_init_wizard(
         default_model=default_model,
         default_effort=default_effort,
         build_skill_selection=skill_selection_model,
+        rebuild_skill_selection=rebuild,
         scope_locked=scope_locked,
     )
     app.run()

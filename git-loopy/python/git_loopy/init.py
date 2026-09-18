@@ -53,7 +53,7 @@ import shutil
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence, overload
 
 from git_loopy import labels, settings
 from git_loopy.config import (
@@ -85,6 +85,9 @@ from git_loopy.interactive.models import (
     to_model_choices,
 )
 
+if TYPE_CHECKING:
+    from git_loopy.skillscmd import SkillSelectionModel
+
 __all__ = ["collect_routing", "run_init", "select_wizard_runner", "InitCancelled"]
 
 #: Tokens that cancel the wizard at any prompt (case-insensitive).
@@ -109,6 +112,23 @@ class InitAnswers:
     routing: dict[str, tuple[str, str]] | None
     scaffold: bool
     enabled_skills: tuple[str, ...]
+
+
+class SkillSelectionRebuilder(Protocol):
+    """Collect names for a numbered runner or model a Textual redraw."""
+
+    @overload
+    def __call__(
+        self, scaffold_decision: bool, selected_scope: str
+    ) -> tuple[str, ...]: ...
+
+    @overload
+    def __call__(
+        self,
+        scaffold_decision: bool,
+        selected_scope: str,
+        previous_enabled: tuple[str, ...],
+    ) -> SkillSelectionModel: ...
 
 
 WizardRunner = Callable[..., InitAnswers | None]
@@ -868,10 +888,40 @@ def run_init(
                 )
             )
         else:
+            @overload
             def rebuild_skill_selection(
-                scaffold_decision: bool, selected_scope: str
-            ) -> tuple[str, ...]:
+                scaffold_decision: bool,
+                selected_scope: str,
+            ) -> tuple[str, ...]: ...
+
+            @overload
+            def rebuild_skill_selection(
+                scaffold_decision: bool,
+                selected_scope: str,
+                previous_enabled: tuple[str, ...],
+            ) -> SkillSelectionModel: ...
+
+            def rebuild_skill_selection(
+                scaffold_decision: bool,
+                selected_scope: str,
+                previous_enabled: tuple[str, ...] | None = None,
+            ) -> tuple[str, ...] | SkillSelectionModel:
+                if previous_enabled is not None:
+                    # The Textual wizard preserves its collected choice while it
+                    # redraws this fresh model. The ordinary two-argument call
+                    # below still owns numbered-picker collection.
+                    return build_skill_selection_model(
+                        scaffold_decision, selected_scope
+                    )
                 selected_targets = _resolve_targets(selected_scope, repo_root, env)
+                required = _post_setup_required_skills(
+                    repo_root=repo_root,
+                    env=env,
+                    prompt_path=selected_targets.prompt_path,
+                    prompt_source=prompt_source,
+                    scaffold=scaffold_decision,
+                    required_skills=required_skills,
+                )
                 collected = _collect_skill_policy(
                     scope=selected_scope,
                     repo_root=repo_root,
@@ -882,14 +932,7 @@ def run_init(
                     discoverer=discoverer,
                     picker_runner=None,
                     git=git,
-                    required_skills=_post_setup_required_skills(
-                        repo_root=repo_root,
-                        env=env,
-                        prompt_path=selected_targets.prompt_path,
-                        prompt_source=prompt_source,
-                        scaffold=scaffold_decision,
-                        required_skills=required_skills,
-                    ),
+                    required_skills=required,
                     installed_skills_dir=skills_source,
                 )
                 # Remember what the picker already resolved, so the answer set
