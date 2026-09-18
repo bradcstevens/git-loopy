@@ -312,6 +312,39 @@ instead:
 
 ---
 
+## Removing a machine-local installation (`git-loopy uninstall`)
+
+`git-loopy uninstall` prints its complete removal plan and asks for confirmation
+before changing anything. By default it removes the executable through its proven
+**Install channel**, the global config-home, the **installed catalog** and its
+record, and the machine-local TUI helper.
+
+```bash
+# Inspect the plan and confirm it interactively.
+git-loopy uninstall
+
+# Accept the printed plan without a prompt.
+git-loopy uninstall --yes
+
+# Explicitly include this repository's tracked project scope and Run logs.
+git-loopy uninstall --all
+```
+
+When run in a repository, the default also reports the project `config.toml`,
+`PROMPT.md`, and `.git-loopy/` Run logs it deliberately keeps. `--all` is the
+explicit opt-in to remove those repository-owned paths and therefore requires a
+repository. A live **Lane** refuses the entire operation before confirmation and
+points at `git-loopy sweep`; uncommitted agent work is never treated as removal
+residue.
+
+If the executable's Install channel cannot be proven, `uninstall` leaves that
+executable in place, prints the exact manual removal command, and still removes
+the machine-local state it can prove belongs to git-loopy. It exits non-zero so
+automation cannot mistake that partial result for a complete uninstall. The
+command never writes to the tracker.
+
+---
+
 ## First-run setup (`git-loopy init`)
 
 `git-loopy init` is an interactive wizard that installs the pinned Skill catalog
