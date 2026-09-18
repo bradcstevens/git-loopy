@@ -565,6 +565,7 @@ _SUBCOMMANDS = (
     "info",
     "update",
     "upgrade",
+    "uninstall",
     "doctor",
     "sweep",
 )
@@ -619,7 +620,10 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{init,config,skills,labels,calibrate,info,update,upgrade,doctor,sweep}",
+        metavar=(
+            "{init,config,skills,labels,calibrate,info,update,upgrade,uninstall,"
+            "doctor,sweep}"
+        ),
     )
 
     init = sub.add_parser(
@@ -819,6 +823,31 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "Permit a move that is not provably forward of the installed "
             "Release."
         ),
+    )
+
+    uninstall = sub.add_parser(
+        "uninstall",
+        help="Remove this installation's machine-local state.",
+        description=(
+            "List and confirm removal of the executable through its proven Install "
+            "channel, the global config-home, installed Skill catalog and record, "
+            "and TUI helper. Project scope and Run logs are reported but preserved "
+            "by default; --all explicitly includes them. A live Lane refuses the "
+            "whole operation so expected agent work is never removed."
+        ),
+    )
+    uninstall.add_argument(
+        "--all",
+        dest="all_",
+        action="store_true",
+        help="Also remove this repository's project scope and Run logs.",
+    )
+    uninstall.add_argument(
+        "-y",
+        "--yes",
+        dest="assume_yes",
+        action="store_true",
+        help="Confirm the printed removal plan without being asked.",
     )
 
     doctor = sub.add_parser(
@@ -1193,6 +1222,34 @@ def _run_upgrade(args: argparse.Namespace) -> int:
         edge_ref=args.edge_ref,
         allow_downgrade=bool(args.allow_downgrade),
     )
+
+
+def _run_uninstall(args: argparse.Namespace) -> int:
+    """Dispatch the installation-owned removal without requiring a repository."""
+    from git_loopy import uninstallcmd
+
+    try:
+        repo_root: Path | None = resolve_repo_root()
+    except RuntimeError:
+        repo_root = None
+    if args.assume_yes:
+        confirm: Callable[[str], bool] | None = _confirm_yes
+    elif sys.stdin.isatty():
+        from git_loopy.calibration_run import interactive_confirm
+
+        confirm = interactive_confirm
+    else:
+        confirm = None
+    return uninstallcmd.run_uninstall(
+        repo_root=repo_root,
+        all_=bool(args.all_),
+        confirm=confirm,
+    )
+
+
+def _confirm_yes(_prompt: str) -> bool:
+    """Accept a plan the operator explicitly approved with ``--yes``."""
+    return True
 
 
 def _display_asset(asset: "InstalledAsset") -> str:
@@ -2423,6 +2480,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_update(sub_args)
         if sub_args.command == "upgrade":
             return _run_upgrade(sub_args)
+        if sub_args.command == "uninstall":
+            return _run_uninstall(sub_args)
         if sub_args.command == "doctor":
             return _run_doctor(sub_args)
         if sub_args.command == "sweep":

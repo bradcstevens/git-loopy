@@ -177,6 +177,29 @@ def test_main_upgrade_moves_the_running_artifact_without_starting_the_loop(
     ]
 
 
+def test_uninstall_is_a_machine_command_with_an_explicit_all_opt_in(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Project scope is discovered when present, never required by uninstall."""
+    from git_loopy import uninstallcmd
+
+    args = cli_module.build_subcommand_parser().parse_args(
+        ["uninstall", "--all", "--yes"]
+    )
+    assert (args.command, args.all_, args.assume_yes) == ("uninstall", True, True)
+
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        uninstallcmd, "run_uninstall", lambda **kwargs: captured.append(kwargs) or 0
+    )
+
+    assert cli_module.main(["uninstall", "--all", "--yes"]) == 0
+    assert captured[0]["repo_root"] == tmp_path
+    assert captured[0]["all_"] is True
+    assert captured[0]["confirm"]("ignored") is True
+
+
 def test_subcommand_parser_parses_the_edge_opt_in_under_either_spelling() -> None:
     """One flag, two spellings: naming the ref *is* the opt-in to unreleased code."""
     parser = cli_module.build_subcommand_parser()
