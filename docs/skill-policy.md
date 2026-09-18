@@ -275,8 +275,6 @@ Opens the searchable multi-select picker, validates, then saves **one** policy
 atomically. The full-screen Textual picker drives the same selection model and
 obeys the same rules described in
 [`docs/skills-setup.md`](skills-setup.md#the-skill-picker-and-its-rules).
-The full-screen picker is used on a terminal; the plain picker is used
-otherwise and returns the same selection.
 
 Two rules are enforced *in the picker*, not at save time:
 
@@ -286,9 +284,8 @@ Two rules are enforced *in the picker*, not at save time:
   off, with the reason, so you can see exactly what needs committing.
 
 A save that would not validate is **refused and names the offending Skill**
-rather than being silently corrected, and the refusal is drawn next to the
-prompt — a status bar in the full-screen picker, the line above the prompt in
-the plain one — so a catalog longer than the terminal cannot scroll it away.
+rather than being silently corrected, and the refusal is drawn in the picker's
+status bar — so a catalog longer than the terminal cannot scroll it away.
 
 ### `git-loopy skills sync` — re-import the Skill baseline
 

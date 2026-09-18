@@ -2,20 +2,19 @@
 
 The very first ``git-loopy`` invocation on an interactive TTY — with **no**
 persisted Config resolving in either scope — sets itself up by auto-running the
-``init`` wizard, then continues into the loop. A non-interactive run (no TTY or
-never prompts: it falls back to the built-in
-defaults so CI never hangs on the wizard. Cancelling the auto-run wizard aborts
-the whole command (writes nothing, runs nothing, non-zero exit).
+``init`` wizard, then continues into the loop. A run with no TTY never prompts:
+it falls back to the built-in defaults so CI never hangs on the wizard.
+Cancelling the auto-run wizard aborts the whole command (writes nothing, runs
+nothing, non-zero exit).
 
 This slice is the **dispatch wiring in** :func:`git_loopy.cli.main` plus the
 TTY decision (:func:`git_loopy.cli._should_auto_init`);
 it reuses the wizard (#53) and the Config loader/resolver (#51). All tests drive
-``main(argv)`` with injected TTY-ness + stdin — no real TTY is ever touched.
+``main(argv)`` with injected TTY-ness — no real TTY is ever touched.
 """
 
 from __future__ import annotations
 
-import io
 from pathlib import Path
 from typing import Any
 
@@ -64,27 +63,19 @@ def test_no_auto_init_when_global_config_present() -> None:
 
 
 class _FakeStdin:
-    """A stdin stand-in with an injectable ``isatty()`` and scripted read data.
+    """A stdin stand-in with an injectable ``isatty()``.
 
-    Lets the tests fake TTY-ness (and, for the cancel case, an EOF at the first
-    prompt) without touching a real terminal — ``input()`` falls back to
-    ``sys.stdin.readline()`` once ``sys.stdin`` is not the real console stream,
-    and an empty buffer makes it raise ``EOFError`` (which the wizard maps to a
-    cancel).
+    TTY-ness is the whole of what the auto-init gate reads, and since #508 the
+    wizard is a fullscreen app rather than a numbered prompt chain — so there is
+    no scripted stdin to answer it with. Cancellation is driven through the
+    wizard app itself (see the cancel test below).
     """
 
-    def __init__(self, *, isatty: bool, data: str = "") -> None:
+    def __init__(self, *, isatty: bool) -> None:
         self._isatty = isatty
-        self._buf = io.StringIO(data)
 
     def isatty(self) -> bool:
         return self._isatty
-
-    def readline(self, *args: Any) -> str:
-        return self._buf.readline(*args)
-
-    def read(self, *args: Any) -> str:
-        return self._buf.read(*args)
 
 
 def _install_fake_loop_run(
@@ -219,13 +210,18 @@ def test_bare_first_run_cancel_aborts_nonzero_and_never_runs_loop(
 ) -> None:
     """Cancelling the auto-run wizard writes nothing, runs nothing, exits non-zero.
 
-    Uses the *real* wizard with a faked TTY stdin that yields EOF at the first
-    (scope) prompt — cancelled before any model fetch, so no SDK is touched.
+    Uses the *real* ``run_init`` and the real wizard runner; only the fullscreen
+    app's event loop is stubbed, because a cancelled Textual app is one whose
+    ``run`` records no answer set. A real ``App.run`` returns what ``exit``
+    recorded, so a stub that records nothing *is* the cancel.
     """
+    from git_loopy.interactive import init_wizard_app
+
     _clear_run_env(monkeypatch)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
-    monkeypatch.setattr("sys.stdin", _FakeStdin(isatty=True, data=""))
+    monkeypatch.setattr("sys.stdin", _FakeStdin(isatty=True))
+    monkeypatch.setattr(init_wizard_app.InitWizardApp, "run", lambda self: None)
     captured: list[tuple[RunConfig, Any]] = []
     _install_fake_loop_run(monkeypatch, captured)
 

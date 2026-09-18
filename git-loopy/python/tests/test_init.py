@@ -22,6 +22,7 @@ from git_loopy import init as init_module
 from git_loopy import scaffold_provenance
 from git_loopy import settings
 from git_loopy import skill_install
+from git_loopy.config import RECOMMENDED_ROUTING
 from git_loopy.interactive.models import ModelChoice, default_cursor_index
 from git_loopy.skill_catalog import SkillCatalogError
 from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
@@ -213,10 +214,10 @@ def _runner(*answers: str, out: "_Output | None" = None) -> Any:
             if recommended in {"q", "quit"}:
                 return None
             if recommended not in {"n", "no"}:
-                routing = dict(init_module.RECOMMENDED_ROUTING)
+                routing = dict(RECOMMENDED_ROUTING)
             else:
                 routing = {}
-                for key, recommended_route in init_module.RECOMMENDED_ROUTING.items():
+                for key, recommended_route in RECOMMENDED_ROUTING.items():
                     action = inp(key)
                     if action.lower() in {"q", "quit"}:
                         return None
@@ -340,6 +341,47 @@ def test_static_choices_expose_the_full_current_catalog_consistently() -> None:
         ), choice.id
         # Offline rows carry no policy block, so every one is selectable.
         assert choice.selectable is True, choice.id
+
+
+def test_run_init_offers_the_static_roster_when_the_live_fetch_fails(
+    tmp_path: Path,
+) -> None:
+    """A failed live fetch warns and still gives the wizard a full roster.
+
+    The wizard is now the only model selection in setup (#508), so the offline
+    fallback is pinned where it survives: at ``run_init``'s seam, by what the
+    runner is handed — not at a numbered collector that no longer exists.
+    """
+    offered: list[Sequence[ModelChoice]] = []
+    warnings: list[str] = []
+
+    def capture(**kwargs: Any) -> Any:
+        offered.append(kwargs["model_choices"])
+        return init_module.InitAnswers(
+            "project", "gpt-5.6-sol", "max", None, False, ()
+        )
+
+    def _offline() -> Sequence[ModelChoice]:
+        raise RuntimeError("offline")
+
+    out = _Output()
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            wizard_runner=capture,
+            scope="project",
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            fetch_choices=_offline,
+            warn=warnings.append,
+            **_packaged(tmp_path),
+        )
+
+    assert rc == 0
+    assert any("could not load the live model list" in w for w in warnings)
+    assert [choice.id for choice in offered[0]] == [
+        choice.id for choice in init_module._static_choices()
+    ]
 
 
 # ---------------------------------------------------------------------------

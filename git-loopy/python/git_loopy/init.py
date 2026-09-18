@@ -347,7 +347,9 @@ def _collect_skill_policy(
 ) -> tuple[str, ...]:
     """Collect one Skill policy through the shared ``skills edit`` seam.
 
-    Cancelling the picker is an ordinary wizard cancellation and writes nothing.
+    Cancelling the picker raises :class:`~git_loopy.skillscmd.SkillPolicyCancelled`
+    — deliberately not wrapped, so it reaches :func:`run_init`'s one cancellation
+    handler as the ordinary wizard cancellation it is, and writes nothing.
     """
     from git_loopy import skillscmd
 
@@ -369,8 +371,6 @@ def _collect_skill_policy(
             installed_skills_dir=installed_skills_dir,
             **options,
         )
-    except skillscmd.SkillPolicyCancelled:
-        raise
     except skillscmd.SKILL_POLICY_FAILURES as exc:
         raise _SkillPolicyUnavailable(
             f"cannot establish a Skill policy: {type(exc).__name__}: {exc}"

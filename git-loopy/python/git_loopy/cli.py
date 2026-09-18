@@ -364,7 +364,6 @@ def build_parser() -> argparse.ArgumentParser:
             "picker (ModelSelectionMode);\n"
             "                              off by default. --select-model wins "
             "over this.\n"
-            "                              off by default.\n"
             "  GIT_LOOPY_SEND_TIMEOUT_SECONDS  send_and_wait timeout "
             "(default: 7200).\n"
             "  GIT_LOOPY_GATE_TIMEOUT_SECONDS  Per-feedback-loop wall-clock "
