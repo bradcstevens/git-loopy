@@ -96,7 +96,7 @@ from git_loopy.skill_policy import (
     resolve_skill_policy,
 )
 from git_loopy.skill_run_preflight import RunSkillPreflight
-from git_loopy.sources import is_afk_ready
+from git_loopy.sources import confirms_empty_pool, is_afk_ready
 from git_loopy.ui import RunSummary
 from git_loopy.ui.renderer import Renderer
 from git_loopy.wrapper import (
@@ -517,6 +517,27 @@ _EXIT_CODES = _load_fixture("exit-codes.json")
 )
 def test_exit_code_fixture(case: dict[str, Any]) -> None:
     assert wrapper_module.exit_code_for(case["reason"]) == case["exit_code"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _EXIT_CODES["pool_emptiness_cases"],
+    ids=lambda case: case["id"],
+)
+def test_pool_emptiness_fixture(case: dict[str, Any]) -> None:
+    """Which read may claim the exit-`0` empty Pool (§2.2, #541).
+
+    Rides `exit-codes.json` rather than a fixture of its own because it decides
+    the same thing those cases map: a read that proved nothing is not entitled
+    to `empty_pool`, and the family's disagreement about that would show up as
+    one member exiting `0` where another exits `1` over identical data.
+    """
+    assert (
+        confirms_empty_pool(
+            complete=case["complete"], remaining=case["remaining"]
+        )
+        is case["confirms_empty"]
+    )
 
 
 _EVENT_SCHEMA = _load_fixture("event-schema.json")
@@ -3637,21 +3658,35 @@ def test_the_contract_states_a_task_type_labels_origin_is_unobservable() -> None
     assert "Task-type classifier" in section
 
 
+#: The contract revision whose text first described the **measured tier** — the
+#: one the two fixtures below pin their decisions against (§18). A literal
+#: rather than `_written_contract_version()`, because a later revision that
+#: changes something else entirely (2.6's unread-Pool rule, §2.2) leaves the
+#: measured tier exactly where it was, and a fixture that re-declared itself at
+#: every bump would claim a decision moved when nothing did.
+_MEASURED_TIER_CONTRACT_VERSION = "2.5"
+
+
 def test_the_measured_tier_fixtures_pin_the_contract_that_records_them() -> None:
     """The decision and its fixtures move as one change (§18).
 
     ``routing-resolution.json`` gained the measured-tier precedence cases and
     ``calibration-search.json`` is the search fixture; until the contract
     described the tier, both pinned behaviour no written contract stated. Now
-    that it does, they declare the version whose text explains them.
+    that it does, they declare the version whose text explains them — and keep
+    declaring *that* version, not whichever one the contract has since reached.
     """
     written = _written_contract_version()
     declared = _declared_fixture_contract_versions()
 
+    # Non-vacuity: the revision these fixtures name is one the contract reached.
+    assert tuple(int(p) for p in _MEASURED_TIER_CONTRACT_VERSION.split(".")) <= tuple(
+        int(p) for p in written.split(".")
+    )
     for fixture in ("routing-resolution.json", "calibration-search.json"):
-        assert declared[fixture] == written, (
+        assert declared[fixture] == _MEASURED_TIER_CONTRACT_VERSION, (
             f"{fixture} pins the measured tier but declares contract "
-            f"{declared[fixture]}, not {written}"
+            f"{declared[fixture]}, not {_MEASURED_TIER_CONTRACT_VERSION}"
         )
 
 

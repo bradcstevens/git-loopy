@@ -825,6 +825,26 @@ git_loopy_exit_code_for() {
   esac
 }
 
+# Whether one read of the Pool may end a Run as an empty Pool (§2.2, #541).
+#
+# The family's single emptiness rule, stated here rather than at the branch that
+# consumes it so this member asks the same question the Python reference's
+# `sources.confirms_empty_pool` answers, over the same fixture cases
+# (`conformance/exit-codes.json` `pool_emptiness_cases`). Only a *complete* read
+# that found nothing establishes emptiness: a failed or truncated read that
+# found nothing produces byte-identical data and proves nothing, and reporting
+# it as the exit-`0` empty Pool ends an unattended Run with "there is no work"
+# over a backlog nobody managed to look at.
+#
+# Arguments: <complete: 1|0> <remaining count>
+# Returns 0 (shell true) only when this read is authority for an empty Pool.
+git_loopy_confirms_empty_pool() {
+  local complete="$1" remaining="$2"
+  [[ "$complete" == "1" ]] || return 1
+  [[ "$remaining" == "0" ]] || return 1
+  return 0
+}
+
 # GitHub closing-keyword regex — kept byte-identical to the Conformance suite's
 # reference_regex and the Python reference CLOSE_KEYWORD_RE so the whole Runner
 # family shares one close-keyword oracle. jq (Oniguruma) honours the embedded
@@ -1535,7 +1555,7 @@ git_loopy_collect_github_pool() {
     if ((status == 2)); then
       printf 'git-loopy: gh issue list returned malformed JSON.\n' >&2
     else
-      printf 'git-loopy: gh issue list failed; treating this Pool as empty.\n' >&2
+      printf 'git-loopy: gh issue list failed; this Pool is unread and may not be treated as empty.\n' >&2
     fi
     GIT_LOOPY_POOL_JSON='[]'
     GIT_LOOPY_POOL_EXCLUSIONS_JSON='[]'
@@ -3110,15 +3130,32 @@ git_loopy_run_discovery() {
     local pool_length
     pool_length="$(jq -r 'length' <<<"$GIT_LOOPY_POOL_JSON")" || return 1
     if [[ "$pool_length" == "0" ]]; then
+      local pool_outcome="empty_pool" pool_rollup_reason=""
+      if ! git_loopy_confirms_empty_pool \
+        "$GIT_LOOPY_POOL_COMPLETE" "$pool_length"; then
+        # Wrapper contract §2.2 (#541) — this read failed, or stopped short of
+        # the whole backlog, so it found nothing *and proved nothing*. An
+        # unreadable Pool is unknown, not empty, and may not leave under the
+        # exit `0` that tells an unattended caller the work is finished. It
+        # ends under `preflight_failed` for the same reason §3.3.1's `gh`
+        # capability gate does — a tracker this Run cannot read is a
+        # precondition an operator can repair — and it is terminal on the spot,
+        # because re-asking a source that just refused would spend the whole
+        # Iteration budget and then exit `0` under `iteration_cap` anyway.
+        pool_outcome="preflight_failed"
+        pool_rollup_reason="preflight_failed"
+        printf 'git-loopy: the Pool read completed no listing and returned no candidates; an unreadable Pool is unknown, not empty, so this Run will not report it as finished work. Check `gh auth status`, this host'"'"'s network path to the tracker, and whether the repository'"'"'s host supports issue dependencies, then re-run.\n' >&2
+      fi
       local iteration_end_payload
-      git_loopy_build_iteration_rollup 0 0 0 "$strikes" || return 1
+      git_loopy_build_iteration_rollup 0 0 0 "$strikes" "$pool_rollup_reason" ||
+        return 1
       iteration_end_payload="$GIT_LOOPY_ITERATION_ROLLUP_JSON"
       git_loopy_emit_event \
         "${GIT_LOOPY_EVENT_TYPES[WRAPPER_ITERATION_END]}" \
         "$iteration" \
         "$iteration_end_payload" || return 1
       iterations_run="$iteration"
-      outcome="empty_pool"
+      outcome="$pool_outcome"
       break
     fi
 
@@ -3334,6 +3371,9 @@ git_loopy_run_discovery() {
       ;;
     all_skipped | all_blocked)
       exit_code="$(git_loopy_exit_code_for "$outcome")"
+      ;;
+    preflight_failed)
+      exit_code="$(git_loopy_exit_code_for "preflight_failed")"
       ;;
     stuck)
       exit_code="$(git_loopy_exit_code_for "stuck")"

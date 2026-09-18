@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.5 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.6 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -51,8 +51,8 @@ never cache across iterations:
   pull requests.
 
 An empty Pool at the start of an Iteration is the **clean-exit-on-empty** condition (exit `0`,
-§10). The next Iteration's collection — not any sentinel — is the source of truth on whether work
-remains.
+§10) — but only when the read that found it empty was *complete* (§2.2). The next Iteration's
+collection — not any sentinel — is the source of truth on whether work remains.
 
 ### 2.1 Fetch completeness (contract 1.11, MUST)
 
@@ -100,6 +100,35 @@ not — a re-rendered value is a different value, and a coercing reader is typic
 
 A source with no page limit — the local-markdown Pool's directory walk — is complete by
 construction and MUST report itself so, including when it is empty.
+
+### 2.2 An unread Pool is unknown, not empty (contract 2.6, MUST)
+
+Emptiness is a claim only a **complete** read may make. A read that failed outright, that gave out
+part-way through, or that is still full at §2.1's ceiling produces the same zero candidates a
+finished backlog does — the two are byte-identical in the data — so an Orchestrator MUST decide the
+clean-exit-on-empty condition from *completeness together with* the candidate count, never from the
+count alone.
+
+An Orchestrator that concludes a Run on such a read MUST NOT report the exit-`0` empty Pool: exit
+`0` says "there is no work", and an unattended caller acts on that by going home. It MUST instead
+end under `preflight_failed` and its non-zero exit, which is the reason §1 already spends on "a
+precondition this Run needs is not satisfied, and an operator can repair it" — an unreadable
+tracker is exactly that, and §3.3.1's `gh`-capability gate is the *predictable* half of the same
+failure, caught earlier only because it is visible in `gh --version`. A host-side capability the
+gate cannot see (a server without issue dependencies, an expired token, a 502) fails later for the
+same reason and takes the same operator action, so it takes the same reason rather than splitting
+one repair across two vocabularies.
+
+The rule MUST be one rule, asked wherever a Pool read could end a Run — in the Python reference it
+is `sources.confirms_empty_pool`, which both the serial Iteration and Rolling dispatch's terminal
+classifier call. Two dispatch paths that each restate it drift, and the drift is invisible: both
+report `empty_pool` and only one of them is entitled to.
+
+An Orchestrator that holds *independent* evidence about the same Pool is not overruled by one
+refused read. Rolling dispatch's granted serial turn already latched proof that specific
+serial-required issues exist, and its serial fallback already has two complete same-turn reads
+proving the Pool empty; in both, a later read that proved nothing MUST NOT overturn what was
+proven, and the Run polls for a read that completes rather than abandoning work it can name.
 
 ## 3. Discriminator (phase 1, MUST)
 

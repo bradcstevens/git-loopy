@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.3",
+  "contract_version": "2.6",
   "cases": [
     {
       "id": "empty-pool-is-clean",
@@ -41,6 +41,32 @@
       "id": "malformed-invocation-is-usage-error",
       "reason": "usage_error",
       "exit_code": 2
+    }
+  ],
+  "pool_emptiness_cases": [
+    {
+      "id": "complete-read-with-no-candidates-is-empty",
+      "complete": true,
+      "remaining": 0,
+      "confirms_empty": true
+    },
+    {
+      "id": "failed-read-with-no-candidates-is-unknown",
+      "complete": false,
+      "remaining": 0,
+      "confirms_empty": false
+    },
+    {
+      "id": "complete-read-with-candidates-is-not-empty",
+      "complete": true,
+      "remaining": 3,
+      "confirms_empty": false
+    },
+    {
+      "id": "partial-read-with-candidates-is-not-empty",
+      "complete": false,
+      "remaining": 3,
+      "confirms_empty": false
     }
   ]
 }

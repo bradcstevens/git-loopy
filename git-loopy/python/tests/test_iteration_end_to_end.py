@@ -4209,6 +4209,73 @@ def test_a_failed_pool_read_never_ends_a_run_as_an_empty_pool(
     assert fake_client.created == []
 
 
+def test_a_failed_gh_issue_list_never_ends_a_serial_run_as_an_empty_pool(
+    tmp_path, monkeypatch
+) -> None:
+    """The #541 report, driven through the read it names (contract §2.1).
+
+    The sibling above proves the rule on the collection; this proves it on the
+    exact failure the issue was filed about — ``gh issue list`` refusing inside
+    the serial driver's own Pool collection. The distinction matters because
+    that refusal is the one an operator actually meets: a ``gh`` that preflight
+    cleared, against a host that then rejects the query (a GHES without issue
+    dependencies, an expired token, a 502), degrading the collection to zero
+    items.
+
+    Preflight passes here on purpose — ``gh repo view`` and ``gh --version``
+    both answer. This pins precisely the half of the hazard #438's capability
+    gate cannot see, because it lives on the *server* rather than in
+    ``gh --version``: a Run reaches its first Iteration, reads nothing, and
+    before the fix reported a repository full of triaged work as a finished
+    backlog at exit ``0``.
+    """
+    writers = create_writers(tmp_path)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        # The backlog is *not* empty — #7 is triaged, ready, and waiting. Only
+        # the read of it fails, which is the whole point: a Run that reported
+        # this as an empty Pool would abandon work it never looked at.
+        issues=[_make_issue(7)],
+        issue_list_error=gh_module.GhError(
+            ["gh", "issue", "list"], 1, "GraphQL: Field 'blockedBy' doesn't exist"
+        ),
+    )
+    denomination = BilledCreditsDenomination()
+    serial = loop_module._Loop(
+        config=RunConfig(issue_source="github", max_iterations=3),
+        release_version=EXPECTED_RELEASE_VERSION,
+        git=FakeGitClient(tmp_path),
+        prompt_text="be the agent",
+        denomination=denomination,
+        writers=writers,
+        sinks=SinkFanout([]),
+        summary=RunSummary(denomination=denomination),
+        client=cast(CopilotClient, None),
+        skill_preflight=cast(
+            Any,
+            SimpleNamespace(exposure=None, migration_warning=False, event_payload={}),
+        ),
+        source=sources_module.GitHubIssueSource(diag=writers.diagnostics, gh=fake_gh),
+        diag=writers.diagnostics,
+    )
+
+    exit_code = asyncio.run(serial.drive())
+
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    # Non-vacuity: preflight really did pass, and the Iteration really did try
+    # to read the Pool and come back with nothing.
+    collected = [e for e in events if e["type"] == "wrapper.afk_ready.collected"]
+    assert collected and collected[0]["issues"] == []
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] != "empty_pool"
+    assert run_end["outcome"] == "preflight_failed"
+    assert exit_code != 0
+    assert exit_code == 1
+    # Terminal on the spot rather than re-asked until the cap: an Iteration cap
+    # spent on a refusing source ends at `iteration_cap`, which is exit 0 again.
+    assert len([e for e in events if e["type"] == "wrapper.iteration.start"]) == 1
+
+
 # ---------------------------------------------------------------------------
 # The Task-type classifier at Pickup (#409, ADR-0029)
 # ---------------------------------------------------------------------------

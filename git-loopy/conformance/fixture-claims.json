@@ -52,9 +52,9 @@
       "rust": {"kind": "waived_owed", "reason": "The Dashboard is assigned the consumer Event-stream fold but its suite does not exercise this fixture.", "issue": 557}
     },
     "exit-codes.json": {
-      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py compares fixture exit-code cases with the production exit-code function."},
-      "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh compares fixture cases with the production exit-code function."},
-      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 compares fixture cases with the production exit-code function."},
+      "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py compares fixture exit-code and Pool-emptiness cases with the production exit-code function and emptiness rule."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-orchestrator-conformance.sh compares fixture exit-code and Pool-emptiness cases with the production functions."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 compares fixture exit-code and Pool-emptiness cases with the production functions."},
       "rust": {"kind": "waived_out_of_scope", "reason": "Process exit disposition belongs to an Orchestrator; the Dashboard core does not own a Run's exit code."}
     },
     "homebrew-tap.json": {

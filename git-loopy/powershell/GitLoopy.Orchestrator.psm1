@@ -1410,6 +1410,28 @@ function Get-GitLoopyExitCode {
     }
 }
 
+# Whether one read of the Pool may end a Run as an empty Pool (§2.2, #541).
+#
+# The family's single emptiness rule, stated here rather than at the branch that
+# consumes it so this member asks the same question the Python reference's
+# `sources.confirms_empty_pool` answers, over the same fixture cases
+# (`conformance/exit-codes.json` `pool_emptiness_cases`). Only a *complete* read
+# that found nothing establishes emptiness: a failed or truncated read that found
+# nothing produces byte-identical data and proves nothing, and reporting it as
+# the exit-`0` empty Pool ends an unattended Run with "there is no work" over a
+# backlog nobody managed to look at.
+function Test-GitLoopyConfirmsEmptyPool {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [bool]$Complete,
+        [Parameter(Mandatory)]
+        [int]$Remaining
+    )
+    return ($Complete -and $Remaining -eq 0)
+}
+
 # GitHub closing-keyword regex — kept byte-identical to the Conformance suite's
 # reference_regex and the Python reference so the whole Runner family shares one
 # close-keyword oracle. .NET honours the embedded (?i) and matches \s (including
@@ -2098,7 +2120,8 @@ function Get-GitLoopyIssueListToCompletion {
             return @{
                 ok = $false
                 message =
-                    "git-loopy: gh issue list failed; treating this Pool as empty."
+                    "git-loopy: gh issue list failed; this Pool is unread and " +
+                    "may not be treated as empty."
             }
         }
         $Candidates = ConvertFrom-GitLoopyExternalJsonText `
@@ -4294,16 +4317,43 @@ function Invoke-GitLoopyDiscoveryLoop {
                 -Context $Context `
                 -EventTypes $EventTypes `
                 -Iteration $Iteration
+            $PoolOutcome = "empty_pool"
+            $PoolRollupReason = ""
+            if (-not (Test-GitLoopyConfirmsEmptyPool `
+                    -Complete $script:GitLoopyPoolComplete `
+                    -Remaining $Pool.Count)) {
+                # Wrapper contract §2.2 (#541) — this read failed, or stopped
+                # short of the whole backlog, so it found nothing *and proved
+                # nothing*. An unreadable Pool is unknown, not empty, and may not
+                # leave under the exit `0` that tells an unattended caller the
+                # work is finished. It ends under `preflight_failed` for the same
+                # reason §3.3.1's `gh` capability gate does — a tracker this Run
+                # cannot read is a precondition an operator can repair — and it is
+                # terminal on the spot, because re-asking a source that just
+                # refused would spend the whole Iteration budget and then exit `0`
+                # under `iteration_cap` anyway.
+                $PoolOutcome = "preflight_failed"
+                $PoolRollupReason = "preflight_failed"
+                [Console]::Error.WriteLine(
+                    "git-loopy: the Pool read completed no listing and returned " +
+                    "no candidates; an unreadable Pool is unknown, not empty, so " +
+                    "this Run will not report it as finished work. Check " +
+                    "``gh auth status``, this host's network path to the tracker, " +
+                    "and whether the repository's host supports issue " +
+                    "dependencies, then re-run."
+                )
+            }
             $Rollup = Get-GitLoopyCurrentIterationRollup `
                 -FinishedMonotonic (Get-GitLoopyMonotonicSeconds) `
-                -Strikes $Strikes
+                -Strikes $Strikes `
+                -TerminalOutcome $PoolRollupReason
             Write-GitLoopyEvent `
                 -Context $Context `
                 -Type $EventTypes["WRAPPER_ITERATION_END"] `
                 -Iteration $Iteration `
                 -Payload $Rollup
             $IterationsRun = $Iteration
-            $Outcome = "empty_pool"
+            $Outcome = $PoolOutcome
             break
         }
 
@@ -4574,6 +4624,9 @@ function Invoke-GitLoopyDiscoveryLoop {
     if ($Outcome -ceq "all_skipped" -or $Outcome -ceq "all_blocked") {
         return Get-GitLoopyExitCode -Reason $Outcome
     }
+    if ($Outcome -ceq "preflight_failed") {
+        return Get-GitLoopyExitCode -Reason "preflight_failed"
+    }
     return Get-GitLoopyExitCode -Reason "iteration_cap"
 }
 
@@ -4688,6 +4741,7 @@ Export-ModuleMember -Function @(
     "Write-GitLoopyPickupSkipped",
     "Get-GitLoopyPickupRecord",
     "Get-GitLoopyExitCode",
+    "Test-GitLoopyConfirmsEmptyPool",
     "Get-GitLoopyCloseKeywordPattern",
     "Get-GitLoopyCloseReferences",
     "Get-GitLoopyActionableCloseReferences",

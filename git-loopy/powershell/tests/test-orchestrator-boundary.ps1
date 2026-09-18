@@ -237,6 +237,16 @@ switch -CaseSensitive ($Command) {
             $env:FAKE_GH_LIST_COUNT,
             [string]($Count + 1)
         )
+        # An opt-in refusal, recorded in the count like any other attempt: the
+        # Orchestrator has to tell "the host answered with nothing" from "the
+        # host did not answer", and only a read that really failed exercises
+        # that.
+        if ($env:FAKE_GH_LIST_STATUS -and [int]$env:FAKE_GH_LIST_STATUS -ne 0) {
+            [Console]::Error.WriteLine(
+                "GraphQL: Field blockedBy does not exist on type Issue"
+            )
+            exit ([int]$env:FAKE_GH_LIST_STATUS)
+        }
         [Console]::Out.Write(
             (Complete-FakeIssueJson -Text (
                 [IO.File]::ReadAllText($env:FAKE_GH_LIST_JSON)
@@ -1140,6 +1150,47 @@ exit 97
     Assert-True (-not (
             [IO.File]::ReadAllText($env:FAKE_GH_LOG) -match "(?m)^issue list"
         )) "old gh readiness preflight reads no Pool"
+
+    # Wrapper contract §2.2 (#541): a Pool read that *failed* produces the same
+    # zero candidates a finished backlog does, and must not be reported as one.
+    # The refusal here is the one an operator meets — a `gh` preflight cleared,
+    # against a host that then rejects the query — so the Run gets past §3.3.1's
+    # capability gate and only discovers the tracker is unreadable at its first
+    # collection.
+    [IO.File]::WriteAllText($env:FAKE_GH_LOG, "")
+    [IO.File]::Delete($env:FAKE_GH_LIST_COUNT)
+    $env:FAKE_GH_LIST_STATUS = "1"
+    $UnreadStdout = Join-Path $TempDir "unread-pool.stdout"
+    $UnreadStderr = Join-Path $TempDir "unread-pool.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $EmptyRepo `
+        -FakeBin $EmptyBin `
+        -StdoutPath $UnreadStdout `
+        -StderrPath $UnreadStderr
+    $env:FAKE_GH_LIST_STATUS = $null
+    Assert-Equal 1 $Status "an unread Pool exits nonzero"
+    Assert-Equal "1" (
+        [IO.File]::ReadAllText($env:FAKE_GH_LIST_COUNT).Trim()
+    ) "an unread Pool is terminal on the spot rather than re-asked until the cap"
+    Assert-Contains (
+        [IO.File]::ReadAllText($UnreadStderr)
+    ) "unknown, not empty" (
+        "the unread-Pool diagnostic names what it will not claim"
+    )
+    $UnreadEvents = Read-Events -Path $UnreadStdout
+    $UnreadIterationEnd = @(
+        $UnreadEvents | Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )
+    Assert-Equal 1 $UnreadIterationEnd.Count "an unread Pool closes one Iteration"
+    Assert-Equal "preflight_failed" $UnreadIterationEnd[0]["outcome"] (
+        "an unread Iteration does not record an empty Pool"
+    )
+    $UnreadRunEnd = $UnreadEvents[$UnreadEvents.Count - 1]
+    Assert-Equal "wrapper.run.end" $UnreadRunEnd["type"] "unread Run ends"
+    Assert-Equal "preflight_failed" $UnreadRunEnd["outcome"] (
+        "a failed Pool read did not end the Run as an unread Pool"
+    )
+    Assert-Equal 1 $UnreadRunEnd["iterations_run"] "unread Run Iteration count"
 
     $env:GIT_LOOPY_MODEL = "env-model"
     $env:GIT_LOOPY_REASONING_EFFORT = "high"

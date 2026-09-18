@@ -372,6 +372,21 @@ foreach ($Case in $ExitCodes["cases"]) {
     Assert-Equal $Case["exit_code"] $Actual "exit-code fixture: $($Case["id"])"
 }
 
+# §2.2 (#541): which read may claim the exit-`0` empty Pool. Driven through the
+# production rule rather than re-derived here, so this member and the Python
+# reference answer the same four cases the same way — a family that disagreed
+# would have one Orchestrator exiting 0 where another exits 1 over identical
+# data.
+foreach ($Case in $ExitCodes["pool_emptiness_cases"]) {
+    $Actual = Test-GitLoopyConfirmsEmptyPool `
+        -Complete ([bool]$Case["complete"]) `
+        -Remaining ([int]$Case["remaining"])
+    Assert-Equal `
+        ([bool]$Case["confirms_empty"]) `
+        $Actual `
+        "pool-emptiness fixture: $($Case["id"])"
+}
+
 $CloseReferences = Get-Content `
     -LiteralPath (Join-Path $ConformanceDir "close-references.json") `
     -Raw |

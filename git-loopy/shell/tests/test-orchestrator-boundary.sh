@@ -241,6 +241,13 @@ case "${1-} ${2-}" in
     fi
     count=$((count + 1))
     printf '%s\n' "$count" >"$FAKE_GH_LIST_COUNT"
+    # An opt-in refusal, recorded in the count like any other attempt: the
+    # Orchestrator has to tell "the host answered with nothing" from "the host
+    # did not answer", and only a read that really failed exercises that.
+    if [[ "${FAKE_GH_LIST_STATUS:-0}" != "0" ]]; then
+      printf 'GraphQL: Field blockedBy does not exist on type Issue\n' >&2
+      exit "$FAKE_GH_LIST_STATUS"
+    fi
     if [[ -n "${FAKE_GH_EMPTY_AFTER:-}" ]] && ((count > FAKE_GH_EMPTY_AFTER)); then
       printf '[]\n'
     else
@@ -1028,6 +1035,47 @@ jq -se '
   and .[-1].iterations_run == 2
 ' "$temp_dir/github-default.stdout" >/dev/null ||
   fail "unlimited turn Run did not terminate on an empty Pool"
+
+# Wrapper contract §2.2 (#541): a Pool read that *failed* produces the same zero
+# candidates a finished backlog does, and must not be reported as one. The
+# refusal here is the one an operator meets — a `gh` preflight cleared, against a
+# host that then rejects the query — so the Run gets past §3.3.1's capability
+# gate and only discovers the tracker is unreadable at its first collection.
+repo="$temp_dir/unread-pool"
+fake_bin="$temp_dir/unread-pool-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+cp "$temp_dir/github-list.json" "$temp_dir/unread-pool-list.json"
+export FAKE_GH_LOG="$temp_dir/unread-pool-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/unread-pool-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/unread-pool-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+setup_copilot_env "unread-pool"
+export FAKE_GH_LIST_STATUS=1
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/unread-pool.stdout" \
+  "$temp_dir/unread-pool.stderr" 5
+status=$?
+set -e
+unset FAKE_GH_LIST_STATUS
+assert_equal "1" "$status" "an unread Pool exits nonzero"
+assert_equal "1" "$(<"$FAKE_GH_LIST_COUNT")" \
+  "an unread Pool is terminal on the spot rather than re-asked until the cap"
+[[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
+  fail "an unread Pool started a session"
+assert_contains "$(<"$temp_dir/unread-pool.stderr")" \
+  "unknown, not empty" "the unread-Pool diagnostic names what it will not claim"
+jq -se '
+  ([.[] | select(.type == "wrapper.afk_ready.collected") | .issues] == [[]])
+  and ([.[] | select(.type == "wrapper.iteration.end") | .outcome] ==
+    ["preflight_failed"])
+  and (.[-1].type == "wrapper.run.end")
+  and (.[-1].outcome != "empty_pool")
+  and (.[-1].outcome == "preflight_failed")
+  and (.[-1].iterations_run == 1)
+' "$temp_dir/unread-pool.stdout" >/dev/null ||
+  fail "a failed Pool read did not end the Run as an unread Pool"
 
 # A turn that produces new commits records one commit event per commit, in
 # git's newest-first order, and only closes the Iteration afterwards.
