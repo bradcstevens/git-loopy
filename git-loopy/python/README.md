@@ -557,6 +557,7 @@ Copilot, network access, or the TUI.
 | `GIT_LOOPY_MODEL`                           | `claude-opus-5`                | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `GIT_LOOPY_REASONING_EFFORT` for backward compatibility. With ModelSelectionMode enabled (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`) this value is the startup picker's pre-selected cursor and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly. |
 | `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, case-insensitive (the `--reasoning-effort` flag overrides this). Explicit `none` requests no reasoning; an omitted value lets the backend choose when no configured/default effort applies. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A model without configurable reasoning (`auto`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
 | `GIT_LOOPY_CONTEXT_TIER`                    | `default`                       | Root-session tier: `default` or `long_context`. `--context-tier` wins, then this value, project Config, global Config, and the default. It constrains every **Routing resolution**, including a legacy `[routing]` model/effort pair, but does **not** suppress per-task-type routing. |
+| `GIT_LOOPY_ROUTE_POLICY`                    | unset (`unselected`)            | Which **Route policy** this Run uses. `unselected` — the default, and what you get by saying nothing — keeps every existing behaviour unchanged. `static` selects the **Static route** (ADR-0057): your `model` / `reasoning_effort` / `context_tier` are verified against the **authenticated harness this Run spawns** and then honoured exactly, rather than being passed through the built-in model roster's capability gate. `--route-policy` wins, then this value, project Config, global Config. A settings combination the harness does not support **fails before any work** instead of being quietly downgraded. `dynamic` is a real policy name that this release does not implement and refuses by name. |
 | `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type** and **Bump-class classifiers** run on. Each reads an unlabelled issue's own content and writes a closed `task-type:` or `semver:` label back at **Pickup** (ADR-0029, ADR-0052). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
 | `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort both classifiers run at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
@@ -575,6 +576,7 @@ Copilot, network access, or the TUI.
 
 CLI flags (`--version`, `--model ID`, `--reasoning-effort EFFORT`,
 `--context-tier TIER`,
+`--route-policy POLICY`,
 `-v` / `-vv` / `-vvv`,
 `--no-reasoning`, `--enable-skill` / `--disable-skill`, `--deny-tool`,
 `--deny-skill` (deprecated), `--select-model` / `--no-select-model`,
@@ -583,7 +585,9 @@ are the runner's only non-positional flags. `--model` / `--reasoning-effort`
 are per-run overrides at the **top** of the precedence chain (they win over
 env, project / global config, and the built-in default). `--context-tier`
 follows that precedence for the run-wide work-tier constraint without
-suppressing a static route. See `git-loopy --help` for the full list.
+suppressing a static route. `--route-policy` selects the **Route policy**
+([below](#the-route-policy-and-the-static-route)). See `git-loopy --help` for the
+full list.
 
 `--issue N` **pins** one issue for one invocation (ADR-0032): the run works
 issue `N` instead of the head of the selection order, and every other issue
@@ -623,6 +627,7 @@ lower-cased):
 model = "gpt-5.6-sol"
 reasoning_effort = "max"
 context_tier = "long_context"
+route_policy = "static"    # opt in to the Static route; omit to keep today's behaviour
 classifier_model = "gpt-5.4-mini"
 classifier_effort = "low"
 issue_source = "github"
@@ -636,7 +641,8 @@ deny_tools = ["bash"]
 deny_skills = []   # deprecated final guard — prefer omitting from enabled_skills
 ```
 
-The **persisted** knobs are `model`, `reasoning_effort`, `context_tier`, `classifier_model`,
+The **persisted** knobs are `model`, `reasoning_effort`, `context_tier`, `route_policy`,
+`classifier_model`,
 `classifier_effort`, `issue_source`,
 `include_prs`, `max_nmt_strikes`, `demotion_threshold`, `otel_enabled`,
 `send_timeout_seconds`, `enabled_skills`, and the two denylists. The
@@ -756,11 +762,64 @@ git-loopy config edit --global
   set.
 
 The settable keys are exactly the [persisted knobs](#persistent-config-configtoml)
-above (`model`, `reasoning_effort`, `context_tier`, `classifier_model`, `classifier_effort`,
+above (`model`, `reasoning_effort`, `context_tier`, `route_policy`,
+`classifier_model`, `classifier_effort`,
 `issue_source`, `max_nmt_strikes`, `demotion_threshold`,
 `include_prs`, `otel_enabled`, `send_timeout_seconds`,
 `deny_tools`, `deny_skills`). Per-run-only knobs are never persisted, so they are
 not `config` keys.
+
+### The Route policy and the Static route
+
+`route_policy` (flag: `--route-policy`, env: `GIT_LOOPY_ROUTE_POLICY`) chooses
+how this Run decides what each issue runs on. It has two values today:
+
+- **`unselected`** — the default. Everything works exactly as documented above:
+  the pair you configure is passed through the built-in **model roster**'s
+  capability gate, an effort the roster says the model cannot take is dropped to
+  "let the backend pick", a context tier the roster does not list for that model
+  is downgraded to `default`, and the run keeps going.
+- **`static`** — the **Static route** ([ADR-0057](../../docs/adr/)). Your
+  `model`, `reasoning_effort` and `context_tier` are one atomic choice, verified
+  against the **model listing of the authenticated Copilot harness this Run
+  actually spawns** — its eligibility for *your* account, its reasoning-effort
+  dial, and the context tiers it prices — and then used exactly as selected.
+
+Under `static` the run **refuses rather than rescues**. A model your account may
+not use, a model the harness never listed, an effort outside the model's dial,
+an effort on a model with no dial at all, a context tier the harness does not
+offer for that model, or a harness that could not be read — each ends the run
+with exit `1` **before any issue is picked up**, naming the setting and which
+entry it came from:
+
+```
+git-loopy: the selected Static route was refused — [routing] docs: 'gpt-5-mini'
+does not accept reasoning effort 'max'. It accepts: low, medium.
+```
+
+That check covers the whole config in one pass — the run-wide default, every
+`[routing]` entry, and an explicitly configured escalation rung — so a broken
+route in a table you rarely exercise is caught at the start of the run rather
+than six iterations in.
+
+Three details worth knowing:
+
+- **A model with no reasoning-effort dial is sent no effort argument at all.**
+  That is a different thing from the effort *value* `none`, which is sent as a
+  value to a model whose dial offers it.
+- **Your existing config is already a Static route.** A `model` /
+  `reasoning_effort` pair, or a `[routing]` entry, is a valid static choice and
+  inherits the run-level `context_tier`. Nothing is migrated for you: selecting
+  the policy is the only thing that changes behaviour.
+- **A static route does not escalate on its own.** git-loopy ships a default
+  **escalation rung** that retries a stalled issue on a stronger pair. Under
+  `static` that built-in rung does not apply, because a route that promotes
+  itself was never static. Write an explicit `[escalation]` block if you want
+  one — it is verified like any other route.
+
+`dynamic` is a policy name this release deliberately **refuses**: live evidence
+guiding per-issue routing is accepted design, and naming it here is how the
+static tracer stays distinguishable from a default that has not been activated.
 
 ### The Task-type classifier's pair
 

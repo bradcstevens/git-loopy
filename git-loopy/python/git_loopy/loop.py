@@ -188,6 +188,14 @@ from git_loopy.release_version import (
 )
 from git_loopy.run_control import RunControlArtifact
 from git_loopy.run_environment_preflight import resolve_run_environment_preflight
+from git_loopy.static_route import (
+    HarnessCapabilities,
+    RoutePolicy,
+    StaticRoute,
+    StaticRouteError,
+    refresh_harness_capabilities,
+    validate_static_route,
+)
 from git_loopy.skill_install import (
     SkillInstallError,
     describe_refresh,
@@ -864,6 +872,77 @@ _ITERATION_RUN_REASONS: dict[str, str] = {
 def _run_reason_for(iteration_outcome: str) -> str:
     """Return the Run reason one Iteration outcome ends the Run under."""
     return _ITERATION_RUN_REASONS.get(iteration_outcome, iteration_outcome)
+
+
+async def _refresh_harness_capabilities() -> HarnessCapabilities | None:
+    """The Run's capability read, as a module seam tests substitute.
+
+    A function here rather than a call into
+    :mod:`git_loopy.static_route` inline, on the discipline ``_make_client`` /
+    ``_make_git_client`` already keep: the one place a Run reaches the network
+    for capabilities is named, so an offline suite replaces it and a reader can
+    see at a glance that an **unselected** policy never calls it at all.
+    """
+    return await refresh_harness_capabilities()
+
+
+def _configured_static_routes(
+    config: RunConfig,
+) -> tuple[tuple[str, StaticRoute], ...]:
+    """Every Static route this Run could resolve to, each with what to call it.
+
+    The run-wide default, every ``[routing]`` entry, and the **Escalation rung**
+    where the operator configured one — all under the run-level context tier,
+    which is the whole point of the tier being run-level rather than a
+    ``[routing]`` column. The classifier's own pair is deliberately absent:
+    ADR-0057 leaves Subagents and non-Iteration sessions on their existing
+    settings, and the **Task-type classifier** is not an issue-owning Agent.
+
+    Named rather than numbered, because the refusal an operator reads has to
+    say *which* entry to go and fix.
+    """
+    routes: list[tuple[str, StaticRoute]] = [
+        (
+            "the run-wide default",
+            StaticRoute(config.model, config.reasoning_effort, config.context_tier),
+        )
+    ]
+    for key in sorted(config.routing):
+        model, effort = config.routing[key]
+        routes.append(
+            (f"[routing] {key}", StaticRoute(model, effort, config.context_tier))
+        )
+    if config.escalation_rung is not None:
+        model, effort = config.escalation_rung
+        routes.append(
+            ("[escalation]", StaticRoute(model, effort, config.context_tier))
+        )
+    return tuple(routes)
+
+
+async def _static_route_preflight(config: RunConfig) -> str | None:
+    """Verify every configured Static route, or say why the Run cannot start.
+
+    Answers ``None`` when there is nothing to refuse — which is *always*, and
+    without a round trip, for a Run that selected no policy (#560, ADR-0057).
+
+    Whole-configuration rather than per-Pickup. "Fail explicitly before work"
+    is only true of a check that runs before the first session, and checking
+    only the route this Pickup resolved would leave a broken ``[routing]``
+    entry to be discovered by the Iteration that finally picks up an issue
+    carrying that Task type — after the Run has already spent work. It also
+    makes the refusal deterministic: the same Config refuses the same way
+    whatever the Pool happened to contain.
+    """
+    if config.route_policy is not RoutePolicy.STATIC:
+        return None
+    capabilities = await _refresh_harness_capabilities()
+    for name, route in _configured_static_routes(config):
+        try:
+            validate_static_route(route, capabilities)
+        except StaticRouteError as exc:
+            return f"{name}: {exc}"
+    return None
 
 #: The **Wind-down** ladder as a rung lookup, derived from the family's ordered
 #: wire vocabulary so the order lives in one place (``events.WIND_DOWN_STAGES``)
@@ -5689,6 +5768,24 @@ async def run(
                 diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
             control.close()
             return exit_code_for("preflight_failed")
+
+    # A Static route is verified against the authenticated harness *here*: after
+    # the host is known to be usable and before a single session is opened, so
+    # an unsupported or unverifiable selection costs no work at all (#560,
+    # ADR-0057). A Run that selected no policy never reaches the network for it.
+    static_route_refusal = await _static_route_preflight(config)
+    if static_route_refusal is not None:
+        print(
+            f"git-loopy: the selected Static route was refused — "
+            f"{static_route_refusal}",
+            file=sys.stderr,
+        )
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
+        return exit_code_for("preflight_failed")
 
     try:
         prompt_text = _read_prompt(repo_root, os.environ)

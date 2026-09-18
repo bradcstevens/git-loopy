@@ -71,6 +71,7 @@ def test_registry_covers_exactly_the_persisted_schema() -> None:
         "model",
         "reasoning_effort",
         "context_tier",
+        "route_policy",
         "classifier_model",
         "classifier_effort",
         "issue_source",
@@ -112,6 +113,15 @@ def test_coerce_enum_keys_validate_choices() -> None:
     assert configcmd.coerce_value("reasoning_effort", "NONE") == "none"
     assert configcmd.coerce_value("issue_source", "prds") == "prds"
     assert configcmd.coerce_value("context_tier", "LONG_CONTEXT") == "long_context"
+    # The **Route policy** (#560, ADR-0057) is a persisted key so an operator
+    # can opt a repository into the **Static route** once, rather than
+    # remembering a flag on every Run. `dynamic` is a real policy name that
+    # this slice does not implement, so it is refused by name rather than
+    # rejected as junk.
+    assert configcmd.coerce_value("route_policy", "STATIC") == "static"
+    assert configcmd.coerce_value("route_policy", "unselected") == "unselected"
+    with pytest.raises(configcmd.ConfigCommandError, match="ADR-0057"):
+        configcmd.coerce_value("route_policy", "dynamic")
     with pytest.raises(configcmd.ConfigCommandError):
         configcmd.coerce_value("reasoning_effort", "ultra")
     with pytest.raises(configcmd.ConfigCommandError):

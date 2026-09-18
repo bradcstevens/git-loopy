@@ -764,6 +764,44 @@ rung rather than reserving it and unclassified work that stalls has nowhere stro
 independent constant: it resembles one seeded **Routed pair** by rationale, never by derivation.
 _Avoid_: global default (ambiguous — **Config** has global scope), fallback model.
 
+**Route policy**:
+Which rule this **Run** decides a **Routing resolution** by. Selected, never inherited: *unselected*
+is the absence of a decision and keeps every existing behaviour — the model roster's capability
+gate, the built-in **Escalation rung**, the historical Event stream — exactly as it was, and a
+**Run** that names nothing is never read as having chosen. *Static* selects the **Static route**.
+A name the kit does not implement is refused rather than absorbed, because a policy silently
+ignored runs the **Run** under one the operator did not ask for and believes is active. It is one
+**Config** key on the ordinary precedence spine, and it travels on the **Run**'s own start record
+so a reader never has to infer which rule produced the pairs beside it (ADR-0057).
+_Avoid_: routing mode, routing strategy, model policy.
+
+**Static route**:
+A complete, operator-selected `model` + reasoning effort + **Context tier**, verified against the
+**Harness capabilities** of the authenticated harness this **Run** actually spawns and then
+honoured exactly. Atomic: an existing model/effort pair — run-wide or a `[routing]` entry — is
+already one and inherits the run-level tier. It **refuses rather than rescues**: an ineligible or
+unlisted model, an effort outside the model's dial, an effort on a model with no dial, a tier the
+harness does not price, and a capability read that did not complete each end the **Run** before
+any work, because dropping an effort or downgrading a tier produces a different route than the one
+selected and reports it as success. It stays fixed for an **Agent** and across every permitted
+retry unless the operator configured an **Escalation rung** explicitly — a rung the kit ships by
+default is not consent. The verified triple is the **Routing resolution**, so the session, the
+**Pickup** Event, the CLI line and the **Dashboard** all read one record (ADR-0057).
+_Avoid_: pinned model, fixed pair, hardcoded route.
+
+**Harness capabilities**:
+What the authenticated Copilot harness says about the models *this account* may use, read from its
+own model listing: eligibility, whether each model has a reasoning-effort dial and which values it
+takes, and which **Context tier**s it offers. It is read **fresh** for a **Static route**, in its
+own short-lived connect-list-stop, deliberately not from the **Run**'s memoised listing — that one
+is memoised so the **Rate card** cannot reprice mid-**Run**, which is the opposite property — and
+what it returns is capability only, so a capability read can never write back over billing
+provenance the **Run** already recorded. A model with *no* effort dial is a different fact from one
+whose dial offers the value `none`: the first is sent no effort argument at all, the second is sent
+`none` as a value. A listing that could not be read is *unknown*, never *empty* and never
+permission.
+_Avoid_: model roster (the kit's own hardcoded table), model catalog, plan comparison.
+
 **Escalation rung**:
 The one model and reasoning effort a silently stalled unit of work is retried at. A **Session
 outcome** of silent no-progress — and only that one, because a timeout answered with a slower

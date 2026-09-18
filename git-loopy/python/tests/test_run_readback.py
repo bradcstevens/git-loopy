@@ -24,6 +24,7 @@ from git_loopy.config import (
     TaskTypeError,
 )
 from git_loopy.run_readback import build_run_readback, spawned_harness_version
+from git_loopy.static_route import RoutePolicy
 
 
 def test_a_routing_key_outside_the_taxonomy_never_reaches_a_readback() -> None:
@@ -326,3 +327,68 @@ def test_a_suppressed_table_is_still_read_back() -> None:
 
     assert payload["routing_suppressed"] is True
     assert [route["key"] for route in payload["routes"]] == ["planning"]
+
+
+# ---------------------------------------------------------------------------
+# The **Static route** policy (#560, ADR-0057)
+# ---------------------------------------------------------------------------
+
+
+def test_a_static_route_is_read_back_as_selected_not_as_the_roster_would_gate_it() -> (
+    None
+):
+    """The readback is the same resolution the session gets, or it is a lie.
+
+    Under the Static route the hardcoded roster is not the authority — the
+    authenticated harness is — so a roster row that would drop ``max`` from
+    ``gpt-5-mini`` must not make the CLI print a route the Run will not use.
+    The Run refuses an unsupported pair outright; it never *shows* a downgrade.
+    """
+    config = RunConfig(
+        model="gpt-5-mini",
+        reasoning_effort="max",
+        routing={"test": ("gpt-5-mini", "max")},
+        context_tier="long_context",
+        route_policy=RoutePolicy.STATIC,
+    )
+
+    readback = build_run_readback(config)
+    (route,) = readback.routes
+
+    assert (route.model, route.effort, route.configured_effort) == (
+        "gpt-5-mini",
+        "max",
+        "max",
+    )
+    assert route.gate_warnings == ()
+    assert readback.context_tier == "long_context"
+
+
+def test_an_unselected_policy_still_gates_exactly_as_before() -> None:
+    """The opt-in is the whole safety story: saying nothing changes nothing."""
+    config = RunConfig(routing={"test": ("gpt-5-mini", "max")})
+
+    (route,) = build_run_readback(config).routes
+
+    assert route.effort is None
+    assert EffortGateWarning.DROPPED_EFFORT in route.gate_warnings
+
+
+def test_the_run_start_payload_names_the_policy_in_force() -> None:
+    """Provenance travels on the wire, so a reader never has to infer it.
+
+    A payload whose pairs are ungated is indistinguishable from one whose pairs
+    happened to pass the gate unless the policy that ungated them is stated.
+    """
+    payload = build_run_readback(
+        RunConfig(model="gpt-5-mini", route_policy=RoutePolicy.STATIC)
+    ).as_run_start_payload()
+
+    assert payload["route_policy"] == "static"
+    assert json.dumps(payload)
+
+
+def test_a_run_that_named_no_policy_says_so_rather_than_saying_nothing() -> None:
+    payload = build_run_readback(RunConfig(model="gpt-5-mini")).as_run_start_payload()
+
+    assert payload["route_policy"] == "unselected"

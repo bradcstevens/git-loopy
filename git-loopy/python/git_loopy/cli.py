@@ -114,6 +114,7 @@ from git_loopy.model_listing import LiveModelListing
 from git_loopy.routing_scope import routing_in_force
 from git_loopy.rate_card import resolve_rate_card
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
+from git_loopy.static_route import RoutePolicy, RoutePolicyError
 from git_loopy.skill_policy import (
     DENY_SKILLS_ENV,
     ENABLED_SKILLS_ENV,
@@ -431,6 +432,19 @@ def build_parser() -> argparse.ArgumentParser:
             "Run-wide context-tier override (default|long_context). Wins over "
             "GIT_LOOPY_CONTEXT_TIER and Config without suppressing per-task-type "
             "static routes."
+        ),
+    )
+    parser.add_argument(
+        "--route-policy",
+        dest="route_policy",
+        default=None,
+        type=str.lower,
+        metavar="POLICY",
+        help=(
+            "Select the Route policy (ADR-0057). 'static' verifies the selected "
+            "model/effort/context tier against the authenticated harness and "
+            "refuses an unsupported one instead of rescuing it. Unset keeps the "
+            "current behaviour; 'dynamic' is accepted design, not yet delivered."
         ),
     )
     parser.add_argument(
@@ -1911,6 +1925,8 @@ def _resolve_escalation(
     env: Mapping[str, str],
     project: Mapping[str, object],
     global_: Mapping[str, object],
+    *,
+    route_policy: RoutePolicy = RoutePolicy.UNSELECTED,
 ) -> tuple[str, str] | None:
     """Resolve the **Escalation rung** in force for this Run (#408).
 
@@ -1934,6 +1950,13 @@ def _resolve_escalation(
       a two-rung-cheaper ``implementation`` pair *on the strength of this
       backstop existing*; an opt-in backstop would leave that table leaning on
       mechanism that, for everyone who did not opt in, is not there.
+    * **Off by default under a Static route (#560, ADR-0057).** Default-on is an
+      argument about a pair *the runner chose*: the table leans on the backstop
+      because the table is the runner's. A route the operator named is not the
+      runner's to move, so an inherited built-in rung is not authorization to
+      move it — only an ``[escalation]`` block the operator actually wrote is.
+      The switch alone (``enabled = true``) counts: it is an operator naming
+      this mechanism, which is the consent the rung was missing.
     * **Independent of ``[routing]``.** Escalating off a bare run-wide default
       is still meaningful, so an empty routing table is no reason to withhold a
       rung.
@@ -1949,6 +1972,11 @@ def _resolve_escalation(
         settings.table_escalation(global_, scope="global"),
     )
     if _explicit_model_or_effort_override(args, env):
+        return None
+    configured = any(
+        scope.enabled is not None or scope.pair is not None for scope in scopes
+    )
+    if route_policy is RoutePolicy.STATIC and not configured:
         return None
     enabled = next((s.enabled for s in scopes if s.enabled is not None), True)
     if not enabled:
@@ -2072,6 +2100,7 @@ def _resolve_model_and_effort(
     effort_env: str | None,
     *,
     warn: Callable[[str], None] = _warn,
+    route_policy: RoutePolicy = RoutePolicy.UNSELECTED,
 ) -> tuple[str, str | None]:
     """Resolve the ``(model_id, reasoning_effort)`` pair the loop sends.
 
@@ -2130,6 +2159,13 @@ def _resolve_model_and_effort(
     #    the init seed and the per-issue routing seam also use, so routed and
     #    default pairs gate identically. The gate owns the *policy*; this call
     #    site owns the *presentation* and its suppression rule.
+    #
+    #    A Static route skips it for the reason `config._gate_pair` does (#560,
+    #    ADR-0057): this table is a hardcoded roster, and the selected pair must
+    #    survive to be verified against the authenticated harness rather than be
+    #    rescued by a description of some other binary.
+    if route_policy is RoutePolicy.STATIC:
+        return base_model, effort
     gated = gate_reasoning_effort(base_model, effort)
     warning = gated.warning
     if warning is EffortGateWarning.UNKNOWN_MODEL:
@@ -2188,6 +2224,47 @@ def _validate_context_tier(value: str, *, source: str) -> str:
             f"{sorted(CONTEXT_TIERS)}, got {value!r}"
         )
     return normalized
+
+
+def _resolve_route_policy(
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> RoutePolicy:
+    """Resolve the **Route policy** in force for this Run (#560, ADR-0057).
+
+    An ordinary scalar on the precedence chain, with one deliberate difference
+    from ``--model`` / ``--reasoning-effort``: naming a *policy* is not naming a
+    *pair*, so it never enters ``routing_suppressed_by``. ``[routing]`` still
+    chooses the pair per **Task type**; the policy only decides what verifies it.
+
+    Absence is the answer that matters. ADR-0057 requires a keep-or-migrate
+    decision rather than a guess that a saved recommended value is disposable,
+    so an unset key resolves to
+    :attr:`~git_loopy.static_route.RoutePolicy.UNSELECTED` and every existing
+    Config keeps behaving exactly as it did.
+    """
+    sources: tuple[tuple[str | None, str], ...] = (
+        (getattr(args, "route_policy", None), "--route-policy"),
+        (env.get("GIT_LOOPY_ROUTE_POLICY"), "GIT_LOOPY_ROUTE_POLICY"),
+        (
+            settings.table_str(project, "route_policy", scope="project"),
+            "project config route_policy",
+        ),
+        (
+            settings.table_str(global_, "route_policy", scope="global"),
+            "global config route_policy",
+        ),
+    )
+    for raw, source in sources:
+        if raw is None or not raw.strip():
+            continue
+        try:
+            return RoutePolicy.parse(raw)
+        except RoutePolicyError as exc:
+            raise SystemExit(f"git-loopy: error: {source}: {exc}") from None
+    return RoutePolicy.UNSELECTED
 
 
 @dataclasses.dataclass(frozen=True)
@@ -2306,7 +2383,10 @@ def resolve_config(
     effort_flag = getattr(args, "reasoning_effort", None)
     if effort_flag is not None:
         effort_raw = effort_flag
-    model, reasoning_effort = _resolve_model_and_effort(model_raw, effort_raw, warn=warn)
+    route_policy = _resolve_route_policy(args, env, project, global_)
+    model, reasoning_effort = _resolve_model_and_effort(
+        model_raw, effort_raw, warn=warn, route_policy=route_policy
+    )
     context_tier = _resolve_context_tier(args, env, project, global_)
     execution_host_flag = getattr(args, "execution_host", None)
     execution_host = (
@@ -2355,12 +2435,15 @@ def resolve_config(
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
         routing=routing,
         context_tier=context_tier,
+        route_policy=route_policy,
         routing_suppressed=suppressed_by is not None,
         skill_policy=skill_policy,
         classifier_model=classifier_model,
         classifier_effort=classifier_effort,
         issue_pin=_resolve_issue_pin(args),
-        escalation_rung=_resolve_escalation(args, env, project, global_),
+        escalation_rung=_resolve_escalation(
+            args, env, project, global_, route_policy=route_policy
+        ),
     )
     return ResolvedConfig(
         run=run,

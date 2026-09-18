@@ -34,6 +34,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Literal, Mapping
 
+from git_loopy.static_route import RoutePolicy
+
 __all__ = [
     "RunConfig",
     "SkillPolicyInput",
@@ -647,6 +649,14 @@ class RunConfig:
             depends on that model. ``--context-tier`` / ``GIT_LOOPY_CONTEXT_TIER``
             / Config resolve it through the ordinary precedence chain, but it is
             not a model/effort override and therefore never suppresses routing.
+        route_policy: Which **Route policy** the operator selected (#560,
+            ADR-0057). :attr:`~git_loopy.static_route.RoutePolicy.UNSELECTED` —
+            the default — is the *absence* of a decision and keeps every legacy
+            behaviour: the roster gates rescue an unsupported setting, the
+            built-in **Escalation rung** applies, and no harness capability read
+            happens at all. ``STATIC`` selects ADR-0057's Static route, under
+            which the selected model/effort/tier travel verbatim and are
+            verified against the authenticated harness instead.
         routing_suppressed: ``True`` only when an explicit model or effort
             override suppressed routing run-wide. Kept on the effective config
             so the per-issue resolver can report that distinct fallback source.
@@ -698,6 +708,7 @@ class RunConfig:
     send_timeout_seconds: float = DEFAULT_SEND_TIMEOUT_SECONDS
     routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)
     context_tier: str = DEFAULT_CONTEXT_TIER
+    route_policy: RoutePolicy = RoutePolicy.UNSELECTED
     routing_suppressed: bool = False
     skill_policy: SkillPolicyInputs = field(default_factory=SkillPolicyInputs)
     classifier_model: str | None = None
@@ -766,7 +777,9 @@ def _ignore_routing_warning(_message: str) -> None:
 
 
 def _gate_pair(
-    pair: tuple[str | None, str | None], context_tier: str
+    pair: tuple[str | None, str | None],
+    context_tier: str,
+    route_policy: RoutePolicy = RoutePolicy.UNSELECTED,
 ) -> tuple[str | None, str | None, str, tuple[GateWarning, ...]]:
     """Gate a source pair and the run-level context tier against the model roster.
 
@@ -775,10 +788,20 @@ def _gate_pair(
     gated for effort against :data:`MODEL_REASONING_EFFORTS` and then — the model
     being settled — for tier against :data:`MODEL_CONTEXT_TIERS`. Both signals are
     returned rather than dropped; the caller carries them on its record.
+
+    **A Static route is not gated here at all** (#560, ADR-0057). These tables are
+    a hardcoded roster, and the accepted policy excludes a hardcoded roster as the
+    source of a Static route's verdict: the authenticated harness the Run actually
+    spawns is. Gating first would also make the two answers disagree in the one
+    case that matters — a stale roster row would drop an effort the live harness
+    accepts, and the route that then ran would not be the route selected. So the
+    selected settings travel verbatim and
+    :func:`git_loopy.static_route.validate_static_route` reaches the verdict
+    before work.
     """
     model, effort = pair
-    if model is None:
-        return None, effort, context_tier, ()
+    if model is None or route_policy is RoutePolicy.STATIC:
+        return model, effort, context_tier, ()
     gated_effort = gate_reasoning_effort(model, effort)
     gated_context_tier, context_warning = gate_context_tier(
         gated_effort.model, context_tier
@@ -921,7 +944,7 @@ def resolve_iteration_model(
             source = RoutingSource.DEFAULTED_CONFLICTING_TASK_TYPE_KEYS
 
     model, effort, context_tier, gate_warnings = _gate_pair(
-        pair, run_config.context_tier
+        pair, run_config.context_tier, run_config.route_policy
     )
     return RoutingResolution(
         model=model,

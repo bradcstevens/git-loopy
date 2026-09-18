@@ -144,6 +144,8 @@ from git_loopy.session_outcome import (
 )
 from git_loopy.skill_catalog import build_skill_catalog
 from git_loopy.rolling_pool import RollingPool
+from git_loopy import static_route
+from git_loopy.static_route import RoutePolicy
 from git_loopy.sources import MembershipSnapshot, PoolCandidate
 from git_loopy.staircase import Candidate, PriceStaircase
 from git_loopy.wrapper import (
@@ -7726,3 +7728,139 @@ class _ConsumingRemoteHost(_RemoteBranchExecutionHost):
                 },
             ),
         )
+
+
+def test_a_static_route_reaches_each_lanes_own_work_session(
+    tmp_path, monkeypatch
+) -> None:
+    """Rolling dispatch honours the same verified triple, at the same seam (#560).
+
+    The serial Iteration and a Lane contribution resolve the same **Routing
+    resolution** and must open the same request with it — one route/capability
+    boundary, two dispatch modes, not two routing implementations.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42, labels=["ready-for-agent", "parallel-safe", "task-type:docs"]
+            ),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch,
+        ("wide-model", ["low", "high"], True),
+        ("narrow-model", None, True),
+    )
+
+    cfg = RunConfig(
+        model="wide-model",
+        reasoning_effort="high",
+        routing={"docs": ("narrow-model", None)},
+        context_tier="long_context",
+        route_policy=RoutePolicy.STATIC,
+        issue_source="github",
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    by_dir = {
+        Path(c["working_directory"]).name: c
+        for c in fake_client.create_calls
+        if c["working_directory"]
+    }
+    # The routed Lane runs on a model with no effort dial, so it is sent no
+    # effort argument at all — and keeps the tier the harness prices for it.
+    assert by_dir["issue-42"]["model"] == "narrow-model"
+    assert by_dir["issue-42"]["reasoning_effort"] is None
+    assert by_dir["issue-42"]["context_tier"] == "long_context"
+    # ...and the unlabelled Lane runs on the verified run-wide default.
+    assert by_dir["issue-43"]["model"] == "wide-model"
+    assert by_dir["issue-43"]["reasoning_effort"] == "high"
+    assert by_dir["issue-43"]["context_tier"] == "long_context"
+
+
+def test_a_refused_static_route_opens_no_lane_at_all(tmp_path, monkeypatch) -> None:
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(monkeypatch, ("wide-model", ["low", "high"], False))
+
+    cfg = RunConfig(
+        model="wide-model",
+        reasoning_effort="high",
+        context_tier="long_context",
+        route_policy=RoutePolicy.STATIC,
+        issue_source="github",
+        max_iterations=2,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == 1
+    assert fake_client.create_calls == []
+    assert fake_git.active_worktrees == []
+
+
+def _script_harness(monkeypatch, *models) -> None:
+    """Answer the Run's capability refresh with a scripted harness listing.
+
+    ``models`` are ``(id, efforts, long_context)`` triples; ``efforts=None`` is
+    the harness's own spelling of a model with no effort dial.
+    """
+    from types import SimpleNamespace
+
+    listing = [
+        SimpleNamespace(
+            id=identifier,
+            name=identifier,
+            policy=SimpleNamespace(state="enabled", terms=""),
+            billing=SimpleNamespace(
+                multiplier=1.0,
+                token_prices=SimpleNamespace(
+                    long_context=SimpleNamespace(max_prompt_tokens=400_000)
+                    if long_context
+                    else None
+                ),
+            ),
+            supported_reasoning_efforts=efforts,
+            default_reasoning_effort=(efforts or [None])[0],
+        )
+        for identifier, efforts, long_context in models
+    ]
+
+    async def _refresh():
+        return static_route.HarnessCapabilities.from_listing(listing)
+
+    monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", _refresh)
+

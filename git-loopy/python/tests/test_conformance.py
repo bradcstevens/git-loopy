@@ -54,6 +54,15 @@ from git_loopy.escalation import EscalationLedger
 from git_loopy.session_outcome import SessionOutcome
 from git_loopy.interactive.state import RETROACTIVE_BINDING_SOURCES, LiveRunState
 from git_loopy.run_readback import run_start_payload
+from git_loopy.static_route import (
+    HarnessCapabilities,
+    HarnessModel,
+    RoutePolicy,
+    StaticRoute,
+    StaticRouteError,
+    StaticRouteRefusal,
+    validate_static_route,
+)
 from git_loopy.gh import (
     LIST_MAX_LIMIT,
     LIST_PAGE_LIMIT,
@@ -994,10 +1003,14 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     2.4 adds the remaining Wind-down causes and the Strike-only lift Event. Both
     literals ride the existing 1.2 step because that step already made the
     Stop-event family a schema-visible change.
+
+    2.8 adds the **Route policy** to the Run readback (§14.3). Purely additive
+    on an already-optional section, so the wire axis stays at 1.2: a consumer
+    pinned to it reads every field it knew and skips one it does not.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
-    assert _EVENT_SCHEMA["contract_version"] == "2.5"
+    assert _EVENT_SCHEMA["contract_version"] == "2.8"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
@@ -1084,6 +1097,11 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "harness_version",
                 "roster_cli_version",
                 "roster_diverged",
+                # #560, ADR-0057: the **Route policy** in force. Under `static`
+                # every pair above is published ungated, which a reader cannot
+                # tell from a set of pairs that passed the gate unless the
+                # policy that ungated them travels beside them.
+                "route_policy",
             ],
             "readback_pair_keys": [
                 "model",
@@ -1131,6 +1149,20 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "gate_warnings carries, and rides every configured pair "
                 "including the escalation rung, which nothing else gates "
                 "until an issue has already stalled."
+            ),
+            "readback_route_policy": (
+                "Contract 2.8. route_policy names the Route policy this Run "
+                "selected (ADR-0057): `unselected` -- the default, and today's "
+                "behaviour byte-for-byte -- or `static`, the operator-selected "
+                "Static route. It travels because under `static` the hardcoded "
+                "roster is not the authority and every pair above is published "
+                "UNGATED, which is otherwise indistinguishable from a set of "
+                "pairs that merely passed the gate. A consumer MUST NOT read "
+                "an empty gate_warnings under `static` as `the roster approved "
+                "this`; it means the roster was not asked. It also MUST NOT "
+                "treat an unrecognised policy name as `unselected`: a Runner "
+                "that names a policy this consumer does not know is describing "
+                "a Run whose routing it cannot explain."
             ),
             "readback_roster_divergence": (
                 "roster_diverged is THREE-valued: true, false, or null for an "
@@ -3770,6 +3802,84 @@ def test_routing_refusal_fixture(case: dict[str, Any]) -> None:
     for key in _TASK_TYPE_TAXONOMY:
         assert key in message
     assert warnings == []
+
+
+# ---------------------------------------------------------------------------
+# The **Static route** (#560, ADR-0057)
+# ---------------------------------------------------------------------------
+
+
+def _harness_from_fixture(listing: list[dict[str, Any]] | None):
+    """Build **Harness capabilities** from a fixture's model listing.
+
+    ``None`` is the read that did not complete — not an empty harness. The
+    distinction is the whole of the ``unverifiable`` verdict: an empty listing
+    is a harness that offers nothing, and a missing one is a harness nobody
+    managed to ask.
+    """
+    if listing is None:
+        return None
+    return HarnessCapabilities(
+        models={
+            entry["model"]: HarnessModel(
+                model=entry["model"],
+                eligible=entry["eligible"],
+                effort_configurable=entry["efforts"] is not None,
+                efforts=tuple(entry["efforts"] or ()),
+                context_tiers=tuple(entry["context_tiers"]),
+            )
+            for entry in listing
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _ROUTING_RESOLUTION["static_route_cases"],
+    ids=lambda case: case["id"],
+)
+def test_static_route_fixture(case: dict[str, Any]) -> None:
+    """One route, one harness, one verdict — checkable from outside any language.
+
+    The **Static route** is the first routing decision the hardcoded roster does
+    not get a vote in (ADR-0057): eligibility, the effort dial and the context
+    tier all come from the authenticated harness the Run actually spawns. That
+    makes these cases the only cross-member statement of *what the harness's
+    answer means*, and in particular of the two distinctions a member is most
+    likely to collapse — a model with no effort dial versus one whose dial
+    offers the value ``none``, and a harness that answered "no" versus one that
+    did not answer at all.
+    """
+    route = StaticRoute(
+        model=case["route"]["model"],
+        reasoning_effort=case["route"]["reasoning_effort"],
+        context_tier=case["route"]["context_tier"],
+    )
+    capabilities = _harness_from_fixture(case["harness"])
+
+    if case["verdict"] == "accepted":
+        validate_static_route(route, capabilities)
+        return
+
+    with pytest.raises(StaticRouteError) as refusal:
+        validate_static_route(route, capabilities)
+    assert refusal.value.refusal.value == case["verdict"]
+
+
+def test_the_static_route_fixture_exercises_every_refusal_it_names() -> None:
+    """A vocabulary a case never reaches is a rule no port has to implement."""
+    named = set(_ROUTING_RESOLUTION["static_route_refusals"])
+    reached = {case["verdict"] for case in _ROUTING_RESOLUTION["static_route_cases"]}
+
+    assert named == {refusal.value for refusal in StaticRouteRefusal}
+    assert named <= reached
+    assert "accepted" in reached
+
+
+def test_the_static_route_fixture_names_the_policies_the_kit_can_parse() -> None:
+    assert set(_ROUTING_RESOLUTION["static_route_policies"]) == {
+        policy.value for policy in RoutePolicy
+    }
 
 
 _CALIBRATION_SEARCH = _load_fixture("calibration-search.json")

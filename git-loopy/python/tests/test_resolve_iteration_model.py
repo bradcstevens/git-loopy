@@ -36,6 +36,7 @@ from git_loopy.config import (
     RunConfig,
     resolve_iteration_model,
 )
+from git_loopy.static_route import RoutePolicy
 
 
 def test_no_task_type_label_uses_global_default() -> None:
@@ -550,3 +551,54 @@ def test_a_dropped_effort_reaches_the_payload_as_a_null_beside_its_warning(
     assert incapable["gate_warnings"] == ["incapable_model"]
     assert dropped["effort"] is None
     assert dropped["gate_warnings"] == ["dropped_effort"]
+
+
+# ---------------------------------------------------------------------------
+# A Static route is not gated against the kit's roster (#560, ADR-0057).
+# ---------------------------------------------------------------------------
+
+
+def test_a_static_route_carries_the_selected_effort_the_kit_roster_would_drop() -> None:
+    """The hardcoded roster is not the authority under this policy.
+
+    ``claude-haiku-4.5`` has an empty roster row, so the legacy gate would drop
+    the effort and report ``incapable_model``. ADR-0057 excludes a hardcoded
+    roster as the source of that judgement — the authenticated harness decides —
+    so the resolution carries what was selected and
+    :func:`git_loopy.static_route.validate_static_route` reaches the verdict.
+    """
+    cfg = RunConfig(
+        model="claude-haiku-4.5",
+        reasoning_effort="high",
+        route_policy=RoutePolicy.STATIC,
+    )
+
+    resolution = resolve_iteration_model(cfg, [])
+
+    assert resolution.model == "claude-haiku-4.5"
+    assert resolution.reasoning_effort == "high"
+    assert resolution.gate_warnings == ()
+
+
+def test_a_static_route_keeps_a_tier_the_legacy_gate_would_downgrade() -> None:
+    cfg = RunConfig(
+        model="tier-less",
+        reasoning_effort=None,
+        context_tier="long_context",
+        route_policy=RoutePolicy.STATIC,
+    )
+
+    resolution = resolve_iteration_model(cfg, [])
+
+    assert resolution.context_tier == "long_context"
+    assert resolution.gate_warnings == ()
+
+
+def test_an_unselected_policy_still_gates_against_the_roster() -> None:
+    """The legacy path is untouched: the same config, gated, byte-for-byte."""
+    cfg = RunConfig(model="claude-haiku-4.5", reasoning_effort="high")
+
+    resolution = resolve_iteration_model(cfg, [])
+
+    assert resolution.reasoning_effort is None
+    assert resolution.gate_warnings == (EffortGateWarning.INCAPABLE_MODEL,)

@@ -73,6 +73,8 @@ from git_loopy import routing_scope
 from git_loopy import settings
 from git_loopy import skill_install
 from git_loopy import sources as sources_module
+from git_loopy import static_route
+from git_loopy.static_route import RoutePolicy
 from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy.emit import EventEmitter
 from git_loopy.events import REDACTED_SECRET
@@ -4810,3 +4812,350 @@ def test_a_run_that_configured_nothing_still_reads_its_defaults_back(
     assert start["escalation_rung"] is None
     assert start["context_tier"] == "default"
     assert start["routing_suppressed"] is False
+
+
+# ---------------------------------------------------------------------------
+# A complete Static route, through actual execution (#560, ADR-0057).
+# ---------------------------------------------------------------------------
+
+
+def _harness(monkeypatch, *models) -> None:
+    """Answer the Run's capability refresh with a scripted harness listing.
+
+    ``models`` are ``(id, efforts, long_context)`` triples, where ``efforts`` of
+    ``None`` is the harness's own spelling of *no effort dial*. Passing no
+    models at all scripts an unreadable listing.
+    """
+    listing = [
+        SimpleNamespace(
+            id=identifier,
+            name=identifier,
+            policy=SimpleNamespace(state="enabled", terms=""),
+            billing=SimpleNamespace(
+                multiplier=1.0,
+                token_prices=SimpleNamespace(
+                    long_context=SimpleNamespace(max_prompt_tokens=400_000)
+                    if long_context
+                    else None
+                ),
+            ),
+            supported_reasoning_efforts=efforts,
+            default_reasoning_effort=(efforts or [None])[0],
+        )
+        for identifier, efforts, long_context in models
+    ]
+
+    async def _refresh() -> Any:
+        if not listing:
+            return None
+        return static_route.HarnessCapabilities.from_listing(listing)
+
+    monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", _refresh)
+
+
+def _static_config(**overrides: Any) -> RunConfig:
+    base: dict[str, Any] = dict(
+        issue_source="github",
+        max_iterations=1,
+        route_policy=RoutePolicy.STATIC,
+        model="gpt-5.6-terra",
+        reasoning_effort="high",
+        context_tier="long_context",
+        verbosity=0,
+        render_reasoning=False,
+    )
+    base.update(overrides)
+    return RunConfig(**base)
+
+
+def test_a_static_route_reaches_the_serial_work_sessions_own_arguments(
+    tmp_path, monkeypatch
+) -> None:
+    """The selected triple is what ``create_session`` is actually called with.
+
+    Not the resolution, not the readback, not the Queue cell: the request the
+    issue-owning session is opened with. A route that agrees everywhere except
+    here is a route that did not take effect.
+    """
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+
+    exit_code = asyncio.run(loop_module.run(_static_config()))
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+    assert fake_client.create_calls, "no work session was opened"
+    call = fake_client.create_calls[0]
+    assert call["model"] == "gpt-5.6-terra"
+    assert call["reasoning_effort"] == "high"
+    assert call["context_tier"] == "long_context"
+
+
+def test_an_effort_not_configurable_model_is_sent_no_effort_argument(
+    tmp_path, monkeypatch
+) -> None:
+    """``None`` is *no argument*; the SDK omits ``reasoningEffort`` for it.
+
+    Distinct from the effort **value** ``none``, which is an argument the dial
+    accepts and which the next test sends.
+    """
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("no-dial", None, False))
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            _static_config(
+                model="no-dial", reasoning_effort=None, context_tier="default"
+            )
+        )
+    )
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+    assert fake_client.create_calls[0]["reasoning_effort"] is None
+
+
+def test_the_effort_value_none_is_sent_as_a_value(tmp_path, monkeypatch) -> None:
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("dialled", ["none", "high"], False))
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            _static_config(
+                model="dialled", reasoning_effort="none", context_tier="default"
+            )
+        )
+    )
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+    assert fake_client.create_calls[0]["reasoning_effort"] == "none"
+
+
+def test_an_effort_the_harness_refuses_stops_the_run_before_any_session(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Refusal, not rescue: the legacy gate would have dropped this effort."""
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("no-dial", None, False))
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            _static_config(
+                model="no-dial", reasoning_effort="high", context_tier="default"
+            )
+        )
+    )
+
+    assert exit_code == 1, f"expected exit 1, got {exit_code}"
+    assert fake_client.create_calls == [], "work started on a refused route"
+    assert "no-dial" in capsys.readouterr().err
+
+
+def test_a_tier_the_harness_does_not_offer_stops_the_run_before_any_session(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["high"], False))
+
+    exit_code = asyncio.run(loop_module.run(_static_config()))
+
+    assert exit_code == 1, f"expected exit 1, got {exit_code}"
+    assert fake_client.create_calls == []
+    assert "long_context" in capsys.readouterr().err
+
+
+def test_an_unreadable_harness_listing_stops_the_run_rather_than_guessing(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch)
+
+    exit_code = asyncio.run(loop_module.run(_static_config()))
+
+    assert exit_code == 1, f"expected exit 1, got {exit_code}"
+    assert fake_client.create_calls == []
+    assert "could not be asked" in capsys.readouterr().err
+
+
+def test_every_configured_static_route_is_checked_not_just_the_default(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """A ``[routing]`` entry no issue in this Pool carries is still refused.
+
+    Checking only the route this Pickup resolved would leave a broken entry to
+    be discovered by the Iteration that finally picks a ``docs`` issue up — the
+    exact "dead config that costs an Iteration to discover" the **Run readback**
+    exists to avoid, except with work already spent.
+    """
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+
+    exit_code = asyncio.run(
+        loop_module.run(_static_config(routing={"docs": ("ghost-model", "low")}))
+    )
+
+    assert exit_code == 1, f"expected exit 1, got {exit_code}"
+    assert fake_client.create_calls == []
+    err = capsys.readouterr().err
+    assert "ghost-model" in err and "docs" in err
+
+
+def test_an_unselected_policy_asks_the_harness_nothing(tmp_path, monkeypatch) -> None:
+    """The legacy Run pays for no capability round trip and refuses nothing."""
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    asked: list[int] = []
+
+    async def _refresh() -> Any:
+        asked.append(1)
+        return None
+
+    monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", _refresh)
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            RunConfig(
+                issue_source="github",
+                max_iterations=1,
+                model="claude-haiku-4.5",
+                reasoning_effort="high",
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    )
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+    assert asked == [], "an unselected policy reached for harness capabilities"
+    assert fake_client.create_calls, "no work session was opened"
+
+
+def test_the_record_the_dashboard_reads_names_the_static_route_it_verified(
+    tmp_path, monkeypatch
+) -> None:
+    """One resolution feeds the session, the Event, and the Dashboard (#560).
+
+    The **Dashboard** renders its Route cell from ``wrapper.pickup.bound``'s own
+    ``model``/``effort``/``context_tier``, so the readback agreeing with the
+    session is not a second projection to keep in step — it is the same
+    **Routing resolution** arriving in two places. What this pins is that the
+    resolution reaching the wire is the *selected* triple: the roster would have
+    dropped ``max`` from this model and downgraded the tier, and under a Static
+    route it was never asked.
+    """
+    _write_runnable_feedback_loop(tmp_path)
+    _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("gpt-5-mini", ["low", "medium", "max"], True))
+
+    assert (
+        asyncio.run(
+            loop_module.run(
+                _static_config(
+                    model="gpt-5-mini",
+                    reasoning_effort="max",
+                    context_tier="long_context",
+                )
+            )
+        )
+        == 0
+    )
+
+    (bound,) = _bound_pickups(tmp_path)
+    assert bound["model"] == "gpt-5-mini"
+    assert bound["effort"] == "max"
+    assert bound["context_tier"] == "long_context"
+    assert bound["gate_warnings"] == []
+
+
+def test_a_static_route_stays_put_when_an_iteration_stalls(
+    tmp_path, monkeypatch
+) -> None:
+    """A Static route is fixed for the Agent, and a shipped rung is not consent.
+
+    ADR-0057: the route stays fixed across every permitted retry unless the
+    *operator* configured an escalation rung. Whether the kit's own default rung
+    counts as consent is decided where Config is resolved, and is pinned there
+    (``test_config_resolver``); what this pins is the execution half — that a
+    Run holding no rung promotes nothing on a stall. The attempt and **Strike**
+    accounting is untouched either way: the same issue is picked up twice, on
+    the same pair, and the second Pickup is the retry it always was.
+    """
+    fake_client, _ = _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+
+    asyncio.run(
+        loop_module.run(_static_config(max_iterations=2, verbosity=0))
+    )
+
+    assert [
+        (e["issue"], e["model"], e["effort"], e["routing_source"])
+        for e in _bound_pickups(tmp_path)
+    ] == [
+        (7, "gpt-5.6-terra", "high", "defaulted_no_task_type_label"),
+        (7, "gpt-5.6-terra", "high", "defaulted_no_task_type_label"),
+    ]
+    assert [
+        (call["model"], call["reasoning_effort"], call["context_tier"])
+        for call in fake_client.create_calls
+    ] == [
+        ("gpt-5.6-terra", "high", "long_context"),
+        ("gpt-5.6-terra", "high", "long_context"),
+    ]
+
+
+def test_a_static_route_still_escalates_where_the_operator_asked_for_it(
+    tmp_path, monkeypatch
+) -> None:
+    """Explicit consent is honoured, and the rung is verified like any route.
+
+    The refusal-before-work rule reaches the rung too: a rung nothing checked
+    until an issue stalled would refuse mid-Run, which is the one moment the
+    operator is least able to act on it.
+    """
+    fake_client, _ = _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+    _harness(
+        monkeypatch,
+        ("gpt-5.6-terra", ["low", "high"], True),
+        ("claude-opus-5", ["high", "max"], True),
+    )
+
+    asyncio.run(
+        loop_module.run(
+            _static_config(
+                max_iterations=2, escalation_rung=("claude-opus-5", "max")
+            )
+        )
+    )
+
+    assert [
+        (call["model"], call["reasoning_effort"]) for call in fake_client.create_calls
+    ] == [("gpt-5.6-terra", "high"), ("claude-opus-5", "max")]
+
+
+def test_a_rung_the_harness_refuses_stops_the_run_before_any_work(
+    tmp_path, monkeypatch
+) -> None:
+    fake_client, _ = _wire_multi_issue_github(
+        tmp_path, monkeypatch, [_dated(7, "2026-01-01T00:00:00Z")]
+    )
+    _harness(
+        monkeypatch,
+        ("gpt-5.6-terra", ["low", "high"], True),
+        ("claude-opus-5", ["high"], True),
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(_static_config(escalation_rung=("claude-opus-5", "max")))
+    )
+
+    assert exit_code == 1
+    assert fake_client.create_calls == []

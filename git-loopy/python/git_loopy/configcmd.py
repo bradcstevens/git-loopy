@@ -59,6 +59,7 @@ from git_loopy.config import (
     task_type_refusal,
     validate_task_type_key,
 )
+from git_loopy.static_route import RoutePolicy, RoutePolicyError
 
 if TYPE_CHECKING:
     from git_loopy.cli import ResolvedConfig
@@ -124,6 +125,20 @@ def _coerce_context_tier(raw: str) -> str:
             f"(got {raw!r})"
         )
     return value
+
+
+def _coerce_route_policy(raw: str) -> str:
+    """The **Route policy** (#560, ADR-0057), persisted as its own name.
+
+    Stored as the policy's plain name rather than the enum so the config file
+    stays a document an operator can read and edit; the resolver parses it back
+    through the same :meth:`RoutePolicy.parse` every other source goes through,
+    so a value accepted here can never be one a Run then rejects.
+    """
+    try:
+        return RoutePolicy.parse(raw).value
+    except RoutePolicyError as exc:
+        raise ConfigCommandError(str(exc)) from None
 
 
 def _coerce_issue_source(raw: str) -> str:
@@ -223,6 +238,11 @@ _KEYS: dict[str, _Key] = {
         _Key("model", _coerce_str, lambda rc: rc.run.model),
         _Key("reasoning_effort", _coerce_effort, lambda rc: rc.run.reasoning_effort),
         _Key("context_tier", _coerce_context_tier, lambda rc: rc.run.context_tier),
+        _Key(
+            "route_policy",
+            _coerce_route_policy,
+            lambda rc: rc.run.route_policy.value,
+        ),
         # The **Task-type classifier**'s own pair (#377, ADR-0029). Two keys of
         # its own rather than a reuse of the run-wide pair: a classifier that
         # borrowed `model` would let the run-wide default determine the Task
