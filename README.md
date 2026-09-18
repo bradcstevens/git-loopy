@@ -112,9 +112,14 @@ git-loopy init
 git-loopy
 ```
 
-On a terminal, a Run detaches its worker and opens the live interface with the
-shared `git-loopy-tui` helper when available, falling back to the line printer.
-A non-terminal Run uses the line printer directly.
+The terminal interface is included in the base installation. An older install
+command that names the removed `[tui]` extra still succeeds, but your package
+manager warns that the extra does not exist; omit it.
+
+On a terminal, a Run detaches its worker and opens the Dashboard with the
+shared `git-loopy-tui` helper when available. To return to the line-printer
+view, use `--no-interactive` or set `GIT_LOOPY_INTERACTIVE=0`. A non-terminal
+Run uses the line printer directly.
 
 Useful variations:
 
