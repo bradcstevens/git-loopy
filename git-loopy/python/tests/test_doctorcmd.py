@@ -537,7 +537,7 @@ def test_doctor_apply_does_not_write_a_policy_replaced_by_environment(
             )
         ),
         repo_root=repo,
-        env={"GIT_LOOPY_ENABLED_SKILLS": "ghost"},
+        env=_pinned_scope(tmp_path, GIT_LOOPY_ENABLED_SKILLS="ghost"),
         client_factory=_CatalogClient,
         discoverer=discoverer,
         git=FakeGitClient(repo),

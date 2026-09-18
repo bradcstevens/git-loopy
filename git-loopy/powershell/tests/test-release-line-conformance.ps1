@@ -377,7 +377,7 @@ try {
 }
 finally {
     if ([IO.Directory]::Exists($ScratchRoot)) {
-        [IO.Directory]::Delete($ScratchRoot, $true)
+        Remove-Item -LiteralPath $ScratchRoot -Recurse -Force -ErrorAction Stop
     }
 }
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from packaging.version import Version
 
 import git_loopy.release_version as release_version
 from git_loopy.release_version import (
@@ -221,8 +222,8 @@ def test_repository_release_metadata_matches_root_authority() -> None:
 
 def test_installed_python_distribution_metadata_matches_release_version() -> None:
     assert (
-        distribution_version("git-loopy")
-        == RELEASE_VERSION_FIXTURE["expected_python_distribution_version"]
+        Version(distribution_version("git-loopy"))
+        == Version(RELEASE_VERSION_FIXTURE["expected_python_distribution_version"])
     )
 
 
