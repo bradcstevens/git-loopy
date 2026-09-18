@@ -226,60 +226,6 @@ def _skill_tree(root: Path, skills: Mapping[str, str]) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Scope resolution
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_scope_honours_project_flag(tmp_path: Path) -> None:
-    scope = init_module._resolve_scope(
-        "project",
-        assume_yes=False,
-        repo_root=tmp_path,
-        input_fn=_Input(),  # never consulted: flag given
-        output_fn=_Output(),
-    )
-    assert scope == "project"
-
-
-def test_resolve_scope_prompts_when_no_flag(tmp_path: Path) -> None:
-    out = _Output()
-    scope = init_module._resolve_scope(
-        None,
-        assume_yes=False,
-        repo_root=tmp_path,
-        input_fn=_Input("2"),  # 2 => global
-        output_fn=out,
-    )
-    assert scope == "global"
-    assert "which scope" in out.text.lower()
-
-
-def test_resolve_scope_yes_defaults_project_in_repo(tmp_path: Path) -> None:
-    scope = init_module._resolve_scope(
-        None, assume_yes=True, repo_root=tmp_path, input_fn=_Input(), output_fn=_Output()
-    )
-    assert scope == "project"
-
-
-def test_resolve_scope_yes_defaults_global_without_repo() -> None:
-    scope = init_module._resolve_scope(
-        None, assume_yes=True, repo_root=None, input_fn=_Input(), output_fn=_Output()
-    )
-    assert scope == "global"
-
-
-def test_resolve_scope_project_without_repo_raises() -> None:
-    with pytest.raises(init_module._ScopeUnavailable):
-        init_module._resolve_scope(
-            "project",
-            assume_yes=False,
-            repo_root=None,
-            input_fn=_Input(),
-            output_fn=_Output(),
-        )
-
-
-# ---------------------------------------------------------------------------
 # Model / reasoning-effort seeding
 # ---------------------------------------------------------------------------
 

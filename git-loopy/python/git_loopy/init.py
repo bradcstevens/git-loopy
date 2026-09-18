@@ -617,43 +617,6 @@ def _validate_skill_policy(
         ) from exc
 
 
-def _resolve_scope(
-    scope: str | None,
-    *,
-    assume_yes: bool,
-    repo_root: Path | None,
-    input_fn: Callable[[str], str],
-    output_fn: Callable[[str], None],
-) -> str:
-    """Resolve the target scope: honour the flag, else ask (or default under --yes)."""
-    if scope is None:
-        if assume_yes:
-            scope = "project" if repo_root is not None else "global"
-        else:
-            labels = [
-                "project  (this repository: <repo>/git-loopy/)"
-                if repo_root is not None
-                else "project  (unavailable: not in a git repository)",
-                "global   (this machine: ~/.config/git-loopy/)",
-            ]
-            default_index = 0 if repo_root is not None else 1
-            index = _ask_index(
-                input_fn,
-                output_fn,
-                "Configure git-loopy for which scope?",
-                labels,
-                default_index=default_index,
-                selectable=[repo_root is not None, True],
-                prompt_label="Scope",
-            )
-            scope = "project" if index == 0 else "global"
-    if scope == "project" and repo_root is None:
-        raise _ScopeUnavailable(
-            "the project scope needs a git repository; run inside one or use --global."
-        )
-    return scope
-
-
 class _ScopeUnavailable(Exception):
     """Raised when the project scope is requested outside a git repository."""
 
