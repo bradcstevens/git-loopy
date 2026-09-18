@@ -3835,6 +3835,55 @@ def test_a_blocked_and_unroutable_pool_remains_all_skipped(
     )["outcome"] == "all_skipped"
 
 
+def test_an_all_unprovable_pool_never_ends_the_run_all_skipped(
+    tmp_path, monkeypatch
+) -> None:
+    """The #542 report: a read that failed proves no refusal (ADR-0047, §3.3.1).
+
+    ``readiness_unprovable`` reports that *no assertion could be read*, so a
+    Pool whose every candidate reached it has established nothing about the
+    work in it. Ending under ``all_skipped`` would assert the one thing the
+    read failed to establish -- contract §10 spends that reason on "I could not
+    take any of what there is" -- and would send an operator to repair a
+    labelling mistake that may not exist, with ``Readiness.blockers``
+    deliberately empty so nothing is even named.
+
+    It ends under ``preflight_failed`` for the reason #541's unreadable Pool
+    does: a tracker this Run cannot read is a precondition an operator can
+    repair, and the candidates whose readiness could not be read are named.
+    """
+    _wire_multi_issue_github(
+        tmp_path,
+        monkeypatch,
+        [
+            _dated(7, "2026-01-01T00:00:00Z", blocked_by=BlockedByRead.unprovable()),
+            _dated(31, "2026-05-01T00:00:00Z", blocked_by=BlockedByRead.unprovable()),
+        ],
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=5))
+    )
+
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    # Non-vacuity: the Pool really was non-empty and really did bind nothing.
+    assert [e for e in events if e["type"] == "wrapper.afk_ready.collected"][0][
+        "issues"
+    ] == [7, 31]
+    assert not any(e["type"] == "wrapper.pickup.bound" for e in events)
+    skip_reasons = [
+        e["reason"] for e in events if e["type"] == "wrapper.pickup.skipped"
+    ]
+    # §3.3.1's reason vocabulary is untouched: the skip still reports the fact.
+    assert skip_reasons == ["readiness_unprovable", "readiness_unprovable"]
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] != "all_skipped"
+    assert run_end["outcome"] == "preflight_failed"
+    assert exit_code == loop_module.exit_code_for("preflight_failed")
+    # Terminal on the spot, for the reason every other unbound Pool is.
+    assert len([e for e in events if e["type"] == "wrapper.iteration.start"]) == 1
+
+
 def test_a_candidate_whose_blockers_all_closed_is_admitted_normally(
     tmp_path, monkeypatch
 ) -> None:

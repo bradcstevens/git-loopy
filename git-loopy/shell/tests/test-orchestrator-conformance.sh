@@ -312,6 +312,20 @@ while IFS= read -r case_json; do
   assert_equal "$expected" "$actual" "pool-emptiness fixture: $case_id"
 done < <(jq -c '.pool_emptiness_cases[]' "$conformance_dir/exit-codes.json")
 
+# §3.3.1/§10 (#542): which terminal reason a Pool that bound nothing is entitled
+# to. The refusal-side companion to the cases above, driven through the same
+# production rule, so a failed read cannot become a terminal Pool fact in one
+# member while it stays a failed precondition in another.
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  candidates="$(jq -r '.candidates' <<<"$case_json")"
+  waiting="$(jq -r '.waiting' <<<"$case_json")"
+  unresolved="$(jq -r '.unresolved' <<<"$case_json")"
+  expected="$(jq -r '.outcome' <<<"$case_json")"
+  actual="$(git_loopy_unbound_pool_outcome "$candidates" "$waiting" "$unresolved")"
+  assert_equal "$expected" "$actual" "unbound-pool fixture: $case_id"
+done < <(jq -c '.unbound_pool_cases[]' "$conformance_dir/exit-codes.json")
+
 assert_equal \
   "$(jq -r '.reference_regex' "$conformance_dir/close-references.json")" \
   "$GIT_LOOPY_CLOSE_KEYWORD_RE" \

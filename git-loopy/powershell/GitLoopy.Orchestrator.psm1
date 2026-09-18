@@ -1432,6 +1432,47 @@ function Test-GitLoopyConfirmsEmptyPool {
     return ($Complete -and $Remaining -eq 0)
 }
 
+# Which terminal reason a Pool that bound nothing is entitled to (§3.3.1, §10,
+# #542).
+#
+# The refusal-side companion to `Test-GitLoopyConfirmsEmptyPool`, and one rule
+# for the same reason: this member and the Python reference's
+# `sources.unbound_pool_outcome` answer it over the same fixture cases
+# (`conformance/exit-codes.json` `unbound_pool_cases`), so two restatements of
+# it cannot drift — both would report `all_skipped` and only one of them would
+# be entitled to.
+#
+# An *unresolved* candidate is not a refused one. `readiness_unprovable` reports
+# that no assertion could be read, so a walk holding one has not established
+# that its Pool cannot be worked; the candidate may be perfectly ready.
+# `all_skipped` claims "I could not take any of what there is" and `all_blocked`
+# claims "every candidate proves an open blocker" — both are claims about the
+# *work*, and a failed read is a claim about the *read*. So an unresolved
+# candidate outranks both and the Run ends under `preflight_failed`, the reason
+# §2.2 already spends on a precondition an operator can repair.
+function Get-GitLoopyUnboundPoolOutcome {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [int]$Candidates,
+        [Parameter(Mandatory)]
+        [int]$Waiting,
+        [Parameter(Mandatory)]
+        [int]$Unresolved
+    )
+    if ($Candidates -le 0) {
+        throw "A Pool that refused nothing has no unbound outcome"
+    }
+    if ($Unresolved -gt 0) {
+        return "preflight_failed"
+    }
+    if ($Waiting -eq $Candidates) {
+        return "all_blocked"
+    }
+    return "all_skipped"
+}
+
 # GitHub closing-keyword regex — kept byte-identical to the Conformance suite's
 # reference_regex and the Python reference so the whole Runner family shares one
 # close-keyword oracle. .NET honours the embedded (?i) and matches \s (including
@@ -3188,6 +3229,7 @@ function Get-GitLoopyCurrentIterationRollup {
 # would be a second implementation of the one decision
 # `conformance/issue-ordering.json` exists to keep single.
 $script:GitLoopySerialPickupTerminalOutcome = $null
+$script:GitLoopySerialPickupUnresolvedRefs = @()
 function Select-GitLoopySerialPickup {
     [CmdletBinding()]
     param(
@@ -3204,11 +3246,14 @@ function Select-GitLoopySerialPickup {
 
     $Items = @($Pool)
     $script:GitLoopySerialPickupTerminalOutcome = $null
+    $script:GitLoopySerialPickupUnresolvedRefs = @()
     if ($Items.Count -eq 0) {
         return @()
     }
     [int]$Position = 0
-    $AllWaitingOnBlockers = $true
+    [int]$Refused = 0
+    [int]$Waiting = 0
+    $UnresolvedLabels = [Collections.Generic.List[string]]::new()
     foreach ($Head in $Items) {
         $Position += 1
         $Ref = if ($Head.Contains("number")) {
@@ -3222,8 +3267,18 @@ function Select-GitLoopySerialPickup {
             -IssueSource $IssueSource
         if (-not $Readiness["admissible"]) {
             $Reason = [string]$Readiness["skip_reason"]
-            if ($Reason -cne "blocked_by_open_dependency") {
-                $AllWaitingOnBlockers = $false
+            $Refused += 1
+            $Label = if ($Ref -match '^[0-9]+$') { "#$Ref" } else { $Ref }
+            if ($Reason -ceq "blocked_by_open_dependency") {
+                $Waiting += 1
+            }
+            elseif ($Reason -ceq "readiness_unprovable") {
+                # Not a refusal of this candidate: a read that did not happen
+                # (#542, ADR-0047). It still skips — no Pickup may bind a
+                # candidate whose blockers it never checked — but it is counted
+                # apart so the terminal rule cannot mistake it for the Pool
+                # refusing work.
+                $UnresolvedLabels.Add($Label)
             }
             $Blockers = [string]::Join(", ", @($Readiness["blockers"]))
             $EventReason = if ([string]::IsNullOrEmpty($Blockers)) {
@@ -3232,7 +3287,6 @@ function Select-GitLoopySerialPickup {
             else {
                 "${Reason}: $Blockers"
             }
-            $Label = if ($Ref -match '^[0-9]+$') { "#$Ref" } else { $Ref }
             # The Pool exclusion line's shape, because a skip is the same kind
             # of fact for an operator: what was passed over, and why in words.
             [Console]::Error.WriteLine(
@@ -3279,11 +3333,15 @@ function Select-GitLoopySerialPickup {
         )
         return @($Head)
     }
-    $script:GitLoopySerialPickupTerminalOutcome = if ($AllWaitingOnBlockers) {
-        "all_blocked"
+    $script:GitLoopySerialPickupUnresolvedRefs = $UnresolvedLabels.ToArray()
+    $script:GitLoopySerialPickupTerminalOutcome = if ($Refused -eq 0) {
+        $null
     }
     else {
-        "all_skipped"
+        Get-GitLoopyUnboundPoolOutcome `
+            -Candidates $Refused `
+            -Waiting $Waiting `
+            -Unresolved $UnresolvedLabels.Count
     }
     return @()
 }
@@ -4375,9 +4433,28 @@ function Invoke-GitLoopyDiscoveryLoop {
             # Strike was charged and nothing inside the Run can change the next
             # walk's answer, so continuing would spend the whole Iteration budget
             # reaching this same ending. #443 owns what a Pool that is merely
-            # *waiting* should read as.
+            # *waiting* should read as. Which of the three reasons it is was
+            # decided by the family rule inside the walk
+            # (`Get-GitLoopyUnboundPoolOutcome`), so this only reports it.
             $TerminalOutcome = $script:GitLoopySerialPickupTerminalOutcome
-            if ($TerminalOutcome -ceq "all_blocked") {
+            if ($TerminalOutcome -ceq "preflight_failed") {
+                # #542: an unread candidate is unknown, not refused. Its verdict
+                # carries no blockers, so the refs are the only thing an
+                # operator can act on.
+                $UnresolvedRefs = [string]::Join(
+                    ", ", @($script:GitLoopySerialPickupUnresolvedRefs))
+                [Console]::Error.WriteLine(
+                    "git-loopy: serial Pickup bound nothing, and the readiness " +
+                    "of some of the $($Pool.Count) candidate(s) in the Pool " +
+                    "could not be read ($UnresolvedRefs); an unread candidate " +
+                    "is unknown, not refused, so this Run will not report the " +
+                    "Pool as one it could take no work from. Check " +
+                    "``gh auth status``, this host's network path to the " +
+                    "tracker, and whether those issues' blockers live in a " +
+                    "repository this token can see, then re-run."
+                )
+            }
+            elseif ($TerminalOutcome -ceq "all_blocked") {
                 [Console]::Error.WriteLine(
                     "git-loopy: serial Pickup bound nothing: all $($Pool.Count) " +
                     "candidate(s) in the Pool wait on open blockers; this Run is " +
@@ -4742,6 +4819,7 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyPickupRecord",
     "Get-GitLoopyExitCode",
     "Test-GitLoopyConfirmsEmptyPool",
+    "Get-GitLoopyUnboundPoolOutcome",
     "Get-GitLoopyCloseKeywordPattern",
     "Get-GitLoopyCloseReferences",
     "Get-GitLoopyActionableCloseReferences",

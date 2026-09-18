@@ -387,6 +387,21 @@ foreach ($Case in $ExitCodes["pool_emptiness_cases"]) {
         "pool-emptiness fixture: $($Case["id"])"
 }
 
+# §3.3.1/§10 (#542): which terminal reason a Pool that bound nothing is entitled
+# to. The refusal-side companion to the cases above, driven through the same
+# production rule, so a failed read cannot become a terminal Pool fact in one
+# member while it stays a failed precondition in another.
+foreach ($Case in $ExitCodes["unbound_pool_cases"]) {
+    $Actual = Get-GitLoopyUnboundPoolOutcome `
+        -Candidates ([int]$Case["candidates"]) `
+        -Waiting ([int]$Case["waiting"]) `
+        -Unresolved ([int]$Case["unresolved"])
+    Assert-Equal `
+        ([string]$Case["outcome"]) `
+        $Actual `
+        "unbound-pool fixture: $($Case["id"])"
+}
+
 $CloseReferences = Get-Content `
     -LiteralPath (Join-Path $ConformanceDir "close-references.json") `
     -Raw |

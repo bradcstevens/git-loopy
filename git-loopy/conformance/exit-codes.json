@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.6",
+  "contract_version": "2.7",
   "cases": [
     {
       "id": "empty-pool-is-clean",
@@ -67,6 +67,50 @@
       "complete": false,
       "remaining": 3,
       "confirms_empty": false
+    }
+  ],
+  "unbound_pool_cases": [
+    {
+      "id": "every-refusal-unreadable-is-a-failed-precondition",
+      "candidates": 2,
+      "waiting": 0,
+      "unresolved": 2,
+      "outcome": "preflight_failed"
+    },
+    {
+      "id": "one-unreadable-refusal-outranks-the-blocked-ones",
+      "candidates": 3,
+      "waiting": 2,
+      "unresolved": 1,
+      "outcome": "preflight_failed"
+    },
+    {
+      "id": "one-unreadable-refusal-outranks-the-skipped-ones",
+      "candidates": 3,
+      "waiting": 0,
+      "unresolved": 1,
+      "outcome": "preflight_failed"
+    },
+    {
+      "id": "every-refusal-waiting-on-a-blocker-is-all-blocked",
+      "candidates": 2,
+      "waiting": 2,
+      "unresolved": 0,
+      "outcome": "all_blocked"
+    },
+    {
+      "id": "a-blocked-and-a-routing-refusal-is-all-skipped",
+      "candidates": 2,
+      "waiting": 1,
+      "unresolved": 0,
+      "outcome": "all_skipped"
+    },
+    {
+      "id": "one-routing-refusal-is-all-skipped",
+      "candidates": 1,
+      "waiting": 0,
+      "unresolved": 0,
+      "outcome": "all_skipped"
     }
   ]
 }

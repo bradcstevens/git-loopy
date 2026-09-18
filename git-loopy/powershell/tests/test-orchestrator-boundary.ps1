@@ -4763,9 +4763,11 @@ Start-Sleep -Seconds $Sleep
         "waiting on blockers"
     ) "the all-blocked ending tells the operator why work did not start"
 
-    # A read that cannot prove readiness is not a blocker wait. Mixing it with
-    # a proven blocker retains all_skipped so an operator-facing repair is not
-    # hidden behind the waiting outcome.
+    # A read that cannot prove readiness is not a blocker wait, and it is not a
+    # refusal either (#542). Mixing it with a proven blocker ends the Run under
+    # `preflight_failed`: the unread candidate outranks the blocked one, because
+    # `all_skipped` would claim this Pool holds no work the Run could take over
+    # a candidate nobody managed to look at.
     $MixedRows = @(
         $ReadinessRows[0],
         [ordered]@{
@@ -4814,13 +4816,19 @@ Start-Sleep -Seconds $Sleep
     Assert-Equal "readiness_unprovable" $MixedSkipReasons[1] (
         "mixed blocked Pool preserves the unreadable readiness refusal"
     )
-    Assert-Equal "all_skipped" @(
+    Assert-Equal "preflight_failed" @(
         $MixedEvents |
             Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
-    )[0]["outcome"] "mixed blocked Iteration remains all_skipped"
-    Assert-Equal "all_skipped" @(
+    )[0]["outcome"] "an unread refusal outranks the blocked one on the Iteration"
+    Assert-Equal "preflight_failed" @(
         $MixedEvents | Where-Object { $_["type"] -ceq "wrapper.run.end" }
-    )[0]["outcome"] "mixed blocked Run remains all_skipped"
+    )[0]["outcome"] "an unread refusal outranks the blocked one on the Run"
+    Assert-Contains ([IO.File]::ReadAllText($MixedStderr)) (
+        "unknown, not refused"
+    ) "an unread refusal names itself rather than reporting the Pool as skipped"
+    Assert-Contains ([IO.File]::ReadAllText($MixedStderr)) (
+        "#52"
+    ) "the unreadable-readiness ending names the candidate to act on"
     Assert-True (-not [IO.File]::Exists($env:FAKE_COPILOT_CALLS)) (
         "mixed blocked Pool starts no agent session"
     )

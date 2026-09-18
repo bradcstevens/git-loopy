@@ -96,7 +96,11 @@ from git_loopy.skill_policy import (
     resolve_skill_policy,
 )
 from git_loopy.skill_run_preflight import RunSkillPreflight
-from git_loopy.sources import confirms_empty_pool, is_afk_ready
+from git_loopy.sources import (
+    confirms_empty_pool,
+    is_afk_ready,
+    unbound_pool_outcome,
+)
 from git_loopy.ui import RunSummary
 from git_loopy.ui.renderer import Renderer
 from git_loopy.wrapper import (
@@ -537,6 +541,31 @@ def test_pool_emptiness_fixture(case: dict[str, Any]) -> None:
             complete=case["complete"], remaining=case["remaining"]
         )
         is case["confirms_empty"]
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _EXIT_CODES["unbound_pool_cases"],
+    ids=lambda case: case["id"],
+)
+def test_unbound_pool_fixture(case: dict[str, Any]) -> None:
+    """Which terminal reason a Pool that bound nothing is entitled to (#542).
+
+    The refusal-side companion to `pool_emptiness_cases`, on the same fixture
+    for the same reason: an unresolved candidate reports a read that failed,
+    not work the Run could not take, so the family must agree that it outranks
+    both `all_skipped` and `all_blocked` and ends the Run under
+    `preflight_failed`. Three members restating that rule would be three places
+    for a failed read to quietly become a terminal Pool fact again.
+    """
+    assert (
+        unbound_pool_outcome(
+            candidates=case["candidates"],
+            waiting=case["waiting"],
+            unresolved=case["unresolved"],
+        )
+        == case["outcome"]
     )
 
 

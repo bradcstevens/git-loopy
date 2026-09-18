@@ -969,8 +969,11 @@ assert_contains "$(<"$temp_dir/readiness-all-blocked.stderr")" \
   "waiting on blockers" \
   "the all-blocked ending tells the operator why work did not start"
 
-# A Pool that mixes a proven blocker with a read the Runner could not prove is
-# still all-skipped: "waiting" must not hide work an operator can repair.
+# A Pool that mixes a proven blocker with a read the Runner could not prove ends
+# under `preflight_failed` (#542): "waiting" must not hide work an operator can
+# repair, and neither must "skipped" — an unread candidate is unknown, not
+# refused, so the one refusal nobody could read outranks the one that proved a
+# blocker.
 repo="$temp_dir/readiness-mixed-skips"
 fake_bin="$temp_dir/readiness-mixed-skips-bin"
 make_real_repo "$repo"
@@ -998,17 +1001,70 @@ set -e
 assert_equal "1" "$status" "a mixed blocked Pool exits nonzero"
 [[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
   fail "a mixed blocked Pool started a session"
+assert_contains "$(<"$temp_dir/readiness-mixed-skips.stderr")" \
+  "unknown, not refused" \
+  "an unread refusal names itself rather than reporting the Pool as skipped"
 jq -se '
   ([.[] | select(.type == "wrapper.pickup.skipped") | .reason] ==
     ["blocked_by_open_dependency: example/repo#50", "readiness_unprovable"])
   and ([.[] | select(.type == "wrapper.pickup.bound")] | length == 0)
   and ([.[] | select(.type == "wrapper.strike")] | length == 0)
   and ([.[] | select(.type == "wrapper.iteration.end") | .outcome] ==
-    ["all_skipped"])
+    ["preflight_failed"])
   and (.[-1].type == "wrapper.run.end")
-  and (.[-1].outcome == "all_skipped")
+  and (.[-1].outcome != "all_skipped")
+  and (.[-1].outcome == "preflight_failed")
 ' "$temp_dir/readiness-mixed-skips.stdout" >/dev/null ||
-  fail "a mixed blocked Pool did not preserve the all-skipped ending"
+  fail "an unread refusal did not outrank the blocked one"
+
+# Wrapper contract §3.3.1 (#542): a Pool whose every candidate's readiness could
+# not be read has established nothing about the work in it. `all_skipped` means
+# "a labelling mistake an operator can fix" and names the blockers to fix; this
+# verdict carries none, so reporting it that way would hand an operator exit 1
+# and nothing to act on over a Pool that may be entirely ready.
+repo="$temp_dir/readiness-all-unprovable"
+fake_bin="$temp_dir/readiness-all-unprovable-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+jq '[.[] | .blockedBy = {totalCount: 1, nodes: []}]' \
+  "$temp_dir/readiness-pickup-list.json" \
+  >"$temp_dir/readiness-all-unprovable-list.json"
+mkdir -p "$temp_dir/readiness-all-unprovable-views"
+jq '.[0] | .blockedBy = {totalCount: 1, nodes: []} | . + {comments: []}' \
+  "$temp_dir/readiness-pickup-list.json" \
+  >"$temp_dir/readiness-all-unprovable-views/51.json"
+jq '.[1] | .blockedBy = {totalCount: 1, nodes: []} | . + {comments: []}' \
+  "$temp_dir/readiness-pickup-list.json" \
+  >"$temp_dir/readiness-all-unprovable-views/52.json"
+export FAKE_GH_LOG="$temp_dir/readiness-all-unprovable-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/readiness-all-unprovable-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/readiness-all-unprovable-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/readiness-all-unprovable-views"
+setup_copilot_env "readiness-all-unprovable"
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/readiness-all-unprovable.stdout" \
+  "$temp_dir/readiness-all-unprovable.stderr" 5
+status=$?
+set -e
+assert_equal "1" "$status" "an all-unreadable Pool exits nonzero"
+[[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
+  fail "an all-unreadable Pool started a session"
+assert_contains "$(<"$temp_dir/readiness-all-unprovable.stderr")" \
+  "#51, #52" \
+  "the unreadable-readiness ending names the candidates to act on"
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.skipped") | .reason] ==
+    ["readiness_unprovable", "readiness_unprovable"])
+  and ([.[] | select(.type == "wrapper.pickup.bound")] | length == 0)
+  and ([.[] | select(.type == "wrapper.iteration.end") | .outcome] ==
+    ["preflight_failed"])
+  and (.[-1].type == "wrapper.run.end")
+  and (.[-1].outcome != "all_skipped")
+  and (.[-1].outcome == "preflight_failed")
+  and (.[-1].iterations_run == 1)
+' "$temp_dir/readiness-all-unprovable.stdout" >/dev/null ||
+  fail "an all-unreadable Pool ended the Run as one it could take no work from"
 
 export FAKE_GH_LOG="$temp_dir/github-cap-gh.log"
 export FAKE_GH_LIST_COUNT="$temp_dir/github-cap-list.count"

@@ -60,6 +60,7 @@ from git_loopy.issue_order import (
 from git_loopy.issue_pin import PinnedIssue, refuse_pin
 from git_loopy.readiness import (
     SKIP_BLOCKED_BY_OPEN_DEPENDENCY,
+    SKIP_READINESS_UNPROVABLE,
     BlockedByRead,
     Readiness,
     decide_readiness,
@@ -97,6 +98,8 @@ __all__ = [
     "is_lane_candidate",
     "is_afk_ready",
     "is_pr_afk_ready",
+    "readiness_unresolved",
+    "unbound_pool_outcome",
 ]
 
 # The two human triage assertions Rolling dispatch reads. Both are labels and
@@ -424,6 +427,69 @@ def confirms_empty_pool(*, complete: bool, remaining: int) -> bool:
     return complete and remaining == 0
 
 
+def unbound_pool_outcome(
+    *, candidates: int, waiting: int, unresolved: int
+) -> str:
+    """Which terminal reason a **Pool** that bound nothing is entitled to.
+
+    The refusal-side companion to :func:`confirms_empty_pool`, and one rule for
+    the same reason (Wrapper contract §2.2, §3.3.1, §10, #542): a serial
+    **Pickup** that walked its whole Pool and a Rolling-dispatch cache that
+    classified its survivors are asking the identical question, and two
+    restatements of it drift invisibly — both report ``all_skipped`` and only
+    one of them is entitled to.
+
+    **An unresolved candidate is not a refused one.** ``readiness_unprovable``
+    reports that *no assertion could be read*, so a walk holding one has not
+    established that its Pool cannot be worked — the candidate may be perfectly
+    ready. ``all_skipped`` means "I could not take any of what there is" and
+    ``all_blocked`` means "every candidate proves an open blocker"; both are
+    claims about the *work*, and a failed read is a claim about the *read*.
+    Reporting either would assert the very thing the read failed to establish,
+    and — because :attr:`~git_loopy.readiness.Readiness.blockers` is
+    deliberately empty for that verdict — would do it with nothing named for an
+    operator to act on. So an unresolved candidate outranks both, exactly as
+    ``sources.py``'s collection and
+    :meth:`~git_loopy.rolling_pool.RollingPool.confirm_empty` already refuse to
+    let an unread candidate establish the Pool's emptiness.
+
+    It resolves to ``preflight_failed`` rather than a reason of its own, for
+    #541's reason: the contract already spends that reason on "a precondition
+    this Run needs is not satisfied, and an operator can repair it", and a
+    dependency graph this Run cannot read is exactly that — the server-side
+    half of the capability §3.3.1's ``gh``-version gate catches early.
+
+    Args:
+        candidates: How many candidates the walk refused in total.
+        waiting: How many of them proved an open native blocker.
+        unresolved: How many of them refused only because their readiness read
+            did not complete.
+
+    Returns:
+        ``"preflight_failed"``, ``"all_blocked"`` or ``"all_skipped"``. A walk
+        that refused nothing is not this function's question and raises.
+    """
+    if candidates <= 0:
+        raise ValueError("a Pool that refused nothing has no unbound outcome")
+    if unresolved > 0:
+        return "preflight_failed"
+    if waiting == candidates:
+        return "all_blocked"
+    return "all_skipped"
+
+
+def readiness_unresolved(readiness: Readiness) -> bool:
+    """Whether this verdict refused a candidate without reading anything.
+
+    The one place the family asks "was this a refusal, or a failed read?", so
+    a caller classifying a Pool never re-derives it from the operator-facing
+    reason payload — the same discipline
+    :attr:`~git_loopy.serial_pickup.AdmissionRefusal.waiting_on_blocker`
+    keeps for the opposite fact.
+    """
+    return readiness.skip_reason == SKIP_READINESS_UNPROVABLE
+
+
 @dataclass(frozen=True)
 class Completion:
     """An item completed by the wrapper-side backstop this iteration.
@@ -508,6 +574,17 @@ def has_proven_open_blocker(candidate: PoolCandidate) -> bool:
         decide_readiness(candidate.blocked_by).skip_reason
         == SKIP_BLOCKED_BY_OPEN_DEPENDENCY
     )
+
+
+def has_unresolved_readiness(candidate: PoolCandidate) -> bool:
+    """Return whether this candidate's carried read proved nothing at all.
+
+    The sibling of :func:`has_proven_open_blocker`, and the Rolling-dispatch
+    shape of :func:`readiness_unresolved`: a candidate whose **Membership
+    read** could not determine its blockers is unresolved, not refused, so it
+    may not establish a terminal Pool fact (#542).
+    """
+    return readiness_unresolved(decide_readiness(candidate.blocked_by))
 
 
 @dataclass(frozen=True)

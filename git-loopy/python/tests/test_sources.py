@@ -18,6 +18,7 @@ from git_loopy.readiness import (
     SKIP_BLOCKED_BY_OPEN_DEPENDENCY,
     BlockedByRead,
     BlockerNode,
+    decide_readiness,
 )
 from git_loopy.sources import (
     AfkReadyItem,
@@ -811,6 +812,106 @@ class TestConfirmsEmptyPool:
 
 
 # --------------------------------------------------------------------------- #
+# unbound_pool_outcome — the refusal-side companion to the above (#542)        #
+# --------------------------------------------------------------------------- #
+
+
+class TestUnboundPoolOutcome:
+    """Which terminal reason a Pool that bound nothing is entitled to."""
+
+    def test_every_refusal_unreadable_is_a_failed_precondition(self) -> None:
+        """The #542 regression, stated at the rule rather than at a caller.
+
+        ``readiness_unprovable`` reports that no assertion could be read, so a
+        Pool of them has established nothing about the work in it. Calling that
+        ``all_skipped`` hands an operator exit ``1``, a reason meaning "a
+        labelling mistake you can fix", and — because the verdict carries no
+        blockers — nothing at all to act on.
+        """
+        assert (
+            sources_module.unbound_pool_outcome(
+                candidates=2, waiting=0, unresolved=2
+            )
+            == "preflight_failed"
+        )
+
+    def test_one_unreadable_refusal_outranks_the_blocked_ones(self) -> None:
+        assert (
+            sources_module.unbound_pool_outcome(
+                candidates=3, waiting=2, unresolved=1
+            )
+            == "preflight_failed"
+        )
+
+    def test_every_refusal_waiting_on_a_blocker_is_all_blocked(self) -> None:
+        assert (
+            sources_module.unbound_pool_outcome(
+                candidates=2, waiting=2, unresolved=0
+            )
+            == "all_blocked"
+        )
+
+    def test_a_mixed_readable_pool_stays_all_skipped(self) -> None:
+        """The refusal this change must leave exactly as it found it."""
+        assert (
+            sources_module.unbound_pool_outcome(
+                candidates=2, waiting=1, unresolved=0
+            )
+            == "all_skipped"
+        )
+
+    def test_a_pool_that_refused_nothing_has_no_unbound_outcome(self) -> None:
+        """Every reason this rule returns is terminal, so "none" is not one.
+
+        A caller with nothing to classify is asking the wrong question, and
+        answering it would mint a terminal Run ending out of a walk that never
+        refused anything.
+        """
+        with pytest.raises(ValueError):
+            sources_module.unbound_pool_outcome(
+                candidates=0, waiting=0, unresolved=0
+            )
+
+
+# --------------------------------------------------------------------------- #
+# readiness_unresolved / has_unresolved_readiness (#542)                       #
+# --------------------------------------------------------------------------- #
+
+
+class TestReadinessUnresolved:
+    """Telling a read that failed apart from a refusal that read something."""
+
+    def test_an_unprovable_verdict_is_unresolved(self) -> None:
+        assert (
+            sources_module.readiness_unresolved(
+                decide_readiness(BlockedByRead.unprovable())
+            )
+            is True
+        )
+
+    def test_a_proven_open_blocker_is_not_unresolved(self) -> None:
+        assert (
+            sources_module.readiness_unresolved(
+                decide_readiness(
+                    BlockedByRead(
+                        total_count=1,
+                        nodes=(BlockerNode(ref="example/repo#7", state="open"),),
+                    )
+                )
+            )
+            is False
+        )
+
+    def test_a_ready_candidate_is_not_unresolved(self) -> None:
+        assert (
+            sources_module.readiness_unresolved(
+                decide_readiness(BlockedByRead(total_count=0))
+            )
+            is False
+        )
+
+
+# --------------------------------------------------------------------------- #
 # GitHubIssueSource.handle_completions                                        #
 # --------------------------------------------------------------------------- #
 
@@ -1357,6 +1458,8 @@ class TestModuleStructure:
             "is_lane_candidate",
             "is_afk_ready",
             "is_pr_afk_ready",
+            "readiness_unresolved",
+            "unbound_pool_outcome",
         }
         assert set(sources_module.__all__) == expected
         for name in expected:

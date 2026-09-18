@@ -441,8 +441,16 @@ class TestTerminalOutcome:
         assert pool.confirm_terminal_outcome() == "all_blocked"
         assert source.membership_calls == 2
 
-    def test_an_unprovable_read_keeps_a_waiting_pool_all_skipped(self) -> None:
-        """A dependency read failure is an actionable refusal, not a wait."""
+    def test_an_unprovable_read_never_calls_a_waiting_pool_all_skipped(self) -> None:
+        """A dependency read failure is a failed read, not a refusal (#542).
+
+        ``all_skipped`` says "I could not take any of what there is" and
+        ``all_blocked`` says "every candidate proves an open blocker". A
+        survivor whose ``blockedBy`` connection came back unprovable supports
+        neither claim — it may be perfectly ready — so the Pool ends under
+        ``preflight_failed``, the reason the contract spends on a precondition
+        an operator can repair, exactly as #541's unreadable Pool does.
+        """
         from git_loopy.rolling_pool import is_parallel_safe
         from git_loopy.sources import is_lane_candidate
 
@@ -470,7 +478,7 @@ class TestTerminalOutcome:
         )
         pool.start()
 
-        assert pool.confirm_terminal_outcome() == "all_skipped"
+        assert pool.confirm_terminal_outcome() == "preflight_failed"
 
     def test_a_final_refresh_that_finds_ready_work_is_not_terminal(self) -> None:
         """A blocker may close while another Lane is finishing."""

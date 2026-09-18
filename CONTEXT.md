@@ -308,14 +308,26 @@ collection), **Pool exclusion**, **Pickup skip** (that is what the runner *does*
 unreadiness, not the fact itself).
 
 **Blocked**:
-A candidate carrying at least one open `blocked_by` dependency, or one whose
-dependencies could not be read. It is not admissible at **Pickup** and is refused
-**Lane** candidacy outright — never reserved and never released — stays in the
-**Pool** so the closure whitelist and the emptiness test still see it, and costs no
+A candidate carrying at least one open `blocked_by` dependency. It is not admissible at
+**Pickup** and is refused **Lane** candidacy outright — never reserved and never released —
+stays in the **Pool** so the closure whitelist and the emptiness test still see it, and costs no
 **Strike** — it was never attempted. A blocker in another repository blocks exactly as
 one in this repository does. An issue blocked by *itself* is blocked, like any other;
 a longer cycle is invisible at one hop and reads as an ordinary blocker.
-_Avoid_: ineligible, excluded, defeated, deferred.
+_Avoid_: ineligible, excluded, defeated, deferred; **Unresolved readiness** (a read that
+failed is not a blocker that was read).
+
+**Unresolved readiness**:
+A candidate whose `blockedBy` connection came back incomplete or with an unreadable node, so
+no assertion about its dependencies could be read at all. It skips at **Pickup** like a
+**Blocked** candidate — no Pickup may bind a candidate whose blockers it never checked — but it
+is *not* the same fact and may not stand in for one: a **Blocked** candidate proved an open
+blocker, while this one proved nothing and may be perfectly ready. A **Pool** that bound
+nothing and holds one of these is therefore neither an **All-skipped Run** nor an
+**All-blocked Run**; it ends the Run the way an unread **Pool** does, as a precondition an
+operator can repair, naming the candidates. One rule, asked by every Orchestrator.
+_Avoid_: blocked, skipped, empty (each of those is a claim about the *work*; this is a report
+about the *read*).
 
 **Lease**:
 A run's exclusive right to work one issue, taken at **Pickup**, held while its owner
@@ -805,20 +817,22 @@ _Avoid_: blacklist, ban, exclusion (that is a **Pool exclusion**, decided at col
 **All-skipped Run**:
 How a **Run** ends when a **Pickup** finds the **Pool** non-empty and can bind none of it: exit
 `1` under its own reason, `all_skipped`, unless every refusal proves an open native blocker (an
-**All-blocked Run**). It is not an empty Pool — "there is nothing to do" and "I could not take
-any of what there is" are different facts about the repository, and only the first is a finished
-Run — and it is not a **Strike**, because that **Iteration** spends no session and gives up on
-nothing new. It is terminal on the spot rather than counted, since an Iteration that charges
-nothing and binds nothing would otherwise re-walk the same Pool and skip the same candidates for
-as long as the Run has **Iteration** budget.
-_Avoid_: all-blocked run, empty pool, stuck, no work.
+**All-blocked Run**) or any refusal is an **Unresolved readiness** one. It is not an empty Pool
+— "there is nothing to do" and "I could not take any of what there is" are different facts about
+the repository, and only the first is a finished Run — and it is not a **Strike**, because that
+**Iteration** spends no session and gives up on nothing new. It is terminal on the spot rather
+than counted, since an Iteration that charges nothing and binds nothing would otherwise re-walk
+the same Pool and skip the same candidates for as long as the Run has **Iteration** budget. It
+is a claim about the *work* in the Pool, so only refusals that read something may establish it.
+_Avoid_: all-blocked run, empty pool, stuck, no work, unreadable pool.
 
 **All-blocked Run**:
 How a **Run** ends when a non-empty **Pool** contains only candidates whose **Pickup skip** proves
 an open native blocker: exit `1` under `all_blocked`. It is terminal on the spot because no work
 inside the Run can close a blocker. It shares the non-zero exit status with an **All-skipped Run**
 because neither completed the available work; its distinct reason lets an operator or supervising
-process wait for dependency closure rather than repair the Pool.
+process wait for dependency closure rather than repair the Pool. Like an All-skipped Run it is a
+claim about the *work*, so a single **Unresolved readiness** refusal outranks it.
 _Avoid_: all-skipped run, empty pool, readiness-unprovable.
 
 **Run readback**:

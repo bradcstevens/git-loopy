@@ -63,6 +63,8 @@ from git_loopy.sources import (
     RollingIssueSource,
     confirms_empty_pool,
     has_proven_open_blocker,
+    has_unresolved_readiness,
+    unbound_pool_outcome,
 )
 
 __all__ = [
@@ -349,11 +351,21 @@ class RollingPool:
         """Classify a quiescent cache from one authoritative Membership read.
 
         A complete cache with no survivors is empty. A complete cache whose
-        survivors all prove an open native blocker is waiting on blockers. Any
-        unreadable or unprovable records make the Pool ``all_skipped``: they
-        are a refusal an operator can repair, not a reason to keep polling.
+        survivors all prove an open native blocker is waiting on blockers. A
+        survivor whose **Readiness** could not be read ends the Run under
+        ``preflight_failed`` instead of either (#542): that record reports a
+        failed *read*, so calling it ``all_skipped`` would assert the refusal
+        the read never established — and the Run's own diagnostic names the
+        candidates, because the verdict carries no blockers to name.
         Incomplete and quarantined reads remain non-terminal because the Run
         has no complete fact to report.
+
+        The three-way choice itself is
+        :func:`~git_loopy.sources.unbound_pool_outcome`, asked here and on the
+        serial path so the two dispatch modes cannot drift apart on what a Pool
+        nobody could bind work out of is entitled to report — the same
+        discipline :func:`~git_loopy.sources.confirms_empty_pool` keeps for
+        emptiness.
         """
         snapshot = self._refresh_now()
         if confirms_empty_pool(
@@ -382,9 +394,31 @@ class RollingPool:
             for entry in self._entries
         ):
             return None
-        if all(has_proven_open_blocker(entry.candidate) for entry in self._entries):
-            return "all_blocked"
-        return "all_skipped"
+        survivors = tuple(entry.candidate for entry in self._entries)
+        unreadable = tuple(
+            candidate.ref
+            for candidate in survivors
+            if has_unresolved_readiness(candidate)
+        )
+        if unreadable:
+            self.diag.error(
+                "the readiness of %d of the %d candidate(s) left in the Pool "
+                "could not be read (%s); an unread candidate is unknown, not "
+                "refused, so this Run will not report the Pool as one it could "
+                "take no work from. Check `gh auth status`, this host's network "
+                "path to the tracker, and whether those issues' blockers live "
+                "in a repository this token can see, then re-run.",
+                len(unreadable),
+                len(survivors),
+                ", ".join(f"#{ref}" for ref in unreadable),
+            )
+        return unbound_pool_outcome(
+            candidates=len(survivors),
+            waiting=sum(
+                1 for candidate in survivors if has_proven_open_blocker(candidate)
+            ),
+            unresolved=len(unreadable),
+        )
 
     def _refresh_now(self) -> MembershipSnapshot:
         """Force one refresh regardless of the backoff window."""

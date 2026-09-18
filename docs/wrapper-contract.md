@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.6 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.7 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -431,6 +431,28 @@ when the wait can never end.
 
 `issue-readiness.json` pins the verdict and the reason for every case.
 
+**An unread refusal may not establish a terminal Pool fact (contract 2.7, MUST).** A Pool that bound
+nothing ends the Run under one of three reasons, and `readiness_unprovable` outranks the other two.
+Where **every** candidate was refused and **at least one** refusal was `readiness_unprovable`, the
+Run MUST end under `preflight_failed` (§10) — not `all_skipped`, and not `all_blocked`. Where every
+refusal was `blocked_by_open_dependency` the Run ends `all_blocked`, and otherwise `all_skipped`,
+both exactly as before. `conformance/exit-codes.json` pins this as `unbound_pool_cases`, so the
+family asks one rule rather than restating it per member.
+
+This is §2.2's rule at the next seam down. `all_skipped` means "a labelling mistake an operator can
+fix" and `all_blocked` means "every candidate proves an open blocker" — both are claims about the
+**work**, and `readiness_unprovable` is a report about the **read**. A Pool nobody managed to read
+may be entirely ready, so either verdict would assert the thing the read failed to establish.
+`preflight_failed` states what is true instead: a precondition this Run needs is not satisfied and
+an operator can repair it. Because an unprovable verdict carries no blockers by design, the ending
+MUST name the candidates whose readiness could not be read, or an operator is handed exit 1 and
+nothing to act on.
+
+**Rolling dispatch is not bound by this the same way.** A Rolling Run holding independent evidence
+of remaining work MUST keep quarantining and retrying an unreadable candidate rather than ending
+(§12, *Rolling-dispatch contribution lifecycle*); the rule above governs the point at which a walk
+that read the whole Pool ends the Run on its own evidence.
+
 **Lane candidacy (Parallel mode).** A **Lane** MUST refuse **candidacy** to a candidate that is not
 ready, rather than reserving it and declining it at its own Pickup. The **Attempt lifecycle** (§9)
 fixed the shape: a Lane's only way to decline a reservation hands the candidate back to the list it
@@ -564,7 +586,7 @@ error (exit `2`).
 | `1`  | Aborted — stuck      | The `GIT_LOOPY_MAX_NMT_STRIKES` Strike ceiling is spent (§6).        |
 | `1`  | Aborted — all skipped | A Pickup found the Pool non-empty and could bind none of it (§14.3). |
 | `1`  | Waiting — all blocked | Every Pickup refusal proved an open native blocker (§3.3.1).         |
-| `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1).      |
+| `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1), the Pool could not be read (§2.2), or an unread refusal left it unresolved (§3.3.1). |
 | `1`  | Stopped — operator   | The operator ended the Run deliberately (§10.1, contract 2.3).       |
 | `2`  | Usage error          | Malformed invocation (e.g. non-numeric iteration cap, §9).           |
 
@@ -584,7 +606,9 @@ Both leave work unfinished, so an unattended caller must not treat either as the
 exit-`0` empty Pool; the distinct reason is the actionable branch for a caller that can wait for
 dependency closure instead of repairing a refusal. `all_blocked` applies only when every skipped
 candidate proves an open dependency. A mixed Pool remains `all_skipped`, so waiting never hides
-work an operator can fix.
+work an operator can fix — except where the mix holds a refusal nobody could read, which §3.3.1
+sends to `preflight_failed` instead. Both of these reasons are claims about the *work* in the
+Pool, and neither may be established by a *read* that failed.
 
 ### 10.1 An operator Stop is a decided outcome (contract 2.3, MUST)
 

@@ -216,6 +216,8 @@ from git_loopy.sources import (
     RollingIssueSource,
     confirms_empty_pool,
     is_lane_candidate,
+    readiness_unresolved,
+    unbound_pool_outcome,
 )
 from git_loopy.skill_catalog import discover_skill_catalog as _discover_skill_catalog
 from git_loopy.skill_exposure import SkillExposureError
@@ -813,12 +815,28 @@ RUN_OUTCOME_OPERATOR_STOP = "operator_stop"
 #: cap, before it runs; an interrupt lands inside one.
 _RUN_OUTCOMES_MID_ITERATION = frozenset({"iteration_cap", RUN_OUTCOME_INTERRUPTED})
 
+#: The Iteration-scoped label :meth:`_Loop._finish_unworked_iteration` returns
+#: when it walked a non-empty Pool, bound nothing, and at least one candidate
+#: refused only because its **Readiness** could not be read (#542). It is
+#: *reported* as ``preflight_failed`` — same operator action, same vocabulary as
+#: #541 — and returned under its own name only so a driver can tell the two
+#: apart, exactly as ``"aborted"`` is returned under a name its Run reports as
+#: ``stuck``. The evidence is opposite: an unreadable Pool proved nothing about
+#: work a driver may already be able to name, while this one read the Pool,
+#: named every candidate, and found the tracker unable to say whether any of
+#: them may start — so a driver's independent evidence of remaining work does
+#: not overrule it. It asked about exactly that work.
+_ITERATION_POOL_UNRESOLVED = "pool_unresolved"
+
 #: Serial-Iteration outcomes that end the Run on a **proven** fact about the
 #: Pool: it was walked to completion and every candidate in it was defeated
-#: (#413). Terminal wherever they arrive — including inside a Parallel Run's
-#: granted serial turn — because no later turn could read anything different,
-#: so carrying on would re-walk the same Pool until the iteration cap.
-_SERIAL_DEFEATED_OUTCOMES = frozenset({"all_skipped", "all_blocked"})
+#: (#413), or named and left unresolvable (#542). Terminal wherever they arrive
+#: — including inside a Parallel Run's granted serial turn — because no later
+#: turn could read anything different, so carrying on would re-walk the same
+#: Pool until the iteration cap.
+_SERIAL_DEFEATED_OUTCOMES = frozenset(
+    {"all_skipped", "all_blocked", _ITERATION_POOL_UNRESOLVED}
+)
 
 #: The above plus #541's unreadable Pool, which proves nothing and so is
 #: terminal only where the serial Iteration *is* the Run's whole view of the
@@ -833,6 +851,19 @@ _SERIAL_DEFEATED_OUTCOMES = frozenset({"all_skipped", "all_blocked"})
 #: proving the Pool empty. Ending on the refusal would make a Run's outcome
 #: depend on which of several reads a transient ``gh`` failure landed on.
 _SERIAL_TERMINAL_OUTCOMES = _SERIAL_DEFEATED_OUTCOMES | {"preflight_failed"}
+
+#: Iteration labels a Run reports under a different reason. The Run-level
+#: vocabulary is closed by Wrapper contract §10 and pinned by
+#: ``conformance/exit-codes.json``, so an Iteration-scoped routing label never
+#: reaches ``wrapper.run.end`` or :func:`exit_code_for` under its own name.
+_ITERATION_RUN_REASONS: dict[str, str] = {
+    _ITERATION_POOL_UNRESOLVED: "preflight_failed",
+}
+
+
+def _run_reason_for(iteration_outcome: str) -> str:
+    """Return the Run reason one Iteration outcome ends the Run under."""
+    return _ITERATION_RUN_REASONS.get(iteration_outcome, iteration_outcome)
 
 #: The **Wind-down** ladder as a rung lookup, derived from the family's ordered
 #: wire vocabulary so the order lives in one place (``events.WIND_DOWN_STAGES``)
@@ -1959,7 +1990,15 @@ class _Loop:
                         reason=f"{verdict.skip_reason}: {', '.join(verdict.blockers)}",
                         waiting_on_blocker=True,
                     )
-                return verdict.skip_reason
+                # An *unprovable* readiness read is not a refusal of this
+                # candidate; it is a read that did not happen (#542, ADR-0047).
+                # It still skips — the runner may not bind a candidate whose
+                # blockers it never checked — but it is marked so the terminal
+                # classifier cannot mistake it for the Pool refusing work.
+                return AdmissionRefusal(
+                    reason=verdict.skip_reason,
+                    unresolved=readiness_unresolved(verdict),
+                )
             try:
                 resolution = self._resolve_route(
                     item,
@@ -2016,7 +2055,9 @@ class _Loop:
         because there is no work, and reporting "I could not take any of it" the
         same way would end a Run cleanly over a repairable tracker state. It
         therefore ends as ``all_skipped``, unless every refusal proves an open
-        native blocker, in which case it ends as ``all_blocked``.
+        native blocker, in which case it ends as ``all_blocked`` — and unless
+        some refusal proves *nothing at all*, in which case
+        :func:`~git_loopy.sources.unbound_pool_outcome` withholds both.
 
         Terminating here rather than recording a **Strike** and carrying on is
         what stops the livelock #413 opened. Once the ceiling counts *skipped
@@ -2027,13 +2068,43 @@ class _Loop:
         spin until the iteration cap or the operator stopped it. Nothing about
         the next Iteration could differ: the lifecycle is monotonic and the Pool
         is re-read from a tracker no session is touching.
+
+        **That justification is false for an unresolved candidate** (#542), and
+        the outcome changes rather than the termination. A
+        ``readiness_unprovable`` skip is a property of the *read*, not of the
+        tracker, so the next Iteration genuinely could differ — but a Run that
+        kept re-asking a source which just refused would spend its whole
+        Iteration budget and then exit ``0`` under ``iteration_cap``, the clean
+        exit #541 established this path must withhold. So it still ends here,
+        under ``preflight_failed``, naming the candidates whose readiness could
+        not be read: that verdict's ``blockers`` are deliberately empty, so the
+        refs are the only thing an operator has to act on.
         """
         assert pickup.skipped
-        outcome = (
-            "all_blocked"
-            if all(skip.waiting_on_blocker for skip in pickup.skipped)
-            else "all_skipped"
+        unresolved = tuple(skip.ref for skip in pickup.skipped if skip.unresolved)
+        outcome = unbound_pool_outcome(
+            candidates=len(pickup.skipped),
+            waiting=sum(1 for skip in pickup.skipped if skip.waiting_on_blocker),
+            unresolved=len(unresolved),
         )
+        if outcome == "preflight_failed":
+            self._diag.error(
+                "serial Pickup bound nothing, and the readiness of %d of the %d "
+                "candidate(s) in the Pool could not be read (%s); an unread "
+                "candidate is unknown, not refused, so this Run will not report "
+                "the Pool as one it could take no work from. Check "
+                "`gh auth status`, this host's network path to the tracker, and "
+                "whether those issues' blockers live in a repository this token "
+                "can see, then re-run.",
+                len(unresolved),
+                len(pickup.considered),
+                ", ".join(f"#{ref}" for ref in unresolved),
+            )
+            self._finish_iteration(iter_num, outcome=outcome)
+            # Reported as `preflight_failed`, routed under its own name: see
+            # `_ITERATION_POOL_UNRESOLVED` for why a Rolling driver's
+            # independent evidence overrules #541's ending and not this one.
+            return (_ITERATION_POOL_UNRESOLVED, 0, 0)
         if outcome == "all_blocked":
             self._diag.error(
                 "serial Pickup bound nothing: all %d candidate(s) in the Pool "
@@ -2414,8 +2485,8 @@ class _Loop:
                         # Pool held only that one. #541 joins them with the Pool
                         # that could not be read at all, for the same reason:
                         # an unknown Pool is not a finished one.
-                        outcome_label = outcome
-                        exit_code = exit_code_for(outcome)
+                        outcome_label = _run_reason_for(outcome)
+                        exit_code = exit_code_for(outcome_label)
                         break
                     if outcome == "aborted":
                         self._announce_wind_down(
@@ -3097,7 +3168,8 @@ class _ParallelLoop:
             if outcome == "empty_pool":
                 return "empty_pool", exit_code_for("empty_pool"), iter_num
             if outcome in _SERIAL_TERMINAL_OUTCOMES:
-                return outcome, exit_code_for(outcome), iter_num
+                reason = _run_reason_for(outcome)
+                return reason, exit_code_for(reason), iter_num
             if outcome == "aborted":
                 return "stuck", exit_code_for("stuck"), iter_num
 
@@ -3234,10 +3306,15 @@ class _ParallelLoop:
                         # flight behind it. Continuing would re-latch the same
                         # serial demand, run the same Iteration and skip the same
                         # candidates for as long as the Run has units, which is
-                        # the livelock this outcome exists to end.
+                        # the livelock this outcome exists to end. #542's
+                        # unresolved Pool joins them: the latched evidence that
+                        # granted this turn is evidence about the very issues
+                        # the Iteration just failed to read, so it overrules
+                        # nothing.
+                        reason = _run_reason_for(outcome)
                         return (
-                            outcome,
-                            exit_code_for(outcome),
+                            reason,
+                            exit_code_for(reason),
                             scheduler._units_spent,
                         )
                     # An `empty_pool` outcome is deliberately NOT terminal here:
@@ -3333,9 +3410,10 @@ class _ParallelLoop:
                                 scheduler._units_spent,
                             )
                         if outcome in _SERIAL_DEFEATED_OUTCOMES | {"empty_pool"}:
+                            reason = _run_reason_for(outcome)
                             return (
-                                outcome,
-                                exit_code_for(outcome),
+                                reason,
+                                exit_code_for(reason),
                                 scheduler._units_spent,
                             )
                         scheduler.serial_finished()
