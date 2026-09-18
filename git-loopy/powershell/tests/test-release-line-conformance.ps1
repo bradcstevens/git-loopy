@@ -61,7 +61,8 @@ $VersionPaths = @(
     "git-loopy/python/uv.lock",
     "git-loopy/tui/Cargo.toml",
     "git-loopy/tui/Cargo.lock",
-    "git-loopy/tui/README.md"
+    "git-loopy/tui/README.md",
+    "git-loopy/conformance/release-version.json"
 )
 
 function Set-Utf8Text {
@@ -88,6 +89,27 @@ function Get-HeadCommitPaths {
     return @(
         (& git -C $RepositoryRoot show --pretty=format: --name-only HEAD) |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+}
+
+function Get-ReleaseFixtureContentWithVersions {
+    param(
+        [string]$Content,
+        [string]$ReleaseVersion,
+        [string]$PythonDistributionVersion
+    )
+
+    $Updated = [regex]::Replace(
+        $Content,
+        '(?m)^(\s*"expected_release_version"\s*:\s*)"[^"]*"(?=,\r?$)',
+        ('${1}"' + $ReleaseVersion + '"'),
+        1
+    )
+    return [regex]::Replace(
+        $Updated,
+        '(?m)^(\s*"expected_python_distribution_version"\s*:\s*)"[^"]*"(?=,\r?$)',
+        ('${1}"' + $PythonDistributionVersion + '"'),
+        1
     )
 }
 
@@ -246,6 +268,58 @@ try {
             '(?s)name = "git-loopy".*?version = "([^"]+)"'
         ).Groups[1].Value
     ) "the Python lockfile copy normalizes dev.N"
+    $ReleaseFixturePath = Join-Path $Scratch "git-loopy/conformance/release-version.json"
+    $ReleaseFixture = Get-Utf8Text -Path $ReleaseFixturePath | ConvertFrom-Json -AsHashtable
+    Assert-Equal "1.2.4-dev.1" $ReleaseFixture["expected_release_version"] (
+        "a Release-line advance updates the fixture's public SemVer expectation"
+    )
+    Assert-Equal "1.2.4.dev1" $ReleaseFixture["expected_python_distribution_version"] (
+        "a Release-line advance updates the fixture's normalized PEP 440 expectation"
+    )
+    Assert-Equal (
+        Get-ReleaseFixtureContentWithVersions `
+            -Content (Get-Utf8Text -Path (Join-Path $RepositoryRoot "git-loopy/conformance/release-version.json")) `
+            -ReleaseVersion "1.2.4-dev.1" `
+            -PythonDistributionVersion "1.2.4.dev1"
+    ) (Get-Utf8Text -Path $ReleaseFixturePath) (
+        "a Release-line advance preserves every other release-version fixture field"
+    )
+
+    $DuplicateFixtureScratch = New-ReleaseLineScratchRepository `
+        -ScratchRoot $ScratchRoot `
+        -Version "1.2.3" `
+        -ReachableStableTag $null
+    $DuplicateFixturePath = Join-Path $DuplicateFixtureScratch "git-loopy/conformance/release-version.json"
+    $DuplicateFixtureContent = Get-Utf8Text -Path $DuplicateFixturePath
+    Set-Utf8Text `
+        -Path $DuplicateFixturePath `
+        -Content $DuplicateFixtureContent.Replace(
+            '  "expected_release_version": "1.2.3",',
+            "  `"expected_release_version`": `"1.2.3`",`n" +
+                '  "expected_release_version": "1.2.3",'
+        )
+    $MetadataBeforeDuplicateFixtureFailure = @{}
+    foreach ($Path in $VersionPaths) {
+        $MetadataBeforeDuplicateFixtureFailure[$Path] = Get-Utf8Text -Path (
+            Join-Path $DuplicateFixtureScratch $Path
+        )
+    }
+    try {
+        Set-GitLoopyRepositoryReleaseVersion `
+            -RepositoryRoot $DuplicateFixtureScratch `
+            -Version "1.2.4-dev.1"
+        throw "FAIL: duplicate release-version fixture fields were accepted"
+    }
+    catch {
+        Assert-Contains "expected_release_version" $_.Exception.Message (
+            "a duplicate release-version fixture field is rejected explicitly"
+        )
+    }
+    foreach ($Path in $VersionPaths) {
+        Assert-Equal $MetadataBeforeDuplicateFixtureFailure[$Path] (
+            Get-Utf8Text -Path (Join-Path $DuplicateFixtureScratch $Path)
+        ) "a rejected release-version fixture leaves every Release metadata copy unchanged: $Path"
+    }
 
     $CrLfScratch = New-ReleaseLineScratchRepository `
         -ScratchRoot $ScratchRoot `
@@ -261,6 +335,52 @@ try {
     Assert-Equal $false (
         [regex]::IsMatch($CrLfProject, '(?<!\r)\n')
     ) "a CRLF Python project manifest preserves its line endings"
+    $CrLfReleaseFixture = Get-Utf8Text -Path (
+        Join-Path $CrLfScratch "git-loopy/conformance/release-version.json"
+    )
+    Assert-Equal $false (
+        [regex]::IsMatch($CrLfReleaseFixture, '(?<!\r)\n')
+    ) "a CRLF release-version fixture preserves its line endings"
+
+    $InvalidFixtureScratch = New-ReleaseLineScratchRepository `
+        -ScratchRoot $ScratchRoot `
+        -Version "1.2.3" `
+        -ReachableStableTag $null
+    $InvalidFixturePath = Join-Path $InvalidFixtureScratch "git-loopy/conformance/release-version.json"
+    Set-Utf8Text `
+        -Path $InvalidFixturePath `
+        -Content (Get-Utf8Text -Path $InvalidFixturePath).Replace(
+            '"expected_python_distribution_version": "1.2.3"',
+            '"expected_python_distribution_version": false'
+        )
+    try {
+        Set-GitLoopyRepositoryReleaseVersion `
+            -RepositoryRoot $InvalidFixtureScratch `
+            -Version "1.2.4-dev.1"
+        throw "FAIL: an invalid release-version fixture field type was accepted"
+    }
+    catch {
+        Assert-Contains "must be a JSON string" $_.Exception.Message (
+            "an invalid release-version fixture field type is rejected explicitly"
+        )
+    }
+
+    Set-Utf8Text -Path $InvalidFixturePath -Content ($DuplicateFixtureContent + "`ninvalid")
+    $MalformedFixtureRejected = $false
+    try {
+        Set-GitLoopyRepositoryReleaseVersion `
+            -RepositoryRoot $InvalidFixtureScratch `
+            -Version "1.2.4-dev.1"
+    }
+    catch {
+        $MalformedFixtureRejected = $true
+    }
+    Assert-Equal $true $MalformedFixtureRejected (
+        "malformed JSON is refused even when both live fields look valid"
+    )
+    Assert-Equal "1.2.3" (
+        (Get-Utf8Text -Path (Join-Path $InvalidFixtureScratch "VERSION")).Trim()
+    ) "malformed fixture refusal preserves the repository Release version"
 
     $SecondAdvance = Invoke-GitLoopyRepositoryReleaseLineAdvance `
         -RepositoryRoot $Scratch -Labels @("semver:minor")

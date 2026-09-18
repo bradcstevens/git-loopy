@@ -307,6 +307,14 @@ def _write_release_distribution(root: Path, version: str = "1.2.3-dev.4") -> Non
     )
     (root / "git-loopy/conformance").mkdir()
     (root / "git-loopy/conformance/release-version.json").write_text(
+        json.dumps({
+            "expected_release_version": version,
+            "expected_python_distribution_version": python_version,
+            "fixture": "unchanged",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    (root / "git-loopy/conformance/other.json").write_text(
         '{"fixture": "unchanged"}\n',
         encoding="utf-8",
     )
@@ -338,7 +346,16 @@ def test_release_writer_advances_all_distribution_copies(tmp_path: Path) -> None
     assert (tmp_path / "git-loopy/tui/README.md").read_text(encoding="utf-8") == (
         '{"name": "git-loopy-tui", "version": "2.3.4-dev.5"}\n'
     )
-    assert (tmp_path / "git-loopy/conformance/release-version.json").read_text(
+    assert json.loads(
+        (tmp_path / "git-loopy/conformance/release-version.json").read_text(
+            encoding="utf-8"
+        )
+    ) == {
+        "expected_release_version": "2.3.4-dev.5",
+        "expected_python_distribution_version": "2.3.4.dev5",
+        "fixture": "unchanged",
+    }
+    assert (tmp_path / "git-loopy/conformance/other.json").read_text(
         encoding="utf-8"
     ) == '{"fixture": "unchanged"}\n'
     assert {
@@ -346,6 +363,66 @@ def test_release_writer_advances_all_distribution_copies(tmp_path: Path) -> None
         for path in tmp_path.rglob("*")
         if path.is_file()
     } == modes_before
+
+
+def test_release_writer_promotes_the_live_fixture_with_the_distribution(
+    tmp_path: Path,
+) -> None:
+    _write_release_distribution(tmp_path)
+
+    write_repository_release_version(tmp_path, "1.2.3")
+
+    fixture = json.loads(
+        (tmp_path / "git-loopy/conformance/release-version.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert fixture["expected_release_version"] == "1.2.3"
+    assert fixture["expected_python_distribution_version"] == "1.2.3"
+    assert fixture["fixture"] == "unchanged"
+    assert Path("git-loopy/conformance/release-version.json") in (
+        release_version.RELEASE_VERSION_PATHS
+    )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{",
+        "[]",
+        "{}",
+        '{"expected_release_version": 1, '
+        '"expected_python_distribution_version": "1.2.3.dev4"}',
+        '{"expected_release_version": "9.0.0", '
+        '"expected_python_distribution_version": "1.2.3.dev4"}',
+        '{"expected_release_version": "1.2.3-dev.4", '
+        '"expected_python_distribution_version": "9.0.0"}',
+        '{"expected_release_version": 1, '
+        '"expected_release_version": "1.2.3-dev.4", '
+        '"expected_python_distribution_version": "1.2.3.dev4"}',
+    ],
+)
+def test_release_writer_refuses_invalid_fixture_without_touching_distribution(
+    tmp_path: Path, content: str,
+) -> None:
+    _write_release_distribution(tmp_path)
+    (tmp_path / "git-loopy/conformance/release-version.json").write_text(
+        content, encoding="utf-8"
+    )
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(ReleaseVersionError, match="Release fixture"):
+        write_repository_release_version(tmp_path, "2.3.4-dev.5")
+
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    } == before
 
 
 def test_release_line_reader_continues_a_dev_counter_from_its_stable_release() -> None:
