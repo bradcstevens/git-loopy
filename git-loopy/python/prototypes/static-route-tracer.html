@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>PROTOTYPE: Static Route Tracer</title>
+<style>
+  body { background: #f8fafc; color: #172033; font: 16px/1.5 system-ui, sans-serif; margin: 0 auto; max-width: 760px; padding: 2rem; }
+  h1 { color: #143d73; margin-bottom: .25rem; }
+  section { background: white; border: 1px solid #d9e1ed; border-radius: .5rem; margin: 1rem 0; padding: 1rem; }
+  button { background: #175ea8; border: 0; border-radius: .25rem; color: white; cursor: pointer; margin: .25rem; padding: .5rem .75rem; }
+  button:hover { background: #0f497f; }
+  dt { color: #516176; font-weight: 600; }
+  dd { margin: 0 0 .7rem; }
+  .refused { color: #a4262c; font-weight: 700; }
+  .ok { color: #0b6a3b; font-weight: 700; }
+  .steps button[disabled] { background: #9aa8bb; cursor: default; }
+</style>
+<body>
+<h1>Static Route Tracer</h1>
+<p><strong>PROTOTYPE — throwaway.</strong> This asks whether one operator-selected static
+route stays whole: a model, an optional effort, and a run-level context tier must be
+validated from the authenticated harness, carried unchanged to every work session, and
+refused rather than silently changed.</p>
+
+<section>
+  <h2>Current Routing resolution</h2>
+  <dl id="state"></dl>
+</section>
+
+<section>
+  <h2>Free play</h2>
+  <button data-action="complete">Verified static route</button>
+  <button data-action="none">Verified no-effort model</button>
+  <button data-action="unsupported-effort">Unsupported effort</button>
+  <button data-action="unsupported-tier">Unsupported context tier</button>
+  <button data-action="unverifiable">Unreadable harness</button>
+</section>
+
+<section class="steps">
+  <h2>Guided walkthroughs</h2>
+  <p id="scenario"></p>
+  <button id="start">Start selected walkthrough</button>
+  <div id="steps"></div>
+  <button data-scenario="whole">Whole route</button>
+  <button data-scenario="no-effort">No-effort distinction</button>
+  <button data-scenario="refusal">No silent fallback</button>
+</section>
+
+<script>
+// Pure state module: the page only renders the resolution it returns.
+const StaticRoute = (() => {
+  const requested = {
+    complete: { model: "model-a", effort: "high", tier: "long_context" },
+    none: { model: "model-b", effort: undefined, tier: "default" },
+    "unsupported-effort": { model: "model-a", effort: "max", tier: "default" },
+    "unsupported-tier": { model: "model-b", effort: "none", tier: "long_context" },
+    unverifiable: { model: "model-a", effort: "high", tier: "long_context" },
+  };
+  const capabilities = {
+    "model-a": { efforts: ["low", "high"], tiers: ["default", "long_context"] },
+    "model-b": { efforts: ["none"], tiers: ["default"] },
+  };
+  function resolve(kind) {
+    const route = requested[kind];
+    if (kind === "unverifiable") return { requested: route, status: "refused", reason: "The authenticated harness could not be read." };
+    const capability = capabilities[route.model];
+    if (!capability) return { requested: route, status: "refused", reason: "The authenticated harness did not offer this model." };
+    if (route.effort !== undefined && !capability.efforts.includes(route.effort)) return { requested: route, status: "refused", reason: "The model does not accept this effort." };
+    if (!capability.tiers.includes(route.tier)) return { requested: route, status: "refused", reason: "The model does not support this context tier." };
+    return { requested: route, session: { ...route }, status: "ready", reason: "The exact static route will be sent to every attempt and retry." };
+  }
+  return { resolve };
+})();
+
+const scenarios = {
+  whole: { text: "A complete selected route reaches a work session unchanged.", steps: ["complete"] },
+  "no-effort": { text: "No effort argument is different from the explicit effort value “none”.", steps: ["none"] },
+  refusal: { text: "A capability mismatch is named before work; it is never downgraded into a successful route.", steps: ["unsupported-effort", "unsupported-tier", "unverifiable"] },
+};
+let active = "whole", step = 0, resolution = StaticRoute.resolve("complete");
+const state = document.querySelector("#state"), scenario = document.querySelector("#scenario"), steps = document.querySelector("#steps");
+function show() {
+  const session = resolution.session;
+  state.innerHTML = `
+    <dt>Requested model</dt><dd>${resolution.requested.model}</dd>
+    <dt>Requested effort</dt><dd>${resolution.requested.effort === undefined ? "No effort argument" : resolution.requested.effort}</dd>
+    <dt>Requested context tier</dt><dd>${resolution.requested.tier}</dd>
+    <dt>Result</dt><dd class="${resolution.status === "ready" ? "ok" : "refused"}">${resolution.status}: ${resolution.reason}</dd>
+    <dt>Work-session arguments</dt><dd>${session ? `model=${session.model}; effort=${session.effort === undefined ? "omitted" : session.effort}; context_tier=${session.tier}` : "No session is created."}</dd>`;
+  scenario.textContent = scenarios[active].text;
+  steps.innerHTML = scenarios[active].steps.map((kind, index) =>
+    `<button data-step="${index}" ${index !== step ? "disabled" : ""}>${index + 1}. ${kind.replaceAll("-", " ")}</button>`).join("");
+}
+document.addEventListener("click", event => {
+  const action = event.target.dataset.action;
+  const chosen = event.target.dataset.scenario;
+  const next = event.target.dataset.step;
+  if (action) { resolution = StaticRoute.resolve(action); show(); }
+  if (chosen) { active = chosen; step = 0; resolution = StaticRoute.resolve("complete"); show(); }
+  if (next !== undefined) { resolution = StaticRoute.resolve(scenarios[active].steps[next]); step += 1; show(); }
+  if (event.target.id === "start") { step = 0; resolution = StaticRoute.resolve("complete"); show(); }
+});
+show();
+</script>
+</body>
+</html>
