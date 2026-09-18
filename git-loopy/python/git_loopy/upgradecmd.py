@@ -25,11 +25,11 @@ INSTALL_SPEC = (
 )
 
 
-#: Where a published Release announces itself. The newest stable Release is what
-#: ``releases/latest`` means to GitHub — drafts and prereleases are excluded — so
-#: a bare ``upgrade`` lands a version somebody deliberately cut.
+#: Where published Releases announce themselves.  This list includes prereleases:
+#: ``X.Y.Z-dev.N`` is a published Release on this project's Release line, while
+#: GitHub's ``releases/latest`` endpoint deliberately excludes it.
 _LATEST_RELEASE_URL = (
-    "https://api.github.com/repos/bradcstevens/git-loopy/releases/latest"
+    "https://api.github.com/repos/bradcstevens/git-loopy/releases?per_page=100"
 )
 _NAMED_RELEASE_URL = (
     "https://api.github.com/repos/bradcstevens/git-loopy/releases/tags/v{version}"
@@ -49,21 +49,56 @@ def resolve_published_release(version: str | None) -> str:
     a ref that does not exist — or, worse, an Edge install the operator was
     never told about.
     """
-    url = _LATEST_RELEASE_URL if version is None else _NAMED_RELEASE_URL.format(
-        version=version
-    )
+    if version is not None:
+        url = _NAMED_RELEASE_URL.format(version=version)
+        document, _next_page = _read_release_page(url)
+        tag = document.get("tag_name") if isinstance(document, dict) else None
+        if not isinstance(tag, str) or _RELEASE_REF.fullmatch(tag) is None:
+            raise UpgradeError(f"{url} named no published Release tag")
+        return tag.removeprefix("v")
+
+    releases: list[tuple[tuple[int, int, int, int, int], str]] = []
+    url: str | None = _LATEST_RELEASE_URL
+    read_pages: set[str] = set()
+    while url is not None:
+        if url in read_pages:
+            raise UpgradeError(f"published Releases pagination looped at {url}")
+        read_pages.add(url)
+        page_url = url
+        document, url = _read_release_page(page_url)
+        if not isinstance(document, list):
+            raise UpgradeError(f"{page_url} named no published Releases")
+        for release in document:
+            if not isinstance(release, dict) or release.get("draft") is True:
+                continue
+            tag = release.get("tag_name")
+            if not isinstance(tag, str):
+                continue
+            named = _RELEASE_REF.fullmatch(tag)
+            if named is None:
+                continue
+            release_version = named.group(1)
+            order = _ordering(release_version)
+            assert order is not None
+            releases.append((order, release_version))
+    if not releases:
+        raise UpgradeError("published Releases named no published Release tag")
+    return max(releases)[1]
+
+
+def _read_release_page(url: str) -> tuple[object, str | None]:
+    """Read one GitHub Releases page and its optional next page."""
     try:
         with urlopen(url, timeout=15) as response:
             document = json.loads(response.read().decode("utf-8"))
+            headers = getattr(response, "headers", None)
+            link = headers.get("Link") if headers is not None else None
     except (OSError, HTTPException, UnicodeError, ValueError) as exc:
         raise UpgradeError(
             "cannot read the published Releases "
             f"({url}): {exc}"
         ) from exc
-    tag = document.get("tag_name") if isinstance(document, dict) else None
-    if not isinstance(tag, str) or not tag.startswith("v"):
-        raise UpgradeError(f"{url} named no published Release tag")
-    return tag[1:]
+    return document, _next_release_page(link)
 
 
 def replace_process(command: Sequence[str]) -> None:
@@ -145,10 +180,38 @@ def run_upgrade(
     except UpgradeError as exc:
         output_fn(f"Left {inventory.artifact} unchanged: {exc}")
         return 1
+    if target.edge and environ.get("COMSPEC") and _has_windows_command_characters(
+        target.ref
+    ):
+        output_fn(
+            f"Left {inventory.artifact} at {executable} unchanged: `{target.ref}` "
+            "contains characters cmd.exe would interpret. Name its full commit "
+            "instead."
+        )
+        return 1
+    if environ.get("COMSPEC") and _has_windows_command_characters(inventory.executable):
+        output_fn(
+            f"Left {inventory.artifact} at {executable} unchanged: its executable "
+            "path contains characters cmd.exe would interpret."
+        )
+        return 1
+    channel = _channel_move(inventory.install_channel)
+    chain = channel.chain(target, update_executable=inventory.executable)
+    if not inventory.install_channel.proven:
+        output_fn(
+            f"Left {inventory.artifact} at {executable} unchanged: {channel.limit}"
+        )
+        for line in channel.instruct(
+            target,
+            update_executable=inventory.executable,
+            windows=bool(environ.get("COMSPEC")),
+        ):
+            output_fn(line)
+        return 1
     if (
         target.release_version is not None
+        and inventory.edge_install is False
         and inventory.release_version == target.release_version
-        and inventory.edge_install is not True
     ):
         output_fn(
             f"Left {inventory.artifact} at {target.describe()} unchanged: it is "
@@ -159,6 +222,7 @@ def run_upgrade(
     if (
         target.release_version is not None
         and not allow_downgrade
+        and inventory.release_version != target.release_version
         and _is_forward(inventory.release_version, target.release_version) is not True
     ):
         output_fn(
@@ -168,13 +232,14 @@ def run_upgrade(
             "Pass --allow-downgrade to move there deliberately."
         )
         return 1
-    channel = _channel_move(inventory.install_channel)
-    chain = channel.chain(target)
     if not channel.pins or chain is None:
         output_fn(
             f"Left {inventory.artifact} at {executable} unchanged: {channel.limit}"
         )
-        for line in channel.instruct(target):
+        for line in channel.instruct(
+            target,
+            windows=bool(environ.get("COMSPEC")),
+        ):
             output_fn(line)
         return 1
     output_fn(
@@ -191,7 +256,11 @@ def run_upgrade(
         (handoff or replace_process)(_handoff_command(chain, environ))
     except OSError as exc:
         output_fn(f"Could not hand {executable} over to its Install channel: {exc}")
-        for line in channel.instruct(target):
+        for line in channel.instruct(
+            target,
+            update_executable=inventory.executable,
+            windows=bool(environ.get("COMSPEC")),
+        ):
             output_fn(line)
         return 1
     return 0
@@ -216,26 +285,29 @@ class _ChannelMove:
     preface: str
     steps: Callable[[UpgradeTarget], tuple[str, ...]] | None
 
-    def chain(self, target: UpgradeTarget) -> tuple[tuple[str, ...], ...] | None:
+    def chain(
+        self, target: UpgradeTarget, *, update_executable: str = "git-loopy"
+    ) -> tuple[tuple[str, ...], ...] | None:
         """The move, and the ``update`` that a landed Release makes necessary."""
         if self.steps is None:
             return None
-        return (self.steps(target), _UPDATE_STEP)
+        return (self.steps(target), (update_executable, "update"))
 
-    def instruct(self, target: UpgradeTarget) -> tuple[str, ...]:
+    def instruct(
+        self,
+        target: UpgradeTarget,
+        *,
+        update_executable: str = "git-loopy",
+        windows: bool = False,
+    ) -> tuple[str, ...]:
         """Render the exact command a refused operator can run themselves."""
-        chain = self.chain(target)
+        chain = self.chain(target, update_executable=update_executable)
         if chain is None:
             return ()
         return (
             self.preface.format(target=target.describe()),
-            f"  {_render(chain)}",
+            f"  {_render(chain, windows=windows)}",
         )
-
-
-#: The refresh a landed Release makes necessary, run from the artifact the move
-#: installed rather than from this one (ADR-0054).
-_UPDATE_STEP = ("git-loopy", "update")
 
 
 def _uv_tool_steps(target: UpgradeTarget) -> tuple[str, ...]:
@@ -297,6 +369,8 @@ def _channel_move(channel: installation.InstallChannel) -> _ChannelMove:
 _RELEASE_ORDER = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-dev\.(\d+))?")
 #: A ref spelled the way this project spells its published Release tags.
 _RELEASE_REF = re.compile(r"v?(\d+\.\d+\.\d+(?:-dev\.\d+)?)")
+_WINDOWS_COMMAND_CHARACTERS = frozenset("&|<>()%^!\"")
+_NEXT_RELEASE_PAGE = re.compile(r'<([^>]+)>;\s*rel="next"')
 
 
 def _resolve_target(
@@ -313,6 +387,10 @@ def _resolve_target(
     operator is handed the flag that means what they asked for.
     """
     if edge_ref is not None:
+        if not edge_ref.strip():
+            raise UpgradeError(
+                "an Edge ref must not be empty; name an unreleased commit or ref"
+            )
         named = _RELEASE_REF.fullmatch(edge_ref)
         if named is not None:
             raise UpgradeError(
@@ -365,9 +443,25 @@ def _direction_refusal(installed: str | None, target: str) -> str:
     return f"Release {target} cannot be proven newer than the one installed."
 
 
-def _render(steps: Sequence[Sequence[str]]) -> str:
+def _has_windows_command_characters(ref: str) -> bool:
+    """Whether passing an Edge ref to ``cmd.exe /c`` would change its command."""
+    return bool(_WINDOWS_COMMAND_CHARACTERS.intersection(ref)) or any(
+        ord(character) < 32 for character in ref
+    )
+
+
+def _next_release_page(link: object) -> str | None:
+    """Read GitHub's next-page URL from the Releases pagination header."""
+    if not isinstance(link, str):
+        return None
+    match = _NEXT_RELEASE_PAGE.search(link)
+    return match.group(1) if match is not None else None
+
+
+def _render(steps: Sequence[Sequence[str]], *, windows: bool = False) -> str:
     """Render the steps as the one command line an operator could type."""
-    return " && ".join(shlex.join(step) for step in steps)
+    quote = subprocess.list2cmdline if windows else shlex.join
+    return " && ".join(quote(step) for step in steps)
 
 
 def _handoff_command(
@@ -384,6 +478,6 @@ def _handoff_command(
     """
     interpreter = env.get("COMSPEC")
     if interpreter:
-        chain = " && ".join(subprocess.list2cmdline(step) for step in steps)
+        chain = _render(steps, windows=True)
         return (interpreter, "/c", chain)
     return ("sh", "-c", _render(steps))

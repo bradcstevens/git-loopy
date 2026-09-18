@@ -50,9 +50,116 @@ def test_upgrade_hands_the_newest_published_release_to_the_owning_channel(
             "-c",
             "uv tool install --force "
             "'git+https://github.com/bradcstevens/git-loopy"
-            "@v1.3.0#subdirectory=git-loopy/python' && git-loopy update",
+            "@v1.3.0#subdirectory=git-loopy/python' && "
+            f"{executable} update",
         )
     ]
+
+
+def test_upgrade_runs_update_from_the_artifact_it_moved(tmp_path: Path) -> None:
+    """The post-move refresh cannot follow a colliding PATH entry."""
+    from git_loopy import upgradecmd
+
+    executable = tmp_path / "uv tools" / "git-loopy" / "bin" / "git-loopy"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    handed: list[tuple[str, ...]] = []
+    env = {
+        "UV_TOOL_DIR": str(tmp_path / "uv tools"),
+        "XDG_CONFIG_HOME": str(tmp_path / "config-home"),
+    }
+
+    result = upgradecmd.run_upgrade(
+        env=env,
+        executable_path=executable,
+        release_resolver=lambda requested: "1.3.0",
+        handoff=lambda command: handed.append(tuple(command)),
+        release_version_reader=lambda: "1.2.3",
+        output_fn=lambda _line: None,
+    )
+
+    assert result == 0
+    assert handed == [
+        (
+            "sh",
+            "-c",
+            "uv tool install --force "
+            "'git+https://github.com/bradcstevens/git-loopy"
+            "@v1.3.0#subdirectory=git-loopy/python' && "
+            f"'{executable}' update",
+        )
+    ]
+
+
+def test_newest_published_release_includes_a_prerelease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A published development Release still advances the Release line."""
+    import json
+    from contextlib import contextmanager
+
+    from git_loopy import upgradecmd
+
+    @contextmanager
+    def _fake_urlopen(url: str, timeout: float = 0):
+        assert (
+            url
+            == "https://api.github.com/repos/bradcstevens/git-loopy/releases?per_page=100"
+        )
+        yield _Response(
+            json.dumps(
+                [
+                    {"tag_name": "v1.3.0", "draft": False, "prerelease": False},
+                    {"tag_name": "v1.4.0-dev.1", "draft": False, "prerelease": True},
+                    {"tag_name": "v9.0.0", "draft": True, "prerelease": False},
+                ]
+            ).encode("utf-8")
+        )
+
+    monkeypatch.setattr(upgradecmd, "urlopen", _fake_urlopen)
+
+    assert upgradecmd.resolve_published_release(None) == "1.4.0-dev.1"
+
+
+def test_newest_published_release_considers_every_release_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A long Release history does not hide the current Release line."""
+    import json
+    from contextlib import contextmanager
+
+    from git_loopy import upgradecmd
+
+    pages = {
+        "https://api.github.com/repos/bradcstevens/git-loopy/releases?per_page=100": _Response(
+            json.dumps(
+                [{"tag_name": "v1.3.0", "draft": False, "prerelease": False}]
+            ).encode("utf-8"),
+            headers={
+                "Link": (
+                    '<https://api.github.com/repos/bradcstevens/git-loopy/releases'
+                    '?per_page=100&page=2>; rel="next"'
+                )
+            },
+        ),
+        (
+            "https://api.github.com/repos/bradcstevens/git-loopy/releases"
+            "?per_page=100&page=2"
+        ): _Response(
+            json.dumps(
+                [{"tag_name": "v1.4.0-dev.1", "draft": False, "prerelease": True}]
+            ).encode("utf-8")
+        ),
+    }
+
+    @contextmanager
+    def _fake_urlopen(url: str, timeout: float = 0):
+        yield pages.pop(url)
+
+    monkeypatch.setattr(upgradecmd, "urlopen", _fake_urlopen)
+
+    assert upgradecmd.resolve_published_release(None) == "1.4.0-dev.1"
+    assert pages == {}
 
 
 def test_upgrade_refuses_an_unprovable_channel_and_names_the_command(
@@ -88,8 +195,65 @@ def test_upgrade_refuses_an_unprovable_channel_and_names_the_command(
     assert (
         "uv tool install --force "
         "'git+https://github.com/bradcstevens/git-loopy"
-        "@v1.3.0#subdirectory=git-loopy/python' && git-loopy update" in report
+        f"@v1.3.0#subdirectory=git-loopy/python' && {executable} update" in report
     )
+
+
+def test_an_unproven_artifact_refuses_even_when_its_version_matches(
+    tmp_path: Path,
+) -> None:
+    """Channel proof precedes any no-op claim based on a source VERSION file."""
+    from git_loopy import upgradecmd
+
+    executable = tmp_path / ".local" / "bin" / "git-loopy"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    output: list[str] = []
+
+    result = upgradecmd.run_upgrade(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=executable,
+        release_resolver=lambda requested: "1.3.0",
+        handoff=lambda command: (_ for _ in ()).throw(
+            AssertionError(f"an unproven channel must move nothing: {command!r}")
+        ),
+        release_version_reader=lambda: "1.3.0",
+        output_fn=output.append,
+    )
+
+    assert result == 1
+    assert "uv tool install --force" in "\n".join(output)
+
+
+def test_windows_unproven_channel_names_a_cmd_executable_recovery_command(
+    tmp_path: Path,
+) -> None:
+    """A refusal still gives Windows an executable command to run."""
+    from git_loopy import upgradecmd
+
+    executable = tmp_path / "operator home" / ".local" / "bin" / "git-loopy"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    output: list[str] = []
+
+    result = upgradecmd.run_upgrade(
+        env={
+            "COMSPEC": "C:\\Windows\\system32\\cmd.exe",
+            "XDG_CONFIG_HOME": str(tmp_path / "config-home"),
+        },
+        executable_path=executable,
+        release_resolver=lambda requested: "1.3.0",
+        handoff=lambda command: (_ for _ in ()).throw(
+            AssertionError(f"an unproven channel must move nothing: {command!r}")
+        ),
+        release_version_reader=lambda: "1.2.3",
+        output_fn=output.append,
+    )
+
+    assert result == 1
+    report = "\n".join(output)
+    assert "'git+https://github.com/bradcstevens/git-loopy" not in report
+    assert f'"{executable}" update' in report
 
 
 def test_upgrade_pins_the_named_release_the_operator_asked_for(
@@ -168,35 +332,31 @@ def test_allow_downgrade_moves_to_the_older_release_it_names(tmp_path: Path) -> 
     assert "@v1.2.0#subdirectory=git-loopy/python" in handed[0][2]
 
 
-def test_upgrade_changes_nothing_when_the_release_is_already_installed(
+def test_upgrade_does_not_trust_an_unverifiable_release_version_as_a_noop(
     tmp_path: Path,
 ) -> None:
-    """A move to where the operator already stands is reported, never performed.
+    """An unproven source version is not Release identity.
 
-    Re-running a package manager over an installation that is already at the
-    resolved Release spends an operator's network and their running executable
-    for a no-op, so the asset refresh is named instead of assumed.
+    An Edge install can retain the same ``VERSION`` as a published Release.  It
+    must still move back to that published Release rather than mistaking a source
+    constant for proof that it is already there.
     """
     from git_loopy import upgradecmd
 
     env, executable = _uv_tool_executable(tmp_path)
-    output: list[str] = []
+    handed: list[tuple[str, ...]] = []
 
     result = upgradecmd.run_upgrade(
         env=env,
         executable_path=executable,
         release_resolver=lambda version: "1.2.3",
-        handoff=lambda command: (_ for _ in ()).throw(
-            AssertionError(f"an installed Release must not be re-installed: {command!r}")
-        ),
+        handoff=lambda command: handed.append(tuple(command)),
         release_version_reader=lambda: "1.2.3",
-        output_fn=output.append,
+        output_fn=lambda _line: None,
     )
 
     assert result == 0
-    report = "\n".join(output)
-    assert "1.2.3" in report
-    assert "git-loopy update" in report
+    assert handed
 
 
 def test_edge_lands_the_named_commit_and_reports_it_as_an_edge_install(
@@ -317,7 +477,11 @@ def test_upgrade_drives_the_real_seams_when_neither_is_injected(
     @contextmanager
     def _fake_urlopen(url: str, timeout: float = 0):
         asked.append(url)
-        yield _Response(json.dumps({"tag_name": "v1.3.0"}).encode("utf-8"))
+        yield _Response(
+            json.dumps(
+                [{"tag_name": "v1.3.0", "draft": False, "prerelease": False}]
+            ).encode("utf-8")
+        )
 
     monkeypatch.setattr(upgradecmd, "urlopen", _fake_urlopen)
     monkeypatch.setattr(
@@ -335,7 +499,7 @@ def test_upgrade_drives_the_real_seams_when_neither_is_injected(
 
     assert result == 0
     assert asked == [
-        "https://api.github.com/repos/bradcstevens/git-loopy/releases/latest"
+        "https://api.github.com/repos/bradcstevens/git-loopy/releases?per_page=100"
     ]
     assert replaced == [
         (
@@ -345,7 +509,8 @@ def test_upgrade_drives_the_real_seams_when_neither_is_injected(
                 "-c",
                 "uv tool install --force "
                 "'git+https://github.com/bradcstevens/git-loopy"
-                "@v1.3.0#subdirectory=git-loopy/python' && git-loopy update",
+                "@v1.3.0#subdirectory=git-loopy/python' && "
+                f"{executable} update",
             ),
         )
     ]
@@ -427,10 +592,93 @@ def test_the_handoff_runs_through_the_windows_command_interpreter(
             "/c",
             "uv tool install --force "
             "git+https://github.com/bradcstevens/git-loopy"
-            "@v1.3.0#subdirectory=git-loopy/python && git-loopy update",
+            "@v1.3.0#subdirectory=git-loopy/python && "
+            f"{executable} update",
         )
     ]
 
+
+def test_windows_refuses_an_edge_ref_that_cmd_would_interpret(
+    tmp_path: Path,
+) -> None:
+    """A valid Git ref must not become a second Windows command."""
+    from git_loopy import upgradecmd
+
+    env, executable = _uv_tool_executable(tmp_path)
+    env["COMSPEC"] = "C:\\Windows\\system32\\cmd.exe"
+    output: list[str] = []
+
+    result = upgradecmd.run_upgrade(
+        env=env,
+        executable_path=executable,
+        edge_ref="feature&unsafe",
+        handoff=lambda command: (_ for _ in ()).throw(
+            AssertionError(f"an unsafe Edge ref must move nothing: {command!r}")
+        ),
+        release_version_reader=lambda: "1.2.3",
+        output_fn=output.append,
+    )
+
+    assert result == 1
+    assert "full commit" in "\n".join(output)
+
+
+def test_windows_refuses_an_edge_ref_with_control_characters(
+    tmp_path: Path,
+) -> None:
+    """An Edge ref cannot create another command line for cmd.exe."""
+    from git_loopy import upgradecmd
+
+    env, executable = _uv_tool_executable(tmp_path)
+    env["COMSPEC"] = "C:\\Windows\\system32\\cmd.exe"
+    output: list[str] = []
+
+    result = upgradecmd.run_upgrade(
+        env=env,
+        executable_path=executable,
+        edge_ref="commit\r\nunsafe",
+        handoff=lambda command: (_ for _ in ()).throw(
+            AssertionError(f"an unsafe Edge ref must move nothing: {command!r}")
+        ),
+        release_version_reader=lambda: "1.2.3",
+        output_fn=output.append,
+    )
+
+    assert result == 1
+    assert "full commit" in "\n".join(output)
+
+
+def test_windows_refuses_an_executable_path_that_cmd_would_interpret(
+    tmp_path: Path,
+) -> None:
+    """A path character must not split the post-move update command."""
+    from git_loopy import upgradecmd
+
+    executable = (
+        tmp_path / "A&B" / "uv" / "tools" / "git-loopy" / "bin" / "git-loopy"
+    )
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    output: list[str] = []
+    env = {
+        "UV_TOOL_DIR": str(tmp_path / "A&B" / "uv" / "tools"),
+        "XDG_CONFIG_HOME": str(tmp_path / "config-home"),
+        "COMSPEC": "C:\\Windows\\system32\\cmd.exe",
+    }
+
+    result = upgradecmd.run_upgrade(
+        env=env,
+        executable_path=executable,
+        release_resolver=lambda requested: "1.3.0",
+        handoff=lambda command: (_ for _ in ()).throw(
+            AssertionError(f"an unsafe executable path must move nothing: {command!r}")
+        ),
+        release_version_reader=lambda: "1.2.3",
+        output_fn=output.append,
+    )
+
+    assert result == 1
+    assert "path" in "\n".join(output)
 
 
 def test_a_handoff_that_cannot_launch_hands_the_command_back(tmp_path: Path) -> None:
@@ -463,7 +711,7 @@ def test_a_handoff_that_cannot_launch_hands_the_command_back(tmp_path: Path) -> 
     assert (
         "uv tool install --force "
         "'git+https://github.com/bradcstevens/git-loopy"
-        "@v1.3.0#subdirectory=git-loopy/python' && git-loopy update" in report
+        f"@v1.3.0#subdirectory=git-loopy/python' && {executable} update" in report
     )
 
 
@@ -471,8 +719,9 @@ def test_a_handoff_that_cannot_launch_hands_the_command_back(tmp_path: Path) -> 
 class _Response:
     """The one thing this module reads back from a GitHub API response."""
 
-    def __init__(self, payload: bytes) -> None:
+    def __init__(self, payload: bytes, headers: dict[str, str] | None = None) -> None:
         self._payload = payload
+        self.headers = headers or {}
 
     def read(self) -> bytes:
         return self._payload
@@ -564,6 +813,31 @@ def test_a_to_that_is_no_release_version_is_refused_before_the_network(
     assert result == 1
     report = "\n".join(output)
     assert "main" in report and "--edge" in report
+
+
+def test_an_empty_edge_ref_is_refused_before_the_network(tmp_path: Path) -> None:
+    """An opt-in without a ref must not silently install the default branch."""
+    from git_loopy import upgradecmd
+
+    env, executable = _uv_tool_executable(tmp_path)
+    output: list[str] = []
+
+    result = upgradecmd.run_upgrade(
+        env=env,
+        executable_path=executable,
+        edge_ref="",
+        release_resolver=lambda version: (_ for _ in ()).throw(
+            AssertionError("an empty Edge ref must not resolve a Release")
+        ),
+        handoff=lambda command: (_ for _ in ()).throw(
+            AssertionError(f"an empty Edge ref must move nothing: {command!r}")
+        ),
+        release_version_reader=lambda: "1.2.3",
+        output_fn=output.append,
+    )
+
+    assert result == 1
+    assert "empty" in "\n".join(output)
 
 
 def test_an_unreadable_installed_release_is_reported_as_unknown(
