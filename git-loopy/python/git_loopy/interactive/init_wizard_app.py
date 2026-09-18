@@ -3,10 +3,8 @@
 One continuous, keyboard-driven walk through every question ``git-loopy init``
 asks — scope, model, reasoning effort, per-task-type routing, prompt scaffold,
 and **Skill policy** — ending on a review screen over ``Save`` / ``Back`` /
-``Cancel``. It is an *alternate* runner behind the single wizard-runner seam
-:func:`git_loopy.init.run_init` already owns (issue #504), selected by
-:func:`git_loopy.init.select_wizard_runner`; issue #508 makes it the default and
-deletes the numbered renderers it replaces.
+``Cancel``. It is the default runner behind the single wizard-runner seam
+:func:`git_loopy.init.run_init`.
 
 Keys: ``up``/``down`` move, ``space`` toggles a Skill, ``enter`` advances or
 confirms, ``esc`` goes back one step — and cancels on the first step, where
@@ -745,7 +743,7 @@ def run_textual_init_wizard(
     skill_selection_model: Callable[[bool, str], SkillSelectionModel],
     scope_locked: bool = False,
 ) -> InitAnswers | None:
-    """Run the alternate fullscreen setup wizard and return its answer set."""
+    """Run the fullscreen setup wizard and return its answer set."""
 
     def rebuild(
         scaffold: bool, scope: str, enabled: tuple[str, ...]

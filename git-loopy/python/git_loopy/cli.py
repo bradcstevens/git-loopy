@@ -364,10 +364,6 @@ def build_parser() -> argparse.ArgumentParser:
             "picker (ModelSelectionMode);\n"
             "                              off by default. --select-model wins "
             "over this.\n"
-            "  GIT_LOOPY_INIT_WIZARD           '1' opts `git-loopy init` into "
-            "the keyboard setup\n"
-            "                              wizard (esc goes back, review before "
-            "anything is written);\n"
             "                              off by default.\n"
             "  GIT_LOOPY_SEND_TIMEOUT_SECONDS  send_and_wait timeout "
             "(default: 7200).\n"
@@ -1130,6 +1126,16 @@ def _run_init(args: argparse.Namespace) -> int:
     fetches the live model list (never on the ``--yes`` non-interactive path).
     """
     from git_loopy import init as _init
+
+    if not args.assume_yes and (
+        not sys.stdin.isatty() or not sys.stdout.isatty()
+    ):
+        print(
+            "git-loopy: error: init requires an interactive terminal; use --yes "
+            "for non-interactive setup.",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         repo_root: Path | None = resolve_repo_root()

@@ -111,30 +111,12 @@ the Config surfaces, the `git-loopy skills` commands, the resolved-policy audit
 event, the Python-first family transition, and every preflight failure with its
 recovery command — is in [`docs/skill-policy.md`](skill-policy.md).
 
-#### The Skill picker has two renderings, and one set of rules
+#### The Skill picker and its rules
 
 Every path that asks you to choose Skills — `init`, `skills edit`, and the
-one-time legacy migration below — opens the *same* picker over the *same*
-selection state. Only the drawing differs, and git-loopy picks the drawing for
-you:
-
-| | Full-screen picker | Plain picker |
-| --- | --- | --- |
-| Used when | stdout is a terminal | anywhere else — a pipe or CI |
-| Search | type to filter, live | type the text, then Enter |
-| Toggle | `Space` on the highlighted row | the row's number |
-| Clear the filter | delete the search text | an empty line |
-| Move | `Up` / `Down` | — the list is numbered |
-| Save | `Enter` | `done`, then `y` at the confirmation |
-| Cancel | `Esc` or `Ctrl+C` | `q` |
-
-The full-screen picker is available when the Python Runner is installed with its
-optional `tui` extra. A non-terminal still uses the plain picker, and nothing is
-lost — the two are interchangeable and return the same selection. git-loopy
-probes for Textual without importing it, so non-interactive commands never pay
-for a screen they do not show.
-
-Both renderings obey identical rules, because both read one shared model:
+one-time legacy migration below — opens the *same* full-screen picker over the
+same selection state. It is part of the base Python Runner installation. The
+picker obeys these rules because it reads one shared model:
 
 - **Filtering never changes a selection.** Skills you enabled that the current
   search hides stay enabled and are saved. Canonical Skill names never contain a
@@ -147,10 +129,8 @@ Both renderings obey identical rules, because both read one shared model:
 - **Save is refused, not silently corrected**, whenever the selection would not
   validate; the refusal names the offending Skill.
 
-Every refusal is shown where you are about to type: the full-screen picker
-updates its status bar, and the plain picker redraws the reason *below* the
-list, on the line above the prompt — so a long catalog cannot scroll away the
-one line that explains why the last answer changed nothing.
+Every refusal is shown in the picker's status bar, so a long catalog cannot
+hide the one line that explains why the last action changed nothing.
 
 Copilot's own enabled state has no authority over a saved Skill policy — once
 established, the policy changes only through an explicit git-loopy action. When

@@ -13,6 +13,7 @@ no wizard I/O happens; these tests assert only the *routing*.
 
 from __future__ import annotations
 
+import argparse
 import io
 import json
 import sys
@@ -990,26 +991,25 @@ def test_main_init_yes_global_writes_to_config_home_outside_repo(
     assert (xdg / "git-loopy" / "config.toml").is_file()
 
 
-def test_main_init_cancel_writes_nothing_and_exits_nonzero(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_init_refuses_a_non_tty_without_yes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Cancelling the interactive wizard (EOF at the first prompt) writes nothing.
+    """A pipe cannot safely answer a keyboard wizard by ordinal position."""
+    from git_loopy import init as init_module
 
-    With no scope flag the wizard asks for the scope *first* — before any model
-    fetch — so an EOF here proves the cancel-writes-nothing contract via
-    ``main`` without ever touching the SDK or a real TTY.
-    """
-    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    monkeypatch.setattr(
+        init_module,
+        "run_init",
+        lambda **_kwargs: pytest.fail("the wizard must not start on a non-TTY"),
+    )
 
-    monkeypatch.setattr("sys.stdin", io.StringIO(""))  # empty -> input() raises EOF
-    captured: list[tuple[RunConfig, Any]] = []
-    _install_fake_loop_run(monkeypatch, captured)
+    rc = cli_module._run_init(
+        argparse.Namespace(scope=None, assume_yes=False)
+    )
 
-    rc = cli_module.main(["init"])
-
-    assert rc != 0
-    assert captured == []
-    assert not (tmp_path / "git-loopy" / "config.toml").exists()
+    assert rc == 1
+    assert "--yes" in capsys.readouterr().err
 
 
 def test_dispatch_does_not_import_sdk() -> None:

@@ -33,7 +33,7 @@ Design (mirrors :mod:`git_loopy.settings` being the pure I/O half):
   Skill policy** (exactly the **Required Skills**) without contacting the
   machine's Copilot Skill inventory. The model rows reuse
   :func:`git_loopy.interactive.models.to_model_choices` (stdlib + config only, no
-  Textual), rendered as a **plain-text numbered list**.
+  Textual), rendered by the setup wizard.
 
 The Skill policy is collected through :func:`git_loopy.skillscmd.collect_skill_policy`,
 the same seam ``git-loopy skills edit`` uses, so both commands share one Skill
@@ -58,7 +58,6 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence, ov
 from git_loopy import labels, settings
 from git_loopy.config import (
     MODEL_REASONING_EFFORTS,
-    RECOMMENDED_ROUTING,
     REASONING_EFFORT_ORDER,
     gate_reasoning_effort,
 )
@@ -78,28 +77,19 @@ from git_loopy.skill_install import (
 )
 from git_loopy.interactive.models import (
     ModelChoice,
-    default_cursor_index,
-    format_context_window,
-    format_multiplier,
-    format_reasoning,
     to_model_choices,
 )
+from git_loopy.interactive.init_wizard_app import run_textual_init_wizard
+from git_loopy.skillscmd import SkillPolicyCancelled
 
 if TYPE_CHECKING:
     from git_loopy.skillscmd import SkillSelectionModel
 
-__all__ = ["collect_routing", "run_init", "select_wizard_runner", "InitCancelled"]
-
-#: Tokens that cancel the wizard at any prompt (case-insensitive).
-_CANCEL_TOKENS = frozenset({"q", "quit"})
+__all__ = ["run_init"]
 
 #: Sentinel so ``default_effort=None`` (leave effort unset) is distinguishable
 #: from "caller did not pass one". Explicit no reasoning is the string ``"none"``.
 _UNSET: object = object()
-
-
-class InitCancelled(Exception):
-    """Raised internally when the operator cancels a prompt (``q`` / EOF / Ctrl-C)."""
 
 
 @dataclass(frozen=True)
@@ -115,7 +105,7 @@ class InitAnswers:
 
 
 class SkillSelectionRebuilder(Protocol):
-    """Collect names for a numbered runner or model a Textual redraw."""
+    """Collect names or model a wizard redraw."""
 
     @overload
     def __call__(
@@ -132,107 +122,6 @@ class SkillSelectionRebuilder(Protocol):
 
 
 WizardRunner = Callable[..., InitAnswers | None]
-
-#: Env var that opts setup into the alternate Textual wizard runner (issue #506).
-#: The wizard arrives *beside* the numbered prompts rather than replacing them;
-#: issue #508 makes it the only runner and deletes this switch with the renderers
-#: it replaces.
-WIZARD_ENV = "GIT_LOOPY_INIT_WIZARD"
-
-_WIZARD_OPT_IN = frozenset({"1", "true", "yes", "on", "textual"})
-
-
-def select_wizard_runner(env: Mapping[str, str]) -> WizardRunner:
-    """Resolve which setup runner collects the answers.
-
-    Opt-in, like **ModelSelectionMode** (:func:`~git_loopy.interactive.detect.
-    resolve_model_selection`) and for the same reason: the alternate runner is
-    reachable by an operator who asks for it, and by nobody who does not.
-    """
-    if env.get(WIZARD_ENV, "").strip().lower() in _WIZARD_OPT_IN:
-        try:
-            from git_loopy.interactive.init_wizard_app import run_textual_init_wizard
-        except ModuleNotFoundError as exc:
-            if exc.name != "textual":
-                raise
-            return _default_wizard_runner
-
-        return run_textual_init_wizard
-    return _default_wizard_runner
-
-
-
-# ---------------------------------------------------------------------------
-# Prompt primitives (injected I/O; cancel-aware)
-# ---------------------------------------------------------------------------
-
-
-def _prompt(input_fn: Callable[[str], str], text: str) -> str:
-    """Read one line, mapping EOF / Ctrl-C / a cancel token to :class:`InitCancelled`."""
-    try:
-        raw = input_fn(text)
-    except (EOFError, KeyboardInterrupt) as exc:
-        raise InitCancelled from exc
-    if raw.strip().lower() in _CANCEL_TOKENS:
-        raise InitCancelled
-    return raw.strip()
-
-
-def _ask_index(
-    input_fn: Callable[[str], str],
-    output_fn: Callable[[str], None],
-    heading: str,
-    labels: Sequence[str],
-    *,
-    default_index: int,
-    selectable: Sequence[bool] | None = None,
-    prompt_label: str,
-) -> int:
-    """Render a numbered list and read a validated 0-based selection.
-
-    Re-asks on a blank-with-no-default, an out-of-range number, a non-number, or
-    a non-selectable row (policy-disabled). ``q`` / EOF cancels.
-    """
-    output_fn(heading)
-    for number, label in enumerate(labels, start=1):
-        marker = " *" if number - 1 == default_index else ""
-        output_fn(f"  {number}) {label}{marker}")
-    while True:
-        answer = _prompt(input_fn, f"{prompt_label} [{default_index + 1}]: ")
-        if not answer:
-            picked = default_index
-        else:
-            try:
-                picked = int(answer) - 1
-            except ValueError:
-                output_fn(f"  Please enter a number between 1 and {len(labels)}.")
-                continue
-            if not 0 <= picked < len(labels):
-                output_fn(f"  Please enter a number between 1 and {len(labels)}.")
-                continue
-        if selectable is not None and not selectable[picked]:
-            output_fn("  That option is unavailable (disabled by policy); pick another.")
-            continue
-        return picked
-
-
-def _ask_yes_no(
-    input_fn: Callable[[str], str],
-    text: str,
-    *,
-    default: bool,
-) -> bool:
-    """Read a yes/no answer; blank -> ``default``. ``q`` / EOF cancels."""
-    suffix = "[Y/n]" if default else "[y/N]"
-    while True:
-        answer = _prompt(input_fn, f"{text} {suffix}: ").lower()
-        if not answer:
-            return default
-        if answer in {"y", "yes"}:
-            return True
-        if answer in {"n", "no"}:
-            return False
-
 
 # ---------------------------------------------------------------------------
 # Scope + target-path resolution
@@ -318,25 +207,6 @@ def _default_fetch_choices() -> list[ModelChoice]:
     return to_model_choices(models)
 
 
-def _model_label(choice: ModelChoice) -> str:
-    """One numbered-list row: ``<id>  (premium <mult>, ctx <window>, reasoning: ...)``."""
-    label = f"{choice.id}  ({_model_details(choice)})"
-    if not choice.selectable:
-        label = f"{label} [disabled]"
-    return label
-
-
-def _model_details(choice: ModelChoice) -> str:
-    """Render the cost, context, and reasoning annotation shared by guided rows."""
-    return ", ".join(
-        [
-        f"premium {format_multiplier(choice.multiplier)}",
-        f"ctx {format_context_window(choice.context_window)}",
-        f"reasoning: {format_reasoning(choice)}",
-        ]
-    )
-
-
 def _gate_default_effort(model: str, effort: str | None) -> str | None:
     """Gate a seeded default effort through the shared effort gate (#145).
 
@@ -349,26 +219,6 @@ def _gate_default_effort(model: str, effort: str | None) -> str | None:
     surface the gate's warning signal — seeding a sensible default should not nag.
     """
     return gate_reasoning_effort(model, effort).effort
-
-
-def _collect_model_and_effort(
-    *,
-    input_fn: Callable[[str], str],
-    output_fn: Callable[[str], None],
-    fetch_choices: Callable[[], Sequence[ModelChoice]],
-    default_model: str,
-    default_effort: str | None,
-    warn: Callable[[str], None],
-) -> tuple[str, str | None]:
-    """Interactively seed the run's model + reasoning effort from a numbered list."""
-    choices = _load_model_choices(fetch_choices, warn=warn)
-    return _select_model_and_effort_from_choices(
-        input_fn=input_fn,
-        output_fn=output_fn,
-        choices=choices,
-        default_model=default_model,
-        default_effort=default_effort,
-    )
 
 
 def _load_model_choices(
@@ -386,72 +236,6 @@ def _load_model_choices(
         )
         choices = []
     return choices or _static_choices()
-
-
-def collect_routing(
-    *,
-    input_fn: Callable[[str], str],
-    output_fn: Callable[[str], None],
-    fetch_choices: Callable[[], Sequence[ModelChoice]] = _default_fetch_choices,
-    warn: Callable[[str], None],
-) -> dict[str, tuple[str, str]]:
-    """Collect the shared recommended routing walk without writing Config.
-
-    The returned map is complete only after every prompt succeeds. Cancellation
-    raises :class:`InitCancelled`, leaving the caller free to preserve the
-    collect-then-commit guarantee.
-    """
-    choices = _load_model_choices(fetch_choices, warn=warn)
-    static_by_id = {choice.id: choice for choice in _static_choices()}
-    by_id = {choice.id: choice for choice in choices}
-    for model, _effort in RECOMMENDED_ROUTING.values():
-        if model not in by_id:
-            fallback = static_by_id[model]
-            choices.append(fallback)
-            by_id[model] = fallback
-
-    output_fn("Recommended task-type routing:")
-    for key, (model, effort) in RECOMMENDED_ROUTING.items():
-        output_fn(
-            f"  task-type:{key} -> {model} @ {effort}  "
-            f"({_model_details(by_id[model])})"
-        )
-    output_fn("Unlabelled issues use the global default model and effort.")
-
-    if _ask_yes_no(
-        input_fn,
-        "Use all recommended task-type routes?",
-        default=True,
-    ):
-        return dict(RECOMMENDED_ROUTING)
-
-    routing: dict[str, tuple[str, str]] = {}
-    override_choices = [choice for choice in choices if choice.supported_efforts]
-    for key, (recommended_model, recommended_effort) in RECOMMENDED_ROUTING.items():
-        action = _ask_index(
-            input_fn,
-            output_fn,
-            f"task-type:{key} ({recommended_model} @ {recommended_effort}):",
-            ["keep recommended", "override", "skip"],
-            default_index=0,
-            prompt_label="Action",
-        )
-        if action == 2:
-            continue
-        if action == 0:
-            routing[key] = (recommended_model, recommended_effort)
-            continue
-        model, effort = _collect_model_and_effort(
-            input_fn=input_fn,
-            output_fn=output_fn,
-            fetch_choices=lambda: override_choices,
-            default_model=recommended_model,
-            default_effort=recommended_effort,
-            warn=warn,
-        )
-        assert effort is not None  # override_choices contains reasoning-capable models
-        routing[key] = (model, effort)
-    return routing
 
 
 # ---------------------------------------------------------------------------
@@ -563,8 +347,7 @@ def _collect_skill_policy(
 ) -> tuple[str, ...]:
     """Collect one Skill policy through the shared ``skills edit`` seam.
 
-    Cancelling the picker is an ordinary wizard cancellation, so it joins the
-    collect phase's single :class:`InitCancelled` path and writes nothing.
+    Cancelling the picker is an ordinary wizard cancellation and writes nothing.
     """
     from git_loopy import skillscmd
 
@@ -586,8 +369,8 @@ def _collect_skill_policy(
             installed_skills_dir=installed_skills_dir,
             **options,
         )
-    except skillscmd.SkillPolicyCancelled as exc:
-        raise InitCancelled from exc
+    except skillscmd.SkillPolicyCancelled:
+        raise
     except skillscmd.SKILL_POLICY_FAILURES as exc:
         raise _SkillPolicyUnavailable(
             f"cannot establish a Skill policy: {type(exc).__name__}: {exc}"
@@ -665,114 +448,6 @@ def _runner_context(
     return {name: value for name, value in offered.items() if name in parameters}
 
 
-def _default_wizard_runner(
-    *,
-    scope_options: Sequence[str],
-    model_choices: Sequence[ModelChoice],
-    default_model: str,
-    default_effort: str | None,
-    rebuild_skill_selection: Callable[..., tuple[str, ...]],
-    scope_locked: bool = False,
-    input_fn: Callable[[str], str] = input,
-    output_fn: Callable[[str], None] = print,
-    warn: Callable[[str], None] = print,
-) -> InitAnswers:
-    """Collect answers with the existing numbered prompts.
-
-    This is deliberately a boring adapter: issue 504 moves the seam, while the
-    Textual application and removal of these renderers belong to later issues.
-    """
-    if scope_locked:
-        # The operator already fixed the scope with a flag, so there is nothing
-        # to ask. A *single* option is not the same thing: outside a repository
-        # the question still has something to tell the operator, below.
-        resolved_scope = scope_options[0]
-    else:
-        labels = [
-            "project  (this repository: <repo>/git-loopy/)"
-            if "project" in scope_options
-            else "project  (unavailable: not in a git repository)",
-            "global   (this machine: ~/.config/git-loopy/)",
-        ]
-        selectable = [option in scope_options for option in ("project", "global")]
-        scope_index = _ask_index(
-            input_fn,
-            output_fn,
-            "Configure git-loopy for which scope?",
-            labels,
-            default_index=0 if selectable[0] else 1,
-            selectable=selectable,
-            prompt_label="Scope",
-        )
-        resolved_scope = ("project", "global")[scope_index]
-    model, effort = _select_model_and_effort_from_choices(
-        input_fn=input_fn,
-        output_fn=output_fn,
-        choices=model_choices,
-        default_model=default_model,
-        default_effort=default_effort,
-    )
-    routing = (
-        collect_routing(
-            input_fn=input_fn,
-            output_fn=output_fn,
-            fetch_choices=lambda: model_choices,
-            warn=warn,
-        )
-        if _ask_yes_no(input_fn, "Configure per-task-type routing?", default=False)
-        else None
-    )
-    scaffold = _ask_yes_no(
-        input_fn,
-        "Also scaffold an editable PROMPT.md override into "
-        f"the {resolved_scope} scope?",
-        default=True,
-    )
-    enabled = rebuild_skill_selection(scaffold, resolved_scope)
-    return InitAnswers(resolved_scope, model, effort, routing, scaffold, tuple(enabled))
-
-
-def _select_model_and_effort_from_choices(
-    *,
-    input_fn: Callable[[str], str],
-    output_fn: Callable[[str], None],
-    choices: Sequence[ModelChoice],
-    default_model: str,
-    default_effort: str | None,
-) -> tuple[str, str | None]:
-    """Numbered model/effort collection over an already-fetched choice list."""
-    model_index = _ask_index(
-        input_fn,
-        output_fn,
-        "Select a model:",
-        [_model_label(choice) for choice in choices],
-        default_index=default_cursor_index(choices, preferred=default_model),
-        selectable=[choice.selectable for choice in choices],
-        prompt_label="Model",
-    )
-    chosen = choices[model_index]
-    if not chosen.supported_efforts:
-        output_fn(f"  {chosen.id} takes no reasoning effort; skipping.")
-        return chosen.id, None
-    efforts = list(chosen.supported_efforts)
-    effort_default = (
-        efforts.index(default_effort)
-        if chosen.id == default_model and default_effort in efforts
-        else efforts.index(chosen.default_effort)
-        if chosen.default_effort in efforts
-        else len(efforts) - 1
-    )
-    effort_index = _ask_index(
-        input_fn,
-        output_fn,
-        f"Select a reasoning effort for {chosen.id}:",
-        efforts,
-        default_index=effort_default,
-        prompt_label="Reasoning effort",
-    )
-    return chosen.id, efforts[effort_index]
-
-
 def run_init(
     *,
     scope: str | None,
@@ -780,7 +455,7 @@ def run_init(
     repo_root: Path | None,
     env: Mapping[str, str],
     fetch_choices: Callable[[], Sequence[ModelChoice]] = _default_fetch_choices,
-    wizard_runner: WizardRunner = _default_wizard_runner,
+    wizard_runner: WizardRunner = run_textual_init_wizard,
     packaged_prompt: Path | None = None,
     installed_skills: Path | None = None,
     default_model: str | None = None,
@@ -799,12 +474,6 @@ def run_init(
     the requested scope is unavailable. Never starts the loop.
     """
     from git_loopy.cli import _DEFAULT_MODEL, _DEFAULT_REASONING_EFFORT, _warn
-
-    # An injected runner is the test/caller seam and always wins; only a caller
-    # that left the default in place is asking the environment which runner to
-    # use (issue #506's opt-in, removed with the numbered renderers in #508).
-    if wizard_runner is _default_wizard_runner:
-        wizard_runner = select_wizard_runner(env)
 
     if default_model is None:
         default_model = _DEFAULT_MODEL
@@ -847,9 +516,6 @@ def run_init(
         )
     except _ScopeUnavailable as exc:
         warn(str(exc))
-        return 1
-    except InitCancelled:
-        output_fn("git-loopy init cancelled; nothing was written.")
         return 1
 
     # Resolve the write targets + packaged sources up front so the collect phase
@@ -908,8 +574,7 @@ def run_init(
             ) -> tuple[str, ...] | SkillSelectionModel:
                 if previous_enabled is not None:
                     # The Textual wizard preserves its collected choice while it
-                    # redraws this fresh model. The ordinary two-argument call
-                    # below still owns numbered-picker collection.
+                    # redraws this fresh model.
                     return build_skill_selection_model(
                         scaffold_decision, selected_scope
                     )
@@ -997,7 +662,8 @@ def run_init(
                 **runner_options,
             )
             if answers is None:
-                raise InitCancelled
+                output_fn("git-loopy init cancelled; nothing was written.")
+                return 1
             if answers.scope not in scope_options:
                 raise _ScopeUnavailable(
                     f"wizard returned unavailable scope {answers.scope!r}"
@@ -1032,7 +698,7 @@ def run_init(
                     ),
                     installed_skills_dir=skills_source,
                 )
-    except InitCancelled:
+    except SkillPolicyCancelled:
         output_fn("git-loopy init cancelled; nothing was written.")
         return 1
     except _ScopeUnavailable as exc:

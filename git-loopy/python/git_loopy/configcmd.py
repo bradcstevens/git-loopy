@@ -59,6 +59,12 @@ from git_loopy.config import (
     task_type_refusal,
     validate_task_type_key,
 )
+from git_loopy.interactive.models import (
+    default_cursor_index,
+    format_context_window,
+    format_multiplier,
+    format_reasoning,
+)
 from git_loopy.static_route import RoutePolicy, RoutePolicyError
 
 if TYPE_CHECKING:
@@ -661,6 +667,179 @@ def run_routing_use_recommended(
     return 0
 
 
+class _RoutingCancelled(Exception):
+    """Raised when the operator cancels the guided routing walk."""
+
+
+def _routing_prompt(input_fn: Callable[[str], str], text: str) -> str:
+    try:
+        raw = input_fn(text)
+    except (EOFError, KeyboardInterrupt) as exc:
+        raise _RoutingCancelled from exc
+    if raw.strip().lower() in {"q", "quit"}:
+        raise _RoutingCancelled
+    return raw.strip()
+
+
+def _routing_choice(
+    input_fn: Callable[[str], str],
+    output_fn: Callable[[str], None],
+    heading: str,
+    labels: Sequence[str],
+    *,
+    default_index: int,
+    selectable: Sequence[bool] | None = None,
+    prompt_label: str,
+) -> int:
+    """Render and collect one numbered choice in the routing-only command."""
+    output_fn(heading)
+    for number, label in enumerate(labels, start=1):
+        marker = " *" if number - 1 == default_index else ""
+        output_fn(f"  {number}) {label}{marker}")
+    while True:
+        answer = _routing_prompt(input_fn, f"{prompt_label} [{default_index + 1}]: ")
+        if not answer:
+            picked = default_index
+        else:
+            try:
+                picked = int(answer) - 1
+            except ValueError:
+                output_fn(f"  Please enter a number between 1 and {len(labels)}.")
+                continue
+            if not 0 <= picked < len(labels):
+                output_fn(f"  Please enter a number between 1 and {len(labels)}.")
+                continue
+        if selectable is not None and not selectable[picked]:
+            output_fn("  That option is unavailable (disabled by policy); pick another.")
+            continue
+        return picked
+
+
+def _routing_yes_no(
+    input_fn: Callable[[str], str], text: str, *, default: bool
+) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    while True:
+        answer = _routing_prompt(input_fn, f"{text} {suffix}: ").lower()
+        if not answer:
+            return default
+        if answer in {"y", "yes"}:
+            return True
+        if answer in {"n", "no"}:
+            return False
+
+
+def _routing_model_details(choice: "ModelChoice") -> str:
+    return ", ".join(
+        (
+            f"premium {format_multiplier(choice.multiplier)}",
+            f"ctx {format_context_window(choice.context_window)}",
+            f"reasoning: {format_reasoning(choice)}",
+        )
+    )
+
+
+def _collect_routing_model_and_effort(
+    *,
+    input_fn: Callable[[str], str],
+    output_fn: Callable[[str], None],
+    choices: Sequence["ModelChoice"],
+    default_model: str,
+    default_effort: str | None,
+) -> tuple[str, str | None]:
+    model_index = _routing_choice(
+        input_fn,
+        output_fn,
+        "Select a model:",
+        [
+            f"{choice.id}  ({_routing_model_details(choice)})"
+            + (" [disabled]" if not choice.selectable else "")
+            for choice in choices
+        ],
+        default_index=default_cursor_index(choices, preferred=default_model),
+        selectable=[choice.selectable for choice in choices],
+        prompt_label="Model",
+    )
+    chosen = choices[model_index]
+    if not chosen.supported_efforts:
+        output_fn(f"  {chosen.id} takes no reasoning effort; skipping.")
+        return chosen.id, None
+    efforts = list(chosen.supported_efforts)
+    effort_default = (
+        efforts.index(default_effort)
+        if chosen.id == default_model and default_effort in efforts
+        else efforts.index(chosen.default_effort)
+        if chosen.default_effort in efforts
+        else len(efforts) - 1
+    )
+    effort_index = _routing_choice(
+        input_fn,
+        output_fn,
+        f"Select a reasoning effort for {chosen.id}:",
+        efforts,
+        default_index=effort_default,
+        prompt_label="Reasoning effort",
+    )
+    return chosen.id, efforts[effort_index]
+
+
+def _collect_routing(
+    *,
+    input_fn: Callable[[str], str],
+    output_fn: Callable[[str], None],
+    fetch_choices: Callable[[], Sequence["ModelChoice"]],
+    warn: Callable[[str], None],
+) -> dict[str, tuple[str, str]]:
+    """Collect the guided routing walk without writing Config."""
+    from git_loopy import init as init_module
+
+    choices = init_module._load_model_choices(fetch_choices, warn=warn)
+    static_by_id = {choice.id: choice for choice in init_module._static_choices()}
+    by_id = {choice.id: choice for choice in choices}
+    for model, _effort in RECOMMENDED_ROUTING.values():
+        if model not in by_id:
+            choices.append(static_by_id[model])
+            by_id[model] = static_by_id[model]
+
+    output_fn("Recommended task-type routing:")
+    for key, (model, effort) in RECOMMENDED_ROUTING.items():
+        output_fn(
+            f"  task-type:{key} -> {model} @ {effort}  "
+            f"({_routing_model_details(by_id[model])})"
+        )
+    output_fn("Unlabelled issues use the global default model and effort.")
+
+    if _routing_yes_no(input_fn, "Use all recommended task-type routes?", default=True):
+        return dict(RECOMMENDED_ROUTING)
+
+    routing: dict[str, tuple[str, str]] = {}
+    override_choices = [choice for choice in choices if choice.supported_efforts]
+    for key, (recommended_model, recommended_effort) in RECOMMENDED_ROUTING.items():
+        action = _routing_choice(
+            input_fn,
+            output_fn,
+            f"task-type:{key} ({recommended_model} @ {recommended_effort}):",
+            ["keep recommended", "override", "skip"],
+            default_index=0,
+            prompt_label="Action",
+        )
+        if action == 2:
+            continue
+        if action == 0:
+            routing[key] = (recommended_model, recommended_effort)
+            continue
+        model, effort = _collect_routing_model_and_effort(
+            input_fn=input_fn,
+            output_fn=output_fn,
+            choices=override_choices,
+            default_model=recommended_model,
+            default_effort=recommended_effort,
+        )
+        assert effort is not None
+        routing[key] = (model, effort)
+    return routing
+
+
 def run_routing_guided(
     *,
     scope: str | None,
@@ -677,7 +856,7 @@ def run_routing_guided(
     try:
         resolved_scope = _resolve_scope(scope, repo_root)
         path = _scope_config_path(resolved_scope, repo_root, env)
-        routing = init_module.collect_routing(
+        routing = _collect_routing(
             input_fn=input_fn,
             output_fn=out,
             fetch_choices=fetch_choices or init_module._default_fetch_choices,
@@ -698,7 +877,7 @@ def run_routing_guided(
         else:
             table.pop("routing", None)
         settings.write_config(path, table)
-    except init_module.InitCancelled:
+    except _RoutingCancelled:
         out("git-loopy config routing cancelled; nothing was written.")
         return 1
     except (ConfigCommandError, settings.SettingsError) as exc:

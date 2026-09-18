@@ -22,7 +22,7 @@ from git_loopy import init as init_module
 from git_loopy import scaffold_provenance
 from git_loopy import settings
 from git_loopy import skill_install
-from git_loopy.interactive.models import ModelChoice
+from git_loopy.interactive.models import ModelChoice, default_cursor_index
 from git_loopy.skill_catalog import SkillCatalogError
 from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
 from git_loopy.skillscmd import SkillSelectionResult
@@ -164,19 +164,78 @@ def _packaged(tmp_path: Path) -> _Wizard:
 
 
 def _runner(*answers: str, out: "_Output | None" = None) -> Any:
-    """Drive the packaged numbered runner through the injected wizard seam.
-
-    ``run_init`` no longer takes ``input_fn`` / ``output_fn``; the numbered
-    renderer owns them. Behaviour tests therefore inject this runner, which is
-    the packaged one bound to scripted answers, so an assertion about what setup
-    *wrote* is unchanged from when the prompts were driven directly.
-    """
+    """Build a test-only answer runner for Config commit behaviour."""
     inp = _Input(*answers)
     sink = _Output() if out is None else out
 
     def run(**kwargs: Any) -> Any:
-        return init_module._default_wizard_runner(
-            **kwargs, input_fn=inp, output_fn=sink
+        options = kwargs["scope_options"]
+        scope = options[0]
+        if not kwargs["scope_locked"]:
+            selected = inp("scope")
+            if selected.lower() in {"q", "quit"}:
+                return None
+            scope = ("project", "global")[int(selected or "1") - 1]
+        selected_model = inp("model")
+        if selected_model.lower() in {"q", "quit"}:
+            return None
+        choices = kwargs["model_choices"]
+        model = choices[
+            int(
+                selected_model
+                or str(
+                    default_cursor_index(choices, preferred=kwargs["default_model"]) + 1
+                )
+            )
+            - 1
+        ]
+        effort: str | None = None
+        if model.supported_efforts:
+            selected_effort = inp("effort")
+            if selected_effort.lower() in {"q", "quit"}:
+                return None
+            efforts = model.supported_efforts
+            default = (
+                efforts.index(kwargs["default_effort"])
+                if model.id == kwargs["default_model"]
+                and kwargs["default_effort"] in efforts
+                else efforts.index(model.default_effort)
+                if model.default_effort in efforts
+                else len(efforts) - 1
+            )
+            effort = efforts[int(selected_effort or str(default + 1)) - 1]
+        routing_answer = inp("routing").lower()
+        if routing_answer in {"q", "quit"}:
+            return None
+        routing = None
+        if routing_answer in {"y", "yes"}:
+            recommended = inp("recommended").lower()
+            if recommended in {"q", "quit"}:
+                return None
+            if recommended not in {"n", "no"}:
+                routing = dict(init_module.RECOMMENDED_ROUTING)
+            else:
+                routing = {}
+                for key, recommended_route in init_module.RECOMMENDED_ROUTING.items():
+                    action = inp(key)
+                    if action.lower() in {"q", "quit"}:
+                        return None
+                    if action in {"", "1"}:
+                        routing[key] = recommended_route
+                    elif action == "2":
+                        selected = inp("route model")
+                        route_model = choices[int(selected or "1") - 1]
+                        route_effort = route_model.supported_efforts[
+                            int(inp("route effort") or "1") - 1
+                        ]
+                        routing[key] = (route_model.id, route_effort)
+        scaffold_answer = inp("scaffold").lower()
+        if scaffold_answer in {"q", "quit"}:
+            return None
+        scaffold = scaffold_answer not in {"n", "no"}
+        enabled = kwargs["rebuild_skill_selection"](scaffold, scope)
+        return init_module.InitAnswers(
+            scope, model.id, effort, routing, scaffold, tuple(enabled)
         )
 
     run.input = inp  # type: ignore[attr-defined]
@@ -185,16 +244,8 @@ def _runner(*answers: str, out: "_Output | None" = None) -> Any:
 
 
 def _runner_with(inp: Any, out: "_Output") -> Any:
-    """Bind an already-built scripted input to the injected wizard seam."""
-
-    def run(**kwargs: Any) -> Any:
-        return init_module._default_wizard_runner(
-            **kwargs, input_fn=inp, output_fn=out
-        )
-
-    run.input = inp  # type: ignore[attr-defined]
-    run.output = out  # type: ignore[attr-defined]
-    return run
+    """Bind a scripted input to the Config-answer test double."""
+    return _runner(*inp._answers, out=out)
 
 
 @pytest.fixture(autouse=True)
@@ -228,107 +279,6 @@ def _skill_tree(root: Path, skills: Mapping[str, str]) -> Path:
 # ---------------------------------------------------------------------------
 # Model / reasoning-effort seeding
 # ---------------------------------------------------------------------------
-
-
-def test_collect_model_effort_from_numbered_list() -> None:
-    out = _Output()
-    choices = [_choice("claude-opus-4.8"), _choice("gpt-5.4", efforts=("low", "high"))]
-    model, effort = init_module._collect_model_and_effort(
-        input_fn=_Input("2", "1"),  # model #2 (gpt-5.4), effort #1 (low)
-        output_fn=out,
-        fetch_choices=lambda: choices,
-        default_model="claude-opus-4.8",
-        default_effort="max",
-        warn=lambda _m: None,
-    )
-    assert (model, effort) == ("gpt-5.4", "low")
-    # The plain-text numbered list was rendered (no [tui]).
-    assert "1) claude-opus-4.8" in out.text
-    assert "2) gpt-5.4" in out.text
-
-
-def test_collect_model_effort_skips_effort_when_unsupported() -> None:
-    out = _Output()
-    choices = [_choice("claude-sonnet-4.5", efforts=())]  # no reasoning
-    model, effort = init_module._collect_model_and_effort(
-        input_fn=_Input("1"),  # only the model prompt is asked
-        output_fn=out,
-        fetch_choices=lambda: choices,
-        default_model="claude-opus-4.8",
-        default_effort="max",
-        warn=lambda _m: None,
-    )
-    assert (model, effort) == ("claude-sonnet-4.5", None)
-
-
-def test_collect_model_effort_retains_live_none_and_minimal() -> None:
-    model, effort = init_module._collect_model_and_effort(
-        input_fn=_Input("1", "2"),
-        output_fn=_Output(),
-        fetch_choices=lambda: [
-            _choice(
-                "reasoning-model",
-                efforts=("none", "minimal"),
-                default="minimal",
-            )
-        ],
-        default_model="reasoning-model",
-        default_effort=None,
-        warn=lambda _message: None,
-    )
-
-    assert (model, effort) == ("reasoning-model", "minimal")
-
-
-def test_collect_model_effort_falls_back_to_static_on_fetch_failure() -> None:
-    warnings: list[str] = []
-
-    def _boom() -> Sequence[ModelChoice]:
-        raise RuntimeError("offline")
-
-    out = _Output()
-    model, effort = init_module._collect_model_and_effort(
-        input_fn=_Input("1", "1"),
-        output_fn=out,
-        fetch_choices=_boom,
-        default_model="claude-opus-4.8",
-        default_effort="max",
-        warn=warnings.append,
-    )
-    # A real model id from the static matrix was offered + chosen.
-    assert model in init_module.MODEL_REASONING_EFFORTS
-    assert any("live model list" in w for w in warnings)
-
-
-def test_offline_fallback_selects_gpt_5_6_sol_with_advertised_max_effort() -> None:
-    choices = init_module._static_choices()
-    model_index = next(
-        index for index, choice in enumerate(choices) if choice.id == "gpt-5.6-sol"
-    )
-    sol = choices[model_index]
-    effort_index = sol.supported_efforts.index("max")
-
-    def _offline() -> Sequence[ModelChoice]:
-        raise RuntimeError("offline")
-
-    model, effort = init_module._collect_model_and_effort(
-        input_fn=_Input(str(model_index + 1), str(effort_index + 1)),
-        output_fn=_Output(),
-        fetch_choices=_offline,
-        default_model="claude-opus-4.8",
-        default_effort="max",
-        warn=lambda _message: None,
-    )
-
-    assert sol.supported_efforts == (
-        "none",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max",
-    )
-    assert (model, effort) == ("gpt-5.6-sol", "max")
 
 
 def test_static_choices_offer_only_each_models_supported_efforts(
@@ -392,38 +342,6 @@ def test_static_choices_expose_the_full_current_catalog_consistently() -> None:
         assert choice.selectable is True, choice.id
 
 
-def test_ask_index_rejects_disabled_row() -> None:
-    out = _Output()
-    labels = ["enabled-a", "disabled-b", "enabled-c"]
-    picked = init_module._ask_index(
-        _Input("2", "3"),  # 2 is disabled -> re-ask -> 3
-        out,
-        "Pick:",
-        labels,
-        default_index=0,
-        selectable=[True, False, True],
-        prompt_label="Choice",
-    )
-    assert picked == 2
-    assert "disabled by policy" in out.text
-
-
-def test_ask_index_rejects_disabled_default_on_blank() -> None:
-    out = _Output()
-    picked = init_module._ask_index(
-        _Input("", "2"),
-        out,
-        "Pick:",
-        ["disabled-a", "enabled-b"],
-        default_index=0,
-        selectable=[False, True],
-        prompt_label="Choice",
-    )
-
-    assert picked == 1
-    assert "disabled by policy" in out.text
-
-
 # ---------------------------------------------------------------------------
 # Shared guided routing collector
 # ---------------------------------------------------------------------------
@@ -455,61 +373,6 @@ def _routing_choices() -> list[ModelChoice]:
             default="max",
         ),
     ]
-
-
-def test_collect_routing_accept_all_returns_recommended_core_with_annotations() -> None:
-    from git_loopy.config import RECOMMENDED_ROUTING
-
-    out = _Output()
-    routing = init_module.collect_routing(
-        input_fn=_Input(""),
-        output_fn=out,
-        fetch_choices=_routing_choices,
-        warn=lambda _message: None,
-    )
-
-    assert routing == dict(RECOMMENDED_ROUTING)
-    assert "task-type:planning" in out.text
-    assert "premium 1×" in out.text
-    assert "ctx 200K" in out.text
-    assert "reasoning:" in out.text
-    assert "Unlabelled issues use the global default" in out.text
-
-
-def test_collect_routing_keep_override_skip_is_preseeded_per_type() -> None:
-    routing = init_module.collect_routing(
-        input_fn=_Input(
-            "n",  # do not accept all
-            "",  # planning: keep
-            "3",  # review: skip
-            "2",  # implementation: override
-            "",  # keep the pre-seeded gpt-5.6-terra model
-            "",  # keep its pre-seeded "high" effort, not model default "max"
-            "3",  # test: skip
-            "",  # docs: keep
-            "3",  # chore: skip
-            "3",  # bugfix: skip
-        ),
-        output_fn=_Output(),
-        fetch_choices=_routing_choices,
-        warn=lambda _message: None,
-    )
-
-    assert routing == {
-        "planning": ("claude-opus-5", "xhigh"),
-        "implementation": ("gpt-5.6-terra", "high"),
-        "docs": ("gpt-5.6-terra", "low"),
-    }
-
-
-def test_collect_routing_cancel_raises_before_any_commit() -> None:
-    with pytest.raises(init_module.InitCancelled):
-        init_module.collect_routing(
-            input_fn=_Input("n", "q"),
-            output_fn=_Output(),
-            fetch_choices=_routing_choices,
-            warn=lambda _message: None,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -555,7 +418,7 @@ def test_run_init_cancel_at_scaffold_writes_nothing(tmp_path: Path) -> None:
     out = _Output()
     with contextlib.redirect_stdout(out):
         rc = init_module.run_init(
-            wizard_runner=_runner("1", "5", "n", "q", out=out),
+            wizard_runner=_runner("1", "4", "n", "q", out=out),
             scope="project",
             assume_yes=False,
             repo_root=tmp_path,
@@ -603,7 +466,6 @@ def test_run_init_declines_routing_without_writing_routing_table(
         # carry no Required Skills, so the explicitly empty policy is the result.
         "enabled_skills": [],
     }
-    assert any("task-type routing" in prompt for prompt in inp.prompts)
 
 
 def test_run_init_accepts_all_recommended_routes_in_selected_scope(
@@ -1055,61 +917,6 @@ def test_run_init_global_scope_targets_config_home(tmp_path: Path) -> None:
     assert not (Path(env["HOME"]) / ".copilot").exists()
 
 
-# ---------------------------------------------------------------------------
-# run_init — scaffold-prompt wording (issue #123)
-# ---------------------------------------------------------------------------
-
-
-def _scaffold_prompt(inp: _Input) -> str:
-    """The single combined scaffold confirmation the wizard showed the operator."""
-    return next(p for p in inp.prompts if "scaffold" in p.lower())
-
-
-def test_scaffold_prompt_asks_only_about_the_prompt_override(
-    tmp_path: Path,
-) -> None:
-    """The confirmation covers what it actually writes, and nothing else.
-
-    The Skill catalog is no longer part of this decision: it is installed
-    unconditionally, machine-wide, before the wizard collects anything. Naming
-    it here would offer the operator a choice the wizard does not have.
-    """
-    inp = _Input("1", "4", "n", "n")  # decline routing and scaffold
-    out = _Output()
-    with contextlib.redirect_stdout(out):
-        rc = init_module.run_init(
-            wizard_runner=_runner_with(inp, out),
-            scope="project",
-            assume_yes=False,
-            repo_root=tmp_path,
-            env=_env(tmp_path),
-            fetch_choices=lambda: [_choice("claude-opus-4.8")],
-            **_packaged(tmp_path),
-        )
-    assert rc == 0
-    prompt = _scaffold_prompt(inp)
-    assert "PROMPT.md" in prompt
-    assert "skill" not in prompt.lower()
-
-
-def test_scaffold_prompt_names_the_scope_it_writes_to(tmp_path: Path) -> None:
-    """The operator is told which scope the override lands in."""
-    inp = _Input("1", "4", "n", "n")  # decline routing and scaffold
-    out = _Output()
-    with contextlib.redirect_stdout(out):
-        rc = init_module.run_init(
-            wizard_runner=_runner_with(inp, out),
-            scope="global",
-            assume_yes=False,
-            repo_root=tmp_path,
-            env=_env(tmp_path),
-            fetch_choices=lambda: [_choice("claude-opus-4.8")],
-            **_packaged(tmp_path),
-        )
-    assert rc == 0
-    assert "global scope" in _scaffold_prompt(inp)
-
-
 def test_run_init_config_round_trips_through_settings_loader(tmp_path: Path) -> None:
     """What init writes is loadable by the resolver's own settings loader."""
     out = _Output()
@@ -1140,7 +947,9 @@ def test_run_init_yes_writes_defaults_without_fetch(tmp_path: Path) -> None:
     out = _Output()
     with contextlib.redirect_stdout(out):
         rc = init_module.run_init(
-            wizard_runner=_runner(out=out),
+            wizard_runner=lambda **_kwargs: pytest.fail(
+                "--yes must not start the wizard"
+            ),
             scope="project",
             assume_yes=True,
             repo_root=tmp_path,
@@ -2108,49 +1917,6 @@ def test_run_init_cancelling_the_picker_through_the_callback_writes_nothing(
     assert not settings.project_config_path(tmp_path).exists()
 
 
-def test_the_packaged_runner_explains_a_project_scope_it_cannot_offer(
-    tmp_path: Path,
-) -> None:
-    """Outside a repository the scope question still renders, and says why.
-
-    Collapsing ``scope_options`` to one entry is not the operator's answer to
-    anything: it is the reason the question exists.
-    """
-    out = _Output()
-    answers = init_module._default_wizard_runner(
-        scope_options=("global",),
-        model_choices=[_choice("claude-opus-4.8")],
-        default_model="claude-opus-4.8",
-        default_effort="max",
-        rebuild_skill_selection=lambda *_args: (),
-        input_fn=_Input("2", "1", "1", "n", "n"),
-        output_fn=out,
-    )
-
-    assert answers.scope == "global"
-    assert any("not in a git repository" in line for line in out.lines)
-
-
-def test_the_packaged_runner_skips_the_scope_question_the_flag_already_answered(
-    tmp_path: Path,
-) -> None:
-    """An explicit ``--scope`` / ``--global`` leaves nothing to ask."""
-    out = _Output()
-    answers = init_module._default_wizard_runner(
-        scope_options=("global",),
-        model_choices=[_choice("claude-opus-4.8")],
-        default_model="claude-opus-4.8",
-        default_effort="max",
-        rebuild_skill_selection=lambda *_args: (),
-        scope_locked=True,
-        input_fn=_Input("1", "1", "n", "n"),
-        output_fn=out,
-    )
-
-    assert answers.scope == "global"
-    assert not any("which scope" in line.lower() for line in out.lines)
-
-
 def test_run_init_unresolvable_required_skills_writes_nothing(tmp_path: Path) -> None:
     """Instructions whose Required Skills cannot be parsed fail setup.
 
@@ -2249,7 +2015,7 @@ def test_run_init_revalidates_when_the_runner_changes_the_scaffold_decision(
 def test_run_init_keeps_the_wizard_runner_contract_for_injected_adapters(
     tmp_path: Path,
 ) -> None:
-    """Adding the alternate runner must not add keywords to #504's seam."""
+    """The wizard runner adds no keywords to #504's answer seam."""
 
     def legacy_runner(
         *,
@@ -2325,10 +2091,10 @@ def test_run_init_offers_presentation_context_to_any_runner_that_declares_it(
     assert seen["scope_paths"]["project"] == settings.project_config_path(tmp_path)
 
 
-def test_run_init_selects_the_textual_runner_when_the_operator_opts_in(
+def test_run_init_uses_the_textual_runner_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The opt-in reaches the alternate runner through the one seam.
+    """The default runner reaches the fullscreen wizard through the one seam.
 
     Only ``InitWizardApp.run`` is stubbed, so the runner itself is called with
     exactly the keyword arguments ``run_init`` passes every runner — which is
@@ -2348,8 +2114,6 @@ def test_run_init_selects_the_textual_runner_when_the_operator_opts_in(
         return answers
 
     monkeypatch.setattr(init_wizard_app.InitWizardApp, "run", _run)
-    env = _env(tmp_path)
-    env[init_module.WIZARD_ENV] = "textual"
     out = _Output()
 
     with contextlib.redirect_stdout(out):
@@ -2357,7 +2121,7 @@ def test_run_init_selects_the_textual_runner_when_the_operator_opts_in(
             scope=None,
             assume_yes=False,
             repo_root=tmp_path,
-            env=env,
+            env=_env(tmp_path),
             fetch_choices=lambda: [_choice("claude-opus-4.8")],
             **_packaged(tmp_path),
         )
@@ -2397,8 +2161,6 @@ def test_run_init_reports_a_skill_policy_the_textual_wizard_could_not_resolve(
         return self.return_value
 
     monkeypatch.setattr(init_wizard_app.InitWizardApp, "run", _run)
-    env = _env(tmp_path)
-    env[init_module.WIZARD_ENV] = "1"
     warnings: list[str] = []
     seams = _packaged(tmp_path)
     seams["discoverer"] = refuse
@@ -2409,7 +2171,7 @@ def test_run_init_reports_a_skill_policy_the_textual_wizard_could_not_resolve(
             scope=None,
             assume_yes=False,
             repo_root=tmp_path,
-            env=env,
+            env=_env(tmp_path),
             fetch_choices=lambda: [_choice("claude-opus-4.8")],
             warn=warnings.append,
             **seams,
@@ -2428,8 +2190,6 @@ def test_run_init_textual_cancellation_writes_nothing(
     from git_loopy.interactive import init_wizard_app
 
     monkeypatch.setattr(init_wizard_app.InitWizardApp, "run", lambda self: None)
-    env = _env(tmp_path)
-    env[init_module.WIZARD_ENV] = "1"
     out = _Output()
 
     with contextlib.redirect_stdout(out):
@@ -2437,7 +2197,7 @@ def test_run_init_textual_cancellation_writes_nothing(
             scope=None,
             assume_yes=False,
             repo_root=tmp_path,
-            env=env,
+            env=_env(tmp_path),
             fetch_choices=lambda: [_choice("claude-opus-4.8")],
             **_packaged(tmp_path),
         )

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import builtins
+import inspect
 from dataclasses import replace
 from pathlib import Path
 
@@ -19,33 +19,11 @@ from git_loopy.interactive.models import ModelChoice
 from git_loopy.skillscmd import SkillSelectionModel, SkillSelectionRow
 
 
-def test_setup_runner_is_selectable_without_being_the_default() -> None:
-    assert init_module.select_wizard_runner({}) is init_module._default_wizard_runner
-    assert (
-        init_module.select_wizard_runner({"GIT_LOOPY_INIT_WIZARD": "0"})
-        is init_module._default_wizard_runner
-    )
-    for opt_in in ("1", "true", "Yes", "on", "textual"):
-        assert (
-            init_module.select_wizard_runner({"GIT_LOOPY_INIT_WIZARD": opt_in})
-            is run_textual_init_wizard
-        )
+def test_setup_runner_is_the_default() -> None:
+    """Interactive setup always enters the continuous Textual wizard."""
+    default = inspect.signature(init_module.run_init).parameters["wizard_runner"].default
 
-
-def test_setup_runner_falls_back_when_textual_is_not_installed(monkeypatch) -> None:
-    import_module = builtins.__import__
-
-    def import_without_textual(name, *args, **kwargs):
-        if name == "git_loopy.interactive.init_wizard_app":
-            raise ModuleNotFoundError("No module named 'textual'", name="textual")
-        return import_module(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", import_without_textual)
-
-    assert (
-        init_module.select_wizard_runner({"GIT_LOOPY_INIT_WIZARD": "textual"})
-        is init_module._default_wizard_runner
-    )
+    assert default is run_textual_init_wizard
 
 
 def _choice(id: str, efforts: tuple[str, ...] = ("high",)) -> ModelChoice:
