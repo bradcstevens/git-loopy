@@ -28,6 +28,11 @@ the **Skill policy**'s validity is still asked of
 :class:`~git_loopy.skillscmd.SkillSelectionModel`, which is a domain model rather
 than a widget one. Nothing here reads :mod:`git_loopy.interactive.state`, which
 is what keeps a later Dashboard-hosted wizard from coupling setup to the Run.
+
+How a run *ends* is a single question — :meth:`InitWizardApp.outcome` — so a
+saved answer set, a cancellation, and a **Skill policy** that could not be
+resolved all leave by the same door and reach the same ``run_init`` handlers the
+numbered runner reaches.
 """
 
 from __future__ import annotations
@@ -323,6 +328,10 @@ class InitWizardApp(App["InitAnswers | None"]):
         self._route_index = 0
         self._scaffold = True
         self._skills: SkillSelectionModel | None = None
+        #: Why the Skill policy could not be resolved, if it could not. Kept
+        #: rather than raised, because raising here is a Textual panic; see
+        #: :meth:`_ensure_skills`.
+        self._skill_failure: Exception | None = None
 
     def _initial_selection(self) -> Selection:
         index = default_cursor_index(self._model_choices, preferred=self._default_model)
@@ -369,7 +378,6 @@ class InitWizardApp(App["InitAnswers | None"]):
             self._skills = replace(self.screen.selection, query="")
         if len(self.screen_stack) > 1:
             self.pop_screen()
-        self._ensure_skills()
         self._show_review()
 
     def _show_scope_or_model(self) -> None:
@@ -473,17 +481,52 @@ class InitWizardApp(App["InitAnswers | None"]):
             self._on_scaffold,
         )
 
-    def _ensure_skills(self) -> None:
-        if self._skills is None:
+    def _ensure_skills(self) -> bool:
+        """Resolve the **Skill policy** once, ending setup if it cannot be.
+
+        The callback reaches the network, so it can fail the way ``run_init``
+        already expects a Skill policy to fail — and answers with one line and an
+        untouched scope. Letting that failure escape from here would not reach
+        that handler intact: this runs inside a Textual message handler, where an
+        escaping exception is a *panic*, and the app is torn down through
+        Textual's crash path with a traceback printed over the operator's
+        terminal first. So it is recorded, the app exits, and :meth:`outcome`
+        re-raises it verbatim to the caller that knows what it means.
+
+        Returns ``True`` when a policy is in hand; a caller that gets ``False``
+        has already been exited and must not push another screen.
+        """
+        if self._skills is not None:
+            return True
+        try:
             self._skills = self._build_skill_selection(self._scaffold, self._scope)
+        except Exception as exc:  # re-raised verbatim by outcome()
+            self._skill_failure = exc
+            self.exit(None)
+            return False
+        return True
+
+    def outcome(self) -> InitAnswers | None:
+        """Return what the wizard collected, or re-raise why it could not.
+
+        The one place the run's ending is turned into the runner's result, so
+        ``Save`` / cancellation and an unresolvable Skill policy all leave by the
+        same door — and the caller sees the same exception the numbered runner
+        would have raised, rather than a cancellation that hides it.
+        """
+        if self._skill_failure is not None:
+            raise self._skill_failure
+        return self.return_value
 
     def _show_skills(self) -> None:
-        self._ensure_skills()
+        if not self._ensure_skills():
+            return
         assert self._skills is not None
         self.push_screen(_WizardSkillPickerScreen(self._skills), self._on_skills)
 
     def _show_review(self) -> None:
-        self._ensure_skills()
+        if not self._ensure_skills():
+            return
         assert self._skills is not None
         self.push_screen(
             _ReviewScreen(
@@ -644,7 +687,7 @@ def run_textual_init_wizard(
 ) -> InitAnswers | None:
     """Run the alternate fullscreen setup wizard and return its answer set."""
     del rebuild_skill_selection
-    return InitWizardApp(
+    app = InitWizardApp(
         scope_options=scope_options,
         scope_paths=scope_paths,
         model_choices=model_choices,
@@ -652,4 +695,6 @@ def run_textual_init_wizard(
         default_effort=default_effort,
         build_skill_selection=skill_selection_model,
         scope_locked=scope_locked,
-    ).run()
+    )
+    app.run()
+    return app.outcome()

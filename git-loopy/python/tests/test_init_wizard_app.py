@@ -6,6 +6,7 @@ import builtins
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from textual.widgets import DataTable, Static
 
 from git_loopy import init as init_module
@@ -509,6 +510,112 @@ async def test_review_back_to_an_unchanged_scope_keeps_selected_skills() -> None
 
     assert app.return_value is not None
     assert app.return_value.enabled_skills == ("codebase-design", "tdd")
+
+
+async def test_a_skill_policy_that_cannot_be_resolved_ends_setup_without_a_panic() -> (
+    None
+):
+    """The wizard has to fail the way the runner it stands beside fails.
+
+    ``run_init`` resolves the **Skill policy** through a callback that reaches
+    the network, and answers a failure with one line and an untouched scope. The
+    numbered runner raises that failure with no interface up. The wizard raises
+    it from inside a Textual message handler, where an escape is a *panic*: the
+    app is torn down through Textual's crash path and a Rich traceback is printed
+    over the operator's terminal before ``run_init`` gets to say its line. So the
+    failure is recorded and the app exits normally, and :meth:`outcome` re-raises
+    it verbatim — same exception, same handler, no crash dump.
+    """
+
+    class _PolicyUnavailable(Exception):
+        pass
+
+    def refuse(_scaffold: bool, _scope: str) -> SkillSelectionModel:
+        raise _PolicyUnavailable("cannot establish a Skill policy")
+
+    app = InitWizardApp(
+        scope_options=("project", "global"),
+        scope_paths={"project": Path("/repo/git-loopy/config.toml")},
+        model_choices=(_choice("model"),),
+        default_model="model",
+        default_effort="high",
+        build_skill_selection=refuse,
+        scope_locked=True,
+    )
+    async with app.run_test() as pilot:
+        await pilot.press("enter")  # model
+        await pilot.press("enter")  # effort
+        await pilot.press("enter")  # routing
+        await pilot.press("enter")  # scaffold — resolves the Skill policy
+        await pilot.pause()
+
+    assert app.return_value is None
+    with pytest.raises(_PolicyUnavailable):
+        app.outcome()
+
+
+async def test_the_review_shortcut_reports_an_unresolvable_policy_too() -> None:
+    """``ctrl+s`` resolves the same policy, so it cannot bypass the same report."""
+
+    class _PolicyUnavailable(Exception):
+        pass
+
+    def refuse(_scaffold: bool, _scope: str) -> SkillSelectionModel:
+        raise _PolicyUnavailable("cannot establish a Skill policy")
+
+    app = InitWizardApp(
+        scope_options=("project", "global"),
+        scope_paths={"project": Path("/repo/git-loopy/config.toml")},
+        model_choices=(_choice("model"),),
+        default_model="model",
+        default_effort="high",
+        build_skill_selection=refuse,
+        scope_locked=True,
+    )
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+    assert app.return_value is None
+    with pytest.raises(_PolicyUnavailable):
+        app.outcome()
+
+
+async def test_a_completed_wizard_reports_its_answers_as_its_outcome() -> None:
+    app = _app()
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+s", "enter")
+        await pilot.pause()
+
+    assert app.outcome() == app.return_value
+    assert app.outcome() is not None
+
+
+def test_the_runner_reports_the_app_outcome_not_merely_its_return_value(
+    monkeypatch,
+) -> None:
+    """The runner's result is whatever :meth:`InitWizardApp.outcome` says.
+
+    That is the wiring an unresolvable **Skill policy** travels on: the app
+    records it rather than panicking, and ``run_init``'s handler only ever sees
+    it because the runner reports the outcome instead of the raw return value.
+    """
+    reported = object()
+    monkeypatch.setattr(InitWizardApp, "run", lambda self: None)
+    monkeypatch.setattr(InitWizardApp, "outcome", lambda self: reported)
+
+    assert (
+        run_textual_init_wizard(
+            scope_options=("global",),
+            scope_paths={"global": Path("/home/.config/git-loopy/config.toml")},
+            model_choices=(_choice("model"),),
+            default_model="model",
+            default_effort="high",
+            rebuild_skill_selection=lambda _scaffold, _scope: (),
+            skill_selection_model=lambda _scaffold, _scope: _skills(),
+        )
+        is reported
+    )
 
 
 def test_wizard_import_graph_never_reaches_live_run_state() -> None:

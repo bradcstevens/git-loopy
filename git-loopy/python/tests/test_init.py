@@ -2301,7 +2301,11 @@ def test_run_init_offers_presentation_context_to_any_runner_that_declares_it(
 
     def _run(self: Any) -> Any:
         seen["scope_paths"] = dict(self._scope_paths)
-        return _answers(scope="project", model="claude-opus-4.8", effort="max")
+        answers = _answers(scope="project", model="claude-opus-4.8", effort="max")
+        # A real ``App.run`` returns what ``exit`` recorded, so the stand-in
+        # records it too — the wizard reports its ending from that state.
+        self.exit(answers)
+        return answers
 
     monkeypatch.setattr(init_wizard_app.InitWizardApp, "run", _run)
     out = _Output()
@@ -2337,7 +2341,11 @@ def test_run_init_selects_the_textual_runner_when_the_operator_opts_in(
     def _run(self: Any) -> Any:
         seen["scope_paths"] = dict(self._scope_paths)
         seen["default_model"] = self._default_model
-        return _answers(scope="project", model="claude-opus-4.8", effort="max")
+        answers = _answers(scope="project", model="claude-opus-4.8", effort="max")
+        # A real ``App.run`` returns what ``exit`` recorded, so the stand-in
+        # records it too — the wizard reports its ending from that state.
+        self.exit(answers)
+        return answers
 
     monkeypatch.setattr(init_wizard_app.InitWizardApp, "run", _run)
     env = _env(tmp_path)
@@ -2361,6 +2369,57 @@ def test_run_init_selects_the_textual_runner_when_the_operator_opts_in(
         settings.project_config_path(tmp_path).read_text(encoding="utf-8")
     )
     assert written["model"] == "claude-opus-4.8"
+
+
+def test_run_init_reports_a_skill_policy_the_textual_wizard_could_not_resolve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unresolvable Skill policy reaches the operator as one line, not silence.
+
+    Setup answers a policy it cannot establish with a warning and an untouched
+    scope. That handler is only reachable if the wizard *reports* the failure
+    rather than folding it into the cancellation it otherwise returns — which is
+    the temptation, because the failure is raised deep inside a running Textual
+    app. So this pins the ``run_init`` end: the operator is told what went wrong
+    and nothing is written. The other end — that recording the failure does not
+    also cost a Textual panic over the terminal — is pinned by the pilot tests in
+    ``test_init_wizard_app.py``, which drive the real event loop.
+    """
+    from git_loopy.interactive import init_wizard_app
+
+    async def refuse(_client: object, **_kwargs: object) -> Any:
+        raise OSError("the Skill catalog host is unreachable")
+
+    def _run(self: Any) -> Any:
+        # Stands in for the walk that reaches the Skill step and resolves the
+        # policy through the callback ``run_init`` injected.
+        self._ensure_skills()
+        return self.return_value
+
+    monkeypatch.setattr(init_wizard_app.InitWizardApp, "run", _run)
+    env = _env(tmp_path)
+    env[init_module.WIZARD_ENV] = "1"
+    warnings: list[str] = []
+    seams = _packaged(tmp_path)
+    seams["discoverer"] = refuse
+    out = _Output()
+
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            scope=None,
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=env,
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            warn=warnings.append,
+            **seams,
+        )
+
+    assert rc == 1
+    assert not settings.project_config_path(tmp_path).exists()
+    assert any("cannot establish a Skill policy" in message for message in warnings)
+    assert any("nothing was written" in message for message in warnings)
+    assert not any("cancelled" in line for line in out.lines)
 
 
 def test_run_init_textual_cancellation_writes_nothing(
