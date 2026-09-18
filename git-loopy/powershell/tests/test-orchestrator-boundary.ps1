@@ -4848,7 +4848,8 @@ Start-Sleep -Seconds $Sleep
         "git-loopy/python/uv.lock",
         "git-loopy/tui/Cargo.toml",
         "git-loopy/tui/Cargo.lock",
-        "git-loopy/tui/README.md"
+        "git-loopy/tui/README.md",
+        "git-loopy/conformance/release-version.json"
     )) {
         $Destination = Join-Path $ReleaseRepo $RelativePath
         [IO.Directory]::CreateDirectory((Split-Path -Parent $Destination)) | Out-Null

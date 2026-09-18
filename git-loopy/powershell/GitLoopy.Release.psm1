@@ -19,7 +19,8 @@ $script:ReleaseVersionPaths = [string[]]@(
     "git-loopy/python/uv.lock",
     "git-loopy/tui/Cargo.toml",
     "git-loopy/tui/Cargo.lock",
-    "git-loopy/tui/README.md"
+    "git-loopy/tui/README.md",
+    "git-loopy/conformance/release-version.json"
 )
 $script:ReleaseLineInitialized = $false
 $script:ReleaseLastStable = $null
@@ -406,6 +407,57 @@ function Replace-GitLoopyReleaseValue {
     return $Regex.Replace($Content, $Replacement, 1)
 }
 
+function Replace-GitLoopyReleaseFixtureExpectation {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Content,
+        [Parameter(Mandatory)]
+        [string]$PropertyName,
+        [Parameter(Mandatory)]
+        [string]$Expected,
+        [Parameter(Mandatory)]
+        [string]$Version,
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $Fixture = ConvertFrom-Json -InputObject $Content -AsHashtable -NoEnumerate -ErrorAction Stop
+    if ($Fixture -isnot [System.Collections.IDictionary]) {
+        throw "Release fixture must be a JSON object in $Path"
+    }
+
+    $PropertyPattern = (
+        '(?m)^(?<prefix>\s*"' + [regex]::Escape($PropertyName) +
+        '"\s*:\s*)(?<value>[^,\r\n]+)(?<suffix>\s*,?\r?$)'
+    )
+    $Matches = [regex]::Matches(
+        $Content,
+        $PropertyPattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    )
+    if ($Matches.Count -ne 1) {
+        throw "$PropertyName must occur exactly once in $Path"
+    }
+
+    $Match = $Matches[0]
+    $Value = $Match.Groups["value"].Value.Trim()
+    $StringMatch = [regex]::Match($Value, '\A"(?<value>(?:[^"\\]|\\.)*)"\z')
+    if (-not $StringMatch.Success) {
+        throw "$PropertyName must be a JSON string in $Path"
+    }
+    if ($StringMatch.Groups["value"].Value -cne $Expected) {
+        throw "$PropertyName mismatch in ${Path}: expected '$Expected', found '$($StringMatch.Groups["value"].Value)'"
+    }
+
+    return (
+        $Content.Substring(0, $Match.Index) +
+        $Match.Groups["prefix"].Value +
+        '"' + $Version + '"' +
+        $Match.Groups["suffix"].Value +
+        $Content.Substring($Match.Index + $Match.Length)
+    )
+}
+
 function Replace-GitLoopyPackageReleaseValue {
     param(
         [Parameter(Mandatory)]
@@ -566,6 +618,20 @@ function Set-GitLoopyRepositoryReleaseVersion {
                     -Replacement ('${1}"' + $Version + '"') `
                     -Path $Path `
                     -Label "TUI documented probe Release version"
+            }
+            "git-loopy/conformance/release-version.json" {
+                $Updated = Replace-GitLoopyReleaseFixtureExpectation `
+                    -Content $Content `
+                    -PropertyName "expected_release_version" `
+                    -Expected $Authority `
+                    -Version $Version `
+                    -Path $Path
+                Replace-GitLoopyReleaseFixtureExpectation `
+                    -Content $Updated `
+                    -PropertyName "expected_python_distribution_version" `
+                    -Expected $PythonAuthority `
+                    -Version $PythonVersion `
+                    -Path $Path
             }
         }
         $Updates.Add([pscustomobject]@{ Path = $Path; Content = $Updated })

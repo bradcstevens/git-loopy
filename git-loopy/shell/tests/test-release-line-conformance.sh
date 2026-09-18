@@ -156,6 +156,10 @@ git -C "$scratch" config user.name "Test Runner"
 git -C "$scratch" add -A
 git -C "$scratch" commit -qm "initial Release metadata"
 git -C "$scratch" tag v1.2.3
+fixture_without_live_versions="$(
+  jq -c 'del(.expected_release_version, .expected_python_distribution_version)' \
+    "$scratch/git-loopy/conformance/release-version.json"
+)"
 git_loopy_advance_repository_release_line "$scratch" '["semver:patch"]' >/dev/null
 assert_equal \
   '{"target":"1.2.4","counter":1,"version":"1.2.4-dev.1","bump_class":"patch"}' \
@@ -175,6 +179,22 @@ assert_equal "1.2.4.dev1" \
     gsub(/"/, "", $3); print $3; exit
   }' "$scratch/git-loopy/python/uv.lock")" \
   "the Python lockfile uses its normalized Release version"
+assert_equal "1.2.4-dev.1" \
+  "$(jq -r '.expected_release_version' \
+    "$scratch/git-loopy/conformance/release-version.json")" \
+  "the live conformance Release version advances"
+assert_equal "1.2.4.dev1" \
+  "$(jq -r '.expected_python_distribution_version' \
+    "$scratch/git-loopy/conformance/release-version.json")" \
+  "the live conformance Python distribution version is normalized"
+assert_equal "$fixture_without_live_versions" \
+  "$(jq -c 'del(.expected_release_version, .expected_python_distribution_version)' \
+    "$scratch/git-loopy/conformance/release-version.json")" \
+  "the live conformance fixture preserves all non-version data"
+assert_equal "git-loopy/conformance/release-version.json" \
+  "$(git -C "$scratch" diff-tree --no-commit-id --name-only -r HEAD -- \
+    git-loopy/conformance)" \
+  "only the designated live Release conformance fixture advances"
 assert_equal \
   $'# git-loopy 1.2.4-dev.1\n\nThis development fragment advances the Release line to `1.2.4-dev.1` on the way to stable `1.2.4`.' \
   "$(cat "$scratch/docs/releases/v1.2.4-dev.1.md")" \
@@ -278,5 +298,30 @@ if git_loopy_advance_repository_release_line \
 fi
 [[ -z "$(find "$missing_metadata" -name '.git-loopy-release*' -print -quit)" ]] ||
   fail "a refused metadata write leaked a checkpointable temporary file"
+
+invalid_fixture="$(mktemp -d)"
+trap 'rm -rf "$scratch" "$preserve_notes" "$preserve_fragment" "$missing_metadata" "$invalid_fixture"' EXIT
+for path in "${GIT_LOOPY_RELEASE_VERSION_PATHS[@]}"; do
+  mkdir -p "$invalid_fixture/$(dirname "$path")"
+  cp "$repository_root/$path" "$invalid_fixture/$path"
+done
+git_loopy_write_repository_release_version "$invalid_fixture" "1.2.3" ||
+  fail "could not establish Release metadata before fixture validation refusals"
+while IFS=$'\t' read -r id fixture_content; do
+  printf '%s\n' "$fixture_content" \
+    >"$invalid_fixture/git-loopy/conformance/release-version.json"
+  if git_loopy_write_repository_release_version "$invalid_fixture" "1.2.4" >/dev/null 2>&1; then
+    fail "a $id live Release conformance fixture was accepted"
+  fi
+  assert_equal "1.2.3" "$(git_loopy_read_release_version "$invalid_fixture/VERSION")" \
+    "a refused $id live Release conformance fixture leaves metadata untouched"
+  [[ -z "$(find "$invalid_fixture" -name '.git-loopy-release*' -print -quit)" ]] ||
+    fail "a refused $id live Release conformance fixture leaked a checkpointable temporary file"
+done <<'EOF'
+malformed	{"expected_release_version":"1.2.3",
+missing	{"expected_release_version":"1.2.3"}
+duplicate	{"expected_release_version":"1.2.3","expected_release_version":"1.2.3","expected_python_distribution_version":"1.2.3"}
+invalid-type	{"expected_release_version":123,"expected_python_distribution_version":"1.2.3"}
+EOF
 
 printf 'shell Release-line conformance: ok\n'

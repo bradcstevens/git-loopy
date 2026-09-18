@@ -32,6 +32,11 @@ Integration. The Release target is the ratchet across those labels, while the
 `dev.N` counter records each advance; see [ADR-0052](../adr/0052-the-release-line-advances-per-issue.md).
 An issue's milestone neither selects nor records that target.
 
+Each member's Release writer advances the two live version expectations in
+`git-loopy/conformance/release-version.json` in the same atomic write as the
+distribution metadata, and includes that fixture in its Release commit.
+All other Conformance fixtures remain unchanged.
+
 A `vX.Y.Z` **GitHub milestone** is solely the **Promotion** trigger. Closing it
 starts the unattended Promotion: the matching `dev.N` line becomes stable,
 `release-promotion.yml` commits it as `chore(release): promote Release line to

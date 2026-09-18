@@ -68,6 +68,7 @@ if ! declare -p GIT_LOOPY_RELEASE_VERSION_PATHS >/dev/null 2>&1; then
     "git-loopy/tui/Cargo.toml"
     "git-loopy/tui/Cargo.lock"
     "git-loopy/tui/README.md"
+    "git-loopy/conformance/release-version.json"
   )
 fi
 
@@ -411,6 +412,62 @@ _git_loopy_release_transform_tui_probe() {
   ' "$source" >"$destination"
 }
 
+_git_loopy_release_transform_conformance_fixture() {
+  local source="$1"
+  local destination="$2"
+  local expected_release_version="$3"
+  local release_version="$4"
+  local expected_python_distribution_version="$5"
+  local python_distribution_version="$6"
+
+  if ! jq -e --stream '
+    reduce (., inputs) as $entry (
+      {release_versions: [], python_distribution_versions: []};
+      if ($entry | length) == 2
+        and $entry[0] == ["expected_release_version"] then
+        .release_versions += [$entry[1]]
+      elif ($entry | length) == 2
+        and $entry[0] == ["expected_python_distribution_version"] then
+        .python_distribution_versions += [$entry[1]]
+      else
+        .
+      end
+    )
+    | if (.release_versions | length) == 1
+        and (.python_distribution_versions | length) == 1 then
+        .
+      else
+        error("live Release version fields must each appear exactly once")
+      end
+  ' "$source" >/dev/null; then
+    printf 'git-loopy: Release conformance fixture %s must contain each live Release version field exactly once\n' \
+      "$source" >&2
+    return 1
+  fi
+
+  jq -e \
+    --arg expected_release_version "$expected_release_version" \
+    --arg release_version "$release_version" \
+    --arg expected_python_distribution_version "$expected_python_distribution_version" \
+    --arg python_distribution_version "$python_distribution_version" '
+      if type != "object" then
+        error("fixture must be an object")
+      elif (.expected_release_version | type) != "string"
+        or (.expected_python_distribution_version | type) != "string" then
+        error("live Release version fields must be strings")
+      elif .expected_release_version != $expected_release_version
+        or .expected_python_distribution_version != $expected_python_distribution_version then
+        error("live Release version fields do not match repository metadata")
+      else
+        .expected_release_version = $release_version
+        | .expected_python_distribution_version = $python_distribution_version
+      end
+    ' "$source" >"$destination" || {
+    printf 'git-loopy: cannot replace live Release version fields in %s\n' "$source" >&2
+    return 1
+  }
+}
+
 git_loopy_write_repository_release_version() {
   local repository_root="${1:?repository root is required}"
   local version="${2:?Release version is required}"
@@ -480,6 +537,11 @@ git_loopy_write_repository_release_version() {
       git-loopy/tui/README.md)
         _git_loopy_release_transform_tui_probe \
           "$source" "$destination" "$authority" "$version"
+        ;;
+      git-loopy/conformance/release-version.json)
+        _git_loopy_release_transform_conformance_fixture \
+          "$source" "$destination" "$authority" "$version" \
+          "$python_authority" "$python_version"
         ;;
     esac || {
       printf 'git-loopy: cannot replace Release version in %s\n' "$source" >&2

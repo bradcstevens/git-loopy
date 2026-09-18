@@ -546,6 +546,15 @@ def _wire_release_distribution(root: Path, version: str = "1.2.3") -> None:
         f'{{"name": "git-loopy-tui", "version": "{version}"}}\n',
         encoding="utf-8",
     )
+    conformance_dir = root / "git-loopy" / "conformance"
+    conformance_dir.mkdir()
+    (conformance_dir / "release-version.json").write_text(
+        json.dumps({
+            "expected_release_version": version,
+            "expected_python_distribution_version": version.replace("-dev.", ".dev"),
+        }) + "\n",
+        encoding="utf-8",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2842,6 +2851,7 @@ def test_parallel_integration_applies_only_bumped_release_lines_after_publicatio
                     "git-loopy/tui/Cargo.toml",
                     "git-loopy/tui/Cargo.lock",
                     "git-loopy/tui/README.md",
+                    "git-loopy/conformance/release-version.json",
                     *expected_note_paths,
                 ),
             )
@@ -7863,4 +7873,3 @@ def _script_harness(monkeypatch, *models) -> None:
         return static_route.HarnessCapabilities.from_listing(listing)
 
     monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", _refresh)
-

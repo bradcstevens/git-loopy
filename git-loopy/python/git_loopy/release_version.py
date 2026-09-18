@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import os
 import re
 import stat
@@ -34,6 +35,7 @@ _PYTHON_LOCKFILE = Path("git-loopy/python/uv.lock")
 _RUST_MANIFEST = Path("git-loopy/tui/Cargo.toml")
 _RUST_LOCKFILE = Path("git-loopy/tui/Cargo.lock")
 _TUI_PROBE = Path("git-loopy/tui/README.md")
+_RELEASE_FIXTURE = Path("git-loopy/conformance/release-version.json")
 _RELEASE_NOTES_DIRECTORY = Path("docs/releases")
 RELEASE_VERSION_PATHS: tuple[Path, ...] = (
     Path("VERSION"),
@@ -44,6 +46,7 @@ RELEASE_VERSION_PATHS: tuple[Path, ...] = (
     _RUST_MANIFEST,
     _RUST_LOCKFILE,
     _TUI_PROBE,
+    _RELEASE_FIXTURE,
 )
 BUMP_CLASS_LABEL_PREFIX = "semver:"
 BUMP_CLASS_KEYS: tuple[str, ...] = ("major", "minor", "patch", "none")
@@ -491,6 +494,17 @@ def write_repository_release_version(repository_root: Path, version: str) -> Non
                 "TUI documented probe Release version",
             ),
         ),
+        _ReleaseVersionUpdate(
+            repository_root / _RELEASE_FIXTURE,
+            _replace_release_fixture(
+                _read_metadata_text(
+                    repository_root / _RELEASE_FIXTURE, "Release fixture"
+                ),
+                authority,
+                version,
+                repository_root / _RELEASE_FIXTURE,
+            ),
+        ),
     )
     _apply_release_version_updates(updates)
 
@@ -704,6 +718,44 @@ def _python_distribution_version(version: str) -> str:
         )
     stable, counter = match.groups()
     return f"{stable}.dev{counter}" if counter is not None else stable
+
+
+def _replace_release_fixture(
+    content: str, expected: str, version: str, path: Path,
+) -> str:
+    def unique_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        fields = dict(pairs)
+        if len(fields) != len(pairs):
+            raise ReleaseVersionError(f"Release fixture has duplicate fields in {path}")
+        return fields
+
+    try:
+        fixture = json.loads(content, object_pairs_hook=unique_fields)
+    except json.JSONDecodeError as exc:
+        raise ReleaseVersionError(f"Release fixture is not valid JSON in {path}: {exc}") from exc
+    if not isinstance(fixture, dict):
+        raise ReleaseVersionError(f"Release fixture must be an object in {path}")
+    for key, old, new in (
+        ("expected_release_version", expected, version),
+        (
+            "expected_python_distribution_version",
+            _python_distribution_version(expected),
+            _python_distribution_version(version),
+        ),
+    ):
+        if fixture.get(key) != old:
+            raise ReleaseVersionError(
+                f"Release fixture {key} mismatch in {path}: "
+                f"expected {old!r}, found {fixture.get(key)!r}"
+            )
+        content = _replace_exactly_once(
+            content,
+            re.compile(rf'("{key}"\s*:\s*){re.escape(json.dumps(old))}'),
+            rf"\g<1>{json.dumps(new)}",
+            path,
+            f"Release fixture {key}",
+        )
+    return content
 
 
 def _replace_python_source_version(
