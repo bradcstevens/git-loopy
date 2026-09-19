@@ -65,6 +65,10 @@ from git_loopy.readiness import (
     Readiness,
     decide_readiness,
 )
+from git_loopy.route_identity import (
+    is_route_label,
+    is_route_projection_comment,
+)
 from git_loopy.wrapper import (
     actionable_close_refs,
     exit_code_for,
@@ -1399,13 +1403,20 @@ def _format_github_issue_block(issue: gh_module.Issue) -> str:
 
     Emits a header line, blank line, body, then up to 5 newest-first
     comments behind a separator.
+
+    A Route projection (#563) is removed *before* the window is taken, not
+    after. It is this Runner's own output, so leaving it in would both spend
+    one of the five slots the loop reserves for what a human or an earlier
+    iteration actually said, and make publishing a route change the block that
+    the **Route selector**'s relevant input identity hashes — the assessment
+    invalidation loop ADR-0057 forbids.
     """
-    labels_str = ", ".join(issue.labels)
+    labels_str = ", ".join(_visible_labels(issue.labels))
     header = f"=== Issue #{issue.number}: {issue.title} [labels: {labels_str}] ==="
     body = issue.body or ""
 
     recent = sorted(
-        issue.comments,
+        _visible_comments(issue.comments),
         key=lambda c: c.created_at,
         reverse=True,
     )[:5]
@@ -1420,6 +1431,22 @@ def _format_github_issue_block(issue: gh_module.Issue) -> str:
     )
 
 
+def _visible_labels(labels: Sequence[str]) -> tuple[str, ...]:
+    """The issue's labels minus this Runner's own observational Route label."""
+    return tuple(label for label in labels if not is_route_label(label))
+
+
+def _visible_comments(
+    comments: Sequence[gh_module.Comment],
+) -> tuple[gh_module.Comment, ...]:
+    """The issue's comments minus this Runner's own Route projections."""
+    return tuple(
+        comment
+        for comment in comments
+        if not is_route_projection_comment(comment.body)
+    )
+
+
 def _format_github_pr_block(pr: gh_module.PullRequest) -> str:
     """Render one GitHub pull request as the prompt block.
 
@@ -1428,9 +1455,12 @@ def _format_github_pr_block(pr: gh_module.PullRequest) -> str:
     agent can tell a PR from an issue and apply PR mode per
     ``git-loopy/PROMPT.md`` (check out the branch, finish the diff, push, do
     **not** close/merge, return to the base branch). The agent brief lives
-    in the comments, so the up-to-5 recent comments are always included.
+    in the comments, so the up-to-5 recent comments are always included — which
+    is also why a Route projection is filtered out of them here (#563): a brief
+    evicted from the window by this Runner's own output is a PR the agent
+    cannot advance.
     """
-    labels_str = ", ".join(pr.labels)
+    labels_str = ", ".join(_visible_labels(pr.labels))
     header = (
         f"=== PR #{pr.number}: {pr.title} "
         f"[labels: {labels_str}] (branch: {pr.head_branch}) ==="
@@ -1438,7 +1468,7 @@ def _format_github_pr_block(pr: gh_module.PullRequest) -> str:
     body = pr.body or ""
 
     recent = sorted(
-        pr.comments,
+        _visible_comments(pr.comments),
         key=lambda c: c.created_at,
         reverse=True,
     )[:5]

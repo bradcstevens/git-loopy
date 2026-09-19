@@ -835,6 +835,21 @@ that keeps forecast and measurement apart; anything else is invalid output, not 
 and retry it makes is **Consumption**.
 _Avoid_: router agent, routing model, meta-model.
 
+**Route projection**:
+The observational copy of a final **Routing resolution** on the issue that resolution belongs to:
+one idempotent, append-only comment carrying the exact model, reasoning effort and **Context tier**
+plus an issue-safe rationale and provenance references, and one owned **Route label** encoding the
+same triple compactly. Written *after* the canonical local record, never before — a resolution that
+could not be recorded locally starts no work and is published nowhere — and non-blocking once that
+record exists, so a permission failure, rate limit or half-delivered pair is retained as *pending*,
+*partial* or *failed* delivery and retried a bounded number of times rather than reported as
+published. It is strictly an output: a comment or label cannot pin, select or validate a route, the
+Runner keeps its own projection out of the issue block it reads back so publishing cannot invalidate
+the assessment that produced it, and a projection a newer resolution has overtaken is *stale* and is
+dropped rather than delivered late over the current label. Only a materially changed final
+assignment is projected — a proposal and an unchanged revalidation are not (ADR-0057).
+_Avoid_: route announcement, routing comment (the delivery state is part of it), route tag.
+
 **Harness capabilities**:
 What the authenticated Copilot harness says about the models *this account* may use, read from its
 own model listing: eligibility, whether each model has a reasoning-effort dial and which values it

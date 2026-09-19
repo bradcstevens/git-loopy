@@ -1754,6 +1754,14 @@ resolution.
   record and comment. Rerouting MUST replace only that issue's owned Route-label
   association, preserving Task-type and unrelated labels; it MUST NOT rename a
   shared repository label.
+- **Do not read your own output back.** A Runner that renders an issue for an
+  **Agent** or for a **Route selector** MUST exclude its own Route projection
+  from that rendering — both the owned Route label and the projection comment,
+  and the comment before any "most recent N comments" window is taken. A
+  projection left in is a tracker write that changes the assessment's relevant
+  input, which is the invalidation loop the first rule of this section forbids,
+  and it spends a comment slot reserved for what a human or an earlier
+  iteration actually said.
 - **Retry without time travel.** Pending delivery MUST survive restart and retry
   within a finite bound using the comment identity. A retry must not duplicate a
   comment already accepted by the tracker, and an obsolete delivery MUST NOT

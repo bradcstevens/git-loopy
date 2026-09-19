@@ -80,8 +80,10 @@ from git_loopy.static_route import RoutePolicy
 from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy.emit import EventEmitter
 from git_loopy.events import REDACTED_SECRET
+from git_loopy import persist as persist_module
 from git_loopy.persist import WritersBundle, create_writers
 from git_loopy.readiness import BlockedByRead, BlockerNode
+from git_loopy.route_publication import RouteDeliveryError
 from git_loopy.run_control import is_run_alive
 from git_loopy.session import SKILL_TOOL_NAME
 from git_loopy.sinks import SinkFanout
@@ -5964,3 +5966,160 @@ def test_an_unavailable_later_route_blocks_the_retry_without_spending_it(
         if event["type"] == "wrapper.pickup.skipped"
     ]
     assert skipped and "dynamic route unavailable" in skipped[-1]["reason"]
+
+
+# ---------------------------------------------------------------------------
+# Route publication — the final Routing resolution, projected (#563, ADR-0057)
+# ---------------------------------------------------------------------------
+
+
+def _delivery_events(tmp_path: Path) -> list[dict[str, Any]]:
+    """Every Route-delivery envelope written under this repo, oldest Run first.
+
+    Deliberately not :func:`_read_events`, which reads one Run's log: a pending
+    delivery is resumed by a *later* Run, so the property under test only
+    exists across two of them.
+    """
+    logs = sorted((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+    return [
+        event
+        for log in logs
+        for line in log.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+        for event in [json.loads(line)]
+        if event["type"] == "wrapper.routing.delivery"
+    ]
+
+
+def test_a_pickup_projects_its_final_route_onto_the_issue(
+    tmp_path, monkeypatch
+) -> None:
+    """The Pickup's own resolution reaches the tracker as one comment and label.
+
+    The projection is an *output adapter* of a record that already exists: the
+    comment names the exact triple, and the single owned Route label sits
+    beside the issue's own labels rather than replacing any of them.
+    """
+    _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_gh = loop_module._make_github_client()
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    )
+
+    assert exit_code == 0
+    assert len(fake_gh.route_comment_calls) == 1
+    _number, body = fake_gh.route_comment_calls[0]
+    assert "<!-- git-loopy-route:v1:" in body
+    route_labels = [
+        label
+        for label in fake_gh.issue_labels(42)
+        if label.startswith("git-loopy-route:")
+    ]
+    assert len(route_labels) == 1
+    assert "ready-for-agent" in fake_gh.issue_labels(42)
+    assert [event["status"] for event in _delivery_events(tmp_path)] == ["published"]
+
+
+def test_an_unchanged_route_is_not_published_a_second_time(
+    tmp_path, monkeypatch
+) -> None:
+    """A revalidation that re-elects the same triple is not news for the issue.
+
+    The durable delivery record is keyed on the assignment, so a second Run
+    over the same issue recognises its own projection instead of appending a
+    duplicate explanation of a route that never changed.
+    """
+    _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_gh = loop_module._make_github_client()
+
+    for _ in range(2):
+        assert (
+            asyncio.run(
+                loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+            )
+            == 0
+        )
+
+    assert len(fake_gh.route_comment_calls) == 1
+
+
+def test_a_refusing_tracker_leaves_the_recorded_work_to_proceed(
+    tmp_path, monkeypatch
+) -> None:
+    """Delivery is non-blocking once the canonical local record exists (AC5/AC6).
+
+    A permission failure on the comment is retained as pending local delivery
+    and reported as pending — never as published — while the Agent session the
+    already-recorded route authorises still runs.
+    """
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_gh = loop_module._make_github_client()
+    fake_gh._route_comment_errors[42] = RouteDeliveryError("HTTP 403")
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    )
+
+    assert exit_code == 0
+    assert len(fake_client.created) == 1, "the recorded route still ran its session"
+    assert [event["status"] for event in _delivery_events(tmp_path)] == ["pending"]
+    assert fake_gh.route_comment_calls == []
+
+
+def test_a_pending_delivery_is_resumed_by_a_later_run(tmp_path, monkeypatch) -> None:
+    """Pending delivery survives the Run that could not complete it (AC7).
+
+    The retry reads the durable local record rather than re-deciding anything,
+    so a tracker that comes back accepts the projection of the route that was
+    already final when it failed.
+    """
+    _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_gh = loop_module._make_github_client()
+    fake_gh._route_comment_errors[42] = RouteDeliveryError("HTTP 429")
+
+    assert (
+        asyncio.run(
+            loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+        )
+        == 0
+    )
+    fake_gh._route_comment_errors.clear()
+    assert (
+        asyncio.run(
+            loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+        )
+        == 0
+    )
+
+    assert len(fake_gh.route_comment_calls) == 1
+    assert "published" in [event["status"] for event in _delivery_events(tmp_path)]
+
+
+def test_a_final_route_that_cannot_be_recorded_locally_starts_no_work(
+    tmp_path, monkeypatch
+) -> None:
+    """Canonical local persistence precedes work *and* publication (AC5).
+
+    An event log that refuses the binding leaves no record of what the Agent
+    would have run on, so the iteration must not run one — and must not tell
+    the tracker about a route it could not write down.
+    """
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_gh = loop_module._make_github_client()
+    original = persist_module.EventLogWriter.write
+
+    def refuse_the_binding(self, envelope: dict[str, Any]) -> None:
+        if envelope.get("type") == "wrapper.pickup.bound":
+            raise OSError("event log is unwritable")
+        original(self, envelope)
+
+    monkeypatch.setattr(persist_module.EventLogWriter, "write", refuse_the_binding)
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    )
+
+    assert exit_code != 0
+    assert fake_client.created == []
+    assert fake_gh.route_comment_calls == []

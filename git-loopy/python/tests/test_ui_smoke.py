@@ -2604,6 +2604,66 @@ def test_a_pickup_carrying_no_routing_still_renders_its_issue() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Route delivery — a tracker projection that lagged, not a route that failed
+# (#563)
+# ---------------------------------------------------------------------------
+
+
+def _delivery_event(**payload: Any) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "type": events_module.WRAPPER_ROUTING_DELIVERY,
+        "issue": 7,
+        "identity": "c3e505e1e9cb9a7e5a5e086e8a1e71b6",
+        "label": "git-loopy-route:gpt-5-mini-medium-d-0d3d445fe66d",
+        "status": "published",
+    }
+    event.update(payload)
+    return event
+
+
+def test_a_published_route_projection_is_quiet_at_default_verbosity() -> None:
+    """The happy path is the common path, and it says nothing an operator needs.
+
+    A Pickup already printed the pair; repeating it once more per issue only to
+    report that a comment landed would drown the one delivery state that *is*
+    news.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_delivery_event())
+
+    assert buf.getvalue() == ""
+
+
+@pytest.mark.parametrize(
+    ("status", "phrase"),
+    [
+        ("pending", "pending"),
+        ("partial", "partial"),
+        ("failed", "failed"),
+        ("stale", "superseded"),
+    ],
+)
+def test_an_undelivered_route_projection_says_so_without_blaming_the_route(
+    status: str, phrase: str
+) -> None:
+    """Delivery state is about the tracker, never about the pair (#563, AC9).
+
+    The Route is already decided and already recorded locally when this prints,
+    so the line has to be readable as "the comment did not land" rather than as
+    "routing failed" — those have opposite remedies.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_delivery_event(status=status))
+
+    out = buf.getvalue()
+    assert "#7" in out
+    assert phrase in out
+    assert "route publication" in out
+
+
+# ---------------------------------------------------------------------------
 # The Run readback block (#410) — the only validation ``[routing]`` can have
 # ---------------------------------------------------------------------------
 

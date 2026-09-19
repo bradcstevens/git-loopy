@@ -19,6 +19,16 @@ $script:EventTypes = [ordered]@{
     # refuse.
     WRAPPER_PICKUP_BOUND = "wrapper.pickup.bound"
     WRAPPER_PICKUP_SKIPPED = "wrapper.pickup.skipped"
+    # The two **Routing** records (contract 14.4, 14.5, ADR-0057): the elected
+    # triple's provenance, and the delivery state of projecting that final
+    # resolution onto its issue. Declared so this table stays the whole event
+    # vocabulary and its replay reads; never emitted here, because this
+    # Orchestrator resolves no Routed pair at all, and support is explicitly
+    # deferred rather than silently claimed. Carrying the literals is not a
+    # claim that it routes -- the insight capabilities below still say
+    # `routing = $false`, which is what a **Dashboard** reads.
+    WRAPPER_ROUTING_RESOLVED = "wrapper.routing.resolved"
+    WRAPPER_ROUTING_DELIVERY = "wrapper.routing.delivery"
     WRAPPER_CHECKPOINT_RECORDED = "wrapper.checkpoint.recorded"
     WRAPPER_COMMIT_RECORDED = "wrapper.commit.recorded"
     WRAPPER_PUSH_RECORDED = "wrapper.push.recorded"

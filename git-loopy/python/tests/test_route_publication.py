@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -261,3 +262,64 @@ def test_compact_route_labels_remain_unambiguous_for_similar_long_values() -> No
     assert first != second
     assert len(first) <= 50
     assert len(second) <= 50
+
+
+def test_a_delayed_retry_cannot_overwrite_a_newer_final_label(tmp_path: Path) -> None:
+    """An obsolete projection is dropped, not delivered late (AC7).
+
+    The durable record holds one final assignment per issue, so a delivery the
+    tracker refused before the Route changed has nothing left to resume: the
+    issue must end carrying the label of the Route that is actually final, and
+    must never acquire the superseded one afterwards.
+    """
+    tracker = _Tracker(labels={42: {"ready-for-agent"}}, label_error="HTTP 403")
+    publisher = RoutePublisher(
+        store=RoutePublicationStore(tmp_path / "routing-delivery.json"),
+        tracker=tracker,
+    )
+
+    obsolete = publisher.publish(issue=42, resolution=_resolution())
+    tracker.label_error = None
+    current = publisher.publish(
+        issue=42,
+        resolution=replace(_resolution(), model="claude-opus-5", source=RoutingSource.DYNAMIC),
+    )
+    resumed = publisher.retry_pending()
+
+    assert obsolete.status is RouteDeliveryStatus.PARTIAL
+    assert current.published is True
+    assert resumed == ()
+    assert tracker.labels[42] == {"ready-for-agent", current.label}
+    assert obsolete.label not in tracker.labels[42]
+
+
+def test_untrusted_route_values_cannot_shape_a_tracker_operation(
+    tmp_path: Path,
+) -> None:
+    """A model identity is data from an outside source, never an instruction (AC8).
+
+    The elected model's name reaches this adapter from published evidence, so
+    the label it produces has to stay inside the owned namespace and the
+    tracker-safe alphabet, and the comment has to state the exact value without
+    letting it re-open Markdown or HTML.
+    """
+    tracker = _Tracker(labels={42: {"ready-for-agent"}})
+    publisher = RoutePublisher(
+        store=RoutePublicationStore(tmp_path / "routing-delivery.json"),
+        tracker=tracker,
+    )
+
+    result = publisher.publish(
+        issue=42,
+        resolution=replace(
+            _resolution(),
+            model='`\n\n--remove-label ready-for-agent <img src=x onerror=alert(1)>',
+        ),
+    )
+
+    assert result.published is True
+    assert re.fullmatch(r"git-loopy-route:[a-z0-9-]+", result.label)
+    assert tracker.labels[42] == {"ready-for-agent", result.label}
+    body = tracker.comments[42][0]
+    assert "<img" not in body
+    assert body.count("\n- Model: ") == 1

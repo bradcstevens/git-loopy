@@ -65,6 +65,7 @@ from git_loopy.events import (
     WRAPPER_PARALLEL_DEGRADED,
     WRAPPER_PARALLEL_SERIAL_FALLBACK,
     WRAPPER_PICKUP_BOUND,
+    WRAPPER_ROUTING_DELIVERY,
     WRAPPER_POOL_EXCLUDED,
     WRAPPER_PR_ADVANCED,
     WRAPPER_PUSH_RECORDED,
@@ -576,8 +577,35 @@ class Renderer:
             text.append(f"  {tier}", style=STYLES["meta"])
         self.console.print(text)
 
-    def _on_checkpoint_recorded(self, event: dict[str, Any]) -> None:
-        # A runner-authored Checkpoint (ADR-0004). Rendered DISTINCTLY from an
+    def _on_routing_delivery(self, event: dict[str, Any]) -> None:
+        # The observational Route projection's delivery state (#563, ADR-0057).
+        # The pair itself was decided and durably recorded before this event
+        # exists, so a line here is never a routing failure — it is a tracker
+        # comment or label that has not landed yet. A published delivery is
+        # silent at default verbosity: it repeats a Pickup the operator already
+        # saw, and printing it would bury the states that need a remedy.
+        status = event.get("status")
+        if not isinstance(status, str) or status == "published":
+            return
+        ref = event.get("issue")
+        label = event.get("label")
+        text = Text()
+        text.append("⇪ ", style=STYLES["meta"])
+        text.append("route publication ", style=STYLES["meta"])
+        text.append(f"#{ref}" if isinstance(ref, int) else str(ref))
+        text.append(
+            f"  {_DELIVERY_PHRASES.get(status, status.replace('_', ' '))}",
+            style=(
+                STYLES["warning"]
+                if status in _UNDELIVERED_ROUTE_PROJECTIONS
+                else STYLES["meta"]
+            ),
+        )
+        if isinstance(label, str) and label:
+            text.append(f"  {label}", style=STYLES["meta"])
+        self.console.print(text)
+
+    def _on_checkpoint_recorded(self, event: dict[str, Any]) -> None:        # A runner-authored Checkpoint (ADR-0004). Rendered DISTINCTLY from an
         # agent commit (different glyph, "checkpoint" label) and deliberately
         # NOT counted toward the Summary's commit tally — Checkpoints are
         # excluded from agent commit accounting.
@@ -883,6 +911,23 @@ _ROUTING_SOURCE_PHRASES: dict[str, str] = {
     "defaulted_explicit_override": "routing suppressed",
 }
 
+#: What each Route-delivery state means to an operator, in words that stay
+#: about the *tracker*. ``stale`` is the one that cannot keep its wire spelling:
+#: a stale projection is a delivery a newer final Route overtook, which is the
+#: publisher behaving correctly rather than anything going wrong.
+_DELIVERY_PHRASES: dict[str, str] = {
+    "pending": "pending — comment not delivered",
+    "partial": "partial — label not delivered",
+    "failed": "failed — retries exhausted",
+    "stale": "superseded by a newer route",
+}
+
+#: The delivery states that still owe an operator something. A superseded
+#: projection owes nothing, so it prints without the warning colour.
+_UNDELIVERED_ROUTE_PROJECTIONS: frozenset[str] = frozenset(
+    {"pending", "partial", "failed"}
+)
+
 #: The sources whose phrase is completed by the keys the tracker actually
 #: carried. "routed docs" and "unconfigured chore" are claims about a label;
 #: "unlabelled" and "routing suppressed" are claims about its absence.
@@ -1144,6 +1189,7 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_CONTRIBUTION_END: Renderer._on_contribution_end,
     WRAPPER_AFK_READY_COLLECTED: Renderer._on_afk_ready_collected,
     WRAPPER_PICKUP_BOUND: Renderer._on_pickup_bound,
+    WRAPPER_ROUTING_DELIVERY: Renderer._on_routing_delivery,
     WRAPPER_POOL_EXCLUDED: Renderer._on_pool_excluded,
     WRAPPER_PARALLEL_SERIAL_FALLBACK: Renderer._on_parallel_serial_fallback,
     WRAPPER_PARALLEL_DEGRADED: Renderer._on_parallel_degraded,

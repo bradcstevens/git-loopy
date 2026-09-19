@@ -1499,6 +1499,14 @@ class TestModuleStructure:
         :class:`~git_loopy.sources.GitHubIssueSource` calls the pure seam
         rather than re-deciding readiness inline. It carries no I/O of its own
         and costs the Protocol nothing.
+
+        ``route_identity`` joined it with #563, when the **Pool** read acquired
+        something it must *not* read: this Runner's own Route projection.
+        Recognising one is the same fact the publisher spells it by, and a
+        second copy of that fact is how the assessment invalidation loop
+        ADR-0057 forbids would come back. The publisher itself reads Config and
+        so stays off the allowlist; the spelling is a stdlib-only seam, held to
+        that purity by :meth:`test_the_selection_seams_stay_stdlib_only`.
         """
         import ast
 
@@ -1511,6 +1519,7 @@ class TestModuleStructure:
             "issue_order",
             "issue_pin",
             "readiness",
+            "route_identity",
             "wrapper",
         }
 
@@ -1556,20 +1565,26 @@ class TestModuleStructure:
             + "\n  ".join(offenders)
         )
 
-    @pytest.mark.parametrize("module_name", ["issue_order", "issue_pin"])
+    @pytest.mark.parametrize(
+        "module_name", ["issue_order", "issue_pin", "route_identity"]
+    )
     def test_the_selection_seams_stay_stdlib_only(self, module_name: str) -> None:
         """Widening the allowlist above must not smuggle a dependency in.
 
-        ``sources.py`` may import ``issue_order`` and ``issue_pin`` because
-        ordering and refusing a **Pin** are each one decision that belongs in
-        one place. That stays cheap only while those modules themselves import
-        nothing from ``git_loopy`` — the moment either reached for ``config``
+        ``sources.py`` may import ``issue_order``, ``issue_pin`` and
+        ``route_identity`` because ordering, refusing a **Pin** and recognising
+        a **Route projection** are each one decision that belongs in one place.
+        That stays cheap only while those modules themselves import nothing
+        from ``git_loopy`` — the moment any of them reached for ``config``
         or ``events``, the Protocol seam would have acquired the weight this
         class exists to keep off it, transitively and invisibly.
 
         It is also what forces ``issue_pin`` to be *told* the AFK-ready verdict
         rather than computing it: importing ``sources`` for the discriminator
-        would fail here, and would make the pair cyclic besides.
+        would fail here, and would make the pair cyclic besides. The same rule
+        is why ``route_identity`` carries the projection's *spelling* and
+        ``route_publication`` — which reads Config to compose one — does not
+        move with it.
         """
         import ast
         import importlib
@@ -2620,3 +2635,86 @@ class TestThePinIsValidatedAtPreflight:
 
         assert rc == 1
         assert gh.issue_list_calls == []
+
+
+class TestRouteProjectionIsNotIssueInput:
+    """A published Route never comes back as issue input (#563, ADR-0057).
+
+    The Pool renders an issue with its labels and its five newest comments, and
+    that block is both what the **Agent** reads and — through
+    :func:`git_loopy.routing_input.build_routing_request` — what the **Route
+    selector**'s relevant input identity hashes. A Route projection left in it
+    would make publishing a route change the next assessment's input, which is
+    the invalidation loop ADR-0057 forbids, and would spend one of the five
+    comment slots the loop reserves for what a human or an earlier iteration
+    actually said.
+    """
+
+    @staticmethod
+    def _routing_request(issue: gh_module.Issue) -> Any:
+        from git_loopy.routing_input import build_routing_request
+
+        impl = GitHubIssueSource(_silent_logger(), gh=FakeGitHubClient(issues=[issue]))
+        item = list(impl.collect_pool().items)[0]
+        return build_routing_request(
+            rendered_block=item.rendered_block,
+            issue_ref=item.ref,
+            task_type="implementation",
+        )
+
+    @staticmethod
+    def _operator_comments() -> tuple[gh_module.Comment, ...]:
+        return tuple(
+            gh_module.Comment(
+                author="operator",
+                body=f"operator note {day}",
+                created_at=f"2026-05-1{day}T00:00:00Z",
+            )
+            for day in range(1, 6)
+        )
+
+    def test_a_published_route_leaves_the_assessment_input_unchanged(self) -> None:
+        operator = self._operator_comments()
+        before = _make_issue(42, labels=["ready-for-agent"], comments=operator)
+        after = _make_issue(
+            42,
+            labels=[
+                "ready-for-agent",
+                "git-loopy-route:gpt-5-6-terra-high-d-0d3d445fe66d",
+            ],
+            comments=(
+                *operator,
+                gh_module.Comment(
+                    author="git-loopy",
+                    body=(
+                        "<!-- git-loopy-route:v1:c3e505e1 -->\n"
+                        "git-loopy recorded a final Routing resolution for this issue.\n"
+                        "\n- Model: `\"gpt-5.6-terra\"`"
+                    ),
+                    created_at="2026-05-16T00:00:00Z",
+                ),
+            ),
+        )
+
+        assert self._routing_request(after) == self._routing_request(before)
+
+    def test_a_published_route_does_not_evict_an_operator_comment(self) -> None:
+        operator = self._operator_comments()
+        issue = _make_issue(
+            42,
+            labels=["ready-for-agent", "git-loopy-route:gpt-5-6-terra-high-d-0d3d445"],
+            comments=(
+                *operator,
+                gh_module.Comment(
+                    author="git-loopy",
+                    body="<!-- git-loopy-route:v1:c3e505e1 -->\nRouting resolution.",
+                    created_at="2026-05-16T00:00:00Z",
+                ),
+            ),
+        )
+        impl = GitHubIssueSource(_silent_logger(), gh=FakeGitHubClient(issues=[issue]))
+
+        block = list(impl.collect_pool().items)[0].rendered_block
+
+        assert "git-loopy-route:" not in block
+        assert all(f"operator note {day}" in block for day in range(1, 6))

@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -20,20 +19,26 @@ from pathlib import Path
 from typing import ClassVar, Iterator, Protocol, Sequence, runtime_checkable
 
 from git_loopy.config import RoutingResolution, RoutingSource
+from git_loopy.route_identity import (
+    ROUTE_LABEL_PREFIX,
+    is_route_label,
+    is_route_projection_comment,
+    route_comment_marker,
+    route_label,
+)
 
 __all__ = [
+    "ROUTE_LABEL_PREFIX",
     "RouteDeliveryError",
     "RouteDeliveryResult",
     "RouteDeliveryStatus",
     "RoutePublicationStore",
     "RoutePublisher",
     "RouteTracker",
+    "is_route_label",
+    "is_route_projection_comment",
     "route_label",
 ]
-
-_COMMENT_MARKER = "git-loopy-route:v1:"
-_LABEL_PREFIX = "git-loopy-route:"
-_OWNED_LABEL = re.compile(r"^git-loopy-route:[a-z0-9-]+-[0-9a-f]{12}$")
 
 
 class RouteDeliveryError(RuntimeError):
@@ -365,7 +370,7 @@ class RoutePublisher:
 
         comment_status = str(entry.get("comment"))
         if comment_status != "published":
-            marker = f"<!-- {_COMMENT_MARKER}{assignment.identity} -->"
+            marker = route_comment_marker(assignment.identity)
             try:
                 comments = self._tracker.issue_comments(assignment.issue)
                 if not any(marker in comment for comment in comments):
@@ -410,8 +415,7 @@ class RoutePublisher:
                 owned = tuple(
                     label
                     for label in self._tracker.issue_labels(assignment.issue)
-                    if _OWNED_LABEL.fullmatch(label) is not None
-                    and label != assignment.label
+                    if is_route_label(label) and label != assignment.label
                 )
                 self._tracker.ensure_label(assignment.label)
                 self._tracker.replace_route_label(
@@ -458,39 +462,13 @@ class RoutePublisher:
         )
 
 
-def route_label(
-    *,
-    model: str | None,
-    effort: str | None,
-    context_tier: str,
-    identity: str,
-) -> str:
-    """Return one compact, collision-resistant label for an exact Route triple."""
-    readable = "-".join(
-        _label_token(value, fallback)
-        for value, fallback in (
-            (model, "backend"),
-            (effort, "auto"),
-            (context_tier, "tier"),
-        )
-    )
-    return f"{_LABEL_PREFIX}{readable[:20]}-{identity[:12]}"
-
-
-def _label_token(value: str | None, fallback: str) -> str:
-    if value is None:
-        return fallback
-    token = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    return token or fallback
-
-
 def _comment(assignment: _RouteAssignment) -> str:
     source = (
         "live-evidence Dynamic route"
         if assignment.source == RoutingSource.DYNAMIC.value
         else "final configured route"
     )
-    marker = f"<!-- {_COMMENT_MARKER}{assignment.identity} -->"
+    marker = route_comment_marker(assignment.identity)
     lines = [
         marker,
         "git-loopy recorded a final Routing resolution for this issue.",

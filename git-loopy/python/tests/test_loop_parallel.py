@@ -155,6 +155,8 @@ from git_loopy.wrapper import (
     checkpoint_message,
 )
 from git_loopy.worktree import SetupResult
+from git_loopy import persist as persist_module
+from git_loopy.route_publication import RouteDeliveryError
 from tests.fakes import FakeGateRunner, FakeGitClient, FakeGitHubClient
 
 
@@ -8162,3 +8164,151 @@ def _dynamic_parallel_config(**overrides) -> RunConfig:
     )
     base.update(overrides)
     return RunConfig(**base)
+
+
+def test_each_lanes_final_dynamic_route_is_published_to_its_own_issue(
+    tmp_path, monkeypatch
+) -> None:
+    """Rolling dispatch projects per issue, never per Run (#563, AC10).
+
+    Both Lanes elect the same triple here, which is the case a Run-scoped
+    projection would pass by accident: the delivery record is keyed on the
+    issue, so each Lane's own issue gets its own comment and its own single
+    owned Route label beside the labels a human put there.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    assert asyncio.run(loop_module.run(_dynamic_parallel_config())) == 0
+
+    assert sorted(number for number, _body in fake_gh.route_comment_calls) == [42, 43]
+    for number in (42, 43):
+        labels = fake_gh.issue_labels(number)
+        assert len([x for x in labels if x.startswith("git-loopy-route:")]) == 1
+        assert {"ready-for-agent", "parallel-safe"} <= set(labels)
+    deliveries = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.delivery"
+    ]
+    assert sorted(event["issue"] for event in deliveries) == [42, 43]
+    assert {event["status"] for event in deliveries} == {"published"}
+
+
+def test_one_lanes_refused_projection_does_not_hold_up_the_other(
+    tmp_path, monkeypatch
+) -> None:
+    """A tracker refusal is scoped to the issue it refused (#563, AC6).
+
+    Delivery is non-blocking, so a Lane whose comment the tracker rejected
+    still runs the route already recorded for it, and the Lane beside it still
+    publishes. The refusal is reported as pending — never as published.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+        route_comment_errors={43: RouteDeliveryError("HTTP 403")},
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    assert asyncio.run(loop_module.run(_dynamic_parallel_config())) == 0
+
+    assert len(fake_client.created) == 2, "both recorded routes still ran"
+    assert [number for number, _body in fake_gh.route_comment_calls] == [42]
+    deliveries = {
+        event["issue"]: event["status"]
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.delivery"
+    }
+    assert deliveries == {42: "published", 43: "pending"}
+
+
+def test_a_lane_whose_binding_cannot_be_recorded_opens_no_session(
+    tmp_path, monkeypatch
+) -> None:
+    """Canonical local persistence precedes Lane work too (#563, AC5).
+
+    A Lane that could not write down what it bound has no record of which pair
+    its Agent would have run on, so it must not open the session and must not
+    tell the tracker about a route it could not write down. The serial half of
+    this rule is
+    ``test_a_final_route_that_cannot_be_recorded_locally_starts_no_work``; the
+    two share one ``_emit_pickup_bound``, which is the point.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    original = persist_module.EventLogWriter.write
+
+    def refuse_the_binding(self, envelope: dict[str, Any]) -> None:
+        if envelope.get("type") == "wrapper.pickup.bound":
+            raise OSError("event log is unwritable")
+        original(self, envelope)
+
+    monkeypatch.setattr(persist_module.EventLogWriter, "write", refuse_the_binding)
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code != 0
+    assert fake_client.created == []
+    assert fake_gh.route_comment_calls == []
