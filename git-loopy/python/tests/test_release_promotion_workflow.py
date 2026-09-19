@@ -185,3 +185,26 @@ def test_every_stable_release_the_trunk_carries_is_tagged_not_just_its_head(
     assert 'git show "$commit:VERSION"' in tag["run"]
     assert 'git tag -a "v$version" -m "Release $version" "$commit"' in tag["run"]
     assert "tr -d '\\r\\n' < VERSION" not in _run_text(workflow)
+
+
+def test_no_tag_becomes_public_until_a_rehearsal_proved_that_exact_commit(
+    workflow: dict[Any, Any],
+) -> None:
+    """Supplementary to `test_release_rehearsal.py`, which is the actual proof.
+
+    All this pins is that the Promotion *asks* for it, on the candidate commit
+    rather than the head, and before the tag exists rather than after. A green
+    development ancestor is not proof of the commit being published
+    ([ADR-0059](https://github.com/bradcstevens/git-loopy/blob/9d33e78b8aba97ae16ee5a133aae1fca78905ed0/docs/adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md)).
+    """
+    tag = next(step for step in _steps(workflow) if "git tag" in step.get("run", ""))
+    run = tag["run"]
+
+    assert "python -m git_loopy.release_rehearsal" in run
+    assert '--candidate-commit "$commit"' in run
+    # The promise is stated, never inferred from what happens to be configured.
+    assert "--distribution-mode source-only" in run
+    assert run.index("release_rehearsal") < run.index('git tag -a "v$version"')
+    # `shell: bash` is `-eo pipefail`, so a refused rehearsal ends the step
+    # before the tag it would have proved is created.
+    assert tag["shell"] == "bash"

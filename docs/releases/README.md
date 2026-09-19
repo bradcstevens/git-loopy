@@ -79,6 +79,64 @@ human gate this design declined.
 Prereleases take no part in any of it. They consult no milestone, this workflow
 tags none, and none reaches a package channel.
 
+### Rehearsing a candidate before its tag exists
+
+A **Promotion** changes the tree the Runner-family gate has to judge, so a green
+development ancestor proves nothing about the distribution that would be
+published from it. During v0.10.0 that cost two failures in a row: a stable
+transformation left the live version fixture behind, and the repair snapshot
+then passed ordinary CI while failing the rule that a tagged commit must itself
+carry the version bump. Recovering moved an already-public tag.
+
+So every candidate is **rehearsed** before a tag for it exists
+([ADR-0059](../adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md)).
+`git_loopy.release_rehearsal` constructs the complete proposed stable commit,
+its annotated candidate tag and its generated source archive inside a throwaway
+clone **whose remote is removed before a single ref is written**, then proves
+that exact snapshot:
+
+- every distribution Release-version copy and the one live
+  `release-version.json` fixture agree, and no other Conformance fixture churns;
+- the annotated tag resolves to the commit under test, whose own history carries
+  the `VERSION` bump — a nearby repair commit is refused however green it is;
+- the committed release notes are non-empty UTF-8 in the tagged tree, and stable
+  notes a human already wrote are what gets published;
+- the generated archive extracts to `git-loopy-<version>/` and every
+  Orchestrator in it reports that Release version;
+- every runnable `AGENTS.md` feedback loop is green **on the candidate**, not on
+  its ancestor.
+
+What it returns is the **publication input**: the commit, tree, annotated tag
+object, committed notes and their digest, the archive and its digest, the trunk
+commit the candidate was built from, and the explicit distribution promise. That
+promise is *stated*, never inferred — a source-only rehearsal proves committed
+notes and a source archive and refuses to certify any other mode, because it has
+no evidence for one.
+
+```sh
+uv run --project git-loopy/python --all-extras \
+  python -m git_loopy.release_rehearsal \
+  --repository-root . \
+  --workspace "$RUNNER_TEMP/candidate" \
+  --archive-output "$RUNNER_TEMP/git-loopy-source.tar" \
+  --distribution-mode source-only \
+  --major-bump --candidate-commit "$commit"
+```
+
+`release-promotion.yml` runs exactly that per candidate before it creates a tag,
+and the step is `-eo pipefail`, so a refusal ends it with no tag created and
+nothing pushed. A rehearsal needs no publication credential and touches no
+tracker; it reads the trunk and writes only inside its own workspace.
+
+Two boundaries this **does not** move. Proof is of content, so repairing a
+candidate makes a *new* candidate that has to be rehearsed again — that is what
+`confirm_publication_input` refuses on, and it is also why concurrent work on
+`main` cannot retarget a proof: the input binds a commit SHA, and a moved trunk
+is visible in `base_commit` rather than silently substituted. And the rehearsal
+is not a bypass: `source-release.yml` still gates the pushed tag, and the
+release-only real-host smoke ADR-0059 requires before a stable publication is
+not wired up yet.
+
 ### Open boundary
 
 What happens when a human closes a milestone-bearing issue outside a **Run**

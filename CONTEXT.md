@@ -650,6 +650,33 @@ event rather than a judgement — except for a `major` **Bump class**, which is 
 and cuts on the label alone.
 _Avoid_: release cut, graduation, publish.
 
+**Rehearsal**:
+Constructing the complete proposed stable commit, its annotated **candidate tag** and
+its generated source archive in a throwaway clone with no remote, and proving *that*
+snapshot — every distribution version copy and the live release-version fixture, the
+committed notes, the version-bump commit rule, the archive's public identities, and
+every **feedback loop** — before any public tag for it exists. A **Promotion** changes
+the tree the gate has to judge, so a green development ancestor is not proof of the
+thing being published ([ADR-0059](docs/adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md)).
+_Avoid_: dry run, release preflight, dress rehearsal, smoke (the **release smoke** is
+the separate live check on a clean installation).
+
+**Publication input**:
+What a **Rehearsal** proved and the only thing a later publication may publish: the
+commit and its tree, the annotated tag object, the committed notes and their digest,
+the archive and its digest, the trunk commit the candidate was built from, and the
+explicit **distribution mode** the Release promises. Bound by content, so repairing a
+candidate produces a new one that has to be rehearsed again, and concurrent work on
+the trunk is *visible* rather than able to retarget a proof.
+_Avoid_: release plan, release manifest, publication payload.
+
+**Candidate tag**:
+The annotated `vX.Y.Z` tag a **Rehearsal** creates inside its own workspace. It is not
+public and cannot be pushed from there; only a proved candidate's tag is ever created
+on the trunk, and once a tag *is* public it never moves — changed content needs a new
+**Release version**.
+_Avoid_: draft tag, temporary tag, pre-tag.
+
 **Autonomous loop**:
 The *technique* git-loopy orchestrates — an unattended, iterative execution loop that
 drives the Copilot agent to work triaged issues one at a time, bounded by feedback
