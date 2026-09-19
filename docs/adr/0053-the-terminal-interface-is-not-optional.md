@@ -2,6 +2,11 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0058](0058-init-precedes-the-run-and-clients-do-not-own-its-lifetime.md):**
+the Dashboard-hosted wizard clause is superseded by init before a detached Run
+and an explicit handoff to its client. The remaining wizard/picker decisions
+stand; the hosting rationale below is retained as history.
+
 Settles what `git-loopy init` asks an operator and how. The starting complaint was narrow — the
 setup wizard prompts by number while a keyboard-driven picker already ships — but the reason it
 prompts by number is a packaging decision, so the narrow complaint could not be answered without

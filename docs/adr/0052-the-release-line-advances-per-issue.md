@@ -2,6 +2,12 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0059](0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md):**
+the exact stable snapshot must be verified before a public tag exists, public
+tags are immutable, and publication is explicitly source-only or artifact-bearing.
+The Release target, Bump classes, milestone/major-bump triggers, and unattended
+Promotion policy remain unchanged.
+
 Amends [ADR-0016](0016-single-distribution-release-version.md), which made a Release version a
 thing a human writes into `VERSION` and selects with a tag. It keeps every identity rule that ADR
 established and replaces only the question of *who moves the number and when*. It extends
