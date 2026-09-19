@@ -469,4 +469,3 @@ class TestDistributionModeDocumentation:
         assert "artifact-bearing" in content
         assert "line-printer" in content
         assert "cargo build" in content
-
