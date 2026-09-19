@@ -133,6 +133,7 @@ class EventEmitter:
         event_type: str,
         *,
         iter_num: int | None,
+        require_persistence: bool = False,
         **payload: Any,
     ) -> dict[str, Any]:
         """Compose an envelope, :meth:`dispatch` it, and return it.
@@ -149,10 +150,12 @@ class EventEmitter:
             **self._identity,
             **payload,
         )
-        self.dispatch(envelope)
+        self.dispatch(envelope, require_persistence=require_persistence)
         return envelope
 
-    def dispatch(self, envelope: dict[str, Any]) -> None:
+    def dispatch(
+        self, envelope: dict[str, Any], *, require_persistence: bool = False
+    ) -> None:
         """Observe raw data, scrub once, then fan out to writer and sinks.
 
         The single :func:`git_loopy.events.scrub` call runs *before* the guards,
@@ -170,6 +173,8 @@ class EventEmitter:
         except Exception as exc:
             if self._diag is not None:
                 self._diag.warning("event log write failed: %s", exc)
+            if require_persistence:
+                raise
         try:
             self._sinks.render(scrubbed)
         except Exception as exc:

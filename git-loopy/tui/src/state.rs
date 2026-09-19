@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::event::{
     CommitRecorded, ContextWindowSample, Event, EventPayload, ExecutionHostDeclaration,
     InsightCapabilities, IssueRef, IterationEnd, IterationIssue, IterationSummary, Pickup,
-    ReleaseAdvanced, StopRequested,
+    ReleaseAdvanced, RoutingDelivery, RoutingDeliveryStatus, StopRequested,
 };
 use crate::timestamp::Timestamp;
 
@@ -205,6 +205,24 @@ impl ResolvedRoute {
     }
 }
 
+/// The delivery state of publishing one final route to an external tracker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RouteDelivery {
+    pub(crate) status: RoutingDeliveryStatus,
+    pub(crate) identity: Option<String>,
+    pub(crate) label: Option<String>,
+}
+
+impl RouteDelivery {
+    fn from_event(delivery: &RoutingDelivery) -> Self {
+        Self {
+            status: delivery.status,
+            identity: non_empty(delivery.identity.as_deref()),
+            label: non_empty(delivery.label.as_deref()),
+        }
+    }
+}
+
 /// One finalized Iteration or Lane contribution for an issue.
 #[derive(Clone, Debug)]
 pub(crate) struct IssueContribution {
@@ -253,6 +271,8 @@ pub(crate) struct IssueLedgerEntry {
     /// the Queue answers "what is this issue costing *now*", which outlives
     /// the Iteration that resolved it.
     pub(crate) route: Option<ResolvedRoute>,
+    /// The most recent tracker-delivery observation for that final route.
+    pub(crate) delivery: Option<RouteDelivery>,
     pub(crate) log: Vec<LogLine>,
 }
 
@@ -272,6 +292,7 @@ impl IssueLedgerEntry {
             credits: BilledTotal::default(),
             premium_requests: BilledTotal::default(),
             route: None,
+            delivery: None,
             log: Vec::new(),
         }
     }
@@ -527,6 +548,7 @@ impl DashboardState {
             EventPayload::PickupSkipped(pickup) => {
                 self.append_lane_log(&pickup.issue, LOG_EVENT, &pickup_skipped_text(pickup), now)
             }
+            EventPayload::RoutingDelivery(delivery) => self.record_route_delivery(delivery, now),
             EventPayload::AgentOutput(output) => {
                 self.append_log_block(&output.kind, &output.text, now)
             }
@@ -729,8 +751,22 @@ impl DashboardState {
         self.insert_entry(issue.clone());
         if let Some(entry) = self.ledger.get_mut(issue) {
             entry.route = Some(route.clone());
+            entry.delivery = None;
         }
         self.iteration_routes.insert(issue.clone(), route);
+    }
+
+    fn record_route_delivery(&mut self, delivery: &RoutingDelivery, now: Option<Timestamp>) {
+        self.insert_entry(delivery.issue.clone());
+        if let Some(entry) = self.ledger.get_mut(&delivery.issue) {
+            entry.delivery = Some(RouteDelivery::from_event(delivery));
+        }
+        self.append_lane_log(
+            &delivery.issue,
+            LOG_EVENT,
+            &routing_delivery_text(delivery),
+            now,
+        );
     }
 
     fn record_pool(&mut self, issues: &[IssueRef]) {
@@ -1103,6 +1139,18 @@ fn pickup_issue_label(issue: &IssueRef) -> String {
         IssueRef::Number(number) => format!("#{number}"),
         IssueRef::Path(path) => path.clone(),
     }
+}
+
+fn routing_delivery_text(delivery: &RoutingDelivery) -> String {
+    let mut text = format!("Route delivery: {}", delivery.status.as_str());
+    if let Some(label) = delivery.label.as_deref().filter(|label| !label.is_empty()) {
+        text.push_str(&format!(" ({label})"));
+    }
+    text
+}
+
+fn non_empty(value: Option<&str>) -> Option<String> {
+    value.filter(|value| !value.is_empty()).map(str::to_string)
 }
 
 fn split_log_block(kind: &str, text: &str, at: Option<Timestamp>) -> Vec<LogLine> {

@@ -25,6 +25,7 @@ from git_loopy.gh import (
     Repo,
 )
 from git_loopy.git import Commit, GitError, Worktree
+from git_loopy.route_publication import RouteDeliveryError
 
 
 class FakeGitClient:
@@ -633,6 +634,8 @@ class FakeGitHubClient:
         issue_view_errors: Mapping[int, GhError] | None = None,
         issue_close_errors: Mapping[int, GhError] | None = None,
         issue_comment_errors: Mapping[int, GhError] | None = None,
+        route_comment_errors: Mapping[int, RouteDeliveryError] | None = None,
+        route_label_errors: Mapping[int, RouteDeliveryError] | None = None,
         pr_view_errors: Mapping[int, GhError] | None = None,
         gh_version: tuple[int, int, int] = MIN_GH_VERSION_FOR_READINESS,
     ) -> None:
@@ -658,12 +661,22 @@ class FakeGitHubClient:
         self._issue_comment_errors: dict[int, GhError] = dict(
             issue_comment_errors or {}
         )
+        self._route_comment_errors: dict[int, RouteDeliveryError] = dict(
+            route_comment_errors or {}
+        )
+        self._route_label_errors: dict[int, RouteDeliveryError] = dict(
+            route_label_errors or {}
+        )
         self._pr_view_errors: dict[int, GhError] = dict(pr_view_errors or {})
         # Read/write spies.
         self.issue_list_calls: list[tuple[str, str]] = []
         self.issue_view_calls: list[int] = []
         self.issue_close_calls: list[tuple[int, str]] = []
         self.issue_comment_calls: list[tuple[int, str]] = []
+        self.route_comment_calls: list[tuple[int, str]] = []
+        self.route_label_calls: list[tuple[int, tuple[str, ...], str]] = []
+        self.route_labels: set[str] = set()
+        self._route_comments: dict[int, list[str]] = {}
         self.pr_list_calls: list[tuple[str, str]] = []
         self.pr_view_calls: list[int] = []
         # The 429 **Pressure signal** (#309, #219 §6), counted by the same
@@ -767,6 +780,44 @@ class FakeGitHubClient:
         err = self._issue_comment_errors.get(number)
         if err is not None:
             self._fail(err)
+
+    def issue_comments(self, number: int) -> tuple[str, ...]:
+        if number not in self._issues:
+            raise RouteDeliveryError(f"issue #{number} not found")
+        return tuple(self._route_comments.get(number, ()))
+
+    def issue_labels(self, number: int) -> tuple[str, ...]:
+        try:
+            return tuple(self._issues[number].labels)
+        except KeyError as exc:
+            raise RouteDeliveryError(f"issue #{number} not found") from exc
+
+    def ensure_label(self, label: str) -> None:
+        self.route_labels.add(label)
+
+    def replace_route_label(
+        self, number: int, *, remove: Sequence[str], add: str
+    ) -> None:
+        error = self._route_label_errors.get(number)
+        if error is not None:
+            raise error
+        try:
+            labels = self._issues[number].labels
+        except KeyError as exc:
+            raise RouteDeliveryError(f"issue #{number} not found") from exc
+        labels[:] = [label for label in labels if label not in remove]
+        if add not in labels:
+            labels.append(add)
+        self.route_label_calls.append((number, tuple(remove), add))
+
+    def post_issue_comment(self, number: int, body: str) -> None:
+        error = self._route_comment_errors.get(number)
+        if error is not None:
+            raise error
+        if number not in self._issues:
+            raise RouteDeliveryError(f"issue #{number} not found")
+        self.route_comment_calls.append((number, body))
+        self._route_comments.setdefault(number, []).append(body)
 
     def pr_list(self, label: str, state: str = "open") -> list[PullRequest]:
         self.pr_list_calls.append((label, state))

@@ -111,6 +111,8 @@ pub enum EventPayload {
     PickupBound(Pickup),
     /// `wrapper.pickup.skipped`
     PickupSkipped(Pickup),
+    /// `wrapper.routing.delivery`
+    RoutingDelivery(RoutingDelivery),
     /// `agent.output`
     AgentOutput(AgentOutput),
     /// `usage.context_window`
@@ -300,6 +302,50 @@ pub struct Pickup {
     /// binding.
     #[serde(default)]
     pub routing_source: Option<String>,
+}
+
+/// One run-scoped delivery observation for a final **Routing resolution**.
+///
+/// Delivery is operational state about publishing an already-final route to the
+/// tracker, not a second route authority. It stays separate from
+/// [`Pickup`]'s decision/execution facts so a failed or pending publication
+/// cannot rewrite the pair the Runner chose.
+#[derive(Clone, Debug, Deserialize)]
+pub struct RoutingDelivery {
+    /// The issue whose final route publication this observation describes.
+    pub issue: IssueRef,
+    /// The publisher's idempotency identity, when recorded.
+    #[serde(default)]
+    pub identity: Option<String>,
+    /// The observational route label the publisher targeted, when recorded.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// How far tracker delivery got.
+    pub status: RoutingDeliveryStatus,
+}
+
+/// The final route publication's delivery state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingDeliveryStatus {
+    Published,
+    Pending,
+    Partial,
+    Failed,
+    Stale,
+}
+
+impl RoutingDeliveryStatus {
+    /// The literal status spelling carried on the wire.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Published => "published",
+            Self::Pending => "pending",
+            Self::Partial => "partial",
+            Self::Failed => "failed",
+            Self::Stale => "stale",
+        }
+    }
 }
 
 /// One timestamped, unclassified line of agent output.
@@ -598,6 +644,12 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         },
         "wrapper.pickup.skipped" => match serde_json::from_value(value.clone()) {
             Ok(pickup) => EventPayload::PickupSkipped(pickup),
+            Err(_) => EventPayload::Other,
+        },
+        // Delivery is only attributable when it names an issue and a known
+        // delivery status. Otherwise it is unusable telemetry, not route truth.
+        "wrapper.routing.delivery" => match serde_json::from_value(value.clone()) {
+            Ok(delivery) => EventPayload::RoutingDelivery(delivery),
             Err(_) => EventPayload::Other,
         },
         "agent.output" => EventPayload::AgentOutput(decode_or_default(value)),

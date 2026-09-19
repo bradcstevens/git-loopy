@@ -1729,6 +1729,39 @@ The Dashboard needs no policy-aware branch — it renders the elected triple off
 MUST NOT enable it by inference from the presence of a key, an association table, or any other
 prerequisite.
 
+### 14.5 Route publication (contract 2.9)
+
+The final **Routing resolution** remains local and authoritative. The tracker is
+an output projection, never a routing input: a tracker comment or Route label
+MUST NOT pin, select, validate, invalidate, or otherwise alter a later
+resolution.
+
+- **Record before projecting or working.** The final `wrapper.pickup.bound`
+  record MUST persist before an Agent session or any tracker publication starts.
+  Failed local recording starts no work. Tracker delivery is non-blocking once
+  that record exists: a permission failure, rate limit, transient failure, or
+  partial delivery MUST be retained as pending/failed local delivery state and
+  MUST NOT be reported as published.
+- **Project finals only.** Every materially changed final static or Dynamic
+  assignment gets one idempotent append-only comment with an identity, its exact
+  model/effort/context-tier values, an issue-safe source rationale, and
+  provenance references. A proposal and unchanged revalidation get no comment.
+  The projection MUST omit credentials, raw prompts, private repository
+  excerpts, and hidden reasoning.
+- **Own one association, not a repository label.** A projection MAY attach one
+  deterministic compact Route label that encodes the selected triple and is
+  collision-resistant within tracker limits. Exact values remain in the local
+  record and comment. Rerouting MUST replace only that issue's owned Route-label
+  association, preserving Task-type and unrelated labels; it MUST NOT rename a
+  shared repository label.
+- **Retry without time travel.** Pending delivery MUST survive restart and retry
+  within a finite bound using the comment identity. A retry must not duplicate a
+  comment already accepted by the tracker, and an obsolete delivery MUST NOT
+  overwrite a newer Route label. Delivery state is published separately from the
+  Routing resolution so the CLI and Dashboard distinguish an undecided Route or
+  failed Agent from an already-decided Route whose tracker projection is pending
+  or failed.
+
 ## 15. Release and compatibility identity (MUST)
 
 The **Release version** is product identity, not a compatibility shortcut. `--version` and

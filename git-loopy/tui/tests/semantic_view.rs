@@ -840,3 +840,154 @@ fn a_routed_pickup_projects_its_context_tier() {
         })
     );
 }
+
+#[test]
+fn a_route_delivery_projects_separately_from_the_route() {
+    let projected = reduce(
+        &[
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:01.000Z",
+                "run_id": "r1",
+                "iter": 1,
+                "type": "wrapper.pickup.bound",
+                "issue": 7,
+                "reason": "order",
+                "model": "gpt-5-mini",
+                "effort": "medium",
+                "routing_source": "routed"
+            }),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:02.000Z",
+                "run_id": "r1",
+                "type": "wrapper.routing.delivery",
+                "issue": 7,
+                "identity": "route-7-v1",
+                "label": "route:gpt-5-mini@medium",
+                "status": "pending"
+            }),
+        ],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(
+        queue_row(&projected, 7)["route"],
+        serde_json::json!({
+            "model": "gpt-5-mini",
+            "effort": "medium",
+            "source": "routed"
+        })
+    );
+    assert_eq!(
+        queue_row(&projected, 7)["delivery"],
+        serde_json::json!({
+            "status": "pending",
+            "identity": "route-7-v1",
+            "label": "route:gpt-5-mini@medium"
+        })
+    );
+    assert_eq!(
+        projected["drill_in"]["detail_header"]["delivery"],
+        serde_json::json!({
+            "status": "pending",
+            "identity": "route-7-v1",
+            "label": "route:gpt-5-mini@medium"
+        })
+    );
+    assert_eq!(
+        log_texts(&projected),
+        [
+            "Pickup: bound #7 (order)",
+            "Route delivery: pending (route:gpt-5-mini@medium)"
+        ]
+    );
+}
+
+#[test]
+fn a_new_route_clears_the_previous_delivery_state() {
+    let projected = reduce(
+        &[
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:01.000Z",
+                "run_id": "r1",
+                "iter": 1,
+                "type": "wrapper.pickup.bound",
+                "issue": 7,
+                "reason": "order",
+                "model": "gpt-5-mini",
+                "effort": "medium",
+                "routing_source": "routed"
+            }),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:02.000Z",
+                "run_id": "r1",
+                "type": "wrapper.routing.delivery",
+                "issue": 7,
+                "identity": "route-7-v1",
+                "label": "route:gpt-5-mini@medium",
+                "status": "published"
+            }),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:03.000Z",
+                "run_id": "r1",
+                "iter": 2,
+                "type": "wrapper.pickup.bound",
+                "issue": 7,
+                "reason": "priority",
+                "model": "gpt-5.6-sol",
+                "effort": "high",
+                "routing_source": "escalated"
+            }),
+        ],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(
+        queue_row(&projected, 7)["route"],
+        serde_json::json!({
+            "model": "gpt-5.6-sol",
+            "effort": "high",
+            "source": "escalated"
+        })
+    );
+    assert_eq!(queue_row(&projected, 7)["delivery"], Value::Null);
+}
+
+#[test]
+fn a_malformed_delivery_event_never_corrupts_the_route() {
+    let projected = reduce(
+        &[
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:01.000Z",
+                "run_id": "r1",
+                "iter": 1,
+                "type": "wrapper.pickup.bound",
+                "issue": 7,
+                "reason": "order",
+                "model": "gpt-5-mini",
+                "effort": "medium",
+                "routing_source": "routed"
+            }),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:02.000Z",
+                "run_id": "r1",
+                "type": "wrapper.routing.delivery",
+                "issue": 7,
+                "identity": "route-7-v1",
+                "label": ["bad"],
+                "status": "mystery"
+            }),
+        ],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(
+        queue_row(&projected, 7)["route"],
+        serde_json::json!({
+            "model": "gpt-5-mini",
+            "effort": "medium",
+            "source": "routed"
+        })
+    );
+    assert_eq!(queue_row(&projected, 7)["delivery"], Value::Null);
+    assert_eq!(log_texts(&projected), ["Pickup: bound #7 (order)"]);
+}

@@ -182,6 +182,11 @@ from git_loopy.measured_routing import (
     measured_routing_path,
 )
 from git_loopy.routing_input import build_routing_request
+from git_loopy.route_publication import (
+    RouteDeliveryStatus,
+    RoutePublicationStore,
+    RoutePublisher,
+)
 from git_loopy.selector_session import RoutingCostMeter, SessionRouteSelector
 from git_loopy.escalation import EscalationLedger
 from git_loopy.persist import (
@@ -1242,6 +1247,7 @@ class _Loop:
         rate_card: RateCard | None = None,
         classifier_pair: ClassifierPair | None = None,
         task_type_client: TaskTypeLabelClient | None = None,
+        route_tracker: gh_module.GitHubClient | None = None,
         dynamic_routing: "_DynamicRoutingSetup | None" = None,
     ) -> None:
         self._config = config
@@ -1411,6 +1417,16 @@ class _Loop:
             diag=self._diag,
             observer=self._rollup,
         )
+        self._route_publisher = (
+            None
+            if route_tracker is None
+            else RoutePublisher(
+                store=RoutePublicationStore(
+                    self._writers.event_log.path.parent.parent / "route-delivery.json"
+                ),
+                tracker=route_tracker,
+            )
+        )
         # The **Route selector**'s router, or `None` for every Run that did not
         # select the policy (#561, ADR-0057) — the same "a `None` makes the
         # whole object inert" discipline the classifier above keeps, so no
@@ -1567,6 +1583,7 @@ class _Loop:
         event_type: str,
         *,
         iter_num: int | None,
+        require_persistence: bool = False,
         **payload: Any,
     ) -> dict[str, Any]:
         """Compose, scrub, persist, then fan out one wrapper-level event.
@@ -1582,7 +1599,34 @@ class _Loop:
         ``diag`` (warn-and-continue). Returns the composed **pre-scrub** envelope
         so callers can still read the SHA / subject off their own events.
         """
-        return self._emitter.emit(event_type, iter_num=iter_num, **payload)
+        return self._emitter.emit(
+            event_type,
+            iter_num=iter_num,
+            require_persistence=require_persistence,
+            **payload,
+        )
+
+    def _retry_route_delivery(self) -> None:
+        """Retry only durable pending Route projections; never re-decide a Route."""
+        route_publisher = getattr(self, "_route_publisher", None)
+        if route_publisher is None:
+            return
+        for delivery in route_publisher.retry_pending():
+            self._emit(
+                events_module.WRAPPER_ROUTING_DELIVERY,
+                iter_num=None,
+                issue=delivery.issue,
+                identity=delivery.identity,
+                label=delivery.label,
+                status=delivery.status.value,
+            )
+            if delivery.status is not RouteDeliveryStatus.PUBLISHED:
+                self._diag.warning(
+                    "route publication retry for issue #%s is %s: %s",
+                    delivery.issue,
+                    delivery.status.value,
+                    delivery.detail or "delivery remains pending",
+                )
 
     def _report_pool_exclusions(
         self, collection: PoolCollection, *, iter_num: int
@@ -1640,12 +1684,36 @@ class _Loop:
         self._emit(
             events_module.WRAPPER_PICKUP_BOUND,
             iter_num=iter_num,
+            require_persistence=True,
             issue=issue,
             reason=reason,
             position=position,
             considered=considered,
             **(resolution.as_pickup_payload() if resolution is not None else {}),
         )
+        if (
+            self._route_publisher is not None
+            and isinstance(issue, int)
+            and resolution is not None
+        ):
+            delivery = self._route_publisher.publish(
+                issue=issue, resolution=resolution
+            )
+            self._emit(
+                events_module.WRAPPER_ROUTING_DELIVERY,
+                iter_num=iter_num,
+                issue=issue,
+                identity=delivery.identity,
+                label=delivery.label,
+                status=delivery.status.value,
+            )
+            if delivery.status is not RouteDeliveryStatus.PUBLISHED:
+                self._diag.warning(
+                    "route publication for issue #%s is %s: %s",
+                    issue,
+                    delivery.status.value,
+                    delivery.detail or "delivery remains pending",
+                )
 
     def _emit_pickup_skipped(
         self,
@@ -3024,6 +3092,7 @@ class _Loop:
             # #410: what this Run parsed, gate-checked.
             **run_start_payload(self._config),
         )
+        self._retry_route_delivery()
 
         exit_code = exit_code_for("iteration_cap")
         # Not `iteration_cap`: the only ways out of the loop below that skip
@@ -3296,6 +3365,7 @@ class _ParallelLoop:
         rate_card: RateCard | None = None,
         classifier_pair: ClassifierPair | None = None,
         task_type_client: TaskTypeLabelClient | None = None,
+        route_tracker: gh_module.GitHubClient | None = None,
         execution_host: execution_host_module.ExecutionHost | None = None,
         dynamic_routing: "_DynamicRoutingSetup | None" = None,
     ) -> None:
@@ -3476,6 +3546,7 @@ class _ParallelLoop:
             usage_observer=self._cost_meter,
             classifier_pair=classifier_pair,
             task_type_client=task_type_client,
+            route_tracker=route_tracker,
             dynamic_routing=dynamic_routing,
         )
 
@@ -3636,6 +3707,7 @@ class _ParallelLoop:
             iter_num=None,
             **start_payload,
         )
+        self._serial._retry_route_delivery()
         self._report_parallel_degraded()
 
         # Same reasoning as `_Loop.drive` (#398): an interrupt bypasses the
@@ -6603,6 +6675,7 @@ async def run(
             rate_card=rate_card,
             classifier_pair=classifier_pair,
             task_type_client=task_type_client,
+            route_tracker=github_client,
             execution_host=selected_execution_host,
             dynamic_routing=dynamic_routing,
         )

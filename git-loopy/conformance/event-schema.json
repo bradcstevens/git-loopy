@@ -292,6 +292,12 @@
       "later_attempts": "Contract 14.4, ADR-0057. lifecycle_position and attempt name WHERE the issue sits and model/effort/context_tier name WHAT it will run on; a Runner MUST report them separately, because a reassessed retry that re-elects the same configuration is otherwise indistinguishable from a first election. attempt counts this issue's dynamic decisions in this Run and starts at 1. prior_attempts is what the election was told -- oldest first, one object per earlier attempt carrying model, effort, context_tier, outcome and capability_evidence -- and is an EMPTY LIST on a first attempt, never null and never omitted. A Runner MUST NOT derive the position from the length of that list: an attempt that advanced its issue without closing it reaches no ending, spends no attempt, and still appears in the list.",
       "scope": "Run-scoped, for the same reason wrapper.pickup.bound is: the route is elected before the work it routes, so no contribution identity exists yet."
     },
+    "wrapper.routing.delivery": {
+      "required_when_present": ["issue", "identity", "label", "status"],
+      "status_values": ["published", "pending", "partial", "failed", "stale"],
+      "emitted": "After a final wrapper.pickup.bound has been durably recorded, once for each attempted observational tracker projection and retry. Delivery never selects, validates, or pins a Routed pair.",
+      "scope": "Run-scoped. A delivery is attributed to the final Pickup it projects and is not contribution-scoped because it precedes the Agent session."
+    },
     "wrapper.pickup.skipped": {
       "required_when_present": ["issue", "reason", "position", "considered"],
       "emitted": "Once per candidate a Pickup passed over, in order, before the wrapper.pickup.bound that ended the walk. Selection never blocks on a human (Wrapper contract section 7), so a candidate that cannot be taken is skipped rather than raised — and the skip is a record rather than a log line because the starvation ADR-0032 fixes was invisible precisely for want of one.",
@@ -488,6 +494,7 @@
       "wrapper.pickup.bound",
       "wrapper.pickup.skipped",
       "wrapper.routing.resolved",
+      "wrapper.routing.delivery",
       "wrapper.concurrency.changed",
       "wrapper.serial.requested",
       "wrapper.pipeline.quiescent",
@@ -557,6 +564,7 @@
     "WRAPPER_PICKUP_BOUND": "wrapper.pickup.bound",
     "WRAPPER_PICKUP_SKIPPED": "wrapper.pickup.skipped",
     "WRAPPER_ROUTING_RESOLVED": "wrapper.routing.resolved",
+    "WRAPPER_ROUTING_DELIVERY": "wrapper.routing.delivery",
     "WRAPPER_CHECKPOINT_RECORDED": "wrapper.checkpoint.recorded",
     "WRAPPER_COMMIT_RECORDED": "wrapper.commit.recorded",
     "WRAPPER_PUSH_RECORDED": "wrapper.push.recorded",
@@ -1420,6 +1428,16 @@
           "considered": 4
         },
         {
+          "ts": "2026-05-16T00:00:02.500Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.routing.delivery",
+          "issue": 42,
+          "identity": "c3e505e1e9cb9a7e5a5e086e8a1e71b6",
+          "label": "git-loopy-route-claude-opus-5-high-0d3d445fe66d",
+          "status": "published"
+        },
+        {
           "ts": "2026-05-16T00:00:03.000Z",
           "run_id": "01HXR0000000000000000000DD",
           "iter": null,
@@ -1799,6 +1817,7 @@
         "{\"ts\": \"2026-05-16T00:00:02.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.concurrency.changed\", \"configured_lane_limit\": 3, \"credit_state\": null, \"effective_lane_limit\": 2, \"host_state\": \"healthy\", \"pressure\": null, \"rate_limit_state\": \"healthy\"}\n",
         "{\"ts\": \"2026-05-16T00:00:02.200Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.routing.resolved\", \"attempt\": 1, \"benchmark_version\": null, \"capabilities_retrieved_at\": \"2026-05-16T00:00:02.150Z\", \"conditions\": null, \"context_tier\": \"default\", \"effort\": \"high\", \"evidence_retrieved_at\": \"2026-05-16T00:00:02.100Z\", \"evidence_source\": \"https://artificialanalysis.ai/api/v2/data/llms/models\", \"intelligence_index\": \"70.0\", \"issue\": 42, \"lifecycle_position\": \"fresh\", \"measurement_at\": null, \"model\": \"claude-opus-5\", \"prior_attempts\": [], \"public_output_tokens_per_second\": \"90.0\", \"repeat_justification\": null, \"routing_credits\": \"0.25\", \"selector_attempts\": 1, \"source_model_identity\": \"aa-opus\", \"summary\": \"highest verified Intelligence Index among the runnable configurations\"}\n",
         "{\"ts\": \"2026-05-16T00:00:02.400Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pickup.bound\", \"considered\": 4, \"issue\": 42, \"position\": 1, \"reason\": \"order\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:02.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.routing.delivery\", \"identity\": \"c3e505e1e9cb9a7e5a5e086e8a1e71b6\", \"issue\": 42, \"label\": \"git-loopy-route-claude-opus-5-high-0d3d445fe66d\", \"status\": \"published\"}\n",
         "{\"ts\": \"2026-05-16T00:00:03.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.start\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:03.400Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pickup.bound\", \"considered\": 3, \"issue\": 43, \"position\": 1, \"reason\": \"order\"}\n",
         "{\"ts\": \"2026-05-16T00:00:04.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.start\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",

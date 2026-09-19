@@ -1013,6 +1013,22 @@ Two properties are worth knowing before you turn it on:
   already in flight when a bound is reached is disclosed rather than hidden, and
   no further routing call is admitted afterwards.
 
+### Route comments and labels
+
+After a final static or Dynamic Routing resolution is durably recorded,
+git-loopy projects a materially changed assignment onto its GitHub issue. The
+append-only comment carries an idempotency identity, exact model/effort/context
+values, a concise safe rationale, and a provenance reference. The issue also
+carries one `git-loopy-route:` label for the same triple; it is compact and
+collision-resistant, while the comment and local event retain the exact values.
+
+These tracker writes are observational. They never become Routing input, never
+change a Task type, and never override Config. A failed comment or label write
+does not stop the already-recorded work: its local delivery state remains
+pending or failed, is retried finitely on a later Run, and appears separately in
+the Dashboard. A failed local final-resolution record is different and starts no
+work.
+
 ### What a later attempt is told
 
 Only the endings that say something about the *work* count against a

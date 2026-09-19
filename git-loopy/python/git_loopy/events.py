@@ -83,6 +83,7 @@ __all__ = [
     "WRAPPER_POOL_EXCLUDED",
     "WRAPPER_PICKUP_BOUND",
     "WRAPPER_ROUTING_RESOLVED",
+    "WRAPPER_ROUTING_DELIVERY",
     "WRAPPER_PICKUP_SKIPPED",
     "WRAPPER_CHECKPOINT_RECORDED",
     "WRAPPER_COMMIT_RECORDED",
@@ -302,6 +303,7 @@ WRAPPER_PICKUP_SKIPPED = "wrapper.pickup.skipped"
 # what makes it provenance rather than a report, and a Run that cannot write it
 # refuses the route instead of running it unrecorded.
 WRAPPER_ROUTING_RESOLVED = "wrapper.routing.resolved"
+WRAPPER_ROUTING_DELIVERY = "wrapper.routing.delivery"
 WRAPPER_CHECKPOINT_RECORDED = "wrapper.checkpoint.recorded"
 WRAPPER_COMMIT_RECORDED = "wrapper.commit.recorded"
 # Emitted once per iteration when the runner's auto-push (ADR-0004) succeeds in

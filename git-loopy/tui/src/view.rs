@@ -16,7 +16,7 @@ use serde::Serialize;
 use crate::event::{ContextWindowSample, IssueRef, IterationSummary};
 use crate::state::{
     DashboardState, IssueContribution, IssueLedgerEntry, IterationRow, LogLine, ResolvedRoute,
-    STATUS_ACTIVE, STATUS_GONE, STATUS_QUEUED,
+    RouteDelivery, STATUS_ACTIVE, STATUS_GONE, STATUS_QUEUED,
 };
 use crate::timestamp::{Timestamp, Zone};
 
@@ -186,6 +186,8 @@ pub struct QueueRow {
     pub closed_at: Option<String>,
     pub iteration_count: usize,
     pub route: Option<RouteView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<DeliveryView>,
     pub tokens_in: Option<i64>,
     pub tokens_out: Option<i64>,
     pub credits: Option<f64>,
@@ -214,6 +216,26 @@ impl RouteView {
             effort: route.effort.clone(),
             context_tier: route.context_tier.clone(),
             source: route.source.clone(),
+        }
+    }
+}
+
+/// One issue's tracker-delivery state for its final route.
+#[derive(Clone, Debug, Serialize)]
+pub struct DeliveryView {
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+impl DeliveryView {
+    fn project(delivery: &RouteDelivery) -> Self {
+        Self {
+            status: delivery.status.as_str(),
+            identity: delivery.identity.clone(),
+            label: delivery.label.clone(),
         }
     }
 }
@@ -276,6 +298,8 @@ pub struct DetailHeader {
     pub issue_elapsed_seconds: Option<f64>,
     pub active_seconds: f64,
     pub iteration_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<DeliveryView>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -424,6 +448,7 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
                     closed_at: entry.closed_at.map(|at| at.to_zoned_iso(context.zone)),
                     iteration_count: entry.contributions.len(),
                     route: entry.route.as_ref().map(RouteView::project),
+                    delivery: entry.delivery.as_ref().map(DeliveryView::project),
                     tokens_in: entry.usage_observed.then_some(entry.tokens_in),
                     tokens_out: entry.usage_observed.then_some(entry.tokens_out),
                     credits: entry.credits.value(),
@@ -523,6 +548,9 @@ fn drill_in_view(state: &DashboardState, context: &ViewContext, issue: &IssueRef
                 })
                 .unwrap_or(0.0),
             iteration_count: entry.map(contribution_count).unwrap_or(0),
+            delivery: entry
+                .and_then(|entry| entry.delivery.as_ref())
+                .map(DeliveryView::project),
         },
         iteration_breakdown: IterationBreakdown {
             rows: entry
