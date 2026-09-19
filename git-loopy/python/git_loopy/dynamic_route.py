@@ -61,6 +61,9 @@ __all__ = [
     "RoutingSourceError",
     "DynamicRouter",
     "EvidenceRecord",
+    "SupportingEvidence",
+    "SupportingEvidenceStatus",
+    "SupportingEvidenceSource",
     "DynamicCandidate",
     "SelectorSettings",
     "CandidateExclusion",
@@ -331,6 +334,41 @@ class EvidenceRecord:
     benchmark_version: str | None
     conditions: str | None
     measurement_at: datetime | None = None
+
+
+class SupportingEvidenceStatus(Enum):
+    """Truthful availability of an optional evidence source's current read."""
+
+    AVAILABLE = "available"
+    NOT_CONFIGURED = "not_configured"
+    MISSING_COMPARABLE_ROWS = "missing_comparable_rows"
+    SOURCE_UNAVAILABLE = "source_unavailable"
+    STALE = "stale"
+
+
+@dataclass(frozen=True)
+class SupportingEvidence:
+    """One optional public benchmark result, separate from AA election facts."""
+
+    source_identity: str
+    source_model_identity: str
+    associated_copilot_model: str
+    associated_copilot_effort: str | None
+    association_provenance: str
+    score: Decimal
+    benchmark_version: str
+    harness: str
+    harness_version: str
+    conditions: str
+
+
+@dataclass(frozen=True)
+class SupportingEvidenceSource:
+    """The latest outcome of reading one optional evidence source."""
+
+    source_identity: str
+    status: SupportingEvidenceStatus
+    retrieved_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -624,6 +662,8 @@ class FreshEvidence:
     source_identity: str
     retrieved_at: datetime
     records: tuple[EvidenceRecord, ...]
+    supporting_sources: tuple[SupportingEvidenceSource, ...] = ()
+    supporting_records: tuple[SupportingEvidence, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -793,6 +833,7 @@ class AssessmentCandidate:
     measurement_at: datetime | None
     benchmark_version: str | None
     conditions: str | None
+    supporting_evidence: tuple[SupportingEvidence, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -805,6 +846,7 @@ class AssessmentRequest:
     repository_context: tuple[str, ...]
     local_measurements: tuple[str, ...]
     candidates: tuple[AssessmentCandidate, ...]
+    supporting_sources: tuple[SupportingEvidenceSource, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1088,6 +1130,7 @@ class DynamicRoutePrerequisites:
     routing_credit_allowance: Decimal
     selector_concurrency: int
     associations: Mapping[tuple[str, str | None], str]
+    swe_bench_associations: Mapping[str, str] | None = None
 
 
 def resolve_prerequisites(
@@ -1151,6 +1194,9 @@ def resolve_prerequisites(
         routing_credit_allowance=Decimal(allowance),
         selector_concurrency=int(concurrency),
         associations=associations,
+        swe_bench_associations=_optional_associations(
+            getattr(config, "swe_bench_associations", {}) or {}
+        ),
     )
 
 
@@ -1170,6 +1216,29 @@ def _parse_associations(
                 "Analysis model id to a non-empty Copilot configuration"
             )
         associations[(str(identity), effort.strip() or None)] = model.strip()
+    return associations
+
+
+def _optional_associations(table: Mapping[str, str]) -> dict[str, str]:
+    """Keep optional source mappings exact without making them prerequisites."""
+    if not isinstance(table, Mapping):
+        raise RoutingPrerequisiteError(
+            "swe_bench_associations must map official model identities to "
+            "non-empty Copilot configurations"
+        )
+    associations: dict[str, str] = {}
+    for identity, configuration in table.items():
+        if (
+            not isinstance(identity, str)
+            or not identity.strip()
+            or not isinstance(configuration, str)
+            or not configuration.strip()
+        ):
+            raise RoutingPrerequisiteError(
+                "swe_bench_associations must map official model identities to "
+                "non-empty Copilot configurations"
+            )
+        associations[identity] = configuration.strip()
     return associations
 
 
@@ -1355,7 +1424,8 @@ class DynamicRouter:
         if election.selector is None or not election.candidates:
             return self._unavailable(RoutingUnavailableReason.NO_RUNNABLE_CANDIDATE)
         candidates = tuple(
-            _assessment_candidate(candidate) for candidate in election.candidates
+            _assessment_candidate(candidate, evidence.supporting_records)
+            for candidate in election.candidates
         )
         if len(candidates) > 64:
             return self._unavailable(RoutingUnavailableReason.BOUNDED_INPUT_EXCEEDED)
@@ -1366,6 +1436,7 @@ class DynamicRouter:
             repository_context=request.repository_context,
             local_measurements=request.local_measurements,
             candidates=candidates,
+            supporting_sources=evidence.supporting_sources,
         )
 
         async def call() -> SelectorCallResult:
@@ -1394,7 +1465,9 @@ class DynamicRouter:
             issue_ref=request.issue_ref,
             route=route,
             work_evidence=selected,
-            summary=summary,
+            summary=_canonical_summary(
+                summary, selected.supporting_evidence, evidence.supporting_sources
+            ),
             selector=election.selector,
             relevant_input_identity=_relevant_input_identity(
                 request, evidence, capabilities
@@ -1427,6 +1500,16 @@ def _valid_fresh_evidence(value: object) -> bool:
         and value.retrieved_at.tzinfo is not None
         and isinstance(value.records, tuple)
         and all(isinstance(record, EvidenceRecord) for record in value.records)
+        and isinstance(value.supporting_sources, tuple)
+        and all(
+            isinstance(source, SupportingEvidenceSource)
+            for source in value.supporting_sources
+        )
+        and isinstance(value.supporting_records, tuple)
+        and all(
+            isinstance(record, SupportingEvidence)
+            for record in value.supporting_records
+        )
     )
 
 
@@ -1446,7 +1529,10 @@ def _valid_fresh_capabilities(value: object) -> bool:
     return True
 
 
-def _assessment_candidate(candidate: DynamicCandidate) -> AssessmentCandidate:
+def _assessment_candidate(
+    candidate: DynamicCandidate,
+    supporting_records: Sequence[SupportingEvidence],
+) -> AssessmentCandidate:
     settings = candidate.selector
     raw = "\0".join(
         (
@@ -1468,6 +1554,15 @@ def _assessment_candidate(candidate: DynamicCandidate) -> AssessmentCandidate:
         measurement_at=candidate.evidence.measurement_at,
         benchmark_version=candidate.evidence.benchmark_version,
         conditions=candidate.evidence.conditions,
+        supporting_evidence=tuple(
+            record
+            for record in supporting_records
+            if (
+                record.associated_copilot_model,
+                record.associated_copilot_effort,
+            )
+            == (settings.model, settings.reasoning_effort)
+        ),
     )
 
 
@@ -1609,6 +1704,30 @@ def _instant_or_none(value: datetime | None) -> str | None:
     return None if value is None else _instant(value)
 
 
+def _canonical_summary(
+    selector_summary: str,
+    evidence: tuple[SupportingEvidence, ...],
+    sources: tuple[SupportingEvidenceSource, ...],
+) -> str:
+    """Keep optional evidence visible through the existing record summary."""
+    if evidence:
+        details = ", ".join(
+            (
+                f"{record.benchmark_version} {record.score}% via {record.harness} "
+                f"{record.harness_version} for {record.source_model_identity}"
+            )
+            for record in evidence
+        )
+        return f"{selector_summary} Supporting evidence: {details}."
+    if sources:
+        details = ", ".join(
+            f"{source.source_identity} {source.status.value.replace('_', ' ')}"
+            for source in sources
+        )
+        return f"{selector_summary} Supporting evidence: {details}."
+    return selector_summary
+
+
 def _relevant_input_identity(
     request: RoutingRequest,
     evidence: FreshEvidence,
@@ -1633,6 +1752,29 @@ def _relevant_input_identity(
         )
         for record in evidence.records
     )
+    supporting_source_facts = sorted(
+        (
+            source.source_identity,
+            source.status.value,
+            _instant_or_none(source.retrieved_at),
+        )
+        for source in evidence.supporting_sources
+    )
+    supporting_facts = sorted(
+        (
+            record.source_identity,
+            record.source_model_identity,
+            record.associated_copilot_model,
+            record.associated_copilot_effort or "",
+            record.association_provenance,
+            str(record.score),
+            record.benchmark_version,
+            record.harness,
+            record.harness_version,
+            record.conditions,
+        )
+        for record in evidence.supporting_records
+    )
     capability_facts = sorted(
         (
             model.model,
@@ -1651,6 +1793,8 @@ def _relevant_input_identity(
         evidence.source_identity,
         request,
         evidence_facts,
+        supporting_source_facts,
+        supporting_facts,
         capability_facts,
         capacity_facts,
     )

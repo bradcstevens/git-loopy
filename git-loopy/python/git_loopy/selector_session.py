@@ -62,6 +62,11 @@ Index and output speed below are the leaderboard's public figures for a \
 public benchmark, not a measurement of how long this issue will take here. Do \
 not describe them as one, and do not invent a figure or a confidence that is \
 not given.\
+
+SWE-bench evidence supports the work-model assessment only. Artificial Analysis \
+Intelligence Index remains the selector-election authority. SWE-bench's public \
+resolved rate is benchmark evidence, not a probability that this issue will \
+succeed; do not average it with any other score.\
 """
 
 
@@ -93,6 +98,13 @@ def build_assessment_prompt(request: AssessmentRequest) -> str:
     sections += _fenced("ACCEPTANCE CRITERIA", request.acceptance_criteria)
     sections += _fenced("REPOSITORY CONTEXT", request.repository_context)
     sections += _fenced("LOCAL MEASUREMENTS", request.local_measurements)
+    sections += _fenced(
+        "OPTIONAL SUPPORTING SOURCE CHECKS",
+        tuple(
+            _supporting_source_line(source)
+            for source in request.supporting_sources
+        ),
+    )
     return "\n".join(sections)
 
 
@@ -132,7 +144,34 @@ def _candidate_payload(candidate: AssessmentCandidate) -> dict[str, Any]:
         ),
         "benchmark_version": candidate.benchmark_version,
         "conditions": candidate.conditions,
+        "supporting_evidence": [
+            {
+                "source": evidence.source_identity,
+                "source_model_identity": evidence.source_model_identity,
+                "association_provenance": evidence.association_provenance,
+                "swe_bench_verified_resolved": str(evidence.score),
+                "benchmark_version": evidence.benchmark_version,
+                "harness": evidence.harness,
+                "harness_version": evidence.harness_version,
+                "conditions": evidence.conditions,
+            }
+            for evidence in candidate.supporting_evidence
+        ],
     }
+
+
+def _supporting_source_line(source: Any) -> str:
+    retrieved_at = (
+        None if source.retrieved_at is None else source.retrieved_at.isoformat()
+    )
+    return json.dumps(
+        {
+            "source": source.source_identity,
+            "status": source.status.value,
+            "retrieved_at": retrieved_at,
+        },
+        sort_keys=True,
+    )
 
 
 class RoutingCostMeter:

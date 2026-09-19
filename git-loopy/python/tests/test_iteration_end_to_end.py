@@ -76,6 +76,7 @@ from git_loopy import settings
 from git_loopy import skill_install
 from git_loopy import sources as sources_module
 from git_loopy import static_route
+from git_loopy import swe_bench
 from git_loopy.static_route import RoutePolicy
 from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy.emit import EventEmitter
@@ -5637,6 +5638,60 @@ def test_the_decisions_provenance_is_persisted_before_the_work_starts(
     assert order.index("wrapper.routing.resolved") < order.index(
         "wrapper.pickup.bound"
     )
+
+
+def test_a_dynamic_run_carries_official_swe_bench_support_to_its_record(
+    tmp_path, monkeypatch
+) -> None:
+    """Optional supporting evidence reaches the actual assessment and projection."""
+
+    class _SupportingSource:
+        def __init__(self, *, associations: dict[str, str]) -> None:
+            assert associations == {"GPT Test (20260901)": "claude-opus-5@high"}
+
+        async def fetch(self) -> swe_bench.SWEbenchVerifiedResult:
+            return swe_bench.SWEbenchVerifiedResult(
+                source_identity=swe_bench.SWE_BENCH_VERIFIED_URL,
+                retrieved_at=datetime(2026, 9, 18, 12, tzinfo=timezone.utc),
+                records=(
+                    swe_bench.SWEbenchVerifiedRecord(
+                        source_identity=swe_bench.SWE_BENCH_VERIFIED_URL,
+                        source_model_identity="GPT Test (20260901)",
+                        associated_copilot_model="claude-opus-5",
+                        associated_copilot_effort="high",
+                        association_provenance=(
+                            "swe_bench_associations:GPT Test (20260901)"
+                        ),
+                        resolved=Decimal("72.4"),
+                        benchmark_version="SWE-bench Verified",
+                        harness="mini-SWE-agent",
+                        harness_version="2.4.1",
+                        conditions=(
+                            "reasoning_effort=high; evaluated_on=2026-09-01"
+                        ),
+                    ),
+                ),
+            )
+
+    monkeypatch.setattr(loop_module, "SWEbenchVerifiedSource", _SupportingSource)
+    _client, spied, exit_code = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        swe_bench_associations={"GPT Test (20260901)": "claude-opus-5@high"},
+    )
+
+    assert exit_code == 0
+    (candidate,) = [
+        candidate
+        for candidate in spied["assessments"][0][1].candidates
+        if candidate.model == "claude-opus-5"
+    ]
+    assert candidate.supporting_evidence[0].score == Decimal("72.4")
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    (record,) = [
+        event for event in events if event["type"] == "wrapper.routing.resolved"
+    ]
+    assert "SWE-bench Verified 72.4% via mini-SWE-agent 2.4.1" in record["summary"]
 
 
 def test_an_invalid_selector_answer_refuses_rather_than_falling_back(

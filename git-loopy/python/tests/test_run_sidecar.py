@@ -123,6 +123,7 @@ def test_a_detached_dynamic_run_carries_its_bounds_exactly() -> None:
             routing_credit_allowance=Decimal("0.1234567890123456789"),
             selector_concurrency=3,
             route_associations={"aa/opus-4.8": "claude-opus-4.8@max"},
+            swe_bench_associations={"GPT Test (20260901)": "gpt-test@high"},
         ),
         run_id="01K3CQ7VJ1GWQ9H8Q6SE2V1D5A",
         started_at_epoch_ms=1_780_000_123_456,
@@ -139,6 +140,9 @@ def test_a_detached_dynamic_run_carries_its_bounds_exactly() -> None:
     assert decoded.config.selector_concurrency == 3
     assert dict(decoded.config.route_associations) == {
         "aa/opus-4.8": "claude-opus-4.8@max"
+    }
+    assert dict(decoded.config.swe_bench_associations) == {
+        "GPT Test (20260901)": "gpt-test@high"
     }
 
 

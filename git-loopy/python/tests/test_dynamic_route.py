@@ -310,6 +310,87 @@ def test_dynamic_router_revalidates_unchanged_proposal_without_reassessment() ->
     assert recorded == [resolution]
 
 
+def test_dynamic_router_projects_supporting_evidence_without_changing_aa_election() -> (
+    None
+):
+    """A comparable SWE-bench result reaches the record but cannot elect a route."""
+    evidence, capabilities = _fresh_router_inputs(score="80")
+    supporting = dynamic_route.SupportingEvidence(
+        source_identity="https://www.swebench.com/",
+        source_model_identity="GPT Test (20260901)",
+        associated_copilot_model="work-model",
+        associated_copilot_effort="high",
+        association_provenance="swe_bench_associations:GPT Test (20260901)",
+        score=Decimal("72.4"),
+        benchmark_version="SWE-bench Verified",
+        harness="mini-SWE-agent",
+        harness_version="2.4.1",
+        conditions="reasoning_effort=high; evaluated_on=2026-09-01",
+    )
+    evidence = replace(
+        evidence,
+        supporting_sources=(
+            dynamic_route.SupportingEvidenceSource(
+                source_identity=supporting.source_identity,
+                status=dynamic_route.SupportingEvidenceStatus.AVAILABLE,
+                retrieved_at=evidence.retrieved_at,
+            ),
+        ),
+        supporting_records=(supporting,),
+    )
+    assessments: list[dynamic_route.AssessmentRequest] = []
+
+    async def fetch_evidence() -> dynamic_route.FreshEvidence:
+        return evidence
+
+    async def fetch_capabilities() -> dynamic_route.FreshHarnessCapabilities:
+        return capabilities
+
+    async def assess(
+        selector: dynamic_route.SelectorSettings,
+        request: dynamic_route.AssessmentRequest,
+    ) -> dynamic_route.SelectorCallResult:
+        del selector
+        assessments.append(request)
+        return dynamic_route.SelectorCallResult(
+            output={
+                "candidate_identity": request.candidates[0].stable_identity,
+                "summary": "AA elects the route; SWE-bench is supporting evidence.",
+            },
+            routing_credits=Decimal("0.25"),
+        )
+
+    recorded: list[dynamic_route.DynamicRouteDecision] = []
+
+    async def record(resolution: dynamic_route.DynamicRouteDecision) -> None:
+        recorded.append(resolution)
+
+    router = dynamic_route.DynamicRouter(
+        evidence_fetch=fetch_evidence,
+        capabilities_fetch=fetch_capabilities,
+        selector_assess=assess,
+        recorder=record,
+        admission_ledger=dynamic_route.RoutingAdmissionLedger(
+            deadline_seconds=30,
+            routing_credit_allowance=Decimal("1"),
+            selector_concurrency=1,
+        ),
+    )
+    request = _routing_request()
+
+    proposal = asyncio.run(router.prepare(request))
+    assert isinstance(proposal, dynamic_route.RoutingProposal)
+    assert proposal.selector.evidence.intelligence_index == Decimal("80")
+    assert assessments[0].candidates[0].supporting_evidence == (supporting,)
+
+    decision = asyncio.run(router.bind(proposal, request))
+
+    assert isinstance(decision, dynamic_route.DynamicRouteDecision)
+    assert decision.route.model == "work-model"
+    assert "SWE-bench Verified 72.4% via mini-SWE-agent 2.4.1" in decision.summary
+    assert recorded == [decision]
+
+
 def _fresh_router_inputs(
     *, score: str = "80", policy_state: str = "enabled"
 ) -> tuple[dynamic_route.FreshEvidence, dynamic_route.FreshHarnessCapabilities]:
@@ -1425,6 +1506,7 @@ def test_prerequisites_resolve_from_config_and_the_environment() -> None:
     assert resolved.routing_credit_allowance == Decimal("2.50")
     assert resolved.selector_concurrency == 2
     assert resolved.associations == {("aa/opus", "max"): "claude-opus-4.8"}
+    assert resolved.swe_bench_associations == {}
 
 
 def test_a_missing_prerequisite_is_named_without_echoing_the_key() -> None:
