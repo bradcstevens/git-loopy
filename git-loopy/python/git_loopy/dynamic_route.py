@@ -23,7 +23,7 @@ from enum import Enum
 from numbers import Integral
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
-from git_loopy.events import format_timestamp
+from git_loopy.events import ROUTE_ELECTED, ROUTE_REVALIDATED, format_timestamp
 from git_loopy.static_route import (
     BASE_CONTEXT_TIER,
     LONG_CONTEXT_TIER,
@@ -53,8 +53,11 @@ __all__ = [
     "RoutingUnavailableReason",
     "RoutingUnavailable",
     "WorkRoute",
+    "ROUTE_ELECTED",
+    "ROUTE_REVALIDATED",
     "RoutingProposal",
     "DynamicRouteDecision",
+    "ReusableRoute",
     "routing_provenance_payload",
     "RoutingPrerequisiteError",
     "ARTIFICIAL_ANALYSIS_API_KEY_ENV",
@@ -1108,6 +1111,11 @@ class WorkRoute:
     reasoning_effort: str | None
     context_tier: str
 
+    @property
+    def triple(self) -> tuple[str, str | None, str]:
+        """The configuration, as the one value a comparison may use."""
+        return (self.model, self.reasoning_effort, self.context_tier)
+
 
 @dataclass(frozen=True)
 class RoutingProposal:
@@ -1168,9 +1176,83 @@ class DynamicRouteDecision:
     prior_attempts: tuple[PriorAttempt, ...] = ()
     repeat_justification: str | None = None
 
+    reused_proposal_id: str | None = None
+    """The earlier Run's decision this one revalidated, if any (#565).
+
+    Set only where no selector was called: a **Reusable route** whose verified
+    inputs still matched. It is the *pointer* AC3 asks the new validation to
+    carry, and it points at a decision rather than at a route so a chain of
+    revalidations stays walkable back to the election that actually happened.
+    """
+
+    reused_validated_at: datetime | None = None
+    """When that earlier decision was validated, verbatim from its own record.
+
+    Beside :attr:`validated_at` rather than in place of it, which is the whole
+    of "freshly validated reuse is distinguishable from an unverified stale
+    result" (AC8): one instant is when a selector last elected this route, the
+    other is when the sources were last read and found to still say so.
+    """
+
     @property
     def available(self) -> bool:
         return True
+
+    @property
+    def reused(self) -> bool:
+        """Whether this decision reused an earlier one instead of electing."""
+        return self.reused_proposal_id is not None
+
+
+@dataclass(frozen=True)
+class ReusableRoute:
+    """One earlier Run's final decision, read back for revalidation (#565).
+
+    Derived state, and deliberately not authority: it names a route and the
+    verified input identity that route was elected under, and nothing here may
+    reach a work session until :meth:`DynamicRouter.rebind` has re-read both
+    live sources and found them to still say the same thing. ADR-0057 rules
+    that reusable state comes from canonical event history rather than from a
+    tracker label, a committed table, or a second authoritative store — so this
+    is a *projection* of a ``wrapper.routing.resolved`` record, built by
+    :mod:`git_loopy.route_reuse`, exactly as a
+    :class:`RoutingRequest` is a projection of a Pool item built by
+    :mod:`git_loopy.routing_input`.
+
+    :attr:`selector_model`, :attr:`selector_reasoning_effort` and
+    :attr:`selector_context_tier` are carried to be *checked*, never to be
+    used. A matching identity already implies the fresh election elects the
+    same selector, so a record that disagrees is a record that did not come
+    from these inputs — forged, corrupted, or written by an identity algorithm
+    that no longer means what it meant. Reuse refuses it rather than trusting
+    the half of it that still parses.
+
+    :attr:`proposal_id` and :attr:`validated_at` name the **original
+    decision** — the election a selector was actually paid for — and not the
+    row this was projected from. Where that row is itself a revalidation they
+    are its own origin, carried through unchanged, so a chain of reuse stays
+    one hop deep and the original survives its log ageing out of the window.
+    """
+
+    issue_ref: int | str | None
+    proposal_id: str
+    route: WorkRoute
+    summary: str
+    selector_model: str
+    selector_reasoning_effort: str | None
+    selector_context_tier: str
+    relevant_input_identity: str
+    validated_at: datetime
+    repeat_justification: str | None = None
+
+    @property
+    def selector_triple(self) -> tuple[str, str | None, str]:
+        """The selector settings the earlier record claims elected this route."""
+        return (
+            self.selector_model,
+            self.selector_reasoning_effort,
+            self.selector_context_tier,
+        )
 
 
 class RoutingPrerequisiteError(RuntimeError):
@@ -1369,7 +1451,120 @@ class DynamicRouter:
             reassessed = True
             superseded = proposal.proposal_id
             self._proposals.pop(proposal.proposal_id, None)
-        resolution = DynamicRouteDecision(
+        resolution = self._decision_for(
+            active,
+            evidence,
+            capabilities,
+            reassessed=reassessed,
+            superseded_proposal_id=superseded,
+        )
+        self._proposals.pop(active.proposal_id, None)
+        return await self._recorded(resolution)
+
+    async def rebind(
+        self, reusable: Sequence[ReusableRoute], request: RoutingRequest
+    ) -> DynamicRouteDecision | RoutingUnavailable:
+        """Revalidate an earlier Run's decision, or decide again from evidence.
+
+        The cross-Run half of ADR-0057's "proposal, binding, and reuse" (#565).
+        :meth:`bind` validates a proposal this Run prepared; this validates one
+        a *previous* Run recorded, and the two do the same work for the same
+        reason — the proposal is not authority, the fresh check is.
+
+        **Both live sources are read first, always.** The saving reuse buys is
+        the selector call, never the freshness check: a route that is not
+        re-derivable from current evidence and current eligibility does not
+        start work, exactly as under :meth:`bind`.
+
+        **A match must be a match on every relevant input.** The comparison is
+        :func:`_relevant_input_identity`, so the issue and its criteria, the
+        settled **Task type**, the repository context, the lifecycle position,
+        the attempt history, every admitted evidence fact and every capability
+        and capacity fact all take part. Anything that moved prevents reuse and
+        this call decides again through the ordinary admission ledger — which
+        is what keeps "obtain a new valid decision" inside the Run's authorized
+        routing limits rather than beside them.
+
+        **Several candidate records, because attempts differ.** An issue worked
+        twice in one Run leaves two records with two identities, and the newest
+        is the retry — which a later Run's first **Pickup** can never match.
+        Handing the whole bounded set over and matching on identity reuses the
+        one that actually describes this Run's inputs instead of the one that
+        happens to be last.
+
+        One source read rather than :meth:`prepare`'s and :meth:`bind`'s two,
+        because preparation and Pickup are the same instant here: the proposal
+        being validated was made in another Run, and there is no interval
+        between this Run preparing it and this Run binding it in which the
+        sources could have moved.
+
+        Args:
+            reusable: The **Reusable routes** derived for this issue, newest
+                first. An empty sequence is a decision from scratch.
+            request: This Pickup's freshly built assessment input.
+        """
+        self._discard_expired_proposals()
+        inputs = await self._fetch_inputs()
+        if isinstance(inputs, RoutingUnavailable):
+            return inputs
+        evidence, capabilities = inputs
+        identity = _relevant_input_identity(request, evidence, capabilities)
+        for candidate in reusable:
+            if candidate.relevant_input_identity != identity:
+                continue
+            verified = _verified_reuse(candidate, request, evidence, capabilities)
+            if verified is None:
+                continue
+            selector, work_evidence = verified
+            return await self._recorded(
+                DynamicRouteDecision(
+                    proposal_id=uuid.uuid4().hex,
+                    issue_ref=request.issue_ref,
+                    route=candidate.route,
+                    work_evidence=work_evidence,
+                    summary=candidate.summary,
+                    selector=selector,
+                    relevant_input_identity=identity,
+                    validated_at=self._aware_now(),
+                    evidence_retrieved_at=evidence.retrieved_at,
+                    capabilities_retrieved_at=capabilities.retrieved_at,
+                    revalidated=True,
+                    reassessed=False,
+                    superseded_proposal_id=None,
+                    usage=self._ledger.snapshot(),
+                    lifecycle_position=request.lifecycle_position,
+                    prior_attempts=request.prior_attempts,
+                    repeat_justification=candidate.repeat_justification,
+                    reused_proposal_id=candidate.proposal_id,
+                    reused_validated_at=candidate.validated_at,
+                )
+            )
+        replacement = await self._assess(request, evidence, capabilities)
+        if isinstance(replacement, RoutingUnavailable):
+            return replacement
+        self._proposals.pop(replacement.proposal_id, None)
+        return await self._recorded(
+            self._decision_for(
+                replacement,
+                evidence,
+                capabilities,
+                reassessed=bool(reusable),
+                superseded_proposal_id=(
+                    reusable[0].proposal_id if reusable else None
+                ),
+            )
+        )
+
+    def _decision_for(
+        self,
+        active: RoutingProposal,
+        evidence: FreshEvidence,
+        capabilities: FreshHarnessCapabilities,
+        *,
+        reassessed: bool,
+        superseded_proposal_id: str | None,
+    ) -> DynamicRouteDecision:
+        return DynamicRouteDecision(
             proposal_id=active.proposal_id,
             issue_ref=active.issue_ref,
             route=active.route,
@@ -1382,20 +1577,24 @@ class DynamicRouter:
             capabilities_retrieved_at=capabilities.retrieved_at,
             revalidated=True,
             reassessed=reassessed,
-            superseded_proposal_id=superseded,
+            superseded_proposal_id=superseded_proposal_id,
             usage=self._ledger.snapshot(),
             lifecycle_position=active.lifecycle_position,
             prior_attempts=active.prior_attempts,
             repeat_justification=active.repeat_justification,
         )
-        self._proposals.pop(active.proposal_id, None)
+
+    async def _recorded(
+        self, decision: DynamicRouteDecision
+    ) -> DynamicRouteDecision | RoutingUnavailable:
+        """Persist provenance before the route may start work, or refuse it."""
         try:
-            recorded = await self._recorder(resolution)
+            recorded = await self._recorder(decision)
         except Exception:
             return self._unavailable(RoutingUnavailableReason.RECORDER_FAILED)
         if recorded is False:
             return self._unavailable(RoutingUnavailableReason.RECORDER_FAILED)
-        return resolution
+        return decision
 
     async def record_classification(self, routing_credits: Decimal) -> None:
         """Account a **Task type** classification against this Run's allowance.
@@ -1541,6 +1740,54 @@ class DynamicRouter:
 
     def _unavailable(self, reason: RoutingUnavailableReason) -> RoutingUnavailable:
         return RoutingUnavailable(reason=reason, usage=self._ledger.snapshot())
+
+
+def _verified_reuse(
+    reusable: ReusableRoute,
+    request: RoutingRequest,
+    evidence: FreshEvidence,
+    capabilities: FreshHarnessCapabilities,
+) -> tuple[SelectorSettings, AssessmentCandidate] | None:
+    """Re-derive one reusable route from freshly read sources, or refuse it.
+
+    The whole of "a cache cannot carry a previously available model past
+    current capability or policy checks" (#565, AC7). A matching input identity
+    says the *inputs* are unchanged; it says nothing about the route written
+    beside it, which a corrupt log, a hand edit, or a Runner bug could have left
+    naming a configuration this harness will not run. So the route has to be
+    found again in the freshly elected candidate set at exactly its own effort
+    and tier — the same admission every candidate passes at election, applied
+    to the one being reused.
+
+    Answering the selector settings and the elected candidate rather than a
+    bare ``True`` is what keeps the new record honest: the provenance it
+    publishes is recomputed from the read that just happened, not copied out of
+    a record nobody re-checked.
+    """
+    election = elect_selector(
+        evidence.records,
+        capabilities.capabilities,
+        request.bounded_input_tokens,
+        tier_capacities=capabilities.tier_capacities,
+    )
+    selector = election.selector
+    if selector is None:
+        return None
+    if (
+        selector.model,
+        selector.reasoning_effort,
+        selector.context_tier,
+    ) != reusable.selector_triple:
+        return None
+    for candidate in election.candidates:
+        assessed = _assessment_candidate(candidate)
+        if (
+            assessed.model,
+            assessed.reasoning_effort,
+            assessed.context_tier,
+        ) == reusable.route.triple:
+            return selector, assessed
+    return None
 
 
 def _valid_fresh_evidence(value: object) -> bool:
@@ -1749,6 +1996,12 @@ def routing_provenance_payload(decision: DynamicRouteDecision) -> dict[str, Any]
     - **Absent prior evidence is an empty list, not a missing key.** A consumer
       has to be able to tell a first attempt from a Runner that did not record
       what came before.
+    - **The record is the reusable state** (#565). ``relevant_input_identity``
+      is what a later Run compares its own freshly read inputs against, and
+      ``routing_reuse`` says how *this* route was arrived at — ``elected`` by a
+      selector call, or ``revalidated`` from the earlier decision named in
+      ``reused_proposal_id``. There is no second store: a **Reusable route** is
+      derived from these records or it does not exist.
     """
     evidence = decision.work_evidence
     return {
@@ -1787,6 +2040,12 @@ def routing_provenance_payload(decision: DynamicRouteDecision) -> dict[str, Any]
         "evidence_retrieved_at": _instant(decision.evidence_retrieved_at),
         "capabilities_retrieved_at": _instant(decision.capabilities_retrieved_at),
         "validated_at": _instant(decision.validated_at),
+        "relevant_input_identity": decision.relevant_input_identity,
+        "routing_reuse": (
+            ROUTE_REVALIDATED if decision.reused else ROUTE_ELECTED
+        ),
+        "reused_proposal_id": decision.reused_proposal_id,
+        "reused_validated_at": _instant_or_none(decision.reused_validated_at),
         "revalidated": decision.revalidated,
         "reassessed": decision.reassessed,
         "superseded_proposal_id": decision.superseded_proposal_id,

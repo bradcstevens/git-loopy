@@ -84,6 +84,8 @@ __all__ = [
     "WRAPPER_PICKUP_BOUND",
     "WRAPPER_ROUTING_RESOLVED",
     "WRAPPER_ROUTING_DELIVERY",
+    "ROUTE_ELECTED",
+    "ROUTE_REVALIDATED",
     "WRAPPER_PICKUP_SKIPPED",
     "WRAPPER_CHECKPOINT_RECORDED",
     "WRAPPER_COMMIT_RECORDED",
@@ -304,6 +306,14 @@ WRAPPER_PICKUP_SKIPPED = "wrapper.pickup.skipped"
 # refuses the route instead of running it unrecorded.
 WRAPPER_ROUTING_RESOLVED = "wrapper.routing.resolved"
 WRAPPER_ROUTING_DELIVERY = "wrapper.routing.delivery"
+# How the route on one such record was arrived at: a selector call elected it,
+# or a prior Run's decision was revalidated against freshly read evidence and
+# eligibility without one (#565, ADR-0057). These live beside the event type
+# they are a field of, so the writer, the CLI readback and the reuse projection
+# all spell the wire the same way — two answers to "is this a reuse?" is how an
+# assessment-invalidation loop comes back.
+ROUTE_ELECTED = "elected"
+ROUTE_REVALIDATED = "revalidated"
 WRAPPER_CHECKPOINT_RECORDED = "wrapper.checkpoint.recorded"
 WRAPPER_COMMIT_RECORDED = "wrapper.commit.recorded"
 # Emitted once per iteration when the runner's auto-push (ADR-0004) succeeds in

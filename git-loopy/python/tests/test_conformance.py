@@ -922,6 +922,12 @@ _NOT_EVENT_TYPES = frozenset(
         # the cancel rung admits. Pinned instead by
         # ``test_wind_down_vocabulary_has_one_declaration``.
         "WIND_DOWN_CANCEL_CAUSE",
+        # The two ``routing_reuse`` spellings (#565). Payload values of
+        # ``wrapper.routing.resolved``, exported from ``events`` so the writer,
+        # the CLI readback and the reuse projection cannot drift apart. Pinned
+        # instead by the ``reuse`` clause of that type's payload contract.
+        "ROUTE_ELECTED",
+        "ROUTE_REVALIDATED",
     }
 )
 
@@ -1768,7 +1774,7 @@ def test_the_production_router_projects_the_pinned_routing_provenance() -> None:
         conditions=None,
     )
     decision = dynamic_route.DynamicRouteDecision(
-        proposal_id="p-0001",
+        proposal_id=pinned["proposal_id"],
         issue_ref=pinned["issue"],
         route=dynamic_route.WorkRoute(
             model=pinned["model"],
@@ -1778,9 +1784,9 @@ def test_the_production_router_projects_the_pinned_routing_provenance() -> None:
         work_evidence=candidate,
         summary=pinned["summary"],
         selector=dynamic_route.SelectorSettings(
-            model="gpt-5.4-mini",
-            reasoning_effort="low",
-            context_tier="default",
+            model=pinned["selector_model"],
+            reasoning_effort=pinned["selector_effort"],
+            context_tier=pinned["selector_context_tier"],
             evidence=dynamic_route.EvidenceRecord(
                 source_identity=pinned["evidence_source"],
                 retrieved_at=datetime(2026, 5, 16, tzinfo=timezone.utc),
@@ -1794,7 +1800,7 @@ def test_the_production_router_projects_the_pinned_routing_provenance() -> None:
                 conditions=None,
             ),
         ),
-        relevant_input_identity="e" * 64,
+        relevant_input_identity=pinned["relevant_input_identity"],
         lifecycle_position=pinned["lifecycle_position"],
         prior_attempts=tuple(
             dynamic_route.PriorAttempt(
@@ -1807,16 +1813,19 @@ def test_the_production_router_projects_the_pinned_routing_provenance() -> None:
             for row in pinned["prior_attempts"]
         ),
         repeat_justification=pinned["repeat_justification"],
-        validated_at=datetime(2026, 5, 16, 0, 0, 2, 150000, tzinfo=timezone.utc),
+        validated_at=datetime.fromisoformat(
+            pinned["validated_at"].replace("Z", "+00:00")
+        ),
         evidence_retrieved_at=datetime.fromisoformat(
             pinned["evidence_retrieved_at"].replace("Z", "+00:00")
         ),
         capabilities_retrieved_at=datetime.fromisoformat(
             pinned["capabilities_retrieved_at"].replace("Z", "+00:00")
         ),
-        revalidated=True,
-        reassessed=False,
-        superseded_proposal_id=None,
+        revalidated=pinned["revalidated"],
+        reassessed=pinned["reassessed"],
+        superseded_proposal_id=pinned["superseded_proposal_id"],
+        reused_proposal_id=pinned["reused_proposal_id"],
         usage=dynamic_route.RoutingUsage(
             routing_credits=Decimal(pinned["routing_credits"]),
             classification_attempts=0,
@@ -1842,6 +1851,25 @@ def test_the_production_router_projects_the_pinned_routing_provenance() -> None:
     # key the Runner quietly dropped -- AC2's explicit unknowns.
     for key in ("measurement_at", "benchmark_version", "conditions"):
         assert key in projected and projected[key] is None, key
+
+
+def test_the_reuse_clause_declares_the_literals_the_runner_writes() -> None:
+    """#565: the ``routing_reuse`` vocabulary is closed, and this is where.
+
+    ``ROUTE_ELECTED`` and ``ROUTE_REVALIDATED`` are payload values rather than
+    event types, so ``event_types`` deliberately does not carry them — which
+    would leave two spellings a native port reads off nothing at all. The
+    contract's own ``reuse`` clause is their declaration, and this is what
+    keeps it honest when one of them is renamed in Python.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_ROUTING_RESOLVED
+    ]
+    clause = contract["reuse"]
+    assert f"`{events_module.ROUTE_ELECTED}`" in clause
+    assert f"`{events_module.ROUTE_REVALIDATED}`" in clause
+    for key in ("reused_proposal_id", "reused_validated_at", "relevant_input_identity"):
+        assert key in clause, key
 
 
 def test_rolling_stream_places_release_advance_after_integration_publication() -> None:

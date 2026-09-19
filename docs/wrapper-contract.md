@@ -1710,6 +1710,27 @@ election an answer an operator can audit rather than a plausible-looking guess.
   were: an **Iteration** that advanced its issue reaches no ending and spends no attempt, yet is a
   real earlier attempt the next election is told about.
 
+- **A later Run may revalidate a decision, and may never replay one.** An Orchestrator MAY reuse a
+  routing result its own earlier Run recorded instead of electing again, but only after it has read
+  the live sources fresh and found every relevant input — the issue and its context, the policy, the
+  model's current capability and eligibility, the evidence, and the attempt history — unchanged. The
+  reusable view MUST be *derived* from the Orchestrator's own canonical event history; it MUST NOT be
+  a second authoritative store, a committed table, or anything read back from a tracker comment or a
+  **Route label**, which §14.5 already forbids as a routing input. A reused result MUST NOT authorize
+  work or take a **Lease** on its own, MUST NOT carry a model past a current capability or policy
+  check, MUST NOT manufacture an attempt or rewrite billing provenance, and MUST still yield to a
+  Static or run-wide route. Where anything relevant moved, the Orchestrator elects again inside the
+  same routing limits, or refuses the work under the rule above — a route it could not revalidate is
+  never a route it may assume.
+- **A revalidation is recorded, and says what it reused.** Reuse MUST write its own
+  `wrapper.routing.resolved` record naming the original decision, the selector settings and the
+  evidence provenance it re-checked, so a CLI or **Dashboard** readback can tell freshly validated
+  reuse from a new assessment and from a recorded route that stopped validating — from the canonical
+  records rather than from a recomputed explanation. Nothing routing itself writes — that record, its
+  timestamps, a published Route comment, an owned Route label — may reach the compared inputs. An
+  Orchestrator whose own output invalidates its next comparison reassesses every Run and has
+  implemented no reuse at all.
+
 The policy's vocabulary is pinned by
 [`routing-resolution.json`](../git-loopy/conformance/routing-resolution.json) (`static_route_policies`,
 the `dynamic` **Routing source**, the case in which an elected route outranks every label-derived
@@ -1728,6 +1749,14 @@ The Dashboard needs no policy-aware branch — it renders the elected triple off
 **Dynamic routing is off by default and stays off until an operator selects it.** An Orchestrator
 MUST NOT enable it by inference from the presence of a key, an association table, or any other
 prerequisite.
+
+**Reuse is local to the clone that recorded it.** The canonical history it derives from is the
+Orchestrator's own Run logs, so reuse never crosses a machine, a checkout, or an operator — two
+clones of one repository each elect once and then each revalidate their own decision. This is a
+boundary rather than a gap: a shared reusable store would be the second route authority §14.5
+exists to prevent, and an event history is a record of what *this* Orchestrator did. A Run whose
+history is absent, pruned or unreadable therefore elects afresh and says so; that is the ordinary
+case every Run before reuse existed was already in, and it MUST NOT refuse a **Pickup**.
 
 ### 14.5 Route publication (contract 2.9)
 

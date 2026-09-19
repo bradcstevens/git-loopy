@@ -1774,6 +1774,7 @@ def test_a_prior_outcome_reaches_the_selector_and_supersedes_its_proposal() -> N
 def _repeat_router(
     outputs: list[object],
     assessments: list[dynamic_route.AssessmentRequest],
+    recorded: list[dynamic_route.DynamicRouteDecision] | None = None,
 ) -> dynamic_route.DynamicRouter:
     evidence, capabilities = _fresh_router_inputs(score="80")
 
@@ -1794,7 +1795,8 @@ def _repeat_router(
         )
 
     async def record(decision: dynamic_route.DynamicRouteDecision) -> None:
-        del decision
+        if recorded is not None:
+            recorded.append(decision)
 
     return dynamic_route.DynamicRouter(
         evidence_fetch=fetch_evidence,
@@ -2017,3 +2019,325 @@ def test_a_first_attempts_record_reports_no_prior_evidence_rather_than_omitting_
     assert payload["attempt"] == 1
     assert payload["prior_attempts"] == []
     assert payload["repeat_justification"] is None
+
+
+def _elected_decision(
+    request: dynamic_route.RoutingRequest | None = None,
+) -> dynamic_route.DynamicRouteDecision:
+    """Drive a real router to one freshly elected decision over scripted ports."""
+    routing_request = _routing_request() if request is None else request
+    assessments: list[dynamic_route.AssessmentRequest] = []
+    probe = _repeat_router([{"candidate_identity": "?", "summary": "x"}], assessments)
+    asyncio.run(probe.prepare(routing_request))
+    answer = {
+        "candidate_identity": assessments[0].candidates[0].stable_identity,
+        "summary": "Highest published index among eligible configurations.",
+    }
+    router = _repeat_router([answer, answer], [])
+    proposal = asyncio.run(router.prepare(routing_request))
+    assert isinstance(proposal, dynamic_route.RoutingProposal)
+    decision = asyncio.run(router.bind(proposal, routing_request))
+    assert isinstance(decision, dynamic_route.DynamicRouteDecision)
+    return decision
+
+
+def test_an_elected_record_carries_what_a_later_run_would_revalidate() -> None:
+    """#565 AC1/AC8: the record is the reusable state, and says it was elected.
+
+    A **Reusable route** is *derived* from canonical Run events rather than kept
+    in a second store, so whatever a later Run needs to compare has to be on the
+    record the first Run wrote. That is the verified input identity: without it
+    a later Run can read back a route and has no way to establish the inputs
+    still match, which is the whole of ADR-0057's reuse precondition.
+
+    ``routing_reuse`` is on every record and not only on a reused one, for the
+    reason ``prior_attempts`` is an empty list rather than a missing key: a
+    consumer has to be able to tell "a selector elected this" from "a Runner
+    that does not report how it got here".
+    """
+    decision = _elected_decision()
+
+    payload = dynamic_route.routing_provenance_payload(decision)
+
+    assert payload["relevant_input_identity"] == decision.relevant_input_identity
+    assert payload["routing_reuse"] == "elected"
+    assert payload["reused_proposal_id"] is None
+    assert payload["reused_validated_at"] is None
+    assert payload["selector_attempts"] == 1
+    assert json.loads(json.dumps(payload)) == payload
+
+
+def _reusable_from(
+    decision: dynamic_route.DynamicRouteDecision,
+) -> dynamic_route.ReusableRoute:
+    """What a later Run reads back out of one recorded decision."""
+    return dynamic_route.ReusableRoute(
+        issue_ref=decision.issue_ref,
+        proposal_id=decision.proposal_id,
+        route=decision.route,
+        summary=decision.summary,
+        selector_model=decision.selector.model,
+        selector_reasoning_effort=decision.selector.reasoning_effort,
+        selector_context_tier=decision.selector.context_tier,
+        relevant_input_identity=decision.relevant_input_identity,
+        validated_at=decision.validated_at,
+    )
+
+
+def test_a_matching_reusable_route_is_revalidated_without_a_selector_call() -> None:
+    """#565 AC1/AC3: fresh checks, no second selector call, one new validation.
+
+    The later Run still reads *both* live sources before it uses anything — the
+    saving ADR-0057 permits is the selector call, never the freshness check.
+    What makes that safe is that :func:`elect_selector` is pure: a matching
+    verified input identity means this Run's election would return the same
+    selector over the same candidate set, so the record's selector settings and
+    evidence provenance are recomputed from the fresh read rather than copied
+    out of the old record, and the old record's own selector triple is only
+    ever a check on that.
+    """
+    request = _routing_request()
+    first_run = _elected_decision(request)
+    reusable = _reusable_from(first_run)
+
+    assessments: list[dynamic_route.AssessmentRequest] = []
+    recorded: list[dynamic_route.DynamicRouteDecision] = []
+    later_run = _repeat_router([], assessments, recorded)
+
+    decision = asyncio.run(later_run.rebind((reusable,), request))
+
+    assert isinstance(decision, dynamic_route.DynamicRouteDecision)
+    assert assessments == []
+    assert decision.usage.selector_attempts == 0
+    assert decision.usage.routing_credits == Decimal("0")
+    assert decision.route == first_run.route
+    assert decision.selector == first_run.selector
+    assert decision.work_evidence == first_run.work_evidence
+    assert decision.reused is True
+    assert decision.reused_proposal_id == first_run.proposal_id
+    assert decision.reused_validated_at == first_run.validated_at
+    assert decision.proposal_id != first_run.proposal_id
+    assert decision.revalidated is True
+    assert decision.reassessed is False
+    assert recorded == [decision]
+
+    payload = dynamic_route.routing_provenance_payload(decision)
+    assert payload["routing_reuse"] == "revalidated"
+    assert payload["selector_attempts"] == 0
+
+
+def test_a_changed_relevant_input_decides_again_instead_of_reusing() -> None:
+    """#565 AC2: anything relevant that moved prevents reuse.
+
+    The comparison is the same verified input identity :meth:`bind` revalidates
+    a proposal against, so an edited issue, a reclassified **Task type**, a new
+    attempt ending, a moved score and a withdrawn model all prevent reuse by
+    the same mechanism rather than by five separate checks somebody has to
+    remember to add.
+    """
+    first_run = _elected_decision(_routing_request())
+    reusable = _reusable_from(first_run)
+    edited = replace(_routing_request(), issue="Issue #561, with the scope halved")
+
+    assessments: list[dynamic_route.AssessmentRequest] = []
+    recorded: list[dynamic_route.DynamicRouteDecision] = []
+    probe: list[dynamic_route.AssessmentRequest] = []
+    asyncio.run(
+        _repeat_router([{"candidate_identity": "?", "summary": "x"}], probe).prepare(
+            edited
+        )
+    )
+    later_run = _repeat_router(
+        [
+            {
+                "candidate_identity": probe[0].candidates[0].stable_identity,
+                "summary": "Reassessed against the edited issue.",
+            }
+        ],
+        assessments,
+        recorded,
+    )
+
+    decision = asyncio.run(later_run.rebind((reusable,), edited))
+
+    assert isinstance(decision, dynamic_route.DynamicRouteDecision)
+    assert len(assessments) == 1
+    assert decision.reused is False
+    assert decision.reassessed is True
+    assert decision.superseded_proposal_id == first_run.proposal_id
+    assert decision.summary == "Reassessed against the edited issue."
+    assert decision.usage.selector_attempts == 1
+    assert recorded == [decision]
+    assert dynamic_route.routing_provenance_payload(decision)["routing_reuse"] == (
+        "elected"
+    )
+
+
+def test_a_replayed_record_cannot_carry_a_route_the_harness_no_longer_admits() -> None:
+    """#565 AC7: a matching identity is not permission to run what it names.
+
+    The identity attests to the *inputs*. The route sits beside it on the same
+    record, and a corrupt log, a hand edit or a Runner bug can leave those two
+    disagreeing — which is the only way a replay could smuggle a withdrawn
+    model past a capability check, so it is the case the guard has to cover.
+    Both halves are checked: the work route must still be an admitted candidate
+    at exactly its own effort and tier, and the selector the record claims
+    elected it must still be the one this evidence elects.
+    """
+    first_run = _elected_decision(_routing_request())
+    genuine = _reusable_from(first_run)
+    forged_route = replace(
+        genuine,
+        route=dynamic_route.WorkRoute(
+            model="withdrawn-model", reasoning_effort="high", context_tier="default"
+        ),
+    )
+    forged_selector = replace(genuine, selector_model="withdrawn-model")
+
+    for forgery in (forged_route, forged_selector):
+        assessments: list[dynamic_route.AssessmentRequest] = []
+        probe: list[dynamic_route.AssessmentRequest] = []
+        asyncio.run(
+            _repeat_router(
+                [{"candidate_identity": "?", "summary": "x"}], probe
+            ).prepare(_routing_request())
+        )
+        later_run = _repeat_router(
+            [
+                {
+                    "candidate_identity": probe[0].candidates[0].stable_identity,
+                    "summary": "Elected afresh rather than replayed.",
+                }
+            ],
+            assessments,
+        )
+
+        decision = asyncio.run(later_run.rebind((forgery,), _routing_request()))
+
+        assert isinstance(decision, dynamic_route.DynamicRouteDecision)
+        assert decision.route.model == "work-model"
+        assert decision.reused is False
+        assert len(assessments) == 1
+
+
+def test_an_exhausted_allowance_refuses_rather_than_reusing_a_changed_input() -> None:
+    """#565 AC2/AC7: reuse is not a way around the Run's routing limits.
+
+    A changed input needs a new decision, a new decision needs a selector call,
+    and a selector call needs admission. Answering the old route instead would
+    be exactly the silent stale fallback ADR-0057 rules out, dressed up as a
+    saving.
+    """
+    first_run = _elected_decision(_routing_request())
+    reusable = _reusable_from(first_run)
+    evidence, capabilities = _fresh_router_inputs(score="80")
+
+    async def fetch_evidence() -> dynamic_route.FreshEvidence:
+        return evidence
+
+    async def fetch_capabilities() -> dynamic_route.FreshHarnessCapabilities:
+        return capabilities
+
+    async def assess(
+        selector: dynamic_route.SelectorSettings,
+        request: dynamic_route.AssessmentRequest,
+    ) -> dynamic_route.SelectorCallResult:
+        del selector, request
+        raise AssertionError("an exhausted allowance admits no selector call")
+
+    async def record(decision: dynamic_route.DynamicRouteDecision) -> None:
+        del decision
+        raise AssertionError("a refused route is never recorded")
+
+    ledger = dynamic_route.RoutingAdmissionLedger(
+        deadline_seconds=30,
+        routing_credit_allowance=Decimal("0.1"),
+        selector_concurrency=1,
+    )
+    asyncio.run(ledger.record_classification(Decimal("0.2")))
+    router = dynamic_route.DynamicRouter(
+        evidence_fetch=fetch_evidence,
+        capabilities_fetch=fetch_capabilities,
+        selector_assess=assess,
+        recorder=record,
+        admission_ledger=ledger,
+    )
+    edited = replace(_routing_request(), issue="Issue #561, rewritten")
+
+    result = asyncio.run(router.rebind((reusable,), edited))
+
+    assert isinstance(result, dynamic_route.RoutingUnavailable)
+    assert result.reason is dynamic_route.RoutingUnavailableReason.QUOTA_EXHAUSTED
+
+
+def test_a_reuse_that_cannot_be_recorded_locally_starts_no_work() -> None:
+    """#565 AC5: reuse is not a way around the record that authorizes work.
+
+    ADR-0057 makes the local provenance record the thing that lets a route open
+    a session, and a reuse is cheaper by exactly one selector call — not by one
+    guarantee. A **Reusable route** whose own revalidation cannot be written is
+    therefore refused the same way a fresh election is, rather than opening a
+    session on a decision nothing recorded.
+    """
+    evidence, capabilities = _fresh_router_inputs(score="80")
+
+    async def fetch_evidence() -> dynamic_route.FreshEvidence:
+        return evidence
+
+    async def fetch_capabilities() -> dynamic_route.FreshHarnessCapabilities:
+        return capabilities
+
+    async def assess(
+        selector: dynamic_route.SelectorSettings,
+        request: dynamic_route.AssessmentRequest,
+    ) -> dynamic_route.SelectorCallResult:
+        del selector, request
+        raise AssertionError("a matching reusable route must buy no assessment")
+
+    async def record(decision: dynamic_route.DynamicRouteDecision) -> bool:
+        del decision
+        return False
+
+    request = _routing_request()
+    reusable = _reusable_from(_elected_decision(request))
+    router = dynamic_route.DynamicRouter(
+        evidence_fetch=fetch_evidence,
+        capabilities_fetch=fetch_capabilities,
+        selector_assess=assess,
+        recorder=record,
+        admission_ledger=dynamic_route.RoutingAdmissionLedger(
+            deadline_seconds=30,
+            routing_credit_allowance=Decimal("1"),
+            selector_concurrency=1,
+        ),
+    )
+
+    result = asyncio.run(router.rebind([reusable], request))
+
+    assert isinstance(result, dynamic_route.RoutingUnavailable)
+    assert result.reason is dynamic_route.RoutingUnavailableReason.RECORDER_FAILED
+
+
+def test_a_revalidation_manufactures_no_attempt_and_bills_nothing() -> None:
+    """#565 AC7: replay may not rewrite the two things it would be cheapest to.
+
+    An attempt is a scarce thing — the **Attempt lifecycle** and the **Strike**
+    limit are both counted in them — and routing credits are what the operator
+    actually authorized. A reuse that let either drift would buy its saving out
+    of the wrong account: the issue would burn attempts it never ran, or the
+    Run would report spend for a selector it never called.
+    """
+    request = _routing_request()
+    elected = _elected_decision(request)
+    recorded: list[dynamic_route.DynamicRouteDecision] = []
+    router = _repeat_router([], [], recorded)
+
+    decision = asyncio.run(router.rebind([_reusable_from(elected)], request))
+
+    assert isinstance(decision, dynamic_route.DynamicRouteDecision)
+    assert decision.prior_attempts == elected.prior_attempts
+    assert decision.lifecycle_position == elected.lifecycle_position
+    assert decision.usage.selector_attempts == 0
+    assert decision.usage.classification_attempts == 0
+    assert decision.usage.routing_credits == Decimal("0")
+    assert recorded == [decision], "the revalidation was not the record it wrote"

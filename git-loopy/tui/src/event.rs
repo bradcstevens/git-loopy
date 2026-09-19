@@ -112,6 +112,7 @@ pub enum EventPayload {
     /// `wrapper.pickup.skipped`
     PickupSkipped(Pickup),
     /// `wrapper.routing.delivery`
+    RoutingResolved(RoutingResolved),
     RoutingDelivery(RoutingDelivery),
     /// `agent.output`
     AgentOutput(AgentOutput),
@@ -303,6 +304,38 @@ pub struct Pickup {
     #[serde(default)]
     pub routing_source: Option<String>,
 }
+
+/// How one issue's final **Routing resolution** was arrived at.
+///
+/// Provenance, not authority: the [`Pickup`] record still carries the pair the
+/// session actually opened on. What this adds is the one thing that record
+/// cannot say — whether a Route selector was paid for it, or a prior Run's
+/// decision was revalidated against freshly read evidence and eligibility
+/// without one (#565, ADR-0057).
+///
+/// Every field is optional because Run logs written before reuse existed carry
+/// none of them, and a Dashboard that replays history has to stay readable
+/// over those.
+#[derive(Clone, Debug, Deserialize)]
+pub struct RoutingResolved {
+    /// The issue this route was resolved for.
+    pub issue: IssueRef,
+    /// `elected` or `revalidated`, when the Orchestrator recorded it.
+    #[serde(default)]
+    pub routing_reuse: Option<String>,
+    /// The original decision a revalidation reused, when there was one.
+    #[serde(default)]
+    pub reused_proposal_id: Option<String>,
+    /// The recorded decision a reassessment replaced, when there was one.
+    #[serde(default)]
+    pub superseded_proposal_id: Option<String>,
+}
+
+/// The `routing_reuse` spelling for a decision a selector was paid for.
+pub const ROUTE_ELECTED: &str = "elected";
+
+/// The `routing_reuse` spelling for a reuse revalidated without a selector.
+pub const ROUTE_REVALIDATED: &str = "revalidated";
 
 /// One run-scoped delivery observation for a final **Routing resolution**.
 ///
@@ -644,6 +677,13 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         },
         "wrapper.pickup.skipped" => match serde_json::from_value(value.clone()) {
             Ok(pickup) => EventPayload::PickupSkipped(pickup),
+            Err(_) => EventPayload::Other,
+        },
+        // Provenance is only attributable when it names an issue; one that
+        // names none describes no Lane's route, the same way an unattributed
+        // Pickup does.
+        "wrapper.routing.resolved" => match serde_json::from_value(value.clone()) {
+            Ok(resolved) => EventPayload::RoutingResolved(resolved),
             Err(_) => EventPayload::Other,
         },
         // Delivery is only attributable when it names an issue and a known

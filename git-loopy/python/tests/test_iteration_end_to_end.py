@@ -884,7 +884,7 @@ def _wire_single_issue_github(
     ``(fake_client, fake_git)`` so the caller can drive the SDK ``on_send`` hook
     and inspect the ``add_all`` / ``commit`` / ``push`` spies.
     """
-    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy").mkdir(exist_ok=True)
     (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
 
     issue = _make_issue(issue_number, labels=labels)
@@ -5480,13 +5480,19 @@ def _wire_dynamic_ports(
     monkeypatch.setattr(dynamic_route, "_stdlib_fetch", _fetch)
     monkeypatch.setattr(loop_module, "_fetch_harness_evidence", _capabilities)
 
-    real_factory = loop_module._make_dynamic_router
+    # Unwrap any factory a previous call in this test already installed, so a
+    # second Run's assessments are counted against its own spy rather than
+    # against the first Run's closure (#565's multi-Run tests).
+    real_factory = getattr(
+        loop_module._make_dynamic_router, "_real_factory", loop_module._make_dynamic_router
+    )
 
     def _factory(prerequisites, *, selector_assess, recorder):
         return real_factory(
             prerequisites, selector_assess=_assess, recorder=recorder
         )
 
+    _factory._real_factory = real_factory  # type: ignore[attr-defined]
     monkeypatch.setattr(loop_module, "_make_dynamic_router", _factory)
     return spied
 
@@ -6123,3 +6129,208 @@ def test_a_final_route_that_cannot_be_recorded_locally_starts_no_work(
     assert exit_code != 0
     assert fake_client.created == []
     assert fake_gh.route_comment_calls == []
+
+
+# --- Dynamic routing: reuse across Runs (#565, ADR-0057) --------------------
+
+
+def _routing_records(tmp_path: Path) -> list[dict[str, Any]]:
+    """Every ``wrapper.routing.resolved`` record in this clone, oldest Run first."""
+    logs = sorted(
+        (tmp_path / ".git-loopy" / "logs").glob("*.jsonl"), key=lambda p: p.name
+    )
+    return [
+        event
+        for path in logs
+        for raw in path.read_text(encoding="utf-8").splitlines()
+        if (event := json.loads(raw))["type"] == "wrapper.routing.resolved"
+    ]
+
+
+def test_a_later_run_revalidates_the_route_its_own_history_already_records(
+    tmp_path, monkeypatch
+) -> None:
+    """#565 AC1/AC3/AC9: fresh checks, no second selector call, both modes' serial half.
+
+    The whole slice end to end. The first Run elects and records; the second
+    Run derives a **Reusable route** from that record alone, re-reads both live
+    sources, finds the verified inputs unchanged, and opens its work session on
+    the same configuration without buying a selector call. What is pinned is
+    every link in that chain — the sources *were* read, the selector was *not*
+    asked, the new record points at the old decision, and the session actually
+    ran on the reused pair. A route that agrees everywhere except the session
+    is a route that did not take effect.
+    """
+    _fake, first, first_exit = _dynamic_run(tmp_path, monkeypatch)
+    assert first_exit == 0, f"the first Run failed: {first_exit}"
+    assert len(first["assessments"]) == 1
+
+    fake_client, second, second_exit = _dynamic_run(tmp_path, monkeypatch)
+
+    assert second_exit == 0, f"the reusing Run failed: {second_exit}"
+    assert second["assessments"] == [], "a matching reusable route still paid a selector"
+    assert second["evidence"] >= 1, "reuse skipped the freshness check it may not skip"
+    assert fake_client.create_calls, "the reusing Run opened no work session"
+    call = fake_client.create_calls[0]
+    assert (call["model"], call["reasoning_effort"]) == ("claude-opus-5", "high")
+
+    elected, revalidated = _routing_records(tmp_path)
+    assert elected["routing_reuse"] == "elected"
+    assert revalidated["routing_reuse"] == "revalidated"
+    assert revalidated["reused_proposal_id"] == elected["proposal_id"]
+    assert revalidated["reused_validated_at"] == elected["validated_at"]
+    assert revalidated["validated_at"] != elected["validated_at"]
+    assert revalidated["selector_attempts"] == 0
+    assert revalidated["routing_credits"] == "0"
+    assert revalidated["model"] == "claude-opus-5"
+    assert revalidated["relevant_input_identity"] == elected["relevant_input_identity"]
+
+
+def test_routing_never_feeds_its_own_inputs_so_reuse_does_not_decay(
+    tmp_path, monkeypatch
+) -> None:
+    """#565 AC6: the second reuse is as valid as the first.
+
+    The invalidation loop this forbids is the one #563 already had to close
+    once on the publishing side: routing writes something an input reader then
+    sees, so the next Run's inputs differ, so it reassesses, so it writes
+    again. Reuse adds two fresh candidates for that — the revalidation record
+    itself, and its ``validated_at`` timestamp. Neither may reach the verified
+    input identity, and a third Run that still revalidates against the *first*
+    Run's decision is the only assertion that says so: had either leaked, the
+    identity would have moved and the third Run would have paid a selector.
+    """
+    _dynamic_run(tmp_path, monkeypatch)
+    _dynamic_run(tmp_path, monkeypatch)
+
+    _fake, third, third_exit = _dynamic_run(tmp_path, monkeypatch)
+
+    assert third_exit == 0, f"the third Run failed: {third_exit}"
+    assert third["assessments"] == [], "reuse decayed into a fresh assessment"
+    elected, second, latest = _routing_records(tmp_path)
+    assert [r["routing_reuse"] for r in (second, latest)] == [
+        "revalidated",
+        "revalidated",
+    ]
+    assert latest["reused_proposal_id"] == elected["proposal_id"], (
+        "a revalidation was reused as if it were the original decision"
+    )
+    assert latest["relevant_input_identity"] == elected["relevant_input_identity"]
+
+
+def test_an_edited_task_type_decides_again_rather_than_reusing(
+    tmp_path, monkeypatch
+) -> None:
+    """#565 AC2/AC6: a relevant edit still invalidates.
+
+    The Task type is one of the things the assessment is *told* rather than
+    left to guess, so re-labelling the issue changes what the selector was
+    asked — and a cache that answered anyway would be answering a question
+    nobody asked. The new decision is a real one, bought inside the allowance,
+    and it names the record it supersedes so the history stays followable.
+    """
+    _dynamic_run(tmp_path, monkeypatch)
+
+    _fake, second, second_exit = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        issue_labels=["ready-for-agent", "task-type:docs"],
+    )
+
+    assert second_exit == 0, f"the reassessing Run failed: {second_exit}"
+    assert len(second["assessments"]) == 1, "a changed input was served from history"
+    elected, reassessed = _routing_records(tmp_path)
+    assert reassessed["routing_reuse"] == "elected"
+    assert reassessed["reused_proposal_id"] is None
+    assert reassessed["reassessed"] is True
+    assert reassessed["superseded_proposal_id"] == elected["proposal_id"]
+    assert (
+        reassessed["relevant_input_identity"] != elected["relevant_input_identity"]
+    ), "the identity did not notice the edit it exists to notice"
+
+
+def test_a_withdrawn_model_is_not_replayed_past_the_harness_it_left(
+    tmp_path, monkeypatch
+) -> None:
+    """#565 AC7: history cannot carry a model past a current capability check.
+
+    The sharpest thing a cache can get wrong. Between the two Runs the elected
+    model leaves the harness listing entirely; the recorded route still names
+    it, and replaying it would open a session on a model this account cannot
+    run. The second Run must elect from what the harness offers *now*, and the
+    session must be opened on that.
+    """
+    _dynamic_run(tmp_path, monkeypatch)
+
+    fake_client, second, second_exit = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        listing=(_listed_model("gpt-5.6-terra", ["low", "high"]),),
+        answer=_elects("gpt-5.6-terra"),
+    )
+
+    assert second_exit == 0, f"the re-electing Run failed: {second_exit}"
+    assert len(second["assessments"]) == 1, "a withdrawn model was replayed"
+    call = fake_client.create_calls[0]
+    assert call["model"] == "gpt-5.6-terra", "the work session ran on the stale route"
+    _elected, reassessed = _routing_records(tmp_path)
+    assert reassessed["routing_reuse"] == "elected"
+    assert reassessed["model"] == "gpt-5.6-terra"
+
+
+def test_a_run_wide_pin_outranks_a_reusable_route_it_never_consults(
+    tmp_path, monkeypatch
+) -> None:
+    """#565 AC5: a cached result is not authority, and an operator's pin is.
+
+    ADR-0057 keeps an explicit instruction ahead of any inference, and history
+    does not promote one inference into an instruction. A pinned Run therefore
+    opens its session on the pin, and — because it never even reaches the
+    router — leaves no routing record of its own for a later Run to mistake for
+    one.
+    """
+    _dynamic_run(tmp_path, monkeypatch)
+
+    fake_client, second, second_exit = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        routing_suppressed=True,
+        model="gpt-5.6-terra",
+        reasoning_effort="low",
+    )
+
+    assert second_exit == 0, f"the pinned Run failed: {second_exit}"
+    assert second["assessments"] == [], "a pinned Run assessed anyway"
+    call = fake_client.create_calls[0]
+    assert (call["model"], call["reasoning_effort"]) == ("gpt-5.6-terra", "low")
+    assert len(_routing_records(tmp_path)) == 1, "a pinned Run recorded a route"
+
+
+def test_an_unusable_routing_history_is_diagnosed_and_elected_afresh(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """#565 AC4: a torn record is not a cached route, and not a dead Run either.
+
+    Reuse is an optimisation over something every Run before it already did,
+    so a history that cannot be read costs a selector call and a diagnostic —
+    not a refused **Pickup**. What it must never do is pass silently: an
+    operator who is quietly paying for every assessment has no way to discover
+    the corrupt log causing it.
+    """
+    _dynamic_run(tmp_path, monkeypatch)
+    log = next((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+    log.write_text(
+        "".join(
+            (raw[: len(raw) // 2] if '"wrapper.routing.resolved"' in raw else raw) + "\n"
+            for raw in log.read_text(encoding="utf-8").splitlines()
+        ),
+        encoding="utf-8",
+    )
+
+    _fake, second, second_exit = _dynamic_run(tmp_path, monkeypatch)
+
+    assert second_exit == 0, "a torn routing record refused the whole Pickup"
+    assert len(second["assessments"]) == 1, "a torn record was served as a cached route"
+    diagnostics = capsys.readouterr().err
+    assert "reusable routing history" in diagnostics
+    assert log.name in diagnostics, "the diagnosis did not name the unusable log"

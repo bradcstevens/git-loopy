@@ -165,6 +165,7 @@ from git_loopy.dynamic_route import (
     DynamicRoutePrerequisites,
     DynamicRouter,
     FreshHarnessCapabilities,
+    ReusableRoute,
     RoutingAdmissionLedger,
     RoutingPrerequisiteError,
     RoutingProposal,
@@ -187,6 +188,7 @@ from git_loopy.route_publication import (
     RoutePublicationStore,
     RoutePublisher,
 )
+from git_loopy.route_reuse import ReusableRouteHistory, read_reusable_routes
 from git_loopy.selector_session import RoutingCostMeter, SessionRouteSelector
 from git_loopy.escalation import EscalationLedger
 from git_loopy.persist import (
@@ -1462,6 +1464,7 @@ class _Loop:
             )
         )
         self._dynamic_routing = dynamic_routing
+        self._reusable_routes: ReusableRouteHistory | None = None
 
     @property
     def finalized_contributions(self) -> tuple[rolling_scheduler.Contribution, ...]:
@@ -2451,6 +2454,14 @@ class _Loop:
         fixed rung — and a proposal prepared before an ending cannot survive it,
         because the ending is part of the identity the router revalidates
         against (AC7).
+
+        **A later Run revalidates rather than re-electing** (#565). Where this
+        clone's own Run logs already record a decision whose verified inputs
+        still match, ``rebind`` re-reads both live sources and reuses it
+        without buying a selector call; where they do not, it decides again
+        through the same admission ledger. The history is consulted *after* the
+        Static-route check above, because an operator's instruction is not
+        something a cache may participate in either.
         """
         router = self._dynamic_router
         if router is None or static_route_applies(resolution):
@@ -2472,16 +2483,21 @@ class _Loop:
                 else None
             ),
         )
-        proposal = await router.prepare(request)
-        if isinstance(proposal, RoutingUnavailable):
-            raise DynamicRouteUnavailable(proposal.reason.value)
-        assert isinstance(proposal, RoutingProposal)
-        decision = await router.bind(proposal, request)
+        reusable = self._reusable_routes_for(item.ref)
+        if reusable:
+            decision = await router.rebind(reusable, request)
+        else:
+            proposal = await router.prepare(request)
+            if isinstance(proposal, RoutingUnavailable):
+                raise DynamicRouteUnavailable(proposal.reason.value)
+            assert isinstance(proposal, RoutingProposal)
+            decision = await router.bind(proposal, request)
         if isinstance(decision, RoutingUnavailable):
             raise DynamicRouteUnavailable(decision.reason.value)
         self._diag.info(
-            "issue #%s dynamically routed to %s @ %s (%s): %s",
+            "issue #%s %s to %s @ %s (%s): %s",
             item.ref,
+            "dynamically revalidated" if decision.reused else "dynamically routed",
             decision.route.model,
             decision.route.reasoning_effort,
             decision.route.context_tier,
@@ -2497,6 +2513,30 @@ class _Loop:
                 decision.route.context_tier,
             ),
         )
+
+    def _reusable_routes_for(self, ref: int | str) -> tuple[ReusableRoute, ...]:
+        """What this clone's earlier Runs already decided about ``ref`` (#565).
+
+        Derived once per Run and kept, because the answer cannot change while
+        the Run is in progress: the only writer of new routing records is this
+        Run, and this Run's own log is deliberately excluded — its decisions
+        are already in front of it in memory, and a half-flushed line is a
+        corrupt record rather than a reusable one.
+
+        A history that could not be read is *diagnosed and then treated as
+        empty* (AC4). Electing afresh is always available, costs a selector
+        call, and is what every Run before reuse existed already did — so a
+        torn log is a thing to report, not a thing to fail a **Pickup** over.
+        """
+        if self._reusable_routes is None:
+            log_path = self._writers.event_log.path
+            self._reusable_routes = read_reusable_routes(
+                log_path.parent, exclude=log_path
+            )
+            diagnosis = self._reusable_routes.diagnosis
+            if diagnosis is not None:
+                self._diag.warning("reusable routing history: %s", diagnosis)
+        return self._reusable_routes.for_issue(ref)
 
     async def _record_dynamic_route(self, decision: DynamicRouteDecision) -> bool:
         """Persist one **Dynamic route**'s provenance before any work starts.

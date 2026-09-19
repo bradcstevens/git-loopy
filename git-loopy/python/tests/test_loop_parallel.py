@@ -489,7 +489,7 @@ def _wire_repo(
     merge_conflicts: Sequence[int] = (),
     release_versions: Sequence[str] = (),
 ) -> FakeGitClient:
-    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy").mkdir(exist_ok=True)
     (tmp_path / "git-loopy" / "prompt.md").write_text(
         "You are the agent. Implement the AFK-ready issues.\n", encoding="utf-8"
     )
@@ -7954,7 +7954,12 @@ def _dynamic_lane_ports(monkeypatch, *, answer) -> dict[str, list[Any]]:
             output=answer(request), routing_credits=Decimal("0.25")
         )
 
-    real_router = loop_module._make_dynamic_router
+    # Unwrap any router a previous call in this test already installed, so a
+    # second Run's assessments are counted against its own spy rather than the
+    # first Run's closure (#565's multi-Run tests).
+    real_router = getattr(
+        loop_module._make_dynamic_router, "_real_router", loop_module._make_dynamic_router
+    )
 
     def _router(prerequisites, *, selector_assess, recorder):
         del selector_assess
@@ -7962,6 +7967,7 @@ def _dynamic_lane_ports(monkeypatch, *, answer) -> dict[str, list[Any]]:
             prerequisites, selector_assess=_assess, recorder=recorder
         )
 
+    _router._real_router = real_router  # type: ignore[attr-defined]
     monkeypatch.setattr(loop_module, "_make_dynamic_router", _router)
     return spied
 
@@ -8312,3 +8318,92 @@ def test_a_lane_whose_binding_cannot_be_recorded_opens_no_session(
     assert exit_code != 0
     assert fake_client.created == []
     assert fake_gh.route_comment_calls == []
+
+
+# --- Dynamic routing: reuse across Runs (#565, ADR-0057) --------------------
+
+
+def _rolling_dynamic_run(tmp_path, monkeypatch, **overrides):
+    """A two-Lane rolling dynamic Run, repeatable inside one test."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch,
+        *overrides.pop(
+            "harness",
+            (("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)),
+        ),
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(
+        monkeypatch,
+        answer=overrides.pop("answer", _elects_lane_model("claude-opus-5")),
+    )
+    exit_code = asyncio.run(loop_module.run(_dynamic_parallel_config(**overrides)))
+    return fake_client, spied, exit_code
+
+
+def _lane_routing_records(tmp_path) -> list[dict[str, Any]]:
+    """Every ``wrapper.routing.resolved`` record in this clone, oldest Run first."""
+    logs = sorted(
+        (tmp_path / ".git-loopy" / "logs").glob("*.jsonl"), key=lambda p: p.name
+    )
+    return [
+        event
+        for path in logs
+        for raw in path.read_text(encoding="utf-8").splitlines()
+        if (event := json.loads(raw))["type"] == "wrapper.routing.resolved"
+    ]
+
+
+def test_each_lane_revalidates_its_own_issues_recorded_route(
+    tmp_path, monkeypatch
+) -> None:
+    """#565 AC1/AC3 in rolling dispatch: reuse is per issue, not per Run.
+
+    A route is elected for *an issue*, so reuse has to be keyed the same way —
+    and a rolling Run is where a shared one would show, because two Lanes read
+    the history concurrently and would otherwise race for whichever record
+    happened to be newest. Both Lanes revalidate, neither buys a selector call,
+    and each points at the decision its own issue got.
+    """
+    _fake, first, first_exit = _rolling_dynamic_run(tmp_path, monkeypatch)
+    assert first_exit == 0, f"the first Run failed: {first_exit}"
+    assert len(first["assessments"]) == 2
+
+    fake_client, second, second_exit = _rolling_dynamic_run(tmp_path, monkeypatch)
+
+    assert second_exit == 0, f"the reusing Run failed: {second_exit}"
+    assert second["assessments"] == [], "a Lane paid for a route it already had"
+    by_dir = {
+        Path(c["working_directory"]).name: c
+        for c in fake_client.create_calls
+        if c["working_directory"]
+    }
+    assert by_dir["issue-42"]["model"] == "claude-opus-5"
+    assert by_dir["issue-43"]["model"] == "claude-opus-5"
+
+    records = _lane_routing_records(tmp_path)
+    elected = {r["issue"]: r for r in records if r["routing_reuse"] == "elected"}
+    revalidated = {
+        r["issue"]: r for r in records if r["routing_reuse"] == "revalidated"
+    }
+    assert set(revalidated) == {42, 43}, "a Lane was left out of the reuse"
+    for issue, record in revalidated.items():
+        assert record["reused_proposal_id"] == elected[issue]["proposal_id"], (
+            f"Lane #{issue} revalidated against another issue's decision"
+        )
+        assert record["selector_attempts"] == 0

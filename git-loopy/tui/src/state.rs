@@ -11,7 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::event::{
     CommitRecorded, ContextWindowSample, Event, EventPayload, ExecutionHostDeclaration,
     InsightCapabilities, IssueRef, IterationEnd, IterationIssue, IterationSummary, Pickup,
-    ReleaseAdvanced, RoutingDelivery, RoutingDeliveryStatus, StopRequested,
+    ReleaseAdvanced, RoutingDelivery, RoutingDeliveryStatus, RoutingResolved, StopRequested,
+    ROUTE_ELECTED, ROUTE_REVALIDATED,
 };
 use crate::timestamp::Timestamp;
 
@@ -548,6 +549,7 @@ impl DashboardState {
             EventPayload::PickupSkipped(pickup) => {
                 self.append_lane_log(&pickup.issue, LOG_EVENT, &pickup_skipped_text(pickup), now)
             }
+            EventPayload::RoutingResolved(resolved) => self.record_route_resolution(resolved, now),
             EventPayload::RoutingDelivery(delivery) => self.record_route_delivery(delivery, now),
             EventPayload::AgentOutput(output) => {
                 self.append_log_block(&output.kind, &output.text, now)
@@ -754,6 +756,16 @@ impl DashboardState {
             entry.delivery = None;
         }
         self.iteration_routes.insert(issue.clone(), route);
+    }
+
+    fn record_route_resolution(&mut self, resolved: &RoutingResolved, now: Option<Timestamp>) {
+        // A Lane log line and nothing else: the pair itself reaches the ledger
+        // from the Pickup that bound it, and a provenance record that also
+        // wrote the route would be a second authority for it. A record from
+        // before reuse existed says nothing here rather than guessing.
+        if let Some(text) = routing_resolution_text(resolved) {
+            self.append_lane_log(&resolved.issue, LOG_EVENT, &text, now);
+        }
     }
 
     fn record_route_delivery(&mut self, delivery: &RoutingDelivery, now: Option<Timestamp>) {
@@ -1138,6 +1150,25 @@ fn pickup_issue_label(issue: &IssueRef) -> String {
     match issue {
         IssueRef::Number(number) => format!("#{number}"),
         IssueRef::Path(path) => path.clone(),
+    }
+}
+
+fn routing_resolution_text(resolved: &RoutingResolved) -> Option<String> {
+    let origin = non_empty(resolved.reused_proposal_id.as_deref());
+    let superseded = non_empty(resolved.superseded_proposal_id.as_deref());
+    match resolved.routing_reuse.as_deref()? {
+        ROUTE_REVALIDATED => Some(match origin {
+            Some(origin) => format!("Route revalidated: reused {origin}, no new assessment"),
+            None => "Route revalidated: no new assessment".to_string(),
+        }),
+        ROUTE_ELECTED => Some(match superseded {
+            Some(superseded) => format!("Route assessed: {superseded} no longer validates"),
+            None => "Route assessed: no reusable route for this issue".to_string(),
+        }),
+        // A spelling this Dashboard does not know is reported as it arrived
+        // rather than translated into one of the two it does: guessing would
+        // make a newer Orchestrator's provenance read as something it is not.
+        other => Some(format!("Route resolved: {other}")),
     }
 }
 

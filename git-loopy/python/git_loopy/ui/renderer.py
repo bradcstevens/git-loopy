@@ -42,6 +42,7 @@ from rich.console import Console
 from rich.text import Text
 
 from git_loopy.events import (
+    ROUTE_REVALIDATED,
     ASSISTANT_MESSAGE,
     ASSISTANT_REASONING,
     SESSION_CREATED,
@@ -66,6 +67,7 @@ from git_loopy.events import (
     WRAPPER_PARALLEL_SERIAL_FALLBACK,
     WRAPPER_PICKUP_BOUND,
     WRAPPER_ROUTING_DELIVERY,
+    WRAPPER_ROUTING_RESOLVED,
     WRAPPER_POOL_EXCLUDED,
     WRAPPER_PR_ADVANCED,
     WRAPPER_PUSH_RECORDED,
@@ -575,6 +577,42 @@ class Renderer:
         tier = _context_tier_phrase(event)
         if tier:
             text.append(f"  {tier}", style=STYLES["meta"])
+        self.console.print(text)
+
+    def _on_routing_resolved(self, event: dict[str, Any]) -> None:
+        # How this Pickup got its **Dynamic route** (#565, ADR-0057). The
+        # Pickup line below already says *what* was chosen; what it cannot say
+        # is whether a selector was paid for it, and that is the whole of AC8:
+        # freshly validated reuse, a new assessment, and a reassessment that
+        # found a recorded route no longer valid are three different things an
+        # operator is billed differently for.
+        #
+        # Every word here is read off the canonical record rather than worked
+        # out from the Run's own state — a readback that recomputes its
+        # explanation is a second implementation of the decision, and the one
+        # an operator checks against is the one that cannot be checked.
+        reuse = event.get("routing_reuse")
+        if not isinstance(reuse, str):
+            return
+        ref = event.get("issue")
+        origin = event.get("reused_proposal_id")
+        superseded = event.get("superseded_proposal_id")
+        text = Text()
+        text.append("⇌ ", style=STYLES["meta"])
+        text.append("routing ", style=STYLES["meta"])
+        text.append(f"#{ref}" if isinstance(ref, int) else str(ref))
+        if reuse == ROUTE_REVALIDATED:
+            text.append("  revalidated — reused without a new assessment")
+            if isinstance(origin, str) and origin:
+                text.append(f"  ({origin})", style=STYLES["meta"])
+            validated = event.get("reused_validated_at")
+            if isinstance(validated, str) and validated:
+                text.append(f"  decided {validated}", style=STYLES["meta"])
+        elif isinstance(superseded, str) and superseded:
+            text.append("  reassessed — a recorded route no longer validates")
+            text.append(f"  ({superseded})", style=STYLES["meta"])
+        else:
+            text.append("  assessed — no reusable route for this issue")
         self.console.print(text)
 
     def _on_routing_delivery(self, event: dict[str, Any]) -> None:
@@ -1189,6 +1227,7 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_CONTRIBUTION_END: Renderer._on_contribution_end,
     WRAPPER_AFK_READY_COLLECTED: Renderer._on_afk_ready_collected,
     WRAPPER_PICKUP_BOUND: Renderer._on_pickup_bound,
+    WRAPPER_ROUTING_RESOLVED: Renderer._on_routing_resolved,
     WRAPPER_ROUTING_DELIVERY: Renderer._on_routing_delivery,
     WRAPPER_POOL_EXCLUDED: Renderer._on_pool_excluded,
     WRAPPER_PARALLEL_SERIAL_FALLBACK: Renderer._on_parallel_serial_fallback,

@@ -988,6 +988,8 @@ What happens per issue:
 5. **Revalidation at Pickup.** Evidence and eligibility are re-read before the
    work session opens. Unchanged inputs do not buy a second selector call; a
    candidate that changed or became ineligible does not start on its old route.
+   A *later Run* revalidates the same way against the decision its own history
+   already records — see "Reusing a route a previous Run already elected" below.
 6. **Provenance before work.** A `wrapper.routing.resolved` Event records which
    evidence elected the route, when each source was read, which selector
    assessed it, and what it cost — and it is written *before* the session opens.
@@ -1012,6 +1014,47 @@ Two properties are worth knowing before you turn it on:
   `routing_credit_allowance` and toward the Run's **Consumption**. Billing
   already in flight when a bound is reached is disclosed rather than hidden, and
   no further routing call is admitted afterwards.
+
+### Reusing a route a previous Run already elected
+
+A selector call costs credits, and most of the time nothing that would change
+its answer has moved between one Run and the next. So a later Run reads its own
+`.git-loopy/logs/` history, finds the routing record this issue already got, and
+tries to **revalidate** it rather than buying the same answer twice.
+
+Revalidation is not a cache lookup. The Run still fetches the live evidence and
+re-reads your harness's current capabilities, exactly as a first election does —
+what it skips is only the selector session. It reuses the recorded route only
+when every relevant input still matches: the issue and its rendered context, the
+Route policy, the current eligibility of the model, the evidence, and the
+attempt history. If any of those moved — you edited the issue, re-labelled its
+task type, or the model left your plan — the Run elects again inside the same
+credit allowance, and says which recorded decision stopped validating.
+
+You can see which happened without recomputing anything:
+
+```text
+⇌ routing #42  revalidated — reused without a new assessment  (01JD…)  decided 2026-09-18T20:00:00.000Z
+⇌ routing #43  reassessed — a recorded route no longer validates  (01JD…)
+⇌ routing #44  assessed — no reusable route for this issue
+```
+
+The same three states appear in the Dashboard's Lane log, and the
+`wrapper.routing.resolved` record carries `routing_reuse`, `reused_proposal_id`
+and `reused_validated_at` for anything reading the trace later.
+
+Three boundaries are worth knowing:
+
+- **It is local to this clone.** The history it reads is this checkout's own Run
+  logs, so a second clone or a fresh CI runner elects once for itself before it
+  has anything to revalidate. There is no shared routing store — that would be a
+  second authority for a decision that is supposed to have one.
+- **A reused route is not a shortcut past anything else.** It cannot authorize
+  work on its own, cannot carry a model past your current harness capabilities,
+  does not create an attempt, and still loses to a `[routing]` entry, an
+  explicit `--model` pin or a configured escalation rung.
+- **The tracker is never the source.** Route comments and labels below are
+  output only; nothing reads them back to decide what to run.
 
 ### Route comments and labels
 

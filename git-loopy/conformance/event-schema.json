@@ -282,14 +282,19 @@
         "selector_attempts",
         "lifecycle_position",
         "attempt",
-        "prior_attempts"
+        "prior_attempts",
+        "proposal_id",
+        "validated_at",
+        "relevant_input_identity",
+        "routing_reuse"
       ],
       "emitted": "Once per issue whose route was elected from live evidence -- contract 14.4's Dynamic route -- immediately BEFORE the wrapper.pickup.bound that publishes it, and therefore before the work session opens. A Run under any other Route policy emits it never; a Static route under the dynamic policy emits it never either, because the operator's own instruction was not elected from evidence and has nothing to record. A permitted later attempt on the same issue elects again and records again, so an issue the Attempt lifecycle retried carries one of these per dynamic Pickup rather than one per Run.",
       "ordering": "The one property worth pinning: provenance written after the session starts is provenance that is missing exactly when the Run died mid-decision. A consumer that sees wrapper.pickup.bound with routing_source dynamic and no preceding wrapper.routing.resolved is reading a broken Runner, not an optional record.",
       "provenance_note": "Contract 14.4. This is the local decision record the Dynamic route owes, and it is a separate Event rather than more fields on the Pickup because it answers a different question with a different cardinality: the Pickup says which pair the session runs on, this says which evidence elected it, what that evidence cost, and when each live source was read. A Runner that does not implement the Dynamic route never emits it and stays conforming.",
       "distinguish_forecast_from_measurement": "public_output_tokens_per_second is the leaderboard's published inference speed for the benchmarked model. It is NOT a measurement of how long this issue took under Copilot, and a consumer MUST NOT render it as one. A missing measurement travels as null, never as zero.",
-      "nullable": "effort, measurement_at, benchmark_version and conditions are nullable, and a null is an explicit unknown the source did not publish rather than a field the Runner forgot. repeat_justification is nullable on the same terms and means the election needed none.",
+      "nullable": "effort, measurement_at, benchmark_version and conditions are nullable, and a null is an explicit unknown the source did not publish rather than a field the Runner forgot. repeat_justification is nullable on the same terms and means the election needed none. reused_proposal_id, reused_validated_at and superseded_proposal_id are nullable and mean, respectively, that nothing was reused and that nothing was superseded.",
       "later_attempts": "Contract 14.4, ADR-0057. lifecycle_position and attempt name WHERE the issue sits and model/effort/context_tier name WHAT it will run on; a Runner MUST report them separately, because a reassessed retry that re-elects the same configuration is otherwise indistinguishable from a first election. attempt counts this issue's dynamic decisions in this Run and starts at 1. prior_attempts is what the election was told -- oldest first, one object per earlier attempt carrying model, effort, context_tier, outcome and capability_evidence -- and is an EMPTY LIST on a first attempt, never null and never omitted. A Runner MUST NOT derive the position from the length of that list: an attempt that advanced its issue without closing it reaches no ending, spends no attempt, and still appears in the list.",
+      "reuse": "Contract 14.4, ADR-0057, issue #565. routing_reuse says HOW this route was arrived at, and is one of exactly two literals. `elected` means a Route selector was called and billed for it. `revalidated` means a decision this clone's own earlier Run already recorded was re-checked against freshly read evidence and eligibility and reused WITHOUT a selector call, so selector_attempts is 0 and routing_credits is \"0\". A revalidated record MUST carry reused_proposal_id and reused_validated_at naming the ORIGINAL decision -- the election a selector was actually paid for -- and never the intermediate revalidation it was read back from, so a chain of reuse stays one hop deep and survives the original's log ageing out. Both are null on an elected record; superseded_proposal_id instead names a recorded decision that stopped validating and was replaced by a fresh election. relevant_input_identity is the opaque digest of the issue/context, policy, capability, evidence and attempt-history inputs the decision was made under, and equality of that digest is what a later Run checks: a Runner MUST NOT let anything routing itself writes -- this record, its timestamps, a Route projection comment, an owned Route label -- reach that digest, or reuse invalidates itself every Run. Reuse is DERIVED state read back from canonical local event history, so a Runner MUST NOT treat a tracker comment or a Route label as reuse authority, MUST NOT let a reused record authorize work or take a Lease on its own, and MUST still let a Static or run-wide route take precedence over it. A record written before reuse existed carries none of these keys, and a consumer MUST replay it as an unknown rather than as an election.",
       "scope": "Run-scoped, for the same reason wrapper.pickup.bound is: the route is elected before the work it routes, so no contribution identity exists yet."
     },
     "wrapper.routing.delivery": {
@@ -1415,7 +1420,19 @@
           "lifecycle_position": "fresh",
           "attempt": 1,
           "prior_attempts": [],
-          "repeat_justification": null
+          "repeat_justification": null,
+          "proposal_id": "01HXR0000000000000000000R1",
+          "selector_model": "gpt-5.4-mini",
+          "selector_effort": "low",
+          "selector_context_tier": "default",
+          "validated_at": "2026-05-16T00:00:02.150Z",
+          "relevant_input_identity": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "routing_reuse": "elected",
+          "reused_proposal_id": null,
+          "reused_validated_at": null,
+          "revalidated": true,
+          "reassessed": false,
+          "superseded_proposal_id": null
         },
         {
           "ts": "2026-05-16T00:00:02.400Z",
@@ -1815,7 +1832,7 @@
       "jsonl": [
         "{\"ts\": \"2026-05-16T00:00:01.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pool.refreshed\", \"issues\": [42, 43, 44, 46]}\n",
         "{\"ts\": \"2026-05-16T00:00:02.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.concurrency.changed\", \"configured_lane_limit\": 3, \"credit_state\": null, \"effective_lane_limit\": 2, \"host_state\": \"healthy\", \"pressure\": null, \"rate_limit_state\": \"healthy\"}\n",
-        "{\"ts\": \"2026-05-16T00:00:02.200Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.routing.resolved\", \"attempt\": 1, \"benchmark_version\": null, \"capabilities_retrieved_at\": \"2026-05-16T00:00:02.150Z\", \"conditions\": null, \"context_tier\": \"default\", \"effort\": \"high\", \"evidence_retrieved_at\": \"2026-05-16T00:00:02.100Z\", \"evidence_source\": \"https://artificialanalysis.ai/api/v2/data/llms/models\", \"intelligence_index\": \"70.0\", \"issue\": 42, \"lifecycle_position\": \"fresh\", \"measurement_at\": null, \"model\": \"claude-opus-5\", \"prior_attempts\": [], \"public_output_tokens_per_second\": \"90.0\", \"repeat_justification\": null, \"routing_credits\": \"0.25\", \"selector_attempts\": 1, \"source_model_identity\": \"aa-opus\", \"summary\": \"highest verified Intelligence Index among the runnable configurations\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:02.200Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.routing.resolved\", \"attempt\": 1, \"benchmark_version\": null, \"capabilities_retrieved_at\": \"2026-05-16T00:00:02.150Z\", \"conditions\": null, \"context_tier\": \"default\", \"effort\": \"high\", \"evidence_retrieved_at\": \"2026-05-16T00:00:02.100Z\", \"evidence_source\": \"https://artificialanalysis.ai/api/v2/data/llms/models\", \"intelligence_index\": \"70.0\", \"issue\": 42, \"lifecycle_position\": \"fresh\", \"measurement_at\": null, \"model\": \"claude-opus-5\", \"prior_attempts\": [], \"proposal_id\": \"01HXR0000000000000000000R1\", \"public_output_tokens_per_second\": \"90.0\", \"reassessed\": false, \"relevant_input_identity\": \"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\", \"repeat_justification\": null, \"reused_proposal_id\": null, \"reused_validated_at\": null, \"revalidated\": true, \"routing_credits\": \"0.25\", \"routing_reuse\": \"elected\", \"selector_attempts\": 1, \"selector_context_tier\": \"default\", \"selector_effort\": \"low\", \"selector_model\": \"gpt-5.4-mini\", \"source_model_identity\": \"aa-opus\", \"summary\": \"highest verified Intelligence Index among the runnable configurations\", \"superseded_proposal_id\": null, \"validated_at\": \"2026-05-16T00:00:02.150Z\"}\n",
         "{\"ts\": \"2026-05-16T00:00:02.400Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pickup.bound\", \"considered\": 4, \"issue\": 42, \"position\": 1, \"reason\": \"order\"}\n",
         "{\"ts\": \"2026-05-16T00:00:02.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.routing.delivery\", \"identity\": \"c46130bb0f803d9b447c86458c7322d3f48e8fb36c8e0772ab285b856f0e6b7b\", \"issue\": 42, \"label\": \"git-loopy-route:claude-opus-5-high-d-bc4730b42709\", \"status\": \"published\"}\n",
         "{\"ts\": \"2026-05-16T00:00:03.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.start\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",

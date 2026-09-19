@@ -903,6 +903,106 @@ fn a_route_delivery_projects_separately_from_the_route() {
 }
 
 #[test]
+fn a_revalidated_route_reads_differently_from_a_fresh_assessment() {
+    // #565 AC8. The Pickup line says which pair a Lane runs on; it cannot say
+    // whether a Route selector was paid for it. Reuse, a first assessment and
+    // a reassessment of a route that stopped validating are three different
+    // bills, so the Lane log has to tell them apart -- and each phrase is read
+    // off the canonical record rather than worked out from Dashboard state.
+    let projected = reduce(
+        &[
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:01.000Z",
+                "run_id": "r1",
+                "iter": 1,
+                "type": "wrapper.routing.resolved",
+                "issue": 7,
+                "proposal_id": "decision-2",
+                "routing_reuse": "revalidated",
+                "reused_proposal_id": "decision-1",
+                "reused_validated_at": "2026-05-15T00:00:00.000Z",
+                "superseded_proposal_id": null
+            }),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:02.000Z",
+                "run_id": "r1",
+                "iter": 1,
+                "type": "wrapper.pickup.bound",
+                "issue": 7,
+                "reason": "order",
+                "model": "gpt-5-mini",
+                "effort": "medium",
+                "routing_source": "dynamic"
+            }),
+        ],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(
+        log_texts(&projected),
+        [
+            "Route revalidated: reused decision-1, no new assessment",
+            "Pickup: bound #7 (order)"
+        ]
+    );
+    // Provenance is not a second route authority: the pair still comes from
+    // the Pickup that bound it.
+    assert_eq!(
+        queue_row(&projected, 7)["route"],
+        serde_json::json!({
+            "model": "gpt-5-mini",
+            "effort": "medium",
+            "source": "dynamic"
+        })
+    );
+}
+
+#[test]
+fn a_reassessment_names_the_recorded_route_that_stopped_validating() {
+    let projected = reduce(
+        &[serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z",
+            "run_id": "r1",
+            "iter": 1,
+            "type": "wrapper.routing.resolved",
+            "issue": 7,
+            "proposal_id": "decision-2",
+            "routing_reuse": "elected",
+            "reused_proposal_id": null,
+            "superseded_proposal_id": "decision-1"
+        })],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(
+        log_texts(&projected),
+        ["Route assessed: decision-1 no longer validates"]
+    );
+}
+
+#[test]
+fn a_routing_record_written_before_reuse_existed_still_replays() {
+    // Historical compatibility: a Run log from before #565 carries no
+    // `routing_reuse` at all. Saying nothing is the only honest reading --
+    // inventing "assessed" would report a fact that record does not carry.
+    let projected = reduce(
+        &[serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z",
+            "run_id": "r1",
+            "iter": 1,
+            "type": "wrapper.routing.resolved",
+            "issue": 7,
+            "proposal_id": "decision-1",
+            "model": "gpt-5-mini",
+            "effort": "medium"
+        })],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(log_texts(&projected), Vec::<String>::new());
+}
+
+#[test]
 fn a_new_route_clears_the_previous_delivery_state() {
     let projected = reduce(
         &[

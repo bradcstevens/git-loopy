@@ -850,6 +850,22 @@ dropped rather than delivered late over the current label. Only a materially cha
 assignment is projected — a proposal and an unchanged revalidation are not (ADR-0057).
 _Avoid_: route announcement, routing comment (the delivery state is part of it), route tag.
 
+**Reusable route**:
+A final **Routing resolution** an earlier **Run** of *this clone* recorded, read back out of the
+canonical local Event history and offered to a later **Run** as something to revalidate. Derived
+state, never authority: it is a projection of `wrapper.routing.resolved` rows, not a second store,
+not a committed table, and never a **Route projection** comment or **Route label**, which are
+output only. It reaches a work session only where a fresh read of the live sources finds every
+relevant input — the issue and its context, the **Route policy**, current **Harness capabilities**,
+the evidence, and the **Attempt evidence** — still identical to what the original election was made
+under; anything relevant that moved elects again inside the same routing limits, and a route that
+cannot be revalidated is refused rather than assumed. A reuse costs no **Route selector** call and
+records its own resolution naming the *original* decision, so the CLI and **Dashboard** tell
+freshly validated reuse from a new assessment and from a recorded route that stopped validating.
+Nothing routing itself writes may reach the compared inputs — an Orchestrator whose own output
+invalidates its next comparison reassesses every **Run** and has reused nothing (ADR-0057).
+_Avoid_: route cache, cached route, memoised routing (a cache is trusted; this is re-verified).
+
 **Harness capabilities**:
 What the authenticated Copilot harness says about the models *this account* may use, read from its
 own model listing: eligibility, whether each model has a reasoning-effort dial and which values it

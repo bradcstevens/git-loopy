@@ -2663,6 +2663,83 @@ def test_an_undelivered_route_projection_says_so_without_blaming_the_route(
     assert "route publication" in out
 
 
+def _resolved_event(**payload: Any) -> dict[str, Any]:
+    """A ``wrapper.routing.resolved`` record, as a Runner writes one."""
+    event: dict[str, Any] = {
+        "type": events_module.WRAPPER_ROUTING_RESOLVED,
+        "issue": 7,
+        "proposal_id": "01JD00000000000000000000NEW",
+        "model": "claude-opus-5",
+        "effort": "high",
+        "context_tier": "default",
+        "routing_reuse": events_module.ROUTE_ELECTED,
+        "reused_proposal_id": None,
+        "reused_validated_at": None,
+        "superseded_proposal_id": None,
+        "relevant_input_identity": "9f2c1d6a4b8e",
+    }
+    event.update(payload)
+    return event
+
+
+def test_a_freshly_validated_reuse_is_distinguishable_from_an_assessment() -> None:
+    """#565 AC8: the one fact the Pickup line cannot carry.
+
+    The pair is already on the Pickup line; what an operator cannot see there
+    is whether a selector call was bought for it. Reuse, a first assessment and
+    a reassessment of a route that no longer validates are three different
+    bills, so they have to read as three different lines.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _resolved_event(
+            routing_reuse=events_module.ROUTE_REVALIDATED,
+            reused_proposal_id="01JD00000000000000000000OLD",
+            reused_validated_at="2026-09-18T20:00:00.000Z",
+        )
+    )
+
+    out = buf.getvalue()
+    assert "routing" in out
+    assert "#7" in out
+    assert "revalidated" in out
+    assert "01JD00000000000000000000OLD" in out, (
+        "a reuse that does not name the decision it reused is not provenance"
+    )
+    assert "2026-09-18T20:00:00.000Z" in out
+
+
+def test_a_first_assessment_says_it_had_nothing_to_reuse() -> None:
+    """The baseline case still reads as an assessment, not as a silent default."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_resolved_event())
+
+    out = buf.getvalue()
+    assert "assessed" in out
+    assert "revalidated" not in out
+    assert "reassessed" not in out
+
+
+def test_a_stale_recorded_route_reads_as_a_reassessment_not_a_reuse() -> None:
+    """#565 AC8's third state: history was there, and it did not validate.
+
+    An operator who sees only "assessed" cannot tell a Run that had nothing to
+    reuse from one whose recorded route stopped matching — and the second is
+    the one worth looking into, because something about the issue, the policy
+    or the harness moved.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_resolved_event(superseded_proposal_id="01JD00000000000000000000OLD"))
+
+    out = buf.getvalue()
+    assert "reassessed" in out
+    assert "01JD00000000000000000000OLD" in out
+    assert "revalidated" not in out
+
+
 # ---------------------------------------------------------------------------
 # The Run readback block (#410) — the only validation ``[routing]`` can have
 # ---------------------------------------------------------------------------
