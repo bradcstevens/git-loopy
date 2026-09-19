@@ -445,6 +445,28 @@ all.
 _Avoid_: terminal manager, screen guard, teardown hook (restoration is not the
 Dashboard's teardown).
 
+**Control domain**:
+The set of **Run**s a clone may name, observe, and act on — those of the invoking
+worktree and of every other worktree that clone registers. It is defined by the clone,
+never by the machine and never by the remote: an independent clone of the same
+repository is a *different* domain, and its Runs are not addressable from here at all.
+Nothing widens it. There is no machine-wide registry to consult, and no newest-Run
+default, because a gesture that names no Run must reach no Run rather than the one that
+happens to be on top of a listing (ADR-0058). `git-loopy runs` is the domain made
+visible, and the same resolution is what **Stop** and **Attach** target through, so the
+two can never disagree about which Runs exist.
+_Avoid_: session list, run registry, machine scope.
+
+**Run liveness**:
+What a host can *prove* about a discovered **Run**: live, dead, or unknown. The proof is
+the per-Run control artifact's advisory lock and nothing else — never a pid, a
+heartbeat, nor the presence of a leftover file, since a Run that ended normally leaves
+its artifacts behind on purpose. Every platform git-loopy claims owes a real answer
+rather than a permanent unknown dressed as parity. Unknown is reserved for a genuine
+inability to read the lock, and is not a softer dead: failing to prove a Run has
+finished is never permission to control or **Sweep** its work.
+_Avoid_: running/not running, status, health, heartbeat.
+
 ### The live interface
 
 **Dashboard**:

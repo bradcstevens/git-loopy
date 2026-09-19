@@ -3,6 +3,14 @@
 The artifact is deliberately content-free: its OS-held lock is the complete
 liveness record. A released lock therefore makes a preserved artifact a
 readable record of a dead Run without a stale pid or a timed-out heartbeat.
+
+Two lock mechanisms implement the one oracle, because git-loopy claims macOS,
+Linux *and* native Windows and a platform that answered "unknown" would be an
+absence of support dressed as parity (ADR-0058). POSIX uses ``flock``; Windows
+uses ``LockFileEx`` on the artifact's first byte through the handle ``msvcrt``
+hands out. They are chosen to behave identically where it matters: the holder's
+lock is exclusive and outlives nothing but its process, and a probe's is
+*shared*, so concurrent readers can never mistake one another for a live Run.
 """
 
 from __future__ import annotations
@@ -20,6 +28,11 @@ try:
     import fcntl as _fcntl
 except ImportError:  # pragma: no cover - exercised only on platforms without flock.
     _fcntl = None
+
+try:
+    import msvcrt as _msvcrt
+except ImportError:  # pragma: no cover - exercised only off Windows.
+    _msvcrt = None
 
 __all__ = [
     "RunControlArtifact",
@@ -45,7 +58,7 @@ _UNSUPPORTED_LOCK_ERRNOS = frozenset(
 
 def advisory_locking_available() -> bool:
     """Whether this distribution can make the control artifact authoritative."""
-    return _fcntl is not None
+    return _fcntl is not None or _msvcrt is not None
 
 
 def control_path_for_trace(trace_path: Path) -> Path:
@@ -53,13 +66,144 @@ def control_path_for_trace(trace_path: Path) -> Path:
     return trace_path.with_suffix(".control")
 
 
+# ---------------------------------------------------------------------------
+# The two lock mechanisms behind one oracle
+# ---------------------------------------------------------------------------
+
+#: The byte range both mechanisms lock. One byte at offset zero, held whether
+#: or not the file has ever been written to — a content-free artifact has no
+#: other range to agree on, and Windows locks past end-of-file quite happily.
+_LOCK_OFFSET = 0
+_LOCK_LENGTH = 1
+
+if _msvcrt is not None:  # pragma: no cover - the Windows CI job is what runs this.
+    import ctypes
+    from ctypes import wintypes
+
+    _LOCKFILE_FAIL_IMMEDIATELY = 0x00000001
+    _LOCKFILE_EXCLUSIVE_LOCK = 0x00000002
+    #: What Windows reports when the range is held by somebody else, which is
+    #: the answer this module wants rather than an error it should propagate.
+    _ERROR_LOCK_VIOLATION = 33
+    #: Unlocking a range nobody holds. Release is idempotent here exactly as it
+    #: is for ``flock``, so this is not a failure either.
+    _ERROR_NOT_LOCKED = 158
+
+    class _Overlapped(ctypes.Structure):
+        """The ``OVERLAPPED`` the lock APIs read the target offset out of."""
+
+        _fields_ = (
+            ("Internal", ctypes.c_void_p),
+            ("InternalHigh", ctypes.c_void_p),
+            ("Offset", wintypes.DWORD),
+            ("OffsetHigh", wintypes.DWORD),
+            ("hEvent", wintypes.HANDLE),
+        )
+
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # Declared rather than inferred: a Windows ``HANDLE`` is pointer-sized, and
+    # an undeclared ``ctypes`` argument is a 32-bit ``int``. The truncation
+    # would only bite on a handle large enough to need the top word, which is
+    # exactly the bug that survives every local smoke test.
+    _kernel32.LockFileEx.argtypes = (
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(_Overlapped),
+    )
+    _kernel32.LockFileEx.restype = wintypes.BOOL
+    _kernel32.UnlockFileEx.argtypes = (
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(_Overlapped),
+    )
+    _kernel32.UnlockFileEx.restype = wintypes.BOOL
+
+    def _windows_region(handle: TextIO) -> tuple[int, "_Overlapped"]:
+        overlapped = _Overlapped()
+        overlapped.Offset = _LOCK_OFFSET
+        return _msvcrt.get_osfhandle(handle.fileno()), overlapped
+
+    def _windows_lock(handle: TextIO, *, exclusive: bool, wait: bool) -> bool:
+        """Take the range, or report that somebody else is holding it."""
+        os_handle, overlapped = _windows_region(handle)
+        flags = 0
+        if exclusive:
+            flags |= _LOCKFILE_EXCLUSIVE_LOCK
+        if not wait:
+            flags |= _LOCKFILE_FAIL_IMMEDIATELY
+        if _kernel32.LockFileEx(
+            os_handle, flags, 0, _LOCK_LENGTH, 0, ctypes.byref(overlapped)
+        ):
+            return True
+        code = ctypes.get_last_error()
+        if code == _ERROR_LOCK_VIOLATION:
+            return False
+        raise ctypes.WinError(code)
+
+    def _windows_unlock(handle: TextIO) -> None:
+        os_handle, overlapped = _windows_region(handle)
+        if _kernel32.UnlockFileEx(
+            os_handle, 0, _LOCK_LENGTH, 0, ctypes.byref(overlapped)
+        ):
+            return
+        code = ctypes.get_last_error()
+        if code != _ERROR_NOT_LOCKED:
+            raise ctypes.WinError(code)
+
+
+def _lock_exclusively(handle: TextIO) -> None:
+    """Hold the artifact for this Run, waiting out any current holder."""
+    if _fcntl is not None:
+        _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX)
+    elif _msvcrt is not None:  # pragma: no cover - Windows-only.
+        _windows_lock(handle, exclusive=True, wait=True)
+
+
+def _release(handle: TextIO) -> None:
+    """Release whatever this handle holds; safe where it holds nothing."""
+    if _fcntl is not None:
+        _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
+    elif _msvcrt is not None:  # pragma: no cover - Windows-only.
+        _windows_unlock(handle)
+
+
+def _lock_is_free(handle: TextIO) -> bool:
+    """Whether no Run holds the artifact, read through a *shared* probe.
+
+    Shared on both mechanisms on purpose: an exclusive probe would conflict
+    with another probe, and two operators listing Runs at the same moment would
+    each report the other's read as a live Run.
+    """
+    if _fcntl is not None:
+        try:
+            _fcntl.flock(handle.fileno(), _fcntl.LOCK_SH | _fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in {errno.EACCES, errno.EAGAIN}:
+                return False
+            raise
+        _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
+        return True
+    # pragma: no cover below - the Windows CI job is what runs this.
+    assert _msvcrt is not None  # guarded by ``advisory_locking_available``
+    if not _windows_lock(handle, exclusive=False, wait=False):
+        return False
+    _windows_unlock(handle)
+    return True
+
+
 @dataclass
 class RunControlArtifact:
     """One Run's lock-held control artifact.
 
     The file remains after :meth:`close`; liveness is a property of its lock,
-    not of file existence. Platforms without ``flock`` keep the trace-side
-    artifact but intentionally expose trace-only liveness through ``None``.
+    not of file existence. A host with neither lock mechanism keeps the
+    trace-side artifact but intentionally exposes trace-only liveness through
+    ``None``.
     """
 
     path: Path
@@ -73,8 +217,7 @@ class RunControlArtifact:
         path.parent.mkdir(parents=True, exist_ok=True)
         handle = path.open("a", encoding="utf-8")
         try:
-            if _fcntl is not None:
-                _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX)
+            _lock_exclusively(handle)
             repository_fd = _hold_run_lock(trace_path)
         except OSError:
             handle.close()
@@ -86,8 +229,7 @@ class RunControlArtifact:
         if self._handle.closed:
             return
         try:
-            if _fcntl is not None:
-                _fcntl.flock(self._handle.fileno(), _fcntl.LOCK_UN)
+            _release(self._handle)
         finally:
             self._handle.close()
             _release_repository_lock(self._repository_fd)
@@ -110,9 +252,9 @@ def is_run_alive(control_path: Path) -> bool | None:
 
     ``True`` means another process holds its advisory lock; ``False`` means the
     lock is free (or the artifact is absent). ``None`` is an explicit trace-only
-    result on a platform that does not provide ``flock``.
+    result on a host that provides neither lock mechanism.
     """
-    if _fcntl is None:
+    if not advisory_locking_available():
         return None
     try:
         handle = control_path.open("r", encoding="utf-8")
@@ -120,14 +262,7 @@ def is_run_alive(control_path: Path) -> bool | None:
         return False
 
     with handle:
-        try:
-            _fcntl.flock(handle.fileno(), _fcntl.LOCK_SH | _fcntl.LOCK_NB)
-        except OSError as exc:
-            if exc.errno in {errno.EACCES, errno.EAGAIN}:
-                return True
-            raise
-        _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
-        return False
+        return not _lock_is_free(handle)
 
 
 @contextmanager
@@ -139,6 +274,13 @@ def hold_uninstall_lock(repo_root: Path) -> Iterator[bool]:
     way of failing to *take* that lock yields ``False`` rather than raising:
     uninstall answers an unavailable lock by refusing, and a caller cannot refuse
     on behalf of a traceback.
+
+    Deliberately the one thing here that stays ``flock``-only. Its target is a
+    *directory*, which Windows has no descriptor for; the Windows mechanism
+    added for the control artifact locks a byte range in a file and cannot
+    stand in. So uninstall on Windows proceeds exactly as it always has —
+    uncoordinated at this seam and still refusing on the *Lane* liveness it
+    reads from :func:`is_run_alive`, which is now a real answer there.
     """
     if _fcntl is None:
         yield True
@@ -185,6 +327,10 @@ def _hold_run_lock(trace_path: Path) -> int | None:
     those would trade a rare coordination gap for an outage on the one path
     every Run takes, and a Run wedged behind a package manager with no output
     would be worse still.
+
+    The other half of :func:`hold_uninstall_lock`, so it is ``flock``-only for
+    the same reason: there is no directory descriptor to lock on Windows, and a
+    Run that offered no coordination is exactly what "no lock held" means here.
     """
     if _fcntl is None:
         return None

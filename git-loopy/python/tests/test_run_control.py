@@ -18,9 +18,19 @@ from git_loopy.run_control import (
     is_run_alive,
 )
 
+# Every platform git-loopy claims owes a real liveness answer (ADR-0058), so
+# the suite runs wherever one is claimed rather than wherever ``flock`` exists.
+# Only a host that is neither POSIX nor Windows is excused.
 pytestmark = pytest.mark.skipif(
-    not advisory_locking_available(),
-    reason="this platform has no flock advisory locks",
+    os.name not in {"posix", "nt"},
+    reason="liveness is claimed on macOS, Linux and native Windows",
+)
+
+#: The individual mechanism, for the cases that reach past the oracle and
+#: manipulate ``flock`` itself. Their *guarantees* are platform-independent;
+#: the way this handful of tests arranges them is not.
+posix_only = pytest.mark.skipif(
+    os.name == "nt", reason="this case arranges a POSIX flock failure directly"
 )
 
 
@@ -41,6 +51,27 @@ def _probe_liveness(path: Path) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
     )
+
+
+def test_every_platform_git_loopy_claims_can_prove_a_runs_liveness(
+    tmp_path: Path,
+) -> None:
+    """A claimed platform answers live or dead, never "cannot tell" (ADR-0058).
+
+    The one assertion that has to *fail* on a platform whose support is only
+    declared: an ``unknown`` result presented as parity is the gap ADR-0058
+    requires the next release to close, and this is what closes it in CI on
+    macOS, Linux and native Windows alike.
+    """
+    assert advisory_locking_available() is True
+
+    control = RunControlArtifact.acquire(tmp_path / "logs" / "run.jsonl")
+    try:
+        assert is_run_alive(control.path) is True
+    finally:
+        control.close()
+
+    assert is_run_alive(control.path) is False
 
 
 def test_control_artifact_liveness_is_an_advisory_lock_not_process_metadata(
@@ -78,6 +109,7 @@ def test_each_run_holds_only_its_own_control_artifact(tmp_path: Path) -> None:
         second.close()
 
 
+@posix_only
 def test_liveness_readers_do_not_make_a_stale_artifact_read_alive(
     tmp_path: Path,
 ) -> None:
@@ -150,6 +182,7 @@ def test_sigkill_releases_the_control_lock_but_preserves_the_artifact(
             process.wait(timeout=5)
 
 
+@posix_only
 def test_a_run_starts_even_when_the_repository_lock_cannot_be_taken(
     tmp_path: Path,
 ) -> None:
@@ -187,6 +220,7 @@ def test_an_unopenable_repository_refuses_the_uninstall_lock(tmp_path: Path) -> 
         assert locked is False
 
 
+@posix_only
 def test_a_filesystem_without_locks_is_not_mistaken_for_a_running_uninstall(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -206,6 +240,7 @@ def test_a_filesystem_without_locks_is_not_mistaken_for_a_running_uninstall(
     assert fcntl is run_control._fcntl
 
 
+@posix_only
 def test_a_busy_repository_still_refuses_the_uninstall_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -219,3 +254,53 @@ def test_a_busy_repository_still_refuses_the_uninstall_lock(
 
     with hold_uninstall_lock(tmp_path) as locked:
         assert locked is False
+
+
+#: One reader, hammering the oracle at exactly the artifact a second reader is
+#: hammering. The probe this module publishes is shared on every mechanism, so
+#: every answer here is the artifact's own state and none of them is a peer.
+_CONCURRENT_PROBE = """
+import sys
+from pathlib import Path
+
+from git_loopy.run_control import is_run_alive
+
+path = Path(sys.argv[1])
+print(sorted({str(is_run_alive(path)) for _ in range(int(sys.argv[2]))}), flush=True)
+"""
+
+
+def test_concurrent_liveness_readers_never_read_each_other_as_a_live_run(
+    tmp_path: Path,
+) -> None:
+    """Two operators listing Runs at once must not invent a live one.
+
+    The portable statement of the shared-probe guarantee: on a mechanism whose
+    only lock is exclusive, a reader's own momentary hold is visible to every
+    other reader, and a dead Run reads live to whoever collided with it. Run on
+    every claimed platform, because that is the mistake a second mechanism is
+    most likely to introduce.
+    """
+    control = RunControlArtifact.acquire(tmp_path / "logs" / "run.jsonl")
+    control.close()
+
+    readers = [
+        subprocess.Popen(
+            [sys.executable, "-c", textwrap.dedent(_CONCURRENT_PROBE),
+             str(control.path), "200"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(3)
+    ]
+    try:
+        for reader in readers:
+            stdout, stderr = reader.communicate(timeout=120)
+            assert reader.returncode == 0, stderr
+            assert stdout.strip() == "['False']", stderr
+    finally:
+        for reader in readers:
+            if reader.poll() is None:
+                reader.kill()
+                reader.wait(timeout=30)

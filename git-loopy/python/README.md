@@ -697,6 +697,51 @@ Copilot, network access, or the TUI.
 
 ---
 
+## Listing this clone's Runs (`git-loopy runs`)
+
+```bash
+git-loopy runs
+```
+
+```
+RUN                         STATE    STARTED               SCOPE
+01K6Z9QWERTYUIOPASDFGHJKLZ  live     2026-09-19T11:04:02Z  /src/app
+01K6Z7H4TCXV0YQ9M2N8B3RJ5D  dead     2026-09-19T09:51:40Z  /src/app/.worktrees/lane-2
+01K6Z4B1GKAP7WS3E6D9F2TQXN  unknown  2026-09-18T22:17:09Z  /src/app
+```
+
+Every Run of **this clone** — the worktree you invoked it from plus every other
+worktree `git worktree list` registers — newest first. Run it from any of those
+worktrees and you get the same listing, including Runs that were started from a
+different one. `RUN` is the full Run identity, and `SCOPE` is the worktree the
+Run published its artefacts in; together they are what the forthcoming Attach
+and Stop commands target by.
+
+The domain is the clone, never the machine. An independent clone of the same
+repository has its own Runs and its own listing; nothing here scans for them,
+and there is no "newest Run" default that could let an unnamed gesture reach a
+Run you did not name.
+
+`STATE` is what *this host can prove*, read from the per-Run control artifact's
+advisory lock (`flock` on macOS and Linux, `LockFileEx` on native Windows) and
+from nothing else — never a pid, a heartbeat, or the presence of a leftover
+file, since a Run that ended normally leaves its artefacts behind on purpose:
+
+| State     | Means                                                                                     |
+| --------- | ----------------------------------------------------------------------------------------- |
+| `live`    | The lock is still held: a worker process is running this Run right now.                    |
+| `dead`    | The lock is free: the Run has ended. Its artefacts remain readable.                        |
+| `unknown` | The lock could not be read — no control artefact was ever published, or it is unreadable.  |
+
+`unknown` is not a softer `dead`. Being unable to prove a Run has finished is
+never treated as permission to control or reclaim its work, which is the same
+rule `git-loopy sweep` already follows.
+
+The listing is purely observational: it starts no agent work, sends no Stop,
+reclaims nothing, and never reaches your issue tracker. It needs only `git`.
+
+---
+
 ## Exit codes
 
 | Exit                  | Code | When                                                                                                                                                                                                                                                |

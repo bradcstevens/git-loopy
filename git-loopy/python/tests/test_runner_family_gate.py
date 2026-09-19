@@ -86,6 +86,13 @@ PYTHON_TEST_TREE = "git-loopy/python/tests"
 # shared semantic fixture Python does, so it must not drift unwatched.
 RUST_MANIFEST = "git-loopy/tui/Cargo.toml"
 RUST_SUITE = "cargo test"
+# The Run control/liveness seam is the one part of the Python member whose answer
+# comes from the operating system rather than from Python -- ``flock`` on POSIX,
+# ``LockFileEx`` on native Windows (#584, ADR-0058) -- so it is gated as its own
+# member across every platform that answer is claimed on. The Python job runs on
+# Linux alone, which would leave the Windows half of the claim unexecuted.
+RUN_CONTROL_SUITE = "test_run_control.py"
+RUN_DISCOVERY_SUITE = "test_run_discovery.py"
 
 # The operating systems each member claims to support (ADR-0013 "Runtime floors";
 # ``docs/runners.md``). Normalised to the runner-image family (image label minus
@@ -252,6 +259,12 @@ def _is_powershell_gate(job: _Job) -> bool:
         POWERSHELL_CONFORMANCE in text
         and POWERSHELL_BOUNDARY in text
     )
+
+
+def _is_run_control_gate(job: _Job) -> bool:
+    """Runs both the control-artifact liveness suite and the discovery suite."""
+    text = _job_run_text(job)
+    return RUN_CONTROL_SUITE in text and RUN_DISCOVERY_SUITE in text
 
 
 def _is_rust_gate(job: _Job) -> bool:
@@ -649,6 +662,14 @@ FAMILY: tuple[_Member, ...] = (
         census_marker=POWERSHELL_CENSUS_MARKER,
     ),
     _Member(
+        name="Run control",
+        predicate=_is_run_control_gate,
+        tokens=(RUN_CONTROL_SUITE, RUN_DISCOVERY_SUITE),
+        platforms=frozenset({LINUX, MACOS, WINDOWS}),
+        census=_python_census_reasons,
+        census_marker=PYTHON_CENSUS_MARKER,
+    ),
+    _Member(
         name="Rust",
         predicate=_is_rust_gate,
         tokens=(RUST_SUITE,),
@@ -811,6 +832,37 @@ def test_ci_gates_powershell_port_across_the_os_matrix() -> None:
     assert {LINUX, MACOS, WINDOWS} <= platforms, (
         "the PowerShell port must be gated on Linux, macOS, and Windows "
         f"(PowerShell 7+); found {sorted(platforms)}"
+    )
+
+
+def test_ci_gates_run_control_liveness_on_every_claimed_platform() -> None:
+    """The liveness oracle is proved where it runs, not only where Python does.
+
+    ``is_run_alive`` is not a Python answer: it is an advisory lock the kernel
+    grants or refuses, so a suite that passes on Linux says nothing at all about
+    the ``LockFileEx`` path a Windows operator's ``git-loopy runs`` takes.
+    ADR-0058 requires a *supported* answer on macOS, Linux and native Windows
+    rather than an ``unknown`` presented as parity, and this pin is what makes
+    that a claim CI can falsify.
+    """
+    workflows = _loaded_workflows()
+
+    control_jobs = [
+        (path, name)
+        for path, name, job in _all_jobs(workflows)
+        if _is_run_control_gate(job)
+    ]
+    assert control_jobs, (
+        "no CI job runs the Run control liveness suite "
+        f"({RUN_CONTROL_SUITE}) together with Run discovery ({RUN_DISCOVERY_SUITE}). "
+        "The platform claim in ADR-0058 is only as good as the platform it is "
+        "executed on."
+    )
+
+    platforms = _gate_platforms(workflows, _is_run_control_gate)
+    assert {LINUX, MACOS, WINDOWS} <= platforms, (
+        "Run control liveness must be gated on Linux, macOS, and native Windows; "
+        f"found {sorted(platforms)}"
     )
 
 

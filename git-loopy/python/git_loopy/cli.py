@@ -204,6 +204,11 @@ _COMMAND_SPECS = (
         "skills list, skills edit, and skills sync for the closed-world Skill policy.",
     ),
     _CommandSpec(
+        "runs",
+        "Run control",
+        "List this clone's Runs and whether each one is still running.",
+    ),
+    _CommandSpec(
         "labels",
         "Repository maintenance",
         "Report or reconcile the tracker Label vocabulary.",
@@ -1037,6 +1042,23 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help="Report exactly what this sweep would remove without changing it.",
     )
 
+    _add_command(
+        sub,
+        "runs",
+        description=(
+            "List the Runs belonging to this clone — the worktree you are in "
+            "and every worktree it has registered — newest first, with the Run "
+            "identity to target, the worktree the Run was started in, and "
+            "whether it is still running. Liveness is read from each Run's own "
+            "control artifact, so a Run that ended is reported as ended and a "
+            "liveness this host cannot read is reported as unknown rather than "
+            "guessed. Another clone of the same repository is a separate "
+            "control domain and is never listed. Listing observes only: it "
+            "starts no work, stops nothing, and reclaims nothing (see "
+            "`git-loopy sweep` for that)."
+        ),
+    )
+
     config = _add_command(
         sub,
         "config",
@@ -1322,6 +1344,23 @@ def _run_sweep(args: argparse.Namespace) -> int:
         print(f"git-loopy: sweep requires a git repository: {exc}", file=sys.stderr)
         return 1
     return sweepcmd.run_sweep(repo_root=repo_root, dry_run=bool(args.dry_run))
+
+
+def _run_runs(_args: argparse.Namespace) -> int:
+    """Dispatch the clone-scoped Run listing.
+
+    Resolved from the invoking worktree, never from a machine-wide search, so a
+    command typed outside a clone has no domain to list and says so instead of
+    widening one (ADR-0058).
+    """
+    from git_loopy import runscmd
+
+    try:
+        repo_root = resolve_repo_root()
+    except RuntimeError as exc:
+        print(f"git-loopy: runs requires a git repository: {exc}", file=sys.stderr)
+        return 1
+    return runscmd.run_runs(repo_root=repo_root)
 
 
 def _run_info(
@@ -2919,6 +2958,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_doctor(sub_args)
         if sub_args.command == "sweep":
             return _run_sweep(sub_args)
+        if sub_args.command == "runs":
+            return _run_runs(sub_args)
         if sub_args.command == "config":
             return _run_config(sub_args)
         raise AssertionError(f"undispatched command {sub_args.command!r}")
