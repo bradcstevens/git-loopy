@@ -301,33 +301,108 @@ class TestWorkflowJobGatingInSourceOnlyMode:
         )
         assert result.returncode == 0, result.stderr
 
+    def test_rogue_policy_cannot_expand_distribution_mode_vocabulary(
+        self, tmp_path: Path
+    ) -> None:
+        """AC 5: Unknown mode is refused even if policy JSON attempts to declare it in distribution_modes."""
+        repo = tmp_path / "repo"
+        repo.mkdir(parents=True)
+        trust_dir = repo / "git-loopy/conformance"
+        trust_dir.mkdir(parents=True)
+        trust_json = trust_dir / "release-trust.json"
+        fixture_data = json.loads(TRUST_FIXTURE_PATH.read_text(encoding="utf-8"))
+        fixture_data["distribution_mode"] = "banana"
+        fixture_data["distribution_modes"] = ["banana"]
+        trust_json.write_text(json.dumps(fixture_data), encoding="utf-8")
+        with pytest.raises(DistributionModeError) as exc_info:
+            resolve_distribution_mode(repo)
+        assert "banana" in str(exc_info.value)
+
     def test_workflow_scheduling_graph_simulated_for_both_modes(self) -> None:
         """AC 8: Drive workflow boundary and assert actions scheduled in each mode."""
         workflow = _load_yaml(TUI_WORKFLOW_PATH)
         jobs = workflow["jobs"]
 
-        def eval_condition(raw_expr: str, ctx: dict[str, Any]) -> bool:
-            expr = raw_expr.strip()
-            expr = expr.replace("github.event_name != 'push'", str(ctx.get("event_name") != "push"))
-            expr = expr.replace("github.event_name == 'pull_request'", str(ctx.get("event_name") == "pull_request"))
-            expr = expr.replace("needs.identity.outputs.distribution_mode == 'artifact-bearing'", str(ctx.get("distribution_mode") == "artifact-bearing"))
-            expr = expr.replace("startsWith(github.ref, 'refs/tags/v')", str(ctx.get("ref", "").startswith("refs/tags/v")))
-            expr = expr.replace("&&", " and ").replace("||", " or ")
-            return bool(eval(expr))
+        def simulate_workflow_dag(ctx: dict[str, Any]) -> dict[str, str]:
+            """Simulate GitHub Actions DAG execution with condition evaluation and needs skip propagation."""
+            outcomes: dict[str, str] = {}
+
+            def eval_condition(raw_expr: str) -> bool:
+                expr = raw_expr.strip()
+                expr = expr.replace("github.event_name != 'push'", str(ctx.get("event_name") != "push"))
+                expr = expr.replace("github.event_name == 'pull_request'", str(ctx.get("event_name") == "pull_request"))
+                expr = expr.replace("needs.identity.outputs.distribution_mode == 'artifact-bearing'", str(ctx.get("distribution_mode") == "artifact-bearing"))
+                expr = expr.replace("needs.identity.outputs.prerelease == 'false'", str(not ctx.get("prerelease", False)))
+                expr = expr.replace("startsWith(github.ref, 'refs/tags/v')", str(ctx.get("ref", "").startswith("refs/tags/v")))
+                expr = expr.replace("&&", " and ").replace("||", " or ")
+                return bool(eval(expr))
+
+            remaining = set(jobs.keys())
+            while remaining:
+                progress = False
+                for job_name in sorted(remaining):
+                    job = jobs[job_name]
+                    raw_needs = job.get("needs", [])
+                    if isinstance(raw_needs, str):
+                        needs_list = [raw_needs]
+                    else:
+                        needs_list = list(raw_needs)
+
+                    if all(dep in outcomes for dep in needs_list):
+                        if any(outcomes[dep] != "success" for dep in needs_list):
+                            outcomes[job_name] = "skipped"
+                        else:
+                            cond = job.get("if")
+                            if cond is None or eval_condition(cond):
+                                outcomes[job_name] = "success"
+                            else:
+                                outcomes[job_name] = "skipped"
+                        remaining.remove(job_name)
+                        progress = True
+                        break
+                if not progress:
+                    raise RuntimeError(f"Cycle detected in workflow jobs: {remaining}")
+
+            return outcomes
 
         # Tag push in source-only mode
-        source_only_ctx = {"event_name": "push", "ref": "refs/tags/v1.0.0", "distribution_mode": "source-only"}
-        assert eval_condition(jobs["plan"]["if"], source_only_ctx) is False
-        assert eval_condition(jobs["build"]["if"], source_only_ctx) is False
-        assert eval_condition(jobs["publish"]["if"], source_only_ctx) is False
-        # family-conformance runs on all events
-        assert "if" not in jobs["family-conformance"]
+        source_only_outcomes = simulate_workflow_dag({
+            "event_name": "push",
+            "ref": "refs/tags/v1.0.0",
+            "distribution_mode": "source-only",
+        })
+        assert source_only_outcomes["identity"] == "success"
+        assert source_only_outcomes["family-conformance"] == "success"
+        assert source_only_outcomes["plan"] == "skipped"
+        assert source_only_outcomes["build"] == "skipped"
+        assert source_only_outcomes["publish"] == "skipped"
+        for channel in ("homebrew", "winget", "scoop"):
+            if channel in jobs:
+                assert source_only_outcomes[channel] == "skipped"
 
         # Tag push in artifact-bearing mode
-        artifact_ctx = {"event_name": "push", "ref": "refs/tags/v1.0.0", "distribution_mode": "artifact-bearing"}
-        assert eval_condition(jobs["plan"]["if"], artifact_ctx) is True
-        assert eval_condition(jobs["build"]["if"], artifact_ctx) is True
-        assert eval_condition(jobs["publish"]["if"], artifact_ctx) is True
+        artifact_outcomes = simulate_workflow_dag({
+            "event_name": "push",
+            "ref": "refs/tags/v1.0.0",
+            "distribution_mode": "artifact-bearing",
+        })
+        assert artifact_outcomes["identity"] == "success"
+        assert artifact_outcomes["family-conformance"] == "success"
+        assert artifact_outcomes["plan"] == "success"
+        assert artifact_outcomes["build"] == "success"
+        assert artifact_outcomes["publish"] == "success"
+        for channel in ("homebrew", "winget", "scoop"):
+            if channel in jobs:
+                assert artifact_outcomes[channel] == "success"
+
+        # workflow_dispatch in source-only mode must not start helper builds
+        dispatch_outcomes = simulate_workflow_dag({
+            "event_name": "workflow_dispatch",
+            "ref": "refs/tags/v1.0.0",
+            "distribution_mode": "source-only",
+        })
+        assert dispatch_outcomes["build"] == "skipped"
+        assert dispatch_outcomes["publish"] == "skipped"
 
 
 class TestArtifactBearingPrerequisites:

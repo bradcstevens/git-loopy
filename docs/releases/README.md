@@ -29,7 +29,7 @@ publish package-channel metadata, signed platform artifacts, or a TUI helper.
 
 Releases operate under an explicit **distribution mode**,
 with the repository policy in [`release-trust.json`](../../git-loopy/conformance/release-trust.json)
-or the release declaration as the single authority:
+as the single authority:
 
 - **`source-only`** (default): The publication promise is complete with GitHub
   source archives and committed release notes. The release flow does not launch

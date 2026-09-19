@@ -18,7 +18,6 @@ from git_loopy.release_trust import (
     DISTRIBUTION_MODE_SOURCE_ONLY,
     DistributionModeError,
     resolve_distribution_mode,
-    verify_distribution_mode_prerequisites,
 )
 from git_loopy.release_version import (
     ReleaseVersionError,
@@ -180,10 +179,6 @@ def inspect_release_tag(
             repository_root,
             explicit_mode=distribution_mode,
             tag_ref=tag_ref,
-        )
-        verify_distribution_mode_prerequisites(
-            repository_root,
-            resolved_mode,
         )
     except DistributionModeError as exc:
         raise SourceReleaseError(str(exc)) from exc

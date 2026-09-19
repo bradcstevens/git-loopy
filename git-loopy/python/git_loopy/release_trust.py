@@ -58,6 +58,13 @@ DEFAULT_DISTRIBUTION_MODES = (
     DISTRIBUTION_MODE_SOURCE_ONLY,
     DISTRIBUTION_MODE_ARTIFACT_BEARING,
 )
+KNOWN_DISTRIBUTION_MODES = DEFAULT_DISTRIBUTION_MODES
+
+
+def _tui_release():
+    from git_loopy import tui_release
+
+    return tui_release
 
 
 @dataclass(frozen=True)
@@ -243,59 +250,36 @@ def load_trust_policy(repository_root: Path) -> TrustPolicy:
     )
 
 
+def _run_git_text(repository_root: Path, *args: str) -> str:
+    try:
+        res = subprocess.run(
+            ["git", *args],
+            cwd=repository_root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except Exception as exc:
+        raise DistributionModeError(f"git {' '.join(args)} failed: {exc}") from exc
+    if res.returncode != 0:
+        raise DistributionModeError(f"git {' '.join(args)} failed: {res.stderr.strip()}")
+    return res.stdout
+
+
 def _extract_tag_distribution_mode(
     repository_root: Path, tag_ref: str
 ) -> str | None:
-    try:
-        type_res = subprocess.run(
-            ["git", "cat-file", "-t", tag_ref],
-            cwd=repository_root,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
-    except Exception as exc:
-        raise DistributionModeError(
-            f"Failed to resolve tag ref {tag_ref!r}: {exc}"
-        ) from exc
-
-    if type_res.returncode != 0:
-        raise DistributionModeError(
-            f"Failed to read tag object for {tag_ref!r}: {type_res.stderr.strip()}"
-        )
-
-    # Only annotated tags carry an annotation message. A lightweight tag points
-    # directly to a commit object and carries no tag annotation.
-    if type_res.stdout.strip() != "tag":
+    tag_type = _run_git_text(repository_root, "cat-file", "-t", tag_ref).strip()
+    if tag_type != "tag":
         return None
 
-    try:
-        result = subprocess.run(
-            ["git", "cat-file", "-p", tag_ref],
-            cwd=repository_root,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
-    except Exception as exc:
-        raise DistributionModeError(
-            f"Failed to read tag annotation for {tag_ref!r}: {exc}"
-        ) from exc
-
-    if result.returncode != 0:
-        raise DistributionModeError(
-            f"Failed to read tag annotation for {tag_ref!r}: {result.stderr.strip()}"
-        )
-
-    # In git tag objects, the tag message follows the first empty line after headers.
-    _, _, message = result.stdout.partition("\n\n")
+    raw_tag = _run_git_text(repository_root, "cat-file", "-p", tag_ref)
+    _, _, message = raw_tag.partition("\n\n")
 
     for line in message.splitlines():
         line = line.strip()
-        lowered = line.lower()
-        if lowered.startswith("distribution-mode:") or lowered.startswith("distribution_mode:"):
+        if line.lower().startswith("distribution_mode:"):
             return line.split(":", 1)[1].strip()
     return None
 
@@ -340,7 +324,7 @@ def resolve_distribution_mode(
         )
 
     policy = load_trust_policy(repository_root)
-    valid_modes = policy.distribution_modes or DEFAULT_DISTRIBUTION_MODES
+    valid_modes = KNOWN_DISTRIBUTION_MODES
     declared_mode = policy.distribution_mode
 
     if declared_mode not in valid_modes:
@@ -408,10 +392,9 @@ class TrustReceipt:
 def _artifact_for_triple(
     repository_root: Path, triple: str
 ) -> tui_release.PublishedArtifact:
-    from git_loopy import tui_release
-
-    metadata = tui_release.load_artifact_metadata(repository_root)
-    for artifact in tui_release.published_artifacts(metadata):
+    tui = _tui_release()
+    metadata = tui.load_artifact_metadata(repository_root)
+    for artifact in tui.published_artifacts(metadata):
         if artifact.target.triple == triple:
             return artifact
     raise ReleaseTrustError(f"{triple} is not one of this Release's published targets")
@@ -509,7 +492,7 @@ def _verify_one_artifact(
     channel: str,
     version: str,
 ) -> tuple[TrustReceipt | None, list[str]]:
-    from git_loopy import tui_release
+    tui = _tui_release()
 
     problems: list[str] = []
     platform = artifact.target.os
@@ -530,8 +513,8 @@ def _verify_one_artifact(
         )
     else:
         try:
-            tui_release.verify_checksum(archive, checksum)
-        except tui_release.TuiReleaseError as exc:
+            tui.verify_checksum(archive, checksum)
+        except tui.TuiReleaseError as exc:
             problems.append(f"{artifact.archive_name}: {exc}")
         else:
             held.add("checksum")
@@ -594,11 +577,11 @@ def verify_release_trust(
     allowance rests on it: a caller that could omit it could publish an
     unsigned artifact to a Release that says nothing about being one.
     """
-    from git_loopy import tui_release
+    tui = _tui_release()
 
     policy = load_trust_policy(repository_root)
     channel = policy.channel_for(version)
-    metadata = tui_release.load_artifact_metadata(repository_root)
+    metadata = tui.load_artifact_metadata(repository_root)
 
     receipts: list[TrustReceipt] = []
     problems: list[str] = []
@@ -616,7 +599,7 @@ def verify_release_trust(
             f"GitHub Release it attaches to {was} marked as a prerelease"
         )
 
-    for artifact in tui_release.published_artifacts(metadata):
+    for artifact in tui.published_artifacts(metadata):
         receipt, artifact_problems = _verify_one_artifact(
             repository_root,
             artifact_directory,
@@ -802,10 +785,10 @@ def observe_artifact(
         raise ReleaseTrustError(
             f"cannot observe {artifact.archive_name}: it is not in {artifact_directory}"
         )
-    from git_loopy import tui_release
+    tui = _tui_release()
 
     with tempfile.TemporaryDirectory() as scratch:
-        binary = tui_release.extract_helper(archive, artifact, Path(scratch))
+        binary = tui.extract_helper(archive, artifact, Path(scratch))
         return collect_evidence(
             policy,
             platform,
@@ -919,7 +902,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the Release trust gate."""
-    from git_loopy import tui_release
+    tui = _tui_release()
 
     args = _build_parser().parse_args(argv)
     try:
@@ -954,7 +937,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 attestation=args.attestation,
             ):
                 print(receipt.archive_name)
-    except (ReleaseTrustError, ReleaseVersionError, tui_release.TuiReleaseError) as exc:
+    except (ReleaseTrustError, ReleaseVersionError, tui.TuiReleaseError) as exc:
         print(f"Release trust verification failed: {exc}", file=sys.stderr)
         return 1
     return 0
