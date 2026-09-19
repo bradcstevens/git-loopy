@@ -178,7 +178,6 @@ def inspect_release_tag(
         resolved_mode = resolve_distribution_mode(
             repository_root,
             explicit_mode=distribution_mode,
-            tag_ref=tag_ref,
         )
     except DistributionModeError as exc:
         raise SourceReleaseError(str(exc)) from exc

@@ -33,13 +33,10 @@ from typing import Any, Callable, Sequence
 from git_loopy import tui_release
 from git_loopy.distribution_mode import (
     DEFAULT_DISTRIBUTION_MODES,
-    DISTRIBUTION_MODE_ARTIFACT_BEARING,
     DISTRIBUTION_MODE_SOURCE_ONLY,
-    SUPPORTED_DISTRIBUTION_MODES,
     TRUST_POLICY_PATH,
     DistributionModeError,
-    load_trust_policy as load_raw_trust_policy,
-    resolve_distribution_mode,
+    read_trust_policy,
 )
 from git_loopy.release_version import (
     ReleaseVersionError,
@@ -49,17 +46,10 @@ from git_loopy.release_version import (
 
 
 __all__ = [
-    "DEFAULT_DISTRIBUTION_MODES",
-    "DISTRIBUTION_MODE_ARTIFACT_BEARING",
-    "DISTRIBUTION_MODE_SOURCE_ONLY",
-    "DistributionModeError",
     "ReleaseTrustError",
-    "SUPPORTED_DISTRIBUTION_MODES",
-    "TRUST_POLICY_PATH",
     "TrustPolicy",
     "TrustReceipt",
     "load_trust_policy",
-    "resolve_distribution_mode",
     "verify_release_trust",
 ]
 
@@ -173,7 +163,7 @@ def load_trust_policy(repository_root: Path) -> TrustPolicy:
     """Read the declared platform-trust policy for this distribution."""
     policy_path = repository_root / TRUST_POLICY_PATH
     try:
-        document = load_raw_trust_policy(policy_path)
+        document = read_trust_policy(policy_path)
     except DistributionModeError as exc:
         raise ReleaseTrustError(str(exc)) from exc
 

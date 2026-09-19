@@ -7,9 +7,8 @@ Releases operate under an explicit distribution mode declared in
 - `artifact-bearing`: Compiled helper archives, signatures, attestations, receipts,
   and package channels are built, verified, and published.
 
-This module owns distribution mode parsing, tag metadata extraction, and fail-closed
-validation across the publication boundaries without dragging in SDK or runner
-dependencies.
+This module owns distribution mode parsing and fail-closed validation across the
+publication boundaries without dragging in SDK or runner dependencies.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ class DistributionModeError(ValueError):
     """The requested or declared distribution mode is invalid or inconsistent."""
 
 
-def load_trust_policy(policy_path: Path) -> dict[str, Any]:
+def read_trust_policy(policy_path: Path) -> dict[str, Any]:
     """Load and strictly validate release-trust policy document."""
     if not policy_path.is_file():
         raise DistributionModeError(f"Missing release trust policy: {policy_path} is absent")
@@ -64,9 +63,9 @@ def load_trust_policy(policy_path: Path) -> dict[str, Any]:
         raise DistributionModeError("distribution_modes must be a sequence of strings")
 
     for m in modes:
-        if m not in DEFAULT_DISTRIBUTION_MODES:
+        if m not in SUPPORTED_DISTRIBUTION_MODES:
             raise DistributionModeError(
-                f"unrecognized distribution mode '{m}' in policy; allowed: {DEFAULT_DISTRIBUTION_MODES}"
+                f"unrecognized distribution mode '{m}' in policy; allowed: {SUPPORTED_DISTRIBUTION_MODES}"
             )
 
     if mode not in modes:
@@ -77,10 +76,12 @@ def load_trust_policy(policy_path: Path) -> dict[str, Any]:
     return data
 
 
+load_trust_policy = read_trust_policy
+
+
 def resolve_distribution_mode(
     repository_root: Path,
     explicit_mode: str | None = None,
-    tag_ref: str | None = None,
 ) -> str:
     """Resolve and enforce the distribution mode contract fail-closed.
 
@@ -92,14 +93,14 @@ def resolve_distribution_mode(
     DistributionModeError.
     """
     policy_path = repository_root / TRUST_POLICY_PATH
-    policy_data = load_trust_policy(policy_path)
+    policy_data = read_trust_policy(policy_path)
     policy_mode = policy_data["distribution_mode"]
 
     if explicit_mode is not None:
         explicit_mode = explicit_mode.strip()
-        if not explicit_mode or explicit_mode not in DEFAULT_DISTRIBUTION_MODES:
+        if not explicit_mode or explicit_mode not in SUPPORTED_DISTRIBUTION_MODES:
             raise DistributionModeError(
-                f"Unknown distribution mode: {explicit_mode!r}. Valid modes are {list(DEFAULT_DISTRIBUTION_MODES)!r}"
+                f"Unknown distribution mode: {explicit_mode!r}. Valid modes are {list(SUPPORTED_DISTRIBUTION_MODES)!r}"
             )
         if explicit_mode != policy_mode:
             raise DistributionModeError(

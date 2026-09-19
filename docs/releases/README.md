@@ -46,7 +46,7 @@ The contract is strictly enforced:
   publishes helper artifacts; an artifact-bearing release whose trust gate fails
   refuses rather than silently downgrading to source-only.
 - **Fail-closed validation**: Unknown or inconsistent distribution mode declarations
-  (e.g., mismatch between tag annotation and explicit configuration) fail closed
+  (e.g., mismatch between requested publication mode and repository policy) fail closed
   before any publication step runs.
 
 ### Runtime line-printer fallback (plain mode)

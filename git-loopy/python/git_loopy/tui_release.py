@@ -1343,7 +1343,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dist_mode = resolve_distribution_mode(
                     args.repository_root,
                     explicit_mode=args.distribution_mode,
-                    tag_ref=args.tag_ref,
                 )
             except DistributionModeError as exc:
                 raise TuiReleaseError(str(exc)) from exc
