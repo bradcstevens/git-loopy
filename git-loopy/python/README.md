@@ -268,10 +268,12 @@ mutating command operate on the wrong artifact.
 
 `git-loopy update` refreshes the machine-local assets belonging to the installed
 **Release version** without changing that Release. It refreshes the **installed
-catalog**, downloads the matching TUI helper into `<config-home>/git-loopy/bin/`,
-and repairs Release-retired `[routing]` keys in the global Config. Only
-`--project` — which repairs a *tracked* file, and is the one exception to
-ADR-0054's machine-local scope — needs a repository.
+catalog**, resolves and downloads the newest compatible published TUI helper at
+or below the installed Release into `<config-home>/git-loopy/bin/` (recording its
+verified resolved identity in `git-loopy-tui.release`), and repairs
+Release-retired `[routing]` keys in the global Config. Only `--project` — which
+repairs a *tracked* file, and is the one exception to ADR-0054's machine-local
+scope — needs a repository.
 
 That helper is one a Run attaches to. The Python Runner resolves a helper in this
 order, first hit wins:
@@ -284,11 +286,14 @@ order, first hit wins:
 
 Ranks 1 and 2 are components of a packaged distribution, so Wrapper contract
 [§15](../../docs/wrapper-contract.md#15-release-and-compatibility-identity-must)
-requires exact Release-version equality and both are **refused** on drift, leaving
-the Run in plain text. A `PATH` helper is someone else's installation, so drift
-there is only a warning. A machine-local refusal names `git-loopy update` as its
-repair, because an `upgrade` that has outrun its `update` is the one thing that
-produces it.
+requires Release-version equality or a verified resolved fallback identity
+(ADR-0052, #492); unrecorded or tampered drift is **refused**, leaving the Run in
+plain text. A `PATH` helper is someone else's installation, so drift there is
+only a warning. A machine-local refusal names `git-loopy update` as its repair,
+because an `upgrade` that has outrun its `update` or unverified drift is the one
+thing that produces it. If no usable helper is published at or below the installed
+version, or if the Release index cannot be read, `update` reports an actionable
+diagnostic and exits non-zero.
 
 For the global `PROMPT.md` override, **Scaffold provenance** is the safety
 boundary: an `untouched` override is replaced with this Release's packaged

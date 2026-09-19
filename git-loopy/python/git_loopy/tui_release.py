@@ -27,6 +27,7 @@ import tempfile
 import tomllib
 import zipfile
 from dataclasses import dataclass
+from functools import cmp_to_key
 from http.client import HTTPException
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Sequence
@@ -50,8 +51,17 @@ _WINDOWS_EXECUTABLE_SUFFIX = ".exe"
 _RUNTIME_RELEASE_URL = (
     "https://github.com/bradcstevens/git-loopy/releases/download/v{version}/{artifact}"
 )
+_RUNTIME_RELEASE_INDEX_URL = (
+    "https://api.github.com/repos/bradcstevens/git-loopy/releases?per_page=100&page={page}"
+)
 
 _HEX_DIGEST = re.compile("[0-9a-fA-F]{64}")
+_SEMVER = re.compile(
+    r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\."
+    r"(?P<patch>0|[1-9][0-9]*)(?:-(?P<prerelease>"
+    r"[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
 
 #: The discovery ranks that are components of one packaged distribution, and the
 #: repair each one's Release drift has. Wrapper contract §15 refuses both rather
@@ -116,6 +126,7 @@ class ArtifactMetadata:
     checksum_algorithm: str
     archive_formats: dict[str, tuple[str, str]]
     release_download_url_template: str
+    release_index_url_template: str = _RUNTIME_RELEASE_INDEX_URL
 
 
 @dataclass(frozen=True)
@@ -202,6 +213,9 @@ def _parse_artifact_metadata(document: dict[str, Any]) -> ArtifactMetadata:
             for host_os, record in document["archive_formats"].items()
         },
         release_download_url_template=str(document["release_download_url_template"]),
+        release_index_url_template=str(
+            document.get("release_index_url_template", _RUNTIME_RELEASE_INDEX_URL)
+        ),
     )
 
 
@@ -222,6 +236,91 @@ def release_artifact_url(
         version=release_version,
         artifact=artifact,
     )
+
+
+def resolve_published_release(
+    declared_version: str,
+    published_versions: Sequence[str],
+) -> str:
+    """Resolve the newest published helper Release no newer than the tree.
+
+    A Release line advances on every issue, while the cross-platform helper is
+    only present on completed GitHub Releases. The selected version remains the
+    helper's identity: callers must verify its ``--version`` output against this
+    result, not against the tree's possibly newer declaration.
+    """
+    declared = _parse_semver(declared_version, "declared Release version")
+    selected: tuple[str, tuple[int, int, int], tuple[str, ...] | None] | None = None
+    for published_version in published_versions:
+        published = _parse_semver(published_version, "published helper Release")
+        if _compare_semver(published, declared) > 0:
+            continue
+        if (
+            selected is None
+            or _compare_semver(published, selected) > 0
+            or (
+                _compare_semver(published, selected) == 0
+                and published_version == declared_version
+            )
+        ):
+            selected = published
+
+    if selected is None:
+        raise TuiReleaseError(
+            "no published git-loopy-tui Release is at or below declared Release "
+            f"version {declared_version!r}"
+        )
+    return selected[0]
+
+
+def _parse_semver(
+    version: str,
+    label: str,
+) -> tuple[str, tuple[int, int, int], tuple[str, ...] | None]:
+    match = _SEMVER.fullmatch(version)
+    if match is None:
+        raise TuiReleaseError(f"{label} {version!r} is not valid Semantic Versioning")
+    prerelease = (
+        tuple(match.group("prerelease").split("."))
+        if match.group("prerelease") is not None
+        else None
+    )
+    if prerelease is not None and any(
+        identifier.isdigit() and len(identifier) > 1 and identifier.startswith("0")
+        for identifier in prerelease
+    ):
+        raise TuiReleaseError(f"{label} {version!r} is not valid Semantic Versioning")
+    return (
+        version,
+        (int(match.group("major")), int(match.group("minor")), int(match.group("patch"))),
+        prerelease,
+    )
+
+
+def _compare_semver(
+    left: tuple[str, tuple[int, int, int], tuple[str, ...] | None],
+    right: tuple[str, tuple[int, int, int], tuple[str, ...] | None],
+) -> int:
+    if left[1] != right[1]:
+        return -1 if left[1] < right[1] else 1
+    if left[2] is None or right[2] is None:
+        if left[2] is None and right[2] is None:
+            return 0
+        return 1 if left[2] is None else -1
+
+    for left_identifier, right_identifier in zip(left[2], right[2]):
+        if left_identifier == right_identifier:
+            continue
+        left_numeric = left_identifier.isdigit()
+        right_numeric = right_identifier.isdigit()
+        if left_numeric and right_numeric:
+            return -1 if int(left_identifier) < int(right_identifier) else 1
+        if left_numeric != right_numeric:
+            return -1 if left_numeric else 1
+        return -1 if left_identifier < right_identifier else 1
+    if len(left[2]) == len(right[2]):
+        return 0
+    return -1 if len(left[2]) < len(right[2]) else 1
 
 
 def require_stable_release(
@@ -455,6 +554,18 @@ def probe_runtime_helper(
     )
 
 
+def read_installed_helper_release(helper: Path) -> str | None:
+    """Read the resolved Release recorded when this helper was installed."""
+    record = helper.parent / f"{helper.name}.release"
+    try:
+        lines = record.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return None
+    if len(lines) != 1 or not lines[0].strip():
+        return None
+    return lines[0].strip()
+
+
 def resolve_runtime_helper(
     repository_root: Path,
     *,
@@ -472,10 +583,11 @@ def resolve_runtime_helper(
     this Runner's own installation lifecycle owns and no other member writes,
     which is why it is a rank here rather than a change to that shared
     convention. Both of those are components of one packaged distribution, so
-    Wrapper contract §15 refuses either on Release drift; a ``PATH`` helper is a
-    separate installation and may be newer or older, so its drift is surfaced
-    with a warning instead. Any probe failure or schema mismatch degrades to
-    ``None``.
+    Wrapper contract §15 refuses either on Release drift unless verified
+    against the installer-recorded resolved Release (ADR-0052, #492); a ``PATH``
+    helper is a separate installation and may be newer or older, so its drift is
+    surfaced with a warning instead. Any probe failure or schema mismatch
+    degrades to ``None``.
     """
     environ = os.environ if env is None else env
     clone_local = _executable(
@@ -504,6 +616,16 @@ def resolve_runtime_helper(
         if probe.reported_version == release_version:
             return probe.path
         if origin in _DISTRIBUTION_HELPER_REPAIRS:
+            recorded = read_installed_helper_release(helper)
+            if recorded is not None and probe.reported_version == recorded:
+                try:
+                    parsed_recorded = _parse_semver(recorded, "installed helper Release")
+                    parsed_runner = _parse_semver(release_version, "Runner Release version")
+                    is_valid_fallback = _compare_semver(parsed_recorded, parsed_runner) <= 0
+                except TuiReleaseError:
+                    is_valid_fallback = False
+                if is_valid_fallback:
+                    return probe.path
             warn(
                 f"ignoring the {origin} git-loopy-tui helper "
                 f"({helper}) because it reports Release {probe.reported_version!r}, "
@@ -628,6 +750,53 @@ def _runtime_artifact_for_host(
     )
 
 
+def fetch_published_helper_releases(
+    artifact: PublishedArtifact,
+    *,
+    fetch: Callable[[str], bytes] | None = None,
+    index_url_template: str = _RUNTIME_RELEASE_INDEX_URL,
+) -> tuple[str, ...]:
+    """Discover every non-draft published Release carrying this host's helper."""
+    download_fn = fetch or _download_release_file
+    page = 1
+    versions: list[str] = []
+    while True:
+        url = index_url_template.format(page=page)
+        try:
+            payload = download_fn(url)
+            document = json.loads(payload.decode("utf-8"))
+        except (OSError, HTTPException, UnicodeError, json.JSONDecodeError) as exc:
+            raise TuiReleaseError(
+                f"cannot read published helper Releases from {url}: {exc}"
+            ) from exc
+        if not isinstance(document, list):
+            raise TuiReleaseError(
+                f"cannot read published helper Releases from {url}: "
+                "expected a list of releases"
+            )
+        for release in document:
+            if not isinstance(release, dict) or release.get("draft") is True:
+                continue
+            tag = release.get("tag_name")
+            if not isinstance(tag, str) or not tag.startswith("v"):
+                continue
+            assets = release.get("assets")
+            if not isinstance(assets, list):
+                continue
+            asset_names = {
+                item.get("name") for item in assets if isinstance(item, dict)
+            }
+            if (
+                artifact.archive_name in asset_names
+                and artifact.checksum_name in asset_names
+            ):
+                versions.append(tag.removeprefix("v"))
+        if len(document) < 100:
+            break
+        page += 1
+    return tuple(versions)
+
+
 def refresh_machine_local_helper(
     release_version: str,
     env: Mapping[str, str],
@@ -639,38 +808,142 @@ def refresh_machine_local_helper(
         [str, str, str | None], PublishedArtifact
     ] = _runtime_artifact_for_host,
     download: Callable[[str], bytes] | None = None,
+    releases_fetcher: Callable[[PublishedArtifact], Sequence[str]] | None = None,
+    index_url_template: str = _RUNTIME_RELEASE_INDEX_URL,
+    event_schema_version: int = EVENT_SCHEMA_VERSION,
 ) -> Path:
     """Replace the machine-local helper with the verified installed Release artifact."""
     artifact = artifact_resolver(host_system(), host_machine(), host_libc())
     destination = global_dir(env) / "bin" / artifact.executable_name
+    destination_record = destination.parent / f"{destination.name}.release"
     destination.parent.mkdir(parents=True, exist_ok=True)
     fetch = download or _download_release_file
+
+    if releases_fetcher is not None:
+        published_versions = releases_fetcher(artifact)
+    else:
+        published_versions = fetch_published_helper_releases(
+            artifact,
+            fetch=fetch,
+            index_url_template=index_url_template,
+        )
+
+    declared = _parse_semver(release_version, "declared Release version")
+    candidates: list[str] = []
+    for pub in published_versions:
+        parsed_pub = _parse_semver(pub, "published helper Release")
+        if _compare_semver(parsed_pub, declared) <= 0:
+            candidates.append(pub)
+
+    if not candidates:
+        raise TuiReleaseError(
+            "no published git-loopy-tui Release is at or below declared Release "
+            f"version {release_version!r}"
+        )
+
+    exact_candidates = [v for v in candidates if v == release_version]
+    other_candidates = [v for v in candidates if v != release_version]
+    other_candidates.sort(
+        key=cmp_to_key(
+            lambda a, b: _compare_semver(
+                _parse_semver(a, "candidate"), _parse_semver(b, "candidate")
+            )
+        ),
+        reverse=True,
+    )
+    ordered_candidates = exact_candidates + other_candidates
 
     with tempfile.TemporaryDirectory(
         prefix=f".{HELPER_COMMAND_NAME}-", dir=destination.parent
     ) as scratch_dir:
         scratch = Path(scratch_dir)
-        archive = scratch / artifact.archive_name
-        checksum = scratch / artifact.checksum_name
-        archive.write_bytes(
-            fetch(
-                _runtime_release_artifact_url(release_version, artifact.archive_name)
+        selected_version: str | None = None
+        extracted_helper: Path | None = None
+
+        for candidate_version in ordered_candidates:
+            candidate_dir = scratch / candidate_version
+            candidate_dir.mkdir(parents=True, exist_ok=True)
+            archive = candidate_dir / artifact.archive_name
+            checksum = candidate_dir / artifact.checksum_name
+            archive_url = _runtime_release_artifact_url(
+                candidate_version, artifact.archive_name
             )
-        )
-        checksum.write_bytes(
-            fetch(
-                _runtime_release_artifact_url(release_version, artifact.checksum_name)
+            checksum_url = _runtime_release_artifact_url(
+                candidate_version, artifact.checksum_name
             )
-        )
-        verify_checksum(archive, checksum)
-        extracted = extract_helper(archive, artifact, scratch / "extracted")
-        probe = probe_runtime_helper(extracted)
-        if probe.reported_version != release_version:
+            try:
+                archive.write_bytes(fetch(archive_url))
+            except TuiReleaseError:
+                raise
+            except (OSError, HTTPException) as exc:
+                raise TuiReleaseError(
+                    f"cannot download release artifact {archive_url}: {exc}"
+                ) from exc
+            try:
+                checksum.write_bytes(fetch(checksum_url))
+            except TuiReleaseError:
+                raise
+            except (OSError, HTTPException) as exc:
+                raise TuiReleaseError(
+                    f"cannot download release artifact {checksum_url}: {exc}"
+                ) from exc
+            verify_checksum(archive, checksum)
+            extracted = extract_helper(
+                archive, artifact, candidate_dir / "extracted"
+            )
+            try:
+                probe = probe_runtime_helper(
+                    extracted, event_schema_version=event_schema_version
+                )
+            except TuiReleaseError as exc:
+                if (
+                    len(ordered_candidates) > 1
+                    and "decodes Event schemas" in str(exc)
+                    and candidate_version != ordered_candidates[-1]
+                ):
+                    continue
+                raise
+            if probe.reported_version != candidate_version:
+                raise TuiReleaseError(
+                    f"release helper {artifact.archive_name} reports Release "
+                    f"{probe.reported_version!r}, not {candidate_version!r}"
+                )
+            selected_version = candidate_version
+            extracted_helper = extracted
+            break
+
+        if selected_version is None or extracted_helper is None:
             raise TuiReleaseError(
-                f"release helper {artifact.archive_name} reports Release "
-                f"{probe.reported_version!r}, not {release_version!r}"
+                "no compatible published git-loopy-tui Release found at or below "
+                f"declared Release version {release_version!r}"
             )
-        os.replace(extracted, destination)
+
+        backup_helper = scratch / "backup_helper"
+        backup_record = scratch / "backup_record"
+        had_helper = destination.exists()
+        had_record = destination_record.exists()
+        if had_helper:
+            shutil.copy2(destination, backup_helper)
+        if had_record:
+            shutil.copy2(destination_record, backup_record)
+
+        staged_record = scratch / f"{artifact.executable_name}.release"
+        staged_record.write_text(f"{selected_version}\n", encoding="utf-8")
+
+        try:
+            os.replace(staged_record, destination_record)
+            os.replace(extracted_helper, destination)
+        except Exception as exc:
+            if had_record:
+                shutil.copy2(backup_record, destination_record)
+            else:
+                destination_record.unlink(missing_ok=True)
+            if had_helper:
+                shutil.copy2(backup_helper, destination)
+            else:
+                destination.unlink(missing_ok=True)
+            raise TuiReleaseError(f"cannot activate TUI helper: {exc}") from exc
+
     return destination
 
 
