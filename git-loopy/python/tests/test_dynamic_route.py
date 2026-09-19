@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import asyncio
+import json
 
 from git_loopy import dynamic_route, static_route
 
@@ -1617,3 +1618,402 @@ def test_a_bound_decision_keeps_the_evidence_that_elected_the_work_route() -> No
     assert kept.source_model_identity == "aa/work-model/high"
     assert kept.intelligence_index == Decimal("80")
     assert proposal.work_evidence == kept
+
+
+def test_a_routing_request_carries_bounded_prior_attempt_evidence() -> None:
+    """AC1/AC2: a later attempt's request says what ran and how it ended.
+
+    The evidence rides the immutable request beside the issue text for the
+    reason ``issue_ref`` does — a Lane routes concurrently with its neighbours,
+    and per-Pickup state held anywhere else would attribute one Lane's history
+    to another. Its classification is the AC2 distinction made once, at the
+    boundary that owns it: ``DID_NOT_SOLVE`` is the only member that is evidence
+    about the *configuration*, and it is the only one a later election has to
+    answer for.
+    """
+    infrastructure = dynamic_route.PriorAttempt(
+        model="work-model",
+        reasoning_effort="high",
+        context_tier="default",
+        outcome=dynamic_route.PriorOutcome.INFRASTRUCTURE_FAILURE,
+        detail="crash",
+    )
+    unsolved = dynamic_route.PriorAttempt(
+        model="work-model",
+        reasoning_effort="high",
+        context_tier="default",
+        outcome=dynamic_route.PriorOutcome.DID_NOT_SOLVE,
+        detail="no_progress",
+    )
+
+    assert infrastructure.capability_evidence is False
+    assert unsolved.capability_evidence is True
+    assert dynamic_route.PriorOutcome.ADVANCED.capability_evidence is False
+    assert dynamic_route.PriorOutcome.NOTHING_TO_DO.capability_evidence is False
+
+    request = dynamic_route.RoutingRequest(
+        issue="Issue #562",
+        acceptance_criteria=("Reselect from outcome evidence.",),
+        task_type="implementation",
+        repository_context=(),
+        local_measurements=(),
+        bounded_input_tokens=100,
+        issue_ref=562,
+        lifecycle_position="retrying",
+        prior_attempts=(infrastructure, unsolved),
+    )
+    assert request.prior_attempts == (infrastructure, unsolved)
+    assert request.lifecycle_position == "retrying"
+
+    fresh = dynamic_route.RoutingRequest(
+        issue="Issue #562",
+        acceptance_criteria=("Reselect from outcome evidence.",),
+        task_type="implementation",
+        repository_context=(),
+        local_measurements=(),
+        bounded_input_tokens=100,
+    )
+    assert fresh.prior_attempts == ()
+    assert fresh.lifecycle_position is None
+
+    for broken in (
+        {"prior_attempts": [infrastructure]},
+        {"prior_attempts": ("no_progress",)},
+        {"prior_attempts": tuple(unsolved for _ in range(65))},
+        {"lifecycle_position": 2},
+    ):
+        try:
+            dynamic_route.RoutingRequest(
+                issue="Issue #562",
+                acceptance_criteria=(),
+                task_type="implementation",
+                repository_context=(),
+                local_measurements=(),
+                bounded_input_tokens=100,
+                **broken,
+            )
+        except ValueError:
+            continue
+        raise AssertionError(f"routing request accepted {broken!r}")
+
+
+def test_a_prior_outcome_reaches_the_selector_and_supersedes_its_proposal() -> None:
+    """AC1/AC7: the assessment sees the previous attempt, and a new one is stale.
+
+    Two halves of one property. The selector is *shown* the earlier attempt —
+    otherwise "reassess with the previous outcome" is a claim nothing carries —
+    and a proposal prepared before that ending cannot be bound after it, because
+    the ending is part of the request the identity is taken over. Nothing here
+    compares outcomes by hand: the invalidation is a consequence of where the
+    evidence lives.
+    """
+    evidence, capabilities = _fresh_router_inputs(score="80")
+    assessments: list[dynamic_route.AssessmentRequest] = []
+
+    async def fetch_evidence() -> dynamic_route.FreshEvidence:
+        return evidence
+
+    async def fetch_capabilities() -> dynamic_route.FreshHarnessCapabilities:
+        return capabilities
+
+    async def assess(
+        selector: dynamic_route.SelectorSettings,
+        request: dynamic_route.AssessmentRequest,
+    ) -> dynamic_route.SelectorCallResult:
+        del selector
+        assessments.append(request)
+        return dynamic_route.SelectorCallResult(
+            output={
+                "candidate_identity": request.candidates[0].stable_identity,
+                "summary": "Forecast from the published index.",
+            },
+            routing_credits=Decimal("0.1"),
+        )
+
+    async def record(decision: dynamic_route.DynamicRouteDecision) -> None:
+        del decision
+
+    router = dynamic_route.DynamicRouter(
+        evidence_fetch=fetch_evidence,
+        capabilities_fetch=fetch_capabilities,
+        selector_assess=assess,
+        recorder=record,
+        admission_ledger=dynamic_route.RoutingAdmissionLedger(
+            deadline_seconds=30,
+            routing_credit_allowance=Decimal("5"),
+            selector_concurrency=1,
+        ),
+    )
+    fresh = _routing_request()
+    proposal = asyncio.run(router.prepare(fresh))
+    assert isinstance(proposal, dynamic_route.RoutingProposal)
+    assert assessments[0].prior_attempts == ()
+
+    crashed = replace(
+        fresh,
+        lifecycle_position="retrying",
+        prior_attempts=(
+            dynamic_route.PriorAttempt(
+                model="work-model",
+                reasoning_effort="high",
+                context_tier="default",
+                outcome=dynamic_route.PriorOutcome.INFRASTRUCTURE_FAILURE,
+                detail="crash",
+            ),
+        ),
+    )
+    decision = asyncio.run(router.bind(proposal, crashed))
+
+    assert isinstance(decision, dynamic_route.DynamicRouteDecision)
+    assert decision.reassessed is True
+    assert decision.superseded_proposal_id == proposal.proposal_id
+    assert len(assessments) == 2
+    assert assessments[1].prior_attempts == crashed.prior_attempts
+
+
+def _repeat_router(
+    outputs: list[object],
+    assessments: list[dynamic_route.AssessmentRequest],
+) -> dynamic_route.DynamicRouter:
+    evidence, capabilities = _fresh_router_inputs(score="80")
+
+    async def fetch_evidence() -> dynamic_route.FreshEvidence:
+        return evidence
+
+    async def fetch_capabilities() -> dynamic_route.FreshHarnessCapabilities:
+        return capabilities
+
+    async def assess(
+        selector: dynamic_route.SelectorSettings,
+        request: dynamic_route.AssessmentRequest,
+    ) -> dynamic_route.SelectorCallResult:
+        del selector
+        assessments.append(request)
+        return dynamic_route.SelectorCallResult(
+            output=outputs.pop(0), routing_credits=Decimal("0.1")
+        )
+
+    async def record(decision: dynamic_route.DynamicRouteDecision) -> None:
+        del decision
+
+    return dynamic_route.DynamicRouter(
+        evidence_fetch=fetch_evidence,
+        capabilities_fetch=fetch_capabilities,
+        selector_assess=assess,
+        recorder=record,
+        admission_ledger=dynamic_route.RoutingAdmissionLedger(
+            deadline_seconds=30,
+            routing_credit_allowance=Decimal("5"),
+            selector_concurrency=1,
+        ),
+    )
+
+
+def _retry_request(outcome: dynamic_route.PriorOutcome) -> dynamic_route.RoutingRequest:
+    return replace(
+        _routing_request(),
+        lifecycle_position="retrying",
+        prior_attempts=(
+            dynamic_route.PriorAttempt(
+                model="work-model",
+                reasoning_effort="high",
+                context_tier="default",
+                outcome=outcome,
+                detail=outcome.value,
+            ),
+        ),
+    )
+
+
+def test_repeating_a_configuration_that_did_not_solve_the_task_needs_a_reason() -> None:
+    """AC2: neither blacklist a capable configuration nor repeat one blindly.
+
+    The configuration that already failed to solve this task stays on the
+    candidate list — excluding it would be the blind blacklisting AC2 forbids,
+    and a crash-only history is no evidence against it at all. What changes is
+    what the answer has to contain: re-electing a configuration a previous
+    attempt *ran to the end and solved nothing on* is refused unless the answer
+    says why, and the reason is checked at the parse seam rather than hoped for
+    in the prompt.
+    """
+    unsolved = _retry_request(dynamic_route.PriorOutcome.DID_NOT_SOLVE)
+    assessments: list[dynamic_route.AssessmentRequest] = []
+    router = _repeat_router(
+        [
+            {
+                "candidate_identity": "PLACEHOLDER",
+                "summary": "Highest published index among eligible configurations.",
+            }
+        ],
+        assessments,
+    )
+    refused = asyncio.run(router.prepare(unsolved))
+
+    assert isinstance(refused, dynamic_route.RoutingUnavailable)
+    assert (
+        refused.reason is dynamic_route.RoutingUnavailableReason.INVALID_SELECTOR_OUTPUT
+    )
+    assert [candidate.model for candidate in assessments[0].candidates] == [
+        "work-model"
+    ]
+
+    identity = assessments[0].candidates[0].stable_identity
+    assessments.clear()
+    justified = _repeat_router(
+        [
+            {
+                "candidate_identity": identity,
+                "summary": "Highest published index among eligible configurations.",
+                "repeat_justification": (
+                    "No other eligible configuration is evidenced, and the "
+                    "acceptance criteria narrowed since that attempt."
+                ),
+            }
+        ],
+        assessments,
+    )
+    proposal = asyncio.run(justified.prepare(unsolved))
+
+    assert isinstance(proposal, dynamic_route.RoutingProposal)
+    assert proposal.route.model == "work-model"
+    assert proposal.repeat_justification is not None
+    assert "acceptance criteria narrowed" in proposal.repeat_justification
+
+
+def test_an_infrastructure_failure_is_not_evidence_against_its_configuration() -> None:
+    """AC2: a crash is about the harness, so its route repeats without a reason.
+
+    The complement of the rule above, and the half ADR-0057 states outright:
+    *infrastructure failure is not automatically evidence of insufficient model
+    capability*. So no justification is owed — and one supplied anyway is
+    refused, because an unrequired key is a selector answering a question it was
+    not asked and the strict output shape is what keeps that detectable.
+    """
+    crashed = _retry_request(dynamic_route.PriorOutcome.INFRASTRUCTURE_FAILURE)
+    assessments: list[dynamic_route.AssessmentRequest] = []
+    probe = _repeat_router([{"candidate_identity": "?", "summary": "x"}], assessments)
+    asyncio.run(probe.prepare(crashed))
+    identity = assessments[0].candidates[0].stable_identity
+
+    accepted = asyncio.run(
+        _repeat_router(
+            [
+                {
+                    "candidate_identity": identity,
+                    "summary": "Highest published index among eligible options.",
+                }
+            ],
+            [],
+        ).prepare(crashed)
+    )
+    assert isinstance(accepted, dynamic_route.RoutingProposal)
+    assert accepted.repeat_justification is None
+
+    unasked = asyncio.run(
+        _repeat_router(
+            [
+                {
+                    "candidate_identity": identity,
+                    "summary": "Highest published index among eligible options.",
+                    "repeat_justification": "The crash was not this route's fault.",
+                }
+            ],
+            [],
+        ).prepare(crashed)
+    )
+    assert isinstance(unasked, dynamic_route.RoutingUnavailable)
+    assert (
+        unasked.reason is dynamic_route.RoutingUnavailableReason.INVALID_SELECTOR_OUTPUT
+    )
+
+
+def test_a_later_attempts_record_states_its_position_and_the_evidence_it_read() -> None:
+    """AC1/AC6: the record names the lifecycle position and the prior evidence.
+
+    Two facts, kept separate on purpose. The configuration is one axis and where
+    the issue sits in its **Attempt lifecycle** is another, and neither is
+    derivable from the other — an **Iteration** that advanced its issue without
+    closing it is a prior attempt that spent none, so counting rows would report
+    a retry that the ledger never granted.
+
+    And the evidence travels *verbatim* rather than as a count, for the reason
+    the elected candidate does: a record that merely restated "this was a retry"
+    would leave nobody able to check whether the reassessment answered the
+    ending it was given.
+    """
+    unsolved = _retry_request(dynamic_route.PriorOutcome.DID_NOT_SOLVE)
+    assessments: list[dynamic_route.AssessmentRequest] = []
+    probe = _repeat_router([{"candidate_identity": "?", "summary": "x"}], assessments)
+    asyncio.run(probe.prepare(unsolved))
+    identity = assessments[0].candidates[0].stable_identity
+
+    answer = {
+        "candidate_identity": identity,
+        "summary": "Highest published index among eligible configurations.",
+        "repeat_justification": "Nothing else is evidenced and eligible here.",
+    }
+    router = _repeat_router([answer, answer], [])
+    proposal = asyncio.run(router.prepare(unsolved))
+    assert isinstance(proposal, dynamic_route.RoutingProposal)
+    decision = asyncio.run(router.bind(proposal, unsolved))
+    assert isinstance(decision, dynamic_route.DynamicRouteDecision)
+
+    payload = dynamic_route.routing_provenance_payload(decision)
+
+    assert payload["lifecycle_position"] == "retrying"
+    assert payload["attempt"] == 2
+    assert payload["repeat_justification"] == (
+        "Nothing else is evidenced and eligible here."
+    )
+    assert payload["prior_attempts"] == [
+        {
+            "model": "work-model",
+            "effort": "high",
+            "context_tier": "default",
+            "outcome": "did_not_solve",
+            "detail": "did_not_solve",
+            "capability_evidence": True,
+        }
+    ]
+    assert json.loads(json.dumps(payload)) == payload
+
+
+def test_a_first_attempts_record_reports_no_prior_evidence_rather_than_omitting_it(
+) -> None:
+    """AC6: absent evidence is an empty list, never a missing key.
+
+    The rule the rest of this payload already follows — an unknown is a null,
+    never a dropped key — applied to the one field whose absence is the ordinary
+    case. A consumer has to be able to tell "this was a first attempt" from "the
+    Runner did not record what came before".
+    """
+    router = _repeat_router(
+        [
+            {
+                "candidate_identity": "?",
+                "summary": "Highest published index among eligible options.",
+            }
+        ],
+        [],
+    )
+    assessments: list[dynamic_route.AssessmentRequest] = []
+    probe = _repeat_router([{"candidate_identity": "?", "summary": "x"}], assessments)
+    asyncio.run(probe.prepare(_routing_request()))
+    identity = assessments[0].candidates[0].stable_identity
+    answer = {
+        "candidate_identity": identity,
+        "summary": "Highest published index among eligible options.",
+    }
+    router = _repeat_router([answer, answer], [])
+    fresh = replace(_routing_request(), lifecycle_position="fresh")
+    proposal = asyncio.run(router.prepare(fresh))
+    assert isinstance(proposal, dynamic_route.RoutingProposal)
+    decision = asyncio.run(router.bind(proposal, fresh))
+    assert isinstance(decision, dynamic_route.DynamicRouteDecision)
+
+    payload = dynamic_route.routing_provenance_payload(decision)
+
+    assert payload["lifecycle_position"] == "fresh"
+    assert payload["attempt"] == 1
+    assert payload["prior_attempts"] == []
+    assert payload["repeat_justification"] is None

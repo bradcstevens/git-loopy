@@ -818,7 +818,11 @@ something an inference may overrule. It **refuses rather than falls back**: an u
 source, an exhausted allowance or deadline, an empty verified intersection, an invalid selector
 answer, unreadable eligibility, or a provenance record that could not be written each end in an
 explicit *unavailable* decision, never in stale evidence, the run-wide default, or a cheaper
-selector. Its provenance lands **before** the work session opens (ADR-0057).
+selector. Its provenance lands **before** the work session opens. An attempt the **Attempt
+lifecycle** admits elects **again** rather than inheriting a fixed **Escalation rung**, and that
+election is handed the issue's **Attempt evidence** beside the freshly-read sources; the record
+keeps the attempt's lifecycle position separate from the configuration it elected, so a reassessed
+retry stays tellable from a first election that happened to agree (ADR-0057).
 _Avoid_: auto-routing, smart routing, model recommendation.
 
 **Route selector**:
@@ -880,6 +884,23 @@ inside the triage state machine it is only ever a consumer of. It is what a **Ro
 resolution**'s lifecycle position reports, which is how a same-pair crash retry reads as a retry.
 _Avoid_: retry count, attempt budget, issue status (that is **Status**, which is a run's
 *reporting* vocabulary and has no bearing on eligibility).
+
+**Attempt evidence**:
+What an issue's earlier attempts this **Run** ran on and what their endings are evidence *of*, read
+by the next **Dynamic route** election. It is the third dial one **Session outcome** turns, and a
+third one because the question is a third one: the **Escalation rung** asks whether the *pair*
+changes, the **Attempt lifecycle** asks whether the issue is worked again, and this asks what the
+next election is *told*. Its whole content is a classification, stated once and totally over the
+endings: only silent no-progress — the session that ran to the end, claimed no failure, and left
+nothing behind — is evidence about the configuration. A crash and a content-filtered turn are
+evidence about the harness, a timeout is its own verdict because neither neighbour would be honest,
+a no-more-tasks declaration is the **Agent** saying the work is absent, and an **Iteration** that
+advanced its issue reached no ending yet is still the most direct evidence there is that the
+configuration is working. Capability evidence **never blacklists**: every eligible configuration
+stays a candidate at every attempt, and re-electing one an earlier attempt failed to solve the task
+on costs a stated justification rather than a veto — an issue may simply be hard. Per **Run** and in
+memory like both its neighbours, because a bad night must not permanently demote a route (ADR-0057).
+_Avoid_: failure history, model blacklist, demotion (that is the **Calibration** term).
 
 **Skip**:
 The disposition an **Attempt lifecycle** reaches when an issue has spent every attempt this

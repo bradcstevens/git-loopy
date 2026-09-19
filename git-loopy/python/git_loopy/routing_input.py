@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Iterable, Sequence
 
-from git_loopy.dynamic_route import RoutingRequest
+from git_loopy.dynamic_route import PriorAttempt, RoutingRequest
 from git_loopy.gate import FeedbackLoop
 from git_loopy.measured_routing import MeasuredEntry, MeasuredRouting, MeasuredStatus
 
@@ -89,6 +89,8 @@ def build_routing_request(
     rendered_block: str,
     task_type: str,
     issue_ref: int | str | None = None,
+    lifecycle_position: str | None = None,
+    prior_attempts: Sequence[PriorAttempt] = (),
     feedback_loops: Sequence[FeedbackLoop] = (),
     measured: MeasuredRouting | None = None,
 ) -> RoutingRequest:
@@ -103,6 +105,16 @@ def build_routing_request(
         task_type: The settled **Task type** key. Classified *before* this is
             called (AC5), because the assessment is told what kind of work it
             is looking at rather than left to guess from the prose.
+        lifecycle_position: Where this attempt sits in the issue's **Attempt
+            lifecycle**, as the **Routing resolution** spells it. Carried onto
+            the decision's record so a reassessed retry is tellable from a first
+            election that happened to agree (#562, AC6).
+        prior_attempts: What earlier attempts on this issue ran on and how they
+            ended, oldest first, already classified by
+            :class:`~git_loopy.attempt_evidence.AttemptEvidenceLedger`.
+            Truncated to the most recent :data:`MAX_CRITERIA` for the reason the
+            criteria are: an over-long history is an assessable issue rather
+            than an unroutable one, and the *recent* end is the relevant one.
         feedback_loops: The repository's declared **Feedback loops**. This is
             the whole of the "relevant repository context": the gates this
             issue's work will actually have to pass, which is the one thing
@@ -136,6 +148,7 @@ def build_routing_request(
         if loop.runnable
     )[:MAX_CRITERIA]
     measurements = _local_measurements(measured, task_type)
+    history = tuple(prior_attempts)[-MAX_CRITERIA:]
     return RoutingRequest(
         issue=issue,
         acceptance_criteria=criteria,
@@ -143,9 +156,40 @@ def build_routing_request(
         repository_context=context,
         local_measurements=measurements,
         bounded_input_tokens=estimate_tokens(
-            (issue, task_type, *criteria, *context, *measurements)
+            (
+                issue,
+                task_type,
+                *criteria,
+                *context,
+                *measurements,
+                *(_attempt_estimate(attempt) for attempt in history),
+            )
         ),
         issue_ref=issue_ref,
+        lifecycle_position=lifecycle_position,
+        prior_attempts=history,
+    )
+
+
+def _attempt_estimate(attempt: PriorAttempt) -> str:
+    """What one history row costs the assessment, for the tier fit.
+
+    The estimate is what elects a context tier, so a history the prompt renders
+    and the estimate ignores is a request that grew without anything noticing.
+    The exact wording is :mod:`git_loopy.selector_session`'s, which is why this
+    counts the row's *facts* rather than importing its prose — over-estimating
+    only ever elects a larger tier, which is the safe direction to be wrong in.
+    """
+    return "".join(
+        value
+        for value in (
+            attempt.model,
+            attempt.reasoning_effort,
+            attempt.context_tier,
+            attempt.outcome.value,
+            attempt.detail,
+        )
+        if value is not None
     )
 
 

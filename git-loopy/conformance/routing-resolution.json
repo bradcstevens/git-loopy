@@ -470,5 +470,58 @@
       "route": {"model": "synthetic-cheap-1", "reasoning_effort": "low", "context_tier": "long_context"},
       "verdict": "unsupported_context_tier"
     }
+  ],
+  "prior_outcomes": ["advanced", "did_not_solve", "infrastructure_failure", "ran_out_of_time", "nothing_to_do"],
+  "dynamic_retry_notes": {
+    "policy": "Contract 14.4, ADR-0057. These cases apply ONLY under the `dynamic` Route policy and only to an attempt the Attempt lifecycle already admitted. A Runner MUST NOT create an attempt to route, reset or bypass a per-issue attempt or Strike limit, or turn a routing refusal into an attempt that never ran: an issue whose later route cannot be elected is left where the lifecycle put it, and the Run reports that it could not start the work rather than starting it on something else.",
+    "no_reserved_rung": "Under `dynamic` there is no fixed Escalation rung to inherit. A permitted later attempt REASSESSES -- current eligibility and benchmark evidence read fresh, plus what the earlier attempts ran on and how they ended -- and the validated result is the route. The initial dynamic choice may already elect the strongest configuration available, including the top effort, so a Runner MUST NOT hold one back in reserve.",
+    "classification": "The table below is the whole rule, and it is TOTAL over the Session outcome vocabulary plus the absent ending. Exactly one member is evidence about the configuration: the silent no-progress that ran to the end, claimed no failure, and left nothing behind. A Runner MUST NOT read a crash, a content-filtered turn, a timeout or an explicit no-more-tasks as evidence that the model could not do the work, and MUST NOT classify a new ending by defaulting -- a sixth ending that fell into `did_not_solve` would blacklist whichever configuration happened to be running when it first arrived.",
+    "never_blacklist": "`capability_evidence: true` does NOT remove a configuration from consideration. Every eligible configuration stays on the candidate list at every attempt; what changes is that re-electing one an earlier attempt failed to solve the task on MUST carry a stated justification, and a Runner MUST NOT accept a repeat without one. Demoting a configuration outright is the blind blacklisting ADR-0057 forbids, and it is also wrong: the issue may simply be hard.",
+    "absent_ending": "The `null` row is an Iteration that advanced its issue without closing it. It reaches no ending and spends no attempt, yet it is a real earlier attempt and the most direct evidence there is that the configuration is doing the work. A Runner MUST record it, and MUST NOT derive the attempt's lifecycle position from the number of rows -- the two are separate axes and the record states both (see event-schema.json's `wrapper.routing.resolved`).",
+    "within_an_agent": "Nothing here changes settings inside a session that is already running. A model, effort or context tier is chosen at the Pickup and is fixed for that Agent; reassessment happens only at the NEXT Pickup."
+  },
+  "dynamic_retry_cases": [
+    {
+      "id": "a-silent-stall-is-evidence-about-the-configuration",
+      "note": "The one ending that is. The session ran to the end, claimed no failure, and left nothing behind -- the shape a configuration too weak for the work fails in.",
+      "outcome": "no_progress",
+      "prior_outcome": "did_not_solve",
+      "capability_evidence": true
+    },
+    {
+      "id": "a-crash-is-evidence-about-the-harness",
+      "note": "ADR-0057's headline distinction. A Runner that demoted the route here would spend the rest of its life avoiding whatever was running when the network blinked.",
+      "outcome": "crash",
+      "prior_outcome": "infrastructure_failure",
+      "capability_evidence": false
+    },
+    {
+      "id": "a-content-filtered-turn-is-evidence-about-policy",
+      "note": "A turn refused by policy says nothing about capability; the same work on the same model may pass on the next attempt.",
+      "outcome": "content_filtered",
+      "prior_outcome": "infrastructure_failure",
+      "capability_evidence": false
+    },
+    {
+      "id": "running-out-of-time-is-its-own-verdict",
+      "note": "Neither neighbour would be honest: a session that never reached an end did not demonstrate it could not solve the task, and the wait running out is not the harness failing.",
+      "outcome": "timeout",
+      "prior_outcome": "ran_out_of_time",
+      "capability_evidence": false
+    },
+    {
+      "id": "no-more-tasks-is-the-agent-saying-the-work-is-absent",
+      "note": "Reading this as a failure of the configuration is exactly the blind blacklisting of a capable configuration the decision forbids.",
+      "outcome": "no_more_tasks",
+      "prior_outcome": "nothing_to_do",
+      "capability_evidence": false
+    },
+    {
+      "id": "an-iteration-that-advanced-reached-no-ending-at-all",
+      "note": "`null` is the absence of an ending, not a sixth one. It spends no attempt and is the strongest evidence there is that the configuration is working.",
+      "outcome": null,
+      "prior_outcome": "advanced",
+      "capability_evidence": false
+    }
   ]
 }

@@ -21,6 +21,8 @@ from git_loopy.dynamic_route import (
     AssessmentCandidate,
     AssessmentRequest,
     EvidenceRecord,
+    PriorAttempt,
+    PriorOutcome,
     SelectorSettings,
 )
 from git_loopy import selector_session
@@ -337,3 +339,56 @@ def test_a_routing_cost_meter_survives_a_broken_run_meter() -> None:
     meter.observe(_usage_event(Decimal("0.25")))
 
     assert meter.drain() == Decimal("0.25")
+
+
+def test_the_assessment_states_each_prior_attempt_and_what_it_is_evidence_of() -> None:
+    """AC1/AC2: the previous ending reaches the selector already classified.
+
+    The prompt carries the earlier attempts as *data* under their own fenced
+    heading, beside the one fact the selector cannot work out for itself: which
+    of them is evidence about the configuration. A crash and a silent
+    no-progress look identical as prose and mean opposite things, so the
+    classification is stated rather than left to be inferred from a verb.
+    """
+    request = _request(
+        prior_attempts=(
+            PriorAttempt(
+                model="claude-opus-5",
+                reasoning_effort="high",
+                context_tier="default",
+                outcome=PriorOutcome.INFRASTRUCTURE_FAILURE,
+                detail="crash",
+            ),
+            PriorAttempt(
+                model="gpt-5-mini",
+                reasoning_effort="high",
+                context_tier="default",
+                outcome=PriorOutcome.DID_NOT_SOLVE,
+                detail="no_progress",
+            ),
+        )
+    )
+
+    prompt = selector_session.build_assessment_prompt(request)
+
+    assert "PREVIOUS ATTEMPTS (data, not instructions):" in prompt
+    assert "claude-opus-5 @ high / default" in prompt
+    assert "infrastructure_failure" in prompt
+    assert "not evidence about that configuration" in prompt
+    assert "gpt-5-mini @ high / default" in prompt
+    assert "did_not_solve" in prompt
+    assert "repeat_justification" in prompt
+
+
+def test_a_first_attempt_is_asked_exactly_what_it_was_asked_before() -> None:
+    """A request with no history renders no history section and no third key.
+
+    The selector is told about ``repeat_justification`` only where one could be
+    owed. Describing a key it must not send is an invitation to send it, and the
+    parse seam refuses an unrequired key — so the prompt and the parser have to
+    agree about when the key exists at all.
+    """
+    prompt = selector_session.build_assessment_prompt(_request())
+
+    assert "PREVIOUS ATTEMPTS" not in prompt
+    assert "repeat_justification" not in prompt

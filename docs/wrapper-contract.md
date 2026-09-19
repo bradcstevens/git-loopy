@@ -1685,15 +1685,36 @@ election an answer an operator can audit rather than a plausible-looking guess.
   run-wide default, or a cheaper selector, and MUST preserve authorized Static routes and
   already-running work. A candidate refused this way is passed over for the Run rather than
   retried in place: re-admitting it immediately would spend the whole allowance on one issue.
-- **Unsupported portions are stated, not simulated.** Outcome-aware routing of a *later* attempt is
-  not part of this policy today. An Orchestrator MUST NOT claim that support, and MUST NOT silently
-  fall back to §14's fixed escalation rung in its place; as under `static`, a rung shipped by
-  default is not explicit authorization.
+- **A permitted later attempt reassesses; it does not inherit a rung.** Where the **Attempt
+  lifecycle** already admits another attempt on an issue, its new **Pickup** MUST elect again from
+  current evidence and eligibility, supplied together with what the issue's earlier attempts ran on
+  and how they ended. An Orchestrator MUST NOT reserve a configuration for a later attempt — the
+  first dynamic election may already take the strongest one available — and MUST NOT substitute
+  §14's fixed escalation rung, which under this policy is not a route anybody elected. Reassessment
+  creates no attempt: it MUST NOT reset or bypass a per-issue attempt or **Strike** limit, and a
+  later route that cannot be elected blocks the affected work under the rule above rather than
+  becoming an attempt that never ran.
+- **An infrastructure failure is not evidence about a configuration.** A crash, a policy-refused
+  turn, an exhausted wait and an explicit no-more-tasks each say something other than *this
+  configuration could not do this work*, and an Orchestrator MUST NOT read them as capability
+  evidence. Exactly one ending is: the session that ran to the end, claimed no failure, and left
+  nothing behind. Even that MUST NOT remove a configuration from consideration — every eligible
+  configuration stays a candidate at every attempt, and what re-electing one costs is a stated
+  justification rather than a veto. Repeating a configuration without one is invalid output, not a
+  route.
+- **Where the issue is and what it will run on are separate answers.** The **Routing resolution**,
+  the work session's own settings, and the CLI and **Dashboard** history MUST agree on the elected
+  configuration, and MUST report the attempt's **lifecycle position** beside it rather than in place
+  of it. A reassessed retry that re-elects the same configuration is otherwise indistinguishable
+  from a first election, and the position MUST NOT be derived from how many earlier attempts there
+  were: an **Iteration** that advanced its issue reaches no ending and spends no attempt, yet is a
+  real earlier attempt the next election is told about.
 
 The policy's vocabulary is pinned by
 [`routing-resolution.json`](../git-loopy/conformance/routing-resolution.json) (`static_route_policies`,
-the `dynamic` **Routing source**, and the case in which an elected route outranks every
-label-derived one) and its provenance record by
+the `dynamic` **Routing source**, the case in which an elected route outranks every label-derived
+one, and `dynamic_retry_cases`, which states totally what each ending tells the *next* election) and
+its provenance record by
 [`event-schema.json`](../git-loopy/conformance/event-schema.json)'s `wrapper.routing.resolved`
 contract and the rolling stream that carries one.
 

@@ -43,6 +43,8 @@ __all__ = [
     "FreshHarnessCapabilities",
     "refresh_harness_evidence",
     "RoutingRequest",
+    "PriorOutcome",
+    "PriorAttempt",
     "AssessmentCandidate",
     "AssessmentRequest",
     "SelectorCallResult",
@@ -722,6 +724,73 @@ def _capacity(block: Any) -> int | None:
     return int(value)
 
 
+class PriorOutcome(Enum):
+    """What one earlier attempt on this issue tells a later election (#562).
+
+    ADR-0057 rules that *infrastructure failure is not automatically evidence
+    of insufficient model capability*, and this enum is that rule made
+    checkable rather than narrated: exactly one member,
+    :attr:`DID_NOT_SOLVE`, is evidence about the **configuration**, and
+    :attr:`capability_evidence` is the single place that says so.
+
+    Four members rather than three because the alternative is a lie in one of
+    two directions. An Agent that reported no more tasks produced nothing, so
+    calling it ``ADVANCED`` overstates it; but it is also the Agent stating the
+    work is *absent*, so calling it ``DID_NOT_SOLVE`` would blacklist a
+    configuration that did nothing wrong — the exact "blindly blacklist capable
+    configurations" AC2 forbids. :attr:`RAN_OUT_OF_TIME` is a fifth for the same
+    kind of reason: a session that never reached an end demonstrated nothing
+    about solving the task, and the wait running out is not the harness failing
+    either.
+    """
+
+    ADVANCED = "advanced"
+    DID_NOT_SOLVE = "did_not_solve"
+    INFRASTRUCTURE_FAILURE = "infrastructure_failure"
+    RAN_OUT_OF_TIME = "ran_out_of_time"
+    NOTHING_TO_DO = "nothing_to_do"
+
+    @property
+    def capability_evidence(self) -> bool:
+        """Whether this ending is evidence the configuration cannot do the work."""
+        return self is PriorOutcome.DID_NOT_SOLVE
+
+
+@dataclass(frozen=True)
+class PriorAttempt:
+    """One earlier attempt on this issue: what it ran on, and how it ended.
+
+    Deliberately *not* a :class:`~git_loopy.session_outcome.SessionOutcome`.
+    That vocabulary lives one import away from the harness SDK, and this module
+    is a leaf on purpose — so the ending arrives already classified, with the
+    exact name it had kept beside it in :attr:`detail` for a reader who wants
+    the original fact back.
+    """
+
+    model: str | None
+    reasoning_effort: str | None
+    context_tier: str
+    outcome: PriorOutcome
+    detail: str | None = None
+
+    @property
+    def capability_evidence(self) -> bool:
+        """Whether this attempt is evidence about its own configuration."""
+        return self.outcome.capability_evidence
+
+    @property
+    def configuration(self) -> tuple[str | None, str | None, str]:
+        """The triple a later election is compared against for a repeat."""
+        return (self.model, self.reasoning_effort, self.context_tier)
+
+
+#: How many earlier attempts one request may carry. An issue's **Attempt
+#: lifecycle** allows two before it is skipped, so this is not a working bound
+#: on a well-behaved Run — it is the same bound every other request collection
+#: takes, so no path can grow the assessment input without passing a validator.
+_MAX_PRIOR_ATTEMPTS = 64
+
+
 @dataclass(frozen=True)
 class RoutingRequest:
     """The complete bounded, read-only issue input to dynamic routing."""
@@ -741,6 +810,29 @@ class RoutingRequest:
     mutable per-Pickup state — a Lane routes concurrently with its neighbours,
     and a shared "current issue" attribute would attribute one Lane's route to
     another under exactly the interleaving parallel mode exists to produce.
+    """
+
+    lifecycle_position: str | None = None
+    """Where this attempt sits in the issue's **Attempt lifecycle**, verbatim.
+
+    A plain string rather than
+    :class:`~git_loopy.config.RoutingLifecyclePosition`, because importing that
+    enum would put ``config`` on this leaf's import path — the very cycle
+    :func:`resolve_prerequisites` reads a Config duck-typed to avoid.
+
+    It is a *separate* axis from :attr:`prior_attempts` and not derivable from
+    it (AC6): an **Iteration** that advanced its issue without closing it
+    reached no ending, spends no attempt and stays ``fresh`` — yet it is
+    absolutely a prior attempt the next election should see.
+    """
+
+    prior_attempts: tuple["PriorAttempt", ...] = ()
+    """What earlier attempts on this issue ran on and how they ended (#562).
+
+    On the request rather than on router state, so a changed outcome changes
+    :func:`_relevant_input_identity` by construction: a proposal prepared
+    before the ending cannot be bound after it (AC7). Oldest first, because the
+    order a selector reads them in is the order they happened.
     """
 
     def __post_init__(self) -> None:
@@ -775,6 +867,19 @@ class RoutingRequest:
             raise ValueError("routing request collections exceed their bounded size")
         if sum(len(value) for group in text_groups for value in group) > 100_000:
             raise ValueError("routing request exceeds its bounded text size")
+        if self.lifecycle_position is not None and not isinstance(
+            self.lifecycle_position, str
+        ):
+            raise ValueError("routing request lifecycle position must be a string")
+        if not isinstance(self.prior_attempts, tuple) or not all(
+            isinstance(attempt, PriorAttempt) for attempt in self.prior_attempts
+        ):
+            raise ValueError(
+                "routing request prior attempts must be an immutable tuple of "
+                "PriorAttempt"
+            )
+        if len(self.prior_attempts) > _MAX_PRIOR_ATTEMPTS:
+            raise ValueError("routing request collections exceed their bounded size")
         _validate_bounded_input(self.bounded_input_tokens)
 
 
@@ -805,6 +910,13 @@ class AssessmentRequest:
     repository_context: tuple[str, ...]
     local_measurements: tuple[str, ...]
     candidates: tuple[AssessmentCandidate, ...]
+    prior_attempts: tuple[PriorAttempt, ...] = ()
+    """What earlier attempts ran on and how they ended, oldest first (#562).
+
+    Defaulted so a first attempt's request is byte-for-byte the request it was
+    before this existed, which is what keeps "no prior outcome" and "a prior
+    outcome nobody passed on" from rendering the same.
+    """
 
 
 @dataclass(frozen=True)
@@ -1013,6 +1125,9 @@ class RoutingProposal:
     evidence_retrieved_at: datetime
     capabilities_retrieved_at: datetime
     usage: RoutingUsage
+    lifecycle_position: str | None = None
+    prior_attempts: tuple[PriorAttempt, ...] = ()
+    repeat_justification: str | None = None
     nonbinding: bool = True
 
     @property
@@ -1049,6 +1164,9 @@ class DynamicRouteDecision:
     reassessed: bool
     superseded_proposal_id: str | None
     usage: RoutingUsage
+    lifecycle_position: str | None = None
+    prior_attempts: tuple[PriorAttempt, ...] = ()
+    repeat_justification: str | None = None
 
     @property
     def available(self) -> bool:
@@ -1266,6 +1384,9 @@ class DynamicRouter:
             reassessed=reassessed,
             superseded_proposal_id=superseded,
             usage=self._ledger.snapshot(),
+            lifecycle_position=active.lifecycle_position,
+            prior_attempts=active.prior_attempts,
+            repeat_justification=active.repeat_justification,
         )
         self._proposals.pop(active.proposal_id, None)
         try:
@@ -1366,6 +1487,7 @@ class DynamicRouter:
             repository_context=request.repository_context,
             local_measurements=request.local_measurements,
             candidates=candidates,
+            prior_attempts=request.prior_attempts,
         )
 
         async def call() -> SelectorCallResult:
@@ -1379,10 +1501,10 @@ class DynamicRouter:
             return self._unavailable(RoutingUnavailableReason.DEADLINE_EXHAUSTED)
         if refusal is not None or result is None:
             return self._unavailable(RoutingUnavailableReason.SELECTOR_UNAVAILABLE)
-        parsed = _parse_selector_output(result.output, candidates)
+        parsed = _parse_selector_output(result.output, candidates, request.prior_attempts)
         if isinstance(parsed, RoutingUnavailableReason):
             return self._unavailable(parsed)
-        selected, summary = parsed
+        selected, summary, justification = parsed
         route = WorkRoute(
             model=selected.model,
             reasoning_effort=selected.reasoning_effort,
@@ -1404,6 +1526,9 @@ class DynamicRouter:
             evidence_retrieved_at=evidence.retrieved_at,
             capabilities_retrieved_at=capabilities.retrieved_at,
             usage=self._ledger.snapshot(),
+            lifecycle_position=request.lifecycle_position,
+            prior_attempts=request.prior_attempts,
+            repeat_justification=justification,
         )
         self._proposals[proposal.proposal_id] = proposal
         return proposal
@@ -1472,8 +1597,10 @@ def _assessment_candidate(candidate: DynamicCandidate) -> AssessmentCandidate:
 
 
 def _parse_selector_output(
-    output: object, candidates: Sequence[AssessmentCandidate]
-) -> tuple[AssessmentCandidate, str] | RoutingUnavailableReason:
+    output: object,
+    candidates: Sequence[AssessmentCandidate],
+    prior_attempts: Sequence[PriorAttempt] = (),
+) -> tuple[AssessmentCandidate, str, str | None] | RoutingUnavailableReason:
     if output is None or output == "" or output == b"":
         return RoutingUnavailableReason.EMPTY_SELECTOR_OUTPUT
     if isinstance(output, bytes):
@@ -1488,20 +1615,17 @@ def _parse_selector_output(
             output = json.loads(output)
         except json.JSONDecodeError:
             return RoutingUnavailableReason.INVALID_SELECTOR_OUTPUT
-    if not isinstance(output, Mapping) or set(output) != {
-        "candidate_identity",
-        "summary",
-    }:
+    if not isinstance(output, Mapping) or set(output) not in (
+        _REQUIRED_SELECTOR_KEYS,
+        _REQUIRED_SELECTOR_KEYS | {_REPEAT_JUSTIFICATION_KEY},
+    ):
         return RoutingUnavailableReason.INVALID_SELECTOR_OUTPUT
     identity = output.get("candidate_identity")
     summary = output.get("summary")
     if (
         not isinstance(identity, str)
         or not isinstance(summary, str)
-        or not summary.strip()
-        or len(summary) > 500
-        or not _summary_is_grounded(summary)
-        or _claims_public_speed_is_issue_duration(summary)
+        or not _is_usable_prose(summary)
     ):
         return RoutingUnavailableReason.INVALID_SELECTOR_OUTPUT
     matches = [
@@ -1509,7 +1633,61 @@ def _parse_selector_output(
     ]
     if len(matches) != 1:
         return RoutingUnavailableReason.INVALID_SELECTOR_OUTPUT
-    return matches[0], summary.strip()
+    selected = matches[0]
+    justification = output.get(_REPEAT_JUSTIFICATION_KEY)
+    owed = _repeats_an_unsolved_configuration(selected, prior_attempts)
+    if owed != (_REPEAT_JUSTIFICATION_KEY in output):
+        return RoutingUnavailableReason.INVALID_SELECTOR_OUTPUT
+    if owed and (
+        not isinstance(justification, str) or not _is_usable_prose(justification)
+    ):
+        return RoutingUnavailableReason.INVALID_SELECTOR_OUTPUT
+    return (
+        selected,
+        summary.strip(),
+        justification.strip() if isinstance(justification, str) else None,
+    )
+
+
+#: The two keys every selector answer carries. A third,
+#: :data:`_REPEAT_JUSTIFICATION_KEY`, is required exactly when the elected
+#: configuration repeats one an earlier attempt failed to solve the task on, and
+#: refused otherwise — an unrequired key is a selector answering a question it
+#: was not asked, and only an exact shape makes that detectable.
+_REQUIRED_SELECTOR_KEYS = frozenset({"candidate_identity", "summary"})
+
+_REPEAT_JUSTIFICATION_KEY = "repeat_justification"
+
+
+def _repeats_an_unsolved_configuration(
+    selected: AssessmentCandidate, prior_attempts: Sequence[PriorAttempt]
+) -> bool:
+    """Whether this election re-runs a configuration that already solved nothing.
+
+    Only :attr:`PriorOutcome.DID_NOT_SOLVE` counts (AC2). A crash says the
+    harness fell over, and an Agent reporting nothing to do says the work is
+    absent; treating either as a verdict on the configuration would blacklist a
+    capable one on evidence that is not about it.
+    """
+    configuration = (
+        selected.model,
+        selected.reasoning_effort,
+        selected.context_tier,
+    )
+    return any(
+        attempt.capability_evidence and attempt.configuration == configuration
+        for attempt in prior_attempts
+    )
+
+
+def _is_usable_prose(value: str) -> bool:
+    """Whether one bounded free-text field may be published as it stands."""
+    return (
+        bool(value.strip())
+        and len(value) <= 500
+        and _summary_is_grounded(value)
+        and not _claims_public_speed_is_issue_duration(value)
+    )
 
 
 def _summary_is_grounded(summary: str) -> bool:
@@ -1563,6 +1741,14 @@ def routing_provenance_payload(decision: DynamicRouteDecision) -> dict[str, Any]
     - **Decimals travel as strings.** An Intelligence Index and a routing-credit
       figure are exact decimal quantities; JSON floats are not, and a Run's
       **Consumption** is reconciled against the credits recorded here.
+    - **The configuration and the lifecycle position are separate axes** (#562,
+      AC6). ``lifecycle_position`` is the issue's **Attempt lifecycle** state
+      and ``attempt`` counts the evidence rows before this one; neither is
+      derivable from the other, because an **Iteration** that advanced its issue
+      without closing it is a prior attempt the ledger charged nothing for.
+    - **Absent prior evidence is an empty list, not a missing key.** A consumer
+      has to be able to tell a first attempt from a Runner that did not record
+      what came before.
     """
     evidence = decision.work_evidence
     return {
@@ -1572,6 +1758,20 @@ def routing_provenance_payload(decision: DynamicRouteDecision) -> dict[str, Any]
         "effort": decision.route.reasoning_effort,
         "context_tier": decision.route.context_tier,
         "summary": decision.summary,
+        "lifecycle_position": decision.lifecycle_position,
+        "attempt": len(decision.prior_attempts) + 1,
+        "prior_attempts": [
+            {
+                "model": attempt.model,
+                "effort": attempt.reasoning_effort,
+                "context_tier": attempt.context_tier,
+                "outcome": attempt.outcome.value,
+                "detail": attempt.detail,
+                "capability_evidence": attempt.capability_evidence,
+            }
+            for attempt in decision.prior_attempts
+        ],
+        "repeat_justification": decision.repeat_justification,
         "selector_model": decision.selector.model,
         "selector_effort": decision.selector.reasoning_effort,
         "selector_context_tier": decision.selector.context_tier,

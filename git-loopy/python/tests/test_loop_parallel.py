@@ -7967,12 +7967,20 @@ def _dynamic_lane_ports(monkeypatch, *, answer) -> dict[str, list[Any]]:
 def _elects_lane_model(model: str):
     def _answer(request) -> str:
         (chosen,) = [c for c in request.candidates if c.model == model]
-        return json.dumps(
-            {
-                "candidate_identity": chosen.stable_identity,
-                "summary": "strongest verified index for this Lane's work",
-            }
-        )
+        answer = {
+            "candidate_identity": chosen.stable_identity,
+            "summary": "strongest verified index for this Lane's work",
+        }
+        if any(
+            attempt.capability_evidence
+            and attempt.configuration
+            == (chosen.model, chosen.reasoning_effort, chosen.context_tier)
+            for attempt in request.prior_attempts
+        ):
+            answer["repeat_justification"] = (
+                "no eligible candidate scores higher on this evidence"
+            )
+        return json.dumps(answer)
 
     return _answer
 
@@ -8069,6 +8077,66 @@ def test_a_lane_whose_dynamic_route_is_unavailable_opens_no_session(
     assert exit_code != 0
     assert fake_client.create_calls == []
     assert fake_git.active_worktrees == []
+
+
+def test_a_lane_that_stalled_reassesses_at_its_next_dynamic_pickup(
+    tmp_path, monkeypatch
+) -> None:
+    """AC9's second mode: outcome evidence crosses the dispatch boundary (#562).
+
+    The same shape as the **Escalation rung**'s per-issue rule
+    (:func:`test_a_lane_that_stalled_escalates_at_its_next_pickup`), and for the
+    same reason: a silently stalled **Lane** is never auto-resolved and its
+    issue is only ever re-taken by a later serial round, so evidence recorded
+    per mode would be recorded on the side of the boundary that cannot act on
+    it. The Lane learns the elected configuration solved nothing and the Pickup
+    that reassesses never hears.
+
+    Under a **Dynamic route** there is no rung to inherit, so the second
+    election *is* the mechanism. It is told what the Lane ran on and that the
+    ending was evidence about the work rather than about the harness, and the
+    record separates that position from the configuration.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _NoProgressFakeClient(
+            fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    asyncio.run(loop_module.run(_dynamic_parallel_config(max_nmt_strikes=9)))
+
+    lane, retry = (request for _selector, request in spied["assessments"])
+    assert lane.prior_attempts == ()
+    (evidence,) = retry.prior_attempts
+    assert evidence.model == "claude-opus-5"
+    assert evidence.outcome is dynamic_route.PriorOutcome.DID_NOT_SOLVE
+    assert evidence.capability_evidence is True
+
+    resolved = [
+        e for e in _logged_events(tmp_path) if e["type"] == "wrapper.routing.resolved"
+    ]
+    assert [(e["issue"], e["attempt"], e["lifecycle_position"]) for e in resolved] == [
+        (42, 1, "fresh"),
+        (42, 2, "retrying"),
+    ]
 
 
 def _dynamic_parallel_config(**overrides) -> RunConfig:

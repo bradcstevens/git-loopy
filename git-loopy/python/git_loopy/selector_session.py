@@ -22,6 +22,7 @@ from typing import Any, Callable, Mapping
 from git_loopy.dynamic_route import (
     AssessmentCandidate,
     AssessmentRequest,
+    PriorAttempt,
     SelectorCallResult,
     SelectorSettings,
 )
@@ -69,14 +70,22 @@ def build_assessment_prompt(request: AssessmentRequest) -> str:
     """Render the bounded, read-only assessment the selector is sent.
 
     The request's own fields and nothing else: the issue, its acceptance
-    criteria, the **Task type**, the bounded repository context and the
-    admitted local measurements, plus the candidates already narrowed by
+    criteria, the **Task type**, the bounded repository context, the admitted
+    local measurements and — on a later attempt — what earlier attempts ran on
+    and how they ended, plus the candidates already narrowed by
     :func:`git_loopy.dynamic_route.elect_selector`. Everything untrusted is
     fenced under a labelled heading *after* the instructions, so the session
     reads the rules before it reads anything that might try to rewrite them.
+
+    The history section and the ``repeat_justification`` rule appear together or
+    not at all (#562). Describing a key the parse seam will refuse is an
+    invitation to send it, so "when is the key owed" is answered once here and
+    once in :func:`git_loopy.dynamic_route._parse_selector_output`, from the
+    same evidence.
     """
     sections = [
         _INSTRUCTIONS,
+        *_repeat_rule(request.prior_attempts),
         "",
         "CANDIDATES (choose exactly one `candidate_identity`):",
         json.dumps(
@@ -93,7 +102,53 @@ def build_assessment_prompt(request: AssessmentRequest) -> str:
     sections += _fenced("ACCEPTANCE CRITERIA", request.acceptance_criteria)
     sections += _fenced("REPOSITORY CONTEXT", request.repository_context)
     sections += _fenced("LOCAL MEASUREMENTS", request.local_measurements)
+    sections += _fenced(
+        "PREVIOUS ATTEMPTS", tuple(map(_attempt_line, request.prior_attempts))
+    )
     return "\n".join(sections)
+
+
+def _repeat_rule(prior_attempts: tuple[PriorAttempt, ...]) -> list[str]:
+    """State the one extra output key a later attempt may owe.
+
+    Only where one of the listed attempts is capability evidence, because that
+    is the only case in which the key is accepted. An infrastructure failure
+    owes nothing: ADR-0057 rules it is not automatically evidence of
+    insufficient model capability, and the answer shape says so by having
+    nowhere to put an excuse for it.
+    """
+    if not any(attempt.capability_evidence for attempt in prior_attempts):
+        return []
+    return [
+        "",
+        "This issue has been attempted before; the PREVIOUS ATTEMPTS section "
+        "below says what ran and what each ending is evidence of. Those "
+        "configurations are all still choosable — an ending is not a ban. But "
+        "if you choose a configuration marked `did_not_solve`, add a third key "
+        '`"repeat_justification"` saying what makes this attempt different. '
+        "Send that key only then; on any other choice it is an error.",
+    ]
+
+
+def _attempt_line(attempt: PriorAttempt) -> str:
+    """One earlier attempt, with its classification rather than only its name.
+
+    A crash and a silent no-progress read alike as prose and mean opposite
+    things, so what the ending is *evidence of* is spelled out beside it — the
+    AC2 distinction stated where the selector reads it, not merely where the
+    parser enforces it.
+    """
+    effort = attempt.reasoning_effort or "no effort dial"
+    meaning = (
+        "ran to the end and solved nothing — evidence about that configuration"
+        if attempt.capability_evidence
+        else "not evidence about that configuration"
+    )
+    detail = f" ({attempt.detail})" if attempt.detail else ""
+    return (
+        f"{attempt.model} @ {effort} / {attempt.context_tier} ended "
+        f"{attempt.outcome.value}{detail}: {meaning}"
+    )
 
 
 def _fenced(heading: str, values: tuple[str, ...]) -> list[str]:

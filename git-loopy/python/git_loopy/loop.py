@@ -148,6 +148,7 @@ from git_loopy.staircase import PriceStaircase, StaircaseRefusal
 from git_loopy import rollup as rollup_module
 from git_loopy import worktree as worktree_module
 from git_loopy.active_issue import ActiveIssueBinding
+from git_loopy.attempt_evidence import AttemptEvidenceLedger
 from git_loopy.attempt_lifecycle import AttemptLedger, AttemptState
 from git_loopy.config import (
     RoutingResolution,
@@ -1326,6 +1327,14 @@ class _Loop:
         # a **Status** the runner wrote back to the tracker would put it inside
         # the triage state machine it is only ever a consumer of.
         self._attempts = AttemptLedger()
+        # What each issue's earlier attempts ran on, and what their endings are
+        # evidence of (#562, ADR-0057). The third dial one ending turns, and it
+        # is a third ledger because the question is a third one: the rung asks
+        # whether the pair changes, the lifecycle asks whether the issue is
+        # worked at all, and this asks what the *next election* is told. A crash
+        # moves the lifecycle, leaves the rung alone, and lands here classified
+        # as evidence about the harness rather than about the route.
+        self._attempt_evidence = AttemptEvidenceLedger()
         # The **Task-type classifier**, as this Run's Pickups call it (#409,
         # ADR-0029). Assembled here rather than injected whole because the one
         # thing it must not get wrong is where its **Consumption** goes: the
@@ -2277,7 +2286,7 @@ class _Loop:
         await self._note_classification_usage()
         labelled = await self._bump_classifier.labelled(task_type_labelled)
         if task_type_labelled is item:
-            return labelled, await self._routed_dynamically(labelled, routed)
+            return labelled, await self._bound_route(labelled, routed)
         try:
             resolution = self._resolve_route(labelled, warn=lambda _message: None)
         except TaskTypeError as exc:
@@ -2292,7 +2301,7 @@ class _Loop:
                 item.ref,
                 exc,
             )
-            return item, await self._routed_dynamically(item, routed)
+            return item, await self._bound_route(item, routed)
         self._diag.info(
             "issue #%s classified as %s; routed to %s @ %s",
             labelled.ref,
@@ -2300,7 +2309,27 @@ class _Loop:
             resolution.model,
             resolution.reasoning_effort,
         )
-        return labelled, await self._routed_dynamically(labelled, resolution)
+        return labelled, await self._bound_route(labelled, resolution)
+
+    async def _bound_route(
+        self, item: AfkReadyItem, resolution: RoutingResolution
+    ) -> RoutingResolution:
+        """Settle this **Pickup**'s route and remember it as the attempt's own.
+
+        One seam for both halves, because they are one moment: the Pickup is the
+        only thing that knows which route the session below will run on, and the
+        ending that eventually arrives has no business re-deriving it. Wrapping
+        :meth:`_routed_dynamically` rather than living inside it is deliberate —
+        a **Static route** returns from there untouched, and a stalled Static
+        route is evidence about its own pair exactly as an elected one is.
+
+        Nothing is recorded for a route that could not be settled: the
+        refusal propagates, and an attempt that never opened a session is not an
+        attempt to have evidence about (AC4).
+        """
+        resolved = await self._routed_dynamically(item, resolution)
+        self._attempt_evidence.bound(item.ref, resolved)
+        return resolved
 
     async def _note_classification_usage(self) -> None:
         """Charge the classification that just ran to this Run's routing usage.
@@ -2347,6 +2376,13 @@ class _Loop:
         inputs actually changed. Running them adjacently is not a weakening —
         an issue's content does not exist before its Pickup, so there is no
         earlier instant at which a proposal could honestly be made.
+
+        **A later attempt is the same call with more evidence** (#562). What
+        earlier attempts ran on and how they ended rides the request beside the
+        issue text, so a permitted retry reassesses rather than inheriting a
+        fixed rung — and a proposal prepared before an ending cannot survive it,
+        because the ending is part of the identity the router revalidates
+        against (AC7).
         """
         router = self._dynamic_router
         if router is None or static_route_applies(resolution):
@@ -2355,6 +2391,8 @@ class _Loop:
             rendered_block=item.rendered_block,
             issue_ref=item.ref,
             task_type=_assessed_task_type(resolution),
+            lifecycle_position=resolution.lifecycle_position.value,
+            prior_attempts=self._attempt_evidence.prior_attempts(item.ref),
             feedback_loops=(
                 self._dynamic_routing.feedback_loops
                 if self._dynamic_routing is not None
@@ -2848,7 +2886,7 @@ class _Loop:
         *,
         iter_num: int | None = None,
     ) -> None:
-        """Offer one ending to the two ledgers that read one (#408, #412, #413).
+        """Offer one ending to the three ledgers that read one (#408, #412, #413, #562).
 
         Called from a serial **Iteration** and from a **Lane** alike, because
         both ledgers are per issue rather than per mode: neither the pair a
@@ -2857,8 +2895,10 @@ class _Loop:
 
         The ending is offered whole to each, and neither decision is duplicated
         here: escalation triggers on silent no-progress alone, the **Attempt
-        lifecycle** disposes of all five endings, and a condition restated at
-        this call site could disagree with the ones that matter.
+        lifecycle** disposes of all five endings, the **Attempt evidence**
+        ledger classifies every one of them for the next election (#562), and a
+        condition restated at this call site could disagree with the ones that
+        matter.
 
         **This is also where the Run's one Strike is charged** (#413). The
         ceiling counts the issues a Run has given up on, and the moment an issue
@@ -2870,6 +2910,7 @@ class _Loop:
         ending and the accounting scope that finalizes it are different moments.
         """
         self._escalation.observe(ref, record.outcome)
+        self._attempt_evidence.observe(ref, record.outcome)
         before = self._attempts.state(ref)
         after = self._attempts.observe(ref, record.outcome)
         if after is AttemptState.SKIPPED and before is not AttemptState.SKIPPED:

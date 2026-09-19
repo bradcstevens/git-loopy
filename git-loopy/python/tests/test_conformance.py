@@ -41,6 +41,7 @@ from git_loopy.config import (
     MODEL_REASONING_EFFORTS,
     EffortGateWarning,
     RoutingLifecyclePosition,
+    RoutingResolution,
     RoutingSource,
     TASK_TYPE_KEYS,
     RunConfig,
@@ -50,6 +51,7 @@ from git_loopy.config import (
     gate_reasoning_effort,
     resolve_iteration_model,
 )
+from git_loopy.attempt_evidence import AttemptEvidenceLedger
 from git_loopy.attempt_lifecycle import AttemptLedger, AttemptState
 from git_loopy.escalation import EscalationLedger
 from git_loopy.session_outcome import SessionOutcome
@@ -1793,6 +1795,18 @@ def test_the_production_router_projects_the_pinned_routing_provenance() -> None:
             ),
         ),
         relevant_input_identity="e" * 64,
+        lifecycle_position=pinned["lifecycle_position"],
+        prior_attempts=tuple(
+            dynamic_route.PriorAttempt(
+                model=row["model"],
+                reasoning_effort=row["effort"],
+                context_tier=row["context_tier"],
+                outcome=dynamic_route.PriorOutcome(row["outcome"]),
+                detail=row["detail"],
+            )
+            for row in pinned["prior_attempts"]
+        ),
+        repeat_justification=pinned["repeat_justification"],
         validated_at=datetime(2026, 5, 16, 0, 0, 2, 150000, tzinfo=timezone.utc),
         evidence_retrieved_at=datetime.fromisoformat(
             pinned["evidence_retrieved_at"].replace("Z", "+00:00")
@@ -3983,6 +3997,84 @@ def test_the_static_route_fixture_names_the_policies_the_kit_can_parse() -> None
     assert set(_ROUTING_RESOLUTION["static_route_policies"]) == {
         policy.value for policy in RoutePolicy
     }
+
+
+_DYNAMIC_RETRY = _ROUTING_RESOLUTION["dynamic_retry_cases"]
+
+#: The one configuration every retry case is bound with. Held still on purpose:
+#: what a member has to get right is the ending's *meaning*, and a fixture that
+#: also varied the route would let a wrong classification pass by agreeing with
+#: the wrong row.
+_RESOLUTION_FOR_RETRY_CASES = RoutingResolution(
+    model="synthetic-cheap-1",
+    reasoning_effort="low",
+    context_tier="default",
+    source=RoutingSource.DYNAMIC,
+    task_type_keys=("implementation",),
+    gate_warnings=(),
+    lifecycle_position=RoutingLifecyclePosition.FRESH,
+)
+
+
+@pytest.mark.parametrize(
+    "case", _DYNAMIC_RETRY, ids=lambda case: case["id"]
+)
+def test_dynamic_retry_fixture(case: dict[str, Any]) -> None:
+    """What one ending tells the *next* election, driven through the ledger.
+
+    ADR-0057's sharpest rule and the one a native port is most likely to get
+    wrong: a harness that fell over says nothing about the configuration it fell
+    on, and a Runner that demoted a route for a transport failure would spend
+    the rest of its life avoiding whatever was running when the network blinked.
+    So the fixture pins the whole classification rather than an example of it —
+    a member that maps four endings correctly and the fifth by accident is a
+    member that blacklists a capable configuration on the fifth.
+
+    The route is the same in every case because the route is not the variable:
+    exactly one thing changes between these rows, and it is the ending.
+    """
+    ledger = AttemptEvidenceLedger()
+    ledger.bound(7, _RESOLUTION_FOR_RETRY_CASES)
+    ledger.observe(
+        7,
+        None if case["outcome"] is None else SessionOutcome(case["outcome"]),
+    )
+
+    (recorded,) = ledger.prior_attempts(7)
+    assert recorded.outcome.value == case["prior_outcome"]
+    assert recorded.capability_evidence is case["capability_evidence"]
+    assert recorded.configuration == (
+        _RESOLUTION_FOR_RETRY_CASES.model,
+        _RESOLUTION_FOR_RETRY_CASES.reasoning_effort,
+        _RESOLUTION_FOR_RETRY_CASES.context_tier,
+    )
+
+
+def test_the_dynamic_retry_fixture_classifies_every_ending_there_is() -> None:
+    """A vocabulary a case never reaches is a rule no port has to implement.
+
+    Stated over the **Session outcome** enum rather than over the fixture, so an
+    ending added to the kit without a row here fails at the fixture instead of
+    being silently classified by whatever default the next member happens to
+    write. The absent ending — an **Iteration** that advanced its issue and so
+    reached no ending at all — is the ``null`` row, and it is required for the
+    same reason: a Runner that dropped it would reroute an issue three commits
+    into being solved.
+    """
+    named = {case["outcome"] for case in _DYNAMIC_RETRY}
+
+    assert named == {outcome.value for outcome in SessionOutcome} | {None}
+    assert set(_ROUTING_RESOLUTION["prior_outcomes"]) == {
+        verdict.value for verdict in dynamic_route.PriorOutcome
+    }
+    assert {case["prior_outcome"] for case in _DYNAMIC_RETRY} == set(
+        _ROUTING_RESOLUTION["prior_outcomes"]
+    )
+    assert [
+        case["prior_outcome"]
+        for case in _DYNAMIC_RETRY
+        if case["capability_evidence"]
+    ] == ["did_not_solve"]
 
 
 _CALIBRATION_SEARCH = _load_fixture("calibration-search.json")

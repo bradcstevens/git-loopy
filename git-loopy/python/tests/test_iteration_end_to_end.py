@@ -5496,6 +5496,12 @@ def _elects(model: str) -> Callable[[Any], str]:
     has to read it out of the request rather than spell it — which is the same
     constraint a real selector is under, and exactly why the identity is a
     digest.
+
+    It also obeys the one rule a later attempt adds (#562): re-electing a
+    configuration a previous attempt ran to the end and solved nothing on
+    carries a ``repeat_justification``, and electing anything else does not.
+    Scripting an answer that ignored the rule would test the parse seam's
+    refusal rather than the Run's behaviour on a well-formed one.
     """
 
     def _answer(request: Any) -> str:
@@ -5504,12 +5510,20 @@ def _elects(model: str) -> Callable[[Any], str]:
             for candidate in request.candidates
             if candidate.model == model
         ]
-        return json.dumps(
-            {
-                "candidate_identity": chosen.stable_identity,
-                "summary": "strongest verified index for this work",
-            }
-        )
+        answer = {
+            "candidate_identity": chosen.stable_identity,
+            "summary": "strongest verified index for this work",
+        }
+        if any(
+            attempt.capability_evidence
+            and attempt.configuration
+            == (chosen.model, chosen.reasoning_effort, chosen.context_tier)
+            for attempt in request.prior_attempts
+        ):
+            answer["repeat_justification"] = (
+                "still the strongest evidenced eligible configuration"
+            )
+        return json.dumps(answer)
 
     return _answer
 
@@ -5536,6 +5550,9 @@ def _dynamic_run(tmp_path, monkeypatch, **overrides):
     fake_client, _fake_git = _wire_single_issue_github(
         tmp_path, monkeypatch, labels=overrides.pop("issue_labels", None)
     )
+    on_send = overrides.pop("on_send", None)
+    if on_send is not None:
+        fake_client.on_send = on_send
     _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
     monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
     spied = _wire_dynamic_ports(
@@ -5761,3 +5778,189 @@ def test_a_classification_counts_toward_this_runs_routing_usage(
         event for event in events if event["type"] == "wrapper.routing.resolved"
     ]
     assert record["classification_attempts"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Later dynamic attempts reselect from outcome evidence (#562, ADR-0057)
+# ---------------------------------------------------------------------------
+
+
+def _routing_records(tmp_path: Path) -> list[dict[str, Any]]:
+    """Every **Dynamic route** decision this Run recorded, in order."""
+    return [
+        event
+        for event in (json.loads(raw) for raw in _log_lines(tmp_path))
+        if event["type"] == "wrapper.routing.resolved"
+    ]
+
+
+def test_a_permitted_retry_reassesses_with_the_previous_outcome(
+    tmp_path, monkeypatch
+) -> None:
+    """The whole ticket, through the record an operator reads (AC1, AC3, AC6).
+
+    The first Iteration ends in silent no-progress, which the **Attempt
+    lifecycle** answers with one more attempt. Under the **Dynamic route** that
+    second **Pickup** does not inherit a fixed **Escalation rung** — there is
+    none, and ADR-0057 reserves none — it reassesses, and the assessment it buys
+    is handed what the first attempt ran on and what its ending was evidence of.
+
+    Both axes are on the record and neither is derived from the other: the
+    decision names the configuration, and ``lifecycle_position``/``attempt``
+    name where the issue sits. A record carrying only the first could not tell a
+    reassessed retry from a first election that happened to agree.
+    """
+    _fake_client, spied, exit_code = _dynamic_run(
+        tmp_path, monkeypatch, max_iterations=2, max_nmt_strikes=9
+    )
+
+    assert exit_code == 0
+    first, second = (request for _selector, request in spied["assessments"])
+    assert first.prior_attempts == ()
+    (evidence,) = second.prior_attempts
+    assert evidence.model == "claude-opus-5"
+    assert evidence.reasoning_effort == "high"
+    assert evidence.outcome is dynamic_route.PriorOutcome.DID_NOT_SOLVE
+    assert evidence.detail == "no_progress"
+    assert evidence.capability_evidence is True
+
+    opening, retry = _routing_records(tmp_path)
+    assert (opening["lifecycle_position"], opening["attempt"]) == ("fresh", 1)
+    assert opening["prior_attempts"] == []
+    assert (retry["lifecycle_position"], retry["attempt"]) == ("retrying", 2)
+    assert retry["prior_attempts"] == [
+        {
+            "model": "claude-opus-5",
+            "effort": "high",
+            "context_tier": "default",
+            "outcome": "did_not_solve",
+            "detail": "no_progress",
+            "capability_evidence": True,
+        }
+    ]
+    assert retry["repeat_justification"] is not None
+
+    assert [
+        (e["issue"], e["model"], e["routing_source"], e["lifecycle_position"])
+        for e in _bound_pickups(tmp_path)
+    ] == [
+        (42, "claude-opus-5", "dynamic", "fresh"),
+        (42, "claude-opus-5", "dynamic", "retrying"),
+    ]
+
+
+def test_a_crashed_attempt_is_reassessed_without_becoming_capability_evidence(
+    tmp_path, monkeypatch
+) -> None:
+    """AC2: the harness falling over says nothing about the route it fell on.
+
+    The retry still reassesses — current evidence and eligibility are re-read
+    either way — but the configuration that crashed is offered back with no
+    case to answer, so the selector may simply choose it again. A Run that
+    demoted a route for a transport failure would spend the rest of its life
+    avoiding whatever was running when the network blinked.
+    """
+    fake_client, spied, exit_code = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        max_iterations=2,
+        max_nmt_strikes=9,
+        on_send=_raise_a_transport_failure,
+    )
+
+    assert exit_code == 0
+    _first, second = (request for _selector, request in spied["assessments"])
+    (evidence,) = second.prior_attempts
+    assert evidence.outcome is dynamic_route.PriorOutcome.INFRASTRUCTURE_FAILURE
+    assert evidence.detail == "crash"
+    assert evidence.capability_evidence is False
+
+    _opening, retry = _routing_records(tmp_path)
+    assert retry["attempt"] == 2
+    assert retry["repeat_justification"] is None
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "claude-opus-5",
+        "claude-opus-5",
+    ]
+
+
+def test_an_explicitly_configured_rung_still_outranks_the_selector(
+    tmp_path, monkeypatch
+) -> None:
+    """AC5: explicit static escalation is an instruction, not a starting point.
+
+    An operator who wrote an ``[escalation]`` block under the dynamic policy has
+    named the pair a stalled issue is retried at, and ADR-0057 keeps the
+    selector away from it exactly as it keeps it away from a ``[routing]`` entry
+    or a run-wide pin. So the retry runs on the rung, reports ``escalated``, and
+    buys no second assessment at all — a credit spent to contradict an
+    instruction is a credit spent for nothing.
+
+    The rung is deliberately a *different* pair from the run-wide default: a
+    rung equal to what the issue would have run on anyway is a no-op by
+    :meth:`_Loop._resolve_route`'s own rule, which would leave the Pickup
+    dynamic and prove nothing about precedence. It is also a pair the harness
+    really offers, because an ``[escalation]`` block is a **Static route** and
+    is verified at preflight like every other one.
+    """
+    _fake_client, spied, exit_code = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        max_iterations=2,
+        max_nmt_strikes=9,
+        reasoning_effort="low",
+        escalation_rung=("gpt-5.6-terra", "high"),
+    )
+
+    assert exit_code == 0
+    assert len(spied["assessments"]) == 1, "a Static route bought a selector call"
+    assert [
+        (e["model"], e["effort"], e["routing_source"])
+        for e in _bound_pickups(tmp_path)
+    ] == [
+        ("claude-opus-5", "high", "dynamic"),
+        ("gpt-5.6-terra", "high", "escalated"),
+    ]
+    assert len(_routing_records(tmp_path)) == 1
+
+
+def test_an_unavailable_later_route_blocks_the_retry_without_spending_it(
+    tmp_path, monkeypatch
+) -> None:
+    """AC4/AC8: a routing refusal is not an attempt, and not a **Strike**.
+
+    The first attempt stalls and the lifecycle grants a second; the second
+    election cannot be made. Nothing may be invented to fill the gap — no stale
+    decision, no built-in default — and nothing may be charged for the session
+    that never opened: the issue is left where the lifecycle put it rather than
+    driven to ``skipped`` by a decision it never got.
+
+    The Run ends non-zero because the last Iteration bound nothing, which is the
+    honest report: blocking the affected work *is* the required behaviour, and a
+    Run that reported success while silently declining to work its one issue
+    would be indistinguishable from one that had nothing to do.
+    """
+    answers = iter((_elects("claude-opus-5"), None))
+
+    def _answer(request: Any) -> Any:
+        chosen = next(answers)
+        return None if chosen is None else chosen(request)
+
+    fake_client, _spied, exit_code = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        max_iterations=2,
+        max_nmt_strikes=9,
+        answer=_answer,
+    )
+
+    assert exit_code != 0
+    assert len(fake_client.create_calls) == 1, "a refused route still opened a session"
+    assert len(_routing_records(tmp_path)) == 1
+    assert _strikes(tmp_path) == []
+    skipped = [
+        event
+        for event in (json.loads(raw) for raw in _log_lines(tmp_path))
+        if event["type"] == "wrapper.pickup.skipped"
+    ]
+    assert skipped and "dynamic route unavailable" in skipped[-1]["reason"]

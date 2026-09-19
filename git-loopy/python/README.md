@@ -992,6 +992,11 @@ What happens per issue:
    evidence elected the route, when each source was read, which selector
    assessed it, and what it cost — and it is written *before* the session opens.
    If that record cannot be written, the route is refused.
+7. **A permitted retry reassesses.** When the **Attempt lifecycle** grants an
+   issue another attempt, its next Pickup elects again — and this time the
+   assessment is also told what the earlier attempts ran on and how they ended.
+   There is no reserved escalation rung under `dynamic`; the first election may
+   already take the strongest configuration available.
 
 Two properties are worth knowing before you turn it on:
 
@@ -1008,9 +1013,29 @@ Two properties are worth knowing before you turn it on:
   already in flight when a bound is reached is disclosed rather than hidden, and
   no further routing call is admitted afterwards.
 
-Not yet supported, and stated rather than simulated: routing a **later attempt**
-from the outcome of the earlier one. Under `dynamic`, git-loopy does not silently
-substitute the built-in escalation rung for it.
+### What a later attempt is told
+
+Only the endings that say something about the *work* count against a
+configuration. A session that crashed, was refused by content policy, ran out of
+time, or reported there was nothing to do tells the next election about your
+harness, your clock or your backlog — not about the model. Exactly one ending is
+evidence about the configuration: the session that ran to the end, claimed no
+failure, and left nothing behind.
+
+Even that does not blacklist anything. Every eligible configuration stays a
+candidate at every attempt; what changes is that re-electing one an earlier
+attempt failed to solve the task on has to say why, and an answer that repeats it
+silently is rejected as invalid output rather than accepted as a route. An issue
+can simply be hard, and a Run that demoted a route for a network blink would
+spend the rest of its life avoiding whatever was running at the time.
+
+The record keeps the two axes apart. `wrapper.routing.resolved` carries
+`lifecycle_position` and `attempt` beside the elected `model` / `effort` /
+`context_tier`, plus the `prior_attempts` the election was handed and any
+`repeat_justification` it gave — so a reassessed retry that re-elects the same
+configuration is still tellable from a first election that happened to agree.
+Nothing changes inside a session that is already running: the route is fixed for
+that Agent, and reassessment happens at the next Pickup.
 
 The same remote-placement refusal applies: `route_policy = "dynamic"` with a
 non-`local` `execution_host` is refused before any work, for the reason above.
