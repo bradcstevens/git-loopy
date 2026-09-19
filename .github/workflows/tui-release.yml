@@ -64,7 +64,7 @@ jobs:
   plan:
     name: Prove the release plan
     needs: identity
-    if: github.event_name == 'pull_request' || needs.identity.outputs.distribution_mode == 'artifact-bearing'
+    if: github.event_name != 'push' || needs.identity.outputs.distribution_mode == 'artifact-bearing'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -102,7 +102,6 @@ jobs:
   family-conformance:
     name: Prove Runner-family Conformance
     needs: identity
-    if: github.event_name == 'pull_request' || needs.identity.outputs.distribution_mode == 'artifact-bearing'
     uses: ./.github/workflows/runner-family-gate.yml
 
   build:
@@ -110,7 +109,7 @@ jobs:
     needs:
       - identity
       - plan
-    if: github.event_name == 'pull_request' || needs.identity.outputs.distribution_mode == 'artifact-bearing'
+    if: github.event_name != 'push' || needs.identity.outputs.distribution_mode == 'artifact-bearing'
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     # A tagged Release enters the protected environment that holds the signing

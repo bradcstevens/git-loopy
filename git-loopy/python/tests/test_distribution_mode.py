@@ -16,6 +16,7 @@ Ensures that:
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -100,23 +101,35 @@ class TestDistributionModeAuthority:
         mode = resolve_distribution_mode(REPOSITORY_ROOT)
         assert mode == DISTRIBUTION_MODE_SOURCE_ONLY
 
-    def test_explicit_requested_mode_overrides_policy_default(self) -> None:
+    def test_explicit_requested_mode_matching_policy_succeeds(self) -> None:
         mode = resolve_distribution_mode(
             REPOSITORY_ROOT,
-            explicit_mode=DISTRIBUTION_MODE_ARTIFACT_BEARING,
+            explicit_mode=DISTRIBUTION_MODE_SOURCE_ONLY,
         )
-        assert mode == DISTRIBUTION_MODE_ARTIFACT_BEARING
+        assert mode == DISTRIBUTION_MODE_SOURCE_ONLY
 
-    def test_environment_variable_sets_distribution_mode(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("RELEASE_DISTRIBUTION_MODE", DISTRIBUTION_MODE_ARTIFACT_BEARING)
-        mode = resolve_distribution_mode(REPOSITORY_ROOT)
-        assert mode == DISTRIBUTION_MODE_ARTIFACT_BEARING
+    def test_explicit_mode_inconsistent_with_policy_fails_closed(self) -> None:
+        """AC 5: Explicit mode inconsistent with repo policy is refused explicitly."""
+        with pytest.raises(DistributionModeError) as exc_info:
+            resolve_distribution_mode(
+                REPOSITORY_ROOT,
+                explicit_mode=DISTRIBUTION_MODE_ARTIFACT_BEARING,
+            )
+        assert "Inconsistent distribution mode" in str(exc_info.value)
+        assert "artifact-bearing" in str(exc_info.value)
+        assert "source-only" in str(exc_info.value)
 
 
 class TestDistributionModeFailClosed:
     """Unknown or inconsistent distribution modes fail closed before any publication step."""
+
+    def test_missing_policy_file_fails_closed(self, tmp_path: Path) -> None:
+        """AC 5: Missing policy file fails closed rather than silently falling back."""
+        empty_root = tmp_path / "empty"
+        empty_root.mkdir()
+        with pytest.raises(DistributionModeError) as exc_info:
+            resolve_distribution_mode(empty_root)
+        assert "Missing release trust policy" in str(exc_info.value)
 
     def test_unknown_distribution_mode_in_request_fails(self) -> None:
         with pytest.raises(DistributionModeError) as exc_info:
@@ -128,26 +141,35 @@ class TestDistributionModeFailClosed:
         assert "source-only" in str(exc_info.value)
         assert "artifact-bearing" in str(exc_info.value)
 
-    def test_unknown_distribution_mode_in_env_fails(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("RELEASE_DISTRIBUTION_MODE", "unsupported-mode")
-        with pytest.raises(DistributionModeError) as exc_info:
-            resolve_distribution_mode(REPOSITORY_ROOT)
-        assert "Unknown distribution mode: 'unsupported-mode'" in str(exc_info.value)
+def _create_test_repo(path: Path, distribution_mode: str = DISTRIBUTION_MODE_SOURCE_ONLY) -> Path:
+    repo = path / "repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Tester"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "tester@example.com"], cwd=repo, check=True)
+
+    trust_dir = repo / "git-loopy" / "conformance"
+    trust_dir.mkdir(parents=True, exist_ok=True)
+    trust_json = trust_dir / "release-trust.json"
+    trust_json.write_text(
+        json.dumps({
+            "distribution_mode": distribution_mode,
+            "distribution_modes": [DISTRIBUTION_MODE_SOURCE_ONLY, DISTRIBUTION_MODE_ARTIFACT_BEARING],
+            "credentials": [],
+        }),
+        encoding="utf-8",
+    )
+    (repo / "file.txt").write_text("hello\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=repo, check=True)
+    return repo
+
 
     def test_mismatched_tag_annotation_and_requested_mode_fails(
         self, tmp_path: Path
     ) -> None:
         """Tag declaring source-only fails when artifact-bearing is requested."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Tester"], cwd=repo, check=True)
-        subprocess.run(["git", "config", "user.email", "tester@example.com"], cwd=repo, check=True)
-        (repo / "file.txt").write_text("hello\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=repo, check=True)
-        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=repo, check=True)
+        repo = _create_test_repo(tmp_path, distribution_mode=DISTRIBUTION_MODE_SOURCE_ONLY)
 
         # Create tag with source-only in annotation
         annotation = "Release v1.0.0\n\ndistribution_mode: source-only\n"
@@ -164,14 +186,7 @@ class TestDistributionModeFailClosed:
         assert "artifact-bearing" in str(exc_info.value)
 
     def test_tag_with_valid_annotation_resolves_mode(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Tester"], cwd=repo, check=True)
-        subprocess.run(["git", "config", "user.email", "tester@example.com"], cwd=repo, check=True)
-        (repo / "file.txt").write_text("hello\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=repo, check=True)
-        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=repo, check=True)
+        repo = _create_test_repo(tmp_path, distribution_mode=DISTRIBUTION_MODE_ARTIFACT_BEARING)
 
         annotation = "Release v1.0.0\n\ndistribution_mode: artifact-bearing\n"
         subprocess.run(["git", "tag", "-a", "v1.0.0", "-m", annotation], cwd=repo, check=True)
@@ -181,14 +196,7 @@ class TestDistributionModeFailClosed:
         assert mode == DISTRIBUTION_MODE_ARTIFACT_BEARING
 
     def test_tag_with_unknown_mode_annotation_fails_closed(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Tester"], cwd=repo, check=True)
-        subprocess.run(["git", "config", "user.email", "tester@example.com"], cwd=repo, check=True)
-        (repo / "file.txt").write_text("hello\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=repo, check=True)
-        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=repo, check=True)
+        repo = _create_test_repo(tmp_path, distribution_mode=DISTRIBUTION_MODE_SOURCE_ONLY)
 
         annotation = "Release v1.0.0\n\ndistribution_mode: corrupted-mode\n"
         subprocess.run(["git", "tag", "-a", "v1.0.0", "-m", annotation], cwd=repo, check=True)
@@ -199,9 +207,7 @@ class TestDistributionModeFailClosed:
 
     def test_unreadable_or_missing_tag_ref_fails_closed(self, tmp_path: Path) -> None:
         """AC 5: unreadable tag object must fail closed, never quietly fall back."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+        repo = _create_test_repo(tmp_path, distribution_mode=DISTRIBUTION_MODE_SOURCE_ONLY)
 
         with pytest.raises(DistributionModeError) as exc_info:
             resolve_distribution_mode(repo, tag_ref="refs/tags/v9.9.9")
@@ -224,15 +230,11 @@ class TestWorkflowJobGatingInSourceOnlyMode:
         workflow = _load_yaml(TUI_WORKFLOW_PATH)
         jobs = workflow["jobs"]
 
-        # plan job must be gated on artifact-bearing unless on pull_request
+        # plan job must be gated on artifact-bearing unless not a push event
         plan_if = jobs["plan"]["if"]
         assert "needs.identity.outputs.distribution_mode == 'artifact-bearing'" in plan_if
 
-        # family-conformance job must be gated on artifact-bearing
-        family_if = jobs["family-conformance"]["if"]
-        assert "needs.identity.outputs.distribution_mode == 'artifact-bearing'" in family_if
-
-        # build job must be gated on artifact-bearing
+        # build job must be gated on artifact-bearing unless not a push event
         build_if = jobs["build"]["if"]
         assert "needs.identity.outputs.distribution_mode == 'artifact-bearing'" in build_if
 
@@ -306,6 +308,7 @@ class TestWorkflowJobGatingInSourceOnlyMode:
 
         def eval_condition(raw_expr: str, ctx: dict[str, Any]) -> bool:
             expr = raw_expr.strip()
+            expr = expr.replace("github.event_name != 'push'", str(ctx.get("event_name") != "push"))
             expr = expr.replace("github.event_name == 'pull_request'", str(ctx.get("event_name") == "pull_request"))
             expr = expr.replace("needs.identity.outputs.distribution_mode == 'artifact-bearing'", str(ctx.get("distribution_mode") == "artifact-bearing"))
             expr = expr.replace("startsWith(github.ref, 'refs/tags/v')", str(ctx.get("ref", "").startswith("refs/tags/v")))
@@ -315,14 +318,14 @@ class TestWorkflowJobGatingInSourceOnlyMode:
         # Tag push in source-only mode
         source_only_ctx = {"event_name": "push", "ref": "refs/tags/v1.0.0", "distribution_mode": "source-only"}
         assert eval_condition(jobs["plan"]["if"], source_only_ctx) is False
-        assert eval_condition(jobs["family-conformance"]["if"], source_only_ctx) is False
         assert eval_condition(jobs["build"]["if"], source_only_ctx) is False
         assert eval_condition(jobs["publish"]["if"], source_only_ctx) is False
+        # family-conformance runs on all events
+        assert "if" not in jobs["family-conformance"]
 
         # Tag push in artifact-bearing mode
         artifact_ctx = {"event_name": "push", "ref": "refs/tags/v1.0.0", "distribution_mode": "artifact-bearing"}
         assert eval_condition(jobs["plan"]["if"], artifact_ctx) is True
-        assert eval_condition(jobs["family-conformance"]["if"], artifact_ctx) is True
         assert eval_condition(jobs["build"]["if"], artifact_ctx) is True
         assert eval_condition(jobs["publish"]["if"], artifact_ctx) is True
 

@@ -334,22 +334,20 @@ def resolve_distribution_mode(
     Fails closed on unknown, missing, or inconsistent mode input.
     """
     policy_path = repository_root / TRUST_POLICY_PATH
-    if policy_path.is_file():
-        policy = load_trust_policy(repository_root)
-        valid_modes = policy.distribution_modes or DEFAULT_DISTRIBUTION_MODES
-        declared_mode = policy.distribution_mode
-    else:
-        valid_modes = DEFAULT_DISTRIBUTION_MODES
-        declared_mode = DISTRIBUTION_MODE_SOURCE_ONLY
+    if not policy_path.is_file():
+        raise DistributionModeError(
+            f"Missing release trust policy: {policy_path} is absent"
+        )
+
+    policy = load_trust_policy(repository_root)
+    valid_modes = policy.distribution_modes or DEFAULT_DISTRIBUTION_MODES
+    declared_mode = policy.distribution_mode
 
     if declared_mode not in valid_modes:
         raise DistributionModeError(
             f"Unknown distribution mode in repository policy: {declared_mode!r}. "
             f"Valid modes are {list(valid_modes)!r}"
         )
-
-    if explicit_mode is None:
-        explicit_mode = os.environ.get("RELEASE_DISTRIBUTION_MODE")
 
     tag_mode: str | None = None
     if tag_ref is not None:
@@ -361,6 +359,11 @@ def resolve_distribution_mode(
                 f"Unknown distribution mode in tag annotation: {tag_mode!r}. "
                 f"Valid modes are {list(valid_modes)!r}"
             )
+        if tag_mode != declared_mode:
+            raise DistributionModeError(
+                f"Inconsistent distribution mode: tag annotation declares {tag_mode!r}, "
+                f"but repository policy declares {declared_mode!r}"
+            )
 
     if explicit_mode is not None:
         explicit_mode = explicit_mode.strip()
@@ -369,20 +372,11 @@ def resolve_distribution_mode(
                 f"Unknown distribution mode: {explicit_mode!r}. "
                 f"Valid modes are {list(valid_modes)!r}"
             )
-
-    if tag_mode is not None and explicit_mode is not None:
-        if tag_mode != explicit_mode:
+        if explicit_mode != declared_mode:
             raise DistributionModeError(
-                f"Inconsistent distribution mode: tag annotation declares {tag_mode!r}, "
-                f"but explicit input requested {explicit_mode!r}"
+                f"Inconsistent distribution mode: explicit input requested {explicit_mode!r}, "
+                f"but repository policy declares {declared_mode!r}"
             )
-        return explicit_mode
-
-    if explicit_mode is not None:
-        return explicit_mode
-
-    if tag_mode is not None:
-        return tag_mode
 
     return declared_mode
 
@@ -925,6 +919,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the Release trust gate."""
+    from git_loopy import tui_release
+
     args = _build_parser().parse_args(argv)
     try:
         version = args.release_version or read_release_version(
@@ -958,16 +954,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 attestation=args.attestation,
             ):
                 print(receipt.archive_name)
-    except (ReleaseTrustError, ReleaseVersionError) as exc:
+    except (ReleaseTrustError, ReleaseVersionError, tui_release.TuiReleaseError) as exc:
         print(f"Release trust verification failed: {exc}", file=sys.stderr)
         return 1
-    except Exception as exc:
-        from git_loopy import tui_release
-
-        if isinstance(exc, tui_release.TuiReleaseError):
-            print(f"Release trust verification failed: {exc}", file=sys.stderr)
-            return 1
-        raise
     return 0
 
 
