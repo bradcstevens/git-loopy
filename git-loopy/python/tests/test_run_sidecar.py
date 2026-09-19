@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+import time
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -325,3 +328,181 @@ def test_trace_follower_finishes_on_run_end_or_lock_release(tmp_path: Path) -> N
     finally:
         control.close()
     assert follower.poll().finished is True
+
+
+# ---------------------------------------------------------------------------
+# The client reports the worker's result, not its own success at watching
+# (#583, ADR-0058)
+# ---------------------------------------------------------------------------
+
+
+def _finished_worker(code: int) -> "subprocess.Popen[Any]":
+    """A real worker process that has already exited with ``code``."""
+    child = subprocess.Popen([sys.executable, "-c", f"raise SystemExit({code})"])
+    child.wait()
+    return child
+
+
+def test_the_client_reports_a_worker_blocked_before_it_traced_anything(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A blocked startup must not reach the operator as a clean exit 0 (#583).
+
+    Run preflight runs inside the detached worker *before* the first Event, so a
+    precondition failure — an unauthenticated ``gh``, a missing ``copilot`` —
+    leaves the trace empty and writes the blocker only to the per-Run
+    diagnostics file. The client that follows that trace used to render nothing
+    and return 0, so a saved setup looked like Run readiness. ADR-0058 requires
+    the opposite: the confirmed setup stays, no issue work starts, and the
+    non-zero result names the blocker and its remedy.
+    """
+    from git_loopy import run_sidecar
+
+    trace_path = tmp_path / "run.trace.jsonl"  # never created: nothing ran
+    diagnostics_path = tmp_path / "run.log"
+    diagnostics_path.write_text(
+        "2026-09-19 12:00:00 ERROR gh is not authenticated. "
+        "Run `gh auth login` and retry\n",
+        encoding="utf-8",
+    )
+    warnings: list[str] = []
+
+    rc = run_sidecar.run_terminal_client(
+        repository_root=tmp_path,
+        config=_config(),
+        trace_path=trace_path,
+        control_path=run_sidecar.control_path_for_trace(trace_path),
+        child=_finished_worker(1),
+        release_version="",
+        warn=warnings.append,
+        diagnostics_path=diagnostics_path,
+    )
+
+    assert rc == 1
+    reported = capsys.readouterr().err + "\n".join(warnings)
+    assert "gh auth login" in reported
+    assert str(diagnostics_path) in reported
+
+
+def test_the_client_returns_zero_for_a_worker_that_ended_cleanly(
+    tmp_path: Path,
+) -> None:
+    """A Run that finished is still a success, and says so exactly once."""
+    from git_loopy import run_sidecar
+
+    trace_path = tmp_path / "run.trace.jsonl"
+    trace_path.write_text(
+        '{"type":"wrapper.run.end","ts":"2026-09-19T00:00:00.000Z",'
+        '"run_id":"r","outcome":"empty_pool"}\n',
+        encoding="utf-8",
+    )
+    warnings: list[str] = []
+
+    rc = run_sidecar.run_terminal_client(
+        repository_root=tmp_path,
+        config=_config(),
+        trace_path=trace_path,
+        control_path=run_sidecar.control_path_for_trace(trace_path),
+        child=_finished_worker(0),
+        release_version="",
+        warn=warnings.append,
+        diagnostics_path=tmp_path / "run.log",
+    )
+
+    assert rc == 0
+
+
+@pytest.mark.skipif(
+    not advisory_locking_available(),
+    reason="this platform has no flock advisory locks",
+)
+def test_the_client_never_invents_a_failure_for_a_worker_still_running(
+    tmp_path: Path,
+) -> None:
+    """A client observes; it does not own the Run's lifetime (ADR-0058).
+
+    A Dashboard that exits of its own accord while the Run works — a Detach — has
+    nothing to report but its own clean return. Waiting on that worker, or
+    reading a failure into it, would make disconnecting indistinguishable from
+    stopping work, which is the confusion ADR-0058 separates. The Dashboard is
+    the only double here: the worker is a real process holding the real control
+    artifact, and the client really execs the helper.
+    """
+    from git_loopy import run_sidecar, tui_release
+
+    trace_path = tmp_path / "run.trace.jsonl"
+    control_path = run_sidecar.control_path_for_trace(trace_path)
+    helper = tmp_path / "fake-dashboard.py"
+    helper.write_text("#!/usr/bin/env python3\nraise SystemExit(0)\n", encoding="utf-8")
+    helper.chmod(0o755)
+    worker_script = tmp_path / "worker.py"
+    worker_script.write_text(
+        "import pathlib, sys, time\n"
+        "from git_loopy.run_control import RunControlArtifact\n"
+        # Bound, not discarded: the artifact's lock lives on its open handle.
+        "artifact = RunControlArtifact.acquire(pathlib.Path(sys.argv[1]))\n"
+        "time.sleep(120)\n",
+        encoding="utf-8",
+    )
+
+    worker = subprocess.Popen([sys.executable, str(worker_script), str(trace_path)])
+    original_resolve = tui_release.resolve_runtime_helper
+    tui_release.resolve_runtime_helper = (  # type: ignore[assignment]
+        lambda *_args, **_kwargs: helper
+    )
+    try:
+        started = time.monotonic()
+        rc = run_sidecar.run_terminal_client(
+            repository_root=tmp_path,
+            config=_config(),
+            trace_path=trace_path,
+            control_path=control_path,
+            child=worker,
+            release_version="0.10.0",
+            warn=lambda _message: None,
+            diagnostics_path=tmp_path / "run.log",
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        tui_release.resolve_runtime_helper = original_resolve  # type: ignore[assignment]
+        still_running = worker.poll() is None
+        worker.kill()
+        worker.wait()
+
+    assert rc == 0
+    assert still_running, "the client ended the Run it was only observing"
+    assert elapsed < 30, "the client blocked on a worker it does not own"
+
+
+def test_the_client_reports_a_worker_that_failed_after_it_traced_work(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A Run that recorded work and then failed is reported, not re-narrated.
+
+    The trace already said what happened, so echoing the diagnostics file over
+    the top would bury it. Only the exit status crosses back.
+    """
+    from git_loopy import run_sidecar
+
+    trace_path = tmp_path / "run.trace.jsonl"
+    trace_path.write_text(
+        '{"type":"wrapper.run.end","ts":"2026-09-19T00:00:00.000Z",'
+        '"run_id":"r","outcome":"stuck"}\n',
+        encoding="utf-8",
+    )
+    diagnostics_path = tmp_path / "run.log"
+    diagnostics_path.write_text("2026-09-19 ERROR internal detail\n", encoding="utf-8")
+
+    rc = run_sidecar.run_terminal_client(
+        repository_root=tmp_path,
+        config=_config(),
+        trace_path=trace_path,
+        control_path=run_sidecar.control_path_for_trace(trace_path),
+        child=_finished_worker(1),
+        release_version="",
+        warn=lambda _message: None,
+        diagnostics_path=diagnostics_path,
+    )
+
+    assert rc == 1
+    assert "internal detail" not in capsys.readouterr().err

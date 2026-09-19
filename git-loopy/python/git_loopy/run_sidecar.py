@@ -369,6 +369,16 @@ class TraceFollower:
         self._pending = ""
         self._saw_run_end = False
 
+    @property
+    def saw_run_end(self) -> bool:
+        """Whether the trace itself said the Run ended.
+
+        Distinguishes a Run that is over from a client that merely stopped
+        following it — the difference between reporting the worker's result and
+        walking away from a Run that is still working (ADR-0058).
+        """
+        return self._saw_run_end
+
     def poll(self) -> FollowBatch:
         lines: list[str] = []
         if self._trace_path.exists():
@@ -409,6 +419,17 @@ class TraceFollower:
         return False
 
 
+@dataclass(frozen=True)
+class _WatchOutcome:
+    """What a client saw before it stopped following the worker's trace."""
+
+    #: Whether the trace carried a single decodable record.
+    traced: bool
+    #: Whether the trace said the Run itself ended, as opposed to this client
+    #: merely stopping watching.
+    run_ended: bool
+
+
 def _follow_trace_with_renderer(
     trace_path: Path,
     control_path: Path,
@@ -416,7 +437,14 @@ def _follow_trace_with_renderer(
     config: RunConfig,
     owner_alive: Callable[[], bool] | None = None,
     poll_interval: float = 0.05,
-) -> int:
+) -> _WatchOutcome:
+    """Render the worker's trace to its end and report what watching established.
+
+    ``traced`` is what tells a client apart from the Run it watches: a trace that
+    never received a record means the worker ended before it could announce
+    itself, so whatever went wrong was never rendered here and lives only in the
+    worker's diagnostics (see :func:`_report_worker_result`).
+    """
     summary = RunSummary(denomination=BilledCreditsDenomination())
     renderer = Renderer(
         console=get_console(),
@@ -425,15 +453,18 @@ def _follow_trace_with_renderer(
         render_reasoning=config.render_reasoning,
     )
     follower = TraceFollower(trace_path, control_path, owner_alive=owner_alive)
+    traced = False
     while True:
         batch = follower.poll()
         for line in batch.lines:
             try:
-                renderer.render(json.loads(line))
+                event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            traced = True
+            renderer.render(event)
         if batch.finished:
-            return 0
+            return _WatchOutcome(traced=traced, run_ended=follower.saw_run_end)
         time.sleep(poll_interval)
 
 
@@ -456,6 +487,73 @@ def _helper_args(
     return args
 
 
+#: How long a client waits for a worker whose trace already ended to be reaped.
+#: The Run is over by then, so this only spans the worker's own teardown; a
+#: worker that outlives it is still running, which is not this client's failure.
+_WORKER_REAP_GRACE = 10.0
+
+#: How much of a never-traced startup a client echoes. Bounded because the file
+#: is also the worker's stdout, and an operator needs the blocker, not a dump.
+_STARTUP_DIAGNOSTIC_LINES = 40
+
+
+def _startup_diagnostics(diagnostics_path: Path) -> list[str]:
+    """The tail of a worker's diagnostics, or nothing if it wrote none."""
+    try:
+        text = diagnostics_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    lines = [line for line in text.splitlines() if line.strip()]
+    return lines[-_STARTUP_DIAGNOSTIC_LINES:]
+
+
+def _report_worker_result(
+    child: "subprocess.Popen[Any]",
+    *,
+    diagnostics_path: Path,
+    watched: _WatchOutcome,
+    warn: Callable[[str], None],
+) -> int:
+    """Return the worker's exit status, surfacing a startup it never traced.
+
+    A client observes; the Run owns its own lifetime (ADR-0058). Two rules fall
+    out of that, and this is the one place both are applied:
+
+    * **A worker still running is not this client's failure.** Detaching, or
+      quitting a Dashboard, ends the watching and nothing else, so it returns
+      ``0``. The client waits for a worker only when the trace said the *Run*
+      ended, which bounds the wait to that worker's own teardown; waiting on a
+      working Run would make disconnecting look like stopping work.
+    * **A worker that ended owns the result.** Returning the client's own
+      success instead is how a blocked startup used to reach an operator as
+      exit ``0``: Run preflight refuses *before* the first Event, so the trace
+      stays empty, the renderer prints nothing, and a saved setup reads as Run
+      readiness. When nothing was traced, the blocker and its remedy exist only
+      in the worker's diagnostics, so they are echoed here rather than left in a
+      file the operator has no reason to open. A Run that *did* trace its work
+      already said what happened; repeating the log over the top would bury it.
+    """
+    status = child.poll()
+    if status is None and watched.run_ended:
+        try:
+            status = child.wait(timeout=_WORKER_REAP_GRACE)
+        except subprocess.TimeoutExpired:
+            status = None
+    if status is None or status == 0:
+        return 0
+    # A signalled worker reports a negative status, which is no exit code at all.
+    code = status if status > 0 else 1
+    if not watched.traced:
+        warn(
+            f"the Run worker exited {code} before it recorded any activity; "
+            f"no issue work started. Its startup diagnostics follow "
+            f"({diagnostics_path})."
+        )
+        for line in _startup_diagnostics(diagnostics_path):
+            print(line, file=sys.stderr)
+    return code
+
+
 def run_terminal_client(
     *,
     repository_root: Path,
@@ -465,6 +563,7 @@ def run_terminal_client(
     child: subprocess.Popen[Any],
     release_version: str,
     warn: Callable[[str], None],
+    diagnostics_path: Path,
 ) -> int:
     """Attach a TTY parent to a detached child with the helper or a trace fallback."""
     def owner_alive() -> bool:
@@ -507,14 +606,29 @@ def run_terminal_client(
                 )
             else:
                 if result.returncode == 0:
-                    return 0
+                    # The Dashboard left of its own accord. A Detach leaves the
+                    # Run working, so this client claims no knowledge that it
+                    # ended and never waits; a worker already gone by now is
+                    # still the Run's own result and is reported as such.
+                    return _report_worker_result(
+                        child,
+                        diagnostics_path=diagnostics_path,
+                        watched=_WatchOutcome(traced=True, run_ended=False),
+                        warn=warn,
+                    )
                 warn(
                     f"git-loopy-tui exited {result.returncode}; "
                     "following the replay log with the line printer."
                 )
-    return _follow_trace_with_renderer(
+    watched = _follow_trace_with_renderer(
         trace_path,
         control_path,
         config=config,
         owner_alive=owner_alive,
+    )
+    return _report_worker_result(
+        child,
+        diagnostics_path=diagnostics_path,
+        watched=watched,
+        warn=warn,
     )

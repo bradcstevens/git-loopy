@@ -467,8 +467,10 @@ The wizard:
   `reasoning_effort`, seeded from the same live model list the `--select-model`
   picker uses.
 - **Uses one continuous keyboard wizard** for scope, model, effort, routing,
-  scaffold, and Skill policy. It needs an interactive terminal; use `--yes` for
-  non-interactive setup.
+  scaffold, and Skill policy. It needs an interactive terminal — **both** stdin
+  and stdout, since the fullscreen wizard paints the screen it reads answers
+  from; redirect either (`git-loopy init > log`) and it refuses up front rather
+  than drawing into a pipe. Use `--yes` for non-interactive setup.
   `up`/`down` move, `space` toggles a Skill, `enter` advances, `esc` goes back a
   step (and cancels on the first, where there is nowhere back to), `ctrl+c`
   cancels outright, and `ctrl+s` jumps to the end. It composes the same model and
@@ -496,11 +498,21 @@ The wizard:
   scope's editable assets. Each Config and prompt that this invocation writes
   records its Release version and SHA-256 digest; a later init preserves an
   entry for an existing prompt it leaves untouched.
-- **Cancelling** (`q`, `quit`, or EOF / Ctrl-C at any prompt) writes **no Config
-  and no prompt**, runs nothing, and exits non-zero. The Skill install above has
-  already happened by then — it is the wizard's first act, before anything is
-  collected — and is machine-wide rather than scoped, so cancelling leaves the
-  scope untouched but the catalog installed.
+- **Cancelling** (`q`, `quit`, or EOF / Ctrl-C at any prompt) saves **no Config,
+  prompt override, Skill policy, or tracker label**, starts nothing, and exits
+  non-zero. That is the whole guarantee, and it is deliberately narrower than
+  "nothing was written": the Skill install above is the wizard's *first* act,
+  before a single answer is collected, and it is machine-wide rather than scoped.
+  When that install actually changed something, the cancellation names the
+  catalog root and revision it left behind instead of denying it — a
+  prerequisite you can inspect, not an operator choice you never confirmed
+  ([ADR-0058](https://github.com/bradcstevens/git-loopy/blob/9d33e78b8aba97ae16ee5a133aae1fca78905ed0/docs/adr/0058-init-precedes-the-run-and-clients-do-not-own-its-lifetime.md)).
+
+  ```text
+  git-loopy init cancelled; no Config, prompt override, Skill policy, or
+  tracker label was written. The prerequisite Skill catalog install is
+  machine-wide and remains at ~/.config/git-loopy/skills (revision 4f1c2a9e8b03).
+  ```
 
 ### Tracker labels the wizard ensures
 
@@ -589,14 +601,40 @@ The **very first** bare `git-loopy` — when no `config.toml` resolves in *eithe
 scope — sets itself up:
 
 - On an **interactive TTY** it auto-runs the wizard above, then **continues into
-  the loop** on the Config it just wrote. Cancelling aborts the whole command
-  (writes nothing, runs nothing, non-zero exit) — an aborted setup never starts
-  an unconfirmed loop.
+  the loop** on the Config it just wrote. The terminal test is the same one
+  explicit `git-loopy init` applies — stdin *and* stdout — so `git-loopy > log`
+  on a fresh clone takes the no-TTY path below rather than opening a fullscreen
+  wizard against a pipe.
+- Cancelling aborts the whole command: it saves no operator choice, starts no
+  worker, and exits non-zero — an aborted setup never starts an unconfirmed
+  loop. See the cancellation guarantee above for what the prerequisite catalog
+  install may legitimately leave behind.
 - With **no TTY** (CI, pipes) it **never prompts**: it falls back to the built-in
   defaults and goes straight to the loop, so automated runs can't hang on the
   wizard.
 - Once Config exists in either scope, a bare `git-loopy` skips the wizard entirely
   and goes straight to the loop.
+
+**Setup finishing is not the loop starting.** `init` saves and exits; the Run is
+a separate act with its own preconditions (a git repository, `copilot` on
+`PATH`, a usable model). When one of those refuses, your saved setup stays
+exactly as you confirmed it — nothing rolls it back — but no issue work starts
+and the command exits non-zero naming the blocker and its remedy:
+
+```text
+git-loopy: warning: the Run worker exited 1 before it recorded any activity;
+no issue work started. Its startup diagnostics follow
+(.git-loopy/logs/run-20260919-101500-diagnostics.log).
+  git-loopy: error: copilot is not on PATH. Install the GitHub Copilot CLI and
+  re-run git-loopy.
+```
+
+On a TTY the loop runs as a **detached worker** the terminal client watches, so
+the client reports that worker's exit status and echoes the tail of its startup
+diagnostics rather than showing an empty Dashboard and exiting `0`. The handoff
+uses ordinary scrollback — setup's wizard leaves the screen before the client
+takes it — so a blocked startup is readable after the fact instead of being
+erased by a screen restore.
 
 ---
 

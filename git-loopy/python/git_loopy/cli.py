@@ -772,7 +772,11 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "searchable picker as `git-loopy skills edit`, writes config.toml, "
             "and — default yes — scaffolds an editable PROMPT.md override and "
             "git-loopy's agent skills. Writes config and exits; it never starts "
-            "the loop. Cancelling writes nothing and exits non-zero."
+            "the loop. Cancelling saves no Config, prompt override, Skill "
+            "policy, or tracker label and exits non-zero; the Skill catalog it "
+            "installs first is machine-wide and stays, which the cancellation "
+            "says. Needs an interactive terminal — the same requirement a bare "
+            "first run applies before it auto-runs this wizard."
         ),
     )
     _add_scope_flags(init)
@@ -1249,8 +1253,8 @@ def _run_init(args: argparse.Namespace) -> int:
     """
     from git_loopy import init as _init
 
-    if not args.assume_yes and (
-        not sys.stdin.isatty() or not sys.stdout.isatty()
+    if not args.assume_yes and not _wizard_terminal_available(
+        sys.stdin.isatty(), sys.stdout.isatty()
     ):
         print(
             "git-loopy: error: init requires an interactive terminal; use --yes "
@@ -2725,9 +2729,24 @@ def _should_run_interactive() -> bool:
     return dashboard_available(isatty=sys.stdout.isatty())
 
 
+def _wizard_terminal_available(stdin_isatty: bool, stdout_isatty: bool) -> bool:
+    """Whether this invocation can run the setup wizard at all (#583, ADR-0058).
+
+    One predicate for both entry points — explicit ``git-loopy init`` and the
+    bare first Run — so the two cannot drift into different ideas of what an
+    operator can confirm. The wizard is a single fullscreen Textual app: it
+    reads keys from stdin and draws on stdout, and a redirected half is enough
+    to make it unusable rather than merely plain. Textual does not refuse that
+    shape on its own; it runs, renders where nobody is reading, and returns
+    answers the operator never saw — so the gate is here, ahead of it.
+    """
+    return stdin_isatty and stdout_isatty
+
+
 def _should_auto_init(
     tables: settings.ConfigTables,
     stdin_isatty: bool,
+    stdout_isatty: bool,
 ) -> bool:
     """Decide whether a bare run auto-runs the first-run ``init`` wizard (#55).
 
@@ -2736,14 +2755,15 @@ def _should_auto_init(
     * **No Config resolves anywhere** — both the project and global
       ``config.toml`` tables are empty. Once either scope has Config, a bare run
       goes straight to the loop (this slice's "no wizard once configured" rule).
-    * **stdin is an interactive terminal** — the wizard prompts on stdin, so a
-      non-TTY (CI, a pipe) never prompts and the built-in defaults carry the run.
+    * **The invocation owns a terminal** — :func:`_wizard_terminal_available`,
+      the same test explicit ``init`` applies, so a non-TTY (CI, a pipe, a
+      redirected stdout) never prompts and the built-in defaults carry the run.
       This is what keeps automated runs from ever hanging on the wizard
       (ADR-0006 / ADR-0007 first-run / CI behavior).
     """
     if tables.project or tables.global_:
         return False
-    return stdin_isatty
+    return _wizard_terminal_available(stdin_isatty, stdout_isatty)
 
 
 def _should_migrate_skill_policy(
@@ -2975,7 +2995,7 @@ def main(argv: list[str] | None = None) -> int:
     # nothing, and exits non-zero (an aborted setup never starts an unconfirmed
     # loop). The wizard module is imported lazily so a configured bare run (the
     # common case) never pays its import.
-    if _should_auto_init(tables, sys.stdin.isatty()):
+    if _should_auto_init(tables, sys.stdin.isatty(), sys.stdout.isatty()):
         from git_loopy import init as _init
 
         init_rc = _init.run_init(
@@ -3223,6 +3243,9 @@ def _run_tty_sidecar(
         child=child,
         release_version=release_version,
         warn=_warn,
+        # The handoff keeps the worker's startup visible: a Run blocked before
+        # its first Event says so only here (#583, ADR-0058).
+        diagnostics_path=writers.diagnostics_path,
     )
 
 

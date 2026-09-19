@@ -647,7 +647,12 @@ _Avoid_: settings file, profile.
 **init**:
 First-run setup that installs the **installed catalog**, then writes **Config** — and
 optionally an editable prompt — into a chosen **scope**. Runs automatically the first
-time on an interactive terminal; also invocable as `git-loopy init`.
+time on an interactive terminal; also invocable as `git-loopy init`. Setup **precedes**
+a **Run** and does not own its lifetime: init saves and exits, so a saved setup that a
+later Run precondition refuses stays saved while the Run exits non-zero naming the
+blocker. Cancelling saves no Config, prompt, **Skill policy** or tracker label — a
+narrower claim than "writes nothing", because the catalog install is a machine-wide
+prerequisite that precedes the first question (ADR-0058).
 _Avoid_: setup, bootstrap; install (install is the separate act of putting the `git-loopy` command
 on PATH).
 
