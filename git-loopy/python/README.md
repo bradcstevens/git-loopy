@@ -899,7 +899,9 @@ how this Run decides what each issue runs on. It has two values today:
   capability gate, an effort the roster says the model cannot take is dropped to
   "let the backend pick", a context tier the roster does not list for that model
   is downgraded to `default`, and the run keeps going.
-- **`static`** — the **Static route** ([ADR-0057](../../docs/adr/)). Your
+- **`static`** — the **Static route**
+  ([ADR-0057](https://github.com/bradcstevens/git-loopy/blob/8023ddc78f6867319daba440184e59825d32e84b/docs/adr/0057-live-evidence-guides-per-issue-routing.md)).
+  Your
   `model`, `reasoning_effort` and `context_tier` are one atomic choice, verified
   against the **model listing of the authenticated Copilot harness this Run
   actually spawns** — its eligibility for *your* account, its reasoning-effort
@@ -936,6 +938,13 @@ Three details worth knowing:
   `static` that built-in rung does not apply, because a route that promotes
   itself was never static. Write an explicit `[escalation]` block if you want
   one — it is verified like any other route.
+
+One combination is refused outright: `route_policy = "static"` with a
+non-`local` `execution_host`. A `github-actions` contribution opens its session
+on a GitHub-hosted runner that authenticates as *itself*, so this machine's
+model listing is not the listing that would run it — approving a route against
+the wrong installation is exactly what the policy exists to prevent. Run
+locally, or leave `route_policy` unset for that placement.
 
 `dynamic` is a policy name this release deliberately **refuses**: live evidence
 guiding per-issue routing is accepted design, and naming it here is how the

@@ -874,7 +874,9 @@ def _run_reason_for(iteration_outcome: str) -> str:
     return _ITERATION_RUN_REASONS.get(iteration_outcome, iteration_outcome)
 
 
-async def _refresh_harness_capabilities() -> HarnessCapabilities | None:
+async def _refresh_harness_capabilities(
+    *, warn: Callable[[str], None] = lambda _message: None
+) -> HarnessCapabilities | None:
     """The Run's capability read, as a module seam tests substitute.
 
     A function here rather than a call into
@@ -883,7 +885,18 @@ async def _refresh_harness_capabilities() -> HarnessCapabilities | None:
     for capabilities is named, so an offline suite replaces it and a reader can
     see at a glance that an **unselected** policy never calls it at all.
     """
-    return await refresh_harness_capabilities()
+    return await refresh_harness_capabilities(warn=warn)
+
+
+#: The one **Execution host** whose authenticated harness is the harness this
+#: capability read can actually reach. Every other placement opens its work
+#: sessions on a machine that authenticates as *itself* — the Actions host's
+#: built-in token, on a runner the operator never logged into — so the listing
+#: read here describes a different installation, which is precisely what
+#: ADR-0057 excludes as the authority for a Static route. Derived from the seam's
+#: own constant rather than spelled again, so "which placement is in-process"
+#: keeps one answer.
+_VERIFIABLE_EXECUTION_HOST = execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT
 
 
 def _configured_static_routes(
@@ -920,7 +933,9 @@ def _configured_static_routes(
     return tuple(routes)
 
 
-async def _static_route_preflight(config: RunConfig) -> str | None:
+async def _static_route_preflight(
+    config: RunConfig, *, warn: Callable[[str], None]
+) -> str | None:
     """Verify every configured Static route, or say why the Run cannot start.
 
     Answers ``None`` when there is nothing to refuse — which is *always*, and
@@ -933,16 +948,38 @@ async def _static_route_preflight(config: RunConfig) -> str | None:
     carrying that Task type — after the Run has already spent work. It also
     makes the refusal deterministic: the same Config refuses the same way
     whatever the Pool happened to contain.
+
+    **The placement is checked before the routes are**, because it decides
+    whether this host's answer is the answer at all. A remote **Execution
+    host** runs its work sessions under its own identity, so verifying the
+    operator's own listing and reporting it as that placement's verdict would
+    be the "another CLI installation" ADR-0057 rules out — stated as an
+    unsupported combination rather than papered over with a local read.
+
+    Args:
+        config: The Run's frozen configuration.
+        warn: Sink for the observed cause of an unreadable listing, which the
+            ``unverifiable`` refusal can only guess at.
     """
     if config.route_policy is not RoutePolicy.STATIC:
         return None
-    capabilities = await _refresh_harness_capabilities()
+    if config.execution_host != _VERIFIABLE_EXECUTION_HOST:
+        return (
+            f"the {config.execution_host!r} Execution host opens its work "
+            "sessions on a machine that authenticates as itself, so this "
+            "machine's model listing is not the listing that would run them. "
+            "A Static route can only be verified for the "
+            f"{_VERIFIABLE_EXECUTION_HOST!r} placement — run there, or leave "
+            "route_policy unset for this one."
+        )
+    capabilities = await _refresh_harness_capabilities(warn=warn)
     for name, route in _configured_static_routes(config):
         try:
             validate_static_route(route, capabilities)
         except StaticRouteError as exc:
             return f"{name}: {exc}"
     return None
+
 
 #: The **Wind-down** ladder as a rung lookup, derived from the family's ordered
 #: wire vocabulary so the order lives in one place (``events.WIND_DOWN_STAGES``)
@@ -5773,7 +5810,12 @@ async def run(
     # the host is known to be usable and before a single session is opened, so
     # an unsupported or unverifiable selection costs no work at all (#560,
     # ADR-0057). A Run that selected no policy never reaches the network for it.
-    static_route_refusal = await _static_route_preflight(config)
+    static_route_refusal = await _static_route_preflight(
+        config,
+        warn=lambda message: diag.warning(
+            "harness capability read failed: %s", message
+        ),
+    )
     if static_route_refusal is not None:
         print(
             f"git-loopy: the selected Static route was refused — "

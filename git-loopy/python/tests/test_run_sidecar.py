@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,57 @@ def _card() -> RateCard:
 
 def _staircase() -> PriceStaircase:
     return PriceStaircase(candidates=(Candidate("claude-opus-5", "high", 1.5),))
+
+
+def test_every_run_config_field_survives_the_detached_encoding() -> None:
+    """The child's Run is configured by *all* of this Run's Config, not most of it.
+
+    Structural rather than field-by-field on purpose. The detached child is a
+    second process that rebuilds :class:`RunConfig` from this payload, so a
+    field the payload forgets is not a missing key — it is that field's
+    **default** silently taking effect on the path a TTY operator actually
+    runs, while the parent's own object still says otherwise. A round-trip
+    assertion over a config whose fields are mostly defaults cannot see that:
+    the dropped field compares equal to the default that replaced it. Asking
+    the dataclass what its fields are is the only version of this test that
+    keeps working when the next field is added.
+    """
+    import dataclasses
+
+    from git_loopy import run_sidecar
+
+    carried = set(run_sidecar._config_to_payload(RunConfig()))
+    declared = {field.name for field in dataclasses.fields(RunConfig)}
+
+    assert declared - carried == set(), (
+        "these RunConfig fields are dropped when a detached Run is encoded, so "
+        "the child process runs on their defaults instead"
+    )
+
+
+def test_a_detached_run_carries_the_selected_route_policy() -> None:
+    """A **Route policy** the operator selected reaches the process that runs (#560).
+
+    The one field whose loss is silent *and* consequential: a child that
+    rebuilt :attr:`RoutePolicy.UNSELECTED` would skip the Static route
+    preflight entirely and then let the legacy roster gate drop the very
+    effort the operator selected — running a different route than the one
+    named, and reporting it as success (ADR-0057).
+    """
+    from git_loopy import run_sidecar
+    from git_loopy.static_route import RoutePolicy
+
+    spec = run_sidecar.DetachedRunSpec(
+        config=dataclasses_replace(_config(), route_policy=RoutePolicy.STATIC),
+        run_id="01K3CQ7VJ1GWQ9H8Q6SE2V1D5A",
+        started_at_epoch_ms=1_780_000_123_456,
+    )
+
+    decoded = run_sidecar.decode_detached_run_spec(
+        run_sidecar.encode_detached_run_spec(spec)
+    )
+
+    assert decoded.config.route_policy is RoutePolicy.STATIC
 
 
 def test_detached_run_spec_round_trips_complex_run_inputs() -> None:

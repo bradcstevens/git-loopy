@@ -4845,7 +4845,7 @@ def _harness(monkeypatch, *models) -> None:
         for identifier, efforts, long_context in models
     ]
 
-    async def _refresh() -> Any:
+    async def _refresh(**_kwargs: Any) -> Any:
         if not listing:
             return None
         return static_route.HarnessCapabilities.from_listing(listing)
@@ -4981,6 +4981,107 @@ def test_an_unreadable_harness_listing_stops_the_run_rather_than_guessing(
     assert "could not be asked" in capsys.readouterr().err
 
 
+def test_an_unreadable_listing_records_why_it_could_not_be_read(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The refusal names the likeliest cause; the diagnostics name the real one.
+
+    ``unverifiable`` is one verdict over many causes — an unauthenticated CLI,
+    an SDK schema change, a bad call signature — and the refusal can only
+    suggest the first. The Run refuses before ``wrapper.run.start``, so its
+    diagnostics are the only place the observed failure can still be found.
+    """
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+
+    async def _fetch() -> Any:
+        raise RuntimeError("copilot server never answered")
+
+    monkeypatch.setattr(static_route, "_default_capability_fetch", lambda: _fetch)
+
+    exit_code = asyncio.run(loop_module.run(_static_config()))
+
+    assert exit_code == 1, f"expected exit 1, got {exit_code}"
+    assert fake_client.create_calls == []
+    err = capsys.readouterr().err
+    assert "copilot server never answered" in err, (
+        "the observed capability-read failure reached no diagnostic"
+    )
+    assert "could not be asked" in err
+
+
+def test_a_static_route_refuses_a_placement_whose_harness_is_not_this_one(
+    monkeypatch,
+) -> None:
+    """A remote **Execution host** authenticates as itself, so this read is not its read.
+
+    ADR-0057 requires the verdict to come from *the authenticated harness the
+    Run actually uses*, and names "another CLI installation" as one of the
+    things that is explicitly not it. A ``github-actions`` contribution opens
+    its session on a GitHub-hosted runner under the built-in token — a
+    different installation, a different account, a different ``policy.state``.
+    Verifying the operator's local listing and calling it that placement's
+    answer is the one outcome the criterion rules out, so the combination is
+    refused before work rather than approved against the wrong harness.
+
+    Driven at the preflight seam rather than through ``run()`` because the
+    Actions host is unpreparable on a bare fixture repository and would refuse
+    for its *own* reason first, which would let this rule be absent and the
+    test still pass.
+    """
+    asked: list[int] = []
+
+    async def _refresh(**_kwargs: Any) -> Any:
+        asked.append(1)
+        return static_route.HarnessCapabilities(models={})
+
+    monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", _refresh)
+
+    refusal = asyncio.run(
+        loop_module._static_route_preflight(
+            _static_config(execution_host="github-actions"), warn=lambda _message: None
+        )
+    )
+
+    assert refusal is not None, "a remote placement verified against the local harness"
+    assert "github-actions" in refusal
+    assert asked == [], "the orchestrator's own harness was read for a remote placement"
+
+
+def test_a_local_placement_is_the_one_a_static_route_can_verify(monkeypatch) -> None:
+    """The rule above refuses a *placement*, not the policy — ``local`` still runs."""
+
+    async def _refresh(**_kwargs: Any) -> Any:
+        return static_route.HarnessCapabilities.from_listing(
+            [
+                SimpleNamespace(
+                    id="gpt-5.6-terra",
+                    name="gpt-5.6-terra",
+                    policy=SimpleNamespace(state="enabled", terms=""),
+                    billing=SimpleNamespace(
+                        multiplier=1.0,
+                        token_prices=SimpleNamespace(
+                            long_context=SimpleNamespace(max_prompt_tokens=400_000)
+                        ),
+                    ),
+                    supported_reasoning_efforts=["high"],
+                    default_reasoning_effort="high",
+                )
+            ]
+        )
+
+    monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", _refresh)
+
+    assert (
+        asyncio.run(
+            loop_module._static_route_preflight(
+                _static_config(), warn=lambda _message: None
+            )
+        )
+        is None
+    )
+
+
 def test_every_configured_static_route_is_checked_not_just_the_default(
     tmp_path, monkeypatch, capsys
 ) -> None:
@@ -5011,7 +5112,7 @@ def test_an_unselected_policy_asks_the_harness_nothing(tmp_path, monkeypatch) ->
     fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
     asked: list[int] = []
 
-    async def _refresh() -> Any:
+    async def _refresh(**_kwargs: Any) -> Any:
         asked.append(1)
         return None
 

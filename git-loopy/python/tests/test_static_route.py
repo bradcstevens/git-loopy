@@ -303,6 +303,46 @@ def test_a_listing_that_cannot_be_read_answers_nothing_rather_than_raising() -> 
     assert asyncio.run(static_route.refresh_harness_capabilities(fetch=fetch)) is None
 
 
+def test_a_listing_that_cannot_be_parsed_answers_nothing_too() -> None:
+    """A malformed entry is *unverifiable*, which is the same verdict as silence.
+
+    The refresh runs at Run preflight, outside any ``try``, and before a single
+    Event has been written — so an exception escaping it is not a refusal an
+    operator can read but a traceback over a Run whose summary was never
+    flushed and whose control artifact was never closed. "Could not be asked"
+    and "could not be understood" are one answer to the operator and must be
+    one answer here.
+    """
+
+    async def fetch():
+        return [SimpleNamespace(name="no id anywhere on this entry")]
+
+    assert asyncio.run(static_route.refresh_harness_capabilities(fetch=fetch)) is None
+
+
+def test_the_reason_a_capability_read_failed_reaches_the_caller() -> None:
+    """*Unverifiable* is a verdict, not a diagnosis — so the cause travels.
+
+    The refusal this failure produces suggests checking `copilot` is installed
+    and authenticated, because that is the likeliest cause. It is not the only
+    one: an SDK schema change or a bad call signature arrives here identically.
+    Swallowing the exception would leave an operator with a suggestion and no
+    way to find out it was the wrong one.
+    """
+    seen: list[str] = []
+
+    async def fetch():
+        raise RuntimeError("no harness here")
+
+    assert (
+        asyncio.run(
+            static_route.refresh_harness_capabilities(fetch=fetch, warn=seen.append)
+        )
+        is None
+    )
+    assert seen == ["RuntimeError: no harness here"]
+
+
 def test_the_capability_record_carries_capability_and_never_a_price() -> None:
     """ADR-0057: a fresh eligibility read must not rewrite recorded billing.
 

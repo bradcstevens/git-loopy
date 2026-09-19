@@ -810,10 +810,13 @@ takes, and which **Context tier**s it offers. It is read **fresh** for a **Stati
 own short-lived connect-list-stop, deliberately not from the **Run**'s memoised listing — that one
 is memoised so the **Rate card** cannot reprice mid-**Run**, which is the opposite property — and
 what it returns is capability only, so a capability read can never write back over billing
-provenance the **Run** already recorded. A model with *no* effort dial is a different fact from one
+provenance the **Run** already recorded. *Which* harness is the question: an **Execution host**
+that opens its sessions on a machine authenticating as itself has capabilities this machine cannot
+read, so that placement is refused under a **Static route** rather than judged by the wrong
+listing. A model with *no* effort dial is a different fact from one
 whose dial offers the value `none`: the first is sent no effort argument at all, the second is sent
-`none` as a value. A listing that could not be read is *unknown*, never *empty* and never
-permission.
+`none` as a value. A listing that could not be read — or could not be understood — is *unknown*,
+never *empty* and never permission.
 _Avoid_: model roster (the kit's own hardcoded table), model catalog, plan comparison.
 
 **Escalation rung**:

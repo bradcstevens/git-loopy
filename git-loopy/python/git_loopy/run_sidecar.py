@@ -20,6 +20,7 @@ from git_loopy.run_control import (
     is_run_alive,
 )
 from git_loopy.staircase import Candidate, PriceStaircase, StaircaseRefusal
+from git_loopy.static_route import RoutePolicy
 from git_loopy.ui import Renderer, RunSummary
 from git_loopy.ui.console import get_console
 from git_loopy.denomination import BilledCreditsDenomination
@@ -89,6 +90,7 @@ def _config_to_payload(config: RunConfig) -> dict[str, Any]:
             for key, (model, effort) in sorted(config.routing.items())
         },
         "context_tier": config.context_tier,
+        "route_policy": config.route_policy.value,
         "routing_suppressed": config.routing_suppressed,
         "skill_policy": {
             "project": _skill_input_to_payload(config.skill_policy.project),
@@ -132,6 +134,7 @@ def _config_from_payload(payload: dict[str, Any]) -> RunConfig:
         send_timeout_seconds=float(payload.get("send_timeout_seconds", 7200.0)),
         routing=routing,
         context_tier=str(payload.get("context_tier", "default")),
+        route_policy=RoutePolicy.parse(payload.get("route_policy")),
         routing_suppressed=bool(payload.get("routing_suppressed", False)),
         skill_policy=SkillPolicyInputs(
             project=_skill_input_from_payload(dict(skill_policy.get("project", {}))),

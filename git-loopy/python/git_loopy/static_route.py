@@ -1,12 +1,15 @@
 """``git_loopy.static_route`` — the **Static route** and what verifies it (#560).
 
-[ADR-0057](../../../docs/adr/0057-live-evidence-guides-per-issue-routing.md)
+[ADR-0057](https://github.com/bradcstevens/git-loopy/blob/8023ddc78f6867319daba440184e59825d32e84b/docs/adr/0057-live-evidence-guides-per-issue-routing.md)
 accepts a policy in which live evidence guides per-issue routing under explicit
-operator authority. This module owns the **static** half of it — the first
-tracer — and deliberately owns *only* that half: nothing here reaches
-Artificial Analysis, elects a **Route selector**, or prepares a **Routing
-proposal**. The dynamic default the ADR describes is named here
-(:attr:`RoutePolicy.DYNAMIC_NAME`) purely so an operator who asks for it is told
+operator authority — cited at the revision it was accepted on, because the
+document itself lands with its own documentation change and this module must
+not link to a path that does not exist beside it. This module owns the
+**static** half of that policy — the first tracer — and deliberately owns *only*
+that half: nothing here reaches Artificial Analysis, elects a **Route
+selector**, or prepares a **Routing proposal**. The dynamic default the ADR
+describes is named here
+(:data:`DYNAMIC_POLICY_NAME`) purely so an operator who asks for it is told
 it has not landed, rather than being silently given something else.
 
 Three ideas, one per section below.
@@ -43,7 +46,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 #: The policy ADR-0057 makes the eventual default for unpinned work. Named
 #: rather than implemented, and deliberately *not* a :class:`RoutePolicy`
@@ -341,7 +344,7 @@ def _listed(capabilities: HarnessCapabilities) -> str:
 
 
 async def refresh_harness_capabilities(
-    *, fetch: Any | None = None
+    *, fetch: Any | None = None, warn: Callable[[str], None] | None = None
 ) -> HarnessCapabilities | None:
     """Read the authenticated harness's current model listing, or ``None``.
 
@@ -356,21 +359,34 @@ async def refresh_harness_capabilities(
     opens its own short-lived client, asks once, and closes it, and the billing
     blocks it sees are read for capability and then discarded.
 
-    A failure answers ``None`` rather than raising. The refusal that follows is
-    :attr:`StaticRouteRefusal.UNVERIFIABLE` and belongs to
-    :func:`validate_static_route`, so that "the route is wrong" and "the route
-    could not be checked" are one vocabulary reaching the operator from one
-    place.
+    **Every failure answers ``None``, including a listing that cannot be parsed.**
+    The refusal that follows is :attr:`StaticRouteRefusal.UNVERIFIABLE` and
+    belongs to :func:`validate_static_route`, so that "the route is wrong" and
+    "the route could not be checked" are one vocabulary reaching the operator
+    from one place. The projection is inside the guard rather than after it
+    because this runs at Run preflight, before a single Event exists: an
+    exception escaping here is not a refusal an operator can read but a
+    traceback over a Run whose **Summary** was never flushed.
+
+    Args:
+        fetch: The listing call, injected for tests. Defaults to the throwaway
+            connect-list-stop.
+        warn: Sink for the *observed* failure, because ``UNVERIFIABLE`` is a
+            verdict rather than a diagnosis — its message names the likeliest
+            cause, and an operator whose cause is a different one needs
+            somewhere to find that out.
     """
     if fetch is None:
         fetch = _default_capability_fetch()
     try:
         listing = await fetch()
-    except Exception:
+        if listing is None:
+            return None
+        return HarnessCapabilities.from_listing(listing)
+    except Exception as exc:
+        if warn is not None:
+            warn(f"{type(exc).__name__}: {exc}")
         return None
-    if listing is None:
-        return None
-    return HarnessCapabilities.from_listing(listing)
 
 
 def _default_capability_fetch() -> Any:

@@ -7869,7 +7869,7 @@ def _script_harness(monkeypatch, *models) -> None:
         for identifier, efforts, long_context in models
     ]
 
-    async def _refresh():
+    async def _refresh(**_kwargs):
         return static_route.HarnessCapabilities.from_listing(listing)
 
     monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", _refresh)

@@ -1516,68 +1516,6 @@ unmeasured), and
 [`calibration-search.json`](../git-loopy/conformance/calibration-search.json) (the cheapest-first
 price staircase a **Calibration** walks, and where each ceiling stops it).
 
-### 14.3 The Static route (contract 2.8)
-
-Everything above describes the routing an Orchestrator does when no **Route policy** was selected.
-An operator MAY select one, and the only policy this contract currently defines is `static`
-(ADR-0057). The policy is a single Config key, `route_policy`, resolved on the family precedence
-spine (§11) like any other. Two values are in the vocabulary: `unselected` — the default, and the
-absence of a decision — and `static`.
-
-- **Selected, never inherited.** An Orchestrator MUST NOT read the absence of a policy as a choice
-  of one, and MUST NOT reinterpret an existing Config as though `static` had always been in force.
-  A Run that names no policy keeps every rule in §14 exactly, gate warnings and all. An
-  Orchestrator MUST refuse a policy name it does not implement rather than falling back to
-  `unselected`: a name it silently ignored would run the Run under a policy the operator did not
-  ask for and believes is active.
-- **A route is an atomic triple.** Under `static` the **Routing resolution** that binds an
-  Iteration is a complete `(model, reasoning effort, context tier)`. An existing `[routing]` entry
-  or run-wide default is a valid Static route and inherits the run-level context tier; an
-  Orchestrator MUST NOT assemble a route out of per-Task-type fragments of some other policy.
-- **The authenticated harness is the authority.** An Orchestrator MUST verify a Static route
-  against the model listing of the **authenticated harness this Run actually spawns** — its
-  eligibility for this account, its reasoning-effort dial, and the context tiers it offers. It MUST
-  NOT verify against the hardcoded model roster (§14's gate), a published plan or licence
-  catalogue, or another CLI installation, and MUST NOT satisfy the read from a listing memoised
-  earlier in the Run: the **Rate card**'s listing is memoised precisely so it cannot reprice
-  mid-Run (ADR-0026), which is the opposite of the freshness this check needs. Reading capabilities
-  MUST NOT rewrite billing provenance the Run has already recorded.
-- **Refuse, never rescue.** §14's *gate and fall back* rule does not apply to a Static route and
-  MUST NOT be reached for: an effort the model does not accept, a tier it does not offer, a model
-  this account may not use, a model the harness never listed, and a listing that could not be read
-  at all each end the Run under `preflight_failed` (exit `1`) **before any work**, naming the
-  setting and where it was configured. Dropping an effort, downgrading a tier, or substituting a
-  backend default is not a successful route: it is a different route than the one selected,
-  reported as success.
-- **No effort dial is not the effort `none`.** Where the harness states a model has no
-  reasoning-effort dial, an Orchestrator MUST send **no effort argument at all** for it. That is a
-  distinct fact from a model whose dial offers the *value* `none`, which MUST be sent as a value.
-- **Fixed for the Agent, and across retries.** A Static route MUST stay fixed for an Iteration's
-  Agent and for every permitted retry of that issue. §14's **escalation rung** still applies where
-  the operator explicitly configured one, and the rung is verified like any other route; a rung an
-  Orchestrator ships **by default** is not explicit authorization and MUST NOT promote a Static
-  route. Attempt and **Strike** accounting is unchanged either way.
-- **One resolution, everywhere.** The verified triple is the same **Routing resolution** that
-  configures the session, rides `wrapper.pickup.bound`, and reaches the CLI and the **Dashboard**.
-  An Orchestrator MUST NOT re-derive it, and MUST NOT publish a gated readback beside an ungated
-  session. `wrapper.run.start`'s readback MAY carry `route_policy`; a consumer MUST NOT read an
-  empty `gate_warnings` under `static` as roster approval — it means the roster was not asked.
-
-The policy is pinned by [`routing-resolution.json`](../git-loopy/conformance/routing-resolution.json)'s
-`static_route_cases` (one harness listing plus one route → `accepted` or a closed-vocabulary
-refusal, with the no-dial / effort-`none` and unreadable / empty distinctions exercised explicitly)
-and its `static_route_notes`.
-
-**The Static route is Python-only today**, on the same terms as routing itself and for the same
-reason: the shell and PowerShell Orchestrators implement no per-issue routing and read no harness
-model listing, so they have no route to verify. They declare it unsupported in
-[`fixture-claims.json`](../git-loopy/conformance/fixture-claims.json) rather than by implication.
-The Dashboard needs no policy-aware branch — it renders the verified triple off
-`wrapper.pickup.bound` exactly as it renders any other.
-
-A second policy in which live evidence guides the choice is accepted design and **not delivered**;
-until it is, an Orchestrator MUST refuse its name rather than implement part of it.
-
 ### 14.2 A `task-type:` label's origin is unobservable
 
 Routing reads a label and never infers a Task type from content **at routing time** — §14's first
@@ -1616,6 +1554,74 @@ Where the Orchestrator classifies, it does so at the **Pickup** — after the is
 before the Routing resolution is resolved — and it MUST route on what it inferred even where the
 tracker refused the write. The write is what saves the *next* Run the inference; losing it must
 not also lose the decision it recorded.
+
+### 14.3 The Static route (contract 2.8)
+
+Everything above describes the routing an Orchestrator does when no **Route policy** was selected.
+An operator MAY select one, and the only policy this contract currently defines is `static`
+(ADR-0057). The policy is a single Config key, `route_policy`, resolved on the family precedence
+spine (§11) like any other. Two values are in the vocabulary: `unselected` — the default, and the
+absence of a decision — and `static`.
+
+- **Selected, never inherited.** An Orchestrator MUST NOT read the absence of a policy as a choice
+  of one, and MUST NOT reinterpret an existing Config as though `static` had always been in force.
+  A Run that names no policy keeps every rule in §14 exactly, gate warnings and all. An
+  Orchestrator MUST refuse a policy name it does not implement rather than falling back to
+  `unselected`: a name it silently ignored would run the Run under a policy the operator did not
+  ask for and believes is active.
+- **A route is an atomic triple.** Under `static` the **Routing resolution** that binds an
+  Iteration is a complete `(model, reasoning effort, context tier)`. An existing `[routing]` entry
+  or run-wide default is a valid Static route and inherits the run-level context tier; an
+  Orchestrator MUST NOT assemble a route out of per-Task-type fragments of some other policy.
+- **The authenticated harness is the authority.** An Orchestrator MUST verify a Static route
+  against the model listing of the **authenticated harness this Run actually spawns** — its
+  eligibility for this account, its reasoning-effort dial, and the context tiers it offers. It MUST
+  NOT verify against the hardcoded model roster (§14's gate), a published plan or licence
+  catalogue, or another CLI installation, and MUST NOT satisfy the read from a listing memoised
+  earlier in the Run: the **Rate card**'s listing is memoised precisely so it cannot reprice
+  mid-Run (ADR-0026), which is the opposite of the freshness this check needs. Reading capabilities
+  MUST NOT rewrite billing provenance the Run has already recorded.
+- **A remote placement's harness is another installation.** Where an **Execution host** (§20) opens
+  its work sessions on a machine that authenticates as *itself*, the orchestrator's own listing
+  describes a different installation under a different identity, and reporting it as that
+  placement's verdict is exactly the substitution the rule above forbids. An Orchestrator MUST
+  refuse the combination before work rather than verify the wrong harness. Only a placement whose
+  sessions run under the Run's own authenticated harness is verifiable today.
+- **Refuse, never rescue.** §14's *gate and fall back* rule does not apply to a Static route and
+  MUST NOT be reached for: an effort the model does not accept, a tier it does not offer, a model
+  this account may not use, a model the harness never listed, and a listing that could not be read
+  at all each end the Run under `preflight_failed` (exit `1`) **before any work**, naming the
+  setting and where it was configured. Dropping an effort, downgrading a tier, or substituting a
+  backend default is not a successful route: it is a different route than the one selected,
+  reported as success.
+- **No effort dial is not the effort `none`.** Where the harness states a model has no
+  reasoning-effort dial, an Orchestrator MUST send **no effort argument at all** for it. That is a
+  distinct fact from a model whose dial offers the *value* `none`, which MUST be sent as a value.
+- **Fixed for the Agent, and across retries.** A Static route MUST stay fixed for an Iteration's
+  Agent and for every permitted retry of that issue. §14's **escalation rung** still applies where
+  the operator explicitly configured one, and the rung is verified like any other route; a rung an
+  Orchestrator ships **by default** is not explicit authorization and MUST NOT promote a Static
+  route. Attempt and **Strike** accounting is unchanged either way.
+- **One resolution, everywhere.** The verified triple is the same **Routing resolution** that
+  configures the session, rides `wrapper.pickup.bound`, and reaches the CLI and the **Dashboard**.
+  An Orchestrator MUST NOT re-derive it, and MUST NOT publish a gated readback beside an ungated
+  session. `wrapper.run.start`'s readback MAY carry `route_policy`; a consumer MUST NOT read an
+  empty `gate_warnings` under `static` as roster approval — it means the roster was not asked.
+
+The policy is pinned by [`routing-resolution.json`](../git-loopy/conformance/routing-resolution.json)'s
+`static_route_cases` (one harness listing plus one route → `accepted` or a closed-vocabulary
+refusal, with the no-dial / effort-`none` and unreadable / empty distinctions exercised explicitly)
+and its `static_route_notes`.
+
+**The Static route is Python-only today**, on the same terms as routing itself and for the same
+reason: the shell and PowerShell Orchestrators implement no per-issue routing and read no harness
+model listing, so they have no route to verify. They declare it unsupported in
+[`fixture-claims.json`](../git-loopy/conformance/fixture-claims.json) rather than by implication.
+The Dashboard needs no policy-aware branch — it renders the verified triple off
+`wrapper.pickup.bound` exactly as it renders any other.
+
+A second policy in which live evidence guides the choice is accepted design and **not delivered**;
+until it is, an Orchestrator MUST refuse its name rather than implement part of it.
 
 ## 15. Release and compatibility identity (MUST)
 
