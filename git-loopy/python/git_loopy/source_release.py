@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
 
-from git_loopy.release_trust import (
+from git_loopy.distribution_mode import (
     DISTRIBUTION_MODE_SOURCE_ONLY,
     DistributionModeError,
     resolve_distribution_mode,

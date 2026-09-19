@@ -16,7 +16,9 @@ Ensures that:
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -26,7 +28,7 @@ import pytest
 import yaml
 
 from git_loopy import release_trust, tui_release
-from git_loopy.release_trust import (
+from git_loopy.distribution_mode import (
     DISTRIBUTION_MODE_ARTIFACT_BEARING,
     DISTRIBUTION_MODE_SOURCE_ONLY,
     DistributionModeError,
@@ -337,23 +339,62 @@ class TestWorkflowJobGatingInSourceOnlyMode:
 
     def test_workflow_scheduling_graph_simulated_for_both_modes(self) -> None:
         """AC 8: Drive workflow boundary and assert actions scheduled in each mode."""
-        workflow = _load_yaml(TUI_WORKFLOW_PATH)
-        jobs = workflow["jobs"]
+        tui_workflow = _load_yaml(TUI_WORKFLOW_PATH)
+        source_workflow = _load_yaml(SOURCE_WORKFLOW_PATH)
 
-        def simulate_workflow_dag(ctx: dict[str, Any]) -> dict[str, str]:
-            """Simulate GitHub Actions DAG execution with condition evaluation and needs skip propagation."""
+        def eval_ast_node(node: ast.AST, env: dict[str, Any]) -> Any:
+            if isinstance(node, ast.Expression):
+                return eval_ast_node(node.body, env)
+            if isinstance(node, ast.Constant):
+                return node.value
+            if isinstance(node, ast.Name):
+                return env.get(node.id)
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+                return not eval_ast_node(node.operand, env)
+            if isinstance(node, ast.BoolOp):
+                if isinstance(node.op, ast.And):
+                    return all(eval_ast_node(v, env) for v in node.values)
+                if isinstance(node.op, ast.Or):
+                    return any(eval_ast_node(v, env) for v in node.values)
+            if isinstance(node, ast.Compare):
+                left = eval_ast_node(node.left, env)
+                for op, comp in zip(node.ops, node.comparators):
+                    right = eval_ast_node(comp, env)
+                    if isinstance(op, ast.Eq) and left != right:
+                        return False
+                    if isinstance(op, ast.NotEq) and left == right:
+                        return False
+                return True
+            if isinstance(node, ast.Call):
+                func_name = node.func.id if isinstance(node.func, ast.Name) else ""
+                func = env.get(func_name)
+                if not callable(func):
+                    raise ValueError(f"Unknown function '{func_name}' in AST")
+                args = [eval_ast_node(a, env) for a in node.args]
+                return func(*args)
+            raise ValueError(f"Unsupported AST node: {ast.dump(node)}")
+
+        def eval_condition(raw_expr: str, env: dict[str, Any]) -> bool:
+            expr = raw_expr.strip()
+            expr = expr.replace("&&", " and ").replace("||", " or ")
+            expr = re.sub(r"!\s*", "not ", expr)
+            expr = re.sub(r"([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)+)", lambda m: m.group(1).replace(".", "_"), expr)
+            tree = ast.parse(expr, mode="eval")
+            return bool(eval_ast_node(tree, env))
+
+        def simulate_dag(workflow_doc: dict[str, Any], ctx: dict[str, Any]) -> dict[str, str]:
+            """Simulate GitHub Actions DAG execution with AST condition evaluation and needs skip propagation."""
+            jobs = workflow_doc["jobs"]
             outcomes: dict[str, str] = {}
-
-            def eval_condition(raw_expr: str) -> bool:
-                expr = raw_expr.strip()
-                expr = expr.replace("(!startsWith(github.ref, 'refs/tags/v'))", str(not ctx.get("ref", "").startswith("refs/tags/v")))
-                expr = expr.replace("github.event_name != 'push'", str(ctx.get("event_name") != "push"))
-                expr = expr.replace("github.event_name == 'pull_request'", str(ctx.get("event_name") == "pull_request"))
-                expr = expr.replace("needs.identity.outputs.distribution_mode == 'artifact-bearing'", str(ctx.get("distribution_mode") == "artifact-bearing"))
-                expr = expr.replace("needs.identity.outputs.prerelease == 'false'", str(not ctx.get("prerelease", False)))
-                expr = expr.replace("startsWith(github.ref, 'refs/tags/v')", str(ctx.get("ref", "").startswith("refs/tags/v")))
-                expr = expr.replace("&&", " and ").replace("||", " or ")
-                return bool(eval(expr))
+            env = {
+                "github_ref": ctx.get("ref", ""),
+                "github_event_name": ctx.get("event_name", ""),
+                "needs_identity_outputs_distribution_mode": ctx.get("distribution_mode", ""),
+                "needs_identity_outputs_prerelease": "true" if ctx.get("prerelease", False) else "false",
+                "needs_tag_preflight_outputs_distribution_mode": ctx.get("distribution_mode", ""),
+                "steps_release_outputs_prerelease": "true" if ctx.get("prerelease", False) else "false",
+                "startsWith": lambda s, p: str(s or "").startswith(p),
+            }
 
             remaining = set(jobs.keys())
             while remaining:
@@ -361,17 +402,14 @@ class TestWorkflowJobGatingInSourceOnlyMode:
                 for job_name in sorted(remaining):
                     job = jobs[job_name]
                     raw_needs = job.get("needs", [])
-                    if isinstance(raw_needs, str):
-                        needs_list = [raw_needs]
-                    else:
-                        needs_list = list(raw_needs)
+                    needs_list = [raw_needs] if isinstance(raw_needs, str) else list(raw_needs)
 
                     if all(dep in outcomes for dep in needs_list):
                         if any(outcomes[dep] != "success" for dep in needs_list):
                             outcomes[job_name] = "skipped"
                         else:
                             cond = job.get("if")
-                            if cond is None or eval_condition(cond):
+                            if cond is None or eval_condition(cond, env):
                                 outcomes[job_name] = "success"
                             else:
                                 outcomes[job_name] = "skipped"
@@ -383,54 +421,65 @@ class TestWorkflowJobGatingInSourceOnlyMode:
 
             return outcomes
 
-        # Tag push in source-only mode
-        source_only_outcomes = simulate_workflow_dag({
+        # 1. Source release workflow always runs all jobs on tag pushes for both modes
+        for mode in ("source-only", "artifact-bearing"):
+            src_outcomes = simulate_dag(source_workflow, {
+                "event_name": "push",
+                "ref": "refs/tags/v1.0.0",
+                "distribution_mode": mode,
+            })
+            assert src_outcomes["tag-preflight"] == "success"
+            assert src_outcomes["family-conformance"] == "success"
+            assert src_outcomes["publish"] == "success"
+
+        # 2. Tag push in source-only mode for TUI workflow skips helper build/publish/channels
+        source_only_tui = simulate_dag(tui_workflow, {
             "event_name": "push",
             "ref": "refs/tags/v1.0.0",
             "distribution_mode": "source-only",
         })
-        assert source_only_outcomes["identity"] == "success"
-        assert source_only_outcomes["family-conformance"] == "success"
-        assert source_only_outcomes["plan"] == "skipped"
-        assert source_only_outcomes["build"] == "skipped"
-        assert source_only_outcomes["publish"] == "skipped"
+        assert source_only_tui["identity"] == "success"
+        assert source_only_tui["family-conformance"] == "success"
+        assert source_only_tui["plan"] == "skipped"
+        assert source_only_tui["build"] == "skipped"
+        assert source_only_tui["publish"] == "skipped"
         for channel in ("homebrew", "winget", "scoop"):
-            if channel in jobs:
-                assert source_only_outcomes[channel] == "skipped"
+            if channel in tui_workflow["jobs"]:
+                assert source_only_tui[channel] == "skipped"
 
-        # Tag push in artifact-bearing mode
-        artifact_outcomes = simulate_workflow_dag({
+        # 3. Tag push in artifact-bearing mode runs all helper jobs and channels
+        artifact_tui = simulate_dag(tui_workflow, {
             "event_name": "push",
             "ref": "refs/tags/v1.0.0",
             "distribution_mode": "artifact-bearing",
         })
-        assert artifact_outcomes["identity"] == "success"
-        assert artifact_outcomes["family-conformance"] == "success"
-        assert artifact_outcomes["plan"] == "success"
-        assert artifact_outcomes["build"] == "success"
-        assert artifact_outcomes["publish"] == "success"
+        assert artifact_tui["identity"] == "success"
+        assert artifact_tui["family-conformance"] == "success"
+        assert artifact_tui["plan"] == "success"
+        assert artifact_tui["build"] == "success"
+        assert artifact_tui["publish"] == "success"
         for channel in ("homebrew", "winget", "scoop"):
-            if channel in jobs:
-                assert artifact_outcomes[channel] == "success"
+            if channel in tui_workflow["jobs"]:
+                assert artifact_tui[channel] == "success"
 
-        # workflow_dispatch on a tag in source-only mode must not start helper builds
-        dispatch_outcomes = simulate_workflow_dag({
+        # 4. workflow_dispatch on a tag in source-only mode must not start helper builds
+        dispatch_tui = simulate_dag(tui_workflow, {
             "event_name": "workflow_dispatch",
             "ref": "refs/tags/v1.0.0",
             "distribution_mode": "source-only",
         })
-        assert dispatch_outcomes["build"] == "skipped"
-        assert dispatch_outcomes["publish"] == "skipped"
+        assert dispatch_tui["build"] == "skipped"
+        assert dispatch_tui["publish"] == "skipped"
 
-        # Pull request builds run plan and build to validate compiler checks
-        pr_outcomes = simulate_workflow_dag({
+        # 5. Pull request builds run plan and build to validate compiler checks
+        pr_tui = simulate_dag(tui_workflow, {
             "event_name": "pull_request",
             "ref": "refs/pull/123/head",
             "distribution_mode": "source-only",
         })
-        assert pr_outcomes["plan"] == "success"
-        assert pr_outcomes["build"] == "success"
-        assert pr_outcomes["publish"] == "skipped"
+        assert pr_tui["plan"] == "success"
+        assert pr_tui["build"] == "success"
+        assert pr_tui["publish"] == "skipped"
 
 
 class TestArtifactBearingTrustGates:

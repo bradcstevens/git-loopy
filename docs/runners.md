@@ -80,12 +80,14 @@ delivered in later phases, sequenced value-first
   the release runner actually observed. Both are `PATH` helpers too — see
   [the helper's README](../git-loopy/tui/README.md#winget-and-scoop). Until a
   helper is present or selected, the native ports stream plain text and run in
-  place from the clone. Both native installers now install both halves of their
-  distribution — a `git-loopy` launcher on your `PATH` and the clone's pinned,
-  checksum-verified `git-loopy-tui` staged into `.git-loopy/bin/` — the shell
-  port's `install.sh` with `--no-tui` / `--tui-archive` / `--tui-checksum`, and
+  place from the clone. When artifact assets are published, both native installers
+  install both halves of their distribution — a `git-loopy` launcher on your `PATH`
+  and the clone's pinned, checksum-verified `git-loopy-tui` staged into `.git-loopy/bin/` —
+  the shell port's `install.sh` with `--no-tui` / `--tui-archive` / `--tui-checksum`, and
   `install.ps1` with `-NoTui` / `-TuiArchive` / `-TuiChecksum` on Windows, Linux,
-  and macOS. A Run itself never downloads or updates software.
+  and macOS. For source-only releases where no compiled helpers are published,
+  passing `--no-tui` (or `-NoTui`) installs the launcher alone. A Run itself never
+  downloads or updates software.
 - **Phase 3 — config parity.** The `config.toml` precedence chain, the `init`
   wizard, the `config get/set/list/path/edit` subcommands, the model picker, and
   cost estimation reach the native ports (the Python member has these today; the

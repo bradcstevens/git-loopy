@@ -33,7 +33,7 @@ from typing import Any, Callable, Mapping, Sequence
 from urllib.request import urlopen
 
 from .events import EVENT_SCHEMA_VERSION
-from .release_trust import DistributionModeError, resolve_distribution_mode
+from .distribution_mode import DistributionModeError, resolve_distribution_mode
 from .release_version import ReleaseVersionError, is_prerelease, read_release_version
 from .settings import global_dir
 

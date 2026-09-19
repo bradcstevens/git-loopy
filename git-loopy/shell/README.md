@@ -123,9 +123,11 @@ bash git-loopy/shell/git-loopy.sh
 ### Optional: `install.sh` — the launcher and the live interface
 
 `install.sh` installs the two halves of this clone's distribution: a small
-launcher shim on your `PATH` that runs this clone's `git-loopy.sh`, and the
-`git-loopy-tui` helper this clone's Release pins, staged into
-`.git-loopy/bin/` where the Orchestrator looks for it first.
+launcher shim on your `PATH` that runs this clone's `git-loopy.sh`, and (when
+compiled helper artifacts are published) the `git-loopy-tui` helper this clone's
+Release pins, staged into `.git-loopy/bin/` where the Orchestrator looks for it first.
+Under source-only releases, pass `--no-tui` to install the launcher alone; the
+runner operates in plain mode with its built-in streaming line printer.
 
 The clone command above is a **v0.9.0 Release** install, so
 `git-loopy --version` reports `git-loopy 0.9.0`. To install another named
