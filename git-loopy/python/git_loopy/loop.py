@@ -2365,7 +2365,9 @@ class _Loop:
             ),
         )
 
-    async def _record_dynamic_route(self, decision: DynamicRouteDecision) -> bool:
+    async def _record_dynamic_route(
+        self, decision: DynamicRouteDecision, *, issue: int | str
+    ) -> bool:
         """Persist one **Dynamic route**'s provenance before any work starts.
 
         The router's recorder port, and the whole of AC9's "persist local
@@ -2387,27 +2389,7 @@ class _Loop:
             self._emit(
                 events_module.WRAPPER_ROUTING_RESOLVED,
                 iter_num=None,
-                proposal_id=decision.proposal_id,
-                model=decision.route.model,
-                effort=decision.route.reasoning_effort,
-                context_tier=decision.route.context_tier,
-                summary=decision.summary,
-                selector_model=decision.selector.model,
-                selector_effort=decision.selector.reasoning_effort,
-                selector_context_tier=decision.selector.context_tier,
-                evidence_source=decision.selector.evidence.source_identity,
-                evidence_retrieved_at=decision.evidence_retrieved_at.isoformat(),
-                capabilities_retrieved_at=(
-                    decision.capabilities_retrieved_at.isoformat()
-                ),
-                validated_at=decision.validated_at.isoformat(),
-                revalidated=decision.revalidated,
-                reassessed=decision.reassessed,
-                superseded_proposal_id=decision.superseded_proposal_id,
-                routing_credits=str(decision.usage.routing_credits),
-                classification_attempts=decision.usage.classification_attempts,
-                selector_attempts=decision.usage.selector_attempts,
-                routing_overshot=decision.usage.overshot,
+                **routing_provenance_payload(decision, issue=issue),
             )
         except Exception as exc:
             self._diag.error("dynamic route provenance not recorded: %s", exc)
