@@ -29,9 +29,11 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
-from git_loopy import tui_release
+if TYPE_CHECKING:
+    from git_loopy import tui_release
+
 from git_loopy.release_version import (
     ReleaseVersionError,
     is_prerelease,
@@ -253,11 +255,16 @@ def _extract_tag_distribution_mode(
             check=False,
             timeout=10,
         )
-        if result.returncode != 0:
-            return None
-        text = result.stdout
-    except Exception:
-        return None
+    except Exception as exc:
+        raise DistributionModeError(
+            f"Failed to read tag annotation for {tag_ref!r}: {exc}"
+        ) from exc
+
+    if result.returncode != 0:
+        raise DistributionModeError(
+            f"Failed to read tag annotation for {tag_ref!r}: {result.stderr.strip()}"
+        )
+    text = result.stdout
 
     for line in text.splitlines():
         line = line.strip()
@@ -272,18 +279,12 @@ def resolve_distribution_mode(
     *,
     explicit_mode: str | None = None,
     tag_ref: str | None = None,
-    requested_mode: str | None = None,
-    tag: str | None = None,
 ) -> str:
     """Resolve and validate the publication distribution mode.
 
     The repository/release declaration is the single authority.
     Fails closed on unknown, missing, or inconsistent mode input.
     """
-    if explicit_mode is None:
-        explicit_mode = requested_mode
-    if tag_ref is None:
-        tag_ref = tag
 
     policy_path = repository_root / TRUST_POLICY_PATH
     if policy_path.is_file():
@@ -368,6 +369,8 @@ class TrustReceipt:
 def _artifact_for_triple(
     repository_root: Path, triple: str
 ) -> tui_release.PublishedArtifact:
+    from git_loopy import tui_release
+
     metadata = tui_release.load_artifact_metadata(repository_root)
     for artifact in tui_release.published_artifacts(metadata):
         if artifact.target.triple == triple:
@@ -467,6 +470,8 @@ def _verify_one_artifact(
     channel: str,
     version: str,
 ) -> tuple[TrustReceipt | None, list[str]]:
+    from git_loopy import tui_release
+
     problems: list[str] = []
     platform = artifact.target.os
     mechanism = policy.mechanism_for(platform)
@@ -550,6 +555,8 @@ def verify_release_trust(
     allowance rests on it: a caller that could omit it could publish an
     unsigned artifact to a Release that says nothing about being one.
     """
+    from git_loopy import tui_release
+
     policy = load_trust_policy(repository_root)
     channel = policy.channel_for(version)
     metadata = tui_release.load_artifact_metadata(repository_root)
@@ -756,6 +763,8 @@ def observe_artifact(
         raise ReleaseTrustError(
             f"cannot observe {artifact.archive_name}: it is not in {artifact_directory}"
         )
+    from git_loopy import tui_release
+
     with tempfile.TemporaryDirectory() as scratch:
         binary = tui_release.extract_helper(archive, artifact, Path(scratch))
         return collect_evidence(
@@ -904,9 +913,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 attestation=args.attestation,
             ):
                 print(receipt.archive_name)
-    except (ReleaseTrustError, ReleaseVersionError, tui_release.TuiReleaseError) as exc:
+    except (ReleaseTrustError, ReleaseVersionError) as exc:
         print(f"Release trust verification failed: {exc}", file=sys.stderr)
         return 1
+    except Exception as exc:
+        from git_loopy import tui_release
+
+        if isinstance(exc, tui_release.TuiReleaseError):
+            print(f"Release trust verification failed: {exc}", file=sys.stderr)
+            return 1
+        raise
     return 0
 
 

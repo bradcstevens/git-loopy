@@ -33,6 +33,7 @@ from typing import Any, Callable, Mapping, Sequence
 from urllib.request import urlopen
 
 from .events import EVENT_SCHEMA_VERSION
+from .release_trust import DistributionModeError, resolve_distribution_mode
 from .release_version import ReleaseVersionError, is_prerelease, read_release_version
 from .settings import global_dir
 
@@ -1334,11 +1335,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         if args.command == "identity":
-            from git_loopy.release_trust import (
-                DistributionModeError,
-                resolve_distribution_mode,
-            )
-
             version = helper_release_version(
                 args.repository_root,
                 tag_ref=args.tag_ref,
