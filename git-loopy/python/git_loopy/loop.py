@@ -163,6 +163,7 @@ from git_loopy.dynamic_route import (
     DynamicRouteDecision,
     DynamicRoutePrerequisites,
     DynamicRouter,
+    FreshEvidence,
     FreshHarnessCapabilities,
     RoutingAdmissionLedger,
     RoutingPrerequisiteError,
@@ -170,9 +171,13 @@ from git_loopy.dynamic_route import (
     RoutingSourceError,
     RoutingUnavailable,
     SelectorCallResult,
+    SupportingEvidence,
+    SupportingEvidenceSource,
+    SupportingEvidenceStatus,
     refresh_harness_evidence,
     resolve_prerequisites,
 )
+from git_loopy.swe_bench import SWEbenchVerifiedSource
 from git_loopy.emit import EventEmitter
 from git_loopy.gate import FeedbackLoop, parse_feedback_loops
 from git_loopy.measured_routing import (
@@ -1172,8 +1177,75 @@ def _make_dynamic_router(
     source = ArtificialAnalysisSource(
         prerequisites.api_key, associations=prerequisites.associations
     )
+
+    async def evidence_fetch() -> FreshEvidence:
+        """Combine required AA and optional official SWE-bench reads."""
+        artificial_analysis = await source.fetch()
+        if not prerequisites.swe_bench_associations:
+            return FreshEvidence(
+                source_identity=artificial_analysis.source_identity,
+                retrieved_at=artificial_analysis.retrieved_at,
+                records=artificial_analysis.evidence,
+                supporting_sources=(
+                    SupportingEvidenceSource(
+                        source_identity="https://www.swebench.com/",
+                        status=SupportingEvidenceStatus.NOT_CONFIGURED,
+                        retrieved_at=None,
+                    ),
+                ),
+            )
+        try:
+            supporting = await SWEbenchVerifiedSource(
+                associations=prerequisites.swe_bench_associations or {}
+            ).fetch()
+        except Exception:
+            return FreshEvidence(
+                source_identity=artificial_analysis.source_identity,
+                retrieved_at=artificial_analysis.retrieved_at,
+                records=artificial_analysis.evidence,
+                supporting_sources=(
+                    SupportingEvidenceSource(
+                        source_identity="https://www.swebench.com/",
+                        status=SupportingEvidenceStatus.SOURCE_UNAVAILABLE,
+                        retrieved_at=None,
+                    ),
+                ),
+            )
+        status = (
+            SupportingEvidenceStatus.AVAILABLE
+            if supporting.available
+            else SupportingEvidenceStatus.MISSING_COMPARABLE_ROWS
+        )
+        return FreshEvidence(
+            source_identity=artificial_analysis.source_identity,
+            retrieved_at=artificial_analysis.retrieved_at,
+            records=artificial_analysis.evidence,
+            supporting_sources=(
+                SupportingEvidenceSource(
+                    source_identity=supporting.source_identity,
+                    status=status,
+                    retrieved_at=supporting.retrieved_at,
+                ),
+            ),
+            supporting_records=tuple(
+                SupportingEvidence(
+                    source_identity=record.source_identity,
+                    source_model_identity=record.source_model_identity,
+                    associated_copilot_model=record.associated_copilot_model,
+                    associated_copilot_effort=record.associated_copilot_effort,
+                    association_provenance=record.association_provenance,
+                    score=record.resolved,
+                    benchmark_version=record.benchmark_version,
+                    harness=record.harness,
+                    harness_version=record.harness_version,
+                    conditions=record.conditions,
+                )
+                for record in supporting.records
+            ),
+        )
+
     return DynamicRouter(
-        evidence_fetch=source.fetch,
+        evidence_fetch=evidence_fetch,
         capabilities_fetch=_fetch_harness_evidence,
         selector_assess=selector_assess,
         recorder=recorder,

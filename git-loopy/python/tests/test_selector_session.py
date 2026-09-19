@@ -11,6 +11,7 @@ reports — never the prompt's wording.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Mapping
@@ -22,6 +23,9 @@ from git_loopy.dynamic_route import (
     AssessmentRequest,
     EvidenceRecord,
     SelectorSettings,
+    SupportingEvidence,
+    SupportingEvidenceSource,
+    SupportingEvidenceStatus,
 )
 from git_loopy import selector_session
 from git_loopy.selector_session import SessionRouteSelector
@@ -234,6 +238,47 @@ def test_a_missing_public_measurement_is_shown_as_unknown_not_zero() -> None:
     (prompt,) = _FakeSession.sent
     assert '"public_output_tokens_per_second": null' in prompt
     assert '"measured_at": null' in prompt
+
+
+def test_optional_swe_bench_evidence_is_visible_without_electing_the_selector() -> None:
+    """Supporting evidence informs the work assessment, never AA selector election."""
+    selector = _selector(
+        '{"candidate_identity": "one", "summary": "public benchmark support only"}',
+        (),
+    )
+    support = SupportingEvidence(
+        source_identity="https://www.swebench.com/",
+        source_model_identity="GPT Test (20260901)",
+        associated_copilot_model="claude-opus-5",
+        associated_copilot_effort="high",
+        association_provenance="swe_bench_associations:GPT Test (20260901)",
+        score=Decimal("72.4"),
+        benchmark_version="SWE-bench Verified",
+        harness="mini-SWE-agent",
+        harness_version="2.4.1",
+        conditions="reasoning_effort=high; evaluated_on=2026-09-01",
+    )
+    candidate = replace(
+        _candidate("one", "claude-opus-5", "70"),
+        supporting_evidence=(support,),
+    )
+    request = _request(
+        candidates=(candidate,),
+        supporting_sources=(
+            SupportingEvidenceSource(
+                source_identity="https://www.swebench.com/",
+                status=SupportingEvidenceStatus.AVAILABLE,
+                retrieved_at=_WHEN,
+            ),
+        ),
+    )
+
+    asyncio.run(selector(_settings(), request))
+
+    (prompt,) = _FakeSession.sent
+    assert '"swe_bench_verified_resolved": "72.4"' in prompt
+    assert '"harness": "mini-SWE-agent"' in prompt
+    assert "SWE-bench evidence supports the work-model assessment only" in prompt
 
 
 def test_the_billed_credits_are_this_calls_own_post_paid_figure() -> None:
