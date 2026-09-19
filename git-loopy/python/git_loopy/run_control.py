@@ -253,6 +253,14 @@ def is_run_alive(control_path: Path) -> bool | None:
     ``True`` means another process holds its advisory lock; ``False`` means the
     lock is free (or the artifact is absent). ``None`` is an explicit trace-only
     result on a host that provides neither lock mechanism.
+
+    Release after a *hard kill* is the operating system's, and Windows
+    documents it as taking "time ... depend[ing] upon available system
+    resources" rather than completing with the process. So a terminated Run can
+    read ``True`` for a moment longer there. Every direction that lag pushes a
+    caller is the conservative one — a **Sweep** declines to reclaim, a listing
+    briefly over-reports a Run as live — so no caller ever acts on work that is
+    still running because of it.
     """
     if not advisory_locking_available():
         return None

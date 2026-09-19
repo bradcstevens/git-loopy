@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,23 @@ pytestmark = pytest.mark.skipif(
 posix_only = pytest.mark.skipif(
     os.name == "nt", reason="this case arranges a POSIX flock failure directly"
 )
+
+#: Its mirror, for the cases that state what a Windows host deliberately does
+#: *not* coordinate. Without it that promise would be pinned nowhere.
+windows_only = pytest.mark.skipif(
+    os.name != "nt", reason="this case states a Windows-only coordination gap"
+)
+
+#: How long a hard kill is given to become visible in the artifact's lock.
+#: POSIX releases on process teardown synchronously, so the first probe there
+#: is already the answer. Windows releases a terminated process's byte-range
+#: locks too, but documents the release as taking "time ... depend[ing] upon
+#: available system resources" (``LockFileEx``), so the guarantee is that a
+#: killed Run *becomes* dead rather than that it is dead in the same
+#: instruction. Every direction that lag can push a reader is the conservative
+#: one: a **Sweep** declines to reclaim, and a listing briefly over-reports a
+#: Run as live. Neither ever acts on work that is still running.
+_KILL_VISIBLE_WITHIN = 10.0
 
 
 def _probe_liveness(path: Path) -> subprocess.CompletedProcess[str]:
@@ -143,10 +161,28 @@ def test_liveness_readers_do_not_make_a_stale_artifact_read_alive(
             process.wait(timeout=5)
 
 
-def test_sigkill_releases_the_control_lock_but_preserves_the_artifact(
+def _liveness_settles_to(control_path: Path, expected: bool) -> bool:
+    """Whether the artifact reports ``expected`` within the kill deadline."""
+    deadline = time.monotonic() + _KILL_VISIBLE_WITHIN
+    while True:
+        if is_run_alive(control_path) is expected:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def test_a_hard_kill_releases_the_control_lock_but_preserves_the_artifact(
     tmp_path: Path,
 ) -> None:
-    """The OS, rather than a pid or heartbeat, makes a killed Run read dead."""
+    """The OS, rather than a pid or heartbeat, makes a killed Run read dead.
+
+    A hard kill is the case no in-process handler can cover, which is the whole
+    reason liveness is an OS-held lock. The released state is waited for rather
+    than demanded instantly, because Windows documents a terminated process's
+    byte-range locks as released on the kernel's own schedule -- see
+    ``_KILL_VISIBLE_WITHIN``.
+    """
     trace_path = tmp_path / "logs" / "run.jsonl"
     script = textwrap.dedent(
         f"""
@@ -175,10 +211,14 @@ def test_sigkill_releases_the_control_lock_but_preserves_the_artifact(
         process.kill()
         process.wait(timeout=5)
         assert control_path.exists()
-        assert is_run_alive(control_path) is False
+        assert _liveness_settles_to(control_path, False), (
+            "a killed Run still holds its control lock after "
+            f"{_KILL_VISIBLE_WITHIN}s; liveness would outlive the process"
+        )
+        assert control_path.exists()
     finally:
         if process.poll() is None:
-            os.kill(process.pid, 9)
+            process.kill()
             process.wait(timeout=5)
 
 
@@ -214,10 +254,28 @@ def test_a_run_does_not_block_behind_an_uninstall_holding_the_repository(
         control.close()
 
 
+@posix_only
 def test_an_unopenable_repository_refuses_the_uninstall_lock(tmp_path: Path) -> None:
     """A lock it cannot even attempt is reported, not raised at the caller."""
     with hold_uninstall_lock(tmp_path / "absent") as locked:
         assert locked is False
+
+
+@windows_only
+def test_windows_coordinates_uninstall_nowhere_and_proceeds_rather_than_raising(
+    tmp_path: Path,
+) -> None:
+    """The uninstall lock is the one seam Windows deliberately does not hold.
+
+    It locks a *directory* descriptor, which Windows has no equivalent for, so
+    the byte-range mechanism the control artifact gained cannot stand in. The
+    documented answer there is "no coordination available, proceed" -- the same
+    answer this seam has always given on such a host -- and it must stay an
+    answer rather than becoming a traceback at an uninstall's caller. A
+    repository that does not even exist is the harshest input it can be asked.
+    """
+    with hold_uninstall_lock(tmp_path / "absent") as locked:
+        assert locked is True
 
 
 @posix_only
