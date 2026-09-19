@@ -59,9 +59,10 @@ delivered in later phases, sequenced value-first
   a single archive is attached; an unsigned Windows archive reaches operators only
   through a clearly marked prerelease. Those rules live in
   [`release-trust.json`](../git-loopy/conformance/release-trust.json) and are
-  applied by `git_loopy.release_trust`.
-  The **package channels** now follow that publication: a stable Release
-  updates the Homebrew tap from the artifacts it just published — `brew tap
+  applied by `git_loopy.release_trust`. Under `source-only` distribution mode,
+  these helper builds and channel updates are not launched.
+  Under `artifact-bearing` mode, the **package channels** follow that publication:
+  a stable Release updates the Homebrew tap from the artifacts it just published — `brew tap
   bradcstevens/git-loopy && brew install git-loopy-tui` — rebuilding nothing and
   re-hashing nothing. What the formula is allowed to say is pinned in
   [`homebrew-tap.json`](../git-loopy/conformance/homebrew-tap.json) and enforced
@@ -69,7 +70,7 @@ delivered in later phases, sequenced value-first
   version, URL, host, digest, or coverage that is not this Release's. A
   `brew`-installed helper is a `PATH` helper, so it never displaces a clone-local
   one — see [the helper's README](../git-loopy/tui/README.md#homebrew).
-  The same Release now also updates the two Windows channels — `winget install
+  Under `artifact-bearing` mode, the same Release also updates the two Windows channels — `winget install
   bradcstevens.git-loopy-tui` and `scoop install git-loopy-tui` — from the one
   signed `x86_64-pc-windows-msvc` archive it published. Both are pinned in
   [`windows-channels.json`](../git-loopy/conformance/windows-channels.json) and

@@ -32,8 +32,6 @@ from typing import Any, Callable, Sequence
 
 from git_loopy import tui_release
 from git_loopy.distribution_mode import (
-    DEFAULT_DISTRIBUTION_MODES,
-    DISTRIBUTION_MODE_SOURCE_ONLY,
     TRUST_POLICY_PATH,
     DistributionModeError,
     read_trust_policy,
@@ -43,15 +41,6 @@ from git_loopy.release_version import (
     is_prerelease,
     read_release_version,
 )
-
-
-__all__ = [
-    "ReleaseTrustError",
-    "TrustPolicy",
-    "TrustReceipt",
-    "load_trust_policy",
-    "verify_release_trust",
-]
 
 
 class ReleaseTrustError(ValueError):
@@ -125,8 +114,8 @@ class TrustPolicy:
     evidence_kinds: tuple[str, ...]
     mechanisms: tuple[SigningMechanism, ...]
     channel_credentials: tuple[ChannelCredential, ...]
-    distribution_mode: str = DISTRIBUTION_MODE_SOURCE_ONLY
-    distribution_modes: tuple[str, ...] = DEFAULT_DISTRIBUTION_MODES
+    distribution_mode: str
+    distribution_modes: tuple[str, ...]
 
     def mechanism_for(self, platform: str) -> SigningMechanism | None:
         """The mechanism that signs ``platform``, or ``None`` if undeclared."""

@@ -371,8 +371,8 @@ class TestWorkflowJobGatingInSourceOnlyMode:
         assert source_only_tui["build"] == "skipped"
         assert source_only_tui["publish"] == "skipped"
         for channel in ("homebrew", "winget", "scoop"):
-            if channel in tui_workflow["jobs"]:
-                assert source_only_tui[channel] == "skipped"
+            assert channel in tui_workflow["jobs"]
+            assert source_only_tui[channel] == "skipped"
 
         # 3. Tag push in artifact-bearing mode runs all helper jobs and channels
         artifact_tui = simulate_dag(tui_workflow, {
@@ -386,8 +386,8 @@ class TestWorkflowJobGatingInSourceOnlyMode:
         assert artifact_tui["build"] == "success"
         assert artifact_tui["publish"] == "success"
         for channel in ("homebrew", "winget", "scoop"):
-            if channel in tui_workflow["jobs"]:
-                assert artifact_tui[channel] == "success"
+            assert channel in tui_workflow["jobs"]
+            assert artifact_tui[channel] == "success"
 
         # 4. workflow_dispatch on a tag in source-only mode must not start helper builds
         dispatch_tui = simulate_dag(tui_workflow, {

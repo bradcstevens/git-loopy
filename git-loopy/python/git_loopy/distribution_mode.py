@@ -24,7 +24,6 @@ SUPPORTED_DISTRIBUTION_MODES = (
     DISTRIBUTION_MODE_SOURCE_ONLY,
     DISTRIBUTION_MODE_ARTIFACT_BEARING,
 )
-DEFAULT_DISTRIBUTION_MODES = SUPPORTED_DISTRIBUTION_MODES
 
 TRUST_POLICY_PATH = Path("git-loopy/conformance/release-trust.json")
 
@@ -74,9 +73,6 @@ def read_trust_policy(policy_path: Path) -> dict[str, Any]:
         )
 
     return data
-
-
-load_trust_policy = read_trust_policy
 
 
 def resolve_distribution_mode(
