@@ -137,6 +137,63 @@ is not a bypass: `source-release.yml` still gates the pushed tag, and the
 release-only real-host smoke ADR-0059 requires before a stable publication is
 not wired up yet.
 
+### Publishing a proved input, and retrying one
+
+Publication is the separate act that makes a proved snapshot public, and
+`git_loopy.release_publication.publish_release` is the whole of it. It takes the
+**publication input** a rehearsal returned and nothing else: it never reads the
+current head, and it never recomposes an identity the rehearsal already decided.
+What it publishes is the *proved tag object itself*, fetched out of the rehearsal
+workspace and pushed as-is, so "what was proved" and "what is public" cannot end
+up being two different objects.
+
+It is written to be run again. Every step is reconciled against what the remote
+actually holds before anything is written, and read back afterwards:
+
+| The remote already has | What publication does |
+| --- | --- |
+| nothing | pushes the proved tag, then creates the Release |
+| the tag at the proved commit, no Release | creates only the Release — it never retags |
+| the tag and a Release that agrees | nothing; a successful no-op |
+| the tag at **another** commit | refuses; a public tag never moves |
+| a Release that disagrees about marking, title, committed notes, or carries an asset | refuses, having written nothing |
+
+The refusals are refusals, not repairs. A mismatching Release is never
+overwritten and a tag is never replaced, because the absence of a Release object
+is no evidence that nobody fetched the tag behind it. The published tag is also
+never the only thing carrying its commit: a candidate the trunk does not already
+contain is refused before the push.
+
+A failed write is never read as "nothing happened". A rejected push and a
+Release creation whose response was lost are both resolved by asking the remote
+what is actually there — a state that agrees with the input is a success, one
+that disagrees is a refusal, and a host that cannot answer is neither. That is
+also what makes two Promotion runs racing on the same trunk safe: the loser
+reconciles the winner's tag instead of forcing its own.
+
+**Recovering a failed publication.** There are two moves, and replacing a public
+tag is not one of them.
+
+1. *The tag is public and correct.* Run the same publication input again. It
+   resumes whatever is missing — usually the Release — and retags nothing. This
+   is the normal recovery, including after a partial or interrupted run.
+2. *The content was wrong.* Cut a **new Release version**. Fix the defect, let
+   the Release line advance, and rehearse and publish the new candidate. The
+   wrong version stays where it is.
+
+Moving an already-public `v0.10.0` during its recovery is what
+[ADR-0059](../adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md)
+was written about, and it is not precedent. Before a tag exists a candidate may
+instead be repaired and rehearsed again — that is the whole point of rehearsing
+first — but after it exists there is no third option.
+
+`publish_release` deliberately has no command line of its own yet, and no
+workflow calls it. ADR-0059 requires a stable publication to sit behind both the
+full pre-tag proof *and* a bounded real-host smoke, and that smoke does not
+exist; an entry point added before it would be exactly the shortcut the ADR
+refuses. Wiring the two together is the composed Promotion's job, and until then
+`source-release.yml` remains what publishes the Release for a pushed tag.
+
 ### Open boundary
 
 What happens when a human closes a milestone-bearing issue outside a **Run**

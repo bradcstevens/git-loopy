@@ -297,6 +297,31 @@ def _extract_source_archive(archive_path: Path, destination: Path) -> Path:
     return roots[0]
 
 
+def source_archive_name(version: str) -> str:
+    """The one distribution root every generated source archive extracts to."""
+    return f"git-loopy-{version}"
+
+
+def write_source_archive(
+    repository_root: Path, commit: str, version: str, archive_output: Path
+) -> None:
+    """Generate the exact source archive a Release publishes for ``commit``.
+
+    The only place the archive's shape is decided. A **Publication** reads the
+    published archive back by running this again over the tag the *remote*
+    carries, so "what was verified" and "what is public" are compared by the
+    same generator rather than by two descriptions of one.
+    """
+    _run_git(
+        repository_root,
+        "archive",
+        "--format=tar",
+        f"--prefix={source_archive_name(version)}/",
+        f"--output={archive_output}",
+        commit,
+    )
+
+
 def verify_tagged_source_release(
     repository_root: Path,
     tag_ref: str,
@@ -309,13 +334,8 @@ def verify_tagged_source_release(
     if archive_output.exists():
         raise SourceReleaseError(f"source archive already exists: {archive_output}")
 
-    _run_git(
-        repository_root,
-        "archive",
-        "--format=tar",
-        f"--prefix=git-loopy-{release.version}/",
-        f"--output={archive_output}",
-        release.commit,
+    write_source_archive(
+        repository_root, release.commit, release.version, archive_output
     )
     with tempfile.TemporaryDirectory(prefix="git-loopy-source-release-") as temporary:
         source_root = _extract_source_archive(archive_output, Path(temporary))

@@ -677,6 +677,23 @@ on the trunk, and once a tag *is* public it never moves — changed content need
 **Release version**.
 _Avoid_: draft tag, temporary tag, pre-tag.
 
+**Publication**:
+Making one **Publication input** public: pushing the *proved* annotated tag object
+itself and creating the GitHub Release that carries the committed notes. Reconciled
+against what the remote actually holds rather than assumed, so it is safely
+repeatable — matching state is a successful no-op, disagreeing state is a refusal
+that mutates nothing, and a write whose response was lost is resolved by reading the
+remote back rather than by retrying blindly
+([ADR-0059](docs/adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md)).
+_Avoid_: release, deploy, upload, push (the git operation).
+
+**Distribution mode**:
+The promise one Release makes about what it carries. `source-only` is committed notes
+and the generated source archive and nothing else; it is *stated* by the operator
+starting a **Rehearsal**, never inferred from which credentials happen to be
+configured, and the publication seam offers no way to attach an artifact to one.
+_Avoid_: release type, artifact mode, channel.
+
 **Autonomous loop**:
 The *technique* git-loopy orchestrates — an unattended, iterative execution loop that
 drives the Copilot agent to work triaged issues one at a time, bounded by feedback

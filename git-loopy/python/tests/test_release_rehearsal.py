@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -22,146 +21,22 @@ from git_loopy.release_rehearsal import (
     milestone_promotion,
     rehearse_promotion,
 )
+from tests.release_fixtures import (
+    AGENTS_MD,
+    git,
+    trunk_repository,
+    write_release_metadata,
+)
 
 
-REPOSITORY_ROOT = Path(__file__).parents[3]
 GATE_RUNNER = AgentsMdGateRunner(timeout_seconds=120.0)
-
-
-def _git(root: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-    )
-    assert result.returncode == 0, result.stderr
-    return result.stdout.strip()
-
-
-def _python_distribution_version(version: str) -> str:
-    stable, _, counter = version.partition("-dev.")
-    return f"{stable}.dev{counter}" if counter else stable
-
-
-def _write_release_metadata(root: Path, version: str) -> None:
-    """Write every checked-in Release-version copy the writer maintains."""
-    python_version = _python_distribution_version(version)
-    (root / "VERSION").write_text(f"{version}\n", encoding="utf-8")
-    (root / "git-loopy/python/git_loopy/VERSION").write_text(
-        f"{version}\n", encoding="utf-8"
-    )
-    source = root / "git-loopy/python/git_loopy/__init__.py"
-    source.write_text(
-        f'"""git-loopy."""\n\n__version__ = "{version}"\n',
-        encoding="utf-8",
-    )
-    (root / "git-loopy/python/pyproject.toml").write_text(
-        "\n".join(
-            (
-                "[project]",
-                'name = "git-loopy"',
-                f'version = "{version}"',
-                "",
-            )
-        ),
-        encoding="utf-8",
-    )
-    (root / "git-loopy/python/uv.lock").write_text(
-        "\n".join(
-            (
-                "[[package]]",
-                'name = "git-loopy"',
-                f'version = "{python_version}"',
-                'source = { editable = "." }',
-                "",
-            )
-        ),
-        encoding="utf-8",
-    )
-    (root / "git-loopy/tui/Cargo.toml").write_text(
-        "\n".join(
-            ("[package]", 'name = "git-loopy-tui"', f'version = "{version}"', "")
-        ),
-        encoding="utf-8",
-    )
-    (root / "git-loopy/tui/Cargo.lock").write_text(
-        "\n".join(
-            ("[[package]]", 'name = "git-loopy-tui"', f'version = "{version}"', "")
-        ),
-        encoding="utf-8",
-    )
-    (root / "git-loopy/tui/README.md").write_text(
-        f'{{"name": "git-loopy-tui", "version": "{version}"}}\n',
-        encoding="utf-8",
-    )
-    (root / "git-loopy/conformance/release-version.json").write_text(
-        json.dumps(
-            {
-                "expected_release_version": version,
-                "expected_python_distribution_version": python_version,
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-
-AGENTS_MD = """# Agents
-
-## Feedback loops
-
-| Loop | Command | When to run |
-| --- | --- | --- |
-| Release identity | `test -s VERSION` | Any change |
-"""
-
-
-def _trunk_repository(root: Path, version: str, *, agents_md: str = AGENTS_MD) -> Path:
-    """A real scratch clone carrying a complete source distribution and history."""
-    (root / "git-loopy/python").mkdir(parents=True)
-    (root / "git-loopy/tui").mkdir(parents=True)
-    (root / "git-loopy/conformance").mkdir(parents=True)
-    (root / "docs/releases").mkdir(parents=True)
-    for tree in ("git-loopy/python/git_loopy", "git-loopy/shell", "git-loopy/powershell"):
-        shutil.copytree(
-            REPOSITORY_ROOT / tree,
-            root / tree,
-            ignore=shutil.ignore_patterns("__pycache__"),
-        )
-    (root / "git-loopy/conformance/event-schema.json").write_text(
-        '{"contract_version": "2.8"}\n', encoding="utf-8"
-    )
-    (root / "AGENTS.md").write_text(agents_md, encoding="utf-8")
-
-    _git(root, "init", "-q", "-b", "main")
-    _git(root, "config", "user.name", "Release Rehearsal")
-    _git(root, "config", "user.email", "release-rehearsal@example.invalid")
-
-    _write_release_metadata(root, "0.11.0-dev.1")
-    (root / "docs/releases/v0.11.0-dev.1.md").write_text(
-        "# git-loopy 0.11.0-dev.1\n\nFirst advance.\n", encoding="utf-8"
-    )
-    _git(root, "add", ".")
-    _git(root, "commit", "-qm", "chore(release): advance Release line to 0.11.0-dev.1")
-
-    _write_release_metadata(root, version)
-    (root / f"docs/releases/v{version}.md").write_text(
-        f"# git-loopy {version}\n\nSecond advance.\n", encoding="utf-8"
-    )
-    _git(root, "add", ".")
-    _git(root, "commit", "-qm", f"chore(release): advance Release line to {version}")
-    return root
 
 
 def test_a_closed_milestone_rehearses_the_stable_snapshot_it_names(
     tmp_path: Path,
 ) -> None:
-    trunk = _trunk_repository(tmp_path / "trunk", "0.11.0-dev.2")
-    base = _git(trunk, "rev-parse", "HEAD")
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.0-dev.2")
+    base = git(trunk, "rev-parse", "HEAD")
 
     publication_input = rehearse_promotion(
         trunk,
@@ -182,12 +57,12 @@ def test_a_closed_milestone_rehearses_the_stable_snapshot_it_names(
     assert publication_input.archive_path.is_file()
     assert publication_input.gate_loops == ("Release identity",)
 
-    assert _git(trunk, "rev-parse", "HEAD") == base
-    assert _git(trunk, "tag", "--list") == ""
+    assert git(trunk, "rev-parse", "HEAD") == base
+    assert git(trunk, "tag", "--list") == ""
 
 
 def test_a_milestone_that_promises_no_line_rehearses_nothing(tmp_path: Path) -> None:
-    trunk = _trunk_repository(tmp_path / "trunk", "0.11.0-dev.2")
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.0-dev.2")
 
     with pytest.raises(ReleaseRehearsalError, match="promotes no Release line"):
         rehearse_promotion(
@@ -203,17 +78,17 @@ def test_a_milestone_that_promises_no_line_rehearses_nothing(tmp_path: Path) -> 
 def test_a_major_bump_rehearses_the_commit_that_declares_its_stable_version(
     tmp_path: Path,
 ) -> None:
-    trunk = _trunk_repository(tmp_path / "trunk", "0.11.0-dev.2")
-    _write_release_metadata(trunk, "1.0.0")
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.0-dev.2")
+    write_release_metadata(trunk, "1.0.0")
     (trunk / "docs/releases/v1.0.0.md").write_text(
         "# git-loopy 1.0.0\n\nMajor.\n", encoding="utf-8"
     )
-    _git(trunk, "add", ".")
-    _git(trunk, "commit", "-qm", "chore(release): promote Release line to 1.0.0")
-    declaring = _git(trunk, "rev-parse", "HEAD")
+    git(trunk, "add", ".")
+    git(trunk, "commit", "-qm", "chore(release): promote Release line to 1.0.0")
+    declaring = git(trunk, "rev-parse", "HEAD")
     (trunk / "docs/agents.md").write_text("repair\n", encoding="utf-8")
-    _git(trunk, "add", ".")
-    _git(trunk, "commit", "-qm", "fix(docs): repair a typo after the Promotion")
+    git(trunk, "add", ".")
+    git(trunk, "commit", "-qm", "fix(docs): repair a typo after the Promotion")
 
     publication_input = rehearse_promotion(
         trunk,
@@ -226,7 +101,7 @@ def test_a_major_bump_rehearses_the_commit_that_declares_its_stable_version(
 
     assert publication_input.version == "1.0.0"
     assert publication_input.commit == declaring
-    assert publication_input.base_commit == _git(trunk, "rev-parse", "HEAD")
+    assert publication_input.base_commit == git(trunk, "rev-parse", "HEAD")
 
 
 def _stable_candidate_trunk(
@@ -237,8 +112,8 @@ def _stable_candidate_trunk(
     agents_md: str = AGENTS_MD,
 ) -> tuple[Path, str]:
     """A trunk whose `major` Bump class already landed a stable Release commit."""
-    trunk = _trunk_repository(tmp_path / "trunk", "0.11.0-dev.2", agents_md=agents_md)
-    _write_release_metadata(trunk, "1.0.0")
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.0-dev.2", agents_md=agents_md)
+    write_release_metadata(trunk, "1.0.0")
     if drift == "live-fixture":
         (trunk / "git-loopy/conformance/release-version.json").write_text(
             json.dumps(
@@ -264,9 +139,9 @@ def _stable_candidate_trunk(
         raise AssertionError(f"unhandled drift case: {drift}")
     if notes is not None:
         (trunk / "docs/releases/v1.0.0.md").write_text(notes, encoding="utf-8")
-    _git(trunk, "add", "-A")
-    _git(trunk, "commit", "-qm", "chore(release): promote Release line to 1.0.0")
-    return trunk, _git(trunk, "rev-parse", "HEAD")
+    git(trunk, "add", "-A")
+    git(trunk, "commit", "-qm", "chore(release): promote Release line to 1.0.0")
+    return trunk, git(trunk, "rev-parse", "HEAD")
 
 
 def _rehearse(
@@ -342,9 +217,9 @@ def test_a_nearby_repair_commit_is_refused_however_green_its_own_history_is(
 ) -> None:
     trunk, _ = _stable_candidate_trunk(tmp_path)
     (trunk / "docs/releases/README.md").write_text("repaired\n", encoding="utf-8")
-    _git(trunk, "add", "-A")
-    _git(trunk, "commit", "-qm", "fix(docs): repair the candidate after its bump")
-    repair = _git(trunk, "rev-parse", "HEAD")
+    git(trunk, "add", "-A")
+    git(trunk, "commit", "-qm", "fix(docs): repair the candidate after its bump")
+    repair = git(trunk, "rev-parse", "HEAD")
 
     with pytest.raises(
         ReleaseRehearsalError, match="explicit Release-version bump in VERSION"
@@ -379,8 +254,8 @@ def test_the_family_gate_judges_the_promoted_commit_not_its_development_ancestor
     recording = AGENTS_MD.replace(
         "`test -s VERSION`", "`git rev-parse HEAD > .gate-judged`"
     )
-    trunk = _trunk_repository(tmp_path / "trunk", "0.11.0-dev.2", agents_md=recording)
-    base = _git(trunk, "rev-parse", "HEAD")
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.0-dev.2", agents_md=recording)
+    base = git(trunk, "rev-parse", "HEAD")
 
     publication_input = _rehearse(trunk, tmp_path, milestone_promotion("v0.11.0"))
 
@@ -392,11 +267,11 @@ def test_the_family_gate_judges_the_promoted_commit_not_its_development_ancestor
 def test_a_promotion_preserves_the_stable_notes_a_human_already_wrote(
     tmp_path: Path,
 ) -> None:
-    trunk = _trunk_repository(tmp_path / "trunk", "0.11.0-dev.2")
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.0-dev.2")
     authored = "# git-loopy 0.11.0\n\nAn essay a human wrote for this Release.\n"
     (trunk / "docs/releases/v0.11.0.md").write_text(authored, encoding="utf-8")
-    _git(trunk, "add", "-A")
-    _git(trunk, "commit", "-qm", "docs(releases): author the stable notes")
+    git(trunk, "add", "-A")
+    git(trunk, "commit", "-qm", "docs(releases): author the stable notes")
 
     publication_input = _rehearse(trunk, tmp_path, milestone_promotion("v0.11.0"))
 
@@ -437,8 +312,8 @@ def test_a_repaired_candidate_invalidates_the_proof_its_predecessor_earned(
     (workspace / "docs/releases/v1.0.0.md").write_text(
         "# git-loopy 1.0.0\n\nRepaired.\n", encoding="utf-8"
     )
-    _git(workspace, "commit", "-aqm", "chore(release): promote Release line to 1.0.0")
-    _git(workspace, "tag", "-f", "-a", "-m", "Release 1.0.0", "v1.0.0")
+    git(workspace, "commit", "-aqm", "chore(release): promote Release line to 1.0.0")
+    git(workspace, "tag", "-f", "-a", "-m", "Release 1.0.0", "v1.0.0")
 
     with pytest.raises(ReleaseRehearsalError, match="changed after it was proved"):
         confirm_publication_input(publication_input, workspace=workspace)
@@ -463,17 +338,17 @@ def test_concurrent_trunk_work_cannot_retarget_a_proved_candidate(
     publication_input = _rehearse(trunk, tmp_path)
     proof = publication_input.proof
 
-    _write_release_metadata(trunk, "1.0.1-dev.1")
+    write_release_metadata(trunk, "1.0.1-dev.1")
     (trunk / "docs/releases/v1.0.1-dev.1.md").write_text(
         "# git-loopy 1.0.1-dev.1\n\nThe next issue.\n", encoding="utf-8"
     )
-    _git(trunk, "add", "-A")
-    _git(trunk, "commit", "-qm", "chore(release): advance Release line to 1.0.1-dev.1")
+    git(trunk, "add", "-A")
+    git(trunk, "commit", "-qm", "chore(release): advance Release line to 1.0.1-dev.1")
 
     confirm_publication_input(publication_input, workspace=tmp_path / "candidate")
     assert publication_input.commit == candidate
     assert publication_input.proof == proof
-    assert publication_input.base_commit != _git(trunk, "rev-parse", "HEAD")
+    assert publication_input.base_commit != git(trunk, "rev-parse", "HEAD")
 
 
 def test_a_refused_rehearsal_leaves_no_tag_anywhere_it_could_publish_from(
@@ -485,9 +360,9 @@ def test_a_refused_rehearsal_leaves_no_tag_anywhere_it_could_publish_from(
         _rehearse(trunk, tmp_path)
 
     workspace = tmp_path / "candidate"
-    assert _git(workspace, "tag", "--list") == "v1.0.0"
-    assert _git(workspace, "remote") == ""
-    assert _git(trunk, "tag", "--list") == ""
+    assert git(workspace, "tag", "--list") == "v1.0.0"
+    assert git(workspace, "remote") == ""
+    assert git(trunk, "tag", "--list") == ""
     assert not (tmp_path / "git-loopy-source.tar").exists()
 
 
@@ -596,11 +471,11 @@ def test_a_detached_checkout_is_the_shape_ci_hands_the_rehearsal(
     """A workflow checkout is detached at one SHA, which no branch need name."""
     trunk, candidate = _stable_candidate_trunk(tmp_path)
     (trunk / "docs/releases/README.md").write_text("later\n", encoding="utf-8")
-    _git(trunk, "add", "-A")
-    _git(trunk, "commit", "-qm", "docs(releases): work that followed the Promotion")
-    head = _git(trunk, "rev-parse", "HEAD")
-    _git(trunk, "checkout", "--quiet", "--detach", head)
-    _git(trunk, "branch", "-q", "-D", "main")
+    git(trunk, "add", "-A")
+    git(trunk, "commit", "-qm", "docs(releases): work that followed the Promotion")
+    head = git(trunk, "rev-parse", "HEAD")
+    git(trunk, "checkout", "--quiet", "--detach", head)
+    git(trunk, "branch", "-q", "-D", "main")
 
     publication_input = _rehearse(trunk, tmp_path)
 
@@ -617,8 +492,8 @@ def test_an_unrelated_dependency_at_the_superseded_version_is_not_drift(
     rather than scanning for a string that any dependency may legitimately
     carry.
     """
-    trunk = _trunk_repository(tmp_path / "trunk", "0.11.0-dev.2")
-    _write_release_metadata(trunk, "1.0.0")
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.0-dev.2")
+    write_release_metadata(trunk, "1.0.0")
     (trunk / "git-loopy/tui/Cargo.lock").write_text(
         "\n".join(
             (
@@ -637,8 +512,8 @@ def test_an_unrelated_dependency_at_the_superseded_version_is_not_drift(
     (trunk / "docs/releases/v1.0.0.md").write_text(
         "# git-loopy 1.0.0\n\nMajor.\n", encoding="utf-8"
     )
-    _git(trunk, "add", "-A")
-    _git(trunk, "commit", "-qm", "chore(release): promote Release line to 1.0.0")
+    git(trunk, "add", "-A")
+    git(trunk, "commit", "-qm", "chore(release): promote Release line to 1.0.0")
 
     publication_input = _rehearse(trunk, tmp_path)
 
@@ -647,7 +522,7 @@ def test_an_unrelated_dependency_at_the_superseded_version_is_not_drift(
 
 def test_a_prerelease_is_never_a_rehearsal_candidate(tmp_path: Path) -> None:
     """`dev.N` consults no milestone, reaches no channel, and is tagged nowhere."""
-    trunk = _trunk_repository(tmp_path / "trunk", "0.11.0-dev.2")
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.0-dev.2")
 
     with pytest.raises(ReleaseRehearsalError, match="no untagged stable Release"):
         _rehearse(trunk, tmp_path)
@@ -658,26 +533,26 @@ def test_a_version_that_already_carries_a_public_tag_is_refused(
 ) -> None:
     """A published Release version never moves; changed content needs a new one."""
     trunk, candidate = _stable_candidate_trunk(tmp_path)
-    _git(trunk, "tag", "-a", "-m", "Release 1.0.0", "v1.0.0", candidate)
+    git(trunk, "tag", "-a", "-m", "Release 1.0.0", "v1.0.0", candidate)
 
     with pytest.raises(ReleaseRehearsalError, match="already a public tag"):
         _rehearse(trunk, tmp_path, major_bump_promotion(commit=candidate))
 
-    assert _git(trunk, "tag", "--list") == "v1.0.0"
+    assert git(trunk, "tag", "--list") == "v1.0.0"
 
 
 def test_an_explicit_prerelease_candidate_is_refused(tmp_path: Path) -> None:
     """Naming a commit does not make its `dev.N` version publishable."""
     trunk, _ = _stable_candidate_trunk(tmp_path)
-    _write_release_metadata(trunk, "1.1.0-dev.1")
-    _git(trunk, "add", "-A")
-    _git(trunk, "commit", "-qm", "chore(release): advance Release line to 1.1.0-dev.1")
-    prerelease = _git(trunk, "rev-parse", "HEAD")
+    write_release_metadata(trunk, "1.1.0-dev.1")
+    git(trunk, "add", "-A")
+    git(trunk, "commit", "-qm", "chore(release): advance Release line to 1.1.0-dev.1")
+    prerelease = git(trunk, "rev-parse", "HEAD")
 
     with pytest.raises(ReleaseRehearsalError, match="declares prerelease 1.1.0-dev.1"):
         _rehearse(trunk, tmp_path, major_bump_promotion(commit=prerelease))
 
-    assert _git(trunk, "tag", "--list") == ""
+    assert git(trunk, "tag", "--list") == ""
 
 
 def test_a_version_the_writer_cannot_publish_refuses_at_this_boundary(
@@ -691,17 +566,17 @@ def test_a_version_the_writer_cannot_publish_refuses_at_this_boundary(
     that would be facing a boundary with a hole in it.
     """
     trunk, _ = _stable_candidate_trunk(tmp_path)
-    _write_release_metadata(trunk, "1.0.0+build.5")
+    write_release_metadata(trunk, "1.0.0+build.5")
     (trunk / "docs/releases/v1.0.0+build.5.md").write_text(
         "# git-loopy 1.0.0+build.5\n\nBuilt.\n", encoding="utf-8"
     )
-    _git(trunk, "add", "-A")
-    _git(trunk, "commit", "-qm", "chore(release): promote Release line to 1.0.0+build.5")
-    candidate = _git(trunk, "rev-parse", "HEAD")
+    git(trunk, "add", "-A")
+    git(trunk, "commit", "-qm", "chore(release): promote Release line to 1.0.0+build.5")
+    candidate = git(trunk, "rev-parse", "HEAD")
 
     with pytest.raises(
         ReleaseRehearsalError, match="does not declare a publishable Release version"
     ):
         _rehearse(trunk, tmp_path, major_bump_promotion(commit=candidate))
 
-    assert _git(trunk, "tag", "--list") == ""
+    assert git(trunk, "tag", "--list") == ""

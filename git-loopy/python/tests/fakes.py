@@ -25,6 +25,7 @@ from git_loopy.gh import (
     Repo,
 )
 from git_loopy.git import Commit, GitError, Worktree
+from git_loopy.release_publication import PublishedRelease, ReleaseServiceError
 from git_loopy.route_publication import RouteDeliveryError
 
 
@@ -924,3 +925,80 @@ class FakeGateRunner:
         if passed:
             return GateResult.green(("scripted",))
         return GateResult.red(("scripted",), self._failure)
+
+
+class FakeReleaseService:
+    """Scriptable in-memory :class:`~git_loopy.release_publication.ReleaseService`.
+
+    Extends the seam-fake pattern to the one external service a **Publication**
+    talks to. What it exists to script is the part a real host cannot be asked
+    to reproduce on demand: a write whose response was lost, a write that never
+    landed, and a host that cannot be read at all. Those three are
+    indistinguishable to a publisher that does not read back, which is the whole
+    reason the seam is here.
+
+    * ``fail_create`` — the next :meth:`create` raises ``ReleaseServiceError``
+      with this message.
+    * ``create_lands`` — with ``fail_create`` set, whether the Release was
+      nonetheless written before the conversation broke (a lost response).
+    * ``fail_view`` — every :meth:`view` raises with this message.
+    * ``view_failure_after_create`` — reads succeed until a create is attempted
+      and then stop, so the readback that would resolve an ambiguous write is
+      itself unavailable.
+    * ``edited_after_create`` — what the host ends up holding differs from what
+      was asked for, so only a readback can catch it.
+
+    :attr:`create_calls` records every attempted publication, so a test can
+    assert a retry created *nothing* rather than merely ending up correct.
+    """
+
+    def __init__(
+        self,
+        *,
+        releases: Mapping[str, PublishedRelease] | None = None,
+        fail_create: str | None = None,
+        create_lands: bool = False,
+        fail_view: str | None = None,
+        view_failure_after_create: str | None = None,
+        edited_after_create: Mapping[str, object] | None = None,
+    ) -> None:
+        self.releases: dict[str, PublishedRelease] = dict(releases or {})
+        self.create_calls: list[dict[str, object]] = []
+        self.view_calls: list[str] = []
+        self.fail_create = fail_create
+        self.create_lands = create_lands
+        self.fail_view = fail_view
+        self.view_failure_after_create = view_failure_after_create
+        self.edited_after_create = dict(edited_after_create or {})
+
+    def view(self, tag: str) -> PublishedRelease | None:
+        self.view_calls.append(tag)
+        if self.fail_view is not None:
+            raise ReleaseServiceError(self.fail_view)
+        return self.releases.get(tag)
+
+    def create(
+        self, *, tag: str, name: str, notes_path: Path, prerelease: bool
+    ) -> None:
+        body = Path(notes_path).read_text(encoding="utf-8")
+        self.create_calls.append(
+            {"tag": tag, "name": name, "body": body, "prerelease": prerelease}
+        )
+        published = PublishedRelease(
+            tag=tag,
+            name=name,
+            body=body,
+            prerelease=prerelease,
+            draft=False,
+        )
+        if self.fail_create is not None:
+            if self.create_lands:
+                self.releases[tag] = published
+            if self.view_failure_after_create is not None:
+                self.fail_view = self.view_failure_after_create
+            raise ReleaseServiceError(self.fail_create)
+        self.releases[tag] = (
+            replace(published, **self.edited_after_create)
+            if self.edited_after_create
+            else published
+        )
