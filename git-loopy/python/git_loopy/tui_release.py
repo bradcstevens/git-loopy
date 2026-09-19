@@ -27,7 +27,6 @@ import tempfile
 import tomllib
 import zipfile
 from dataclasses import dataclass
-from functools import cmp_to_key
 from http.client import HTTPException
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Sequence
@@ -238,6 +237,15 @@ def release_artifact_url(
     )
 
 
+@dataclass(frozen=True)
+class SemanticVersion:
+    """The SemVer identity of one Release."""
+
+    raw: str
+    core: tuple[int, int, int]
+    prerelease: tuple[str, ...] | None
+
+
 def resolve_published_release(
     declared_version: str,
     published_versions: Sequence[str],
@@ -250,7 +258,7 @@ def resolve_published_release(
     result, not against the tree's possibly newer declaration.
     """
     declared = _parse_semver(declared_version, "declared Release version")
-    selected: tuple[str, tuple[int, int, int], tuple[str, ...] | None] | None = None
+    selected: SemanticVersion | None = None
     for published_version in published_versions:
         published = _parse_semver(published_version, "published helper Release")
         if _compare_semver(published, declared) > 0:
@@ -270,13 +278,13 @@ def resolve_published_release(
             "no published git-loopy-tui Release is at or below declared Release "
             f"version {declared_version!r}"
         )
-    return selected[0]
+    return selected.raw
 
 
 def _parse_semver(
     version: str,
     label: str,
-) -> tuple[str, tuple[int, int, int], tuple[str, ...] | None]:
+) -> SemanticVersion:
     match = _SEMVER.fullmatch(version)
     if match is None:
         raise TuiReleaseError(f"{label} {version!r} is not valid Semantic Versioning")
@@ -290,25 +298,25 @@ def _parse_semver(
         for identifier in prerelease
     ):
         raise TuiReleaseError(f"{label} {version!r} is not valid Semantic Versioning")
-    return (
-        version,
-        (int(match.group("major")), int(match.group("minor")), int(match.group("patch"))),
-        prerelease,
+    return SemanticVersion(
+        raw=version,
+        core=(int(match.group("major")), int(match.group("minor")), int(match.group("patch"))),
+        prerelease=prerelease,
     )
 
 
 def _compare_semver(
-    left: tuple[str, tuple[int, int, int], tuple[str, ...] | None],
-    right: tuple[str, tuple[int, int, int], tuple[str, ...] | None],
+    left: SemanticVersion,
+    right: SemanticVersion,
 ) -> int:
-    if left[1] != right[1]:
-        return -1 if left[1] < right[1] else 1
-    if left[2] is None or right[2] is None:
-        if left[2] is None and right[2] is None:
+    if left.core != right.core:
+        return -1 if left.core < right.core else 1
+    if left.prerelease is None or right.prerelease is None:
+        if left.prerelease is None and right.prerelease is None:
             return 0
-        return 1 if left[2] is None else -1
+        return 1 if left.prerelease is None else -1
 
-    for left_identifier, right_identifier in zip(left[2], right[2]):
+    for left_identifier, right_identifier in zip(left.prerelease, right.prerelease):
         if left_identifier == right_identifier:
             continue
         left_numeric = left_identifier.isdigit()
@@ -318,9 +326,9 @@ def _compare_semver(
         if left_numeric != right_numeric:
             return -1 if left_numeric else 1
         return -1 if left_identifier < right_identifier else 1
-    if len(left[2]) == len(right[2]):
+    if len(left.prerelease) == len(right.prerelease):
         return 0
-    return -1 if len(left[2]) < len(right[2]) else 1
+    return -1 if len(left.prerelease) < len(right.prerelease) else 1
 
 
 def require_stable_release(
@@ -819,6 +827,13 @@ def refresh_machine_local_helper(
     destination.parent.mkdir(parents=True, exist_ok=True)
     fetch = download or _download_release_file
 
+    if index_url_template == _RUNTIME_RELEASE_INDEX_URL and ARTIFACT_METADATA_PATH.is_file():
+        try:
+            metadata = load_artifact_metadata(Path("."))
+            index_url_template = metadata.release_index_url_template
+        except TuiReleaseError:
+            pass
+
     if releases_fetcher is not None:
         published_versions = releases_fetcher(artifact)
     else:
@@ -828,39 +843,24 @@ def refresh_machine_local_helper(
             index_url_template=index_url_template,
         )
 
-    declared = _parse_semver(release_version, "declared Release version")
-    candidates: list[str] = []
-    for pub in published_versions:
-        parsed_pub = _parse_semver(pub, "published helper Release")
-        if _compare_semver(parsed_pub, declared) <= 0:
-            candidates.append(pub)
-
-    if not candidates:
-        raise TuiReleaseError(
-            "no published git-loopy-tui Release is at or below declared Release "
-            f"version {release_version!r}"
-        )
-
-    exact_candidates = [v for v in candidates if v == release_version]
-    other_candidates = [v for v in candidates if v != release_version]
-    other_candidates.sort(
-        key=cmp_to_key(
-            lambda a, b: _compare_semver(
-                _parse_semver(a, "candidate"), _parse_semver(b, "candidate")
-            )
-        ),
-        reverse=True,
-    )
-    ordered_candidates = exact_candidates + other_candidates
+    remaining_versions = list(published_versions)
+    selected_version: str | None = None
+    extracted_helper: Path | None = None
+    last_probe_error: TuiReleaseError | None = None
 
     with tempfile.TemporaryDirectory(
         prefix=f".{HELPER_COMMAND_NAME}-", dir=destination.parent
     ) as scratch_dir:
         scratch = Path(scratch_dir)
-        selected_version: str | None = None
-        extracted_helper: Path | None = None
 
-        for candidate_version in ordered_candidates:
+        while remaining_versions:
+            try:
+                candidate_version = resolve_published_release(
+                    release_version, remaining_versions
+                )
+            except TuiReleaseError:
+                break
+
             candidate_dir = scratch / candidate_version
             candidate_dir.mkdir(parents=True, exist_ok=True)
             archive = candidate_dir / artifact.archive_name
@@ -896,13 +896,11 @@ def refresh_machine_local_helper(
                     extracted, event_schema_version=event_schema_version
                 )
             except TuiReleaseError as exc:
-                if (
-                    len(ordered_candidates) > 1
-                    and "decodes Event schemas" in str(exc)
-                    and candidate_version != ordered_candidates[-1]
-                ):
-                    continue
-                raise
+                last_probe_error = exc
+                remaining_versions = [
+                    v for v in remaining_versions if v != candidate_version
+                ]
+                continue
             if probe.reported_version != candidate_version:
                 raise TuiReleaseError(
                     f"release helper {artifact.archive_name} reports Release "
@@ -913,9 +911,11 @@ def refresh_machine_local_helper(
             break
 
         if selected_version is None or extracted_helper is None:
+            if last_probe_error is not None:
+                raise last_probe_error
             raise TuiReleaseError(
-                "no compatible published git-loopy-tui Release found at or below "
-                f"declared Release version {release_version!r}"
+                "no published git-loopy-tui Release is at or below declared Release "
+                f"version {release_version!r}"
             )
 
         backup_helper = scratch / "backup_helper"
