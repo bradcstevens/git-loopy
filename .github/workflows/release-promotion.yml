@@ -134,13 +134,20 @@ jobs:
             # Annotated, and on the commit that *declares* this version rather
             # than on the head: `source-release.yml` verifies the tag object and
             # refuses a tag whose tree disagrees with it.
-            # Tag carries the declared distribution mode for the release commit.
-            dist_mode="$(git show "$commit:git-loopy/conformance/release-trust.json" 2>/dev/null | jq -r '.distribution_mode // empty')"
-            if [[ -n "$dist_mode" ]]; then
-              git tag -a "v$version" -m "Release $version" -m "distribution_mode: $dist_mode" "$commit"
-            else
-              git tag -a "v$version" -m "Release $version" "$commit"
-            fi
+            # Fails closed if distribution_mode is missing or unrecognized.
+            raw_policy="$(git show "$commit:git-loopy/conformance/release-trust.json" 2>/dev/null)" || {
+              echo "Error: commit $commit is missing git-loopy/conformance/release-trust.json" >&2
+              exit 1
+            }
+            dist_mode="$(printf '%s' "$raw_policy" | jq -r '.distribution_mode // empty')"
+            case "$dist_mode" in
+              source-only|artifact-bearing) ;;
+              *)
+                echo "Error: commit $commit declares invalid distribution_mode '$dist_mode'" >&2
+                exit 1
+                ;;
+            esac
+            git tag -a "v$version" -m "Release $version" "$commit"
             tagged+=("refs/tags/v$version")
           done < <(git log --format=%H --reverse HEAD --not --tags='v*' -- VERSION)
           if [[ "${#tagged[@]}" -eq 0 ]]; then

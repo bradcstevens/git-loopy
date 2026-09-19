@@ -13,8 +13,6 @@ jobs:
       contents: read
     outputs:
       distribution_mode: ${{ steps.preflight.outputs.distribution_mode }}
-      version: ${{ steps.preflight.outputs.version }}
-      tag: ${{ steps.preflight.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:

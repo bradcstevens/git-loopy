@@ -35,6 +35,8 @@ from git_loopy.distribution_mode import (
     DEFAULT_DISTRIBUTION_MODES,
     DISTRIBUTION_MODE_ARTIFACT_BEARING,
     DISTRIBUTION_MODE_SOURCE_ONLY,
+    SUPPORTED_DISTRIBUTION_MODES,
+    TRUST_POLICY_PATH,
     DistributionModeError,
     load_trust_policy as load_raw_trust_policy,
     resolve_distribution_mode,
@@ -52,15 +54,14 @@ __all__ = [
     "DISTRIBUTION_MODE_SOURCE_ONLY",
     "DistributionModeError",
     "ReleaseTrustError",
+    "SUPPORTED_DISTRIBUTION_MODES",
+    "TRUST_POLICY_PATH",
     "TrustPolicy",
     "TrustReceipt",
     "load_trust_policy",
     "resolve_distribution_mode",
     "verify_release_trust",
 ]
-
-
-TRUST_POLICY_PATH = Path("git-loopy/conformance/release-trust.json")
 
 
 class ReleaseTrustError(ValueError):
@@ -168,29 +169,9 @@ class TrustPolicy:
         return tuple(names)
 
 
-def _read_policy_document(repository_root: Path) -> dict[str, Any]:
-    path = repository_root / TRUST_POLICY_PATH
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        raise ReleaseTrustError(f"cannot read trust policy {path}: {exc}") from exc
-    try:
-        document = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ReleaseTrustError(
-            f"trust policy {path} is not valid JSON: {exc}"
-        ) from exc
-    if not isinstance(document, dict):
-        raise ReleaseTrustError(f"trust policy {path} must be a JSON object")
-    return document
-
-
-def load_trust_policy(
-    repository_root: Path,
-    path: Path | None = None,
-) -> TrustPolicy:
+def load_trust_policy(repository_root: Path) -> TrustPolicy:
     """Read the declared platform-trust policy for this distribution."""
-    policy_path = path or (repository_root / TRUST_POLICY_PATH)
+    policy_path = repository_root / TRUST_POLICY_PATH
     try:
         document = load_raw_trust_policy(policy_path)
     except DistributionModeError as exc:

@@ -269,9 +269,10 @@ mutating command operate on the wrong artifact.
 `git-loopy update` refreshes the machine-local assets belonging to the installed
 **Release version** without changing that Release. It refreshes the **installed
 catalog**, downloads the matching TUI helper into `<config-home>/git-loopy/bin/`
-(when the Release distributes compiled helper assets; for source-only releases, no
-helper is downloaded and the runner operates via its streaming line-printer fallback),
-and repairs Release-retired `[routing]` keys in the global Config. Only
+(when updating an artifact-bearing release where precompiled helper binaries are published;
+under source-only releases where no compiled helper assets exist, the runner operates
+via its streaming line-printer fallback in plain mode), and repairs Release-retired
+`[routing]` keys in the global Config. Only
 `--project` — which repairs a *tracked* file, and is the one exception to
 ADR-0054's machine-local scope — needs a repository.
 

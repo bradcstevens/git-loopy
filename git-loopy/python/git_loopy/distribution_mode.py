@@ -22,10 +22,11 @@ from typing import Any, Sequence
 
 DISTRIBUTION_MODE_SOURCE_ONLY = "source-only"
 DISTRIBUTION_MODE_ARTIFACT_BEARING = "artifact-bearing"
-DEFAULT_DISTRIBUTION_MODES = (
+SUPPORTED_DISTRIBUTION_MODES = (
     DISTRIBUTION_MODE_SOURCE_ONLY,
     DISTRIBUTION_MODE_ARTIFACT_BEARING,
 )
+DEFAULT_DISTRIBUTION_MODES = SUPPORTED_DISTRIBUTION_MODES
 
 TRUST_POLICY_PATH = Path("git-loopy/conformance/release-trust.json")
 
@@ -128,7 +129,6 @@ def resolve_distribution_mode(
     repository_root: Path,
     explicit_mode: str | None = None,
     tag_ref: str | None = None,
-    tag_name: str | None = None,
 ) -> str:
     """Resolve and enforce the distribution mode contract fail-closed.
 
@@ -155,7 +155,7 @@ def resolve_distribution_mode(
                 f"but repository policy declares {policy_mode!r}"
             )
 
-    tag_to_check = tag_name or (tag_ref.removeprefix("refs/tags/") if tag_ref else None)
+    tag_to_check = tag_ref.removeprefix("refs/tags/") if tag_ref else None
     if tag_to_check:
         tag_mode = _extract_tag_distribution_mode(repository_root, tag_to_check)
         if tag_mode is not None:
