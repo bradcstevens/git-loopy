@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Mapping
 
 import pytest
 
@@ -23,7 +23,12 @@ from git_loopy.dynamic_route import (
     EvidenceRecord,
     SelectorSettings,
 )
+from git_loopy import selector_session
 from git_loopy.selector_session import SessionRouteSelector
+
+
+def _usage_event(credits: Decimal) -> dict[str, Any]:
+    return {"type": "usage.tokens", "credits": str(credits)}
 
 
 _WHEN = datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc)
@@ -286,3 +291,49 @@ def test_the_selector_session_is_not_an_iteration() -> None:
 
     (opened,) = _FakeSession.opened
     assert opened["iter_num"] is None
+
+
+def test_a_routing_cost_meter_totals_one_call_and_still_feeds_the_run() -> None:
+    """AC10: a classification is routing usage, and it is *also* Consumption.
+
+    Two readers of one session's billing, which is the whole reason this is a
+    chain rather than a replacement: the Run's cost meter must still see every
+    event, because a routing call the Run stops counting is a call billed to
+    nobody. Draining is per-call — a total read off the Run would make the
+    previous issue's classification look like this one's.
+    """
+
+    class _Run:
+        def __init__(self) -> None:
+            self.seen: list[Mapping[str, Any]] = []
+
+        def observe(self, event: Mapping[str, Any]) -> None:
+            self.seen.append(event)
+
+    run = _Run()
+    meter = selector_session.RoutingCostMeter(run)
+
+    meter.observe(_usage_event(Decimal("0.30")))
+    meter.observe(_usage_event(Decimal("0.20")))
+
+    assert meter.drain() == Decimal("0.50")
+    assert meter.drain() == Decimal("0"), "a drained call was counted twice"
+    assert len(run.seen) == 2
+
+
+def test_a_routing_cost_meter_survives_a_broken_run_meter() -> None:
+    """A Run-total failure may not lose the routing figure the ledger needs.
+
+    The routing credits decide whether the *next* call is admitted at all, so
+    dropping them because an unrelated observer raised would quietly unbound the
+    allowance AC10 asks to be enforced.
+    """
+
+    class _Broken:
+        def observe(self, event: Mapping[str, Any]) -> None:
+            raise RuntimeError("meter down")
+
+    meter = selector_session.RoutingCostMeter(_Broken())
+    meter.observe(_usage_event(Decimal("0.25")))
+
+    assert meter.drain() == Decimal("0.25")

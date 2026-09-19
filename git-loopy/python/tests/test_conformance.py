@@ -1767,6 +1767,7 @@ def test_the_production_router_projects_the_pinned_routing_provenance() -> None:
     )
     decision = dynamic_route.DynamicRouteDecision(
         proposal_id="p-0001",
+        issue_ref=pinned["issue"],
         route=dynamic_route.WorkRoute(
             model=pinned["model"],
             reasoning_effort=pinned["effort"],
@@ -1811,7 +1812,7 @@ def test_the_production_router_projects_the_pinned_routing_provenance() -> None:
         ),
     )
 
-    projected = dynamic_route.routing_provenance_payload(decision, issue=pinned["issue"])
+    projected = dynamic_route.routing_provenance_payload(decision)
 
     contract = _EVENT_SCHEMA["payload_contracts"][
         events_module.WRAPPER_ROUTING_RESOLVED

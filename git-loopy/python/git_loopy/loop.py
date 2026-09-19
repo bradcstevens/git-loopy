@@ -158,7 +158,7 @@ from git_loopy.config import (
 )
 from git_loopy.copilot_client import make_copilot_client
 from git_loopy.dynamic_route import (
-    ARTIFICIAL_ANALYSIS_API_KEY_ENV,
+    routing_provenance_payload,
     ArtificialAnalysisSource,
     DynamicRouteDecision,
     DynamicRoutePrerequisites,
@@ -181,7 +181,7 @@ from git_loopy.measured_routing import (
     measured_routing_path,
 )
 from git_loopy.routing_input import build_routing_request
-from git_loopy.selector_session import SessionRouteSelector
+from git_loopy.selector_session import RoutingCostMeter, SessionRouteSelector
 from git_loopy.escalation import EscalationLedger
 from git_loopy.persist import (
     IterationCounters,
@@ -1338,6 +1338,11 @@ class _Loop:
         #
         # A `None` pair makes the whole object inert, so neither Pickup carries
         # a second copy of "does this Run classify?".
+        # AC10: a classification is routing usage. The classifier is the
+        # Pickup's own collaborator rather than something the admission ledger
+        # invokes, so its spend is metered here and handed to the ledger after
+        # the call -- chained, so the Run's own Consumption still sees it.
+        self._classification_meter = RoutingCostMeter(self._session_observer)
         self._classifier = PickupClassifier(
             pair=classifier_pair,
             propose=SessionTaskTypeProposer(
@@ -1353,7 +1358,7 @@ class _Loop:
                 working_directory=None,
                 send_timeout_seconds=config.send_timeout_seconds,
                 skill_exposure=self._skill_exposure,
-                cost_meter=self._session_observer,
+                cost_meter=self._classification_meter,
                 warn=self._diag.warning,
             ),
             client=(
@@ -2269,6 +2274,7 @@ class _Loop:
                 acquire a *label* costs the issue nothing.
         """
         task_type_labelled = await self._classifier.labelled(item)
+        await self._note_classification_usage()
         labelled = await self._bump_classifier.labelled(task_type_labelled)
         if task_type_labelled is item:
             return labelled, await self._routed_dynamically(labelled, routed)
@@ -2295,6 +2301,26 @@ class _Loop:
             resolution.reasoning_effort,
         )
         return labelled, await self._routed_dynamically(labelled, resolution)
+
+    async def _note_classification_usage(self) -> None:
+        """Charge the classification that just ran to this Run's routing usage.
+
+        AC10 counts classification attempts and their spend toward routing
+        usage and the Run's **Consumption**, and the second half is why the
+        credits are drained through :class:`RoutingCostMeter` rather than read
+        off the Run total: one call's figure, attributed to the issue that
+        bought it.
+
+        Only under the **Dynamic route**, and only when the classifier is
+        actually paired. There is no ledger to charge otherwise, and an inert
+        classifier opens no session -- so a drain there would be recording an
+        attempt that never happened.
+        """
+        spent = self._classification_meter.drain()
+        router = self._dynamic_router
+        if router is None or self._classifier.pair is None:
+            return
+        await router.record_classification(spent)
 
     async def _routed_dynamically(
         self, item: AfkReadyItem, resolution: RoutingResolution
@@ -2327,6 +2353,7 @@ class _Loop:
             return resolution
         request = build_routing_request(
             rendered_block=item.rendered_block,
+            issue_ref=item.ref,
             task_type=_assessed_task_type(resolution),
             feedback_loops=(
                 self._dynamic_routing.feedback_loops
@@ -2365,9 +2392,7 @@ class _Loop:
             ),
         )
 
-    async def _record_dynamic_route(
-        self, decision: DynamicRouteDecision, *, issue: int | str
-    ) -> bool:
+    async def _record_dynamic_route(self, decision: DynamicRouteDecision) -> bool:
         """Persist one **Dynamic route**'s provenance before any work starts.
 
         The router's recorder port, and the whole of AC9's "persist local
@@ -2389,7 +2414,7 @@ class _Loop:
             self._emit(
                 events_module.WRAPPER_ROUTING_RESOLVED,
                 iter_num=None,
-                **routing_provenance_payload(decision, issue=issue),
+                **routing_provenance_payload(decision),
             )
         except Exception as exc:
             self._diag.error("dynamic route provenance not recorded: %s", exc)
@@ -4314,16 +4339,24 @@ class _ParallelLoop:
                 item, routed=resolution
             )
         except DynamicRouteUnavailable as exc:
-            # The Lane half of AC11's explicit unavailable decision. Releasing
-            # the reservation is what "preserve already-running work where
-            # possible" means here: every other Lane keeps its route and its
-            # session, and this candidate is left eligible rather than bound to
-            # a route nobody elected. It is *not* added to
-            # ``_rolling_refused`` — a routing refusal is a fact about live
-            # evidence at this instant, not about the candidate, so a later
-            # refill may legitimately reach a different answer.
+            # The Lane half of AC11's explicit unavailable decision, and it
+            # takes the candidate out of this Run's rolling pool exactly as the
+            # routing refusal above does. Leaving it eligible looks kinder and
+            # is not: the scheduler refills the freed reservation from the same
+            # ordered pool, so the candidate comes straight back, buys another
+            # assessment, and is refused again — a hot loop that spends the
+            # whole routing-credit allowance and then spins on the exhausted
+            # deadline for as long as the Run lasts. Refusing once is also what
+            # AC10's "admit no additional routing calls after exhaustion"
+            # actually requires of the caller.
+            #
+            # Releasing the reservation is still what "preserve already-running
+            # work where possible" means here: every other Lane keeps its route
+            # and its session, and the freed slot goes to a candidate that can
+            # be routed rather than being held by one that cannot.
             self._diag.warning("lane #%s dynamic route unavailable: %s", ref, exc)
             passed_over(f"dynamic route unavailable: {exc}")
+            self._rolling_refused.add(ref)
             scheduler.release(reservation)
             return
         if scheduler.stop_latched or scheduler.abort_latched:

@@ -677,7 +677,7 @@ Copilot, network access, or the TUI.
 | `GIT_LOOPY_MODEL`                           | `claude-opus-5`                | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `GIT_LOOPY_REASONING_EFFORT` for backward compatibility. With ModelSelectionMode enabled (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`) this value is the startup picker's pre-selected cursor and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly. |
 | `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, case-insensitive (the `--reasoning-effort` flag overrides this). Explicit `none` requests no reasoning; an omitted value lets the backend choose when no configured/default effort applies. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A model without configurable reasoning (`auto`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
 | `GIT_LOOPY_CONTEXT_TIER`                    | `default`                       | Root-session tier: `default` or `long_context`. `--context-tier` wins, then this value, project Config, global Config, and the default. It constrains every **Routing resolution**, including a legacy `[routing]` model/effort pair, but does **not** suppress per-task-type routing. |
-| `GIT_LOOPY_ROUTE_POLICY`                    | unset (`unselected`)            | Which **Route policy** this Run uses. `unselected` — the default, and what you get by saying nothing — keeps every existing behaviour unchanged. `static` selects the **Static route** (ADR-0057): your `model` / `reasoning_effort` / `context_tier` are verified against the **authenticated harness this Run spawns** and then honoured exactly, rather than being passed through the built-in model roster's capability gate. `--route-policy` wins, then this value, project Config, global Config. A settings combination the harness does not support **fails before any work** instead of being quietly downgraded. `dynamic` is a real policy name that this release does not implement and refuses by name. |
+| `GIT_LOOPY_ROUTE_POLICY`                    | unset (`unselected`)            | Which **Route policy** this Run uses. `unselected` — the default, and what you get by saying nothing — keeps every existing behaviour unchanged. `static` selects the **Static route** (ADR-0057): your `model` / `reasoning_effort` / `context_tier` are verified against the **authenticated harness this Run spawns** and then honoured exactly, rather than being passed through the built-in model roster's capability gate. `--route-policy` wins, then this value, project Config, global Config. A settings combination the harness does not support **fails before any work** instead of being quietly downgraded. `dynamic` selects the **Dynamic route** (ADR-0057): each issue's pair is elected from live Artificial Analysis evidence by a bounded **Route selector**, and needs `ARTIFICIAL_ANALYSIS_API_KEY` plus a deadline, a credit allowance, a selector concurrency and a verified `[route_associations]` table, or the Run refuses before any work. |
 | `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type** and **Bump-class classifiers** run on. Each reads an unlabelled issue's own content and writes a closed `task-type:` or `semver:` label back at **Pickup** (ADR-0029, ADR-0052). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
 | `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort both classifiers run at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
@@ -946,9 +946,74 @@ model listing is not the listing that would run it — approving a route against
 the wrong installation is exactly what the policy exists to prevent. Run
 locally, or leave `route_policy` unset for that placement.
 
-`dynamic` is a policy name this release deliberately **refuses**: live evidence
-guiding per-issue routing is accepted design, and naming it here is how the
-static tracer stays distinguishable from a default that has not been activated.
+### `route_policy = "dynamic"` — elect each issue's route from live evidence
+
+`dynamic` routes **one issue at a time** from current public benchmark
+evidence instead of from a pair you wrote down. It is opt-in, off by default,
+and starts nothing at all unless every prerequisite is present:
+
+```toml
+route_policy = "dynamic"
+routing_deadline_seconds = 120          # or --routing-deadline-seconds
+routing_credit_allowance = "5.00"       # or --routing-credit-allowance
+selector_concurrency = 2                # or --selector-concurrency
+
+[route_associations]
+# benchmark identity -> the Copilot configuration you have verified it names
+"gpt-5.6-terra" = "gpt-5.6-terra@high"
+```
+
+and `ARTIFICIAL_ANALYSIS_API_KEY` in the environment. The key is read from the
+environment **only** — never written into Config, never serialized into a
+detached child, never echoed into diagnostics — and nothing from your
+repository is sent to the leaderboard service.
+
+What happens per issue:
+
+1. **Classification first.** An unlabelled issue gets its **Task type** before
+   anything routes, because the assessment is told what kind of work it is
+   looking at rather than left to guess.
+2. **A Static route still wins.** A `[routing]` entry, an explicit
+   `--model` / env pin, or a configured `[escalation]` rung is an instruction,
+   and git-loopy will not spend a selector call to contradict one. Those routes
+   are verified against the harness exactly as under `static`.
+3. **The Route selector elects itself deterministically** — the highest
+   Intelligence Index among configurations that are both verified by your
+   `[route_associations]` table *and* runnable on your authenticated harness, at
+   its matched effort, in the smallest context tier that fits the input.
+4. **A bounded, read-only assessment** sees the issue, its acceptance criteria,
+   the task type, your declared **Feedback loops**, and any *measured* rows from
+   `measured-routing.json`. It does not read your tree, run Trials, or do the
+   work.
+5. **Revalidation at Pickup.** Evidence and eligibility are re-read before the
+   work session opens. Unchanged inputs do not buy a second selector call; a
+   candidate that changed or became ineligible does not start on its old route.
+6. **Provenance before work.** A `wrapper.routing.resolved` Event records which
+   evidence elected the route, when each source was read, which selector
+   assessed it, and what it cost — and it is written *before* the session opens.
+   If that record cannot be written, the route is refused.
+
+Two properties are worth knowing before you turn it on:
+
+- **It refuses; it never falls back.** An unreachable source, an exhausted
+  allowance or deadline, an empty verified intersection, an invalid selector
+  answer, or unreadable eligibility each produce an explicit *unavailable*
+  decision. git-loopy will not quietly run the issue on your run-wide default —
+  under this policy that default was never verified, precisely because the
+  selector was meant to replace it. In parallel mode the candidate is passed
+  over for the rest of the Run rather than immediately retried, so one issue
+  cannot spend the whole allowance.
+- **Routing costs credits.** Classification and selector calls count toward
+  `routing_credit_allowance` and toward the Run's **Consumption**. Billing
+  already in flight when a bound is reached is disclosed rather than hidden, and
+  no further routing call is admitted afterwards.
+
+Not yet supported, and stated rather than simulated: routing a **later attempt**
+from the outcome of the earlier one. Under `dynamic`, git-loopy does not silently
+substitute the built-in escalation rung for it.
+
+The same remote-placement refusal applies: `route_policy = "dynamic"` with a
+non-`local` `execution_host` is refused before any work, for the reason above.
 
 ### The Task-type classifier's pair
 

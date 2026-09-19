@@ -782,7 +782,8 @@ _Avoid_: global default (ambiguous — **Config** has global scope), fallback mo
 Which rule this **Run** decides a **Routing resolution** by. Selected, never inherited: *unselected*
 is the absence of a decision and keeps every existing behaviour — the model roster's capability
 gate, the built-in **Escalation rung**, the historical Event stream — exactly as it was, and a
-**Run** that names nothing is never read as having chosen. *Static* selects the **Static route**.
+**Run** that names nothing is never read as having chosen. *Static* selects the **Static route**;
+*dynamic* selects the **Dynamic route**.
 A name the kit does not implement is refused rather than absorbed, because a policy silently
 ignored runs the **Run** under one the operator did not ask for and believes is active. It is one
 **Config** key on the ordinary precedence spine, and it travels on the **Run**'s own start record
@@ -803,6 +804,33 @@ default is not consent. The verified triple is the **Routing resolution**, so th
 **Pickup** Event, the CLI line and the **Dashboard** all read one record (ADR-0057).
 _Avoid_: pinned model, fixed pair, hardcoded route.
 
+**Dynamic route**:
+A route **elected for one issue from live public benchmark evidence** instead of written down in
+advance, under the *dynamic* **Route policy**. Opt-in and prerequisite-complete or it does not
+start: the operator's own authorized access to the evidence source, a finite assessment deadline, a
+per-**Run** routing-credit allowance, a bounded **Route selector** concurrency, and the verified
+associations between benchmark identities and harness configurations. The key is read from the
+environment and never stored, serialized or echoed, and no repository content goes to the source.
+The election is deterministic — the highest Intelligence Index among configurations that are both
+verified and runnable on the **Harness capabilities**, at its matched effort, in the smallest tier
+that fits — and a **Static route** still outranks it, because an operator's instruction is not
+something an inference may overrule. It **refuses rather than falls back**: an unreachable required
+source, an exhausted allowance or deadline, an empty verified intersection, an invalid selector
+answer, unreadable eligibility, or a provenance record that could not be written each end in an
+explicit *unavailable* decision, never in stale evidence, the run-wide default, or a cheaper
+selector. Its provenance lands **before** the work session opens (ADR-0057).
+_Avoid_: auto-routing, smart routing, model recommendation.
+
+**Route selector**:
+The bounded, read-only session that assesses **one** issue and proposes its **Dynamic route**. It
+sees the issue, its acceptance criteria, the settled **Task type**, the repository's declared
+**Feedback loops**, and admitted local measurements — never the tree, never a **Trial**, never the
+work itself. Its own configuration is elected by the same rule it is asked to apply, but never *by*
+itself and never downgraded to fit a limit. Its answer is a candidate it was handed plus a summary
+that keeps forecast and measurement apart; anything else is invalid output, not a route. Every call
+and retry it makes is **Consumption**.
+_Avoid_: router agent, routing model, meta-model.
+
 **Harness capabilities**:
 What the authenticated Copilot harness says about the models *this account* may use, read from its
 own model listing: eligibility, whether each model has a reasoning-effort dial and which values it
@@ -812,8 +840,8 @@ is memoised so the **Rate card** cannot reprice mid-**Run**, which is the opposi
 what it returns is capability only, so a capability read can never write back over billing
 provenance the **Run** already recorded. *Which* harness is the question: an **Execution host**
 that opens its sessions on a machine authenticating as itself has capabilities this machine cannot
-read, so that placement is refused under a **Static route** rather than judged by the wrong
-listing. A model with *no* effort dial is a different fact from one
+read, so that placement is refused under a **Static route** or a **Dynamic route** rather than
+judged by the wrong listing. A model with *no* effort dial is a different fact from one
 whose dial offers the value `none`: the first is sent no effort argument at all, the second is sent
 `none` as a value. A listing that could not be read — or could not be understood — is *unknown*,
 never *empty* and never permission.

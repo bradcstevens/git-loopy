@@ -5625,6 +5625,7 @@ def test_the_decisions_provenance_is_persisted_before_the_work_starts(
     ]
     assert len(resolved) == 1, "the dynamic decision left no provenance"
     record = resolved[0]
+    assert record["issue"] == 42
     assert record["model"] == "claude-opus-5"
     assert record["evidence_source"].startswith("https://artificialanalysis.ai/")
     assert record["evidence_retrieved_at"]
@@ -5735,3 +5736,28 @@ def test_the_assessment_sees_the_issue_and_the_gates_it_must_pass(
     assert "#42" in request.issue
     assert request.task_type
     assert any("feedback loop" in entry for entry in request.repository_context)
+
+
+def test_a_classification_counts_toward_this_runs_routing_usage(
+    tmp_path, monkeypatch
+) -> None:
+    """AC10: classification attempts count toward routing usage.
+
+    The **Task-type classifier** runs *because* this Run routes dynamically —
+    AC5 settles the Task type before applicability is resolved — so a Run that
+    counted only the selector would under-report the spend its own routing
+    caused, and the allowance meant to bound that spend would bound half of it.
+    """
+    _fake_client, _spied, exit_code = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        classifier_model="gpt-5.6-terra",
+        classifier_effort="high",
+    )
+
+    assert exit_code == 0
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    (record,) = [
+        event for event in events if event["type"] == "wrapper.routing.resolved"
+    ]
+    assert record["classification_attempts"] == 1

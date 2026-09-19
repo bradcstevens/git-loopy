@@ -1558,10 +1558,9 @@ not also lose the decision it recorded.
 ### 14.3 The Static route (contract 2.8)
 
 Everything above describes the routing an Orchestrator does when no **Route policy** was selected.
-An operator MAY select one, and the only policy this contract currently defines is `static`
-(ADR-0057). The policy is a single Config key, `route_policy`, resolved on the family precedence
-spine (§11) like any other. Two values are in the vocabulary: `unselected` — the default, and the
-absence of a decision — and `static`.
+An operator MAY select one. The policy is a single Config key, `route_policy`, resolved on the
+family precedence spine (§11) like any other. Three values are in the vocabulary: `unselected` —
+the default, and the absence of a decision — `static` (this section), and `dynamic` (§14.4).
 
 - **Selected, never inherited.** An Orchestrator MUST NOT read the absence of a policy as a choice
   of one, and MUST NOT reinterpret an existing Config as though `static` had always been in force.
@@ -1620,8 +1619,94 @@ model listing, so they have no route to verify. They declare it unsupported in
 The Dashboard needs no policy-aware branch — it renders the verified triple off
 `wrapper.pickup.bound` exactly as it renders any other.
 
-A second policy in which live evidence guides the choice is accepted design and **not delivered**;
-until it is, an Orchestrator MUST refuse its name rather than implement part of it.
+### 14.4 The Dynamic route (contract 2.8)
+
+Under `dynamic` the route for one issue is **elected from live public benchmark evidence** rather
+than written down in advance (ADR-0057). It is opt-in, and the rules below are what make the
+election an answer an operator can audit rather than a plausible-looking guess.
+
+- **Opt-in, with its own prerequisites, or no dynamic work at all.** The policy requires the
+  operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run
+  routing-credit allowance, a bounded selector concurrency, and the verified associations between
+  benchmark identities and harness configurations. An Orchestrator MUST refuse a Run whose
+  prerequisites are incomplete **before any work**, under `preflight_failed` (exit `1`), and MUST
+  NOT start dynamic work it can only half perform. §14.3's remote-placement rule applies unchanged
+  and for the same reason: an **Execution host** that authenticates as itself is another
+  installation, and a route verified against this machine's listing is not a verdict about that
+  one.
+- **The credential is the operator's, and the repository stays here.** The access key MUST be read
+  from the environment only: never embedded in the distribution, never written into Config, never
+  serialized into a detached child's payload, and never echoed into diagnostics or Events. An
+  Orchestrator MUST NOT send repository content, issue prose, or any other local material to the
+  evidence source, which is asked for published measurements and nothing else.
+- **Evidence travels with its provenance and its unknowns.** An admitted record MUST keep its
+  source identity, the time it was retrieved, and whatever measurement date, benchmark version and
+  conditions the source published. A value the source did not publish is an explicit unknown — a
+  null — and MUST NOT be rendered as zero or dropped. A missing score is not a score of zero, and a
+  similar name is not proof of identity: an association an operator has not verified MUST be
+  excluded with a reason rather than inferred from spelling.
+- **Elect deterministically, from the verified intersection.** The **Route selector** is the
+  highest-Intelligence-Index configuration that is both verified and runnable on the authenticated
+  harness, at its matched effort, in the smallest supported context tier that fits the bounded
+  input. An exact score tie breaks on comparable published speed and then on stable identity. An
+  Orchestrator MUST NOT select the selector with the selector, and MUST NOT downgrade it to a
+  cheaper configuration to stay inside a limit — a limit is a refusal, not a discount.
+- **A Static route still wins, and the Task type is settled first.** §14.3's routes — a `[routing]`
+  entry, an explicit flag or environment pin, a configured **Escalation rung** — are instructions,
+  and an Orchestrator MUST NOT spend a selector call to contradict one. A missing **Task type** is
+  classified *before* applicability is resolved, and an existing classification is respected.
+- **The assessment is read-only and bounded.** It receives the issue, its acceptance criteria, the
+  settled Task type, bounded relevant repository context, and admitted local measurements. It MUST
+  NOT implement the work, run Trials, or audit the whole repository, and untrusted issue prose MUST
+  NOT be able to escape its tool, policy, candidate or output boundaries: an answer naming anything
+  other than one of the candidates it was handed is invalid, not a route.
+- **Forecast is not measurement.** The proposal's summary MUST distinguish what was forecast from
+  what was measured. Published inference speed MUST NOT be described as a measured duration for
+  this issue under this harness, and a reliability estimate the evidence does not support MUST NOT
+  be invented.
+- **Freshly validated at Pickup, and never mid-Agent.** Evidence and eligibility are checked at
+  preparation *and* again at the **Pickup** that binds the issue. Unchanged verified inputs need
+  not buy a second selector call; a cached response MUST NOT be presented as fresh, and a candidate
+  that changed or was invalidated MUST NOT start under its old route. A proposal takes no **Lease**,
+  and a bound route does not change under a running Agent.
+- **Provenance lands before the work does.** The elected route MUST be recorded locally — which
+  evidence elected it, retrieved when, assessed by which selector, at what cost — **before** the
+  work session opens, and a recording that fails refuses the route. The resulting triple is the
+  same **Routing resolution** §14.3 describes: it configures the session, rides
+  `wrapper.pickup.bound` under the `dynamic` source, and reaches the CLI and the **Dashboard**
+  unchanged.
+- **Routing spends Consumption, and exhaustion is final.** Classification and selector attempts and
+  their retries count toward routing usage and the Run's **Consumption**. An Orchestrator MUST
+  enforce the deadline and the admission allowance, bound selector concurrency, disclose billing
+  overshoot already in flight, and admit no further routing calls once either bound is exhausted.
+- **Refuse, never fall back.** A required-source failure, quota exhaustion, an empty verified
+  intersection, invalid selector output, unavailable eligibility, or a failed local recording each
+  yield an explicit *unavailable* decision. An Orchestrator MUST NOT substitute stale evidence, the
+  run-wide default, or a cheaper selector, and MUST preserve authorized Static routes and
+  already-running work. A candidate refused this way is passed over for the Run rather than
+  retried in place: re-admitting it immediately would spend the whole allowance on one issue.
+- **Unsupported portions are stated, not simulated.** Outcome-aware routing of a *later* attempt is
+  not part of this policy today. An Orchestrator MUST NOT claim that support, and MUST NOT silently
+  fall back to §14's fixed escalation rung in its place; as under `static`, a rung shipped by
+  default is not explicit authorization.
+
+The policy's vocabulary is pinned by
+[`routing-resolution.json`](../git-loopy/conformance/routing-resolution.json) (`static_route_policies`,
+the `dynamic` **Routing source**, and the case in which an elected route outranks every
+label-derived one) and its provenance record by
+[`event-schema.json`](../git-loopy/conformance/event-schema.json)'s `wrapper.routing.resolved`
+contract and the rolling stream that carries one.
+
+**The Dynamic route is Python-only today**, for the same reason §14.3 is: the shell and PowerShell
+Orchestrators implement no per-issue routing and read no harness listing, so they have no route to
+elect. They declare it unsupported in
+[`fixture-claims.json`](../git-loopy/conformance/fixture-claims.json) rather than by implication.
+The Dashboard needs no policy-aware branch — it renders the elected triple off
+`wrapper.pickup.bound` exactly as it renders any other.
+
+**Dynamic routing is off by default and stays off until an operator selects it.** An Orchestrator
+MUST NOT enable it by inference from the presence of a key, an association table, or any other
+prerequisite.
 
 ## 15. Release and compatibility identity (MUST)
 

@@ -88,6 +88,7 @@ def build_routing_request(
     *,
     rendered_block: str,
     task_type: str,
+    issue_ref: int | str | None = None,
     feedback_loops: Sequence[FeedbackLoop] = (),
     measured: MeasuredRouting | None = None,
 ) -> RoutingRequest:
@@ -95,6 +96,10 @@ def build_routing_request(
 
     Args:
         rendered_block: The issue exactly as the **Pool** rendered it.
+        issue_ref: How the **Pool** names this issue, carried verbatim onto
+            the decision's provenance record. Never parsed out of the prose:
+            the block is untrusted input, and a reference read from it is a
+            reference the issue's author chose.
         task_type: The settled **Task type** key. Classified *before* this is
             called (AC5), because the assessment is told what kind of work it
             is looking at rather than left to guess from the prose.
@@ -140,6 +145,7 @@ def build_routing_request(
         bounded_input_tokens=estimate_tokens(
             (issue, task_type, *criteria, *context, *measurements)
         ),
+        issue_ref=issue_ref,
     )
 
 

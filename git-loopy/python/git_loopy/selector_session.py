@@ -29,7 +29,7 @@ from git_loopy.events import ASSISTANT_MESSAGE
 from git_loopy.session_scope import RunScope, not_an_iteration
 from git_loopy.usage import BillingSample
 
-__all__ = ["SessionRouteSelector", "build_assessment_prompt"]
+__all__ = ["RoutingCostMeter", "SessionRouteSelector", "build_assessment_prompt"]
 
 
 #: What the selector is told it is doing, as an instruction it cannot be argued
@@ -133,6 +133,48 @@ def _candidate_payload(candidate: AssessmentCandidate) -> dict[str, Any]:
         "benchmark_version": candidate.benchmark_version,
         "conditions": candidate.conditions,
     }
+
+
+class RoutingCostMeter:
+    """Chain a Run's cost meter and total what each routing call spent.
+
+    The **Task-type classifier** is a routing call too (AC10), but unlike the
+    **Route selector** it is not invoked *through* the admission ledger — it is
+    the Pickup's own collaborator, and it runs whether or not this Run routes
+    dynamically. So its billing is read here, off the same ``usage.tokens``
+    payload every other **Consumption** reader parses, and handed to the ledger
+    afterwards.
+
+    A **chain, not a replacement**: the Run's meter still sees every event,
+    because a routing call the Run stops counting is a call billed to nobody —
+    which is exactly the failure the classifier's own cost-meter wiring exists
+    to prevent. And a failure in *that* reader may not lose the figure, because
+    this one decides whether the next routing call is admitted at all.
+
+    **Drained per call, never read as a total.** ``drain`` returns what has
+    accrued since the last drain and resets. A ledger fed a running total would
+    charge every issue for every classification that came before it, and the
+    allowance would be exhausted by arithmetic rather than by spend.
+    """
+
+    def __init__(self, cost_meter: object | None) -> None:
+        self._cost_meter = cost_meter
+        self._credits = Decimal(0)
+
+    def observe(self, event: Mapping[str, Any]) -> None:
+        if self._cost_meter is not None:
+            try:
+                self._cost_meter.observe(event)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        sample = BillingSample.from_event(event)
+        if sample.credits is not None:
+            self._credits += sample.credits
+
+    def drain(self) -> Decimal:
+        """Total this call's routing credits and start the next one at zero."""
+        spent, self._credits = self._credits, Decimal(0)
+        return spent
 
 
 class _SelectorCollector:

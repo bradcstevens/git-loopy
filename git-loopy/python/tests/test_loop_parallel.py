@@ -144,6 +144,7 @@ from git_loopy.session_outcome import (
 )
 from git_loopy.skill_catalog import build_skill_catalog
 from git_loopy.rolling_pool import RollingPool
+from git_loopy import dynamic_route
 from git_loopy import static_route
 from git_loopy.static_route import RoutePolicy
 from git_loopy.sources import MembershipSnapshot, PoolCandidate
@@ -7873,3 +7874,223 @@ def _script_harness(monkeypatch, *models) -> None:
         return static_route.HarnessCapabilities.from_listing(listing)
 
     monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", _refresh)
+
+
+def _dynamic_lane_ports(monkeypatch, *, answer) -> dict[str, list[Any]]:
+    """Substitute only the two ports a **Dynamic route** takes to the network.
+
+    A real :class:`~git_loopy.dynamic_route.DynamicRouter` over scripted inputs
+    — AC13's "injected external ports" — so what a Lane exercises here is the
+    Run's own routing boundary rather than a stand-in for it.
+    """
+    from types import SimpleNamespace
+    from decimal import Decimal
+
+    spied: dict[str, list[Any]] = {"assessments": []}
+
+    async def _fetch(method, url, headers):
+        del method, url, headers
+        return json.dumps(
+            {
+                "data": [
+                    {
+                        "id": "aa-opus",
+                        "name": "aa-opus",
+                        "slug": "aa-opus",
+                        "evaluations": {
+                            "artificial_analysis_intelligence_index": 70.0
+                        },
+                        "median_output_tokens_per_second": 90.0,
+                    },
+                    {
+                        "id": "aa-terra",
+                        "name": "aa-terra",
+                        "slug": "aa-terra",
+                        "evaluations": {
+                            "artificial_analysis_intelligence_index": 40.0
+                        },
+                        "median_output_tokens_per_second": 200.0,
+                    },
+                ],
+                "prompt_options": {"parallel_queries": 1},
+            }
+        ).encode("utf-8")
+
+    async def _capabilities():
+        return dynamic_route.FreshHarnessCapabilities(
+            retrieved_at=datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc),
+            capabilities=static_route.HarnessCapabilities.from_listing(
+                [
+                    SimpleNamespace(
+                        id=identifier,
+                        name=identifier,
+                        policy=SimpleNamespace(state="enabled", terms=""),
+                        billing=SimpleNamespace(
+                            multiplier=1.0,
+                            token_prices=SimpleNamespace(
+                                max_prompt_tokens=400_000, long_context=None
+                            ),
+                        ),
+                        supported_reasoning_efforts=["high"],
+                        default_reasoning_effort="high",
+                    )
+                    for identifier in ("claude-opus-5", "gpt-5.6-terra")
+                ]
+            ),
+            tier_capacities={
+                (identifier, "default"): 400_000
+                for identifier in ("claude-opus-5", "gpt-5.6-terra")
+            },
+        )
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", _fetch)
+    monkeypatch.setattr(loop_module, "_fetch_harness_evidence", _capabilities)
+
+    async def _assess(selector, request):
+        spied["assessments"].append((selector, request))
+        return dynamic_route.SelectorCallResult(
+            output=answer(request), routing_credits=Decimal("0.25")
+        )
+
+    real_router = loop_module._make_dynamic_router
+
+    def _router(prerequisites, *, selector_assess, recorder):
+        del selector_assess
+        return real_router(
+            prerequisites, selector_assess=_assess, recorder=recorder
+        )
+
+    monkeypatch.setattr(loop_module, "_make_dynamic_router", _router)
+    return spied
+
+
+def _elects_lane_model(model: str):
+    def _answer(request) -> str:
+        (chosen,) = [c for c in request.candidates if c.model == model]
+        return json.dumps(
+            {
+                "candidate_identity": chosen.stable_identity,
+                "summary": "strongest verified index for this Lane's work",
+            }
+        )
+
+    return _answer
+
+
+def test_a_dynamic_route_reaches_each_lanes_own_work_session(
+    tmp_path, monkeypatch
+) -> None:
+    """AC13's second mode: rolling dispatch routes at the same Pickup seam.
+
+    The serial Iteration and a Lane contribution share one
+    ``_classify_at_pickup``, so a **Dynamic route** that works serially and not
+    in a Lane would mean two routing implementations rather than one boundary.
+    Both Lanes are routed independently — each buys its own assessment, because
+    a route is elected for *an issue* and not for a Run.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    exit_code = asyncio.run(loop_module.run(_dynamic_parallel_config()))
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    by_dir = {
+        Path(c["working_directory"]).name: c
+        for c in fake_client.create_calls
+        if c["working_directory"]
+    }
+    assert by_dir["issue-42"]["model"] == "claude-opus-5"
+    assert by_dir["issue-42"]["reasoning_effort"] == "high"
+    assert by_dir["issue-43"]["model"] == "claude-opus-5"
+    assert len(spied["assessments"]) == 2
+
+
+def test_a_lane_whose_dynamic_route_is_unavailable_opens_no_session(
+    tmp_path, monkeypatch
+) -> None:
+    """AC11 in rolling dispatch: refuse the Lane, never fall back to a default.
+
+    The Lane's reservation goes back to the scheduler rather than being held by
+    an issue that cannot start, and the run-wide default — which under this
+    policy was never verified, precisely because the selector was meant to
+    replace it — does not quietly take the route's place.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(
+        monkeypatch,
+        answer=lambda _request: json.dumps(
+            {"candidate_identity": "nine", "summary": "not on the list"}
+        ),
+    )
+
+    exit_code = asyncio.run(loop_module.run(_dynamic_parallel_config()))
+
+    # Nonzero because the only candidate could not be routed and nothing ran —
+    # the same answer the serial path gives, and the point of AC11: a Run that
+    # silently succeeded here would have succeeded by taking the unverified
+    # run-wide default the selector was meant to replace.
+    assert exit_code != 0
+    assert fake_client.create_calls == []
+    assert fake_git.active_worktrees == []
+
+
+def _dynamic_parallel_config(**overrides) -> RunConfig:
+    from decimal import Decimal
+
+    base: dict[str, Any] = dict(
+        model="gpt-5.6-terra",
+        reasoning_effort="high",
+        context_tier="default",
+        route_policy=RoutePolicy.DYNAMIC,
+        routing_deadline_seconds=30,
+        routing_credit_allowance=Decimal("5"),
+        selector_concurrency=1,
+        route_associations={
+            "aa-opus": "claude-opus-5@high",
+            "aa-terra": "gpt-5.6-terra@high",
+        },
+        issue_source="github",
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+    base.update(overrides)
+    return RunConfig(**base)

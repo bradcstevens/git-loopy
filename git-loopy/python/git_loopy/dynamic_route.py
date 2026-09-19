@@ -732,6 +732,16 @@ class RoutingRequest:
     repository_context: tuple[str, ...]
     local_measurements: tuple[str, ...]
     bounded_input_tokens: int
+    issue_ref: int | str | None = None
+    """Which issue this request is for, as the **Pool** names it.
+
+    Untrusted prose cannot be a reference, so the ref travels beside the issue
+    text rather than being read back out of it. It is what lets the decision's
+    provenance record say *which* issue was routed without the recorder holding
+    mutable per-Pickup state — a Lane routes concurrently with its neighbours,
+    and a shared "current issue" attribute would attribute one Lane's route to
+    another under exactly the interleaving parallel mode exists to produce.
+    """
 
     def __post_init__(self) -> None:
         if not all(
@@ -992,6 +1002,7 @@ class RoutingProposal:
     """A prepared route that takes no lease and binds no work."""
 
     proposal_id: str
+    issue_ref: int | str | None
     route: WorkRoute
     work_evidence: AssessmentCandidate
     summary: str
@@ -1025,6 +1036,7 @@ class DynamicRouteDecision:
     """
 
     proposal_id: str
+    issue_ref: int | str | None
     route: WorkRoute
     work_evidence: AssessmentCandidate
     summary: str
@@ -1241,6 +1253,7 @@ class DynamicRouter:
             self._proposals.pop(proposal.proposal_id, None)
         resolution = DynamicRouteDecision(
             proposal_id=active.proposal_id,
+            issue_ref=active.issue_ref,
             route=active.route,
             work_evidence=active.work_evidence,
             summary=active.summary,
@@ -1262,6 +1275,15 @@ class DynamicRouter:
         if recorded is False:
             return self._unavailable(RoutingUnavailableReason.RECORDER_FAILED)
         return resolution
+
+    async def record_classification(self, routing_credits: Decimal) -> None:
+        """Account a **Task type** classification against this Run's allowance.
+
+        Delegated rather than exposing the ledger, because the caller has no
+        business with the rest of it: a Run may *report* what classification
+        spent, and may not reach past that to admit itself a selector call.
+        """
+        await self._ledger.record_classification(routing_credits)
 
     def _discard_expired_proposals(self) -> None:
         now = self._aware_now()
@@ -1369,6 +1391,7 @@ class DynamicRouter:
         now = self._aware_now()
         proposal = RoutingProposal(
             proposal_id=uuid.uuid4().hex,
+            issue_ref=request.issue_ref,
             route=route,
             work_evidence=selected,
             summary=summary,
@@ -1517,9 +1540,7 @@ def _claims_public_speed_is_issue_duration(summary: str) -> bool:
     return issue_duration and public_speed
 
 
-def routing_provenance_payload(
-    decision: DynamicRouteDecision, *, issue: int | str
-) -> dict[str, Any]:
+def routing_provenance_payload(decision: DynamicRouteDecision) -> dict[str, Any]:
     """Project one bound decision into its ``wrapper.routing.resolved`` payload.
 
     The **Dynamic route**'s local decision provenance, composed here rather
@@ -1545,7 +1566,7 @@ def routing_provenance_payload(
     """
     evidence = decision.work_evidence
     return {
-        "issue": issue,
+        "issue": decision.issue_ref,
         "proposal_id": decision.proposal_id,
         "model": decision.route.model,
         "effort": decision.route.reasoning_effort,
