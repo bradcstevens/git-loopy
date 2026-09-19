@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -58,7 +57,6 @@ DEFAULT_DISTRIBUTION_MODES = (
     DISTRIBUTION_MODE_SOURCE_ONLY,
     DISTRIBUTION_MODE_ARTIFACT_BEARING,
 )
-KNOWN_DISTRIBUTION_MODES = DEFAULT_DISTRIBUTION_MODES
 
 
 def _tui_release():
@@ -284,28 +282,6 @@ def _extract_tag_distribution_mode(
     return None
 
 
-def verify_distribution_mode_prerequisites(
-    repository_root: Path, mode: str
-) -> None:
-    """Verify that prerequisites for the chosen distribution mode are satisfied.
-
-    Enforces AC 5: An artifact-bearing promise is never silently downgraded
-    because its credentials or prerequisites are missing.
-    """
-    if mode == DISTRIBUTION_MODE_ARTIFACT_BEARING:
-        policy = load_trust_policy(repository_root)
-        missing = [
-            cred
-            for cred in policy.credentials
-            if not os.environ.get(cred)
-        ]
-        if missing:
-            raise DistributionModeError(
-                f"Cannot publish in artifact-bearing mode: missing required signing credentials: {missing}. "
-                "An artifact-bearing release refuses to publish without credentials and will not downgrade to source-only."
-            )
-
-
 def resolve_distribution_mode(
     repository_root: Path,
     *,
@@ -324,7 +300,10 @@ def resolve_distribution_mode(
         )
 
     policy = load_trust_policy(repository_root)
-    valid_modes = KNOWN_DISTRIBUTION_MODES
+    valid_modes = tuple(
+        m for m in (policy.distribution_modes or DEFAULT_DISTRIBUTION_MODES)
+        if m in DEFAULT_DISTRIBUTION_MODES
+    ) or DEFAULT_DISTRIBUTION_MODES
     declared_mode = policy.distribution_mode
 
     if declared_mode not in valid_modes:

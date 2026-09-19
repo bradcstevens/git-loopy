@@ -37,14 +37,14 @@ as the single authority:
   binary signing identities, or channel credentials to complete.
 - **`artifact-bearing`**: The publication promise includes the seven compiled
   TUI helper archives, checksums, attestations, receipts, and package channels
-  (Homebrew, winget, Scoop). It dispatches all helper builds and requires full
-  credentials; missing credentials refuse publication without silent downgrade.
+  (Homebrew, winget, Scoop). It dispatches all helper builds; artifact trust
+  gates refuse publication rather than silently downgrading to source-only.
 
 The contract is strictly enforced:
 - **Single authority**: Neither secret presence nor runner presence alters the contract.
   A source-only release in an environment with signing secrets never builds or
-  publishes helper artifacts; an artifact-bearing release without credentials refuses
-  rather than silently downgrading to source-only.
+  publishes helper artifacts; an artifact-bearing release whose trust gate fails
+  refuses rather than silently downgrading to source-only.
 - **Fail-closed validation**: Unknown or inconsistent distribution mode declarations
   (e.g., mismatch between tag annotation and explicit configuration) fail closed
   before any publication step runs.
