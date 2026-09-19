@@ -43,7 +43,7 @@ fallback an unlabelled issue had before this module existed.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, replace as dataclass_replace
+from dataclasses import dataclass, field, replace as dataclass_replace
 from typing import Awaitable, Callable
 
 from git_loopy.config import (
@@ -91,12 +91,22 @@ class PickupClassifier:
         diag: The Run's diagnostics logger, or ``None``. ADR-0029 gave up label
             provenance, so this is the only surviving record of what the
             classifier applied.
+        inferred: What this Run has already inferred, keyed by issue. The
+            classifier is now asked *twice* about a prepared issue — once by
+            **Routing preparation** ahead of the **Pickup** (#566) and once by
+            the Pickup itself — and the tracker write the first call makes is
+            only visible to the second if the **Pool** was re-read in between.
+            Remembering the classification rather than relying on that read is
+            what keeps one issue to one inference per Run. It answers with the
+            *classification*, exactly as the write does, so the two calls stay
+            indistinguishable in effect.
     """
 
     pair: ClassifierPair | None
     propose: Callable[[ClassifierPair, AfkReadyItem], Awaitable[str | None]]
     client: TaskTypeLabelClient
     diag: logging.Logger | None = None
+    inferred: dict[int | str, str] = field(default_factory=dict, compare=False)
 
     async def labelled(self, item: AfkReadyItem) -> AfkReadyItem:
         """``item`` as **Routing** should read it — with its **Task type** on it.
@@ -114,6 +124,9 @@ class PickupClassifier:
             of failing to classify may abort the Iteration or the **Run**, and
             a caller must not have to know which collaborator failed.
         """
+        remembered = self.inferred.get(item.ref)
+        if remembered is not None:
+            return self._with_key(item, remembered)
         try:
             assignment = await classify_and_persist(
                 item,
@@ -131,16 +144,25 @@ class PickupClassifier:
             )
             return item
         task_type = assignment.task_type
-        if task_type is None or task_type in _labelled_keys(item):
-            # Either nothing was inferred, or the issue already said it. The
-            # second case is not merely an optimisation: appending a duplicate
-            # would put two identical `task-type:` labels on one item and the
-            # Pickup record would publish both as raw keys.
+        if task_type is None:
             return item
-        # Read off the *classification*, never the write. A label the tracker
-        # refused is still a Task type this Iteration should honour — the write
-        # exists to save the *next* Run the inference, and losing it must not
-        # also lose the routing decision it was recorded from.
+        self.inferred[item.ref] = task_type
+        return self._with_key(item, task_type)
+
+    def _with_key(self, item: AfkReadyItem, task_type: str) -> AfkReadyItem:
+        """``item`` carrying ``task_type``, and unchanged if it already does.
+
+        Not merely an optimisation: appending a duplicate would put two
+        identical ``task-type:`` labels on one item and the **Pickup** record
+        would publish both as raw keys.
+
+        Read off the *classification*, never the write. A label the tracker
+        refused is still a Task type this Iteration should honour — the write
+        exists to save the *next* Run the inference, and losing it must not
+        also lose the routing decision it was recorded from.
+        """
+        if task_type in _labelled_keys(item):
+            return item
         return dataclass_replace(
             item, labels=(*item.labels, f"{TASK_TYPE_LABEL_PREFIX}{task_type}")
         )

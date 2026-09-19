@@ -37,6 +37,10 @@ declare -Ar GIT_LOOPY_EVENT_TYPES=(
   # `"routing": false`, which is what a **Dashboard** reads.
   [WRAPPER_ROUTING_RESOLVED]="wrapper.routing.resolved"
   [WRAPPER_ROUTING_DELIVERY]="wrapper.routing.delivery"
+  # The nonbinding third (contract 14.6, #566): what **Routing preparation**
+  # reached for an eligible **Pool** candidate ahead of its Pickup. Declared on
+  # the same terms and never emitted here either.
+  [WRAPPER_ROUTING_PREPARED]="wrapper.routing.prepared"
   [WRAPPER_CHECKPOINT_RECORDED]="wrapper.checkpoint.recorded"
   [WRAPPER_COMMIT_RECORDED]="wrapper.commit.recorded"
   [WRAPPER_PUSH_RECORDED]="wrapper.push.recorded"

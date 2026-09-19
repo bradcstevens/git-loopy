@@ -1056,6 +1056,49 @@ Three boundaries are worth knowing:
 - **The tracker is never the source.** Route comments and labels below are
   output only; nothing reads them back to decide what to run.
 
+### Preparing routes ahead of the work
+
+A selector call sits on the critical path: the issue that is about to be worked
+has to wait for it. So while an agent session is running, git-loopy assesses the
+*other* issues it has already established as eligible, and a later Pickup that
+reaches one finds the assessment already made.
+
+What this is not, and it matters more than what it is:
+
+- **It does not decide what gets worked.** Nothing is reordered, reserved or
+  claimed. Your Pool order and the ordinary admission rules are untouched, and
+  an issue that was only prepared is exactly as pending as it was.
+- **It does not bind anything.** The Pickup is still authoritative. It re-reads
+  the live evidence and your harness's current capabilities, compares them
+  against what the proposal was made under, and reassesses whatever moved — so
+  editing an issue after it was prepared costs you a second selector call and
+  never a stale route. A proposal that aged out while the Run worked something
+  else is thrown away rather than bound.
+- **It does not run when your Run does not.** There is no daemon. Preparation
+  lives on the Run's own event loop, holds its proposals in memory, and stops
+  when the Run stops.
+
+It stays inside the bounds you already configured: `selector_concurrency` caps
+how many assessments overlap, `routing_credit_allowance` caps what they may
+spend, and preparation stops for the rest of the Run the moment either is gone —
+the work already routed carries on regardless. Candidates that are blocked,
+unreadable or otherwise not currently eligible are left alone and cost nothing.
+Neither does an issue your `[routing]` table already covers, or one a previous
+Run's decision will revalidate for free.
+
+```text
+⇢ route prepared #43  proposal claude-opus-5 @ high (default)  valid until 2026-09-19T09:05:00.000Z
+⇢ route prepared #44  static route applies — no selector call bought
+⇢ route prepared #45  an earlier decision revalidates — nothing to assess
+⇢ route prepared #46  not prepared — its Pickup decides for itself  (quota_exhausted)
+```
+
+Those four states are also on the `wrapper.routing.prepared` Event and in the
+Dashboard's Lane log, always phrased as a proposal. If you are reading a trace
+later, that is the distinction to hold on to: `wrapper.routing.prepared` is what
+was assessed in advance, and `wrapper.routing.resolved` is what a session
+actually ran on.
+
 ### Route comments and labels
 
 After a final static or Dynamic Routing resolution is durably recorded,

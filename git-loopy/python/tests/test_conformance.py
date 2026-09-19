@@ -27,6 +27,7 @@ from git_loopy.calibration_search import (
 from git_loopy.trial_concurrency import InlineTrialDispatcher
 from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import dynamic_route
+from git_loopy import route_preparation
 from git_loopy import events as events_module
 from git_loopy import cli as cli_module
 from git_loopy import config as config_module
@@ -928,8 +929,40 @@ _NOT_EVENT_TYPES = frozenset(
         # instead by the ``reuse`` clause of that type's payload contract.
         "ROUTE_ELECTED",
         "ROUTE_REVALIDATED",
+        # The four ``state`` spellings of ``wrapper.routing.prepared`` (#566),
+        # exported from ``events`` for the same reason and pinned instead by
+        # that type's ``state_values``, below.
+        "ROUTE_PREPARATION_PROPOSED",
+        "ROUTE_PREPARATION_STATIC",
+        "ROUTE_PREPARATION_REUSABLE",
+        "ROUTE_PREPARATION_UNAVAILABLE",
     }
 )
+
+
+def test_the_preparation_state_vocabulary_has_one_declaration() -> None:
+    """The four preparation spellings are the fixture's, exactly (#566).
+
+    They are payload values rather than event types, so the literal pin below
+    cannot reach them — and a Python rename that left the fixture behind would
+    leave a native port replaying a state it has never heard of. This is the
+    declaration that closes that gap, exactly as the ``reuse`` clause does for
+    ``routing_reuse``.
+    """
+    declared = (
+        events_module.ROUTE_PREPARATION_PROPOSED,
+        events_module.ROUTE_PREPARATION_STATIC,
+        events_module.ROUTE_PREPARATION_REUSABLE,
+        events_module.ROUTE_PREPARATION_UNAVAILABLE,
+    )
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_ROUTING_PREPARED
+    ]
+
+    assert list(declared) == contract["state_values"]
+    assert [outcome.value for outcome in route_preparation.PreparationOutcome] == (
+        contract["state_values"]
+    )
 
 
 def test_event_type_fixture_pins_every_exported_literal() -> None:

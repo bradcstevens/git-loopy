@@ -84,8 +84,13 @@ __all__ = [
     "WRAPPER_PICKUP_BOUND",
     "WRAPPER_ROUTING_RESOLVED",
     "WRAPPER_ROUTING_DELIVERY",
+    "WRAPPER_ROUTING_PREPARED",
     "ROUTE_ELECTED",
     "ROUTE_REVALIDATED",
+    "ROUTE_PREPARATION_PROPOSED",
+    "ROUTE_PREPARATION_STATIC",
+    "ROUTE_PREPARATION_REUSABLE",
+    "ROUTE_PREPARATION_UNAVAILABLE",
     "WRAPPER_PICKUP_SKIPPED",
     "WRAPPER_CHECKPOINT_RECORDED",
     "WRAPPER_COMMIT_RECORDED",
@@ -306,6 +311,13 @@ WRAPPER_PICKUP_SKIPPED = "wrapper.pickup.skipped"
 # refuses the route instead of running it unrecorded.
 WRAPPER_ROUTING_RESOLVED = "wrapper.routing.resolved"
 WRAPPER_ROUTING_DELIVERY = "wrapper.routing.delivery"
+# The nonbinding half of the same decision (#566, ADR-0057): what **Routing
+# preparation** reached for one eligible **Pool** candidate ahead of the Pickup
+# that may later bind it. A separate type from the resolution above precisely
+# so the two can never be confused — a consumer that read a proposal as a
+# binding would show an issue as routed that nothing has yet agreed to work,
+# and would report a Pool that is merely prepared as a Pool that is claimed.
+WRAPPER_ROUTING_PREPARED = "wrapper.routing.prepared"
 # How the route on one such record was arrived at: a selector call elected it,
 # or a prior Run's decision was revalidated against freshly read evidence and
 # eligibility without one (#565, ADR-0057). These live beside the event type
@@ -314,6 +326,15 @@ WRAPPER_ROUTING_DELIVERY = "wrapper.routing.delivery"
 # assessment-invalidation loop comes back.
 ROUTE_ELECTED = "elected"
 ROUTE_REVALIDATED = "revalidated"
+# The four ``state`` spellings of a preparation record, beside the type they
+# are a field of for the same reason the two above are. Three of them are
+# reasons no **Route selector** was called, and an operator is owed which:
+# an operator's own **Static route** made one unnecessary, an earlier Run's
+# decision is already there to revalidate, or routing could not propose at all.
+ROUTE_PREPARATION_PROPOSED = "proposed"
+ROUTE_PREPARATION_STATIC = "static"
+ROUTE_PREPARATION_REUSABLE = "reusable"
+ROUTE_PREPARATION_UNAVAILABLE = "unavailable"
 WRAPPER_CHECKPOINT_RECORDED = "wrapper.checkpoint.recorded"
 WRAPPER_COMMIT_RECORDED = "wrapper.commit.recorded"
 # Emitted once per iteration when the runner's auto-push (ADR-0004) succeeds in

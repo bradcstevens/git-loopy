@@ -11,8 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::event::{
     CommitRecorded, ContextWindowSample, Event, EventPayload, ExecutionHostDeclaration,
     InsightCapabilities, IssueRef, IterationEnd, IterationIssue, IterationSummary, Pickup,
-    ReleaseAdvanced, RoutingDelivery, RoutingDeliveryStatus, RoutingResolved, StopRequested,
-    ROUTE_ELECTED, ROUTE_REVALIDATED,
+    ReleaseAdvanced, RoutingDelivery, RoutingDeliveryStatus, RoutingPrepared, RoutingResolved,
+    StopRequested, ROUTE_ELECTED, ROUTE_PREPARATION_PROPOSED, ROUTE_PREPARATION_REUSABLE,
+    ROUTE_PREPARATION_STATIC, ROUTE_PREPARATION_UNAVAILABLE, ROUTE_REVALIDATED,
 };
 use crate::timestamp::Timestamp;
 
@@ -550,6 +551,7 @@ impl DashboardState {
                 self.append_lane_log(&pickup.issue, LOG_EVENT, &pickup_skipped_text(pickup), now)
             }
             EventPayload::RoutingResolved(resolved) => self.record_route_resolution(resolved, now),
+            EventPayload::RoutingPrepared(prepared) => self.record_route_preparation(prepared, now),
             EventPayload::RoutingDelivery(delivery) => self.record_route_delivery(delivery, now),
             EventPayload::AgentOutput(output) => {
                 self.append_log_block(&output.kind, &output.text, now)
@@ -765,6 +767,18 @@ impl DashboardState {
         // before reuse existed says nothing here rather than guessing.
         if let Some(text) = routing_resolution_text(resolved) {
             self.append_lane_log(&resolved.issue, LOG_EVENT, &text, now);
+        }
+    }
+
+    fn record_route_preparation(&mut self, prepared: &RoutingPrepared, now: Option<Timestamp>) {
+        // A Lane log line and nothing else (#566, AC4). A proposal is not a
+        // binding, not a Lease and not evidence the Pool emptied, so it may
+        // touch neither the Queue row's route nor its status: an issue this Run
+        // only prepared is still waiting, exactly as it was. `insert_entry`
+        // would be the same mistake in miniature -- a proposal for an issue the
+        // Dashboard has not seen collected is not a reason to list it.
+        if let Some(text) = routing_preparation_text(prepared) {
+            self.append_lane_log(&prepared.issue, LOG_EVENT, &text, now);
         }
     }
 
@@ -1169,6 +1183,38 @@ fn routing_resolution_text(resolved: &RoutingResolved) -> Option<String> {
         // rather than translated into one of the two it does: guessing would
         // make a newer Orchestrator's provenance read as something it is not.
         other => Some(format!("Route resolved: {other}")),
+    }
+}
+
+fn routing_preparation_text(prepared: &RoutingPrepared) -> Option<String> {
+    match prepared.state.as_deref()? {
+        ROUTE_PREPARATION_PROPOSED => {
+            let model = non_empty(prepared.model.as_deref())?;
+            let effort =
+                non_empty(prepared.effort.as_deref()).unwrap_or_else(|| "default".to_string());
+            // "not bound" is carried in the line itself rather than left to the
+            // reader: this is the one Dashboard phrase that could be mistaken
+            // for a Pickup, and the Queue row it must not have written is the
+            // only other place an operator would check.
+            Some(format!("Route proposed: {model}@{effort} (not bound)"))
+        }
+        ROUTE_PREPARATION_STATIC => {
+            Some("Route preparation: static route applies, no selector call".to_string())
+        }
+        ROUTE_PREPARATION_REUSABLE => {
+            Some("Route preparation: an earlier decision revalidates".to_string())
+        }
+        ROUTE_PREPARATION_UNAVAILABLE => Some(
+            match non_empty(prepared.detail.as_deref())
+                .or_else(|| non_empty(prepared.reason.as_deref()))
+            {
+                Some(why) => format!("Route not prepared: {why}; its Pickup decides"),
+                None => "Route not prepared; its Pickup decides".to_string(),
+            },
+        ),
+        // A spelling this Dashboard does not know is reported as it arrived
+        // rather than translated into one it does.
+        other => Some(format!("Route preparation: {other}")),
     }
 }
 

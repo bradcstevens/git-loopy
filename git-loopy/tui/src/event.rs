@@ -114,6 +114,8 @@ pub enum EventPayload {
     /// `wrapper.routing.delivery`
     RoutingResolved(RoutingResolved),
     RoutingDelivery(RoutingDelivery),
+    /// `wrapper.routing.prepared`
+    RoutingPrepared(RoutingPrepared),
     /// `agent.output`
     AgentOutput(AgentOutput),
     /// `usage.context_window`
@@ -336,6 +338,50 @@ pub const ROUTE_ELECTED: &str = "elected";
 
 /// The `routing_reuse` spelling for a reuse revalidated without a selector.
 pub const ROUTE_REVALIDATED: &str = "revalidated";
+
+/// One candidate's **Routing preparation** outcome, prepared ahead of Pickup.
+///
+/// A proposal and never a binding (#566, ADR-0057). Nothing here may reach the
+/// Queue row's route: an issue whose route was only *prepared* has not been
+/// picked up, may never be, and its eventual Pickup re-reads every input before
+/// it binds anything. The record exists so an operator can see preparation
+/// happening — and so the three ways it can reach no proposal stay apart.
+///
+/// Every field but the issue is optional, because three of the four outcomes
+/// carry no pair at all and a Run log written before this event existed carries
+/// none of them.
+#[derive(Clone, Debug, Deserialize)]
+pub struct RoutingPrepared {
+    /// The issue a proposal was prepared for.
+    pub issue: IssueRef,
+    /// `proposed`, `static`, `reusable` or `unavailable`.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// The proposed model, present only for `proposed`.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The proposed reasoning effort, present only for `proposed`.
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// Why routing could not propose, for `unavailable`.
+    #[serde(default)]
+    pub detail: Option<String>,
+    /// The same fact as `detail` where the Orchestrator recorded only a reason.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// The `state` spelling for a nonbinding proposal waiting for its Pickup.
+pub const ROUTE_PREPARATION_PROPOSED: &str = "proposed";
+
+/// The `state` spelling for a candidate an operator's own route already covers.
+pub const ROUTE_PREPARATION_STATIC: &str = "static";
+
+/// The `state` spelling for a candidate an earlier decision revalidates free.
+pub const ROUTE_PREPARATION_REUSABLE: &str = "reusable";
+
+/// The `state` spelling for a candidate preparation could not assess.
+pub const ROUTE_PREPARATION_UNAVAILABLE: &str = "unavailable";
 
 /// One run-scoped delivery observation for a final **Routing resolution**.
 ///
@@ -688,6 +734,10 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         },
         // Delivery is only attributable when it names an issue and a known
         // delivery status. Otherwise it is unusable telemetry, not route truth.
+        "wrapper.routing.prepared" => match serde_json::from_value(value.clone()) {
+            Ok(prepared) => EventPayload::RoutingPrepared(prepared),
+            Err(_) => EventPayload::Other,
+        },
         "wrapper.routing.delivery" => match serde_json::from_value(value.clone()) {
             Ok(delivery) => EventPayload::RoutingDelivery(delivery),
             Err(_) => EventPayload::Other,

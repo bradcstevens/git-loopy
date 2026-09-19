@@ -2741,6 +2741,137 @@ def test_a_stale_recorded_route_reads_as_a_reassessment_not_a_reuse() -> None:
 
 
 # ---------------------------------------------------------------------------
+# **Routing preparation** (#566) — a proposal, and never a binding
+# ---------------------------------------------------------------------------
+
+
+def _prepared_event(**payload: Any) -> dict[str, Any]:
+    """A ``wrapper.routing.prepared`` record, as a Runner writes one."""
+    event: dict[str, Any] = {
+        "type": events_module.WRAPPER_ROUTING_PREPARED,
+        "issue": 7,
+        "state": events_module.ROUTE_PREPARATION_PROPOSED,
+        "proposal_id": "01JD00000000000000000000PRE",
+        "model": "claude-opus-5",
+        "effort": "high",
+        "context_tier": "default",
+        "summary": "strongest verified index for this work",
+        "reason": None,
+        "detail": None,
+        "prepared_at": "2026-09-19T09:00:00.000Z",
+        "valid_until": "2026-09-19T09:05:00.000Z",
+        "relevant_input_identity": "9f2c1d6a4b8e",
+        "routing_credits": "0.25",
+        "selector_attempts": 2,
+    }
+    event.update(payload)
+    return event
+
+
+def test_a_prepared_route_never_reads_as_a_decision() -> None:
+    """#566 AC4: proposal state is visible without being presented as a binding.
+
+    The whole risk of showing preparation at all. An operator who reads a
+    proposal as a decision believes an issue is routed that has not been picked
+    up, may never be picked up, and whose eventual **Pickup** re-reads every
+    input before it binds anything. So the line says "prepared", names the pair
+    as a *proposal*, and borrows none of the Pickup line's vocabulary.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_prepared_event())
+
+    out = buf.getvalue()
+    assert "#7" in out
+    assert "prepared" in out
+    assert "claude-opus-5" in out
+    assert "routed" not in out, "a proposal claimed the Pickup's word"
+    assert "bound" not in out, "a proposal claimed a Lease"
+
+
+def test_a_statically_routed_candidate_says_the_selector_was_not_asked() -> None:
+    """#566 AC3: "no proposal" has causes an operator is owed.
+
+    An operator who wrote a ``[routing]`` entry and then sees nothing prepared
+    for the issues it covers has no way to tell their instruction was honoured
+    from routing being broken. The line names their own route as the reason.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _prepared_event(
+            state=events_module.ROUTE_PREPARATION_STATIC,
+            proposal_id=None,
+            model=None,
+            effort=None,
+            context_tier=None,
+            summary=None,
+        )
+    )
+
+    out = buf.getvalue()
+    assert "#7" in out
+    assert "static route" in out
+    assert "no selector call" in out
+
+
+def test_a_revalidatable_candidate_reads_as_free_rather_than_skipped() -> None:
+    """A **Reusable route** is why preparation did nothing, not a failure."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _prepared_event(
+            state=events_module.ROUTE_PREPARATION_REUSABLE,
+            proposal_id=None,
+            model=None,
+            summary=None,
+        )
+    )
+
+    out = buf.getvalue()
+    assert "revalidat" in out
+    assert "unavailable" not in out
+
+
+def test_an_unpreparable_candidate_does_not_blame_its_pickup() -> None:
+    """#566 AC8: exhaustion is explicit, and it is not a refusal to work.
+
+    The distinction the line has to carry: preparation could not assess this
+    issue in advance, and its **Pickup** will assess it for itself. Phrasing it
+    as a routing failure would send an operator looking for a broken issue.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _prepared_event(
+            state=events_module.ROUTE_PREPARATION_UNAVAILABLE,
+            proposal_id=None,
+            model=None,
+            effort=None,
+            context_tier=None,
+            summary=None,
+            reason="quota_exhausted",
+            detail="quota_exhausted",
+        )
+    )
+
+    out = buf.getvalue()
+    assert "#7" in out
+    assert "not prepared" in out
+    assert "quota_exhausted" in out
+    assert "its Pickup decides" in out
+
+
+def test_a_prepared_record_from_a_runner_that_predates_the_state_is_ignored() -> None:
+    """An unreadable record is skipped rather than rendered as a blank claim."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_prepared_event(state=None))
+
+    assert buf.getvalue() == ""
+
+
+# ---------------------------------------------------------------------------
 # The Run readback block (#410) — the only validation ``[routing]`` can have
 # ---------------------------------------------------------------------------
 

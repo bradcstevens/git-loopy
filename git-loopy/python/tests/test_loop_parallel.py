@@ -8131,7 +8131,11 @@ def test_a_lane_that_stalled_reassesses_at_its_next_dynamic_pickup(
 
     asyncio.run(loop_module.run(_dynamic_parallel_config(max_nmt_strikes=9)))
 
-    lane, retry = (request for _selector, request in spied["assessments"])
+    lane, retry = (
+        request
+        for _selector, request in spied["assessments"]
+        if "Test issue 42" in request.issue
+    )
     assert lane.prior_attempts == ()
     (evidence,) = retry.prior_attempts
     assert evidence.model == "claude-opus-5"
@@ -8407,3 +8411,108 @@ def test_each_lane_revalidates_its_own_issues_recorded_route(
             f"Lane #{issue} revalidated against another issue's decision"
         )
         assert record["selector_attempts"] == 0
+
+
+def test_a_rolling_run_prepares_the_candidates_no_lane_has_taken(
+    tmp_path, monkeypatch
+) -> None:
+    """AC1 in **Rolling** dispatch: the cache behind the Lanes is prepared too.
+
+    Two Lane slots and three **Parallel-safe** candidates, so exactly one stays
+    in the **Pool** while the other two are worked. It is prepared beside them,
+    which is the whole point: its **Pickup** arrives when a slot frees and
+    finds an assessment already made.
+
+    The Lanes are what must not change. Preparation reserves nothing and
+    reorders nothing, so both open sessions on the elected route exactly as
+    they did before this slice existed.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(number, labels=["ready-for-agent", "parallel-safe"])
+            for number in (42, 43, 44)
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    assert asyncio.run(loop_module.run(_dynamic_parallel_config())) == 0
+
+    prepared = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.prepared"
+    ]
+    assert prepared, "the candidate behind the Lanes was never prepared"
+    assert {event["issue"] for event in prepared} <= {42, 43, 44}
+    assert {event["state"] for event in prepared} == {"proposed"}
+    worked = {
+        event["issue"]
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.resolved"
+    }
+    assert {event["issue"] for event in prepared}.isdisjoint(worked), (
+        "a candidate a Lane was working was prepared beside it"
+    )
+
+
+def test_preparation_reserves_nothing_and_opens_no_session(
+    tmp_path, monkeypatch
+) -> None:
+    """AC7 and AC4: a proposal is not a **Lease** and not evidence of work.
+
+    The sharpest way a preparation desk could go wrong in **Rolling** dispatch
+    is to behave like a second dispatcher — taking a candidate out of the Pool,
+    claiming a Lane slot, or making the Run look busier than it is. Here the
+    prepared candidate must still be worked by an ordinary Lane, and the
+    session count must equal the number of issues rather than the number of
+    proposals.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(number, labels=["ready-for-agent", "parallel-safe"])
+            for number in (42, 43, 44)
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    assert asyncio.run(loop_module.run(_dynamic_parallel_config())) == 0
+
+    events = _logged_events(tmp_path)
+    prepared = [e for e in events if e["type"] == "wrapper.routing.prepared"]
+    resolved = [e for e in events if e["type"] == "wrapper.routing.resolved"]
+    assert prepared, "nothing was prepared, so nothing is being asserted"
+    # `max_iterations=2` caps the Run at two sessions. A proposal is not one.
+    assert len(fake_client.create_calls) == len(resolved) == 2, (
+        f"{len(fake_client.create_calls)} sessions for {len(resolved)} routes "
+        f"and {len(prepared)} proposals"
+    )
+    assert all(event["proposal_id"] for event in prepared), prepared
+    # A proposal names no binding: the Pickup's record is the only one that
+    # reports a **Routing source**.
+    assert all("routing_source" not in event for event in prepared), prepared

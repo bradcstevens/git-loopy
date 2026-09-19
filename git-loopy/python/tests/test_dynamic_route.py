@@ -11,6 +11,8 @@ from typing import Any
 import asyncio
 import json
 
+import pytest
+
 from git_loopy import dynamic_route, static_route
 
 
@@ -2341,3 +2343,79 @@ def test_a_revalidation_manufactures_no_attempt_and_bills_nothing() -> None:
     assert decision.usage.classification_attempts == 0
     assert decision.usage.routing_credits == Decimal("0")
     assert recorded == [decision], "the revalidation was not the record it wrote"
+
+
+def test_an_unchanged_snapshot_revalidates_without_rerunning_the_benchmark() -> None:
+    """A provider-supported ``304`` validates the same snapshot (AC5, #566).
+
+    **Routing preparation** re-reads published evidence per eligible candidate,
+    and the source documents a daily request budget. Where the provider offers
+    conditional revalidation, an unchanged answer costs a round-trip and no
+    reprojection — but it is *not* a new measurement: the benchmark fields and
+    ``measurement_at`` stay exactly as published, and only ``retrieved_at``
+    moves, because only the asking is new.
+    """
+    document = {
+        "prompt_options": {"parallel_queries": 1},
+        "data": [
+            {
+                "id": "aa-stable-1",
+                "name": "Alpha",
+                "slug": "alpha",
+                "evaluations": {"artificial_analysis_intelligence_index": 81.5},
+                "median_output_tokens_per_second": 42.25,
+            }
+        ],
+    }
+    seen: list[dict[str, str]] = []
+    instants = iter(
+        [
+            datetime(2026, 9, 18, 20, tzinfo=timezone.utc),
+            datetime(2026, 9, 18, 20, 5, tzinfo=timezone.utc),
+        ]
+    )
+
+    async def fetch(method: str, url: str, headers: dict[str, str]) -> object:
+        seen.append(dict(headers))
+        if headers.get("if-none-match") == '"snapshot-1"':
+            return dynamic_route.SourceResponse(body=None, not_modified=True)
+        return dynamic_route.SourceResponse(body=document, etag='"snapshot-1"')
+
+    source = dynamic_route.ArtificialAnalysisSource(
+        "secret-key",
+        associations={("aa-stable-1", "high"): "copilot-alpha"},
+        fetch=fetch,
+        clock=lambda: next(instants),
+    )
+
+    first = asyncio.run(source.fetch())
+    second = asyncio.run(source.fetch())
+
+    assert "if-none-match" not in seen[0]
+    assert seen[1]["if-none-match"] == '"snapshot-1"'
+    assert second.records == first.records
+    assert second.retrieved_at == datetime(2026, 9, 18, 20, 5, tzinfo=timezone.utc)
+    assert [record.measurement_at for record in second.evidence] == [None]
+    assert [record.intelligence_index for record in second.evidence] == [
+        Decimal("81.5")
+    ]
+    assert [record.retrieved_at for record in second.evidence] == [
+        second.retrieved_at
+    ]
+
+
+def test_an_unvalidatable_snapshot_is_read_again_rather_than_assumed() -> None:
+    """``304`` with nothing to revalidate is a failed read, not a silent reuse."""
+
+    async def fetch(method: str, url: str, headers: dict[str, str]) -> object:
+        return dynamic_route.SourceResponse(body=None, not_modified=True)
+
+    source = dynamic_route.ArtificialAnalysisSource(
+        "secret-key",
+        associations={("aa-stable-1", "high"): "copilot-alpha"},
+        fetch=fetch,
+        clock=lambda: datetime(2026, 9, 18, 20, tzinfo=timezone.utc),
+    )
+
+    with pytest.raises(dynamic_route.ArtificialAnalysisSourceError):
+        asyncio.run(source.fetch())

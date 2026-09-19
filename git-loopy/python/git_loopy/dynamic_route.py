@@ -39,6 +39,7 @@ __all__ = [
     "ArtificialAnalysisRecord",
     "ArtificialAnalysisResult",
     "ArtificialAnalysisSource",
+    "SourceResponse",
     "FreshEvidence",
     "FreshHarnessCapabilities",
     "refresh_harness_evidence",
@@ -139,17 +140,38 @@ class ArtificialAnalysisSource:
         self._associations = _validated_associations(associations)
         self._fetch = fetch or _stdlib_fetch
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._validator: str | None = None
+        self._records: tuple[ArtificialAnalysisRecord, ...] | None = None
 
     async def fetch(self) -> ArtificialAnalysisResult:
-        """Retrieve current public evidence without accepting work content."""
+        """Retrieve current public evidence without accepting work content.
+
+        **Conditional revalidation** (#566, AC5) where the provider offers it:
+        a validator this adapter was given on an earlier read is offered back,
+        and an unchanged answer reprojects the snapshot it already holds. What
+        that saves is the transfer, never the check — the request still goes
+        out, and the source still gets to say the evidence moved.
+
+        A revalidated snapshot is emphatically **not** a rerun benchmark. Every
+        published field — the scores, the speeds, ``measurement_at``, the
+        benchmark version and conditions — is exactly what the source last
+        published. Only ``retrieved_at`` advances, because only the asking is
+        new, and that is the one thing a revalidation actually establishes.
+        """
+        headers = {"x-api-key": self._api_key}
+        if self._validator is not None:
+            headers["if-none-match"] = self._validator
         try:
             payload = await self._fetch(
                 "GET",
                 ARTIFICIAL_ANALYSIS_MODELS_URL,
-                {"x-api-key": self._api_key},
+                headers,
             )
-            document = _decode_document(payload)
-            records = _project_records(document)
+            response = _source_response(payload)
+            if response.not_modified:
+                records = self._revalidated_records()
+            else:
+                records = _project_records(_decode_document(response.body))
             retrieved_at = self._clock()
             if retrieved_at.tzinfo is None:
                 raise ValueError("retrieval clock must return an aware datetime")
@@ -161,6 +183,9 @@ class ArtificialAnalysisSource:
         except Exception:
             pass
         else:
+            self._records = records
+            if response.etag is not None:
+                self._validator = response.etag
             return ArtificialAnalysisResult(
                 source_identity=ARTIFICIAL_ANALYSIS_MODELS_URL,
                 retrieved_at=retrieved_at,
@@ -174,19 +199,64 @@ class ArtificialAnalysisSource:
             "Artificial Analysis evidence retrieval failed"
         )
 
+    def _revalidated_records(self) -> tuple[ArtificialAnalysisRecord, ...]:
+        """The snapshot an unchanged answer just revalidated.
+
+        "Not modified" with nothing to compare against is a read that failed,
+        not permission to assume evidence: ADR-0057 has no silent stale-data
+        fallback, so this refuses rather than inventing an empty snapshot.
+        """
+        if self._records is None:
+            raise ValueError(
+                "Artificial Analysis revalidated a snapshot this Run never read"
+            )
+        return self._records
+
+
+@dataclass(frozen=True)
+class SourceResponse:
+    """What an evidence transport answers, with its conditional half.
+
+    A plain body stays acceptable — most transports have no validator to offer
+    and every existing one returns bytes, a string or a decoded object. This
+    shape exists for the transports that *do*: ``etag`` is the validator to
+    offer back on the next read, and ``not_modified`` is the provider saying
+    the snapshot it already gave is still current.
+    """
+
+    body: object | None = None
+    etag: str | None = None
+    not_modified: bool = False
+
+
+def _source_response(payload: object) -> SourceResponse:
+    if isinstance(payload, SourceResponse):
+        if payload.not_modified and payload.body is not None:
+            raise ValueError("an unchanged response carries no body")
+        return payload
+    return SourceResponse(body=payload)
+
 
 async def _stdlib_fetch(method: str, url: str, headers: dict[str, str]) -> object:
-    def request() -> bytes:
+    def request() -> SourceResponse:
         if method != "GET" or url != ARTIFICIAL_ANALYSIS_MODELS_URL:
             raise ValueError("Artificial Analysis request target is invalid")
         connection = http.client.HTTPSConnection("artificialanalysis.ai", timeout=30)
         try:
+            request_headers = {"x-api-key": headers["x-api-key"]}
+            validator = headers.get("if-none-match")
+            if validator is not None:
+                request_headers["if-none-match"] = validator
             connection.request(
                 "GET",
                 "/api/v2/data/llms/models",
-                headers={"x-api-key": headers["x-api-key"]},
+                headers=request_headers,
             )
             response = connection.getresponse()
+            etag = response.getheader("etag")
+            if response.status == 304:
+                response.read()
+                return SourceResponse(etag=etag, not_modified=True)
             if not 200 <= response.status < 300:
                 raise ValueError(
                     "Artificial Analysis returned an unsuccessful response"
@@ -196,7 +266,7 @@ async def _stdlib_fetch(method: str, url: str, headers: dict[str, str]) -> objec
             connection.close()
         if len(body) > 10_000_000:
             raise ValueError("Artificial Analysis response is too large")
-        return body
+        return SourceResponse(body=body, etag=etag)
 
     return await asyncio.to_thread(request)
 

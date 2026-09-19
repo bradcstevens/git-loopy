@@ -42,6 +42,10 @@ from rich.console import Console
 from rich.text import Text
 
 from git_loopy.events import (
+    ROUTE_PREPARATION_PROPOSED,
+    ROUTE_PREPARATION_REUSABLE,
+    ROUTE_PREPARATION_STATIC,
+    ROUTE_PREPARATION_UNAVAILABLE,
     ROUTE_REVALIDATED,
     ASSISTANT_MESSAGE,
     ASSISTANT_REASONING,
@@ -67,6 +71,7 @@ from git_loopy.events import (
     WRAPPER_PARALLEL_SERIAL_FALLBACK,
     WRAPPER_PICKUP_BOUND,
     WRAPPER_ROUTING_DELIVERY,
+    WRAPPER_ROUTING_PREPARED,
     WRAPPER_ROUTING_RESOLVED,
     WRAPPER_POOL_EXCLUDED,
     WRAPPER_PR_ADVANCED,
@@ -613,6 +618,49 @@ class Renderer:
             text.append(f"  ({superseded})", style=STYLES["meta"])
         else:
             text.append("  assessed — no reusable route for this issue")
+        self.console.print(text)
+
+    def _on_routing_prepared(self, event: dict[str, Any]) -> None:
+        # **Routing preparation**'s readback (#566, ADR-0057). Every word here
+        # is chosen against one failure: an operator reading a proposal as a
+        # decision. It is not a Pickup, not a Lease, and not evidence the Pool
+        # is empty — so it borrows none of the Pickup line's vocabulary, and
+        # the pair it names is qualified as a proposal every time it appears.
+        #
+        # The three non-proposing outcomes are spelled out rather than left
+        # silent (AC4). Silence would make an operator's own Static route, a
+        # free revalidation and an exhausted allowance look identical, and the
+        # last is the only one of the three worth acting on.
+        state = event.get("state")
+        if not isinstance(state, str):
+            return
+        ref = event.get("issue")
+        text = Text()
+        text.append("⇢ ", style=STYLES["meta"])
+        text.append("route prepared ", style=STYLES["meta"])
+        text.append(f"#{ref}" if isinstance(ref, int) else str(ref))
+        if state == ROUTE_PREPARATION_PROPOSED:
+            model = event.get("model")
+            effort = event.get("effort")
+            tier = event.get("context_tier")
+            text.append("  proposal ")
+            text.append(f"{model} @ {effort}")
+            if isinstance(tier, str) and tier:
+                text.append(f" ({tier})", style=STYLES["meta"])
+            valid_until = event.get("valid_until")
+            if isinstance(valid_until, str) and valid_until:
+                text.append(f"  valid until {valid_until}", style=STYLES["meta"])
+        elif state == ROUTE_PREPARATION_STATIC:
+            text.append("  static route applies — no selector call bought")
+        elif state == ROUTE_PREPARATION_REUSABLE:
+            text.append("  an earlier decision revalidates — nothing to assess")
+        elif state == ROUTE_PREPARATION_UNAVAILABLE:
+            text.append("  not prepared — its Pickup decides for itself")
+            detail = event.get("detail") or event.get("reason")
+            if isinstance(detail, str) and detail:
+                text.append(f"  ({detail})", style=STYLES["meta"])
+        else:
+            return
         self.console.print(text)
 
     def _on_routing_delivery(self, event: dict[str, Any]) -> None:
@@ -1228,6 +1276,7 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_AFK_READY_COLLECTED: Renderer._on_afk_ready_collected,
     WRAPPER_PICKUP_BOUND: Renderer._on_pickup_bound,
     WRAPPER_ROUTING_RESOLVED: Renderer._on_routing_resolved,
+    WRAPPER_ROUTING_PREPARED: Renderer._on_routing_prepared,
     WRAPPER_ROUTING_DELIVERY: Renderer._on_routing_delivery,
     WRAPPER_POOL_EXCLUDED: Renderer._on_pool_excluded,
     WRAPPER_PARALLEL_SERIAL_FALLBACK: Renderer._on_parallel_serial_fallback,

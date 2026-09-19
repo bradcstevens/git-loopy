@@ -45,6 +45,7 @@ import json
 import os
 import shutil
 from decimal import Decimal
+from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -5448,6 +5449,7 @@ def _wire_dynamic_ports(
     rows: tuple[dict[str, Any], ...],
     answer: Callable[[Any], Any] | None,
     listing: tuple[SimpleNamespace, ...],
+    evidence_delay: float = 0.0,
 ) -> dict[str, list[Any]]:
     """Substitute the two ports that reach the network, and nothing else.
 
@@ -5459,6 +5461,11 @@ def _wire_dynamic_ports(
 
     async def _fetch(method: str, url: str, headers: dict[str, str]) -> object:
         spied["evidence"] += 1
+        if evidence_delay:
+            # A real round-trip suspends, which is the only condition under
+            # which two concurrent reads *can* be shared. A port that answers
+            # without ever yielding makes every caller look sequential.
+            await asyncio.sleep(evidence_delay)
         return _aa_payload(*rows)
 
     async def _capabilities() -> Any:
@@ -5586,6 +5593,349 @@ def _dynamic_run(tmp_path, monkeypatch, **overrides):
         **overrides,
     )
     return fake_client, spied, asyncio.run(loop_module.run(config))
+
+
+def _dynamic_pool_run(tmp_path, monkeypatch, *, issues, **overrides):
+    """A multi-issue dynamic Run, for the **Routing preparation** slice (#566).
+
+    ``_dynamic_run``'s Pool is one issue, which is exactly the shape that
+    cannot show preparation: there is nothing behind the **Pickup** to prepare.
+    This wires a Pool the Runner can work its way down and returns the spies
+    both halves are read off.
+    """
+    _write_runnable_feedback_loop(tmp_path)
+    (tmp_path / "git-loopy").mkdir(exist_ok=True)
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=list(issues),
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = FakeCopilotClient(scripted_events=[])
+    close_after_send = overrides.pop("close_after_send", None)
+    edit_after_send = overrides.pop("edit_after_send", None)
+
+    def _after_send() -> None:
+        if close_after_send is not None:
+            fake_gh.issue_close(close_after_send, "worked")
+        if edit_after_send is not None:
+            number, body = edit_after_send
+            fake_gh.seed_issue(
+                dataclass_replace(fake_gh.issue_view(number), body=body)
+            )
+
+    if close_after_send is not None or edit_after_send is not None:
+        fake_client.on_send = _after_send
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _wire_dynamic_ports(
+        monkeypatch,
+        rows=overrides.pop(
+            "rows",
+            (_aa_row("aa-opus", 70.0, 90.0), _aa_row("aa-terra", 40.0, 200.0)),
+        ),
+        answer=overrides.pop("answer", _elects("claude-opus-5")),
+        listing=overrides.pop(
+            "listing",
+            (
+                _listed_model("claude-opus-5", ["high"]),
+                _listed_model("gpt-5.6-terra", ["low", "high"]),
+            ),
+        ),
+        evidence_delay=overrides.pop("evidence_delay", 0.0),
+    )
+    config = _dynamic_config(
+        route_associations={
+            "aa-opus": "claude-opus-5@high",
+            "aa-terra": "gpt-5.6-terra@high",
+        },
+        **overrides,
+    )
+    return fake_client, fake_gh, spied, asyncio.run(loop_module.run(config))
+
+
+def _prepared_records(tmp_path: Path) -> list[dict[str, Any]]:
+    """Every ``wrapper.routing.prepared`` this Run logged, in order."""
+    return [
+        event
+        for event in (json.loads(raw) for raw in _log_lines(tmp_path))
+        if event["type"] == "wrapper.routing.prepared"
+    ]
+
+
+def test_the_pool_behind_the_pickup_is_prepared_within_the_allowance(
+    tmp_path, monkeypatch
+) -> None:
+    """AC1: the other eligible candidates are assessed, and the Pickup is not delayed.
+
+    The whole of "prepares proposals for candidates currently established as
+    eligible, prioritizing the next Pickup". The Pickup binds first and its own
+    selector call is bought first; the rest of the Pool is then prepared beside
+    the Agent session under the operator's configured concurrency. A run with
+    one Iteration is deliberate — preparation has to happen *during* work, not
+    as a side effect of the Run reaching the next issue.
+    """
+    _fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[_make_issue(number) for number in (42, 43, 44)],
+        routing_credit_allowance=Decimal("5"),
+    )
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+    prepared = _prepared_records(tmp_path)
+    assert [record["issue"] for record in prepared] == [43, 44], (
+        "the Pool behind the Pickup was not prepared"
+    )
+    assert all(record["state"] == "proposed" for record in prepared), prepared
+    assert all(record["model"] == "claude-opus-5" for record in prepared), prepared
+    # One for the bound Pickup, one for each prepared candidate. Nothing is
+    # assessed twice and nothing eligible is skipped.
+    assert len(spied["assessments"]) == 3, spied["assessments"]
+
+
+def test_preparation_never_precedes_the_pickup_it_runs_beside(
+    tmp_path, monkeypatch
+) -> None:
+    """AC7: background preparation cannot reorder work or get in front of it.
+
+    Pinned as an *ordering* over the canonical log rather than as a timing,
+    because "does not delay the Pickup" is only checkable as a fact about what
+    happened first. The bound Pickup's own resolution is recorded before any
+    proposal for a candidate behind it, and the issue the session is opened on
+    is still the head of the Pool's order.
+    """
+    fake_client, _fake_gh, _spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[_make_issue(number) for number in (42, 43, 44)],
+        routing_credit_allowance=Decimal("5"),
+    )
+
+    assert exit_code == 0
+    order = [json.loads(raw)["type"] for raw in _log_lines(tmp_path)]
+    assert order.index("wrapper.routing.resolved") < order.index(
+        "wrapper.routing.prepared"
+    ), "a proposal was prepared before the Pickup it runs beside was routed"
+    assert order.index("wrapper.pickup.bound") < order.index(
+        "wrapper.routing.prepared"
+    ), "preparation ran in front of the bound Pickup"
+    (bound,) = _bound_pickups(tmp_path)
+    assert bound["issue"] == 42, "preparation reordered the Pool"
+    assert fake_client.create_calls[0]["model"] == "claude-opus-5"
+
+
+def test_a_blocked_candidate_is_left_pending_without_being_assessed(
+    tmp_path, monkeypatch
+) -> None:
+    """AC2: ineligible candidates stay visibly pending and cost no selector call.
+
+    A blocked issue is one the Run may not work *now*, which makes an
+    assessment of it a **Routing credit** spent on an outcome that cannot be
+    used. It is left alone rather than recorded as refused: preparation has no
+    verdict to give about eligibility, and saying one would be a second opinion
+    competing with the **Pickup**'s.
+    """
+    blocked = _dated(
+        43,
+        "2026-01-02T00:00:00Z",
+        blocked_by=BlockedByRead(
+            total_count=1,
+            nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+        ),
+    )
+    _fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[
+            _dated(42, "2026-01-01T00:00:00Z"),
+            blocked,
+            _dated(44, "2026-01-03T00:00:00Z"),
+        ],
+        routing_credit_allowance=Decimal("5"),
+    )
+
+    assert exit_code == 0
+    prepared_refs = [record["issue"] for record in _prepared_records(tmp_path)]
+    assert prepared_refs == [44], (
+        f"a blocked candidate bought an assessment: {prepared_refs}"
+    )
+    # The Pickup's own call plus the one eligible candidate behind it.
+    assert len(spied["assessments"]) == 2, spied["assessments"]
+
+
+def test_a_static_route_is_prepared_without_asking_the_selector(
+    tmp_path, monkeypatch
+) -> None:
+    """AC3: classification first, then static applicability, then the selector.
+
+    A ``[routing]`` entry is the operator's own instruction, so the candidate
+    it covers reaches its **Pickup** already routed and preparation must not
+    buy an assessment for it. Saying so out loud — ``state: static`` rather
+    than silence — is what keeps an operator from reading an unprepared issue
+    as an unreachable one.
+    """
+    _fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[
+            _make_issue(42),
+            _make_issue(43, labels=["ready-for-agent", "task-type:docs"]),
+        ],
+        routing={"docs": ("gpt-5.6-terra", "low")},
+        routing_credit_allowance=Decimal("5"),
+    )
+
+    assert exit_code == 0
+    (record,) = _prepared_records(tmp_path)
+    assert record["issue"] == 43
+    assert record["state"] == "static", record
+    assert record["proposal_id"] is None, "a static route minted a proposal"
+    # The Pickup's own call, and no second one for the statically routed issue.
+    assert len(spied["assessments"]) == 1, spied["assessments"]
+
+
+def test_a_prepared_proposal_binds_at_its_pickup_without_a_second_call(
+    tmp_path, monkeypatch
+) -> None:
+    """AC6: unchanged verified inputs do not rerun the **Route selector**.
+
+    The payoff the whole slice exists for, and the only assertion that can show
+    it: over two Iterations the second issue is prepared during the first and
+    *bound* in the second, so the Run buys two assessments for two issues
+    rather than three for two. A third call would mean preparation cost a
+    credit and saved nothing.
+
+    The first issue is closed from inside its own session, because an issue the
+    Run re-picks carries a **Prior attempt** the second time — which is a
+    changed verified input and *should* be reassessed. Testing the saving over
+    an issue that legitimately reassesses would measure nothing.
+    """
+    issues = [_make_issue(42), _make_issue(43)]
+
+    _fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=issues,
+        close_after_send=42,
+        max_iterations=2,
+        routing_credit_allowance=Decimal("5"),
+    )
+
+    assert exit_code == 0
+    assert len(spied["assessments"]) == 2, spied["assessments"]
+    resolved = [
+        event
+        for event in (json.loads(raw) for raw in _log_lines(tmp_path))
+        if event["type"] == "wrapper.routing.resolved"
+    ]
+    assert [record["issue"] for record in resolved] == [42, 43]
+    assert all(record["model"] == "claude-opus-5" for record in resolved), resolved
+    # The ledger's Run-wide count: two admitted calls for two worked issues.
+    assert [record["selector_attempts"] for record in resolved] == [1, 2], resolved
+
+
+def test_a_changed_issue_invalidates_its_prepared_proposal(
+    tmp_path, monkeypatch
+) -> None:
+    """AC6: changed relevant input buys another selection rather than binding a stale one.
+
+    The strongest thing preparation can get wrong is to hand a **Pickup** an
+    assessment of an issue that no longer says what it said. Rewriting the
+    queued issue's body between the two Iterations moves the verified input
+    identity, so the second Pickup reassesses — three calls for two issues,
+    which is the *correct* number here and the wrong one in the test above.
+    """
+    issues = [_make_issue(42), _make_issue(43)]
+
+    _fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=issues,
+        close_after_send=42,
+        edit_after_send=(
+            43,
+            "## Parent\nfoo\n\n## What to build\nsomething else entirely\n\n"
+            "## Acceptance criteria\nbar",
+        ),
+        max_iterations=2,
+        routing_credit_allowance=Decimal("5"),
+    )
+
+    assert exit_code == 0
+    assert len(spied["assessments"]) == 3, spied["assessments"]
+    resolved = [
+        event
+        for event in (json.loads(raw) for raw in _log_lines(tmp_path))
+        if event["type"] == "wrapper.routing.resolved"
+    ]
+    assert [record["issue"] for record in resolved] == [42, 43]
+    assert resolved[1]["selector_attempts"] == 3, (
+        "a changed issue bound the proposal prepared for its older text"
+    )
+
+
+def test_an_exhausted_allowance_stops_preparing_without_stopping_work(
+    tmp_path, monkeypatch
+) -> None:
+    """AC8: exhaustion leaves an explicit outcome and strands no speculative loop.
+
+    The allowance here pays for the **Pickup**'s own assessment and no more, so
+    preparation meets the exhausted ledger on its first candidate. What must
+    *not* happen is the Run failing: the bound issue was routed before the
+    allowance ran out and its session is entitled to run to the end.
+    """
+    fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[_make_issue(number) for number in (42, 43, 44)],
+        routing_credit_allowance=Decimal("0.25"),
+    )
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+    assert fake_client.create_calls, "an exhausted allowance stopped the work"
+    assert fake_client.create_calls[0]["model"] == "claude-opus-5"
+    assert len(spied["assessments"]) == 1, spied["assessments"]
+    states = [record["state"] for record in _prepared_records(tmp_path)]
+    assert states and set(states) == {"unavailable"}, states
+    # Latched, not retried per candidate: one refusal, then silence.
+    assert len(states) == 1, "an exhausted desk kept asking"
+
+
+def test_concurrent_preparation_shares_one_live_evidence_read(
+    tmp_path, monkeypatch
+) -> None:
+    """AC5: concurrent checks may share an in-flight request.
+
+    Five live reads are *asked for* here — the **Pickup**'s ``prepare`` and its
+    ``bind``, then one per prepared candidate — and only four are bought,
+    because the two preparations the configured concurrency lets overlap are
+    asking the identical question of the identical source at the same instant.
+    Answering it twice would spend a second round-trip against ADR-0057's
+    thousand-a-day evidence budget for bytes the Run already has in flight.
+
+    Not a cache, and the count says so: the Pickup's ``bind`` re-reads rather
+    than reusing what its own ``prepare`` read a moment earlier, because a
+    binding's authority is that its evidence is current.
+    """
+    _fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[_make_issue(number) for number in (42, 43, 44, 45)],
+        selector_concurrency=2,
+        evidence_delay=0.01,
+        routing_credit_allowance=Decimal("10"),
+    )
+
+    assert exit_code == 0
+    assert len(spied["assessments"]) == 4, spied["assessments"]
+    assert spied["evidence"] == 4, (
+        f"{spied['evidence']} evidence reads; 5 were asked for and the two "
+        "overlapping preparations should have shared one"
+    )
 
 
 def test_a_dynamic_route_reaches_the_serial_work_sessions_own_arguments(

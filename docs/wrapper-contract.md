@@ -1799,6 +1799,52 @@ resolution.
   failed Agent from an already-decided Route whose tracker projection is pending
   or failed.
 
+### 14.6 Routing preparation (contract 2.9)
+
+A Runner MAY prepare **Routing proposals** for candidates it has already
+established as eligible, ahead of the **Pickups** that would bind them. A
+prepared proposal is nonbinding: it is an input to a Pickup's own fresh
+validation and never a substitute for one.
+
+- **Preparation is not dispatch.** A proposal MUST NOT reorder the Pool, reserve
+  or lease a candidate, alter a running Agent, or bypass dependency and attempt
+  admission. It is not evidence the Pool is empty, and a candidate that only
+  ever gets prepared MUST remain exactly as pending as it was.
+- **The Pickup stays authoritative.** The session's final model, reasoning
+  effort and context tier MUST come from the Pickup, which re-reads both live
+  sources and compares the relevant input identity before it binds anything.
+  Unchanged verified inputs MUST NOT rerun the **Route selector**; changed
+  issue content, capabilities, evidence or policy MUST invalidate the proposal
+  and buy another selection only within the remaining bounds. A proposal past
+  its validity window MUST NOT be bound — the Pickup assesses again instead.
+- **Prioritise the next Pickup, and spend nothing on the ineligible.** The next
+  candidate to be worked is prepared first. Blocked, unreadable or otherwise
+  ineligible candidates remain visibly pending and MUST cost no classifier or
+  selector call for preparation. A missing **Task type** is classified at
+  preparation *before* static applicability is checked; existing labels stay
+  authoritative and a **Static route** MUST avoid the selector entirely.
+- **Only while a Run is running, and only within the operator's bounds.**
+  Preparation MUST run on the Run's own event loop under the configured
+  selector concurrency and routing-credit allowance, and MUST stop for the rest
+  of the Run once either is spent. Discovering an issue while no Run is active
+  MUST NOT start a background routing service, and no preparation loop may
+  become unbounded or speculative.
+- **Concurrent checks MAY share one in-flight read.** Two preparations asking
+  the same live source the same question at the same instant MAY join a single
+  request, and a provider-supported unchanged response (for example an
+  `ETag`/`304` revalidation) MAY validate the same snapshot — without reporting
+  that the benchmark was rerun. Neither is a cache: a read that has already
+  finished MUST NOT be replayed to a later caller.
+- **Publish state as a proposal.** Preparation outcomes are recorded as
+  `wrapper.routing.prepared` with a `state` of `proposed`, `static`, `reusable`
+  or `unavailable`. CLI and Dashboard projections MUST present them as
+  proposals — never as a final binding, an acquired Lease, or an empty Pool —
+  and MUST NOT let a proposal populate the route a Pickup is responsible for.
+- **Preparation is clone-local and Run-scoped.** Proposals are held in memory
+  for the life of the Run and are never shared between clones or Runs; a
+  cross-Run saving is the **Reusable route** of §14.5's sibling rule, not this
+  one.
+
 ## 15. Release and compatibility identity (MUST)
 
 The **Release version** is product identity, not a compatibility shortcut. `--version` and

@@ -866,6 +866,25 @@ Nothing routing itself writes may reach the compared inputs — an Orchestrator 
 invalidates its next comparison reassesses every **Run** and has reused nothing (ADR-0057).
 _Avoid_: route cache, cached route, memoised routing (a cache is trusted; this is re-verified).
 
+**Routing preparation**:
+A running **Run** assessing the **Routing proposals** for candidates it has already established as
+eligible, ahead of the **Pickups** that would bind them — so a Pickup that reaches one finds the
+assessment already made instead of buying it on the critical path. It is *not* a dispatcher, a
+**Lease**, or authority to start work: it reorders no **Pool**, reserves no candidate, touches no
+running **Agent**, and is never evidence the Pool is empty. A prepared proposal is an *input* to a
+Pickup's own fresh validation — the Pickup re-reads both live sources, compares the relevant input
+identity, reassesses whatever moved, and refuses anything past its validity window — so what
+preparation saves is a **Route selector** call and nothing else. The next Pickup is prepared first
+and alone; everything behind it runs within the operator's configured selector concurrency and
+**Routing credit** allowance, once per candidate per Run, and stops outright for the rest of the Run
+the moment either bound is spent. A missing **Task type** is classified before static applicability
+is checked, so an operator's **Static route** still costs no assessment; a **Reusable route** costs
+none either and is left to its own Pickup. Blocked, unreadable and otherwise ineligible candidates
+stay visibly pending and are never spent on. It lives only inside a Run, on that Run's own event
+loop, holding its proposals in memory: discovering an issue while nothing is running starts no
+background routing service (ADR-0057).
+_Avoid_: prefetch, routing queue, speculative routing, pre-binding (nothing is bound).
+
 **Harness capabilities**:
 What the authenticated Copilot harness says about the models *this account* may use, read from its
 own model listing: eligibility, whether each model has a reasoning-effort dial and which values it

@@ -1003,6 +1003,134 @@ fn a_routing_record_written_before_reuse_existed_still_replays() {
 }
 
 #[test]
+fn a_prepared_route_is_a_proposal_and_never_a_binding() {
+    // #566 AC4. Preparation has to be visible without being mistaken for a
+    // decision, a Lease or evidence the Pool is empty. The Lane log says
+    // "proposed" and the Queue row's `route` stays absent until an actual
+    // Pickup binds one -- a proposal that populated it would show an issue as
+    // routed that no session has been opened for.
+    let projected = reduce(
+        &[serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z",
+            "run_id": "r1",
+            "iter": null,
+            "type": "wrapper.routing.prepared",
+            "issue": 7,
+            "state": "proposed",
+            "proposal_id": "proposal-1",
+            "model": "gpt-5-mini",
+            "effort": "medium",
+            "context_tier": "default",
+            "valid_until": "2026-05-16T00:05:01.000Z"
+        })],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(
+        log_texts(&projected),
+        ["Route proposed: gpt-5-mini@medium (not bound)"]
+    );
+    assert_eq!(queue_row(&projected, 7)["route"], serde_json::Value::Null);
+}
+
+#[test]
+fn a_candidate_not_prepared_says_which_of_the_three_reasons_it_was() {
+    // "No proposal" has three causes and an operator is owed which: their own
+    // Static route made the selector unnecessary, an earlier decision
+    // revalidates for free, or routing could not propose at all. Only the last
+    // is worth acting on, so collapsing them into silence would hide it.
+    let projected = reduce(
+        &[
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:01.000Z",
+                "run_id": "r1",
+                "iter": null,
+                "type": "wrapper.routing.prepared",
+                "issue": 7,
+                "state": "static"
+            }),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:02.000Z",
+                "run_id": "r1",
+                "iter": null,
+                "type": "wrapper.routing.prepared",
+                "issue": 7,
+                "state": "reusable"
+            }),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:03.000Z",
+                "run_id": "r1",
+                "iter": null,
+                "type": "wrapper.routing.prepared",
+                "issue": 7,
+                "state": "unavailable",
+                "detail": "quota_exhausted"
+            }),
+        ],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(
+        log_texts(&projected),
+        [
+            "Route preparation: static route applies, no selector call",
+            "Route preparation: an earlier decision revalidates",
+            "Route not prepared: quota_exhausted; its Pickup decides"
+        ]
+    );
+}
+
+#[test]
+fn a_prepared_route_leaves_an_unpicked_issue_queued() {
+    // AC4's other half: a proposal is not evidence the issue was taken. An
+    // issue this Run only prepared is still waiting, exactly as it was before
+    // preparation existed.
+    let projected = reduce(
+        &[
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:01.000Z",
+                "run_id": "r1",
+                "iter": 1,
+                "type": "wrapper.afk_ready.collected",
+                "issues": [7, 8]
+            }),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:02.000Z",
+                "run_id": "r1",
+                "iter": null,
+                "type": "wrapper.routing.prepared",
+                "issue": 8,
+                "state": "proposed",
+                "proposal_id": "proposal-1",
+                "model": "gpt-5-mini",
+                "effort": "medium"
+            }),
+        ],
+        IssueRef::number(8),
+    );
+
+    assert_eq!(queue_row(&projected, 8)["status"], "queued");
+}
+
+#[test]
+fn a_prepared_record_without_a_state_says_nothing() {
+    // A Runner that predates this state, or a torn line. Inventing a phrase
+    // would report a fact the record does not carry.
+    let projected = reduce(
+        &[serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z",
+            "run_id": "r1",
+            "iter": null,
+            "type": "wrapper.routing.prepared",
+            "issue": 7
+        })],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(log_texts(&projected), Vec::<String>::new());
+}
+
+#[test]
 fn a_new_route_clears_the_previous_delivery_state() {
     let projected = reduce(
         &[

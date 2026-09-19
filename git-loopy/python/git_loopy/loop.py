@@ -128,6 +128,7 @@ from typing import (
     Iterable,
     Mapping,
     Protocol,
+    Sequence,
 )
 
 from copilot import CopilotClient
@@ -169,13 +170,16 @@ from git_loopy.dynamic_route import (
     RoutingAdmissionLedger,
     RoutingPrerequisiteError,
     RoutingProposal,
+    RoutingRequest,
     RoutingSourceError,
     RoutingUnavailable,
+    RoutingUnavailableReason,
     SelectorCallResult,
     refresh_harness_evidence,
     resolve_prerequisites,
 )
 from git_loopy.emit import EventEmitter
+from git_loopy.live_read import SharedLiveRead
 from git_loopy.gate import FeedbackLoop, parse_feedback_loops
 from git_loopy.measured_routing import (
     MeasuredRouting,
@@ -189,6 +193,11 @@ from git_loopy.route_publication import (
     RoutePublisher,
 )
 from git_loopy.route_reuse import ReusableRouteHistory, read_reusable_routes
+from git_loopy.route_preparation import (
+    PreparationOutcome,
+    PreparedRoute,
+    RoutePreparation,
+)
 from git_loopy.selector_session import RoutingCostMeter, SessionRouteSelector
 from git_loopy.escalation import EscalationLedger
 from git_loopy.persist import (
@@ -252,6 +261,7 @@ from git_loopy.sources import (
     GitHubIssueSource,
     IssueSource,
     LABEL_PARALLEL_SAFE,
+    PICKUP_VALIDATED,
     PoolCandidate,
     PoolCollection,
     PrdsIssueSource,
@@ -932,6 +942,20 @@ async def _refresh_harness_capabilities(
 #: keeps one answer.
 _VERIFIABLE_EXECUTION_HOST = execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT
 
+#: The two refusals a **Routing preparation** proposal may draw at its own
+#: **Pickup** that say something about *the proposal* rather than about routing:
+#: it aged past its validity window while the Run worked something else, or the
+#: router no longer holds it as canonical. Both mean "assess again", never "do
+#: not work this issue" — preparing ahead is an optimisation over a Pickup that
+#: has always been able to prepare for itself, so nothing preparation does may
+#: turn a workable issue into a refused one (#566).
+_DISCARDABLE_PROPOSAL_REFUSALS: frozenset[RoutingUnavailableReason] = frozenset(
+    {
+        RoutingUnavailableReason.STALE_PROPOSAL,
+        RoutingUnavailableReason.INVALID_PROPOSAL,
+    }
+)
+
 
 def _remote_placement_refusal(config: RunConfig) -> str | None:
     """Say why this host's harness cannot answer for a remote placement, or ``None``.
@@ -1176,13 +1200,22 @@ def _make_dynamic_router(
     replaces *this* and gets a real router driving real decisions over
     scripted inputs — which is what AC13's "injected external ports" asks for
     and what a substituted ``DynamicRouter`` would not give.
+
+    Both ports are wrapped in a :class:`SharedLiveRead` (#566, AC5). Under
+    **Routing preparation** several assessments are in flight at once and each
+    re-reads live evidence and live capabilities; two that overlap are asking
+    the identical question of the identical source, and answering it twice
+    costs the operator a second round-trip for an answer that cannot have
+    changed between them. It is deliberately *not* a cache: a read that has
+    already finished is never handed to a later caller, because the whole
+    authority of a Dynamic route is that its evidence is current.
     """
     source = ArtificialAnalysisSource(
         prerequisites.api_key, associations=prerequisites.associations
     )
     return DynamicRouter(
-        evidence_fetch=source.fetch,
-        capabilities_fetch=_fetch_harness_evidence,
+        evidence_fetch=SharedLiveRead(source.fetch),
+        capabilities_fetch=SharedLiveRead(_fetch_harness_evidence),
         selector_assess=selector_assess,
         recorder=recorder,
         admission_ledger=RoutingAdmissionLedger(
@@ -1465,6 +1498,23 @@ class _Loop:
         )
         self._dynamic_routing = dynamic_routing
         self._reusable_routes: ReusableRouteHistory | None = None
+        # **Routing preparation** exists only where routing does, and is bounded
+        # by the operator's own selector concurrency (#566, AC1). The desk is
+        # given the router's `prepare` through `self._prepare_route` rather than
+        # the router itself: what preparation may do is classify, check the
+        # Static route, check reuse, and propose — and handing it a router would
+        # be handing it `bind`, which is the binding preparation must never make.
+        self._preparation = (
+            None
+            if self._dynamic_router is None
+            else RoutePreparation(
+                prepare=self._prepare_route,
+                concurrency=dynamic_routing.prerequisites.selector_concurrency,
+                on_prepared=self._emit_route_prepared,
+            )
+        )
+        #: The in-flight preparation pass, at most one per Iteration.
+        self._preparation_pass: asyncio.Task[None] | None = None
 
     @property
     def finalized_contributions(self) -> tuple[rolling_scheduler.Contribution, ...]:
@@ -1935,6 +1985,13 @@ class _Loop:
                 pickup.position,
                 len(pool),
             )
+            # **Routing preparation** for the rest of the Pool, started here and
+            # settled at (6) below — so it runs for exactly as long as the Agent
+            # session does and not one step before it (#566, AC1). The Pickup
+            # above is already bound, which is the whole of "without delaying the
+            # next useful Pickup": nothing between this line and the session
+            # waits on it.
+            self._start_preparation_pass(pool, beside=active.ref)
 
             # 3) Build prompt (last-5 commits + the bound issue's block +
             #    prompt body). Exactly one issue: the agent is told which issue
@@ -1958,6 +2015,7 @@ class _Loop:
                 pre_sha = self._git.head_sha()
             except git_module.GitError as exc:
                 self._diag.error("git head_sha failed: %s; aborting iteration", exc)
+                await self._settle_preparation_pass()
                 self._finish_iteration(iter_num, outcome="no_progress")
                 return ("continue", 0, 0)
 
@@ -2035,6 +2093,7 @@ class _Loop:
                     )
 
             # 6) Post-iteration accounting.
+            await self._settle_preparation_pass()
             try:
                 head = self._git.head_sha()
             except git_module.GitError as exc:
@@ -2444,9 +2503,20 @@ class _Loop:
         AC8's "current evidence/eligibility checks at preparation and Pickup"
         asks for: ``prepare`` assesses and takes no Lease, and ``bind`` re-reads
         both sources and only buys a second selector call when the verified
-        inputs actually changed. Running them adjacently is not a weakening —
-        an issue's content does not exist before its Pickup, so there is no
-        earlier instant at which a proposal could honestly be made.
+        inputs actually changed.
+
+        **A proposal prepared ahead binds here, or is discarded here** (#566).
+        Where **Routing preparation** already assessed this issue and its
+        proposal is still live, ``bind`` is handed *that* proposal — and does
+        exactly what it does for one prepared a line earlier: re-reads both
+        sources, compares the relevant input identity, and reassesses only what
+        moved. So the Pickup stays authoritative and preparation saves a
+        selector call and nothing else. A proposal the desk will not hand over,
+        or that the router then refuses as stale or unrecognised, falls through
+        to a fresh assessment rather than failing the Pickup: preparing ahead
+        is an optimisation on top of a Pickup that still works without it, and
+        starting work on a stale proposal is the one thing ADR-0057 rules out
+        flatly.
 
         **A later attempt is the same call with more evidence** (#562). What
         earlier attempts ran on and how they ended rides the request beside the
@@ -2466,32 +2536,8 @@ class _Loop:
         router = self._dynamic_router
         if router is None or static_route_applies(resolution):
             return resolution
-        request = build_routing_request(
-            rendered_block=item.rendered_block,
-            issue_ref=item.ref,
-            task_type=_assessed_task_type(resolution),
-            lifecycle_position=resolution.lifecycle_position.value,
-            prior_attempts=self._attempt_evidence.prior_attempts(item.ref),
-            feedback_loops=(
-                self._dynamic_routing.feedback_loops
-                if self._dynamic_routing is not None
-                else ()
-            ),
-            measured=(
-                self._dynamic_routing.measured
-                if self._dynamic_routing is not None
-                else None
-            ),
-        )
-        reusable = self._reusable_routes_for(item.ref)
-        if reusable:
-            decision = await router.rebind(reusable, request)
-        else:
-            proposal = await router.prepare(request)
-            if isinstance(proposal, RoutingUnavailable):
-                raise DynamicRouteUnavailable(proposal.reason.value)
-            assert isinstance(proposal, RoutingProposal)
-            decision = await router.bind(proposal, request)
+        request = self._routing_request(item, resolution)
+        decision = await self._bound_dynamic_decision(item, request, router)
         if isinstance(decision, RoutingUnavailable):
             raise DynamicRouteUnavailable(decision.reason.value)
         self._diag.info(
@@ -2511,6 +2557,258 @@ class _Loop:
                 decision.route.model,
                 decision.route.reasoning_effort,
                 decision.route.context_tier,
+            ),
+        )
+
+    async def _bound_dynamic_decision(
+        self,
+        item: AfkReadyItem,
+        request: RoutingRequest,
+        router: DynamicRouter,
+    ) -> DynamicRouteDecision | RoutingUnavailable:
+        """Bind this Pickup's route from whichever assessment is available.
+
+        The precedence is the order the three cost the Run. A proposal this
+        Run already prepared is spent credit — discarding it would buy a second
+        assessment of inputs that have not moved. A **Reusable route** from an
+        earlier Run costs nothing either. A fresh prepare-and-bind is what is
+        left, and is what every Pickup did before preparation existed.
+        """
+        prepared = None if self._preparation is None else self._preparation.take(
+            item.ref
+        )
+        if prepared is not None:
+            decision = await router.bind(prepared, request)
+            if not isinstance(decision, RoutingUnavailable):
+                return decision
+            if decision.reason not in _DISCARDABLE_PROPOSAL_REFUSALS:
+                return decision
+            self._diag.info(
+                "issue #%s: prepared route was %s at its Pickup; assessing again",
+                item.ref,
+                decision.reason.value,
+            )
+        reusable = self._reusable_routes_for(item.ref)
+        if reusable:
+            return await router.rebind(reusable, request)
+        proposal = await router.prepare(request)
+        if isinstance(proposal, RoutingUnavailable):
+            return proposal
+        assert isinstance(proposal, RoutingProposal)
+        return await router.bind(proposal, request)
+
+    def _routing_request(
+        self, item: AfkReadyItem, resolution: RoutingResolution
+    ) -> RoutingRequest:
+        """This issue's assessment input, built the one way (#561, #566).
+
+        Shared by the **Pickup** and by **Routing preparation** rather than
+        written at each, because the two have to produce the *same* request for
+        an unchanged issue: the relevant input identity is what decides whether
+        a prepared proposal binds without a second selector call, and two
+        builders is two chances for it to differ over nothing.
+        """
+        return build_routing_request(
+            rendered_block=item.rendered_block,
+            issue_ref=item.ref,
+            task_type=_assessed_task_type(resolution),
+            lifecycle_position=resolution.lifecycle_position.value,
+            prior_attempts=self._attempt_evidence.prior_attempts(item.ref),
+            feedback_loops=(
+                self._dynamic_routing.feedback_loops
+                if self._dynamic_routing is not None
+                else ()
+            ),
+            measured=(
+                self._dynamic_routing.measured
+                if self._dynamic_routing is not None
+                else None
+            ),
+        )
+
+    def _start_preparation_pass(
+        self, pool: Sequence[AfkReadyItem], *, beside: int | str
+    ) -> None:
+        """Begin preparing the rest of the Pool beside the bound **Pickup**.
+
+        Fire-and-remember rather than awaited, which is the entire point: the
+        caller has already bound its issue and is on its way to a session, and
+        AC1 asks for the other eligible candidates to be prepared *within* the
+        configured concurrency and allowance rather than before the work.
+        Settled by :meth:`_settle_preparation_pass` at the end of the same
+        Iteration, so the pass never outlives the Pool snapshot it was given.
+        """
+        if self._preparation is None:
+            return
+        self._preparation_pass = asyncio.create_task(
+            self.prepare_ahead(
+                [item for item in pool if item.ref != beside],
+            ),
+            name=f"git-loopy-route-preparation-{beside}",
+        )
+
+    async def _settle_preparation_pass(self) -> None:
+        """End the Iteration's preparation pass before its accounting.
+
+        Awaited rather than cancelled, so an assessment the Run has *already
+        paid for* is recorded rather than thrown away mid-flight — a cancelled
+        selector call bills the account and leaves nothing behind. The desk
+        itself bounds how long that can be: one attempt per candidate per Run,
+        within the configured concurrency, and latched shut the moment the
+        allowance or the deadline is exhausted.
+        """
+        pass_task, self._preparation_pass = self._preparation_pass, None
+        if pass_task is None:
+            return
+        try:
+            await pass_task
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - never worth an Iteration
+            self._diag.warning("route preparation pass failed: %s", exc)
+
+    async def prepare_ahead(self, candidates: Sequence[AfkReadyItem]) -> None:
+        """Prepare proposals for eligible candidates behind the next **Pickup**.
+
+        The producer half of #566, called by both dispatch modes from a point
+        where the next Pickup has already been bound — which is what "without
+        delaying the next useful Pickup" means operationally: the work this
+        starts runs *beside* an Agent session, never in front of one.
+
+        ``candidates`` arrives in the **Pool**'s own order and is filtered, not
+        reordered — and it arrives already without whatever the caller is
+        working, because *that* is the one exclusion only the caller can make:
+        a serial **Iteration** has a single bound Pickup and a rolling driver
+        has every reserved **Lane**. Two more are dropped here, each because
+        preparing it would spend a classifier or selector call on work this Run
+        cannot take: a candidate the **Attempt lifecycle** has already defeated,
+        and one whose **Readiness** is not established. That filter asks the
+        same questions serial ``admit`` asks and asks them *again* rather than
+        remembering an answer — a blocker can close between a Pickup and this
+        call.
+
+        Nothing here may reach the Run: preparing ahead is an optimisation, and
+        an exception from it would fail an Iteration that needs nothing from it.
+        """
+        desk = self._preparation
+        if desk is None or desk.halted:
+            return
+        eligible: list[AfkReadyItem] = []
+        for item in candidates:
+            if self._attempts.defeated_by(item.ref) is not None:
+                continue
+            try:
+                verdict = self._source.readiness(item)
+            except Exception as exc:  # noqa: BLE001 - a read is never worth a Run
+                self._diag.warning(
+                    "route preparation could not read readiness for issue #%s: "
+                    "%s; leaving it to its own Pickup",
+                    item.ref,
+                    exc,
+                )
+                continue
+            if not verdict.admissible:
+                continue
+            eligible.append(item)
+        if not eligible:
+            return
+        try:
+            await desk.prepare_ahead(eligible)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - see the docstring
+            self._diag.warning("route preparation pass failed: %s", exc)
+
+    async def _prepare_route(self, item: AfkReadyItem) -> PreparedRoute:
+        """Prepare one eligible candidate's proposal, or say why there is none.
+
+        The order is AC3's, exactly: a missing **Task type** is classified
+        *first*, because whether an operator's **Static route** applies is a
+        question about the settled type and cannot be asked before it; and the
+        static check comes *before* any selector call, because a route the
+        operator wrote down needs no assessment and must not buy one.
+
+        Three of the four outcomes cost no **Route selector** call, and they
+        are kept apart rather than collapsed into "not proposed" because an
+        operator reading them is owed the difference: their own static route,
+        a **Reusable route** this issue's Pickup will revalidate for free, and
+        routing that could not propose at all.
+        """
+        router = self._dynamic_router
+        if router is None:  # pragma: no cover - the desk exists only with one
+            return PreparedRoute(ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE)
+        labelled = await self._classifier.labelled(item)
+        await self._note_classification_usage()
+        try:
+            resolution = self._resolve_route(labelled, warn=lambda _message: None)
+        except TaskTypeError as exc:
+            # The candidate's own labelling is broken. Its **Pickup** is where
+            # that becomes a skip with a record; preparation only declines to
+            # spend on it.
+            return PreparedRoute(
+                ref=item.ref,
+                outcome=PreparationOutcome.UNAVAILABLE,
+                detail=f"routing refused: {exc}",
+            )
+        if static_route_applies(resolution):
+            return PreparedRoute(ref=item.ref, outcome=PreparationOutcome.STATIC)
+        if self._reusable_routes_for(item.ref):
+            return PreparedRoute(ref=item.ref, outcome=PreparationOutcome.REUSABLE)
+        proposal = await router.prepare(self._routing_request(labelled, resolution))
+        if isinstance(proposal, RoutingUnavailable):
+            return PreparedRoute(
+                ref=item.ref,
+                outcome=PreparationOutcome.UNAVAILABLE,
+                reason=proposal.reason,
+                detail=proposal.reason.value,
+            )
+        return PreparedRoute(
+            ref=item.ref,
+            outcome=PreparationOutcome.PROPOSED,
+            proposal=proposal,
+        )
+
+    def _emit_route_prepared(self, prepared: PreparedRoute) -> None:
+        """Record what preparation reached, as a proposal and never a binding.
+
+        Its own Event type rather than a field on ``wrapper.routing.resolved``,
+        because the two answer different questions with different cardinality
+        and different authority: the resolution is what a session ran on, this
+        is what was assessed in advance for an issue that may never be worked.
+        A reader that could not tell them apart would show a **Pool** of
+        prepared issues as a Pool of routed ones.
+        """
+        proposal = prepared.proposal
+        self._emit(
+            events_module.WRAPPER_ROUTING_PREPARED,
+            iter_num=None,
+            issue=prepared.ref,
+            state=prepared.outcome.value,
+            proposal_id=None if proposal is None else proposal.proposal_id,
+            model=None if proposal is None else proposal.route.model,
+            effort=None if proposal is None else proposal.route.reasoning_effort,
+            context_tier=None if proposal is None else proposal.route.context_tier,
+            summary=None if proposal is None else proposal.summary,
+            reason=None if prepared.reason is None else prepared.reason.value,
+            detail=prepared.detail,
+            prepared_at=(
+                None
+                if proposal is None
+                else events_module.format_timestamp(proposal.prepared_at)
+            ),
+            valid_until=(
+                None
+                if proposal is None
+                else events_module.format_timestamp(proposal.valid_until)
+            ),
+            relevant_input_identity=(
+                None if proposal is None else proposal.relevant_input_identity
+            ),
+            routing_credits=(
+                None if proposal is None else str(proposal.usage.routing_credits)
+            ),
+            selector_attempts=(
+                None if proposal is None else proposal.usage.selector_attempts
             ),
         )
 
@@ -3506,6 +3804,9 @@ class _ParallelLoop:
         # `lane_id`) so it survives the reusable Lane slot moving on to
         # another issue once this contribution is admitted (#219 §7).
         self._lane_work: dict[str, _LaneWork] = {}
+        # At most one **Routing preparation** pass in flight across the whole
+        # driver, so the event-driven turn cannot become a routing service.
+        self._preparation_pass: asyncio.Task[object] | None = None
         # The contribution that owns each live Lane workspace.  Run-exit
         # reclamation needs this alongside the workspace to close interrupted
         # accounting after salvaging the branch.
@@ -3686,6 +3987,63 @@ class _ParallelLoop:
             candidate.ref not in self._rolling_refused
             and self._lane_candidate_cacheable(candidate)
             and is_lane_candidate(candidate)
+        )
+
+    def _prepare_rolling_pool_ahead(self) -> None:
+        """Prepare routes for cached candidates no **Lane** has taken (#566).
+
+        The Rolling producer, and one bounded pass at a time: the driver turn
+        is event-driven and can come round many times a second, so a pass per
+        turn would be a background routing service rather than preparation
+        beside work. AC2 rules that out by name.
+
+        Reserved and already-worked candidates are excluded here rather than
+        inside the desk, because the driver is the only thing that knows them:
+        ``take`` removes a reserved candidate from the cache outright, and
+        ``eligible`` is the scheduler's own composed guard, so what is left is
+        exactly the set a Lane could still be given. What survives that is
+        re-read authoritatively through ``pickup`` — the *same* read a
+        reservation makes, refusing a candidate that is no longer open, no
+        longer labelled, or no longer **Ready** — because AC2 also forbids
+        acting on shallow membership, and the cached record carries neither the
+        issue's prose nor a current eligibility verdict. The desk is asked
+        which refs it has not settled *before* any of that, so the second turn
+        onwards costs no tracker read at all.
+
+        Fire-and-remember with no join: the pass is bounded by the desk, and
+        the Run's own shutdown cancels whatever is still outstanding.
+        """
+        desk = self._serial._preparation
+        pool = self._pool
+        if desk is None or pool is None or desk.halted:
+            return
+        if self._preparation_pass is not None and not self._preparation_pass.done():
+            return
+        busy = {work.item.ref for work in self._lane_work.values()}
+        wanted = desk.unsettled(
+            ref
+            for ref in pool.candidate_refs
+            if ref not in busy and pool.eligible(pool.candidate(ref))
+        )
+        if not wanted:
+            return
+        items: list[AfkReadyItem] = []
+        for ref in wanted:
+            try:
+                validated = self._source.pickup(ref)
+            except Exception as exc:  # noqa: BLE001 - a read never fails a Run
+                self._diag.warning(
+                    "route preparation could not re-read issue #%s: %s", ref, exc
+                )
+                continue
+            if validated.outcome == PICKUP_VALIDATED:
+                assert validated.item is not None
+                items.append(validated.item)
+        if not items:
+            return
+        self._preparation_pass = asyncio.create_task(
+            self._serial.prepare_ahead(items),
+            name="git-loopy-route-preparation-rolling",
         )
 
     def _alloc_iter_num(self) -> int:
@@ -3947,6 +4305,8 @@ class _ParallelLoop:
                         self._guarded_lane_lifecycle(reservation)
                     )
                     self._pending.add(task)
+
+                self._prepare_rolling_pool_ahead()
 
                 serial_pool_seen = self._service_serial_required_work()
 
