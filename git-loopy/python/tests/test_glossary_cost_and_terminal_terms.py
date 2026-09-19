@@ -1,16 +1,9 @@
-"""The glossary entries this arc's shipped code earned (#336).
+"""Glossary terms agree with their accepted decisions (#336, ADR-0058/0059).
 
-``CONTEXT.md`` records *shipped reality*: the **Terminal owner**, the **Rate
-card** and **AI Credits** that ADR-0026 settled, and the correction of a Cost
-derivation rule that has been deleted. ADR-0018 deferred that correction until
-the change shipped; this is when it ships.
-
-Documentation-only and deliberately narrow. Every assertion is a claim some
-future slice could contradict without noticing — the deleted token-multiplication
-rule silently returning, the involuntary **Detach** losing its half of the entry,
-or a term being written into the glossary ahead of the code that implements it.
-Claims are asserted against *reflowed* prose, so re-wrapping a paragraph cannot
-fail a test but deleting a claim must.
+The billed-Cost entries remain pinned to shipped code. The client/publication
+entries follow the human-confirmed next-release decisions, whose ADRs explicitly
+leave runtime acceptance outstanding; these prose checks are not that proof.
+Reflowed prose keeps line wrapping from changing the asserted vocabulary.
 """
 
 from __future__ import annotations
@@ -21,6 +14,8 @@ import pytest
 
 ADR_0024 = "docs/adr/0024-terminal-ownership-and-dashboard-fault-recovery.md"
 ADR_0026 = "docs/adr/0026-billed-cost-and-the-live-rate-card.md"
+ADR_0058 = "docs/adr/0058-init-precedes-the-run-and-clients-do-not-own-its-lifetime.md"
+ADR_0059 = "docs/adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md"
 
 
 def _repo_root() -> Path | None:
@@ -87,13 +82,52 @@ def test_the_glossary_names_the_rate_card() -> None:
     assert "_Avoid_:" in entry
 
 
-def test_detach_covers_its_voluntary_and_its_involuntary_form() -> None:
-    """The operator is not always the one who chose it (ADR-0024)."""
+def test_detach_disconnects_a_client_instead_of_switching_renderers() -> None:
+    """ADR-0058 separates voluntary disconnection from renderer fallback."""
     entry = _entry("Detach")
 
-    assert "voluntar" in entry
-    assert "involuntar" in entry
-    assert "same continuation" in entry, "the two forms differ only in their label"
+    assert "Disconnecting one client" in entry
+    assert "returning its terminal to the shell" in entry
+    assert "without stopping the work or affecting other clients" in entry
+    assert "line-printer fallback is still attachment, not Detach" in entry
+
+
+def test_a_dashboard_fault_preserves_attachment_and_the_run_outcome() -> None:
+    entry = _entry("Dashboard fault")
+
+    assert "outcome unchanged" in entry
+    assert "reports the fault, restores the terminal" in entry
+    assert "remains attached through the line printer" in entry
+    assert "not **Detach**" in entry
+
+
+def test_attach_observes_existing_work_without_owning_it() -> None:
+    entry = _entry("Attach")
+
+    assert "existing **Run**" in entry
+    assert "without starting or taking ownership of its work" in entry
+    assert "repeated or concurrent" in entry
+    assert "only an explicit **Stop** request" in entry
+
+
+def test_publication_is_not_promotion_or_tagging_alone() -> None:
+    entry = _entry("Publication")
+
+    assert "immutable public tag" in entry
+    assert "matching release notes and the distribution it promises" in entry
+    assert "**Promotion** changes the Release line to stable" in entry
+    assert "a tag does not prove a complete publication" in entry
+
+
+def test_the_new_decisions_do_not_claim_runtime_acceptance() -> None:
+    assert (
+        "the next release must prove the behavior below, rather than treat this "
+        "decision as evidence that it is already implemented"
+    ) in _prose(ADR_0058)
+    assert (
+        "publication automation must be brought into conformance before the next "
+        "release claims this guarantee"
+    ) in _prose(ADR_0059)
 
 
 def test_ai_credits_is_the_named_cost_unit() -> None:
@@ -198,7 +232,10 @@ def test_every_new_term_is_implemented_by_shipped_code(
 #: and ADR-0026 records that renumbering. A published number is never reused.
 TERM_DECISIONS: tuple[tuple[str, str], ...] = (
     ("Terminal owner", ADR_0024),
-    ("Detach", ADR_0024),
+    ("Detach", ADR_0058),
+    ("Attach", ADR_0058),
+    ("Dashboard fault", ADR_0058),
+    ("Publication", ADR_0059),
     ("AI Credits", ADR_0026),
     ("Rate card", ADR_0026),
 )

@@ -421,19 +421,20 @@ state it latches).
 **Detach**:
 Disconnecting one client from a **Run** and returning its terminal to the shell,
 without stopping the work or affecting other clients. Observing the Run through a
-line-printer fallback is still attachment, not Detach.
+line-printer fallback is still attachment, not Detach (ADR-0058).
 _Avoid_: background, minimize, Stop, line-printer fallback.
 
 **Dashboard fault**:
 A failure of the **Dashboard** view that leaves the **Run** and its outcome unchanged.
 The affected client reports the fault, restores the terminal, and remains attached
-through the line printer; this is not **Detach**.
+through the line printer; this is not **Detach** (ADR-0058).
 _Avoid_: TUI crash, renderer error, dashboard failure (as the name).
 
 **Terminal owner**:
-The sole owner of a terminal's mode state while an interface uses it. It restores
-the entry state when releasing that terminal, including a handoff or client failure;
-the **Run**'s lifetime does not depend on terminal ownership.
+The sole owner of a terminal's mode state for the client process (ADR-0024, amended
+by ADR-0058). It restores the captured entry state when releasing that terminal,
+including a handoff or client failure; the **Run**'s lifetime does not depend on
+terminal ownership.
 _Avoid_: terminal manager, screen guard, teardown hook (restoration is not the
 Dashboard's teardown).
 
@@ -442,7 +443,7 @@ Dashboard's teardown).
 **Attach**:
 Observing an existing **Run** through a client without starting or taking ownership
 of its work. Attach may be repeated or concurrent: navigation belongs to each client,
-while only an explicit **Stop** request crosses into the Run's lifecycle.
+while only an explicit **Stop** request crosses into the Run's lifecycle (ADR-0058).
 _Avoid_: reconnect (as a separate operation), resume (the Run did not stop).
 
 **Dashboard**:
@@ -629,7 +630,8 @@ _Avoid_: release cut, graduation, publish.
 **Publication**:
 Making a verified **Release version** available under an immutable public tag
 with matching release notes and the distribution it promises. **Promotion**
-changes the Release line to stable; Publication makes that distribution available.
+changes the Release line to stable; Publication makes that distribution available
+(ADR-0059).
 _Avoid_: Promotion, tagging alone (a tag does not prove a complete publication).
 
 **Autonomous loop**:

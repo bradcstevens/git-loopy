@@ -52,7 +52,7 @@ Once public, a tag is never moved, including when no GitHub Release object was
 successfully created. If content must change, it needs a new Release version.
 Before publication, a candidate may instead be repaired and reverified.
 
-A retry reconciles the same verified publication input. An existing Release is
+A **Publication** retry reconciles the same verified input. An existing Release is
 accepted only when its identity, marking, distribution promise, and committed
 notes agree. A mismatch is an explicit refusal, not a reason to overwrite the
 Release, recreate its tag, or declare success. Interrupted or ambiguous network

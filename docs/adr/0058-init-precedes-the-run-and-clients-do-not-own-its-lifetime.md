@@ -34,7 +34,7 @@ with the blocker and its remedy. It must distinguish "configuration saved" from
 
 ## Clients observe; only Stop controls the Run
 
-Attach observes an existing Run and can be repeated or concurrent. It does not
+**Attach** observes an existing Run and can be repeated or concurrent. It does not
 start, resume, or take ownership of that Run. Client navigation is local; the
 Run remains the sole authority for its lifecycle and Wind-down records.
 
@@ -47,7 +47,7 @@ explicit Run identity; neither guesses the newest Run.
 A voluntary **Detach** disconnects that client, restores its terminal to the
 shell, and changes neither the worker nor other clients. A missing or unusable
 Dashboard helper is different: the client announces the limitation and remains
-attached through the line printer. If an active Dashboard fails, the client
+attached through the line printer. On an active **Dashboard fault**, the client
 restores the terminal, reports the fault, and follows the same line-printer
 path without restarting the Dashboard. This renderer change is not Detach and
 does not change the Run's Events, outcome, or exit code.
