@@ -27,7 +27,7 @@ publish package-channel metadata, signed platform artifacts, or a TUI helper.
 
 ## Distribution modes
 
-Releases operate under an explicit **distribution mode** (ADR-0059),
+Releases operate under an explicit **distribution mode**,
 with the repository policy in [`release-trust.json`](../../git-loopy/conformance/release-trust.json)
 or the release declaration as the single authority:
 

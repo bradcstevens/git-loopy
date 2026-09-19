@@ -247,6 +247,30 @@ def _extract_tag_distribution_mode(
     repository_root: Path, tag_ref: str
 ) -> str | None:
     try:
+        type_res = subprocess.run(
+            ["git", "cat-file", "-t", tag_ref],
+            cwd=repository_root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except Exception as exc:
+        raise DistributionModeError(
+            f"Failed to resolve tag ref {tag_ref!r}: {exc}"
+        ) from exc
+
+    if type_res.returncode != 0:
+        raise DistributionModeError(
+            f"Failed to read tag object for {tag_ref!r}: {type_res.stderr.strip()}"
+        )
+
+    # Only annotated tags carry an annotation message. A lightweight tag points
+    # directly to a commit object and carries no tag annotation.
+    if type_res.stdout.strip() != "tag":
+        return None
+
+    try:
         result = subprocess.run(
             ["git", "cat-file", "-p", tag_ref],
             cwd=repository_root,
@@ -264,14 +288,38 @@ def _extract_tag_distribution_mode(
         raise DistributionModeError(
             f"Failed to read tag annotation for {tag_ref!r}: {result.stderr.strip()}"
         )
-    text = result.stdout
 
-    for line in text.splitlines():
+    # In git tag objects, the tag message follows the first empty line after headers.
+    _, _, message = result.stdout.partition("\n\n")
+
+    for line in message.splitlines():
         line = line.strip()
         lowered = line.lower()
         if lowered.startswith("distribution-mode:") or lowered.startswith("distribution_mode:"):
             return line.split(":", 1)[1].strip()
     return None
+
+
+def verify_distribution_mode_prerequisites(
+    repository_root: Path, mode: str
+) -> None:
+    """Verify that prerequisites for the chosen distribution mode are satisfied.
+
+    Enforces AC 5: An artifact-bearing promise is never silently downgraded
+    because its credentials or prerequisites are missing.
+    """
+    if mode == DISTRIBUTION_MODE_ARTIFACT_BEARING:
+        policy = load_trust_policy(repository_root)
+        missing = [
+            cred
+            for cred in policy.credentials
+            if not os.environ.get(cred)
+        ]
+        if missing:
+            raise DistributionModeError(
+                f"Cannot publish in artifact-bearing mode: missing required signing credentials: {missing}. "
+                "An artifact-bearing release refuses to publish without credentials and will not downgrade to source-only."
+            )
 
 
 def resolve_distribution_mode(
@@ -285,7 +333,6 @@ def resolve_distribution_mode(
     The repository/release declaration is the single authority.
     Fails closed on unknown, missing, or inconsistent mode input.
     """
-
     policy_path = repository_root / TRUST_POLICY_PATH
     if policy_path.is_file():
         policy = load_trust_policy(repository_root)
@@ -302,9 +349,7 @@ def resolve_distribution_mode(
         )
 
     if explicit_mode is None:
-        explicit_mode = os.environ.get("RELEASE_DISTRIBUTION_MODE") or os.environ.get(
-            "GIT_LOOPY_DISTRIBUTION_MODE"
-        )
+        explicit_mode = os.environ.get("RELEASE_DISTRIBUTION_MODE")
 
     tag_mode: str | None = None
     if tag_ref is not None:

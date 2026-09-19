@@ -205,7 +205,7 @@ class TestDistributionModeFailClosed:
 
         with pytest.raises(DistributionModeError) as exc_info:
             resolve_distribution_mode(repo, tag_ref="refs/tags/v9.9.9")
-        assert "Failed to read tag annotation" in str(exc_info.value)
+        assert "Failed to read tag" in str(exc_info.value)
 
 
 class TestWorkflowJobGatingInSourceOnlyMode:
@@ -301,41 +301,75 @@ class TestWorkflowJobGatingInSourceOnlyMode:
 
     def test_workflow_scheduling_graph_simulated_for_both_modes(self) -> None:
         """AC 8: Drive workflow boundary and assert actions scheduled in each mode."""
-        # Simulate tag push event in source-only mode
-        tag_ref = "refs/tags/v1.0.0"
-        event_name = "push"
-        distribution_mode = "source-only"
+        workflow = _load_yaml(TUI_WORKFLOW_PATH)
+        jobs = workflow["jobs"]
 
-        # Evaluate jobs
-        # identity always runs
-        identity_ran = True
-        # plan: if: github.event_name == 'pull_request' || needs.identity.outputs.distribution_mode == 'artifact-bearing'
-        plan_ran = (event_name == "pull_request") or (distribution_mode == "artifact-bearing")
-        # family-conformance: if: github.event_name == 'pull_request' || needs.identity.outputs.distribution_mode == 'artifact-bearing'
-        family_ran = (event_name == "pull_request") or (distribution_mode == "artifact-bearing")
-        # build: if: github.event_name == 'pull_request' || needs.identity.outputs.distribution_mode == 'artifact-bearing'
-        build_ran = (event_name == "pull_request") or (distribution_mode == "artifact-bearing")
-        # publish: if: startsWith(github.ref, 'refs/tags/v') && needs.identity.outputs.distribution_mode == 'artifact-bearing'
-        publish_ran = tag_ref.startswith("refs/tags/v") and (distribution_mode == "artifact-bearing")
-        # channels need publish
-        channels_ran = publish_ran
+        def eval_condition(raw_expr: str, ctx: dict[str, Any]) -> bool:
+            expr = raw_expr.strip()
+            expr = expr.replace("github.event_name == 'pull_request'", str(ctx.get("event_name") == "pull_request"))
+            expr = expr.replace("needs.identity.outputs.distribution_mode == 'artifact-bearing'", str(ctx.get("distribution_mode") == "artifact-bearing"))
+            expr = expr.replace("startsWith(github.ref, 'refs/tags/v')", str(ctx.get("ref", "").startswith("refs/tags/v")))
+            expr = expr.replace("&&", " and ").replace("||", " or ")
+            return bool(eval(expr))
 
-        assert identity_ran is True
-        assert plan_ran is False, "plan must not run in source-only tag release"
-        assert family_ran is False, "family-conformance must not run in source-only tag release"
-        assert build_ran is False, "build must not run in source-only tag release"
-        assert publish_ran is False, "publish must not run in source-only tag release"
-        assert channels_ran is False, "channels must not run in source-only tag release"
+        # Tag push in source-only mode
+        source_only_ctx = {"event_name": "push", "ref": "refs/tags/v1.0.0", "distribution_mode": "source-only"}
+        assert eval_condition(jobs["plan"]["if"], source_only_ctx) is False
+        assert eval_condition(jobs["family-conformance"]["if"], source_only_ctx) is False
+        assert eval_condition(jobs["build"]["if"], source_only_ctx) is False
+        assert eval_condition(jobs["publish"]["if"], source_only_ctx) is False
 
-        # Simulate tag push event in artifact-bearing mode
-        distribution_mode = "artifact-bearing"
-        plan_ran = (event_name == "pull_request") or (distribution_mode == "artifact-bearing")
-        build_ran = (event_name == "pull_request") or (distribution_mode == "artifact-bearing")
-        publish_ran = tag_ref.startswith("refs/tags/v") and (distribution_mode == "artifact-bearing")
+        # Tag push in artifact-bearing mode
+        artifact_ctx = {"event_name": "push", "ref": "refs/tags/v1.0.0", "distribution_mode": "artifact-bearing"}
+        assert eval_condition(jobs["plan"]["if"], artifact_ctx) is True
+        assert eval_condition(jobs["family-conformance"]["if"], artifact_ctx) is True
+        assert eval_condition(jobs["build"]["if"], artifact_ctx) is True
+        assert eval_condition(jobs["publish"]["if"], artifact_ctx) is True
 
-        assert plan_ran is True
-        assert build_ran is True
-        assert publish_ran is True
+
+class TestArtifactBearingPrerequisites:
+    """AC 5: Artifact-bearing mode refuses publication without credentials without downgrade."""
+
+    def test_artifact_bearing_without_credentials_refuses_without_downgrade(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
+        for cred in policy.credentials:
+            monkeypatch.delenv(cred, raising=False)
+
+        with pytest.raises(DistributionModeError) as exc_info:
+            release_trust.verify_distribution_mode_prerequisites(
+                REPOSITORY_ROOT,
+                mode=DISTRIBUTION_MODE_ARTIFACT_BEARING,
+            )
+        assert "Cannot publish in artifact-bearing mode" in str(exc_info.value)
+        assert "will not downgrade to source-only" in str(exc_info.value)
+
+    def test_artifact_bearing_with_all_credentials_passes_prerequisites(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
+        for cred in policy.credentials:
+            monkeypatch.setenv(cred, "present-secret")
+
+        # Must not raise
+        release_trust.verify_distribution_mode_prerequisites(
+            REPOSITORY_ROOT,
+            mode=DISTRIBUTION_MODE_ARTIFACT_BEARING,
+        )
+
+    def test_source_only_mode_never_checks_or_requires_signing_credentials(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
+        for cred in policy.credentials:
+            monkeypatch.delenv(cred, raising=False)
+
+        # In source-only mode, missing credentials must not raise
+        release_trust.verify_distribution_mode_prerequisites(
+            REPOSITORY_ROOT,
+            mode=DISTRIBUTION_MODE_SOURCE_ONLY,
+        )
 
 
 class TestCliDistributionModeIntegration:
