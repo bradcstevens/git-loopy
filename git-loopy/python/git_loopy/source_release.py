@@ -14,6 +14,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
 
+from git_loopy.release_trust import (
+    DISTRIBUTION_MODE_SOURCE_ONLY,
+    DistributionModeError,
+    resolve_distribution_mode,
+)
 from git_loopy.release_version import (
     ReleaseVersionError,
     is_prerelease,
@@ -34,6 +39,7 @@ class SourceRelease:
     commit: str
     prerelease: bool
     notes_path: Path
+    distribution_mode: str = DISTRIBUTION_MODE_SOURCE_ONLY
 
 
 def _run_git(
@@ -67,7 +73,12 @@ def _git_text(repository_root: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
-def inspect_release_tag(repository_root: Path, tag_ref: str) -> SourceRelease:
+def inspect_release_tag(
+    repository_root: Path,
+    tag_ref: str,
+    *,
+    distribution_mode: str | None = None,
+) -> SourceRelease:
     """Validate one annotated tag at HEAD and return its publication plan."""
     repository_root = repository_root.resolve()
     if not tag_ref.startswith("refs/tags/v") or "/" in tag_ref.removeprefix(
@@ -163,6 +174,15 @@ def inspect_release_tag(repository_root: Path, tag_ref: str) -> SourceRelease:
             f"authored release notes must be committed before tagging: {notes_path}"
         )
 
+    try:
+        resolved_mode = resolve_distribution_mode(
+            repository_root,
+            explicit_mode=distribution_mode,
+            tag_ref=tag_ref,
+        )
+    except DistributionModeError as exc:
+        raise SourceReleaseError(str(exc)) from exc
+
     prerelease = is_prerelease(version)
     return SourceRelease(
         version=version,
@@ -170,6 +190,7 @@ def inspect_release_tag(repository_root: Path, tag_ref: str) -> SourceRelease:
         commit=commit,
         prerelease=prerelease,
         notes_path=notes_path,
+        distribution_mode=resolved_mode,
     )
 
 
@@ -301,9 +322,15 @@ def verify_tagged_source_release(
     repository_root: Path,
     tag_ref: str,
     archive_output: Path,
+    *,
+    distribution_mode: str | None = None,
 ) -> SourceRelease:
     """Generate and verify the exact tagged GitHub source-archive input."""
-    release = inspect_release_tag(repository_root, tag_ref)
+    release = inspect_release_tag(
+        repository_root,
+        tag_ref,
+        distribution_mode=distribution_mode,
+    )
     archive_output = archive_output.resolve()
     archive_output.parent.mkdir(parents=True, exist_ok=True)
     if archive_output.exists():
@@ -353,6 +380,10 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="optional GitHub Actions output file",
     )
+    parser.add_argument(
+        "--distribution-mode",
+        help="explicit publication distribution mode (e.g. 'source-only')",
+    )
     return parser
 
 
@@ -375,12 +406,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         if args.tag_only:
-            release = inspect_release_tag(args.repository_root, args.tag_ref)
+            release = inspect_release_tag(
+                args.repository_root,
+                args.tag_ref,
+                distribution_mode=args.distribution_mode,
+            )
         else:
             release = verify_tagged_source_release(
                 args.repository_root,
                 args.tag_ref,
                 args.archive_output,
+                distribution_mode=args.distribution_mode,
             )
     except SourceReleaseError as exc:
         print(f"source Release verification failed: {exc}", file=sys.stderr)
@@ -394,6 +430,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"tag={release.tag}\n"
             f"prerelease={str(release.prerelease).lower()}\n"
             f"notes_path={release.notes_path.as_posix()}\n"
+            f"distribution_mode={release.distribution_mode}\n"
         )
         try:
             with args.github_output.open("a", encoding="utf-8") as output:

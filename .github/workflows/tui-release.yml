@@ -35,6 +35,7 @@ jobs:
       version: ${{ steps.identity.outputs.version }}
       tag: ${{ steps.identity.outputs.tag }}
       prerelease: ${{ steps.identity.outputs.prerelease }}
+      distribution_mode: ${{ steps.identity.outputs.distribution_mode }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,6 +60,7 @@ jobs:
   plan:
     name: Prove the release plan
     needs: identity
+    if: github.event_name == 'pull_request' || needs.identity.outputs.distribution_mode == 'artifact-bearing'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -96,6 +98,7 @@ jobs:
   family-conformance:
     name: Prove Runner-family Conformance
     needs: identity
+    if: github.event_name == 'pull_request' || needs.identity.outputs.distribution_mode == 'artifact-bearing'
     uses: ./.github/workflows/runner-family-gate.yml
 
   build:
@@ -103,6 +106,7 @@ jobs:
     needs:
       - identity
       - plan
+    if: github.event_name == 'pull_request' || needs.identity.outputs.distribution_mode == 'artifact-bearing'
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     # A tagged Release enters the protected environment that holds the signing
@@ -419,7 +423,7 @@ jobs:
 
   publish:
     name: Publish verified helper artifacts
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && needs.identity.outputs.distribution_mode == 'artifact-bearing'
     needs:
       - identity
       - plan

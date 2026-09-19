@@ -1280,6 +1280,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     identity.add_argument("--tag-ref", help="the publication ref, when tagging")
     identity.add_argument(
+        "--distribution-mode",
+        help="explicit publication distribution mode (e.g. 'source-only')",
+    )
+    identity.add_argument(
         "--github-output",
         type=Path,
         help="append the resolved version and tag to this GitHub output file",
@@ -1330,10 +1334,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         if args.command == "identity":
+            from git_loopy.release_trust import (
+                DistributionModeError,
+                resolve_distribution_mode,
+            )
+
             version = helper_release_version(
                 args.repository_root,
                 tag_ref=args.tag_ref,
             )
+            try:
+                dist_mode = resolve_distribution_mode(
+                    args.repository_root,
+                    explicit_mode=args.distribution_mode,
+                    tag_ref=args.tag_ref,
+                )
+            except DistributionModeError as exc:
+                raise TuiReleaseError(str(exc)) from exc
+
             if args.github_output is not None:
                 with args.github_output.open("a", encoding="utf-8") as handle:
                     handle.write(f"version={version}\n")
@@ -1341,6 +1359,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     handle.write(
                         f"prerelease={'true' if is_prerelease(version) else 'false'}\n"
                     )
+                    handle.write(f"distribution_mode={dist_mode}\n")
             print(version)
         elif args.command == "verify-plan":
             for artifact in verify_release_plan(

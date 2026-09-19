@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -43,6 +44,18 @@ TRUST_POLICY_PATH = Path("git-loopy/conformance/release-trust.json")
 
 class ReleaseTrustError(ValueError):
     """A Release cannot be proven to carry the trust its channel requires."""
+
+
+class DistributionModeError(ReleaseTrustError):
+    """The requested or declared distribution mode is invalid or inconsistent."""
+
+
+DISTRIBUTION_MODE_SOURCE_ONLY = "source-only"
+DISTRIBUTION_MODE_ARTIFACT_BEARING = "artifact-bearing"
+DEFAULT_DISTRIBUTION_MODES = (
+    DISTRIBUTION_MODE_SOURCE_ONLY,
+    DISTRIBUTION_MODE_ARTIFACT_BEARING,
+)
 
 
 @dataclass(frozen=True)
@@ -112,6 +125,8 @@ class TrustPolicy:
     evidence_kinds: tuple[str, ...]
     mechanisms: tuple[SigningMechanism, ...]
     channel_credentials: tuple[ChannelCredential, ...]
+    distribution_mode: str = DISTRIBUTION_MODE_SOURCE_ONLY
+    distribution_modes: tuple[str, ...] = DEFAULT_DISTRIBUTION_MODES
 
     def mechanism_for(self, platform: str) -> SigningMechanism | None:
         """The mechanism that signs ``platform``, or ``None`` if undeclared."""
@@ -216,7 +231,114 @@ def load_trust_policy(repository_root: Path) -> TrustPolicy:
         },
         evidence_kinds=tuple(document["evidence_kinds"]),
         mechanisms=mechanisms,
+        distribution_mode=str(
+            document.get("distribution_mode", DISTRIBUTION_MODE_SOURCE_ONLY)
+        ),
+        distribution_modes=tuple(
+            str(item)
+            for item in document.get("distribution_modes", DEFAULT_DISTRIBUTION_MODES)
+        ),
     )
+
+
+def _extract_tag_distribution_mode(
+    repository_root: Path, tag_ref: str
+) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "cat-file", "-p", tag_ref],
+            cwd=repository_root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+        text = result.stdout
+    except Exception:
+        return None
+
+    for line in text.splitlines():
+        line = line.strip()
+        lowered = line.lower()
+        if lowered.startswith("distribution-mode:") or lowered.startswith("distribution_mode:"):
+            return line.split(":", 1)[1].strip()
+    return None
+
+
+def resolve_distribution_mode(
+    repository_root: Path,
+    *,
+    explicit_mode: str | None = None,
+    tag_ref: str | None = None,
+    requested_mode: str | None = None,
+    tag: str | None = None,
+) -> str:
+    """Resolve and validate the publication distribution mode.
+
+    The repository/release declaration is the single authority.
+    Fails closed on unknown, missing, or inconsistent mode input.
+    """
+    if explicit_mode is None:
+        explicit_mode = requested_mode
+    if tag_ref is None:
+        tag_ref = tag
+
+    policy_path = repository_root / TRUST_POLICY_PATH
+    if policy_path.is_file():
+        policy = load_trust_policy(repository_root)
+        valid_modes = policy.distribution_modes or DEFAULT_DISTRIBUTION_MODES
+        declared_mode = policy.distribution_mode
+    else:
+        valid_modes = DEFAULT_DISTRIBUTION_MODES
+        declared_mode = DISTRIBUTION_MODE_SOURCE_ONLY
+
+    if declared_mode not in valid_modes:
+        raise DistributionModeError(
+            f"Unknown distribution mode in repository policy: {declared_mode!r}. "
+            f"Valid modes are {list(valid_modes)!r}"
+        )
+
+    if explicit_mode is None:
+        explicit_mode = os.environ.get("RELEASE_DISTRIBUTION_MODE") or os.environ.get(
+            "GIT_LOOPY_DISTRIBUTION_MODE"
+        )
+
+    tag_mode: str | None = None
+    if tag_ref is not None:
+        tag_mode = _extract_tag_distribution_mode(repository_root, tag_ref)
+
+    if tag_mode is not None:
+        if tag_mode not in valid_modes:
+            raise DistributionModeError(
+                f"Unknown distribution mode in tag annotation: {tag_mode!r}. "
+                f"Valid modes are {list(valid_modes)!r}"
+            )
+
+    if explicit_mode is not None:
+        explicit_mode = explicit_mode.strip()
+        if not explicit_mode or explicit_mode not in valid_modes:
+            raise DistributionModeError(
+                f"Unknown distribution mode: {explicit_mode!r}. "
+                f"Valid modes are {list(valid_modes)!r}"
+            )
+
+    if tag_mode is not None and explicit_mode is not None:
+        if tag_mode != explicit_mode:
+            raise DistributionModeError(
+                f"Inconsistent distribution mode: tag annotation declares {tag_mode!r}, "
+                f"but explicit input requested {explicit_mode!r}"
+            )
+        return explicit_mode
+
+    if explicit_mode is not None:
+        return explicit_mode
+
+    if tag_mode is not None:
+        return tag_mode
+
+    return declared_mode
 
 
 @dataclass(frozen=True)

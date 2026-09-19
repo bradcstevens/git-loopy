@@ -318,6 +318,7 @@ def test_tag_preflight_cli_emits_machine_readable_release_plan(
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "commit": _git(root, "rev-parse", "HEAD"),
+        "distribution_mode": "source-only",
         "notes_path": "docs/releases/v1.2.3-rc.1.md",
         "prerelease": True,
         "tag": "v1.2.3-rc.1",

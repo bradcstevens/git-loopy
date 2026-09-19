@@ -25,6 +25,47 @@ package channel. Only a stable Promotion can update those channels.
 The source-only path relies on GitHub's automatic source archives. It does not
 publish package-channel metadata, signed platform artifacts, or a TUI helper.
 
+## Distribution modes
+
+Releases operate under an explicit **distribution mode** ([ADR-0059](../adr/0059-explicit-source-only-distribution-mode.md)),
+with the repository policy in [`release-trust.json`](../../git-loopy/conformance/release-trust.json)
+or the release declaration as the single authority:
+
+- **`source-only`** (default): The publication promise is complete with GitHub
+  source archives and committed release notes. The release flow does not launch
+  helper-build, signing, attachment, or channel jobs. It requires no signing secrets,
+  binary signing identities, or channel credentials to complete.
+- **`artifact-bearing`**: The publication promise includes the seven compiled
+  TUI helper archives, checksums, attestations, receipts, and package channels
+  (Homebrew, winget, Scoop). It dispatches all helper builds and requires full
+  credentials; missing credentials refuse publication without silent downgrade.
+
+The contract is strictly enforced:
+- **Single authority**: Neither secret presence nor runner presence alters the contract.
+  A source-only release in an environment with signing secrets never builds or
+  publishes helper artifacts; an artifact-bearing release without credentials refuses
+  rather than silently downgrading to source-only.
+- **Fail-closed validation**: Unknown or inconsistent distribution mode declarations
+  (e.g., mismatch between tag annotation and explicit configuration) fail closed
+  before any publication step runs.
+
+### Runtime line-printer fallback
+
+When running git-loopy from a source-only release where precompiled helper binaries
+are not distributed, the Orchestrators fall back automatically to the built-in
+**streaming line-printer** output. Operators still receive full progress, phase
+transitions, and iteration events printed to standard output.
+
+Operators who want the interactive full-screen dashboard can build the helper
+locally from the source checkout:
+
+```sh
+cargo build --release --manifest-path git-loopy/tui/Cargo.toml
+```
+
+and ensure the compiled `git-loopy-tui` binary is available on `PATH` or placed in
+`.git-loopy/bin/`.
+
 ## Release target and Promotion
 
 A closed issue's **Bump class** label advances the Release line after
