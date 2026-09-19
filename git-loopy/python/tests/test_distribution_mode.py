@@ -143,79 +143,6 @@ class TestDistributionModeFailClosed:
         assert "source-only" in str(exc_info.value)
         assert "artifact-bearing" in str(exc_info.value)
 
-def _create_test_repo(path: Path, distribution_mode: str = DISTRIBUTION_MODE_SOURCE_ONLY) -> Path:
-    repo = path / "repo"
-    repo.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Tester"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "tester@example.com"], cwd=repo, check=True)
-
-    trust_dir = repo / "git-loopy" / "conformance"
-    trust_dir.mkdir(parents=True, exist_ok=True)
-    trust_json = trust_dir / "release-trust.json"
-    trust_json.write_text(
-        json.dumps({
-            "distribution_mode": distribution_mode,
-            "distribution_modes": [DISTRIBUTION_MODE_SOURCE_ONLY, DISTRIBUTION_MODE_ARTIFACT_BEARING],
-            "credentials": [],
-        }),
-        encoding="utf-8",
-    )
-    (repo / "file.txt").write_text("hello\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=repo, check=True)
-    return repo
-
-
-    def test_mismatched_tag_annotation_and_requested_mode_fails(
-        self, tmp_path: Path
-    ) -> None:
-        """Tag declaring source-only fails when artifact-bearing is requested."""
-        repo = _create_test_repo(tmp_path, distribution_mode=DISTRIBUTION_MODE_SOURCE_ONLY)
-
-        # Create tag with source-only in annotation
-        annotation = "Release v1.0.0\n\ndistribution_mode: source-only\n"
-        subprocess.run(["git", "tag", "-a", "v1.0.0", "-m", annotation], cwd=repo, check=True)
-
-        with pytest.raises(DistributionModeError) as exc_info:
-            resolve_distribution_mode(
-                repo,
-                explicit_mode=DISTRIBUTION_MODE_ARTIFACT_BEARING,
-                tag_ref="v1.0.0",
-            )
-        assert "mismatch" in str(exc_info.value).lower() or "inconsistent" in str(exc_info.value).lower()
-        assert "source-only" in str(exc_info.value)
-        assert "artifact-bearing" in str(exc_info.value)
-
-    def test_tag_with_valid_annotation_resolves_mode(self, tmp_path: Path) -> None:
-        repo = _create_test_repo(tmp_path, distribution_mode=DISTRIBUTION_MODE_ARTIFACT_BEARING)
-
-        annotation = "Release v1.0.0\n\ndistribution_mode: artifact-bearing\n"
-        subprocess.run(["git", "tag", "-a", "v1.0.0", "-m", annotation], cwd=repo, check=True)
-
-        # Mode should be resolved from tag annotation
-        mode = resolve_distribution_mode(repo, tag_ref="v1.0.0")
-        assert mode == DISTRIBUTION_MODE_ARTIFACT_BEARING
-
-    def test_tag_with_unknown_mode_annotation_fails_closed(self, tmp_path: Path) -> None:
-        repo = _create_test_repo(tmp_path, distribution_mode=DISTRIBUTION_MODE_SOURCE_ONLY)
-
-        annotation = "Release v1.0.0\n\ndistribution_mode: corrupted-mode\n"
-        subprocess.run(["git", "tag", "-a", "v1.0.0", "-m", annotation], cwd=repo, check=True)
-
-        with pytest.raises(DistributionModeError) as exc_info:
-            resolve_distribution_mode(repo, tag_ref="v1.0.0")
-        assert "Unknown distribution mode in tag annotation: 'corrupted-mode'" in str(exc_info.value)
-
-    def test_unreadable_or_missing_tag_ref_fails_closed(self, tmp_path: Path) -> None:
-        """AC 5: unreadable tag object must fail closed, never quietly fall back."""
-        repo = _create_test_repo(tmp_path, distribution_mode=DISTRIBUTION_MODE_SOURCE_ONLY)
-
-        with pytest.raises(DistributionModeError) as exc_info:
-            resolve_distribution_mode(repo, tag_ref="refs/tags/v9.9.9")
-        assert "Failed to read tag" in str(exc_info.value)
-
-
 class TestWorkflowJobGatingInSourceOnlyMode:
     """In source-only mode, helper-build, signing, attachment, and channel jobs are not launched."""
 
@@ -377,7 +304,7 @@ class TestWorkflowJobGatingInSourceOnlyMode:
         def eval_condition(raw_expr: str, env: dict[str, Any]) -> bool:
             expr = raw_expr.strip()
             expr = expr.replace("&&", " and ").replace("||", " or ")
-            expr = re.sub(r"!\s*", "not ", expr)
+            expr = re.sub(r"!(?!=)\s*", "not ", expr)
             expr = re.sub(r"([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)+)", lambda m: m.group(1).replace(".", "_"), expr)
             tree = ast.parse(expr, mode="eval")
             return bool(eval_ast_node(tree, env))
