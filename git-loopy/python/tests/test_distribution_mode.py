@@ -318,6 +318,23 @@ class TestWorkflowJobGatingInSourceOnlyMode:
             resolve_distribution_mode(repo)
         assert "banana" in str(exc_info.value)
 
+    def test_rogue_distribution_modes_list_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """AC 5: Any unknown mode in distribution_modes is refused even if distribution_mode is valid."""
+        repo = tmp_path / "repo"
+        repo.mkdir(parents=True)
+        trust_dir = repo / "git-loopy/conformance"
+        trust_dir.mkdir(parents=True)
+        trust_json = trust_dir / "release-trust.json"
+        fixture_data = json.loads(TRUST_FIXTURE_PATH.read_text(encoding="utf-8"))
+        fixture_data["distribution_mode"] = "source-only"
+        fixture_data["distribution_modes"] = ["source-only", "banana"]
+        trust_json.write_text(json.dumps(fixture_data), encoding="utf-8")
+        with pytest.raises(DistributionModeError) as exc_info:
+            resolve_distribution_mode(repo)
+        assert "banana" in str(exc_info.value)
+
     def test_workflow_scheduling_graph_simulated_for_both_modes(self) -> None:
         """AC 8: Drive workflow boundary and assert actions scheduled in each mode."""
         workflow = _load_yaml(TUI_WORKFLOW_PATH)

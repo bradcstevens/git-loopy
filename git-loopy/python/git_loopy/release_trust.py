@@ -238,12 +238,9 @@ def load_trust_policy(repository_root: Path) -> TrustPolicy:
         },
         evidence_kinds=tuple(document["evidence_kinds"]),
         mechanisms=mechanisms,
-        distribution_mode=str(
-            document.get("distribution_mode", DISTRIBUTION_MODE_SOURCE_ONLY)
-        ),
+        distribution_mode=str(document["distribution_mode"]),
         distribution_modes=tuple(
-            str(item)
-            for item in document.get("distribution_modes", DEFAULT_DISTRIBUTION_MODES)
+            str(item) for item in document["distribution_modes"]
         ),
     )
 
@@ -300,11 +297,15 @@ def resolve_distribution_mode(
         )
 
     policy = load_trust_policy(repository_root)
-    valid_modes = tuple(
-        m for m in (policy.distribution_modes or DEFAULT_DISTRIBUTION_MODES)
-        if m in DEFAULT_DISTRIBUTION_MODES
-    ) or DEFAULT_DISTRIBUTION_MODES
+    valid_modes = policy.distribution_modes
     declared_mode = policy.distribution_mode
+
+    for mode in valid_modes:
+        if mode not in DEFAULT_DISTRIBUTION_MODES:
+            raise DistributionModeError(
+                f"Unknown distribution mode in repository policy distribution_modes: {mode!r}. "
+                f"Valid modes are {list(DEFAULT_DISTRIBUTION_MODES)!r}"
+            )
 
     if declared_mode not in valid_modes:
         raise DistributionModeError(

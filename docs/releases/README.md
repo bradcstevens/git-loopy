@@ -56,6 +56,10 @@ are not distributed, the Orchestrators fall back automatically to the built-in
 **streaming line-printer** output. Operators still receive full progress, phase
 transitions, and iteration events printed to standard output.
 
+When installing from a source-only release using `install.sh` or `install.ps1`, pass
+`--no-tui` (or `-NoTui`) to skip attempting to download precompiled helper binaries.
+The installed launcher runs git-loopy in line-printer mode.
+
 Operators who want the interactive full-screen dashboard can build the helper
 locally from the source checkout:
 

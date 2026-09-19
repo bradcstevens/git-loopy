@@ -628,6 +628,14 @@ event rather than a judgement — except for a `major` **Bump class**, which is 
 and cuts on the label alone.
 _Avoid_: release cut, graduation, publish.
 
+**Distribution mode**:
+The explicit publication promise for a Release line: `source-only` (the default, publishing
+GitHub source archives and committed notes without launching helper-build, signing, or
+package-channel work) or `artifact-bearing` (publishing compiled TUI helper archives,
+checksums, attestations, receipts, and package channels). Pinned in `release-trust.json` as
+the single repository authority; secret presence does not alter the contract.
+_Avoid_: build mode, release type, distribution flavor.
+
 **Autonomous loop**:
 The *technique* git-loopy orchestrates — an unattended, iterative execution loop that
 drives the Copilot agent to work triaged issues one at a time, bounded by feedback
