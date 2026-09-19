@@ -16,7 +16,8 @@
     "defaulted_unknown_task_type_key",
     "defaulted_conflicting_task_type_keys",
     "defaulted_explicit_override",
-    "escalated"
+    "escalated",
+    "dynamic"
   ],
   "cases": [
     {
@@ -238,6 +239,28 @@
         "lifecycle_position": "retrying"
       },
       "warns": false
+    },
+    {
+      "id": "an-elected-dynamic-route-wins-over-every-label-derived-source",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
+      "labels": ["task-type:docs"],
+      "route_policy": "dynamic",
+      "dynamic_route": {
+        "model": "claude-haiku-4.5",
+        "effort": "high",
+        "context_tier": "long_context"
+      },
+      "expected": {
+        "model": "claude-haiku-4.5",
+        "effort": "high",
+        "context_tier": "long_context",
+        "source": "dynamic",
+        "task_type_keys": ["docs"],
+        "gate_warnings": [],
+        "lifecycle_position": "fresh"
+      },
+      "warns": false
     }
   ],
   "refusal_cases": [
@@ -363,7 +386,7 @@
       "expected_tiers": {"docs": "project Config"}
     }
   ],
-  "static_route_policies": ["unselected", "static"],
+  "static_route_policies": ["unselected", "static", "dynamic"],
   "static_route_refusals": ["unverifiable", "unnamed_model", "unlisted_model", "ineligible_model", "effort_not_configurable", "unsupported_effort", "unsupported_context_tier"],
   "static_route_notes": {
     "policy": "Contract 2.8. The file-level contract_version above stays at the revision that first described the measured tier; these Static route cases arrived at 2.8 and say so here rather than moving a declaration that belongs to a different decision. The Route policy is SELECTED, never inherited. `unselected` is the absence of a decision and MUST keep every legacy behaviour -- the hardcoded roster gates, the built-in escalation rung, the historical event stream -- byte-for-byte. Only `static` activates the cases below. A Runner MUST NOT reinterpret an existing Config as though the policy had always been in force, and MUST NOT read the absence of a policy as a choice of one.",

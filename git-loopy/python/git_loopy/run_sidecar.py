@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 
@@ -91,6 +92,16 @@ def _config_to_payload(config: RunConfig) -> dict[str, Any]:
         },
         "context_tier": config.context_tier,
         "route_policy": config.route_policy.value,
+        # A Decimal is not a JSON scalar, and float() would round an allowance
+        # the operator wrote exactly. The string round-trips both.
+        "routing_deadline_seconds": config.routing_deadline_seconds,
+        "routing_credit_allowance": (
+            None
+            if config.routing_credit_allowance is None
+            else str(config.routing_credit_allowance)
+        ),
+        "selector_concurrency": config.selector_concurrency,
+        "route_associations": dict(sorted(config.route_associations.items())),
         "routing_suppressed": config.routing_suppressed,
         "skill_policy": {
             "project": _skill_input_to_payload(config.skill_policy.project),
@@ -135,6 +146,25 @@ def _config_from_payload(payload: dict[str, Any]) -> RunConfig:
         routing=routing,
         context_tier=str(payload.get("context_tier", "default")),
         route_policy=RoutePolicy.parse(payload.get("route_policy")),
+        routing_deadline_seconds=(
+            None
+            if payload.get("routing_deadline_seconds") is None
+            else float(payload["routing_deadline_seconds"])
+        ),
+        routing_credit_allowance=(
+            None
+            if payload.get("routing_credit_allowance") is None
+            else Decimal(str(payload["routing_credit_allowance"]))
+        ),
+        selector_concurrency=(
+            None
+            if payload.get("selector_concurrency") is None
+            else int(payload["selector_concurrency"])
+        ),
+        route_associations={
+            str(key): str(value)
+            for key, value in dict(payload.get("route_associations", {})).items()
+        },
         routing_suppressed=bool(payload.get("routing_suppressed", False)),
         skill_policy=SkillPolicyInputs(
             project=_skill_input_from_payload(dict(skill_policy.get("project", {}))),

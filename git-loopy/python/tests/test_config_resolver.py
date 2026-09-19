@@ -19,6 +19,8 @@ are NEVER read from a config file — they resolve from flags/env only.
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from git_loopy import cli
@@ -204,10 +206,99 @@ def test_selecting_the_static_policy_does_not_suppress_per_issue_routing() -> No
     assert dict(resolved.run.routing) == {"docs": ("gpt-5-mini", "medium")}
 
 
-def test_the_undelivered_dynamic_policy_is_refused_by_name() -> None:
+def test_selecting_the_dynamic_policy_reaches_the_run_config() -> None:
+    """``dynamic`` resolves to the member; what it *needs* is preflight's job.
+
+    #560 refused this name at resolution because nothing behind it existed.
+    Now it does, and the refusal an operator who has not supplied the
+    Artificial Analysis access or the bounded allowances deserves names the
+    missing prerequisite — which resolution cannot know and preflight can.
+    """
+    resolved = _resolve(["--route-policy", "dynamic"])
+    assert resolved.run.route_policy is RoutePolicy.DYNAMIC
+
+
+def test_an_unknown_policy_name_is_still_refused() -> None:
     with pytest.raises(SystemExit) as excinfo:
-        _resolve(["--route-policy", "dynamic"])
-    assert "ADR-0057" in str(excinfo.value)
+        _resolve(["--route-policy", "measured"])
+    assert "measured" in str(excinfo.value)
+
+
+def test_dynamic_bounds_resolve_through_the_ordinary_precedence_chain() -> None:
+    """Each bound is an ordinary scalar; none of them is a pair (#561).
+
+    They follow ``--context-tier``'s discipline rather than ``--model``'s:
+    naming a *budget* is not naming a model, so nothing here suppresses
+    per-issue routing.
+    """
+    flagged = _resolve(
+        [
+            "--routing-deadline-seconds",
+            "120",
+            "--routing-credit-allowance",
+            "1.75",
+            "--selector-concurrency",
+            "4",
+        ],
+        project={"routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}}},
+    )
+    assert flagged.run.routing_deadline_seconds == 120.0
+    assert flagged.run.routing_credit_allowance == Decimal("1.75")
+    assert flagged.run.selector_concurrency == 4
+    assert flagged.run.routing_suppressed is False
+
+    env_resolved = _resolve(
+        env={
+            "GIT_LOOPY_ROUTING_DEADLINE_SECONDS": "60",
+            "GIT_LOOPY_ROUTING_CREDIT_ALLOWANCE": "0.5",
+            "GIT_LOOPY_SELECTOR_CONCURRENCY": "2",
+        }
+    )
+    assert env_resolved.run.routing_deadline_seconds == 60.0
+    assert env_resolved.run.routing_credit_allowance == Decimal("0.5")
+    assert env_resolved.run.selector_concurrency == 2
+
+    configured = _resolve(
+        project={"routing_deadline_seconds": 30.0, "selector_concurrency": 1},
+        global_={"routing_credit_allowance": "0.25", "selector_concurrency": 8},
+    )
+    assert configured.run.routing_deadline_seconds == 30.0
+    assert configured.run.routing_credit_allowance == Decimal("0.25")
+    assert configured.run.selector_concurrency == 1
+
+
+def test_a_dynamic_bound_outside_its_range_is_refused_by_name() -> None:
+    for argv, expected in (
+        (["--routing-deadline-seconds", "0"], "--routing-deadline-seconds"),
+        (["--routing-credit-allowance", "-1"], "--routing-credit-allowance"),
+        (["--selector-concurrency", "0"], "--selector-concurrency"),
+        (["--routing-credit-allowance", "lots"], "--routing-credit-allowance"),
+    ):
+        with pytest.raises(SystemExit) as excinfo:
+            _resolve(argv)
+        assert expected in str(excinfo.value)
+
+
+def test_the_association_table_is_config_only_and_read_per_scope() -> None:
+    """Verified associations are authored evidence, so they live in Config.
+
+    Project over global *per identity*, exactly as ``[routing]`` merges: an
+    operator correcting one association in a repository does not have to
+    restate every other one.
+    """
+    resolved = _resolve(
+        project={"route_associations": {"aa/opus": "claude-opus-4.8@max"}},
+        global_={
+            "route_associations": {
+                "aa/opus": "claude-opus-4.7@max",
+                "aa/mini": "gpt-5-mini@medium",
+            }
+        },
+    )
+    assert dict(resolved.run.route_associations) == {
+        "aa/opus": "claude-opus-4.8@max",
+        "aa/mini": "gpt-5-mini@medium",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1220,6 +1311,30 @@ def test_a_static_route_honours_an_explicit_escalation_switch() -> None:
         ["--route-policy", "static"],
         project={"escalation": {"enabled": True}},
     ).run.escalation_rung == cli._DEFAULT_ESCALATION_RUNG
+
+
+def test_dynamic_routing_gets_no_implicit_escalation_rung_either() -> None:
+    """The built-in rung is a *fixed* pair, which is the opposite of dynamic (#561).
+
+    ADR-0057 gives dynamic retries no fixed **Escalation rung** at all — a
+    later attempt reselects with current evidence and the previous outcome —
+    and that reselection is a dependent slice this one does not deliver. An
+    inherited built-in rung firing in the meantime would silently substitute
+    the legacy fixed escalation for the thing it is *not*, and report the
+    result as Dynamic routing. So an operator who never wrote an
+    ``[escalation]`` block gets no rung, exactly as under a Static route.
+    """
+    assert _resolve(["--route-policy", "dynamic"]).run.escalation_rung is None
+
+
+def test_dynamic_routing_still_escalates_where_the_operator_configured_a_rung() -> (
+    None
+):
+    """An ``[escalation]`` block an operator wrote is consent under any policy."""
+    assert _resolve(
+        ["--route-policy", "dynamic"],
+        project={"escalation": {"model": "gpt-5.6-sol", "effort": "high"}},
+    ).run.escalation_rung == ("gpt-5.6-sol", "high")
 
 
 def test_a_static_route_reaches_the_run_config_with_the_effort_selected() -> None:

@@ -72,6 +72,9 @@ def test_registry_covers_exactly_the_persisted_schema() -> None:
         "reasoning_effort",
         "context_tier",
         "route_policy",
+        "routing_deadline_seconds",
+        "routing_credit_allowance",
+        "selector_concurrency",
         "classifier_model",
         "classifier_effort",
         "issue_source",
@@ -113,15 +116,29 @@ def test_coerce_enum_keys_validate_choices() -> None:
     assert configcmd.coerce_value("reasoning_effort", "NONE") == "none"
     assert configcmd.coerce_value("issue_source", "prds") == "prds"
     assert configcmd.coerce_value("context_tier", "LONG_CONTEXT") == "long_context"
-    # The **Route policy** (#560, ADR-0057) is a persisted key so an operator
-    # can opt a repository into the **Static route** once, rather than
-    # remembering a flag on every Run. `dynamic` is a real policy name that
-    # this slice does not implement, so it is refused by name rather than
-    # rejected as junk.
+    # The **Route policy** (#560, #561, ADR-0057) is a persisted key so an
+    # operator can opt a repository into the **Static route** or **Dynamic
+    # routing** once, rather than remembering a flag on every Run.
     assert configcmd.coerce_value("route_policy", "STATIC") == "static"
     assert configcmd.coerce_value("route_policy", "unselected") == "unselected"
-    with pytest.raises(configcmd.ConfigCommandError, match="ADR-0057"):
-        configcmd.coerce_value("route_policy", "dynamic")
+    assert configcmd.coerce_value("route_policy", "Dynamic") == "dynamic"
+    with pytest.raises(configcmd.ConfigCommandError):
+        configcmd.coerce_value("route_policy", "measured")
+    # Dynamic routing's bounds (#561): each is finite and explicit, and the
+    # allowance keeps the exact decimal it was written as rather than a float
+    # that would spend a different number of credits.
+    assert configcmd.coerce_value("routing_deadline_seconds", "90") == 90.0
+    assert configcmd.coerce_value("routing_credit_allowance", "1.50") == "1.50"
+    assert configcmd.coerce_value("selector_concurrency", "4") == 4
+    for key, bad in (
+        ("routing_deadline_seconds", "0"),
+        ("routing_deadline_seconds", "inf"),
+        ("routing_credit_allowance", "-1"),
+        ("routing_credit_allowance", "lots"),
+        ("selector_concurrency", "0"),
+    ):
+        with pytest.raises(configcmd.ConfigCommandError):
+            configcmd.coerce_value(key, bad)
     with pytest.raises(configcmd.ConfigCommandError):
         configcmd.coerce_value("reasoning_effort", "ultra")
     with pytest.raises(configcmd.ConfigCommandError):

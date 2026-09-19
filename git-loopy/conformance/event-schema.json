@@ -257,7 +257,8 @@
         "defaulted_unknown_task_type_key",
         "defaulted_conflicting_task_type_keys",
         "defaulted_explicit_override",
-        "escalated"
+        "escalated",
+        "dynamic"
       ],
       "lifecycle_position_values": ["fresh", "retrying"],
       "routing_note": "Contract 1.21. The Routing resolution section 14 reaches at this Pickup, carried on the Pickup rather than on an Event of its own: the pair resolves AT this instant, for THIS key, so a second record would be one Pickup described twice with the same cardinality. Every field is optional-when-present, so a Runner that resolves no Routed pair emits the binding exactly as before and stays conforming; a consumer reads their absence as 'this Runner does not route', never as a route it failed to report.",
@@ -267,6 +268,25 @@
       "position": "The bound candidate's 1-based place in the selection order it was chosen from; considered is the length of that order. Both are required together: position 1 alone cannot tell 'the runner took the oldest' from 'the runner took the only one left', which is the question this Event exists to answer.",
       "reason_note": "pin is declared here ahead of its producer. #396 owns git-loopy run --issue N and is the only thing that may emit it; a reader that learns the value only when a stream first carries it renders an operator's first pin as an unknown string.",
       "scope": "Run-scoped, not contribution-scoped. A Pickup precedes the work it binds, so a Lane's contribution_id has not been minted yet and there is nothing but the Run to attribute it to."
+    },
+    "wrapper.routing.resolved": {
+      "required_when_present": [
+        "issue",
+        "model",
+        "context_tier",
+        "summary",
+        "evidence_source",
+        "evidence_retrieved_at",
+        "capabilities_retrieved_at",
+        "routing_credits",
+        "selector_attempts"
+      ],
+      "emitted": "Once per issue whose route was elected from live evidence -- contract 14.4's Dynamic route -- immediately BEFORE the wrapper.pickup.bound that publishes it, and therefore before the work session opens. A Run under any other Route policy emits it never; a Static route under the dynamic policy emits it never either, because the operator's own instruction was not elected from evidence and has nothing to record.",
+      "ordering": "The one property worth pinning: provenance written after the session starts is provenance that is missing exactly when the Run died mid-decision. A consumer that sees wrapper.pickup.bound with routing_source dynamic and no preceding wrapper.routing.resolved is reading a broken Runner, not an optional record.",
+      "provenance_note": "Contract 14.4. This is the local decision record the Dynamic route owes, and it is a separate Event rather than more fields on the Pickup because it answers a different question with a different cardinality: the Pickup says which pair the session runs on, this says which evidence elected it, what that evidence cost, and when each live source was read. A Runner that does not implement the Dynamic route never emits it and stays conforming.",
+      "distinguish_forecast_from_measurement": "public_output_tokens_per_second is the leaderboard's published inference speed for the benchmarked model. It is NOT a measurement of how long this issue took under Copilot, and a consumer MUST NOT render it as one. A missing measurement travels as null, never as zero.",
+      "nullable": "effort, measurement_at, benchmark_version and conditions are nullable, and a null is an explicit unknown the source did not publish rather than a field the Runner forgot.",
+      "scope": "Run-scoped, for the same reason wrapper.pickup.bound is: the route is elected before the work it routes, so no contribution identity exists yet."
     },
     "wrapper.pickup.skipped": {
       "required_when_present": ["issue", "reason", "position", "considered"],
@@ -463,6 +483,7 @@
       "wrapper.pool.excluded",
       "wrapper.pickup.bound",
       "wrapper.pickup.skipped",
+      "wrapper.routing.resolved",
       "wrapper.concurrency.changed",
       "wrapper.serial.requested",
       "wrapper.pipeline.quiescent",
@@ -531,6 +552,7 @@
     "WRAPPER_POOL_EXCLUDED": "wrapper.pool.excluded",
     "WRAPPER_PICKUP_BOUND": "wrapper.pickup.bound",
     "WRAPPER_PICKUP_SKIPPED": "wrapper.pickup.skipped",
+    "WRAPPER_ROUTING_RESOLVED": "wrapper.routing.resolved",
     "WRAPPER_CHECKPOINT_RECORDED": "wrapper.checkpoint.recorded",
     "WRAPPER_COMMIT_RECORDED": "wrapper.commit.recorded",
     "WRAPPER_PUSH_RECORDED": "wrapper.push.recorded",
@@ -1358,6 +1380,28 @@
           "host_state": "healthy"
         },
         {
+          "ts": "2026-05-16T00:00:02.200Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.routing.resolved",
+          "issue": 42,
+          "model": "claude-opus-5",
+          "effort": "high",
+          "context_tier": "default",
+          "summary": "highest verified Intelligence Index among the runnable configurations",
+          "evidence_source": "https://artificialanalysis.ai/api/v2/data/llms/models",
+          "evidence_retrieved_at": "2026-05-16T00:00:02.100Z",
+          "capabilities_retrieved_at": "2026-05-16T00:00:02.150Z",
+          "source_model_identity": "aa-opus",
+          "intelligence_index": "70.0",
+          "public_output_tokens_per_second": "90.0",
+          "measurement_at": null,
+          "benchmark_version": null,
+          "conditions": null,
+          "routing_credits": "0.25",
+          "selector_attempts": 1
+        },
+        {
           "ts": "2026-05-16T00:00:02.400Z",
           "run_id": "01HXR0000000000000000000DD",
           "iter": null,
@@ -1745,6 +1789,7 @@
       "jsonl": [
         "{\"ts\": \"2026-05-16T00:00:01.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pool.refreshed\", \"issues\": [42, 43, 44, 46]}\n",
         "{\"ts\": \"2026-05-16T00:00:02.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.concurrency.changed\", \"configured_lane_limit\": 3, \"credit_state\": null, \"effective_lane_limit\": 2, \"host_state\": \"healthy\", \"pressure\": null, \"rate_limit_state\": \"healthy\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:02.200Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.routing.resolved\", \"benchmark_version\": null, \"capabilities_retrieved_at\": \"2026-05-16T00:00:02.150Z\", \"conditions\": null, \"context_tier\": \"default\", \"effort\": \"high\", \"evidence_retrieved_at\": \"2026-05-16T00:00:02.100Z\", \"evidence_source\": \"https://artificialanalysis.ai/api/v2/data/llms/models\", \"intelligence_index\": \"70.0\", \"issue\": 42, \"measurement_at\": null, \"model\": \"claude-opus-5\", \"public_output_tokens_per_second\": \"90.0\", \"routing_credits\": \"0.25\", \"selector_attempts\": 1, \"source_model_identity\": \"aa-opus\", \"summary\": \"highest verified Intelligence Index among the runnable configurations\"}\n",
         "{\"ts\": \"2026-05-16T00:00:02.400Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pickup.bound\", \"considered\": 4, \"issue\": 42, \"position\": 1, \"reason\": \"order\"}\n",
         "{\"ts\": \"2026-05-16T00:00:03.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.start\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:03.400Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pickup.bound\", \"considered\": 3, \"issue\": 43, \"position\": 1, \"reason\": \"order\"}\n",

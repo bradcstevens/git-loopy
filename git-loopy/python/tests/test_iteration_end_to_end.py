@@ -44,6 +44,7 @@ import itertools
 import json
 import os
 import shutil
+from decimal import Decimal
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -65,6 +66,7 @@ from copilot.generated.session_events import (
 
 from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import cli
+from git_loopy import dynamic_route
 from git_loopy import events as events_module
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
@@ -216,12 +218,13 @@ def _make_issue(
     *,
     body: str = "## Parent\nfoo\n\n## What to build\nthing\n\n## Acceptance criteria\nbar",
     state: str = "OPEN",
+    labels: list[str] | None = None,
 ) -> gh_module.Issue:
     return gh_module.Issue(
         number=number,
         title=f"Test issue {number}",
         body=body,
-        labels=["ready-for-agent"],
+        labels=["ready-for-agent"] if labels is None else labels,
         state=state,
         url=f"https://github.com/x/y/issues/{number}",
         comments=(),
@@ -865,6 +868,7 @@ def _wire_single_issue_github(
     untracked: bool = False,
     commit_error: git_module.GitError | None = None,
     push_error: git_module.GitError | None = None,
+    labels: list[str] | None = None,
 ) -> tuple[FakeCopilotClient, FakeGitClient]:
     """Minimal github wiring for a one-issue run with no agent commits.
 
@@ -881,7 +885,7 @@ def _wire_single_issue_github(
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
 
-    issue = _make_issue(issue_number)
+    issue = _make_issue(issue_number, labels=labels)
     fake_git = FakeGitClient(
         tmp_path,
         dirty=dirty,
@@ -4997,7 +5001,7 @@ def test_an_unreadable_listing_records_why_it_could_not_be_read(
     async def _fetch() -> Any:
         raise RuntimeError("copilot server never answered")
 
-    monkeypatch.setattr(static_route, "_default_capability_fetch", lambda: _fetch)
+    monkeypatch.setattr(static_route, "default_capability_fetch", lambda: _fetch)
 
     exit_code = asyncio.run(loop_module.run(_static_config()))
 
@@ -5260,3 +5264,474 @@ def test_a_rung_the_harness_refuses_stops_the_run_before_any_work(
 
     assert exit_code == 1
     assert fake_client.create_calls == []
+
+
+# --- Dynamic routing: the Run boundary (#561, ADR-0057) ---------------------
+
+
+def _dynamic_config(**overrides: Any) -> RunConfig:
+    base: dict[str, Any] = dict(
+        issue_source="github",
+        max_iterations=1,
+        route_policy=RoutePolicy.DYNAMIC,
+        model="gpt-5.6-terra",
+        reasoning_effort="high",
+        routing_deadline_seconds=30.0,
+        routing_credit_allowance=Decimal("2.5"),
+        selector_concurrency=1,
+        route_associations={"aa-terra": "gpt-5.6-terra@high"},
+        verbosity=0,
+        render_reasoning=False,
+    )
+    base.update(overrides)
+    return RunConfig(**base)
+
+
+def test_dynamic_routing_refuses_before_work_when_a_prerequisite_is_missing(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """"Missing prerequisites start no dynamic work" is a preflight, not a Pickup.
+
+    ADR-0057 makes the deadline, the routing-credit allowance, the selector
+    concurrency and the operator's own Artificial Analysis authorization
+    *prerequisites*: bounds the operator agreed to rather than defaults the
+    Runner may invent. Discovering a missing one at the first Pickup would mean
+    the Run had already opened a session under a route nobody could have
+    elected, so the whole configuration is checked before any work — the same
+    place and for the same reason a Static route is (#560).
+    """
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+
+    exit_code = asyncio.run(
+        loop_module.run(_dynamic_config(routing_deadline_seconds=None))
+    )
+
+    assert exit_code == 1, f"expected exit 1, got {exit_code}"
+    assert fake_client.create_calls == [], "dynamic work started without its bounds"
+    err = capsys.readouterr().err
+    assert "routing_deadline_seconds" in err
+
+
+def test_dynamic_routing_never_echoes_the_key_it_refuses_for(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """An absent authorization is named by its variable, never by its value."""
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+
+    assert asyncio.run(loop_module.run(_dynamic_config())) == 1
+    assert fake_client.create_calls == []
+    err = capsys.readouterr().err
+    assert dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV in err
+
+
+def test_dynamic_routing_refuses_a_placement_whose_harness_is_not_this_one(
+    monkeypatch,
+) -> None:
+    """The selector would *elect* from a listing the runner never sees.
+
+    The Static route's placement rule (#560) applies to this policy for a
+    sharper reason: a mis-verified Static route at least ran the pair the
+    operator wrote down, while a Dynamic route elected from the wrong
+    installation's listing is a model the GitHub-hosted runner may have no
+    access to at all.
+
+    Driven at the preflight seam rather than through ``run()`` because the
+    Actions host is unpreparable on a bare fixture repository and would refuse
+    for its *own* reason first.
+    """
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+
+    _prerequisites, refusal = loop_module._dynamic_route_preflight(
+        _dynamic_config(execution_host="github-actions"), os.environ
+    )
+
+    assert refusal is not None, "a remote placement elected from the local listing"
+    assert "github-actions" in refusal
+
+
+def test_an_unselected_policy_resolves_no_dynamic_prerequisites(monkeypatch) -> None:
+    """The legacy Run pays nothing for a policy it did not select."""
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+
+    assert loop_module._dynamic_route_preflight(
+        RunConfig(issue_source="github", max_iterations=1), os.environ
+    ) == (None, None)
+
+
+def test_a_dynamic_run_verifies_the_routing_entries_that_still_win(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """A ``[routing]`` entry outranks the selector, so a dead one still refuses.
+
+    AC5 keeps a Static route ahead of the **Route selector**, which makes a
+    ``[routing]`` entry the harness refuses exactly as dead under this policy as
+    it is under a Static one — and dead in a way no amount of live evidence can
+    rescue, because the selector is never asked about that Task type.
+    """
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+
+    exit_code = asyncio.run(
+        loop_module.run(_dynamic_config(routing={"docs": ("ghost-model", "low")}))
+    )
+
+    assert exit_code == 1, f"expected exit 1, got {exit_code}"
+    assert fake_client.create_calls == []
+    err = capsys.readouterr().err
+    assert "ghost-model" in err and "docs" in err
+
+
+def test_a_dynamic_run_does_not_refuse_a_default_the_selector_replaces(
+    monkeypatch,
+) -> None:
+    """The run-wide default is not a route this Run can resolve to.
+
+    Every Task type the ``[routing]`` table does not cover goes to the
+    selector, and an unavailable selector refuses rather than falling back — so
+    the default never runs. Verifying it would refuse the whole Run over a pair
+    the operator never asked to use, most sharply for the kit's own built-in
+    default on an account that does not carry it.
+    """
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+
+    named = {
+        name for name, _route in loop_module._configured_static_routes(
+            _dynamic_config(model="not-in-any-listing", reasoning_effort=None)
+        )
+    }
+
+    assert named == set(), f"a dynamic Run gated a route it cannot take: {named}"
+
+
+def test_an_explicit_pin_is_still_verified_under_a_dynamic_policy(
+    monkeypatch,
+) -> None:
+    """A flag or env pin suppresses routing, so the default *is* the route."""
+    named = {
+        name for name, _route in loop_module._configured_static_routes(
+            _dynamic_config(routing_suppressed=True)
+        )
+    }
+
+    assert named == {"the run-wide default"}
+
+
+def _aa_payload(*rows: dict[str, Any]) -> bytes:
+    return json.dumps(
+        {"data": list(rows), "prompt_options": {"parallel_queries": 1}}
+    ).encode("utf-8")
+
+
+def _aa_row(identifier: str, index: float, speed: float) -> dict[str, Any]:
+    return {
+        "id": identifier,
+        "name": identifier,
+        "slug": identifier,
+        "evaluations": {"artificial_analysis_intelligence_index": index},
+        "median_output_tokens_per_second": speed,
+    }
+
+
+def _wire_dynamic_ports(
+    monkeypatch,
+    *,
+    rows: tuple[dict[str, Any], ...],
+    answer: Callable[[Any], Any] | None,
+    listing: tuple[SimpleNamespace, ...],
+) -> dict[str, list[Any]]:
+    """Substitute the two ports that reach the network, and nothing else.
+
+    AC13's "injected external ports": the **Route selector** is a real
+    ``DynamicRouter`` making real decisions over scripted inputs, so what the
+    test exercises is the Run's own boundary rather than a stand-in for it.
+    """
+    spied: dict[str, list[Any]] = {"assessments": [], "evidence": 0}
+
+    async def _fetch(method: str, url: str, headers: dict[str, str]) -> object:
+        spied["evidence"] += 1
+        return _aa_payload(*rows)
+
+    async def _capabilities() -> Any:
+        return dynamic_route.FreshHarnessCapabilities(
+            retrieved_at=datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc),
+            capabilities=static_route.HarnessCapabilities.from_listing(listing),
+            tier_capacities={
+                (model.id, "default"): 400_000 for model in listing
+            },
+        )
+
+    async def _assess(selector: Any, request: Any) -> Any:
+        spied["assessments"].append((selector, request))
+        return dynamic_route.SelectorCallResult(
+            output=None if answer is None else answer(request),
+            routing_credits=Decimal("0.25"),
+        )
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", _fetch)
+    monkeypatch.setattr(loop_module, "_fetch_harness_evidence", _capabilities)
+
+    real_factory = loop_module._make_dynamic_router
+
+    def _factory(prerequisites, *, selector_assess, recorder):
+        return real_factory(
+            prerequisites, selector_assess=_assess, recorder=recorder
+        )
+
+    monkeypatch.setattr(loop_module, "_make_dynamic_router", _factory)
+    return spied
+
+
+def _elects(model: str) -> Callable[[Any], str]:
+    """Answer as a selector that picked ``model`` off the list it was handed.
+
+    The candidate identity is a digest the router mints, so a scripted answer
+    has to read it out of the request rather than spell it — which is the same
+    constraint a real selector is under, and exactly why the identity is a
+    digest.
+    """
+
+    def _answer(request: Any) -> str:
+        (chosen,) = [
+            candidate
+            for candidate in request.candidates
+            if candidate.model == model
+        ]
+        return json.dumps(
+            {
+                "candidate_identity": chosen.stable_identity,
+                "summary": "strongest verified index for this work",
+            }
+        )
+
+    return _answer
+
+
+def _listed_model(identifier: str, efforts: list[str] | None) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=identifier,
+        name=identifier,
+        policy=SimpleNamespace(state="enabled", terms=""),
+        billing=SimpleNamespace(
+            multiplier=1.0,
+            token_prices=SimpleNamespace(
+                max_prompt_tokens=400_000, long_context=None
+            ),
+        ),
+        supported_reasoning_efforts=efforts,
+        default_reasoning_effort=(efforts or [None])[0],
+    )
+
+
+def _dynamic_run(tmp_path, monkeypatch, **overrides):
+    """A one-issue dynamic Run with both external ports scripted."""
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(
+        tmp_path, monkeypatch, labels=overrides.pop("issue_labels", None)
+    )
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _wire_dynamic_ports(
+        monkeypatch,
+        rows=overrides.pop(
+            "rows",
+            (_aa_row("aa-opus", 70.0, 90.0), _aa_row("aa-terra", 40.0, 200.0)),
+        ),
+        answer=overrides.pop("answer", _elects("claude-opus-5")),
+        listing=overrides.pop(
+            "listing",
+            (
+                _listed_model("claude-opus-5", ["high"]),
+                _listed_model("gpt-5.6-terra", ["low", "high"]),
+            ),
+        ),
+    )
+    config = _dynamic_config(
+        route_associations={
+            "aa-opus": "claude-opus-5@high",
+            "aa-terra": "gpt-5.6-terra@high",
+        },
+        **overrides,
+    )
+    return fake_client, spied, asyncio.run(loop_module.run(config))
+
+
+def test_a_dynamic_route_reaches_the_serial_work_sessions_own_arguments(
+    tmp_path, monkeypatch
+) -> None:
+    """The elected route is what ``create_session`` is actually called with.
+
+    The whole of AC9's "actually supplies the work session's settings": not the
+    proposal, not the readback, not the Queue cell — the request the
+    issue-owning session is opened with. A route that agrees everywhere except
+    here is a route that did not take effect.
+    """
+    fake_client, spied, exit_code = _dynamic_run(tmp_path, monkeypatch)
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+    assert fake_client.create_calls, "no work session was opened"
+    call = fake_client.create_calls[0]
+    assert call["model"] == "claude-opus-5"
+    assert call["reasoning_effort"] == "high"
+    assert spied["assessments"], "the Route selector was never asked"
+
+
+def test_the_dashboard_reads_the_dynamic_route_from_the_pickup_it_bound(
+    tmp_path, monkeypatch
+) -> None:
+    """One resolution feeds the session, the Event and the **Dashboard**.
+
+    The readback agreeing with the session is the same **Routing resolution**
+    arriving in two places, under a **Routing source** that says a selector
+    decided it — which is what stops a routing decision being quoted back as a
+    human instruction.
+    """
+    _fake_client, _spied, exit_code = _dynamic_run(tmp_path, monkeypatch)
+
+    assert exit_code == 0
+    (bound,) = _bound_pickups(tmp_path)
+    assert bound["model"] == "claude-opus-5"
+    assert bound["effort"] == "high"
+    assert bound["routing_source"] == "dynamic"
+
+
+def test_the_decisions_provenance_is_persisted_before_the_work_starts(
+    tmp_path, monkeypatch
+) -> None:
+    """AC9's local decision provenance, and it lands ahead of the session.
+
+    Provenance written afterwards is provenance that is missing exactly when
+    the Run died mid-decision, so the ordering is what is pinned rather than
+    merely the record's presence.
+
+    The single selector call is AC8's other half: ``bind`` re-read both live
+    sources at Pickup and found the verified inputs unchanged, so it reused the
+    proposal's assessment instead of buying a second one. One admitted call for
+    one issue is the whole point of charging the assessment to routing credits.
+    """
+    _fake_client, _spied, exit_code = _dynamic_run(tmp_path, monkeypatch)
+
+    assert exit_code == 0
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    resolved = [
+        event for event in events if event["type"] == "wrapper.routing.resolved"
+    ]
+    assert len(resolved) == 1, "the dynamic decision left no provenance"
+    record = resolved[0]
+    assert record["model"] == "claude-opus-5"
+    assert record["evidence_source"].startswith("https://artificialanalysis.ai/")
+    assert record["evidence_retrieved_at"]
+    assert record["capabilities_retrieved_at"]
+    assert record["routing_credits"] == "0.25"
+    assert record["selector_attempts"] == 1
+
+    order = [event["type"] for event in events]
+    assert order.index("wrapper.routing.resolved") < order.index(
+        "wrapper.pickup.bound"
+    )
+
+
+def test_an_invalid_selector_answer_refuses_rather_than_falling_back(
+    tmp_path, monkeypatch
+) -> None:
+    """AC11: no stale, default or cheaper-selector fallback — an explicit refusal.
+
+    Naming a configuration that is not on the candidate list is the classic
+    injected answer, and the failure mode that matters is not that it is
+    refused but *what happens next*: taking the Run's default pair would run
+    the issue on a route nobody elected and report it as routed.
+    """
+    fake_client, _spied, exit_code = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        answer=lambda _request: json.dumps(
+            {"candidate_identity": "nine", "summary": "not on the list"}
+        ),
+    )
+
+    assert fake_client.create_calls == [], "a refused route still opened a session"
+    assert exit_code != 0
+    skipped = [
+        event
+        for event in _pickup_events(tmp_path)
+        if event["type"] == "wrapper.pickup.skipped"
+    ]
+    assert skipped and "invalid_selector_output" in skipped[-1]["reason"]
+
+
+def test_an_unreachable_evidence_source_refuses_rather_than_guessing(
+    tmp_path, monkeypatch
+) -> None:
+    """A required source that failed is unavailable, never "assume the default"."""
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _wire_dynamic_ports(
+        monkeypatch,
+        rows=(_aa_row("aa-terra", 40.0, 200.0),),
+        answer=None,
+        listing=(_listed_model("gpt-5.6-terra", ["low", "high"]),),
+    )
+
+    async def _unreachable(*_args: Any, **_kwargs: Any) -> object:
+        raise RuntimeError("artificialanalysis.ai refused the connection")
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", _unreachable)
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            _dynamic_config(route_associations={"aa-terra": "gpt-5.6-terra@high"})
+        )
+    )
+
+    assert fake_client.create_calls == []
+    assert exit_code != 0
+    skipped = [
+        event
+        for event in _pickup_events(tmp_path)
+        if event["type"] == "wrapper.pickup.skipped"
+    ]
+    assert skipped and "source_unavailable" in skipped[-1]["reason"]
+
+
+def test_a_configured_routing_entry_keeps_the_selector_out_of_it(
+    tmp_path, monkeypatch
+) -> None:
+    """AC5: avoid the **Route selector** where a Static route applies.
+
+    The operator wrote this pair down for this **Task type**; spending a
+    selector call to be told something else would override an instruction with
+    an inference, which is the precedence ADR-0057 settles the other way.
+    """
+    fake_client, spied, exit_code = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        issue_labels=["ready-for-agent", "task-type:implementation"],
+        routing={"implementation": ("gpt-5.6-terra", "low")},
+    )
+
+    assert exit_code == 0
+    assert spied["assessments"] == [], "a Static route still bought a selector call"
+    assert fake_client.create_calls[0]["model"] == "gpt-5.6-terra"
+    assert fake_client.create_calls[0]["reasoning_effort"] == "low"
+
+
+def test_the_assessment_sees_the_issue_and_the_gates_it_must_pass(
+    tmp_path, monkeypatch
+) -> None:
+    """AC6's inputs arrive at the real selector, off the real checkout."""
+    _fake_client, spied, exit_code = _dynamic_run(tmp_path, monkeypatch)
+
+    assert exit_code == 0
+    (_selector, request) = spied["assessments"][0]
+    assert "#42" in request.issue
+    assert request.task_type
+    assert any("feedback loop" in entry for entry in request.repository_context)

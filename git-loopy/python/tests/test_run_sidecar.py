@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -95,6 +96,50 @@ def test_a_detached_run_carries_the_selected_route_policy() -> None:
     )
 
     assert decoded.config.route_policy is RoutePolicy.STATIC
+
+
+def test_a_detached_dynamic_run_carries_its_bounds_exactly() -> None:
+    """A routing allowance is spent by the child, so it has to arrive exact (#561).
+
+    The allowance is the one value JSON would quietly change: a
+    :class:`~decimal.Decimal` through a float is a different number of credits
+    than the operator authorized, and the direction of the error is not
+    knowable in advance. The bounds travel beside the policy because a child
+    that rebuilt them as ``None`` would refuse the very Run its parent's
+    preflight had already admitted.
+
+    The API key is deliberately *not* here and cannot be: it is read from the
+    environment at the point of use, so there is nothing in this payload —
+    which is written to a control artifact on disk — to leak.
+    """
+    from git_loopy import run_sidecar
+    from git_loopy.static_route import RoutePolicy
+
+    spec = run_sidecar.DetachedRunSpec(
+        config=dataclasses_replace(
+            _config(),
+            route_policy=RoutePolicy.DYNAMIC,
+            routing_deadline_seconds=45.5,
+            routing_credit_allowance=Decimal("0.1234567890123456789"),
+            selector_concurrency=3,
+            route_associations={"aa/opus-4.8": "claude-opus-4.8@max"},
+        ),
+        run_id="01K3CQ7VJ1GWQ9H8Q6SE2V1D5A",
+        started_at_epoch_ms=1_780_000_123_456,
+    )
+
+    encoded = run_sidecar.encode_detached_run_spec(spec)
+    decoded = run_sidecar.decode_detached_run_spec(encoded)
+
+    assert decoded.config.route_policy is RoutePolicy.DYNAMIC
+    assert decoded.config.routing_deadline_seconds == 45.5
+    assert decoded.config.routing_credit_allowance == Decimal(
+        "0.1234567890123456789"
+    )
+    assert decoded.config.selector_concurrency == 3
+    assert dict(decoded.config.route_associations) == {
+        "aa/opus-4.8": "claude-opus-4.8@max"
+    }
 
 
 def test_detached_run_spec_round_trips_complex_run_inputs() -> None:

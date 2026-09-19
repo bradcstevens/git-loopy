@@ -23,7 +23,14 @@ from enum import Enum
 from numbers import Integral
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
-from git_loopy.static_route import HarnessCapabilities, HarnessModel
+from git_loopy.events import format_timestamp
+from git_loopy.static_route import (
+    BASE_CONTEXT_TIER,
+    LONG_CONTEXT_TIER,
+    HarnessCapabilities,
+    HarnessModel,
+    default_capability_fetch,
+)
 
 __all__ = [
     "ARTIFICIAL_ANALYSIS_MODELS_URL",
@@ -34,6 +41,7 @@ __all__ = [
     "ArtificialAnalysisSource",
     "FreshEvidence",
     "FreshHarnessCapabilities",
+    "refresh_harness_evidence",
     "RoutingRequest",
     "AssessmentCandidate",
     "AssessmentRequest",
@@ -44,8 +52,12 @@ __all__ = [
     "RoutingUnavailable",
     "WorkRoute",
     "RoutingProposal",
-    "RoutingResolution",
+    "DynamicRouteDecision",
+    "routing_provenance_payload",
     "RoutingPrerequisiteError",
+    "ARTIFICIAL_ANALYSIS_API_KEY_ENV",
+    "DynamicRoutePrerequisites",
+    "resolve_prerequisites",
     "RoutingSourceError",
     "DynamicRouter",
     "EvidenceRecord",
@@ -623,6 +635,93 @@ class FreshHarnessCapabilities:
     tier_capacities: Mapping[tuple[str, str], int]
 
 
+async def refresh_harness_evidence(
+    *,
+    fetch: Any | None = None,
+    clock: _Clock | None = None,
+    warn: Callable[[str], None] | None = None,
+) -> FreshHarnessCapabilities | None:
+    """Read eligibility *and* context capacity from one current listing.
+
+    One call rather than two, because the two facts have to describe the same
+    instant: a Run that checked eligibility in one read and capacity in another
+    could elect a context tier for a model the account lost in between, and
+    ADR-0057 asks for a current answer rather than two adjacent ones.
+
+    Capacity is the listing's own ``max_prompt_tokens``, per tier, and a tier
+    the listing does not size is simply **absent** — never ``0``.
+    :func:`elect_selector` already excludes a model with no capacity evidence
+    under :attr:`CandidateExclusion.NO_CAPACITY_EVIDENCE`, which is the honest
+    verdict; a zero would report the same exclusion as a *measured* incapacity
+    the harness never claimed.
+
+    Every failure answers ``None`` — unreadable, unparseable, or absent — for
+    the reason :func:`~git_loopy.static_route.refresh_harness_capabilities`
+    does: unknown is one verdict, and the router turns it into
+    ``capabilities_unavailable`` rather than into permission.
+
+    Args:
+        fetch: The listing call, injected for tests. Defaults to the same
+            throwaway connect-list-stop the Static route's read uses.
+        clock: Source of the aware retrieval timestamp.
+        warn: Sink for the observed failure, so an unavailable verdict keeps
+            its cause recoverable.
+    """
+    if fetch is None:
+        fetch = default_capability_fetch()
+    now = clock or (lambda: datetime.now(timezone.utc))
+    try:
+        listing = await fetch()
+        if listing is None:
+            return None
+        retrieved_at = now()
+        if not isinstance(retrieved_at, datetime) or retrieved_at.tzinfo is None:
+            raise ValueError("retrieval clock must return an aware datetime")
+        return FreshHarnessCapabilities(
+            retrieved_at=retrieved_at,
+            capabilities=HarnessCapabilities.from_listing(listing),
+            tier_capacities=_tier_capacities(listing),
+        )
+    except Exception as exc:
+        if warn is not None:
+            warn(f"{type(exc).__name__}: {exc}")
+        return None
+
+
+def _tier_capacities(listing: Sequence[Any]) -> dict[tuple[str, str], int]:
+    """Project ``(model, tier) -> max prompt tokens`` off a duck-typed listing.
+
+    Attribute access only and no SDK import, matching every other reader of a
+    listing in the kit.
+    """
+    capacities: dict[tuple[str, str], int] = {}
+    for info in listing:
+        model = getattr(info, "id", None)
+        if not isinstance(model, str) or not model:
+            continue
+        billing = getattr(info, "billing", None)
+        prices = getattr(billing, "token_prices", None) if billing else None
+        if prices is None:
+            continue
+        for tier, block in (
+            (BASE_CONTEXT_TIER, prices),
+            (LONG_CONTEXT_TIER, getattr(prices, "long_context", None)),
+        ):
+            capacity = _capacity(block)
+            if capacity is not None:
+                capacities[(model, tier)] = capacity
+    return capacities
+
+
+def _capacity(block: Any) -> int | None:
+    if block is None:
+        return None
+    value = getattr(block, "max_prompt_tokens", None)
+    if isinstance(value, bool) or not isinstance(value, Integral) or value < 0:
+        return None
+    return int(value)
+
+
 @dataclass(frozen=True)
 class RoutingRequest:
     """The complete bounded, read-only issue input to dynamic routing."""
@@ -894,6 +993,7 @@ class RoutingProposal:
 
     proposal_id: str
     route: WorkRoute
+    work_evidence: AssessmentCandidate
     summary: str
     selector: SelectorSettings
     relevant_input_identity: str
@@ -910,11 +1010,23 @@ class RoutingProposal:
 
 
 @dataclass(frozen=True)
-class RoutingResolution:
-    """A freshly validated, locally durable binding decision."""
+class DynamicRouteDecision:
+    """A freshly validated, locally durable binding decision.
+
+    Named for the decision rather than the resolution because the glossary's
+    **Routing resolution** is :class:`git_loopy.config.RoutingResolution` — the
+    record that actually supplies a work session's settings and rides
+    ``wrapper.pickup.bound`` to the CLI and Dashboard. This is the router's own
+    provenance: what was proposed, from which evidence, validated when, and at
+    what cost. It *becomes* a Routing resolution by handing its
+    :attr:`route` to :func:`git_loopy.config.resolve_iteration_model`; two
+    types with one name would let a caller mistake the audit trail for the
+    settings.
+    """
 
     proposal_id: str
     route: WorkRoute
+    work_evidence: AssessmentCandidate
     summary: str
     selector: SelectorSettings
     relevant_input_identity: str
@@ -935,6 +1047,120 @@ class RoutingPrerequisiteError(RuntimeError):
     """A required dynamic-routing prerequisite was not supplied."""
 
 
+#: Where the operator's Artificial Analysis authorization is read from.
+#: Deliberately the environment and never Config: ADR-0057 requires the key be
+#: held outside versioned Config, and a :class:`~git_loopy.config.RunConfig` is
+#: serialized verbatim into the detached Run's control payload.
+ARTIFICIAL_ANALYSIS_API_KEY_ENV = "GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY"
+
+#: What separates a Copilot model from the effort it was scored at in a
+#: ``[route_associations]`` value. A model id carries no ``@``, so the split is
+#: unambiguous and a bare value means "this model has no effort dial".
+_ASSOCIATION_EFFORT_SEPARATOR = "@"
+
+
+@dataclass(frozen=True)
+class DynamicRoutePrerequisites:
+    """Everything ADR-0057 requires before *any* dynamic work may start.
+
+    Each field is an explicit operator decision with no default, because every
+    default this object could invent is a bound the operator did not agree to:
+    an inferred deadline is an unbounded one to anybody who expected theirs, an
+    inferred allowance spends credits nobody authorized, and an inferred
+    association is exactly the "similar names are proof of identity" the
+    evidence rules exclude.
+    """
+
+    api_key: str
+    deadline_seconds: float
+    routing_credit_allowance: Decimal
+    selector_concurrency: int
+    associations: Mapping[tuple[str, str | None], str]
+
+
+def resolve_prerequisites(
+    config: Any, env: Mapping[str, str]
+) -> DynamicRoutePrerequisites:
+    """Read the dynamic prerequisites off a Run's Config and environment.
+
+    Answers the complete set or refuses, naming the one thing to supply. It
+    reads a Config *duck-typed* rather than importing
+    :class:`~git_loopy.config.RunConfig`, so this module stays a leaf of the
+    import graph that ``config`` itself can depend on later without a cycle.
+
+    Raises:
+        RoutingPrerequisiteError: Something required is absent. The message
+            names the setting and never quotes a supplied value, because the
+            one value it could quote is the API key.
+    """
+    api_key = env.get(ARTIFICIAL_ANALYSIS_API_KEY_ENV, "").strip()
+    if not api_key:
+        raise RoutingPrerequisiteError(
+            f"Dynamic routing needs an Artificial Analysis API key in "
+            f"{ARTIFICIAL_ANALYSIS_API_KEY_ENV}. It is read from the "
+            "environment and never written to Config; get one at "
+            "https://artificialanalysis.ai/api-reference."
+        )
+    deadline = getattr(config, "routing_deadline_seconds", None)
+    if deadline is None:
+        raise RoutingPrerequisiteError(
+            "Dynamic routing needs an explicit finite routing_deadline_seconds "
+            "(--routing-deadline-seconds, GIT_LOOPY_ROUTING_DEADLINE_SECONDS or "
+            "Config). There is no default: an assessment with no deadline is an "
+            "unbounded one."
+        )
+    allowance = getattr(config, "routing_credit_allowance", None)
+    if allowance is None:
+        raise RoutingPrerequisiteError(
+            "Dynamic routing needs an explicit routing_credit_allowance "
+            "(--routing-credit-allowance, GIT_LOOPY_ROUTING_CREDIT_ALLOWANCE or "
+            "Config). It bounds what one Run may spend deciding routes, and "
+            "nothing may choose it for you."
+        )
+    concurrency = getattr(config, "selector_concurrency", None)
+    if concurrency is None:
+        raise RoutingPrerequisiteError(
+            "Dynamic routing needs an explicit selector_concurrency "
+            "(--selector-concurrency, GIT_LOOPY_SELECTOR_CONCURRENCY or Config) "
+            "so parallel Pickups cannot each buy a Route selector call at once."
+        )
+    associations = _parse_associations(getattr(config, "route_associations", {}) or {})
+    if not associations:
+        raise RoutingPrerequisiteError(
+            "Dynamic routing needs a verified [route_associations] table "
+            "mapping each Artificial Analysis model id to the Copilot "
+            "configuration it scored (`<model>@<effort>`, or a bare model where "
+            "the model has no effort dial). A similar name is not proof of "
+            "identity, so nothing is inferred and an empty table elects nothing."
+        )
+    return DynamicRoutePrerequisites(
+        api_key=api_key,
+        deadline_seconds=float(deadline),
+        routing_credit_allowance=Decimal(allowance),
+        selector_concurrency=int(concurrency),
+        associations=associations,
+    )
+
+
+def _parse_associations(
+    table: Mapping[str, str],
+) -> dict[tuple[str, str | None], str]:
+    associations: dict[tuple[str, str | None], str] = {}
+    for identity, configuration in table.items():
+        model, separator, effort = str(configuration).rpartition(
+            _ASSOCIATION_EFFORT_SEPARATOR
+        )
+        if not separator:
+            model, effort = str(configuration), ""
+        if not str(identity).strip() or not model.strip():
+            raise RoutingPrerequisiteError(
+                "a [route_associations] row must map a non-empty Artificial "
+                "Analysis model id to a non-empty Copilot configuration"
+            )
+        associations[(str(identity), effort.strip() or None)] = model.strip()
+    return associations
+
+
 class RoutingSourceError(RuntimeError):
     """A fresh evidence or capability source could not be read."""
 
@@ -942,7 +1168,7 @@ class RoutingSourceError(RuntimeError):
 _EvidenceFetch = Callable[[], Awaitable[FreshEvidence | ArtificialAnalysisResult]]
 _CapabilitiesFetch = Callable[[], Awaitable[FreshHarnessCapabilities]]
 _Assess = Callable[[SelectorSettings, AssessmentRequest], Awaitable[SelectorCallResult]]
-_Record = Callable[[RoutingResolution], Awaitable[object]]
+_Record = Callable[[DynamicRouteDecision], Awaitable[object]]
 
 
 class DynamicRouter:
@@ -988,7 +1214,7 @@ class DynamicRouter:
 
     async def bind(
         self, proposal: RoutingProposal, request: RoutingRequest
-    ) -> RoutingResolution | RoutingUnavailable:
+    ) -> DynamicRouteDecision | RoutingUnavailable:
         """Freshly validate a proposal, reassessing changed inputs."""
         canonical = self._proposals.get(getattr(proposal, "proposal_id", ""))
         if canonical is None or canonical != proposal or not proposal.nonbinding:
@@ -1013,9 +1239,10 @@ class DynamicRouter:
             reassessed = True
             superseded = proposal.proposal_id
             self._proposals.pop(proposal.proposal_id, None)
-        resolution = RoutingResolution(
+        resolution = DynamicRouteDecision(
             proposal_id=active.proposal_id,
             route=active.route,
+            work_evidence=active.work_evidence,
             summary=active.summary,
             selector=active.selector,
             relevant_input_identity=active.relevant_input_identity,
@@ -1143,6 +1370,7 @@ class DynamicRouter:
         proposal = RoutingProposal(
             proposal_id=uuid.uuid4().hex,
             route=route,
+            work_evidence=selected,
             summary=summary,
             selector=election.selector,
             relevant_input_identity=_relevant_input_identity(
@@ -1287,6 +1515,77 @@ def _claims_public_speed_is_issue_duration(summary: str) -> bool:
         )
     )
     return issue_duration and public_speed
+
+
+def routing_provenance_payload(
+    decision: DynamicRouteDecision, *, issue: int | str
+) -> dict[str, Any]:
+    """Project one bound decision into its ``wrapper.routing.resolved`` payload.
+
+    The **Dynamic route**'s local decision provenance, composed here rather
+    than at the emitting call site so the Event's shape belongs to the module
+    that owns the decision. Every member of the family reproduces these keys,
+    and the Conformance fixture pins this function's output rather than a
+    hand-written record that merely resembles it.
+
+    Three rules the shape enforces, each of them an acceptance criterion the
+    prose alone could not hold:
+
+    - **An unknown is a null.** A source that published no measurement date, no
+      benchmark version and no conditions leaves three nulls here, never three
+      zeroes and never three dropped keys. A reader has to be able to tell "the
+      leaderboard does not say" from "the Runner did not look".
+    - **Public speed is not issue duration.** ``public_output_tokens_per_second``
+      is the leaderboard's published inference speed for the benchmarked model
+      and is named for what it is, so no consumer can render it as a forecast of
+      how long this issue takes under the harness.
+    - **Decimals travel as strings.** An Intelligence Index and a routing-credit
+      figure are exact decimal quantities; JSON floats are not, and a Run's
+      **Consumption** is reconciled against the credits recorded here.
+    """
+    evidence = decision.work_evidence
+    return {
+        "issue": issue,
+        "proposal_id": decision.proposal_id,
+        "model": decision.route.model,
+        "effort": decision.route.reasoning_effort,
+        "context_tier": decision.route.context_tier,
+        "summary": decision.summary,
+        "selector_model": decision.selector.model,
+        "selector_effort": decision.selector.reasoning_effort,
+        "selector_context_tier": decision.selector.context_tier,
+        "evidence_source": evidence.source_identity,
+        "source_model_identity": evidence.source_model_identity,
+        "intelligence_index": _decimal_or_none(evidence.intelligence_index),
+        "public_output_tokens_per_second": _decimal_or_none(
+            evidence.public_output_tokens_per_second
+        ),
+        "measurement_at": _instant_or_none(evidence.measurement_at),
+        "benchmark_version": evidence.benchmark_version,
+        "conditions": evidence.conditions,
+        "evidence_retrieved_at": _instant(decision.evidence_retrieved_at),
+        "capabilities_retrieved_at": _instant(decision.capabilities_retrieved_at),
+        "validated_at": _instant(decision.validated_at),
+        "revalidated": decision.revalidated,
+        "reassessed": decision.reassessed,
+        "superseded_proposal_id": decision.superseded_proposal_id,
+        "routing_credits": str(decision.usage.routing_credits),
+        "classification_attempts": decision.usage.classification_attempts,
+        "selector_attempts": decision.usage.selector_attempts,
+        "routing_overshot": decision.usage.overshot,
+    }
+
+
+def _decimal_or_none(value: Decimal | None) -> str | None:
+    return None if value is None else str(value)
+
+
+def _instant(value: datetime) -> str:
+    return format_timestamp(value)
+
+
+def _instant_or_none(value: datetime | None) -> str | None:
+    return None if value is None else _instant(value)
 
 
 def _relevant_input_identity(

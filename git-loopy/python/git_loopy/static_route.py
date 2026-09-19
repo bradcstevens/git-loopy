@@ -7,10 +7,14 @@ document itself lands with its own documentation change and this module must
 not link to a path that does not exist beside it. This module owns the
 **static** half of that policy — the first tracer — and deliberately owns *only*
 that half: nothing here reaches Artificial Analysis, elects a **Route
-selector**, or prepares a **Routing proposal**. The dynamic default the ADR
-describes is named here
-(:data:`DYNAMIC_POLICY_NAME`) purely so an operator who asks for it is told
-it has not landed, rather than being silently given something else.
+selector**, or prepares a **Routing proposal**. That half is
+:mod:`git_loopy.dynamic_route` (#561), which imports :class:`HarnessCapabilities`
+from here because "what the authenticated harness offers this account" is one
+question with one answer whichever policy asks it.
+
+:class:`RoutePolicy` is therefore shared vocabulary rather than this module's
+own: it names every policy the family can parse, including the ``DYNAMIC`` one
+implemented next door.
 
 Three ideas, one per section below.
 
@@ -48,18 +52,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Mapping, Sequence
 
-#: The policy ADR-0057 makes the eventual default for unpinned work. Named
-#: rather than implemented, and deliberately *not* a :class:`RoutePolicy`
-#: member: an operator who asks for it gets a refusal that says so, which is
-#: the only honest answer while the **Route selector**, its evidence sources,
-#: and its credit accounting are undelivered. Spelling it here is what keeps
-#: this tracer distinguishable from the thing it is a tracer *for*.
-DYNAMIC_POLICY_NAME = "dynamic"
-
 __all__ = [
+    "BASE_CONTEXT_TIER",
+    "LONG_CONTEXT_TIER",
     "RoutePolicy",
     "RoutePolicyError",
-    "DYNAMIC_POLICY_NAME",
     "HarnessModel",
     "HarnessCapabilities",
     "StaticRoute",
@@ -67,6 +64,7 @@ __all__ = [
     "StaticRouteError",
     "validate_static_route",
     "refresh_harness_capabilities",
+    "default_capability_fetch",
 ]
 
 
@@ -86,38 +84,37 @@ class RoutePolicy(Enum):
     existing Config as though the new policy had always been in force, so a
     Run that never named a policy keeps every legacy gate, the built-in
     **Escalation rung**, and the historical event stream unchanged.
+
+    ``DYNAMIC`` is the opt-in policy :mod:`git_loopy.dynamic_route` implements
+    (#561). It lives here beside ``STATIC`` because the two are one closed
+    vocabulary an operator picks from, not because this module runs it — and
+    naming it is not the same as being able to run it: a Run that selects it
+    without the Artificial Analysis access, deadline, routing-credit allowance
+    and selector concurrency ADR-0057 requires is refused at preflight.
     """
 
     UNSELECTED = "unselected"
     STATIC = "static"
+    DYNAMIC = "dynamic"
 
     @classmethod
     def parse(cls, raw: str | None) -> "RoutePolicy":
         """Read an operator-supplied policy name, or ``None`` for unselected.
 
         Raises:
-            RoutePolicyError: The name is ``dynamic`` (accepted design, not yet
-                implemented) or outside the vocabulary entirely.
+            RoutePolicyError: The name is outside the vocabulary.
         """
         if raw is None:
             return cls.UNSELECTED
         value = raw.strip().lower()
         if not value:
             return cls.UNSELECTED
-        if value == cls.STATIC.value:
-            return cls.STATIC
-        if value == cls.UNSELECTED.value:
-            return cls.UNSELECTED
-        if value == DYNAMIC_POLICY_NAME:
-            raise RoutePolicyError(
-                "route_policy 'dynamic' is accepted design but not implemented "
-                "(ADR-0057): this Runner delivers the Static route only. Select "
-                "'static' and name a model, reasoning effort and context tier, "
-                "or leave route_policy unset to keep the current behaviour."
-            )
+        for policy in cls:
+            if value == policy.value:
+                return policy
         raise RoutePolicyError(
-            f"route_policy must be 'static' (got {raw!r}); leave it unset to "
-            "keep the current behaviour."
+            f"route_policy must be 'static' or 'dynamic' (got {raw!r}); leave "
+            "it unset to keep the current behaviour."
         )
 
 
@@ -127,10 +124,10 @@ _POLICY_DISABLED = "disabled"
 #: The root-session tier every listed model offers. A tier is a *choice* the
 #: harness exposes, and the absence of a long-context price is the harness
 #: declining to offer the other one — never a reason to doubt this one.
-_BASE_CONTEXT_TIER = "default"
+BASE_CONTEXT_TIER = "default"
 
 #: The tier a model offers only where the harness prices it.
-_LONG_CONTEXT_TIER = "long_context"
+LONG_CONTEXT_TIER = "long_context"
 
 
 @dataclass(frozen=True)
@@ -176,9 +173,9 @@ class HarnessModel:
             if token_prices is not None
             else None
         )
-        tiers = {_BASE_CONTEXT_TIER}
+        tiers = {BASE_CONTEXT_TIER}
         if long_context is not None:
-            tiers.add(_LONG_CONTEXT_TIER)
+            tiers.add(LONG_CONTEXT_TIER)
         return cls(
             model=str(getattr(info, "id")),
             eligible=policy_state != _POLICY_DISABLED,
@@ -377,7 +374,7 @@ async def refresh_harness_capabilities(
             somewhere to find that out.
     """
     if fetch is None:
-        fetch = _default_capability_fetch()
+        fetch = default_capability_fetch()
     try:
         listing = await fetch()
         if listing is None:
@@ -389,7 +386,7 @@ async def refresh_harness_capabilities(
         return None
 
 
-def _default_capability_fetch() -> Any:
+def default_capability_fetch() -> Any:
     """The refresh's own fetch, looked up on the listing module at call time.
 
     Resolved here rather than bound at import so the SDK stays lazily imported

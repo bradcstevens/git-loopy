@@ -602,3 +602,105 @@ def test_an_unselected_policy_still_gates_against_the_roster() -> None:
 
     assert resolution.reasoning_effort is None
     assert resolution.gate_warnings == (EffortGateWarning.INCAPABLE_MODEL,)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic routing (#561, ADR-0057): the elected route becomes the resolution.
+# ---------------------------------------------------------------------------
+
+
+def test_a_dynamic_route_becomes_the_resolution_with_its_own_source() -> None:
+    """The **Route selector**'s triple travels verbatim, and says where it came from.
+
+    Supplied to the same pure resolver the escalation rung is, and for the same
+    reason: a route the selector chose and a route a label chose must be
+    provenanced and projected by identical code, or the two arrive on one wire
+    described two different ways. The triple is *complete* where the rung is a
+    pair, because the selector elects a context tier as well.
+    """
+    cfg = RunConfig(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        route_policy=RoutePolicy.DYNAMIC,
+    )
+
+    resolution = resolve_iteration_model(
+        cfg,
+        ["task-type:implementation"],
+        dynamic_route=("claude-haiku-4.5", "high", "long_context"),
+    )
+
+    assert resolution.model == "claude-haiku-4.5"
+    assert resolution.reasoning_effort == "high"
+    assert resolution.context_tier == "long_context"
+    assert resolution.source is RoutingSource.DYNAMIC
+    assert resolution.task_type_keys == ("implementation",)
+    assert resolution.gate_warnings == ()
+
+
+def test_a_dynamic_route_is_not_rescued_by_the_hardcoded_roster() -> None:
+    """The harness already verified it; the roster's second opinion is a stale one."""
+    cfg = RunConfig(route_policy=RoutePolicy.DYNAMIC)
+
+    resolution = resolve_iteration_model(
+        cfg, [], dynamic_route=("claude-haiku-4.5", "high", "long_context")
+    )
+
+    assert (resolution.reasoning_effort, resolution.context_tier) == (
+        "high",
+        "long_context",
+    )
+    assert resolution.gate_warnings == ()
+
+
+def test_an_operator_authored_entry_still_decides_under_the_dynamic_policy() -> None:
+    """A `[routing]` entry for this Task type is a Static route and bypasses the selector.
+
+    ADR-0057 keeps existing model/effort entries static under the new policy,
+    so the loop must be able to tell "the operator already chose" from "nobody
+    has chosen yet" — which is what the **Routing source** answers. The pair is
+    carried unrescued for the reason a Static route is.
+    """
+    cfg = RunConfig(
+        model="claude-opus-4.8",
+        reasoning_effort="max",
+        routing={"docs": ("claude-haiku-4.5", "high")},
+        route_policy=RoutePolicy.DYNAMIC,
+    )
+
+    routed = resolve_iteration_model(cfg, ["task-type:docs"])
+    unrouted = resolve_iteration_model(cfg, ["task-type:chore"])
+
+    assert routed.source is RoutingSource.ROUTED
+    assert (routed.model, routed.reasoning_effort) == ("claude-haiku-4.5", "high")
+    assert routed.gate_warnings == ()
+    assert config_module.static_route_applies(routed) is True
+    assert config_module.static_route_applies(unrouted) is False
+
+
+def test_every_routing_source_states_whether_a_static_route_decided_it() -> None:
+    """A closed vocabulary, answered exhaustively — a new source cannot be silent."""
+    decided = {
+        source: config_module.static_route_applies(
+            RoutingResolution(
+                model="m",
+                reasoning_effort=None,
+                context_tier="default",
+                source=source,
+                task_type_keys=(),
+                gate_warnings=(),
+                lifecycle_position=RoutingLifecyclePosition.FRESH,
+            )
+        )
+        for source in RoutingSource
+    }
+
+    assert decided == {
+        RoutingSource.ROUTED: True,
+        RoutingSource.DEFAULTED_EXPLICIT_OVERRIDE: True,
+        RoutingSource.ESCALATED: True,
+        RoutingSource.DEFAULTED_NO_TASK_TYPE_LABEL: False,
+        RoutingSource.DEFAULTED_UNKNOWN_TASK_TYPE_KEY: False,
+        RoutingSource.DEFAULTED_CONFLICTING_TASK_TYPE_KEYS: False,
+        RoutingSource.DYNAMIC: False,
+    }

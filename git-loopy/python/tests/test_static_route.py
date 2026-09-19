@@ -86,12 +86,21 @@ def test_the_unselected_policy_can_be_named_as_well_as_omitted() -> None:
     )
 
 
-def test_dynamic_is_named_but_refused_until_it_is_delivered() -> None:
-    with pytest.raises(static_route.RoutePolicyError) as excinfo:
-        static_route.RoutePolicy.parse("dynamic")
-    message = str(excinfo.value)
-    assert "dynamic" in message
-    assert "ADR-0057" in message
+def test_dynamic_is_selectable_by_name() -> None:
+    """The opt-in **Dynamic routing** policy is a policy, not a refusal (#561).
+
+    #560 named ``dynamic`` only so that asking for it produced an honest "not
+    delivered" rather than silently getting something else. The selector, its
+    evidence source and its credit accounting have landed, so the name now
+    resolves to the member — and what an operator who has not supplied the
+    prerequisites gets is a *preflight* refusal naming the missing one, which
+    is a different and much more useful sentence.
+    """
+    assert static_route.RoutePolicy.parse("dynamic") is static_route.RoutePolicy.DYNAMIC
+    assert (
+        static_route.RoutePolicy.parse("  DYNAMIC  ")
+        is static_route.RoutePolicy.DYNAMIC
+    )
 
 
 def test_an_unknown_policy_names_the_permitted_values() -> None:
@@ -293,7 +302,7 @@ def test_the_refresh_opens_its_own_short_lived_client() -> None:
     listing object is what must *not* be reached for, and identity is the only
     assertion that can tell the two apart.
     """
-    assert static_route._default_capability_fetch() is model_listing.fetch_live_models
+    assert static_route.default_capability_fetch() is model_listing.fetch_live_models
 
 
 def test_a_listing_that_cannot_be_read_answers_nothing_rather_than_raising() -> None:

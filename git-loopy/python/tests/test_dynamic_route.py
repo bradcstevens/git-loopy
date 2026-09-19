@@ -234,7 +234,7 @@ def test_dynamic_router_revalidates_unchanged_proposal_without_reassessment() ->
     evidence_reads = 0
     capability_reads = 0
     assessments: list[dynamic_route.AssessmentRequest] = []
-    recorded: list[dynamic_route.RoutingResolution] = []
+    recorded: list[dynamic_route.DynamicRouteDecision] = []
 
     async def fetch_evidence() -> dynamic_route.FreshEvidence:
         nonlocal evidence_reads
@@ -268,7 +268,7 @@ def test_dynamic_router_revalidates_unchanged_proposal_without_reassessment() ->
             routing_credits=Decimal("0.25"),
         )
 
-    async def record(resolution: dynamic_route.RoutingResolution) -> None:
+    async def record(resolution: dynamic_route.DynamicRouteDecision) -> None:
         recorded.append(resolution)
 
     router = dynamic_route.DynamicRouter(
@@ -300,7 +300,7 @@ def test_dynamic_router_revalidates_unchanged_proposal_without_reassessment() ->
 
     resolution = asyncio.run(router.bind(proposal, request))
 
-    assert isinstance(resolution, dynamic_route.RoutingResolution)
+    assert isinstance(resolution, dynamic_route.DynamicRouteDecision)
     assert resolution.route.model == "work-model"
     assert resolution.revalidated is True
     assert resolution.reassessed is False
@@ -365,7 +365,7 @@ def test_dynamic_router_reports_prerequisite_and_source_failures() -> None:
         del selector, request
         raise AssertionError("selector must not run")
 
-    async def unused_record(resolution: dynamic_route.RoutingResolution) -> None:
+    async def unused_record(resolution: dynamic_route.DynamicRouteDecision) -> None:
         del resolution
         raise AssertionError("recorder must not run")
 
@@ -412,7 +412,7 @@ def test_classification_usage_exhausts_quota_before_selector_admission() -> None
         selector_calls += 1
         raise AssertionError("quota must stop selector admission")
 
-    async def record(resolution: dynamic_route.RoutingResolution) -> None:
+    async def record(resolution: dynamic_route.DynamicRouteDecision) -> None:
         del resolution
 
     ledger = dynamic_route.RoutingAdmissionLedger(
@@ -455,7 +455,7 @@ def test_dynamic_router_deadline_bounds_stalled_evidence_fetch() -> None:
         del selector, request
         raise AssertionError("deadline must stop selector admission")
 
-    async def unused_record(resolution: dynamic_route.RoutingResolution) -> None:
+    async def unused_record(resolution: dynamic_route.DynamicRouteDecision) -> None:
         del resolution
         raise AssertionError("deadline must stop recording")
 
@@ -493,7 +493,7 @@ def test_dynamic_router_reports_port_timeouts_without_spending_its_deadline() ->
         del selector, request
         raise AssertionError("source failure must stop selector admission")
 
-    async def unused_record(resolution: dynamic_route.RoutingResolution) -> None:
+    async def unused_record(resolution: dynamic_route.DynamicRouteDecision) -> None:
         del resolution
         raise AssertionError("source failure must stop recording")
 
@@ -524,7 +524,7 @@ def test_dynamic_router_rejects_empty_and_invalid_selector_output() -> None:
     async def fetch_capabilities() -> dynamic_route.FreshHarnessCapabilities:
         return capabilities
 
-    async def record(resolution: dynamic_route.RoutingResolution) -> None:
+    async def record(resolution: dynamic_route.DynamicRouteDecision) -> None:
         del resolution
 
     outputs = [
@@ -597,7 +597,7 @@ def test_dynamic_router_accepts_concise_summary_and_rejects_speed_duration_claim
     async def fetch_capabilities() -> dynamic_route.FreshHarnessCapabilities:
         return capabilities
 
-    async def record(resolution: dynamic_route.RoutingResolution) -> None:
+    async def record(resolution: dynamic_route.DynamicRouteDecision) -> None:
         del resolution
 
     async def concise_assessment(
@@ -693,9 +693,9 @@ def test_dynamic_router_supersedes_and_reassesses_changed_inputs() -> None:
             routing_credits=Decimal("0.1"),
         )
 
-    recorded: list[dynamic_route.RoutingResolution] = []
+    recorded: list[dynamic_route.DynamicRouteDecision] = []
 
-    async def record(resolution: dynamic_route.RoutingResolution) -> None:
+    async def record(resolution: dynamic_route.DynamicRouteDecision) -> None:
         recorded.append(resolution)
 
     router = dynamic_route.DynamicRouter(
@@ -715,7 +715,7 @@ def test_dynamic_router_supersedes_and_reassesses_changed_inputs() -> None:
     assert isinstance(proposal, dynamic_route.RoutingProposal)
     resolution = asyncio.run(router.bind(proposal, request))
 
-    assert isinstance(resolution, dynamic_route.RoutingResolution)
+    assert isinstance(resolution, dynamic_route.DynamicRouteDecision)
     assert resolution.reassessed is True
     assert resolution.superseded_proposal_id == proposal.proposal_id
     assert resolution.proposal_id != proposal.proposal_id
@@ -750,7 +750,7 @@ def test_dynamic_router_has_no_fallback_when_revalidation_removes_candidate() ->
             routing_credits=Decimal("0.1"),
         )
 
-    async def record(resolution: dynamic_route.RoutingResolution) -> None:
+    async def record(resolution: dynamic_route.DynamicRouteDecision) -> None:
         del resolution
         raise AssertionError("invalidated route must not be recorded")
 
@@ -801,7 +801,7 @@ def test_dynamic_router_rejects_invalid_and_stale_proposals() -> None:
             routing_credits=Decimal("0.1"),
         )
 
-    async def record(resolution: dynamic_route.RoutingResolution) -> None:
+    async def record(resolution: dynamic_route.DynamicRouteDecision) -> None:
         del resolution
 
     router = dynamic_route.DynamicRouter(
@@ -859,7 +859,7 @@ def test_dynamic_router_refuses_work_when_local_recording_fails() -> None:
             routing_credits=Decimal("0.1"),
         )
 
-    async def record(resolution: dynamic_route.RoutingResolution) -> bool:
+    async def record(resolution: dynamic_route.DynamicRouteDecision) -> bool:
         del resolution
         return False
 
@@ -908,7 +908,7 @@ def test_dynamic_router_binds_each_proposal_at_most_once() -> None:
             routing_credits=Decimal("0.1"),
         )
 
-    async def record(resolution: dynamic_route.RoutingResolution) -> None:
+    async def record(resolution: dynamic_route.DynamicRouteDecision) -> None:
         del resolution
         recording_started.set()
         await release_recording.wait()
@@ -936,7 +936,7 @@ def test_dynamic_router_binds_each_proposal_at_most_once() -> None:
 
     first, second = asyncio.run(exercise())
 
-    assert isinstance(first, dynamic_route.RoutingResolution)
+    assert isinstance(first, dynamic_route.DynamicRouteDecision)
     assert isinstance(second, dynamic_route.RoutingUnavailable)
     assert second.reason is dynamic_route.RoutingUnavailableReason.INVALID_PROPOSAL
 
@@ -1392,3 +1392,228 @@ def test_uses_capacity_evidence_for_the_matching_model_and_tier_only() -> None:
             dynamic_route.CandidateExclusion.INSUFFICIENT_CAPACITY,
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Prerequisites: explicit operator authority, or no dynamic work at all.
+# ---------------------------------------------------------------------------
+
+
+def _dynamic_config(**overrides: Any) -> Any:
+    from git_loopy.config import RunConfig
+
+    fields: dict[str, Any] = {
+        "route_policy": static_route.RoutePolicy.DYNAMIC,
+        "routing_deadline_seconds": 90.0,
+        "routing_credit_allowance": Decimal("2.50"),
+        "selector_concurrency": 2,
+        "route_associations": {"aa/opus": "claude-opus-4.8@max"},
+    }
+    fields.update(overrides)
+    return RunConfig(**fields)
+
+
+def test_prerequisites_resolve_from_config_and_the_environment() -> None:
+    """Every bound is explicit and finite, and the key never enters Config."""
+    resolved = dynamic_route.resolve_prerequisites(
+        _dynamic_config(),
+        {dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV: "aa-secret"},
+    )
+
+    assert resolved.api_key == "aa-secret"
+    assert resolved.deadline_seconds == 90.0
+    assert resolved.routing_credit_allowance == Decimal("2.50")
+    assert resolved.selector_concurrency == 2
+    assert resolved.associations == {("aa/opus", "max"): "claude-opus-4.8"}
+
+
+def test_a_missing_prerequisite_is_named_without_echoing_the_key() -> None:
+    """The refusal tells the operator what to supply, and nothing they gave."""
+    for missing, expected in (
+        ("routing_deadline_seconds", "routing_deadline_seconds"),
+        ("routing_credit_allowance", "routing_credit_allowance"),
+        ("selector_concurrency", "selector_concurrency"),
+        ("route_associations", "route_associations"),
+    ):
+        try:
+            dynamic_route.resolve_prerequisites(
+                _dynamic_config(**{missing: None if missing != "route_associations" else {}}),
+                {dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV: "aa-secret"},
+            )
+        except dynamic_route.RoutingPrerequisiteError as exc:
+            assert expected in str(exc)
+            assert "aa-secret" not in str(exc)
+        else:  # pragma: no cover - the assertion below reports it
+            raise AssertionError(f"{missing} was not refused")
+
+
+def test_an_absent_artificial_analysis_key_starts_no_dynamic_work() -> None:
+    try:
+        dynamic_route.resolve_prerequisites(_dynamic_config(), {})
+    except dynamic_route.RoutingPrerequisiteError as exc:
+        assert dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("a keyless dynamic Run was admitted")
+
+
+# --- Reading capacity off the same listing eligibility came from (#561) ------
+
+
+def _listed(
+    identifier: str,
+    *,
+    efforts: list[str] | None,
+    default_capacity: int | None,
+    long_context_capacity: int | None = None,
+    state: str = "enabled",
+) -> SimpleNamespace:
+    long_context = (
+        None
+        if long_context_capacity is None
+        else SimpleNamespace(max_prompt_tokens=long_context_capacity)
+    )
+    return SimpleNamespace(
+        id=identifier,
+        name=identifier,
+        policy=SimpleNamespace(state=state, terms=""),
+        billing=SimpleNamespace(
+            multiplier=1.0,
+            token_prices=SimpleNamespace(
+                max_prompt_tokens=default_capacity,
+                long_context=long_context,
+            ),
+        ),
+        supported_reasoning_efforts=efforts,
+        default_reasoning_effort=(efforts or [None])[0],
+    )
+
+
+def test_one_listing_read_answers_both_eligibility_and_capacity() -> None:
+    """The tier fit and the eligibility come from the same instant.
+
+    Two reads would let the harness change between them, which is how a Run
+    ends up electing a tier for a model whose eligibility it checked before the
+    account lost it. ADR-0057 wants one current answer, so there is one call.
+    """
+    when = datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc)
+
+    async def _fetch() -> list[SimpleNamespace]:
+        return [
+            _listed(
+                "gpt-5.6-terra",
+                efforts=["low", "high"],
+                default_capacity=128_000,
+                long_context_capacity=400_000,
+            )
+        ]
+
+    fresh = asyncio.run(
+        dynamic_route.refresh_harness_evidence(fetch=_fetch, clock=lambda: when)
+    )
+
+    assert fresh is not None
+    assert fresh.retrieved_at == when
+    assert fresh.capabilities.get("gpt-5.6-terra").eligible is True
+    assert fresh.tier_capacities == {
+        ("gpt-5.6-terra", "default"): 128_000,
+        ("gpt-5.6-terra", "long_context"): 400_000,
+    }
+
+
+def test_an_unpublished_capacity_is_absent_rather_than_zero() -> None:
+    """No capacity evidence excludes the candidate; a zero would silently shrink it.
+
+    ``elect_selector`` already refuses a model with no capacity evidence under
+    ``no_capacity_evidence``. Inventing ``0`` would instead report it as a model
+    that fits nothing, which is the same outcome reached by asserting something
+    the listing never said.
+    """
+
+    async def _fetch() -> list[SimpleNamespace]:
+        return [_listed("mystery", efforts=["high"], default_capacity=None)]
+
+    fresh = asyncio.run(dynamic_route.refresh_harness_evidence(fetch=_fetch))
+
+    assert fresh is not None
+    assert fresh.tier_capacities == {}
+
+
+def test_an_unreadable_listing_is_unknown_not_empty() -> None:
+    """Unknown is never permission — and an empty listing is not the same fact."""
+
+    async def _fetch() -> list[SimpleNamespace]:
+        raise RuntimeError("copilot server never answered")
+
+    observed: list[str] = []
+
+    assert (
+        asyncio.run(
+            dynamic_route.refresh_harness_evidence(
+                fetch=_fetch, warn=observed.append
+            )
+        )
+        is None
+    )
+    assert observed and "copilot server never answered" in observed[0]
+
+
+def test_a_bound_decision_keeps_the_evidence_that_elected_the_work_route() -> None:
+    """AC2/AC9: the provenance record is only as honest as what reaches it.
+
+    The elected route is three words — model, effort, tier — and three words
+    cannot say which benchmark identity backed them, what it scored, when it was
+    measured, or which of those the source left unknown. So the decision keeps
+    the candidate verbatim: the same record the **Route selector** read, which
+    is what makes the local decision provenance re-checkable rather than a
+    restatement of the outcome.
+    """
+    evidence, capabilities = _fresh_router_inputs(score="80")
+
+    async def fetch_evidence() -> dynamic_route.FreshEvidence:
+        return evidence
+
+    async def fetch_capabilities() -> dynamic_route.FreshHarnessCapabilities:
+        return capabilities
+
+    async def assess(
+        selector: dynamic_route.SelectorSettings,
+        request: dynamic_route.AssessmentRequest,
+    ) -> dynamic_route.SelectorCallResult:
+        del selector
+        return dynamic_route.SelectorCallResult(
+            output={
+                "candidate_identity": request.candidates[0].stable_identity,
+                "summary": "Forecast from the published index.",
+            },
+            routing_credits=Decimal("0.1"),
+        )
+
+    async def record(decision: dynamic_route.DynamicRouteDecision) -> None:
+        del decision
+
+    router = dynamic_route.DynamicRouter(
+        evidence_fetch=fetch_evidence,
+        capabilities_fetch=fetch_capabilities,
+        selector_assess=assess,
+        recorder=record,
+        admission_ledger=dynamic_route.RoutingAdmissionLedger(
+            deadline_seconds=30,
+            routing_credit_allowance=Decimal("1"),
+            selector_concurrency=1,
+        ),
+    )
+    request = _routing_request()
+
+    proposal = asyncio.run(router.prepare(request))
+    assert isinstance(proposal, dynamic_route.RoutingProposal)
+    decision = asyncio.run(router.bind(proposal, request))
+
+    assert isinstance(decision, dynamic_route.DynamicRouteDecision)
+    kept = decision.work_evidence
+    assert kept.model == decision.route.model
+    assert kept.reasoning_effort == decision.route.reasoning_effort
+    assert kept.context_tier == decision.route.context_tier
+    assert kept.source_identity == "artificial-analysis"
+    assert kept.source_model_identity == "aa/work-model/high"
+    assert kept.intelligence_index == Decimal("80")
+    assert proposal.work_evidence == kept

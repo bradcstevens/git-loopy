@@ -26,6 +26,7 @@ from git_loopy.calibration_search import (
 )
 from git_loopy.trial_concurrency import InlineTrialDispatcher
 from git_loopy.denomination import BilledCreditsDenomination
+from git_loopy import dynamic_route
 from git_loopy import events as events_module
 from git_loopy import cli as cli_module
 from git_loopy import config as config_module
@@ -1734,6 +1735,100 @@ def test_rolling_stream_orders_each_contribution_lifecycle() -> None:
     assert ordered_cases, "no pinned stream contains a Lane contribution"
 
 
+def test_the_production_router_projects_the_pinned_routing_provenance() -> None:
+    """The **Dynamic route**'s provenance record, driven through its own seam.
+
+    The fixture is the contract only while the code actually produces it, so
+    this rebuilds the pinned record from a real
+    :class:`~git_loopy.dynamic_route.DynamicRouteDecision` rather than trusting
+    a hand-written shape. A key renamed in Python without the fixture moving
+    fails here, not in a native port's replay six months later.
+    """
+    (pinned,) = [
+        event
+        for case in _EVENT_SCHEMA["rolling_stream_cases"]
+        for event in case["events"]
+        if event["type"] == events_module.WRAPPER_ROUTING_RESOLVED
+    ]
+    candidate = dynamic_route.AssessmentCandidate(
+        stable_identity="d" * 64,
+        model=pinned["model"],
+        reasoning_effort=pinned["effort"],
+        context_tier=pinned["context_tier"],
+        source_identity=pinned["evidence_source"],
+        source_model_identity=pinned["source_model_identity"],
+        intelligence_index=Decimal(pinned["intelligence_index"]),
+        public_output_tokens_per_second=Decimal(
+            pinned["public_output_tokens_per_second"]
+        ),
+        measurement_at=None,
+        benchmark_version=None,
+        conditions=None,
+    )
+    decision = dynamic_route.DynamicRouteDecision(
+        proposal_id="p-0001",
+        route=dynamic_route.WorkRoute(
+            model=pinned["model"],
+            reasoning_effort=pinned["effort"],
+            context_tier=pinned["context_tier"],
+        ),
+        work_evidence=candidate,
+        summary=pinned["summary"],
+        selector=dynamic_route.SelectorSettings(
+            model="gpt-5.4-mini",
+            reasoning_effort="low",
+            context_tier="default",
+            evidence=dynamic_route.EvidenceRecord(
+                source_identity=pinned["evidence_source"],
+                retrieved_at=datetime(2026, 5, 16, tzinfo=timezone.utc),
+                model_identity="aa-mini",
+                associated_copilot_model="gpt-5.4-mini",
+                associated_copilot_effort="low",
+                association_verified=True,
+                intelligence_index=Decimal("30"),
+                speed=Decimal("300"),
+                benchmark_version=None,
+                conditions=None,
+            ),
+        ),
+        relevant_input_identity="e" * 64,
+        validated_at=datetime(2026, 5, 16, 0, 0, 2, 150000, tzinfo=timezone.utc),
+        evidence_retrieved_at=datetime.fromisoformat(
+            pinned["evidence_retrieved_at"].replace("Z", "+00:00")
+        ),
+        capabilities_retrieved_at=datetime.fromisoformat(
+            pinned["capabilities_retrieved_at"].replace("Z", "+00:00")
+        ),
+        revalidated=True,
+        reassessed=False,
+        superseded_proposal_id=None,
+        usage=dynamic_route.RoutingUsage(
+            routing_credits=Decimal(pinned["routing_credits"]),
+            classification_attempts=0,
+            selector_attempts=pinned["selector_attempts"],
+            in_flight=0,
+            overshoot_count=0,
+        ),
+    )
+
+    projected = dynamic_route.routing_provenance_payload(decision, issue=pinned["issue"])
+
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_ROUTING_RESOLVED
+    ]
+    for key in contract["required_when_present"]:
+        assert key in projected, key
+    for key, value in pinned.items():
+        if key in ("ts", "run_id", "iter", "type"):
+            continue
+        assert projected[key] == value, key
+
+    # An unknown the source did not publish is a null, never a zero and never a
+    # key the Runner quietly dropped -- AC2's explicit unknowns.
+    for key in ("measurement_at", "benchmark_version", "conditions"):
+        assert key in projected and projected[key] is None, key
+
+
 def test_rolling_stream_places_release_advance_after_integration_publication() -> None:
     """A Release line advances only after its contribution reaches base."""
     advances = 0
@@ -2735,10 +2830,12 @@ def test_routing_resolution_fixture(case: dict[str, Any]) -> None:
         reasoning_effort=case["default"]["effort"],
         routing=routing,
         context_tier=case.get("context_tier", "default"),
+        route_policy=RoutePolicy.parse(case.get("route_policy")),
         routing_suppressed=case.get("routing_suppressed", False),
     )
     warnings: list[str] = []
     escalated = case.get("escalated")
+    elected = case.get("dynamic_route")
     result = resolve_iteration_model(
         config,
         case["labels"],
@@ -2750,6 +2847,11 @@ def test_routing_resolution_fixture(case: dict[str, Any]) -> None:
             None
             if escalated is None
             else (escalated["model"], escalated["effort"])
+        ),
+        dynamic_route=(
+            None
+            if elected is None
+            else (elected["model"], elected["effort"], elected["context_tier"])
         ),
     )
 

@@ -30,6 +30,7 @@ Design notes:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Literal, Mapping
@@ -65,6 +66,7 @@ __all__ = [
     "RoutingLifecyclePosition",
     "RoutingResolution",
     "resolve_iteration_model",
+    "static_route_applies",
 ]
 
 #: The triage-label prefix the runner reads to route an Active issue. The key
@@ -477,6 +479,13 @@ class RoutingSource(Enum):
     resolution at all: it is refused (#375, ADR-0029) before a source is chosen,
     because that key is one an unattended writer could mint as a real tracker
     label.
+
+    ``DYNAMIC`` is the **Route selector**'s own answer (#561, ADR-0057), and it
+    is a source rather than a flavour of ``ROUTED`` because the two are
+    different claims about who decided: ``ROUTED`` says an operator wrote this
+    pair down, ``DYNAMIC`` says a bounded assessment of live evidence elected
+    it. Reading the second as the first would let a routing decision be quoted
+    back as a human instruction.
     """
 
     ROUTED = "routed"
@@ -485,6 +494,44 @@ class RoutingSource(Enum):
     DEFAULTED_CONFLICTING_TASK_TYPE_KEYS = "defaulted_conflicting_task_type_keys"
     DEFAULTED_EXPLICIT_OVERRIDE = "defaulted_explicit_override"
     ESCALATED = "escalated"
+    DYNAMIC = "dynamic"
+
+
+#: The **Routing sources** under which the operator's own authored choice
+#: already settled the route, so **Dynamic routing** has nothing to add and no
+#: **Route selector** call to buy (#561, ADR-0057). ``ROUTED`` is a
+#: ``[routing]`` entry the operator wrote for this **Task type**;
+#: ``DEFAULTED_EXPLICIT_OVERRIDE`` is a run-wide flag or environment pin, which
+#: ADR-0057 keeps suppressing dynamic routing outright; ``ESCALATED`` is a rung
+#: the operator explicitly configured, and an inherited built-in one never
+#: reaches here because a selected policy drops it at Config resolution.
+#:
+#: Every *other* source is a route **nobody chose** — the run-wide default
+#: standing in for an absent, unconfigured or ambiguous label — which is
+#: precisely the unpinned work ADR-0057 hands to the selector.
+_STATIC_ROUTE_SOURCES: frozenset[RoutingSource] = frozenset(
+    {
+        RoutingSource.ROUTED,
+        RoutingSource.DEFAULTED_EXPLICIT_OVERRIDE,
+        RoutingSource.ESCALATED,
+    }
+)
+
+
+def static_route_applies(resolution: "RoutingResolution") -> bool:
+    """Whether this resolution is already an operator-authored **Static route**.
+
+    The question **Dynamic routing** asks before it spends anything: a
+    selector call bought for an issue whose route the operator had already
+    written is a credit spent to re-derive a decision that was not the
+    runner's to make.
+
+    Asked of the *resolution* rather than of the Config and the labels
+    separately, because "which source chose this pair" is exactly what the
+    resolution exists to record — and asking twice is how the two answers
+    eventually disagree.
+    """
+    return resolution.source in _STATIC_ROUTE_SOURCES
 
 
 class RoutingLifecyclePosition(Enum):
@@ -649,14 +696,49 @@ class RunConfig:
             depends on that model. ``--context-tier`` / ``GIT_LOOPY_CONTEXT_TIER``
             / Config resolve it through the ordinary precedence chain, but it is
             not a model/effort override and therefore never suppresses routing.
-        route_policy: Which **Route policy** the operator selected (#560,
+        route_policy: Which **Route policy** the operator selected (#560, #561,
             ADR-0057). :attr:`~git_loopy.static_route.RoutePolicy.UNSELECTED` —
             the default — is the *absence* of a decision and keeps every legacy
             behaviour: the roster gates rescue an unsupported setting, the
             built-in **Escalation rung** applies, and no harness capability read
             happens at all. ``STATIC`` selects ADR-0057's Static route, under
             which the selected model/effort/tier travel verbatim and are
-            verified against the authenticated harness instead.
+            verified against the authenticated harness instead. ``DYNAMIC``
+            selects **Dynamic routing**, under which an issue with no Static
+            route for its **Task type** gets its route from the **Route
+            selector** — and which is refused at preflight unless the four
+            fields below and the Artificial Analysis key are all supplied.
+        routing_deadline_seconds: The finite wall-clock budget one Run may spend
+            on routing work (#561, ADR-0057), or ``None`` for "not supplied".
+            ``None`` is not a default of "unbounded": ADR-0057 requires an
+            *explicit finite* value, so the absence refuses the policy rather
+            than choosing a deadline on the operator's behalf. Must be > 0.
+        routing_credit_allowance: The per-Run routing-credit allowance
+            classification and selector calls are admitted against, or ``None``
+            for "not supplied". A :class:`~decimal.Decimal` for the reason every
+            other **Consumption** figure is one. It is an *admission* bound
+            rather than a prepaid ceiling: a call already in flight when the
+            allowance runs out still completes and still bills, and the
+            overshoot is disclosed rather than described away. Must be ≥ 0.
+        selector_concurrency: How many **Route selector** calls may be in flight
+            at once, or ``None`` for "not supplied". Bounded rather than
+            unbounded because a **Lane** per issue would otherwise buy one
+            selector call per Lane simultaneously. Must be ≥ 1.
+        route_associations: The operator-owned mapping from an Artificial
+            Analysis model identity to the Copilot configuration it scored,
+            spelled ``<copilot model>@<effort>`` (or a bare model where the
+            model has no effort dial). ADR-0057 excludes a similar name and a
+            model's own recollection as proof of identity, so there is
+            deliberately no inference here: an identity this table does not
+            carry is unevidenced and excluded, never guessed at. Stored as a
+            read-only view for the reason :attr:`routing` is.
+
+            The Artificial Analysis **API key is deliberately not a field**. It
+            is operator-owned authorization held outside versioned Config and
+            read from the environment at the point of use, and a
+            :class:`RunConfig` is serialized verbatim into the detached Run's
+            control payload — which is exactly the "exposing credentials" the
+            policy rules out.
         routing_suppressed: ``True`` only when an explicit model or effort
             override suppressed routing run-wide. Kept on the effective config
             so the per-issue resolver can report that distinct fallback source.
@@ -709,6 +791,10 @@ class RunConfig:
     routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)
     context_tier: str = DEFAULT_CONTEXT_TIER
     route_policy: RoutePolicy = RoutePolicy.UNSELECTED
+    routing_deadline_seconds: float | None = None
+    routing_credit_allowance: Decimal | None = None
+    selector_concurrency: int | None = None
+    route_associations: Mapping[str, str] = field(default_factory=dict)
     routing_suppressed: bool = False
     skill_policy: SkillPolicyInputs = field(default_factory=SkillPolicyInputs)
     classifier_model: str | None = None
@@ -770,6 +856,30 @@ class RunConfig:
         for key in routing:
             validate_task_type_key(key)
         object.__setattr__(self, "routing", MappingProxyType(routing))
+        if (
+            self.routing_deadline_seconds is not None
+            and self.routing_deadline_seconds <= 0
+        ):
+            raise ValueError(
+                f"routing_deadline_seconds must be > 0 when set, got "
+                f"{self.routing_deadline_seconds}"
+            )
+        if (
+            self.routing_credit_allowance is not None
+            and self.routing_credit_allowance < 0
+        ):
+            raise ValueError(
+                f"routing_credit_allowance must be ≥ 0 when set, got "
+                f"{self.routing_credit_allowance}"
+            )
+        if self.selector_concurrency is not None and self.selector_concurrency < 1:
+            raise ValueError(
+                f"selector_concurrency must be ≥ 1 when set, got "
+                f"{self.selector_concurrency}"
+            )
+        object.__setattr__(
+            self, "route_associations", MappingProxyType(dict(self.route_associations))
+        )
 
 
 def _ignore_routing_warning(_message: str) -> None:
@@ -789,18 +899,22 @@ def _gate_pair(
     being settled — for tier against :data:`MODEL_CONTEXT_TIERS`. Both signals are
     returned rather than dropped; the caller carries them on its record.
 
-    **A Static route is not gated here at all** (#560, ADR-0057). These tables are
-    a hardcoded roster, and the accepted policy excludes a hardcoded roster as the
-    source of a Static route's verdict: the authenticated harness the Run actually
-    spawns is. Gating first would also make the two answers disagree in the one
-    case that matters — a stale roster row would drop an effort the live harness
-    accepts, and the route that then ran would not be the route selected. So the
-    selected settings travel verbatim and
+    **A selected Route policy is not gated here at all** (#560, #561,
+    ADR-0057). These tables are a hardcoded roster, and the accepted policy
+    excludes a hardcoded roster as the source of a selected route's verdict:
+    the authenticated harness the Run actually spawns is. Gating first would
+    also make the two answers disagree in the one case that matters — a stale
+    roster row would drop an effort the live harness accepts, and the route
+    that then ran would not be the route selected. So the selected settings
+    travel verbatim and
     :func:`git_loopy.static_route.validate_static_route` reaches the verdict
-    before work.
+    before work. Under ``DYNAMIC`` the same holds for a second reason: every
+    candidate the **Route selector** may propose was elected *from* that
+    harness listing, so the roster's second opinion could only overrule a
+    fresher one.
     """
     model, effort = pair
-    if model is None or route_policy is RoutePolicy.STATIC:
+    if model is None or route_policy is not RoutePolicy.UNSELECTED:
         return model, effort, context_tier, ()
     gated_effort = gate_reasoning_effort(model, effort)
     gated_context_tier, context_warning = gate_context_tier(
@@ -821,6 +935,7 @@ def resolve_iteration_model(
     warn: Callable[[str], None] = _ignore_routing_warning,
     lifecycle_position: RoutingLifecyclePosition = RoutingLifecyclePosition.FRESH,
     escalated_pair: tuple[str | None, str | None] | None = None,
+    dynamic_route: tuple[str, str | None, str] | None = None,
 ) -> RoutingResolution:
     """Resolve the **Routing resolution** for one Iteration attempt (issue #147).
 
@@ -881,6 +996,14 @@ def resolve_iteration_model(
         escalated_pair: The configured escalation rung when this is an escalated
             retry. A later lifecycle owner (#408) supplies it; this resolver only
             gates and records it.
+        dynamic_route: The complete ``(model, effort, context tier)`` a
+            **Route selector** elected for this issue (#561, ADR-0057), or
+            ``None``. Supplied on the same terms ``escalated_pair`` is — the
+            caller does the I/O, this resolver does the provenance — and a
+            *triple* rather than a pair because the selector elects the context
+            tier too. It wins over every label-derived source, which is the
+            whole of what "the selector decided this one" means, and it is
+            never roster-gated: it was elected from the live harness listing.
 
     Returns:
         The :class:`RoutingResolution` for this attempt.
@@ -911,6 +1034,17 @@ def resolve_iteration_model(
             raw_keys.append(key)
 
     keys = tuple(dict.fromkeys(raw_keys))
+    if dynamic_route is not None:
+        dynamic_model, dynamic_effort, dynamic_tier = dynamic_route
+        return RoutingResolution(
+            model=dynamic_model,
+            reasoning_effort=dynamic_effort,
+            context_tier=dynamic_tier,
+            source=RoutingSource.DYNAMIC,
+            task_type_keys=tuple(raw_keys),
+            gate_warnings=(),
+            lifecycle_position=lifecycle_position,
+        )
     if escalated_pair is not None:
         pair = escalated_pair
         source = RoutingSource.ESCALATED

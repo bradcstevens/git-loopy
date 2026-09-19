@@ -37,11 +37,13 @@ Design (mirrors :mod:`git_loopy.init`):
 
 from __future__ import annotations
 
+import math
 import re
 import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Sequence
 
@@ -147,6 +149,54 @@ def _coerce_route_policy(raw: str) -> str:
         raise ConfigCommandError(str(exc)) from None
 
 
+def _coerce_routing_deadline(raw: str) -> float:
+    """Dynamic routing's finite wall-clock budget (#561, ADR-0057)."""
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ConfigCommandError(
+            f"routing_deadline_seconds must be a number > 0 (got {raw!r})"
+        ) from None
+    if not math.isfinite(value) or value <= 0:
+        raise ConfigCommandError(
+            f"routing_deadline_seconds must be finite and > 0 (got {raw!r})"
+        )
+    return value
+
+
+def _coerce_routing_credits(raw: str) -> str:
+    """The per-Run routing-credit allowance, persisted as an exact string.
+
+    A credit allowance written through a float is a different number of credits
+    than the operator authorized, and TOML has no decimal type — so the value is
+    validated as a :class:`~decimal.Decimal` here and stored as the text it
+    parsed from, which is the only lossless representation available.
+    """
+    try:
+        value = Decimal(raw.strip())
+    except ArithmeticError:
+        raise ConfigCommandError(
+            f"routing_credit_allowance must be a decimal number ≥ 0 (got {raw!r})"
+        ) from None
+    if not value.is_finite() or value < 0:
+        raise ConfigCommandError(
+            f"routing_credit_allowance must be finite and ≥ 0 (got {raw!r})"
+        )
+    return str(value)
+
+
+def _coerce_selector_concurrency(raw: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ConfigCommandError(
+            f"selector_concurrency must be an integer ≥ 1 (got {raw!r})"
+        ) from None
+    if value < 1:
+        raise ConfigCommandError(f"selector_concurrency must be ≥ 1 (got {raw!r})")
+    return value
+
+
 def _coerce_issue_source(raw: str) -> str:
     value = raw.strip().lower()
     if value not in _ISSUE_SOURCES:
@@ -248,6 +298,29 @@ _KEYS: dict[str, _Key] = {
             "route_policy",
             _coerce_route_policy,
             lambda rc: rc.run.route_policy.value,
+        ),
+        # Dynamic routing's three bounds (#561, ADR-0057). Persisted so an
+        # operator opts a repository in once, and each reads back as the string
+        # it was written as — an allowance rendered through a float would print
+        # a different number of credits than the one authorized.
+        _Key(
+            "routing_deadline_seconds",
+            _coerce_routing_deadline,
+            lambda rc: rc.run.routing_deadline_seconds,
+        ),
+        _Key(
+            "routing_credit_allowance",
+            _coerce_routing_credits,
+            lambda rc: (
+                None
+                if rc.run.routing_credit_allowance is None
+                else str(rc.run.routing_credit_allowance)
+            ),
+        ),
+        _Key(
+            "selector_concurrency",
+            _coerce_selector_concurrency,
+            lambda rc: rc.run.selector_concurrency,
         ),
         # The **Task-type classifier**'s own pair (#377, ADR-0029). Two keys of
         # its own rather than a reuse of the run-wide pair: a classifier that
