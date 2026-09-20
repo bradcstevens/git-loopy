@@ -2785,6 +2785,8 @@ write_fake_tools "$tui_bin"
 write_fake_tui "$tui_repo/.git-loopy/bin/git-loopy-tui" "clone-local"
 setup_tui_env "viewer-zone"
 export FAKE_GH_LOG="$temp_dir/tui-viewer-zone-gh.log"
+previous_tz="${TZ-}"
+previous_tz_set="${TZ+x}"
 export TZ="America/Denver"
 previous_tzdir="${TZDIR-}"
 previous_tzdir_set="${TZDIR+x}"
@@ -2797,7 +2799,11 @@ run_entrypoint \
   --interactive
 status=$?
 set -e
-unset TZ
+if [[ -n "$previous_tz_set" ]]; then
+  export TZ="$previous_tz"
+else
+  unset TZ
+fi
 if [[ -n "$previous_tzdir_set" ]]; then
   export TZDIR="$previous_tzdir"
 else
