@@ -2691,6 +2691,7 @@ fi
 printf '%s\n' "$label" >>"$FAKE_TUI_STARTED"
 printf '%s\n' "$*" >>"$FAKE_TUI_ARGV"
 printf '%s\n' "${TZ-<unset>}" >>"$FAKE_TUI_ZONE"
+printf '%s\n' "${TZDIR-<unset>}" >>"$FAKE_TUI_ZONE_DIR"
 delivered=0
 while IFS= read -r line; do
   delivered=$((delivered + 1))
@@ -2710,7 +2711,8 @@ EOF
 setup_tui_env() {
   local prefix="$1"
   rm -f "$temp_dir/$prefix-tui.stdin" "$temp_dir/$prefix-tui.started" \
-    "$temp_dir/$prefix-tui.argv" "$temp_dir/$prefix-tui.zone"
+    "$temp_dir/$prefix-tui.argv" "$temp_dir/$prefix-tui.zone" \
+    "$temp_dir/$prefix-tui.zone-directory"
   export FAKE_TUI_STDIN="$temp_dir/$prefix-tui.stdin"
   export FAKE_TUI_STARTED="$temp_dir/$prefix-tui.started"
   # What the launch actually handed the helper. Both belong to #597: the helper
@@ -2718,6 +2720,7 @@ setup_tui_env() {
   # Orchestrator states no offset of its own and passes its environment through.
   export FAKE_TUI_ARGV="$temp_dir/$prefix-tui.argv"
   export FAKE_TUI_ZONE="$temp_dir/$prefix-tui.zone"
+  export FAKE_TUI_ZONE_DIR="$temp_dir/$prefix-tui.zone-directory"
   # A clone-local helper is an artifact of this distribution, so contract §16
   # requires exact Release-version equality; the default fake is a well-installed
   # one and a case that wants drift says so explicitly.
@@ -2782,7 +2785,12 @@ write_fake_tools "$tui_bin"
 write_fake_tui "$tui_repo/.git-loopy/bin/git-loopy-tui" "clone-local"
 setup_tui_env "viewer-zone"
 export FAKE_GH_LOG="$temp_dir/tui-viewer-zone-gh.log"
+previous_tz="${TZ-}"
+previous_tz_set="${TZ+x}"
 export TZ="America/Denver"
+previous_tzdir="${TZDIR-}"
+previous_tzdir_set="${TZDIR+x}"
+export TZDIR="$temp_dir/viewer-zoneinfo"
 
 set +e
 run_entrypoint \
@@ -2791,13 +2799,24 @@ run_entrypoint \
   --interactive
 status=$?
 set -e
-unset TZ
+if [[ -n "$previous_tz_set" ]]; then
+  export TZ="$previous_tz"
+else
+  unset TZ
+fi
+if [[ -n "$previous_tzdir_set" ]]; then
+  export TZDIR="$previous_tzdir"
+else
+  unset TZDIR
+fi
 assert_equal "0" "$status" "viewer-zone Run exit"
 [[ -s "$FAKE_TUI_STARTED" ]] || fail "viewer-zone Run never started the helper"
 assert_equal "" "$(<"$FAKE_TUI_ARGV")" \
   "the shell launch states no offset, so the helper resolves the viewer's zone"
 assert_equal "America/Denver" "$(<"$FAKE_TUI_ZONE")" \
   "the helper inherits the viewing machine's zone from the launch"
+assert_equal "$temp_dir/viewer-zoneinfo" "$(<"$FAKE_TUI_ZONE_DIR")" \
+  "the helper inherits the viewing machine's timezone database directory"
 
 # Discovery falls through to PATH only when the clone has no pinned helper. The
 # two fakes label themselves, so "which one ran" is observed rather than assumed.

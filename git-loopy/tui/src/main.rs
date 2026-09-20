@@ -11,7 +11,9 @@
 //! decides *where* the frames go.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, IsTerminal, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
+#[cfg(unix)]
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -642,6 +644,7 @@ const TICK: Duration = Duration::from_millis(500);
 const POLL: Duration = Duration::from_millis(100);
 
 /// How long attach mode waits before checking whether its trace grew.
+#[cfg(unix)]
 const ATTACH_POLL: Duration = Duration::from_millis(100);
 
 /// Draw the live Dashboard on the controlling terminal until end of input.
@@ -1237,17 +1240,24 @@ const CONTROLLING_TERMINAL: &str = "CONOUT$";
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::fs;
+    #[cfg(unix)]
     use std::io::Write;
-    use std::path::{Path, PathBuf};
+    #[cfg(unix)]
+    use std::path::Path;
+    use std::path::PathBuf;
+    #[cfg(unix)]
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
+    #[cfg(unix)]
     static UNIQUE: AtomicU64 = AtomicU64::new(0);
 
     fn invocation(arguments: &[&str]) -> Invocation {
         parse(arguments.iter().map(|argument| argument.to_string())).expect("the arguments parse")
     }
 
+    #[cfg(unix)]
     fn test_artifact_dir(name: &str) -> PathBuf {
         let unique = UNIQUE.fetch_add(1, AtomicOrdering::Relaxed);
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1259,6 +1269,7 @@ mod tests {
         path
     }
 
+    #[cfg(unix)]
     fn append(path: &Path, text: &str) {
         let mut file = OpenOptions::new()
             .create(true)
