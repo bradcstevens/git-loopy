@@ -320,6 +320,39 @@
         "source"
       ]
     },
+    "optional_projection_fields": {
+      "route": ["context_tier", "lifecycle_position"],
+      "queue_row": ["preparation"],
+      "preparation": [
+        "model",
+        "effort",
+        "context_tier",
+        "summary",
+        "proposal_id",
+        "prepared_at",
+        "valid_until",
+        "relevant_input_identity",
+        "selector_model",
+        "selector_effort",
+        "selector_context_tier",
+        "evidence_source",
+        "source_model_identity",
+        "evidence_retrieved_at",
+        "capabilities_retrieved_at",
+        "measurement_at",
+        "benchmark_version",
+        "conditions",
+        "routing_overshot",
+        "detail",
+        "reason"
+      ]
+    },
+    "preparation_projection": {
+      "required_fields": ["state"],
+      "states": ["proposed", "static", "reusable", "unavailable"],
+      "nonbinding": "Queue preparation describes a pending Routing proposal, never a final route, Lease, reservation, or Pool-emptiness signal. It leaves status unchanged and disappears at the authoritative Pickup.",
+      "historical": "Historical rows omit preparation. Sparse preparation records retain only the fields they actually supplied; missing provenance and measurement metadata stay unknown."
+    },
     "binding_sources": {
       "marker": [
         "working_marker"
@@ -4493,7 +4526,8 @@
                     "route": {
                       "model": "gpt-5.6-sol",
                       "effort": "high",
-                      "source": "defaulted_no_task_type_label"
+                      "source": "defaulted_no_task_type_label",
+                      "lifecycle_position": "fresh"
                     },
                     "tokens_in": null,
                     "tokens_out": null,
@@ -4636,7 +4670,8 @@
                     "route": {
                       "model": "gpt-5.6-sol",
                       "effort": "high",
-                      "source": "defaulted_no_task_type_label"
+                      "source": "defaulted_no_task_type_label",
+                      "lifecycle_position": "fresh"
                     },
                     "tokens_in": 100,
                     "tokens_out": 50,
@@ -4709,7 +4744,7 @@
       ]
     },
     {
-      "id": "escalation-reprices-a-stalled-issue-between-contributions",
+      "id": "dynamic-retry-reprices-an-issue-between-contributions",
       "inputs": {
         "model": "gpt-5.6-sol",
         "reasoning_effort": "high",
@@ -4771,7 +4806,7 @@
           "model": "gpt-5.4-mini",
           "effort": "low",
           "context_tier": "default",
-          "routing_source": "routed",
+          "routing_source": "dynamic",
           "task_type_keys": [
             "bugfix"
           ],
@@ -4869,7 +4904,7 @@
           "model": "claude-opus-5",
           "effort": "max",
           "context_tier": "default",
-          "routing_source": "escalated",
+          "routing_source": "dynamic",
           "task_type_keys": [
             "bugfix"
           ],
@@ -4997,7 +5032,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "dynamic",
+                      "lifecycle_position": "fresh"
                     },
                     "tokens_in": null,
                     "tokens_out": null,
@@ -5119,7 +5155,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "dynamic",
+                      "lifecycle_position": "fresh"
                     },
                     "tokens_in": 400,
                     "tokens_out": 120,
@@ -5181,7 +5218,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "dynamic",
+                      "lifecycle_position": "fresh"
                     },
                     "consumption": {
                       "model": "gpt-5.4-mini",
@@ -5277,7 +5315,8 @@
                     "route": {
                       "model": "claude-opus-5",
                       "effort": "max",
-                      "source": "escalated"
+                      "source": "dynamic",
+                      "lifecycle_position": "retrying"
                     },
                     "tokens_in": 400,
                     "tokens_out": 120,
@@ -5339,7 +5378,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "dynamic",
+                      "lifecycle_position": "fresh"
                     },
                     "consumption": {
                       "model": "gpt-5.4-mini",
@@ -5440,7 +5480,8 @@
                     "route": {
                       "model": "claude-opus-5",
                       "effort": "max",
-                      "source": "escalated"
+                      "source": "dynamic",
+                      "lifecycle_position": "retrying"
                     },
                     "tokens_in": 1300,
                     "tokens_out": 420,
@@ -5523,7 +5564,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "dynamic",
+                      "lifecycle_position": "fresh"
                     },
                     "consumption": {
                       "model": "gpt-5.4-mini",
@@ -5547,7 +5589,8 @@
                     "route": {
                       "model": "claude-opus-5",
                       "effort": "max",
-                      "source": "escalated"
+                      "source": "dynamic",
+                      "lifecycle_position": "retrying"
                     },
                     "consumption": {
                       "model": "claude-opus-5",
@@ -5820,7 +5863,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "routed",
+                      "lifecycle_position": "fresh"
                     },
                     "tokens_in": 200,
                     "tokens_out": 60,
@@ -5882,7 +5926,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "routed",
+                      "lifecycle_position": "fresh"
                     },
                     "consumption": {
                       "model": "gpt-5.4-mini",
@@ -5973,7 +6018,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "routed",
+                      "lifecycle_position": "fresh"
                     },
                     "tokens_in": 500,
                     "tokens_out": 150,
@@ -6056,7 +6102,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "routed",
+                      "lifecycle_position": "fresh"
                     },
                     "consumption": {
                       "model": "gpt-5.4-mini",

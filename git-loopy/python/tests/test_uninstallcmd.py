@@ -80,6 +80,44 @@ def test_uninstall_removes_machine_state_but_keeps_project_scope_and_logs(
     assert str(logs) in report
 
 
+def test_uninstall_removes_the_helper_beside_its_resolved_release_record(
+    tmp_path: Path,
+) -> None:
+    """The helper and the record proving its resolved Release leave together.
+
+    ``update`` activates the two as one unit (ADR-0052), so an uninstall that
+    took only the executable would strand a record claiming a Release nothing
+    on the machine can still answer for.
+    """
+    from git_loopy import uninstallcmd
+
+    env, executable = _uv_tool_executable(tmp_path)
+    config_home = Path(env["XDG_CONFIG_HOME"]) / "git-loopy"
+    helper = config_home / "bin" / "git-loopy-tui"
+    helper.parent.mkdir(parents=True)
+    helper.touch()
+    record = helper.parent / f"{helper.name}.release"
+    record.write_text("0.10.0\n", encoding="utf-8")
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    output: list[str] = []
+
+    result = uninstallcmd.run_uninstall(
+        env=env,
+        executable_path=executable,
+        repo_root=repo,
+        confirm=lambda _prompt: True,
+        channel_uninstaller=lambda command: executable.unlink(),
+        live_lanes=lambda _root: (),
+        output_fn=output.append,
+    )
+
+    assert result == 0
+    assert not record.exists()
+    assert str(record) in "\n".join(output)
+
+
 def test_uninstall_all_removes_project_scope_and_logs_after_confirmation(
     tmp_path: Path,
 ) -> None:

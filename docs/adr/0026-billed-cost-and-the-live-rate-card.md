@@ -30,8 +30,10 @@ already noted, the prices parse.
 
 The premise was that Credits and dollars are two units, that the harness supplies the
 first, and that the card supplies the conversion to the second. There is no such
-conversion, in either direction, on any surface the kit can reach. Against the pinned
-harness (`github-copilot-sdk==1.0.5`, CLI 1.0.67):
+conversion, in either direction, on any surface the kit can reach. The investigation
+used the then-pinned harness (`github-copilot-sdk==1.0.5`, CLI 1.0.67);
+[#594](https://github.com/bradcstevens/git-loopy/issues/594) later advanced the pin to
+SDK 1.0.14 / CLI 1.0.85. The following table records the original evidence:
 
 | surface | field | what it is denominated in |
 | --- | --- | --- |

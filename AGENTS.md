@@ -57,6 +57,13 @@ blocking gate:
   refresh itself over a `file://` remote — is covered by
   `tests/test_skill_install.py` and `tests/test_doctorcmd.py` inside the Python
   suite row.
+- **`python -m git_loopy.release_rehearsal`** (prove a promoted stable snapshot
+  before any public tag exists, ADR-0059) *runs this table* over its candidate,
+  so declaring it as a row would make Integration gate itself recursively. It is
+  release proof rather than a Lane gate: `release-promotion.yml` runs it per
+  candidate and creates no tag without it, and the boundary itself — both
+  triggers, every drift and refusal, the publication-input binding — is covered
+  offline by `tests/test_release_rehearsal.py` inside the Python suite row.
 
 Commands resolve their tools through `PATH` and are relative to the repository root,
 because Integration runs them in a throwaway private worktree on whatever host the

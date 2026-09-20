@@ -16,7 +16,7 @@ use serde::Serialize;
 use crate::event::{ContextWindowSample, IssueRef, IterationSummary};
 use crate::state::{
     DashboardState, IssueContribution, IssueLedgerEntry, IterationRow, LogLine, ResolvedRoute,
-    STATUS_ACTIVE, STATUS_GONE, STATUS_QUEUED,
+    RouteDelivery, RoutePreparation, STATUS_ACTIVE, STATUS_GONE, STATUS_QUEUED,
 };
 use crate::timestamp::{Timestamp, Zone};
 
@@ -186,6 +186,10 @@ pub struct QueueRow {
     pub closed_at: Option<String>,
     pub iteration_count: usize,
     pub route: Option<RouteView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<DeliveryView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preparation: Option<PreparationView>,
     pub tokens_in: Option<i64>,
     pub tokens_out: Option<i64>,
     pub credits: Option<f64>,
@@ -205,6 +209,8 @@ pub struct RouteView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_tier: Option<String>,
     pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lifecycle_position: Option<String>,
 }
 
 impl RouteView {
@@ -214,6 +220,103 @@ impl RouteView {
             effort: route.effort.clone(),
             context_tier: route.context_tier.clone(),
             source: route.source.clone(),
+            lifecycle_position: route.lifecycle_position.clone(),
+        }
+    }
+}
+
+/// One issue's tracker-delivery state for its final route.
+#[derive(Clone, Debug, Serialize)]
+pub struct DeliveryView {
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+impl DeliveryView {
+    fn project(delivery: &RouteDelivery) -> Self {
+        Self {
+            status: delivery.status.as_str(),
+            identity: delivery.identity.clone(),
+            label: delivery.label.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PreparationView {
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposal_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepared_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relevant_input_identity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selector_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selector_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selector_context_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_model_identity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_retrieved_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities_retrieved_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub measurement_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub benchmark_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_overshot: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl PreparationView {
+    fn project(preparation: &RoutePreparation) -> Self {
+        Self {
+            state: preparation.state.clone(),
+            model: preparation.model.clone(),
+            effort: preparation.effort.clone(),
+            context_tier: preparation.context_tier.clone(),
+            summary: preparation.summary.clone(),
+            proposal_id: preparation.proposal_id.clone(),
+            prepared_at: preparation.prepared_at.clone(),
+            valid_until: preparation.valid_until.clone(),
+            relevant_input_identity: preparation.relevant_input_identity.clone(),
+            selector_model: preparation.selector_model.clone(),
+            selector_effort: preparation.selector_effort.clone(),
+            selector_context_tier: preparation.selector_context_tier.clone(),
+            evidence_source: preparation.evidence_source.clone(),
+            source_model_identity: preparation.source_model_identity.clone(),
+            evidence_retrieved_at: preparation.evidence_retrieved_at.clone(),
+            capabilities_retrieved_at: preparation.capabilities_retrieved_at.clone(),
+            measurement_at: preparation.measurement_at.clone(),
+            benchmark_version: preparation.benchmark_version.clone(),
+            conditions: preparation.conditions.clone(),
+            routing_overshot: preparation.routing_overshot,
+            detail: preparation.detail.clone(),
+            reason: preparation.reason.clone(),
         }
     }
 }
@@ -276,6 +379,8 @@ pub struct DetailHeader {
     pub issue_elapsed_seconds: Option<f64>,
     pub active_seconds: f64,
     pub iteration_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<DeliveryView>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -424,6 +529,8 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
                     closed_at: entry.closed_at.map(|at| at.to_zoned_iso(context.zone)),
                     iteration_count: entry.contributions.len(),
                     route: entry.route.as_ref().map(RouteView::project),
+                    delivery: entry.delivery.as_ref().map(DeliveryView::project),
+                    preparation: entry.preparation.as_ref().map(PreparationView::project),
                     tokens_in: entry.usage_observed.then_some(entry.tokens_in),
                     tokens_out: entry.usage_observed.then_some(entry.tokens_out),
                     credits: entry.credits.value(),
@@ -523,6 +630,9 @@ fn drill_in_view(state: &DashboardState, context: &ViewContext, issue: &IssueRef
                 })
                 .unwrap_or(0.0),
             iteration_count: entry.map(contribution_count).unwrap_or(0),
+            delivery: entry
+                .and_then(|entry| entry.delivery.as_ref())
+                .map(DeliveryView::project),
         },
         iteration_breakdown: IterationBreakdown {
             rows: entry

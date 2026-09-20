@@ -26,6 +26,8 @@ from git_loopy.calibration_search import (
 )
 from git_loopy.trial_concurrency import InlineTrialDispatcher
 from git_loopy.denomination import BilledCreditsDenomination
+from git_loopy import dynamic_route
+from git_loopy import route_preparation
 from git_loopy import events as events_module
 from git_loopy import cli as cli_module
 from git_loopy import config as config_module
@@ -40,6 +42,7 @@ from git_loopy.config import (
     MODEL_REASONING_EFFORTS,
     EffortGateWarning,
     RoutingLifecyclePosition,
+    RoutingResolution,
     RoutingSource,
     TASK_TYPE_KEYS,
     RunConfig,
@@ -49,6 +52,7 @@ from git_loopy.config import (
     gate_reasoning_effort,
     resolve_iteration_model,
 )
+from git_loopy.attempt_evidence import AttemptEvidenceLedger
 from git_loopy.attempt_lifecycle import AttemptLedger, AttemptState
 from git_loopy.escalation import EscalationLedger
 from git_loopy.session_outcome import SessionOutcome
@@ -919,8 +923,46 @@ _NOT_EVENT_TYPES = frozenset(
         # the cancel rung admits. Pinned instead by
         # ``test_wind_down_vocabulary_has_one_declaration``.
         "WIND_DOWN_CANCEL_CAUSE",
+        # The two ``routing_reuse`` spellings (#565). Payload values of
+        # ``wrapper.routing.resolved``, exported from ``events`` so the writer,
+        # the CLI readback and the reuse projection cannot drift apart. Pinned
+        # instead by the ``reuse`` clause of that type's payload contract.
+        "ROUTE_ELECTED",
+        "ROUTE_REVALIDATED",
+        # The four ``state`` spellings of ``wrapper.routing.prepared`` (#566),
+        # exported from ``events`` for the same reason and pinned instead by
+        # that type's ``state_values``, below.
+        "ROUTE_PREPARATION_PROPOSED",
+        "ROUTE_PREPARATION_STATIC",
+        "ROUTE_PREPARATION_REUSABLE",
+        "ROUTE_PREPARATION_UNAVAILABLE",
     }
 )
+
+
+def test_the_preparation_state_vocabulary_has_one_declaration() -> None:
+    """The four preparation spellings are the fixture's, exactly (#566).
+
+    They are payload values rather than event types, so the literal pin below
+    cannot reach them — and a Python rename that left the fixture behind would
+    leave a native port replaying a state it has never heard of. This is the
+    declaration that closes that gap, exactly as the ``reuse`` clause does for
+    ``routing_reuse``.
+    """
+    declared = (
+        events_module.ROUTE_PREPARATION_PROPOSED,
+        events_module.ROUTE_PREPARATION_STATIC,
+        events_module.ROUTE_PREPARATION_REUSABLE,
+        events_module.ROUTE_PREPARATION_UNAVAILABLE,
+    )
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_ROUTING_PREPARED
+    ]
+
+    assert list(declared) == contract["state_values"]
+    assert [outcome.value for outcome in route_preparation.PreparationOutcome] == (
+        contract["state_values"]
+    )
 
 
 def test_event_type_fixture_pins_every_exported_literal() -> None:
@@ -1734,6 +1776,135 @@ def test_rolling_stream_orders_each_contribution_lifecycle() -> None:
     assert ordered_cases, "no pinned stream contains a Lane contribution"
 
 
+def test_the_production_router_projects_the_pinned_routing_provenance() -> None:
+    """The **Dynamic route**'s provenance record, driven through its own seam.
+
+    The fixture is the contract only while the code actually produces it, so
+    this rebuilds the pinned record from a real
+    :class:`~git_loopy.dynamic_route.DynamicRouteDecision` rather than trusting
+    a hand-written shape. A key renamed in Python without the fixture moving
+    fails here, not in a native port's replay six months later.
+    """
+    (pinned,) = [
+        event
+        for case in _EVENT_SCHEMA["rolling_stream_cases"]
+        for event in case["events"]
+        if event["type"] == events_module.WRAPPER_ROUTING_RESOLVED
+    ]
+    candidate = dynamic_route.AssessmentCandidate(
+        stable_identity="d" * 64,
+        model=pinned["model"],
+        reasoning_effort=pinned["effort"],
+        context_tier=pinned["context_tier"],
+        source_identity=pinned["evidence_source"],
+        source_model_identity=pinned["source_model_identity"],
+        intelligence_index=Decimal(pinned["intelligence_index"]),
+        public_output_tokens_per_second=Decimal(
+            pinned["public_output_tokens_per_second"]
+        ),
+        measurement_at=None,
+        benchmark_version=None,
+        conditions=None,
+    )
+    decision = dynamic_route.DynamicRouteDecision(
+        proposal_id=pinned["proposal_id"],
+        issue_ref=pinned["issue"],
+        route=dynamic_route.WorkRoute(
+            model=pinned["model"],
+            reasoning_effort=pinned["effort"],
+            context_tier=pinned["context_tier"],
+        ),
+        work_evidence=candidate,
+        summary=pinned["summary"],
+        selector=dynamic_route.SelectorSettings(
+            model=pinned["selector_model"],
+            reasoning_effort=pinned["selector_effort"],
+            context_tier=pinned["selector_context_tier"],
+            evidence=dynamic_route.EvidenceRecord(
+                source_identity=pinned["evidence_source"],
+                retrieved_at=datetime(2026, 5, 16, tzinfo=timezone.utc),
+                model_identity="aa-mini",
+                associated_copilot_model="gpt-5.4-mini",
+                associated_copilot_effort="low",
+                association_verified=True,
+                intelligence_index=Decimal("30"),
+                speed=Decimal("300"),
+                benchmark_version=None,
+                conditions=None,
+            ),
+        ),
+        relevant_input_identity=pinned["relevant_input_identity"],
+        lifecycle_position=pinned["lifecycle_position"],
+        prior_attempts=tuple(
+            dynamic_route.PriorAttempt(
+                model=row["model"],
+                reasoning_effort=row["effort"],
+                context_tier=row["context_tier"],
+                outcome=dynamic_route.PriorOutcome(row["outcome"]),
+                detail=row["detail"],
+            )
+            for row in pinned["prior_attempts"]
+        ),
+        repeat_justification=pinned["repeat_justification"],
+        validated_at=datetime.fromisoformat(
+            pinned["validated_at"].replace("Z", "+00:00")
+        ),
+        evidence_retrieved_at=datetime.fromisoformat(
+            pinned["evidence_retrieved_at"].replace("Z", "+00:00")
+        ),
+        capabilities_retrieved_at=datetime.fromisoformat(
+            pinned["capabilities_retrieved_at"].replace("Z", "+00:00")
+        ),
+        revalidated=pinned["revalidated"],
+        reassessed=pinned["reassessed"],
+        superseded_proposal_id=pinned["superseded_proposal_id"],
+        reused_proposal_id=pinned["reused_proposal_id"],
+        usage=dynamic_route.RoutingUsage(
+            routing_credits=Decimal(pinned["routing_credits"]),
+            classification_attempts=0,
+            selector_attempts=pinned["selector_attempts"],
+            in_flight=0,
+            overshoot_count=0,
+        ),
+    )
+
+    projected = dynamic_route.routing_provenance_payload(decision)
+
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_ROUTING_RESOLVED
+    ]
+    for key in contract["required_when_present"]:
+        assert key in projected, key
+    for key, value in pinned.items():
+        if key in ("ts", "run_id", "iter", "type"):
+            continue
+        assert projected[key] == value, key
+
+    # An unknown the source did not publish is a null, never a zero and never a
+    # key the Runner quietly dropped -- AC2's explicit unknowns.
+    for key in ("measurement_at", "benchmark_version", "conditions"):
+        assert key in projected and projected[key] is None, key
+
+
+def test_the_reuse_clause_declares_the_literals_the_runner_writes() -> None:
+    """#565: the ``routing_reuse`` vocabulary is closed, and this is where.
+
+    ``ROUTE_ELECTED`` and ``ROUTE_REVALIDATED`` are payload values rather than
+    event types, so ``event_types`` deliberately does not carry them — which
+    would leave two spellings a native port reads off nothing at all. The
+    contract's own ``reuse`` clause is their declaration, and this is what
+    keeps it honest when one of them is renamed in Python.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_ROUTING_RESOLVED
+    ]
+    clause = contract["reuse"]
+    assert f"`{events_module.ROUTE_ELECTED}`" in clause
+    assert f"`{events_module.ROUTE_REVALIDATED}`" in clause
+    for key in ("reused_proposal_id", "reused_validated_at", "relevant_input_identity"):
+        assert key in clause, key
+
+
 def test_rolling_stream_places_release_advance_after_integration_publication() -> None:
     """A Release line advances only after its contribution reaches base."""
     advances = 0
@@ -2184,13 +2355,14 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     to gain, lose, or reorder a field that no column names, so a second
     implementation could disagree about the payload while agreeing about the
     headings. The inventory is asserted from the fixture's own
-    ``projection_fields`` against every snapshot of every case, and each
+    ``projection_fields`` and declared additive fields against every snapshot, and each
     rendered column is required to resolve onto that inventory -- so a new
     column cannot be added without a field to carry it, and a field cannot be
     renamed without the column following.
     """
     contract = _DASHBOARD_INSIGHTS["semantic_contract"]
     fields = contract["projection_fields"]
+    optional_fields = contract["optional_projection_fields"]
 
     checked_queue_rows = 0
     checked_breakdown_rows = 0
@@ -2221,22 +2393,25 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
             for row in expected["dashboard"]["queue"]["rows"]:
                 assert list(row) == fields["queue_row"], where
                 checked_queue_rows += 1
-                # A route is nullable where a consumption is not: the record's
-                # absence is what "nothing has priced this issue yet" looks
-                # like, so its keys are only asserted where one was resolved.
-                if row["route"] is not None:
-                    assert list(row["route"]) == fields["route"], where
-                    checked_routes += 1
             for row in expected["dashboard"]["summary"]["rows"]:
                 assert list(row) == fields["summary_row"], where
                 checked_summary_rows += 1
             for row in expected["drill_in"]["iteration_breakdown"]["rows"]:
                 assert list(row) == fields["iteration_breakdown_row"], where
                 assert list(row["consumption"]) == fields["consumption"], where
-                if row["route"] is not None:
-                    assert list(row["route"]) == fields["route"], where
-                    checked_routes += 1
                 checked_breakdown_rows += 1
+            for row in (
+                expected["dashboard"]["queue"]["rows"]
+                + expected["drill_in"]["iteration_breakdown"]["rows"]
+            ):
+                route = row["route"]
+                if route is not None:
+                    assert list(route) == fields["route"] + [
+                        field
+                        for field in optional_fields["route"]
+                        if field in route
+                    ], where
+                    checked_routes += 1
             for line in (
                 expected["dashboard"]["activity"]["lines"]
                 + expected["drill_in"]["log"]["lines"]
@@ -2643,14 +2818,12 @@ def test_the_model_roster_fixture_names_the_harness_it_describes() -> None:
     version at all, which is how it was twice "fixed" toward a binary the kit
     does not run while every assertion stayed green.
 
-    The stamp records the harness the *content* was captured against, which is
-    the operator's Homebrew CLI ``1.0.75``, and not the harness the kit spawns
-    (``github-copilot-sdk==1.0.5`` -> CLI ``1.0.67``). Stamping does not close
-    that gap; it makes it a fact somebody can read instead of an unknown.
-    Reconciling the two is a pinned-harness bump plus a regeneration, which
-    ADR-0019 requires to be one atomic change and which is owned elsewhere.
+    The SDK pin and roster stamp must move together. Checking the installed
+    SDK's published pin is offline: no account or live catalogue is needed.
     """
-    assert _MODEL_ROSTER["cli_version"] == "1.0.75"
+    from copilot._cli_version import CLI_VERSION
+
+    assert _MODEL_ROSTER["cli_version"] == CLI_VERSION
 
 
 def test_the_in_language_roster_stamp_tracks_the_fixture_it_restates() -> None:
@@ -2670,18 +2843,18 @@ def test_the_in_language_roster_stamp_tracks_the_fixture_it_restates() -> None:
     assert config_module.MODEL_ROSTER_CLI_VERSION == _MODEL_ROSTER["cli_version"]
 
 
-def test_the_roster_stamp_is_a_version_the_gemini_rows_actually_agree_with() -> None:
-    """The stamp is checkable against the fixture's own content, not decorative.
+def test_the_roster_preserves_compatibility_efforts_alongside_pinned_models() -> None:
+    """A pinned-harness refresh does not erase saved Config's compatibility rows.
 
-    ADR-0019 recorded the three CLI versions' answers side by side. Only
-    ``1.0.75`` reports ``minimal`` for **both** Gemini flash models; the pinned
-    ``1.0.67`` reports ``gemini-3.6-flash`` as absent entirely. So the two rows
-    that produced the whole investigation are exactly the rows that identify the
-    stamp, and a stamp moved without regenerating the content fails here.
+    ADR-0019 recorded that CLI ``1.0.67`` lacked the later Gemini capabilities.
+    CLI ``1.0.85`` verified Astra's ceiling. The upgrade account did not list
+    Gemini, so those rows are retained compatibility data, not a live capture.
     """
     roster = _MODEL_ROSTER["roster"]
     assert "minimal" in roster["gemini-3.5-flash"]
     assert "minimal" in roster["gemini-3.6-flash"]
+    assert "max" in roster["gpt-6-astra"]
+    assert "gemini-3.8-flash" not in roster
 
 
 def test_the_roster_fixture_pins_the_context_tier_half_of_the_roster() -> None:
@@ -2735,10 +2908,12 @@ def test_routing_resolution_fixture(case: dict[str, Any]) -> None:
         reasoning_effort=case["default"]["effort"],
         routing=routing,
         context_tier=case.get("context_tier", "default"),
+        route_policy=RoutePolicy.parse(case.get("route_policy")),
         routing_suppressed=case.get("routing_suppressed", False),
     )
     warnings: list[str] = []
     escalated = case.get("escalated")
+    elected = case.get("dynamic_route")
     result = resolve_iteration_model(
         config,
         case["labels"],
@@ -2750,6 +2925,11 @@ def test_routing_resolution_fixture(case: dict[str, Any]) -> None:
             None
             if escalated is None
             else (escalated["model"], escalated["effort"])
+        ),
+        dynamic_route=(
+            None
+            if elected is None
+            else (elected["model"], elected["effort"], elected["context_tier"])
         ),
     )
 
@@ -3880,6 +4060,91 @@ def test_the_static_route_fixture_names_the_policies_the_kit_can_parse() -> None
     assert set(_ROUTING_RESOLUTION["static_route_policies"]) == {
         policy.value for policy in RoutePolicy
     }
+
+
+_DYNAMIC_RETRY = _ROUTING_RESOLUTION["dynamic_retry_cases"]
+
+#: The one configuration every retry case is bound with. Held still on purpose:
+#: what a member has to get right is the ending's *meaning*, and a fixture that
+#: also varied the route would let a wrong classification pass by agreeing with
+#: the wrong row.
+_RESOLUTION_FOR_RETRY_CASES = RoutingResolution(
+    model="synthetic-cheap-1",
+    reasoning_effort="low",
+    context_tier="default",
+    source=RoutingSource.DYNAMIC,
+    task_type_keys=("implementation",),
+    gate_warnings=(),
+    lifecycle_position=RoutingLifecyclePosition.FRESH,
+)
+
+
+@pytest.mark.parametrize(
+    "case", _DYNAMIC_RETRY, ids=lambda case: case["id"]
+)
+def test_dynamic_retry_fixture(case: dict[str, Any]) -> None:
+    """What one ending tells the *next* election, driven through the ledger.
+
+    ADR-0057's sharpest rule and the one a native port is most likely to get
+    wrong: a harness that fell over says nothing about the configuration it fell
+    on, and a Runner that demoted a route for a transport failure would spend
+    the rest of its life avoiding whatever was running when the network blinked.
+    So the fixture pins the whole classification rather than an example of it —
+    a member that maps four endings correctly and the fifth by accident is a
+    member that blacklists a capable configuration on the fifth.
+
+    The route is the same in every case because the route is not the variable:
+    exactly one thing changes between these rows, and it is the ending.
+    """
+    ledger = AttemptEvidenceLedger()
+    ledger.bound(7, _RESOLUTION_FOR_RETRY_CASES)
+    outcome = None if case["outcome"] is None else SessionOutcome(case["outcome"])
+    ledger.observe(7, outcome)
+
+    (recorded,) = ledger.prior_attempts(7)
+    assert recorded.outcome.value == case["prior_outcome"]
+    assert recorded.capability_evidence is case["capability_evidence"]
+    assert recorded.configuration == (
+        _RESOLUTION_FOR_RETRY_CASES.model,
+        _RESOLUTION_FOR_RETRY_CASES.reasoning_effort,
+        _RESOLUTION_FOR_RETRY_CASES.context_tier,
+    )
+    for initial, expected in (
+        (AttemptState.FRESH, case["after_fresh"]),
+        (AttemptState.RETRYING, case["after_retrying"]),
+    ):
+        lifecycle = AttemptLedger()
+        if initial is AttemptState.RETRYING:
+            lifecycle.observe(7, SessionOutcome.NO_PROGRESS)
+        assert lifecycle.observe(7, outcome).value == expected
+        assert lifecycle.skipped(7) is (expected == "skipped")
+
+
+def test_the_dynamic_retry_fixture_classifies_every_ending_there_is() -> None:
+    """A vocabulary a case never reaches is a rule no port has to implement.
+
+    Stated over the **Session outcome** enum rather than over the fixture, so an
+    ending added to the kit without a row here fails at the fixture instead of
+    being silently classified by whatever default the next member happens to
+    write. The absent ending — an **Iteration** that advanced its issue and so
+    reached no ending at all — is the ``null`` row, and it is required for the
+    same reason: a Runner that dropped it would reroute an issue three commits
+    into being solved.
+    """
+    named = {case["outcome"] for case in _DYNAMIC_RETRY}
+
+    assert named == {outcome.value for outcome in SessionOutcome} | {None}
+    assert set(_ROUTING_RESOLUTION["prior_outcomes"]) == {
+        verdict.value for verdict in dynamic_route.PriorOutcome
+    }
+    assert {case["prior_outcome"] for case in _DYNAMIC_RETRY} == set(
+        _ROUTING_RESOLUTION["prior_outcomes"]
+    )
+    assert [
+        case["prior_outcome"]
+        for case in _DYNAMIC_RETRY
+        if case["capability_evidence"]
+    ] == ["did_not_solve"]
 
 
 _CALIBRATION_SEARCH = _load_fixture("calibration-search.json")

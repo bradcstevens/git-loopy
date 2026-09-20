@@ -21,6 +21,12 @@ name: Promote Release line
 # with no Release behind it and no red job to say so. The Promotion is therefore
 # refused before it mutates anything when no publication token is configured,
 # rather than half happening.
+#
+# A tag is also immutable once it is public, so every candidate is **rehearsed**
+# before one exists for it (ADR-0059): the exact commit, its candidate tag and
+# its generated source archive are proved in a throwaway clone that has no
+# remote, and a refusal leaves no tag rather than a public identity nothing
+# verified.
 
 on:
   milestone:
@@ -121,6 +127,13 @@ jobs:
       # the step self-healing -- a tag this workflow failed to push is found
       # again by the next push rather than lost -- and subsumes the milestone
       # Promotion committed above, so both triggers publish by one mechanism.
+      #
+      # Each candidate is *rehearsed* before its tag exists (ADR-0059). A green
+      # development ancestor is not proof of the commit being published:
+      # Promotion changes the tree the family gate has to judge, and the v0.10.0
+      # recovery had to move an already-public tag because nothing proved the
+      # promoted snapshot first. `shell: bash` is `-eo pipefail`, so a refusal
+      # ends the step with no tag created and nothing pushed.
       - name: Tag every untagged stable Release and start its publication
         shell: bash
         run: |
@@ -131,6 +144,16 @@ jobs:
             if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
               continue
             fi
+            rehearsal="$RUNNER_TEMP/rehearsal-v$version"
+            uv run --project git-loopy/python --all-extras \
+              python -m git_loopy.release_rehearsal \
+              --repository-root . \
+              --workspace "$rehearsal/candidate" \
+              --archive-output "$rehearsal/git-loopy-source.tar" \
+              --distribution-mode source-only \
+              --major-bump \
+              --candidate-commit "$commit" \
+              > "$rehearsal.json"
             # Annotated, and on the commit that *declares* this version rather
             # than on the head: `source-release.yml` verifies the tag object and
             # refuses a tag whose tree disagrees with it.

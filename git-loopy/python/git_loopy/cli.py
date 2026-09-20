@@ -82,14 +82,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import math
 import os
 import subprocess
 import sys
 from datetime import datetime
+from decimal import Decimal
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Callable, Collection, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Collection, Literal, Mapping
 
 from git_loopy import settings
 from git_loopy.config import (
@@ -200,6 +202,11 @@ _COMMAND_SPECS = (
         "skills",
         "Configuration",
         "skills list, skills edit, and skills sync for the closed-world Skill policy.",
+    ),
+    _CommandSpec(
+        "runs",
+        "Run control",
+        "List this clone's Runs and whether each one is still running.",
     ),
     _CommandSpec(
         "labels",
@@ -514,8 +521,42 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Select the Route policy (ADR-0057). 'static' verifies the selected "
             "model/effort/context tier against the authenticated harness and "
-            "refuses an unsupported one instead of rescuing it. Unset keeps the "
-            "current behaviour; 'dynamic' is accepted design, not yet delivered."
+            "refuses an unsupported one instead of rescuing it. 'dynamic' lets "
+            "the Route selector choose an unpinned issue's route from live "
+            "Artificial Analysis evidence, and needs "
+            "GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY plus the three bounds below. "
+            "Unset keeps the current behaviour."
+        ),
+    )
+    parser.add_argument(
+        "--routing-deadline-seconds",
+        dest="routing_deadline_seconds",
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "Finite wall-clock budget one Run may spend on Dynamic routing. "
+            "Required by --route-policy dynamic; there is no default."
+        ),
+    )
+    parser.add_argument(
+        "--routing-credit-allowance",
+        dest="routing_credit_allowance",
+        default=None,
+        metavar="CREDITS",
+        help=(
+            "Per-Run allowance that classification and Route selector calls are "
+            "admitted against. An admission bound, not a prepaid ceiling: a call "
+            "already in flight still completes, bills, and is disclosed."
+        ),
+    )
+    parser.add_argument(
+        "--selector-concurrency",
+        dest="selector_concurrency",
+        default=None,
+        metavar="N",
+        help=(
+            "How many Route selector calls may be in flight at once. Required "
+            "by --route-policy dynamic so parallel Pickups cannot each buy one."
         ),
     )
     parser.add_argument(
@@ -736,7 +777,11 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "searchable picker as `git-loopy skills edit`, writes config.toml, "
             "and — default yes — scaffolds an editable PROMPT.md override and "
             "git-loopy's agent skills. Writes config and exits; it never starts "
-            "the loop. Cancelling writes nothing and exits non-zero."
+            "the loop. Cancelling saves no Config, prompt override, Skill "
+            "policy, or tracker label and exits non-zero; the Skill catalog it "
+            "installs first is machine-wide and stays, which the cancellation "
+            "says. Needs an interactive terminal — the same requirement a bare "
+            "first run applies before it auto-runs this wizard."
         ),
     )
     _add_scope_flags(init)
@@ -997,6 +1042,23 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help="Report exactly what this sweep would remove without changing it.",
     )
 
+    _add_command(
+        sub,
+        "runs",
+        description=(
+            "List the Runs belonging to this clone — the worktree you are in "
+            "and every worktree it has registered — newest first, with the Run "
+            "identity to target, the worktree the Run was started in, and "
+            "whether it is still running. Liveness is read from each Run's own "
+            "control artifact, so a Run that ended is reported as ended and a "
+            "liveness this host cannot read is reported as unknown rather than "
+            "guessed. Another clone of the same repository is a separate "
+            "control domain and is never listed. Listing observes only: it "
+            "starts no work, stops nothing, and reclaims nothing (see "
+            "`git-loopy sweep` for that)."
+        ),
+    )
+
     config = _add_command(
         sub,
         "config",
@@ -1213,8 +1275,8 @@ def _run_init(args: argparse.Namespace) -> int:
     """
     from git_loopy import init as _init
 
-    if not args.assume_yes and (
-        not sys.stdin.isatty() or not sys.stdout.isatty()
+    if not args.assume_yes and not _wizard_terminal_available(
+        sys.stdin.isatty(), sys.stdout.isatty()
     ):
         print(
             "git-loopy: error: init requires an interactive terminal; use --yes "
@@ -1282,6 +1344,23 @@ def _run_sweep(args: argparse.Namespace) -> int:
         print(f"git-loopy: sweep requires a git repository: {exc}", file=sys.stderr)
         return 1
     return sweepcmd.run_sweep(repo_root=repo_root, dry_run=bool(args.dry_run))
+
+
+def _run_runs(_args: argparse.Namespace) -> int:
+    """Dispatch the clone-scoped Run listing.
+
+    Resolved from the invoking worktree, never from a machine-wide search, so a
+    command typed outside a clone has no domain to list and says so instead of
+    widening one (ADR-0058).
+    """
+    from git_loopy import runscmd
+
+    try:
+        repo_root = resolve_repo_root()
+    except RuntimeError as exc:
+        print(f"git-loopy: runs requires a git repository: {exc}", file=sys.stderr)
+        return 1
+    return runscmd.run_runs(repo_root=repo_root)
 
 
 def _run_info(
@@ -2050,13 +2129,17 @@ def _resolve_escalation(
       a two-rung-cheaper ``implementation`` pair *on the strength of this
       backstop existing*; an opt-in backstop would leave that table leaning on
       mechanism that, for everyone who did not opt in, is not there.
-    * **Off by default under a Static route (#560, ADR-0057).** Default-on is an
-      argument about a pair *the runner chose*: the table leans on the backstop
-      because the table is the runner's. A route the operator named is not the
-      runner's to move, so an inherited built-in rung is not authorization to
-      move it — only an ``[escalation]`` block the operator actually wrote is.
-      The switch alone (``enabled = true``) counts: it is an operator naming
-      this mechanism, which is the consent the rung was missing.
+    * **Off by default under a selected Route policy (#560, #561, ADR-0057).**
+      Default-on is an argument about a pair *the runner chose*: the table leans
+      on the backstop because the table is the runner's. A route the operator
+      named is not the runner's to move, so an inherited built-in rung is not
+      authorization to move it — only an ``[escalation]`` block the operator
+      actually wrote is. The switch alone (``enabled = true``) counts: it is an
+      operator naming this mechanism, which is the consent the rung was missing.
+      Under ``dynamic`` the same exclusion holds for a second reason: ADR-0057
+      gives dynamic retries no fixed rung at all, so a built-in one firing would
+      substitute the legacy fixed escalation for the reselection that replaces
+      it — and report the result as Dynamic routing.
     * **Independent of ``[routing]``.** Escalating off a bare run-wide default
       is still meaningful, so an empty routing table is no reason to withhold a
       rung.
@@ -2076,7 +2159,7 @@ def _resolve_escalation(
     configured = any(
         scope.enabled is not None or scope.pair is not None for scope in scopes
     )
-    if route_policy is RoutePolicy.STATIC and not configured:
+    if route_policy is not RoutePolicy.UNSELECTED and not configured:
         return None
     enabled = next((s.enabled for s in scopes if s.enabled is not None), True)
     if not enabled:
@@ -2367,6 +2450,101 @@ def _resolve_route_policy(
     return RoutePolicy.UNSELECTED
 
 
+def _resolve_dynamic_bound(
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+    *,
+    key: str,
+    flag: str,
+    env_name: str,
+    coerce: Callable[[str], Any],
+) -> Any | None:
+    """Resolve one of Dynamic routing's three bounds, or ``None`` for unset.
+
+    ``None`` is the honest answer for an absent bound rather than a built-in
+    value, because ADR-0057 requires each of these to be an *explicit finite*
+    operator decision: a deadline this function invented would be a deadline
+    nobody agreed to, and an operator who believes they set one would never
+    find out. The refusal an unset bound earns belongs to preflight, which
+    knows whether the policy that needs it was even selected.
+    """
+    raw = getattr(args, key, None)
+    origin = flag
+    if raw is None:
+        raw = env.get(env_name)
+        origin = env_name
+    if raw is None or not str(raw).strip():
+        for scope, table in (("project", project), ("global", global_)):
+            value = table.get(key)
+            if value is not None:
+                raw = value
+                origin = f"{scope} config {key}"
+                break
+        else:
+            return None
+    try:
+        return coerce(str(raw).strip())
+    except (ArithmeticError, ValueError) as exc:
+        raise SystemExit(f"git-loopy: error: {origin}: {exc}") from None
+
+
+def _positive_seconds(raw: str) -> float:
+    value = float(raw)
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"must be a finite number of seconds > 0, got {raw!r}")
+    return value
+
+
+def _non_negative_credits(raw: str) -> Decimal:
+    try:
+        value = Decimal(raw)
+    except ArithmeticError:
+        raise ValueError(f"must be a decimal number of credits, got {raw!r}") from None
+    if not value.is_finite() or value < 0:
+        raise ValueError(f"must be a finite number of credits ≥ 0, got {raw!r}")
+    return value
+
+
+def _positive_concurrency(raw: str) -> int:
+    value = int(raw)
+    if value < 1:
+        raise ValueError(f"must be ≥ 1, got {raw!r}")
+    return value
+
+
+def _resolve_route_associations(
+    project: Mapping[str, object], global_: Mapping[str, object]
+) -> dict[str, str]:
+    """Merge the verified association table, project overriding global per row.
+
+    Config-file-only, and deliberately: an association is *authored evidence*
+    that one Artificial Analysis identity is one Copilot configuration, and
+    evidence that arrives as a flag or an environment variable is evidence
+    nobody reviewed. It merges per identity for the reason ``[routing]`` does —
+    correcting one row in a repository must not mean restating every other one.
+    """
+    merged: dict[str, str] = {}
+    for scope, table in (("global", global_), ("project", project)):
+        rows = table.get("route_associations")
+        if rows is None:
+            continue
+        if not isinstance(rows, Mapping):
+            raise SystemExit(
+                f"git-loopy: error: {scope} config route_associations must be a "
+                "table of `<artificial analysis model id> = \"<model>@<effort>\"`"
+            )
+        for identity, configuration in rows.items():
+            if not isinstance(configuration, str) or not configuration.strip():
+                raise SystemExit(
+                    f"git-loopy: error: {scope} config route_associations "
+                    f"[{identity!r}] must be a `<model>@<effort>` string"
+                )
+            merged[str(identity)] = configuration.strip()
+    return merged
+
+
 @dataclasses.dataclass(frozen=True)
 class ResolvedConfig:
     """The fully-resolved Run configuration and routing provenance.
@@ -2536,6 +2714,37 @@ def resolve_config(
         routing=routing,
         context_tier=context_tier,
         route_policy=route_policy,
+        routing_deadline_seconds=_resolve_dynamic_bound(
+            args,
+            env,
+            project,
+            global_,
+            key="routing_deadline_seconds",
+            flag="--routing-deadline-seconds",
+            env_name="GIT_LOOPY_ROUTING_DEADLINE_SECONDS",
+            coerce=_positive_seconds,
+        ),
+        routing_credit_allowance=_resolve_dynamic_bound(
+            args,
+            env,
+            project,
+            global_,
+            key="routing_credit_allowance",
+            flag="--routing-credit-allowance",
+            env_name="GIT_LOOPY_ROUTING_CREDIT_ALLOWANCE",
+            coerce=_non_negative_credits,
+        ),
+        selector_concurrency=_resolve_dynamic_bound(
+            args,
+            env,
+            project,
+            global_,
+            key="selector_concurrency",
+            flag="--selector-concurrency",
+            env_name="GIT_LOOPY_SELECTOR_CONCURRENCY",
+            coerce=_positive_concurrency,
+        ),
+        route_associations=_resolve_route_associations(project, global_),
         routing_suppressed=suppressed_by is not None,
         skill_policy=skill_policy,
         classifier_model=classifier_model,
@@ -2559,9 +2768,24 @@ def _should_run_interactive() -> bool:
     return dashboard_available(isatty=sys.stdout.isatty())
 
 
+def _wizard_terminal_available(stdin_isatty: bool, stdout_isatty: bool) -> bool:
+    """Whether this invocation can run the setup wizard at all (#583, ADR-0058).
+
+    One predicate for both entry points — explicit ``git-loopy init`` and the
+    bare first Run — so the two cannot drift into different ideas of what an
+    operator can confirm. The wizard is a single fullscreen Textual app: it
+    reads keys from stdin and draws on stdout, and a redirected half is enough
+    to make it unusable rather than merely plain. Textual does not refuse that
+    shape on its own; it runs, renders where nobody is reading, and returns
+    answers the operator never saw — so the gate is here, ahead of it.
+    """
+    return stdin_isatty and stdout_isatty
+
+
 def _should_auto_init(
     tables: settings.ConfigTables,
     stdin_isatty: bool,
+    stdout_isatty: bool,
 ) -> bool:
     """Decide whether a bare run auto-runs the first-run ``init`` wizard (#55).
 
@@ -2570,14 +2794,15 @@ def _should_auto_init(
     * **No Config resolves anywhere** — both the project and global
       ``config.toml`` tables are empty. Once either scope has Config, a bare run
       goes straight to the loop (this slice's "no wizard once configured" rule).
-    * **stdin is an interactive terminal** — the wizard prompts on stdin, so a
-      non-TTY (CI, a pipe) never prompts and the built-in defaults carry the run.
+    * **The invocation owns a terminal** — :func:`_wizard_terminal_available`,
+      the same test explicit ``init`` applies, so a non-TTY (CI, a pipe, a
+      redirected stdout) never prompts and the built-in defaults carry the run.
       This is what keeps automated runs from ever hanging on the wizard
       (ADR-0006 / ADR-0007 first-run / CI behavior).
     """
     if tables.project or tables.global_:
         return False
-    return stdin_isatty
+    return _wizard_terminal_available(stdin_isatty, stdout_isatty)
 
 
 def _should_migrate_skill_policy(
@@ -2733,6 +2958,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_doctor(sub_args)
         if sub_args.command == "sweep":
             return _run_sweep(sub_args)
+        if sub_args.command == "runs":
+            return _run_runs(sub_args)
         if sub_args.command == "config":
             return _run_config(sub_args)
         raise AssertionError(f"undispatched command {sub_args.command!r}")
@@ -2809,7 +3036,7 @@ def main(argv: list[str] | None = None) -> int:
     # nothing, and exits non-zero (an aborted setup never starts an unconfirmed
     # loop). The wizard module is imported lazily so a configured bare run (the
     # common case) never pays its import.
-    if _should_auto_init(tables, sys.stdin.isatty()):
+    if _should_auto_init(tables, sys.stdin.isatty(), sys.stdout.isatty()):
         from git_loopy import init as _init
 
         init_rc = _init.run_init(
@@ -3057,6 +3284,9 @@ def _run_tty_sidecar(
         child=child,
         release_version=release_version,
         warn=_warn,
+        # The handoff keeps the worker's startup visible: a Run blocked before
+        # its first Event says so only here (#583, ADR-0058).
+        diagnostics_path=writers.diagnostics_path,
     )
 
 

@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      distribution_mode: ${{ steps.preflight.outputs.distribution_mode }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,6 +22,7 @@ jobs:
         run: git fetch --force --no-tags origin "$GITHUB_REF:$GITHUB_REF"
 
       - name: Verify annotated tag and committed Release identity
+        id: preflight
         env:
           PYTHONPATH: git-loopy/python
         run: >-
@@ -27,6 +30,7 @@ jobs:
           --repository-root .
           --tag-ref "$GITHUB_REF"
           --tag-only
+          --github-output "$GITHUB_OUTPUT"
 
   family-conformance:
     name: Prove Runner-family Conformance
@@ -59,6 +63,7 @@ jobs:
           python -m git_loopy.source_release
           --repository-root .
           --tag-ref "$GITHUB_REF"
+          --distribution-mode "${{ needs.tag-preflight.outputs.distribution_mode }}"
           --archive-output "$RUNNER_TEMP/git-loopy-source.tar"
           --github-output "$GITHUB_OUTPUT"
 

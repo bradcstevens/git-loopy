@@ -16,7 +16,8 @@
     "defaulted_unknown_task_type_key",
     "defaulted_conflicting_task_type_keys",
     "defaulted_explicit_override",
-    "escalated"
+    "escalated",
+    "dynamic"
   ],
   "cases": [
     {
@@ -238,6 +239,28 @@
         "lifecycle_position": "retrying"
       },
       "warns": false
+    },
+    {
+      "id": "an-elected-dynamic-route-wins-over-every-label-derived-source",
+      "default": {"model": "claude-opus-4.8", "effort": "max"},
+      "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
+      "labels": ["task-type:docs"],
+      "route_policy": "dynamic",
+      "dynamic_route": {
+        "model": "claude-haiku-4.5",
+        "effort": "high",
+        "context_tier": "long_context"
+      },
+      "expected": {
+        "model": "claude-haiku-4.5",
+        "effort": "high",
+        "context_tier": "long_context",
+        "source": "dynamic",
+        "task_type_keys": ["docs"],
+        "gate_warnings": [],
+        "lifecycle_position": "fresh"
+      },
+      "warns": false
     }
   ],
   "refusal_cases": [
@@ -363,16 +386,17 @@
       "expected_tiers": {"docs": "project Config"}
     }
   ],
-  "static_route_policies": ["unselected", "static"],
+  "static_route_policies": ["unselected", "static", "dynamic"],
   "static_route_refusals": ["unverifiable", "unnamed_model", "unlisted_model", "ineligible_model", "effort_not_configurable", "unsupported_effort", "unsupported_context_tier"],
   "static_route_notes": {
-    "policy": "Contract 2.8. The file-level contract_version above stays at the revision that first described the measured tier; these Static route cases arrived at 2.8 and say so here rather than moving a declaration that belongs to a different decision. The Route policy is SELECTED, never inherited. `unselected` is the absence of a decision and MUST keep every legacy behaviour -- the hardcoded roster gates, the built-in escalation rung, the historical event stream -- byte-for-byte. Only `static` activates the cases below. A Runner MUST NOT reinterpret an existing Config as though the policy had always been in force, and MUST NOT read the absence of a policy as a choice of one.",
+    "policy": "Contract 2.8. The file-level contract_version above stays at the revision that first described the measured tier; these Static route cases arrived at 2.8 and say so here rather than moving a declaration that belongs to a different decision. The Route policy is SELECTED, never inherited. `unselected` is the absence of a decision and MUST keep every legacy behaviour -- the hardcoded roster gates, the built-in escalation rung, the historical event stream -- byte-for-byte. Only `static` activates the cases below; `dynamic` selects the Dynamic route (contract 14.4), whose election is scored from live evidence rather than pinned here, and whose own record is pinned by event-schema.json's `wrapper.routing.resolved`. A Runner MUST NOT reinterpret an existing Config as though the policy had always been in force, and MUST NOT read the absence of a policy as a choice of one.",
     "verifiable_placement": "The harness whose answer counts is the one the WORK SESSION runs under. Where an Execution host opens its sessions on a machine that authenticates as itself, the orchestrator's own listing describes a different installation under a different identity, and a Runner MUST refuse that combination before work rather than report a local read as that placement's verdict. Only a placement whose sessions run under the Run's own authenticated harness is verifiable.",
   "authority": "Under `static` the authority is the AUTHENTICATED HARNESS THIS RUN SPAWNS -- its own model listing, read fresh. A Runner MUST NOT validate a Static route against a hardcoded roster, a published plan or licence catalogue, or another CLI installation, and MUST NOT satisfy the read from a cache held across the Run: a stale answer is the failure this rule exists to prevent, not a cheaper version of it. Reading eligibility MUST NOT rewrite billing provenance already recorded for the Run.",
     "refuse_never_rescue": "Every verdict other than `accepted` ends the Run BEFORE any work, naming the selected settings. A Runner MUST NOT drop an unsupported effort, downgrade an unoffered context tier, or substitute a backend default and call the result a route: a Static route is honoured exactly or not at all.",
     "effort_dial_versus_effort_value": "`efforts: null` is the harness's own statement that the model has NO EFFORT DIAL, and a route on such a model MUST send no effort argument at all. That is a different fact from a model whose dial offers the value `none`, which MUST be sent as a value. A Runner that collapses the two either sends `none` to a model that cannot read it, or omits an effort the operator explicitly selected.",
     "unverifiable_is_not_empty": "`harness: null` is a capability read that did not complete. It is `unverifiable` -- NOT an empty harness, NOT a reason to fall back to a roster, and NOT a reason to proceed. A Runner MUST NOT treat an unanswered harness as agreement.",
     "static_is_fixed": "A Static route stays fixed for an Agent and across every permitted retry. A Runner MUST NOT promote it to a different model or effort unless the operator explicitly configured an escalation rung: a rung a Runner ships by default is not consent. Attempt and Strike accounting is unchanged either way.",
+    "dynamic_precedence": "Under `dynamic` a Static route still wins. A [routing] entry, an explicit flag or environment pin, and a configured escalation rung are instructions, and a Runner MUST NOT spend a Route selector call to contradict one -- they are verified against the harness exactly as under `static`. What the selector elects is the route for every Task type those instructions do not cover; the run-wide default is NOT one of them, because under this policy the selector replaces it and refusing the Run over a pair it will never take would be a refusal about nothing. An explicit pin suppresses routing entirely, which makes the default the route again and therefore verifiable again.",
     "scope": "These cases validate ONE route. A Run validates every route its Config holds -- the run-wide default, each [routing] entry, and an explicitly configured escalation rung -- before it picks up any issue, so a route that is never exercised is still refused at the start rather than mid-Run."
   },
   "static_route_cases": [
@@ -445,6 +469,71 @@
       "harness": [{"model": "synthetic-cheap-1", "eligible": true, "efforts": ["low", "medium"], "context_tiers": ["default"]}],
       "route": {"model": "synthetic-cheap-1", "reasoning_effort": "low", "context_tier": "long_context"},
       "verdict": "unsupported_context_tier"
+    }
+  ],
+  "prior_outcomes": ["advanced", "did_not_solve", "infrastructure_failure", "ran_out_of_time", "nothing_to_do"],
+  "dynamic_retry_notes": {
+    "policy": "Contract 14.4, ADR-0057. These cases apply ONLY under the `dynamic` Route policy and only to an attempt the Attempt lifecycle already admitted. A Runner MUST NOT create an attempt to route, reset or bypass a per-issue attempt or Strike limit, or turn a routing refusal into an attempt that never ran: an issue whose later route cannot be elected is left where the lifecycle put it, and the Run reports that it could not start the work rather than starting it on something else.",
+    "no_reserved_rung": "Under `dynamic` there is no fixed Escalation rung to inherit. A permitted later attempt REASSESSES -- current eligibility and benchmark evidence read fresh, plus what the earlier attempts ran on and how they ended -- and the validated result is the route. The initial dynamic choice may already elect the strongest configuration available, including the top effort, so a Runner MUST NOT hold one back in reserve.",
+    "classification": "The table below is the whole rule, and it is TOTAL over the Session outcome vocabulary plus the absent ending. Exactly one member is evidence about the configuration: the silent no-progress that ran to the end, claimed no failure, and left nothing behind. A Runner MUST NOT read a crash, a content-filtered turn, a timeout or an explicit no-more-tasks as evidence that the model could not do the work, and MUST NOT classify a new ending by defaulting -- a sixth ending that fell into `did_not_solve` would blacklist whichever configuration happened to be running when it first arrived.",
+    "never_blacklist": "`capability_evidence: true` does NOT remove a configuration from consideration. Every eligible configuration stays on the candidate list at every attempt; what changes is that re-electing one an earlier attempt failed to solve the task on MUST carry a stated justification, and a Runner MUST NOT accept a repeat without one. Demoting a configuration outright is the blind blacklisting ADR-0057 forbids, and it is also wrong: the issue may simply be hard.",
+    "absent_ending": "The `null` row is an Iteration that advanced its issue without closing it. It reaches no ending and spends no attempt, yet it is a real earlier attempt and the most direct evidence there is that the configuration is doing the work. A Runner MUST record it, and MUST NOT derive the attempt's lifecycle position from the number of rows -- the two are separate axes and the record states both (see event-schema.json's `wrapper.routing.resolved`).",
+    "within_an_agent": "Nothing here changes settings inside a session that is already running. A model, effort or context tier is chosen at the Pickup and is fixed for that Agent; reassessment happens only at the NEXT Pickup."
+  },
+  "dynamic_retry_cases": [
+    {
+      "id": "a-silent-stall-is-evidence-about-the-configuration",
+      "note": "The one ending that is. The session ran to the end, claimed no failure, and left nothing behind -- the shape a configuration too weak for the work fails in.",
+      "outcome": "no_progress",
+      "prior_outcome": "did_not_solve",
+      "after_fresh": "retrying",
+      "after_retrying": "skipped",
+      "capability_evidence": true
+    },
+    {
+      "id": "a-crash-is-evidence-about-the-harness",
+      "note": "ADR-0057's headline distinction. A Runner that demoted the route here would spend the rest of its life avoiding whatever was running when the network blinked.",
+      "outcome": "crash",
+      "prior_outcome": "infrastructure_failure",
+      "after_fresh": "retrying",
+      "after_retrying": "skipped",
+      "capability_evidence": false
+    },
+    {
+      "id": "a-content-filtered-turn-is-evidence-about-policy",
+      "note": "A turn refused by policy says nothing about capability; the same work on the same model may pass on the next attempt.",
+      "outcome": "content_filtered",
+      "prior_outcome": "infrastructure_failure",
+      "after_fresh": "skipped",
+      "after_retrying": "skipped",
+      "capability_evidence": false
+    },
+    {
+      "id": "running-out-of-time-is-its-own-verdict",
+      "note": "Neither neighbour would be honest: a session that never reached an end did not demonstrate it could not solve the task, and the wait running out is not the harness failing.",
+      "outcome": "timeout",
+      "prior_outcome": "ran_out_of_time",
+      "after_fresh": "skipped",
+      "after_retrying": "skipped",
+      "capability_evidence": false
+    },
+    {
+      "id": "no-more-tasks-is-the-agent-saying-the-work-is-absent",
+      "note": "Reading this as a failure of the configuration is exactly the blind blacklisting of a capable configuration the decision forbids.",
+      "outcome": "no_more_tasks",
+      "prior_outcome": "nothing_to_do",
+      "after_fresh": "skipped",
+      "after_retrying": "skipped",
+      "capability_evidence": false
+    },
+    {
+      "id": "an-iteration-that-advanced-reached-no-ending-at-all",
+      "note": "`null` is the absence of an ending, not a sixth one. It spends no attempt and is the strongest evidence there is that the configuration is working.",
+      "outcome": null,
+      "prior_outcome": "advanced",
+      "after_fresh": "fresh",
+      "after_retrying": "retrying",
+      "capability_evidence": false
     }
   ]
 }

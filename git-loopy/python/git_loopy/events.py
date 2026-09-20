@@ -82,6 +82,15 @@ __all__ = [
     "WRAPPER_AFK_READY_COLLECTED",
     "WRAPPER_POOL_EXCLUDED",
     "WRAPPER_PICKUP_BOUND",
+    "WRAPPER_ROUTING_RESOLVED",
+    "WRAPPER_ROUTING_DELIVERY",
+    "WRAPPER_ROUTING_PREPARED",
+    "ROUTE_ELECTED",
+    "ROUTE_REVALIDATED",
+    "ROUTE_PREPARATION_PROPOSED",
+    "ROUTE_PREPARATION_STATIC",
+    "ROUTE_PREPARATION_REUSABLE",
+    "ROUTE_PREPARATION_UNAVAILABLE",
     "WRAPPER_PICKUP_SKIPPED",
     "WRAPPER_CHECKPOINT_RECORDED",
     "WRAPPER_COMMIT_RECORDED",
@@ -146,6 +155,7 @@ __all__ = [
     "make_contribution_event",
     "make_calibration_event",
     "to_jsonl_line",
+    "format_timestamp",
     "scrub",
     "map_sdk_event",
     # Sentinels / placeholders (exported for tests + renderer)
@@ -288,6 +298,43 @@ WRAPPER_POOL_EXCLUDED = "wrapper.pool.excluded"
 # walk that binds nothing emits its skips and no binding.
 WRAPPER_PICKUP_BOUND = "wrapper.pickup.bound"
 WRAPPER_PICKUP_SKIPPED = "wrapper.pickup.skipped"
+# The audit behind a **Dynamic route** (#561, ADR-0057), Run-scoped for the
+# reason the Pickup pair above is: routing resolves before the work it routes
+# exists, so there is no Lane contribution to attribute it to.
+#
+# A second record rather than more columns on ``wrapper.pickup.bound``, which is
+# the opposite of the call #407 made for the **Routing resolution** and for the
+# opposite reason: the resolution *is* the Pickup's outcome, while this is what
+# stands behind it — which evidence, retrieved when, assessed by which selector,
+# at what cost. It is emitted *before* the route may start work, because that is
+# what makes it provenance rather than a report, and a Run that cannot write it
+# refuses the route instead of running it unrecorded.
+WRAPPER_ROUTING_RESOLVED = "wrapper.routing.resolved"
+WRAPPER_ROUTING_DELIVERY = "wrapper.routing.delivery"
+# The nonbinding half of the same decision (#566, ADR-0057): what **Routing
+# preparation** reached for one eligible **Pool** candidate ahead of the Pickup
+# that may later bind it. A separate type from the resolution above precisely
+# so the two can never be confused — a consumer that read a proposal as a
+# binding would show an issue as routed that nothing has yet agreed to work,
+# and would report a Pool that is merely prepared as a Pool that is claimed.
+WRAPPER_ROUTING_PREPARED = "wrapper.routing.prepared"
+# How the route on one such record was arrived at: a selector call elected it,
+# or a prior Run's decision was revalidated against freshly read evidence and
+# eligibility without one (#565, ADR-0057). These live beside the event type
+# they are a field of, so the writer, the CLI readback and the reuse projection
+# all spell the wire the same way — two answers to "is this a reuse?" is how an
+# assessment-invalidation loop comes back.
+ROUTE_ELECTED = "elected"
+ROUTE_REVALIDATED = "revalidated"
+# The four ``state`` spellings of a preparation record, beside the type they
+# are a field of for the same reason the two above are. Three of them are
+# reasons no **Route selector** was called, and an operator is owed which:
+# an operator's own **Static route** made one unnecessary, an earlier Run's
+# decision is already there to revalidate, or routing could not propose at all.
+ROUTE_PREPARATION_PROPOSED = "proposed"
+ROUTE_PREPARATION_STATIC = "static"
+ROUTE_PREPARATION_REUSABLE = "reusable"
+ROUTE_PREPARATION_UNAVAILABLE = "unavailable"
 WRAPPER_CHECKPOINT_RECORDED = "wrapper.checkpoint.recorded"
 WRAPPER_COMMIT_RECORDED = "wrapper.commit.recorded"
 # Emitted once per iteration when the runner's auto-push (ADR-0004) succeeds in
@@ -624,7 +671,7 @@ def make_event(
     if ts is None:
         ts = datetime.now(timezone.utc)
     return {
-        "ts": _format_ts(ts),
+        "ts": format_timestamp(ts),
         "run_id": run_id,
         "iter": iter,
         "type": type,
@@ -1119,12 +1166,17 @@ def _call_verdict(data: Any) -> dict[str, Any]:
     )
 
 
-def _format_ts(dt: datetime) -> str:
+def format_timestamp(dt: datetime) -> str:
     """Format ``dt`` as ISO-8601 UTC with millisecond precision.
 
     The PRD spec is ``YYYY-MM-DDTHH:MM:SS.sssZ`` (trailing ``Z``, not
     ``+00:00``; three fractional digits, not six). :meth:`datetime.isoformat`
     gives microseconds by default, so we format manually.
+
+    Public because the envelope's ``ts`` is not the only instant a record
+    carries: a payload that reports *when a source was read* has to spell that
+    instant the same way, and a second formatter is a second chance to spell it
+    differently.
     """
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
@@ -1148,7 +1200,7 @@ def _json_default(obj: Any) -> Any:
     if hasattr(obj, "value"):  # Enum-shaped
         return obj.value
     if isinstance(obj, datetime):
-        return _format_ts(obj)
+        return format_timestamp(obj)
     return str(obj)
 
 

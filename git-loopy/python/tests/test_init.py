@@ -29,6 +29,11 @@ from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
 from git_loopy.skillscmd import SkillSelectionResult
 from tests.fakes import FakeGitClient
 
+#: The one sentence every abandoned setup makes its claim in. Read off the
+#: module under test so the tests pin the *guarantee*, not a copy of its wording
+#: that a later edit could silently widen back to "nothing was written" (#583).
+_SAVED_NOTHING = init_module._SETUP_SAVED_NOTHING
+
 
 # ---------------------------------------------------------------------------
 # Test doubles
@@ -1198,7 +1203,7 @@ def test_run_init_fails_and_writes_nothing_when_nothing_can_be_installed(
     assert rc == 1
     assert not settings.project_config_path(tmp_path).exists()
     assert not (tmp_path / "git-loopy" / "PROMPT.md").exists()
-    assert any("nothing was written" in message for message in warnings)
+    assert any(_SAVED_NOTHING in message for message in warnings)
     assert any("upstream unreachable" in message for message in warnings)
 
 
@@ -1259,6 +1264,87 @@ def test_run_init_never_installs_when_a_catalog_is_injected(
 
     assert rc == 0
 
+
+# ---------------------------------------------------------------------------
+# An abandoned setup reports the boundary it actually held (#583, ADR-0058)
+# ---------------------------------------------------------------------------
+
+
+def test_run_init_cancelled_after_a_refresh_names_the_catalog_it_left_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancelling cannot claim the machine is untouched: setup installed first.
+
+    Acquiring the pinned catalog is setup's *first* act (ADR-0025), so by the
+    time an operator can cancel, a machine-wide directory and its install record
+    already exist. "Nothing was written" sends that operator looking for files
+    that are really there; ADR-0058 requires the narrower guarantee — the
+    operator's choices — beside a statement of what the prerequisite left.
+    """
+    root = tmp_path / "xdg" / "git-loopy" / "skills"
+    _fake_refresh(
+        monkeypatch,
+        skill_install.RefreshOutcome(
+            catalog=_catalog(root, "alpha"),
+            action=skill_install.ACTION_INSTALLED,
+        ),
+    )
+
+    out = _Output()
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            wizard_runner=_runner("q", out=out),
+            scope=None,
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            packaged_prompt=_packaged(tmp_path)["packaged_prompt"],
+            **_policy_seams(tmp_path),
+        )
+
+    assert rc != 0
+    assert not settings.project_config_path(tmp_path).exists()
+    assert "cancelled" in out.text.lower()
+    assert "no Config, prompt override, Skill policy, or tracker label" in out.text
+    assert str(root) in out.text
+    assert "nothing was written" not in out.text
+
+
+def test_run_init_cancelled_after_a_current_catalog_claims_no_residue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refresh that rewrote nothing leaves nothing to disclose.
+
+    The qualification is a fact about *this* invocation, not a disclaimer setup
+    prints regardless: a catalog already at the pin is read, not written, so
+    naming a residue there would be the mirror of the over-claim it replaces.
+    """
+    _fake_refresh(
+        monkeypatch,
+        skill_install.RefreshOutcome(
+            catalog=_catalog(tmp_path / "skills", "alpha"),
+            action=skill_install.ACTION_CURRENT,
+        ),
+    )
+
+    out = _Output()
+    with contextlib.redirect_stdout(out):
+        rc = init_module.run_init(
+            wizard_runner=_runner("q", out=out),
+            scope=None,
+            assume_yes=False,
+            repo_root=tmp_path,
+            env=_env(tmp_path),
+            fetch_choices=lambda: [_choice("claude-opus-4.8")],
+            packaged_prompt=_packaged(tmp_path)["packaged_prompt"],
+            **_policy_seams(tmp_path),
+        )
+
+    assert rc != 0
+    assert "cancelled" in out.text.lower()
+    assert "no Config, prompt override, Skill policy, or tracker label" in out.text
+    assert "remains at" not in out.text
 
 
 # ---------------------------------------------------------------------------
@@ -2222,7 +2308,7 @@ def test_run_init_reports_a_skill_policy_the_textual_wizard_could_not_resolve(
     assert rc == 1
     assert not settings.project_config_path(tmp_path).exists()
     assert any("cannot establish a Skill policy" in message for message in warnings)
-    assert any("nothing was written" in message for message in warnings)
+    assert any(_SAVED_NOTHING in message for message in warnings)
     assert not any("cancelled" in line for line in out.lines)
 
 

@@ -411,6 +411,13 @@ def _machine_removals(env: Mapping[str, str]) -> list[_Removal]:
             _plan("TUI helper", path)
             for path in tui_release.machine_local_helper_paths(env)
         ),
+        *(
+            _plan(
+                "TUI helper resolved-Release record",
+                tui_release.helper_release_record_path(path),
+            )
+            for path in tui_release.machine_local_helper_paths(env)
+        ),
         _plan("global config-home", scope),
     )
     return [removal for removal in candidates if _present(removal.path)]

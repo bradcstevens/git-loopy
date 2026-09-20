@@ -40,10 +40,13 @@ After ``loop.run`` returns, the test asserts:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import itertools
 import json
 import os
 import shutil
+from decimal import Decimal
+from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -65,6 +68,7 @@ from copilot.generated.session_events import (
 
 from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy import cli
+from git_loopy import dynamic_route
 from git_loopy import events as events_module
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
@@ -78,8 +82,10 @@ from git_loopy.static_route import RoutePolicy
 from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy.emit import EventEmitter
 from git_loopy.events import REDACTED_SECRET
+from git_loopy import persist as persist_module
 from git_loopy.persist import WritersBundle, create_writers
 from git_loopy.readiness import BlockedByRead, BlockerNode
+from git_loopy.route_publication import RouteDeliveryError
 from git_loopy.run_control import is_run_alive
 from git_loopy.session import SKILL_TOOL_NAME
 from git_loopy.sinks import SinkFanout
@@ -134,7 +140,9 @@ class FakeCopilotSession:
         # loop's pre- and post-iteration ``head_sha`` reads — so an injected
         # commit advances the fake git log while the SDK "runs".
         if self._on_send is not None:
-            self._on_send()
+            sent = self._on_send()
+            if inspect.isawaitable(sent):
+                await sent
         last: SessionEvent | None = None
         for evt in self._scripted_events:
             if self._on_event is not None:
@@ -216,12 +224,13 @@ def _make_issue(
     *,
     body: str = "## Parent\nfoo\n\n## What to build\nthing\n\n## Acceptance criteria\nbar",
     state: str = "OPEN",
+    labels: list[str] | None = None,
 ) -> gh_module.Issue:
     return gh_module.Issue(
         number=number,
         title=f"Test issue {number}",
         body=body,
-        labels=["ready-for-agent"],
+        labels=["ready-for-agent"] if labels is None else labels,
         state=state,
         url=f"https://github.com/x/y/issues/{number}",
         comments=(),
@@ -865,6 +874,7 @@ def _wire_single_issue_github(
     untracked: bool = False,
     commit_error: git_module.GitError | None = None,
     push_error: git_module.GitError | None = None,
+    labels: list[str] | None = None,
 ) -> tuple[FakeCopilotClient, FakeGitClient]:
     """Minimal github wiring for a one-issue run with no agent commits.
 
@@ -878,10 +888,10 @@ def _wire_single_issue_github(
     ``(fake_client, fake_git)`` so the caller can drive the SDK ``on_send`` hook
     and inspect the ``add_all`` / ``commit`` / ``push`` spies.
     """
-    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy").mkdir(exist_ok=True)
     (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
 
-    issue = _make_issue(issue_number)
+    issue = _make_issue(issue_number, labels=labels)
     fake_git = FakeGitClient(
         tmp_path,
         dirty=dirty,
@@ -4997,7 +5007,7 @@ def test_an_unreadable_listing_records_why_it_could_not_be_read(
     async def _fetch() -> Any:
         raise RuntimeError("copilot server never answered")
 
-    monkeypatch.setattr(static_route, "_default_capability_fetch", lambda: _fetch)
+    monkeypatch.setattr(static_route, "default_capability_fetch", lambda: _fetch)
 
     exit_code = asyncio.run(loop_module.run(_static_config()))
 
@@ -5260,3 +5270,1752 @@ def test_a_rung_the_harness_refuses_stops_the_run_before_any_work(
 
     assert exit_code == 1
     assert fake_client.create_calls == []
+
+
+# --- Dynamic routing: the Run boundary (#561, ADR-0057) ---------------------
+
+
+def _dynamic_config(**overrides: Any) -> RunConfig:
+    base: dict[str, Any] = dict(
+        issue_source="github",
+        max_iterations=1,
+        route_policy=RoutePolicy.DYNAMIC,
+        model="gpt-5.6-terra",
+        reasoning_effort="high",
+        routing_deadline_seconds=30.0,
+        routing_credit_allowance=Decimal("2.5"),
+        selector_concurrency=1,
+        route_associations={"aa-terra": "gpt-5.6-terra@high"},
+        verbosity=0,
+        render_reasoning=False,
+    )
+    base.update(overrides)
+    return RunConfig(**base)
+
+
+def test_dynamic_routing_refuses_before_work_when_a_prerequisite_is_missing(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """"Missing prerequisites start no dynamic work" is a preflight, not a Pickup.
+
+    ADR-0057 makes the deadline, the routing-credit allowance, the selector
+    concurrency and the operator's own Artificial Analysis authorization
+    *prerequisites*: bounds the operator agreed to rather than defaults the
+    Runner may invent. Discovering a missing one at the first Pickup would mean
+    the Run had already opened a session under a route nobody could have
+    elected, so the whole configuration is checked before any work — the same
+    place and for the same reason a Static route is (#560).
+    """
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+
+    exit_code = asyncio.run(
+        loop_module.run(_dynamic_config(routing_deadline_seconds=None))
+    )
+
+    assert exit_code == 1, f"expected exit 1, got {exit_code}"
+    assert fake_client.create_calls == [], "dynamic work started without its bounds"
+    err = capsys.readouterr().err
+    assert "routing_deadline_seconds" in err
+
+
+def test_dynamic_routing_never_echoes_the_key_it_refuses_for(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """An absent authorization is named by its variable, never by its value."""
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+
+    assert asyncio.run(loop_module.run(_dynamic_config())) == 1
+    assert fake_client.create_calls == []
+    err = capsys.readouterr().err
+    assert dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV in err
+
+
+def test_dynamic_routing_refuses_a_placement_whose_harness_is_not_this_one(
+    monkeypatch,
+) -> None:
+    """The selector would *elect* from a listing the runner never sees.
+
+    The Static route's placement rule (#560) applies to this policy for a
+    sharper reason: a mis-verified Static route at least ran the pair the
+    operator wrote down, while a Dynamic route elected from the wrong
+    installation's listing is a model the GitHub-hosted runner may have no
+    access to at all.
+
+    Driven at the preflight seam rather than through ``run()`` because the
+    Actions host is unpreparable on a bare fixture repository and would refuse
+    for its *own* reason first.
+    """
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+
+    _prerequisites, refusal = loop_module._dynamic_route_preflight(
+        _dynamic_config(execution_host="github-actions"), os.environ
+    )
+
+    assert refusal is not None, "a remote placement elected from the local listing"
+    assert "github-actions" in refusal
+
+
+def test_an_unselected_policy_resolves_no_dynamic_prerequisites(monkeypatch) -> None:
+    """The legacy Run pays nothing for a policy it did not select."""
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+
+    assert loop_module._dynamic_route_preflight(
+        RunConfig(issue_source="github", max_iterations=1), os.environ
+    ) == (None, None)
+
+
+def test_a_dynamic_run_verifies_the_routing_entries_that_still_win(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """A ``[routing]`` entry outranks the selector, so a dead one still refuses.
+
+    AC5 keeps a Static route ahead of the **Route selector**, which makes a
+    ``[routing]`` entry the harness refuses exactly as dead under this policy as
+    it is under a Static one — and dead in a way no amount of live evidence can
+    rescue, because the selector is never asked about that Task type.
+    """
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+
+    exit_code = asyncio.run(
+        loop_module.run(_dynamic_config(routing={"docs": ("ghost-model", "low")}))
+    )
+
+    assert exit_code == 1, f"expected exit 1, got {exit_code}"
+    assert fake_client.create_calls == []
+    err = capsys.readouterr().err
+    assert "ghost-model" in err and "docs" in err
+
+
+def test_a_dynamic_run_does_not_refuse_a_default_the_selector_replaces(
+    monkeypatch,
+) -> None:
+    """The run-wide default is not a route this Run can resolve to.
+
+    Every Task type the ``[routing]`` table does not cover goes to the
+    selector, and an unavailable selector refuses rather than falling back — so
+    the default never runs. Verifying it would refuse the whole Run over a pair
+    the operator never asked to use, most sharply for the kit's own built-in
+    default on an account that does not carry it.
+    """
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+
+    named = {
+        name for name, _route in loop_module._configured_static_routes(
+            _dynamic_config(model="not-in-any-listing", reasoning_effort=None)
+        )
+    }
+
+    assert named == set(), f"a dynamic Run gated a route it cannot take: {named}"
+
+
+def test_an_explicit_pin_is_still_verified_under_a_dynamic_policy(
+    monkeypatch,
+) -> None:
+    """A flag or env pin suppresses routing, so the default *is* the route."""
+    named = {
+        name for name, _route in loop_module._configured_static_routes(
+            _dynamic_config(routing_suppressed=True)
+        )
+    }
+
+    assert named == {"the run-wide default"}
+
+
+def _aa_payload(*rows: dict[str, Any]) -> bytes:
+    return json.dumps(
+        {"data": list(rows), "prompt_options": {"parallel_queries": 1}}
+    ).encode("utf-8")
+
+
+def _aa_row(identifier: str, index: float, speed: float) -> dict[str, Any]:
+    return {
+        "id": identifier,
+        "name": identifier,
+        "slug": identifier,
+        "evaluations": {"artificial_analysis_intelligence_index": index},
+        "median_output_tokens_per_second": speed,
+    }
+
+
+def _wire_dynamic_ports(
+    monkeypatch,
+    *,
+    rows: tuple[dict[str, Any], ...],
+    answer: Callable[[Any], Any] | None,
+    listing: tuple[SimpleNamespace, ...],
+    evidence_delay: float = 0.0,
+) -> dict[str, list[Any]]:
+    """Substitute the two ports that reach the network, and nothing else.
+
+    AC13's "injected external ports": the **Route selector** is a real
+    ``DynamicRouter`` making real decisions over scripted inputs, so what the
+    test exercises is the Run's own boundary rather than a stand-in for it.
+    """
+    spied: dict[str, list[Any]] = {"assessments": [], "evidence": 0}
+
+    async def _fetch(method: str, url: str, headers: dict[str, str]) -> object:
+        spied["evidence"] += 1
+        if evidence_delay:
+            # A real round-trip suspends, which is the only condition under
+            # which two concurrent reads *can* be shared. A port that answers
+            # without ever yielding makes every caller look sequential.
+            await asyncio.sleep(evidence_delay)
+        return _aa_payload(*rows)
+
+    async def _capabilities() -> Any:
+        return dynamic_route.FreshHarnessCapabilities(
+            retrieved_at=datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc),
+            capabilities=static_route.HarnessCapabilities.from_listing(listing),
+            tier_capacities={
+                (model.id, "default"): 400_000 for model in listing
+            },
+        )
+
+    async def _assess(selector: Any, request: Any) -> Any:
+        spied["assessments"].append((selector, request))
+        output = None if answer is None else answer(request)
+        if inspect.isawaitable(output):
+            output = await output
+        return dynamic_route.SelectorCallResult(
+            output=output,
+            routing_credits=Decimal("0.25"),
+        )
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", _fetch)
+    monkeypatch.setattr(loop_module, "_fetch_harness_evidence", _capabilities)
+
+    # Unwrap any factory a previous call in this test already installed, so a
+    # second Run's assessments are counted against its own spy rather than
+    # against the first Run's closure (#565's multi-Run tests).
+    real_factory = getattr(
+        loop_module._make_dynamic_router, "_real_factory", loop_module._make_dynamic_router
+    )
+
+    def _factory(prerequisites, *, selector_assess, recorder):
+        return real_factory(
+            prerequisites, selector_assess=_assess, recorder=recorder
+        )
+
+    _factory._real_factory = real_factory  # type: ignore[attr-defined]
+    monkeypatch.setattr(loop_module, "_make_dynamic_router", _factory)
+    return spied
+
+
+def _elects(model: str) -> Callable[[Any], str]:
+    """Answer as a selector that picked ``model`` off the list it was handed.
+
+    The candidate identity is a digest the router mints, so a scripted answer
+    has to read it out of the request rather than spell it — which is the same
+    constraint a real selector is under, and exactly why the identity is a
+    digest.
+
+    It also obeys the one rule a later attempt adds (#562): re-electing a
+    configuration a previous attempt ran to the end and solved nothing on
+    carries a ``repeat_justification``, and electing anything else does not.
+    Scripting an answer that ignored the rule would test the parse seam's
+    refusal rather than the Run's behaviour on a well-formed one.
+    """
+
+    def _answer(request: Any) -> str:
+        (chosen,) = [
+            candidate
+            for candidate in request.candidates
+            if candidate.model == model
+        ]
+        answer = {
+            "candidate_identity": chosen.stable_identity,
+            "summary": "strongest verified index for this work",
+        }
+        if any(
+            attempt.capability_evidence
+            and attempt.configuration
+            == (chosen.model, chosen.reasoning_effort, chosen.context_tier)
+            for attempt in request.prior_attempts
+        ):
+            answer["repeat_justification"] = (
+                "still the strongest evidenced eligible configuration"
+            )
+        return json.dumps(answer)
+
+    return _answer
+
+
+def _listed_model(identifier: str, efforts: list[str] | None) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=identifier,
+        name=identifier,
+        policy=SimpleNamespace(state="enabled", terms=""),
+        billing=SimpleNamespace(
+            multiplier=1.0,
+            token_prices=SimpleNamespace(
+                max_prompt_tokens=400_000, long_context=None
+            ),
+        ),
+        supported_reasoning_efforts=efforts,
+        default_reasoning_effort=(efforts or [None])[0],
+    )
+
+
+def _dynamic_run(tmp_path, monkeypatch, **overrides):
+    """A one-issue dynamic Run with both external ports scripted."""
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(
+        tmp_path, monkeypatch, labels=overrides.pop("issue_labels", None)
+    )
+    on_send = overrides.pop("on_send", None)
+    if on_send is not None:
+        fake_client.on_send = on_send
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _wire_dynamic_ports(
+        monkeypatch,
+        rows=overrides.pop(
+            "rows",
+            (_aa_row("aa-opus", 70.0, 90.0), _aa_row("aa-terra", 40.0, 200.0)),
+        ),
+        answer=overrides.pop("answer", _elects("claude-opus-5")),
+        listing=overrides.pop(
+            "listing",
+            (
+                _listed_model("claude-opus-5", ["high"]),
+                _listed_model("gpt-5.6-terra", ["low", "high"]),
+            ),
+        ),
+    )
+    config = _dynamic_config(
+        route_associations=overrides.pop("route_associations", {
+            "aa-opus": "claude-opus-5@high",
+            "aa-terra": "gpt-5.6-terra@high",
+        }),
+        **overrides,
+    )
+    return fake_client, spied, asyncio.run(loop_module.run(config))
+
+
+def _dynamic_pool_run(tmp_path, monkeypatch, *, issues, **overrides):
+    """A multi-issue dynamic Run, for the **Routing preparation** slice (#566).
+
+    ``_dynamic_run``'s Pool is one issue, which is exactly the shape that
+    cannot show preparation: there is nothing behind the **Pickup** to prepare.
+    This wires a Pool the Runner can work its way down and returns the spies
+    both halves are read off.
+    """
+    _write_runnable_feedback_loop(tmp_path)
+    (tmp_path / "git-loopy").mkdir(exist_ok=True)
+    (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=list(issues),
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = FakeCopilotClient(scripted_events=[])
+    close_after_send = overrides.pop("close_after_send", None)
+    edit_after_send = overrides.pop("edit_after_send", None)
+    context_after_send = overrides.pop("context_after_send", None)
+    wait_for_prepared = set(overrides.pop("wait_for_prepared", ()))
+
+    async def _after_send() -> None:
+        async def prepared() -> None:
+            while not wait_for_prepared.issubset(
+                record["issue"] for record in _prepared_records(tmp_path)
+            ):
+                await asyncio.sleep(0)
+
+        if wait_for_prepared:
+            await asyncio.wait_for(prepared(), timeout=2)
+        if close_after_send is not None:
+            fake_gh.issue_close(close_after_send, "worked")
+        if edit_after_send is not None:
+            number, body = edit_after_send
+            fake_gh.seed_issue(
+                dataclass_replace(fake_gh.issue_view(number), body=body)
+            )
+        if context_after_send is not None:
+            (tmp_path / "AGENTS.md").write_text(context_after_send, encoding="utf-8")
+
+    if (
+        close_after_send is not None or edit_after_send is not None
+        or context_after_send is not None or wait_for_prepared
+    ):
+        fake_client.on_send = _after_send
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    answer = overrides.pop("answer", _elects("claude-opus-5"))
+    on_assess = overrides.pop("on_assess", None)
+
+    async def assess(request):
+        if on_assess is not None:
+            on_assess(request, fake_gh)
+        output = None if answer is None else answer(request)
+        return await output if inspect.isawaitable(output) else output
+
+    spied = _wire_dynamic_ports(
+        monkeypatch,
+        rows=overrides.pop(
+            "rows",
+            (_aa_row("aa-opus", 70.0, 90.0), _aa_row("aa-terra", 40.0, 200.0)),
+        ),
+        answer=assess,
+        listing=overrides.pop(
+            "listing",
+            (
+                _listed_model("claude-opus-5", ["high"]),
+                _listed_model("gpt-5.6-terra", ["low", "high"]),
+            ),
+        ),
+        evidence_delay=overrides.pop("evidence_delay", 0.0),
+    )
+    config = _dynamic_config(
+        route_associations={
+            "aa-opus": "claude-opus-5@high",
+            "aa-terra": "gpt-5.6-terra@high",
+        },
+        **overrides,
+    )
+    return fake_client, fake_gh, spied, asyncio.run(loop_module.run(config))
+
+
+def _prepared_records(tmp_path: Path) -> list[dict[str, Any]]:
+    """Every ``wrapper.routing.prepared`` this Run logged, in order."""
+    return [
+        event
+        for event in (json.loads(raw) for raw in _log_lines(tmp_path))
+        if event["type"] == "wrapper.routing.prepared"
+    ]
+
+
+def test_the_pool_behind_the_pickup_is_prepared_within_the_allowance(
+    tmp_path, monkeypatch
+) -> None:
+    """AC1: the other eligible candidates are assessed, and the Pickup is not delayed.
+
+    The whole of "prepares proposals for candidates currently established as
+    eligible, prioritizing the next Pickup". The Pickup binds first and its own
+    selector call is bought first; the rest of the Pool is then prepared beside
+    the Agent session under the operator's configured concurrency. A run with
+    one Iteration is deliberate — preparation has to happen *during* work, not
+    as a side effect of the Run reaching the next issue.
+    """
+    _fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[_make_issue(number) for number in (42, 43, 44)],
+        wait_for_prepared=(43, 44),
+        routing_credit_allowance=Decimal("5"),
+    )
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+    prepared = _prepared_records(tmp_path)
+    assert [record["issue"] for record in prepared] == [43, 44], (
+        "the Pool behind the Pickup was not prepared"
+    )
+    assert all(record["state"] == "proposed" for record in prepared), prepared
+    assert all(record["model"] == "claude-opus-5" for record in prepared), prepared
+    assert all(record["selector_model"] == "claude-opus-5" for record in prepared)
+    assert all(
+        record["evidence_source"] == "https://artificialanalysis.ai/api/v2/data/llms/models"
+        for record in prepared
+    )
+    assert all(record["evidence_retrieved_at"] for record in prepared)
+    assert all(record["measurement_at"] is None for record in prepared)
+    # One for the bound Pickup, one for each prepared candidate. Nothing is
+    # assessed twice and nothing eligible is skipped.
+    assert len(spied["assessments"]) == 3, spied["assessments"]
+
+
+def test_preparation_never_precedes_the_pickup_it_runs_beside(
+    tmp_path, monkeypatch
+) -> None:
+    """AC7: background preparation cannot reorder work or get in front of it.
+
+    Pinned as an *ordering* over the canonical log rather than as a timing,
+    because "does not delay the Pickup" is only checkable as a fact about what
+    happened first. The bound Pickup's own resolution is recorded before any
+    proposal for a candidate behind it, and the issue the session is opened on
+    is still the head of the Pool's order.
+    """
+    fake_client, _fake_gh, _spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[_make_issue(number) for number in (42, 43, 44)],
+        routing_credit_allowance=Decimal("5"),
+    )
+
+    assert exit_code == 0
+    order = [json.loads(raw)["type"] for raw in _log_lines(tmp_path)]
+    assert order.index("wrapper.routing.resolved") < order.index(
+        "wrapper.routing.prepared"
+    ), "a proposal was prepared before the Pickup it runs beside was routed"
+    assert order.index("wrapper.pickup.bound") < order.index(
+        "wrapper.routing.prepared"
+    ), "preparation ran in front of the bound Pickup"
+    (bound,) = _bound_pickups(tmp_path)
+    assert bound["issue"] == 42, "preparation reordered the Pool"
+    assert fake_client.create_calls[0]["model"] == "claude-opus-5"
+
+
+def test_a_delayed_preparation_cannot_hold_the_next_static_pickup(
+    tmp_path, monkeypatch
+) -> None:
+    tail_started = asyncio.Event()
+    next_pickup = asyncio.Event()
+    timed_out = False
+    send = FakeCopilotSession.send_and_wait
+
+    async def answer(request):
+        nonlocal timed_out
+        if "#44:" in request.issue:
+            tail_started.set()
+            try:
+                await asyncio.wait_for(next_pickup.wait(), timeout=0.5)
+            except TimeoutError:
+                timed_out = True
+                raise
+            except asyncio.CancelledError:
+                raise dynamic_route.RoutingCallCancelled(Decimal("0.30")) from None
+        return _elects("claude-opus-5")(request)
+
+    async def work(session, prompt, **kwargs):
+        if "=== Issue #42:" in prompt:
+            await asyncio.wait_for(tail_started.wait(), timeout=1)
+        else:
+            next_pickup.set()
+        return await send(session, prompt, **kwargs)
+
+    monkeypatch.setattr(FakeCopilotSession, "send_and_wait", work)
+    fake_client, _, _, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[
+            _make_issue(42),
+            _make_issue(43, labels=["ready-for-agent", "task-type:docs"]),
+            _make_issue(44),
+        ],
+        answer=answer,
+        close_after_send=42,
+        max_iterations=2,
+        routing={"docs": ("gpt-5.6-terra", "low")},
+        routing_credit_allowance=Decimal("0.50"),
+    )
+
+    assert exit_code == 0
+    assert next_pickup.is_set()
+    assert not timed_out, "the next Pickup waited for unrelated preparation"
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "claude-opus-5", "gpt-5.6-terra"
+    ]
+    interrupted = next(record for record in _prepared_records(tmp_path) if record["issue"] == 44)
+    assert interrupted["state"] == "unavailable"
+    assert interrupted["routing_credits"] == "0.55"
+    assert interrupted["routing_overshot"] is True
+
+
+def test_a_blocked_candidate_is_left_pending_without_being_assessed(
+    tmp_path, monkeypatch
+) -> None:
+    """AC2: ineligible candidates stay visibly pending and cost no selector call.
+
+    A blocked issue is one the Run may not work *now*, which makes an
+    assessment of it a **Routing credit** spent on an outcome that cannot be
+    used. It is left alone rather than recorded as refused: preparation has no
+    verdict to give about eligibility, and saying one would be a second opinion
+    competing with the **Pickup**'s.
+    """
+    blocked = _dated(
+        43,
+        "2026-01-02T00:00:00Z",
+        blocked_by=BlockedByRead(
+            total_count=1,
+            nodes=(BlockerNode(ref="acme/widgets#93", state="open"),),
+        ),
+    )
+    _fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[
+            _dated(42, "2026-01-01T00:00:00Z"),
+            blocked,
+            _dated(44, "2026-01-03T00:00:00Z"),
+        ],
+        wait_for_prepared=(44,),
+        routing_credit_allowance=Decimal("5"),
+    )
+
+    assert exit_code == 0
+    prepared_refs = [record["issue"] for record in _prepared_records(tmp_path)]
+    assert prepared_refs == [44], (
+        f"a blocked candidate bought an assessment: {prepared_refs}"
+    )
+    # The Pickup's own call plus the one eligible candidate behind it.
+    assert len(spied["assessments"]) == 2, spied["assessments"]
+
+
+@pytest.mark.parametrize("change", ["blocked", "unreadable", "closed", "unlabelled"])
+def test_queued_eligibility_is_reread_before_any_preparation_spend(
+    tmp_path, monkeypatch, change
+) -> None:
+    classified = []
+
+    async def classify(_proposer, _pair, item):
+        classified.append(item.ref)
+        return "<task-type>implementation</task-type>"
+
+    def change_tail(request, tracker):
+        if "#43:" not in request.issue:
+            return
+        item = tracker.issue_view(44)
+        changes = {
+            "blocked": {"blocked_by": BlockedByRead(
+                total_count=1, nodes=(BlockerNode(ref="x/y#99", state="open"),)
+            )},
+            "unreadable": {"blocked_by": BlockedByRead.unprovable()},
+            "closed": {"state": "CLOSED"},
+            "unlabelled": {"labels": ()},
+        }
+        tracker.seed_issue(dataclass_replace(item, **changes[change]))
+
+    monkeypatch.setattr(loop_module.SessionTaskTypeProposer, "__call__", classify)
+    monkeypatch.setattr(
+        loop_module, "_make_task_type_label_client", _RecordingTaskTypeLabelClient
+    )
+    _, _, spied, exit_code = _dynamic_pool_run(
+        tmp_path, monkeypatch,
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "task-type:implementation", "semver:none"]),
+            _make_issue(43, labels=["ready-for-agent", "task-type:implementation", "semver:none"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+        classifier_model="gpt-5.6-terra",
+        classifier_effort="high",
+        on_assess=change_tail,
+        wait_for_prepared=(43, 44),
+    )
+    assert exit_code == 0
+    assert classified == []
+    assert len(spied["assessments"]) == 2
+    assert _prepared_records(tmp_path)[-1]["state"] == "unavailable"
+
+
+@pytest.mark.parametrize("already_labelled", [False, True])
+def test_a_static_route_is_prepared_without_asking_the_selector(
+    tmp_path, monkeypatch, already_labelled
+) -> None:
+    """AC3: classification first, then static applicability, then the selector.
+
+    A ``[routing]`` entry is the operator's own instruction, so the candidate
+    it covers reaches its **Pickup** already routed and preparation must not
+    buy an assessment for it. Saying so out loud — ``state: static`` rather
+    than silence — is what keeps an operator from reading an unprepared issue
+    as an unreachable one.
+    """
+    classified = []
+
+    async def classify(_proposer, _pair, item):
+        classified.append(item.ref)
+        return "<task-type>docs</task-type>"
+
+    monkeypatch.setattr(loop_module.SessionTaskTypeProposer, "__call__", classify)
+    monkeypatch.setattr(
+        loop_module, "_make_task_type_label_client", _RecordingTaskTypeLabelClient
+    )
+    labels = ["ready-for-agent", "semver:none"]
+    if already_labelled:
+        labels.append("task-type:docs")
+    fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "task-type:implementation", "semver:none"]),
+            _make_issue(43, labels=labels),
+        ],
+        routing={"docs": ("gpt-5.6-terra", "low")},
+        classifier_model="gpt-5.6-terra",
+        classifier_effort="high",
+        wait_for_prepared=(43,),
+        close_after_send=42,
+        max_iterations=2,
+        routing_credit_allowance=Decimal("5"),
+    )
+
+    assert exit_code == 0
+    (record,) = _prepared_records(tmp_path)
+    assert record["issue"] == 43
+    assert record["state"] == "static", record
+    assert record["proposal_id"] is None, "a static route minted a proposal"
+    assert classified == ([] if already_labelled else [43])
+    assert fake_client.create_calls[-1]["model"] == "gpt-5.6-terra"
+    assert fake_client.create_calls[-1]["reasoning_effort"] == "low"
+    # The Pickup's own call, and no second one for the statically routed issue.
+    assert len(spied["assessments"]) == 1, spied["assessments"]
+
+
+def test_a_prepared_proposal_binds_at_its_pickup_without_a_second_call(
+    tmp_path, monkeypatch
+) -> None:
+    """AC6: unchanged verified inputs do not rerun the **Route selector**.
+
+    The payoff the whole slice exists for, and the only assertion that can show
+    it: over two Iterations the second issue is prepared during the first and
+    *bound* in the second, so the Run buys two assessments for two issues
+    rather than three for two. A third call would mean preparation cost a
+    credit and saved nothing.
+
+    The first issue is closed from inside its own session, because an issue the
+    Run re-picks carries a **Prior attempt** the second time — which is a
+    changed verified input and *should* be reassessed. Testing the saving over
+    an issue that legitimately reassesses would measure nothing.
+    """
+    issues = [_make_issue(42), _make_issue(43)]
+
+    _fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=issues,
+        wait_for_prepared=(43,),
+        close_after_send=42,
+        max_iterations=2,
+        routing_credit_allowance=Decimal("5"),
+    )
+
+    assert exit_code == 0
+    assert len(spied["assessments"]) == 2, spied["assessments"]
+    resolved = [
+        event
+        for event in (json.loads(raw) for raw in _log_lines(tmp_path))
+        if event["type"] == "wrapper.routing.resolved"
+    ]
+    assert [record["issue"] for record in resolved] == [42, 43]
+    assert all(record["model"] == "claude-opus-5" for record in resolved), resolved
+    # The ledger's Run-wide count: two admitted calls for two worked issues.
+    assert [record["selector_attempts"] for record in resolved] == [1, 2], resolved
+
+
+def test_a_changed_issue_invalidates_its_prepared_proposal(
+    tmp_path, monkeypatch
+) -> None:
+    """AC6: changed relevant input buys another selection rather than binding a stale one.
+
+    The strongest thing preparation can get wrong is to hand a **Pickup** an
+    assessment of an issue that no longer says what it said. Rewriting the
+    queued issue's body between the two Iterations moves the verified input
+    identity, so the second Pickup reassesses — three calls for two issues,
+    which is the *correct* number here and the wrong one in the test above.
+    """
+    issues = [_make_issue(42), _make_issue(43)]
+
+    _fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=issues,
+        wait_for_prepared=(43,),
+        close_after_send=42,
+        edit_after_send=(
+            43,
+            "## Parent\nfoo\n\n## What to build\nsomething else entirely\n\n"
+            "## Acceptance criteria\nbar",
+        ),
+        max_iterations=2,
+        routing_credit_allowance=Decimal("5"),
+    )
+
+    assert exit_code == 0
+    assert len(spied["assessments"]) == 3, spied["assessments"]
+    resolved = [
+        event
+        for event in (json.loads(raw) for raw in _log_lines(tmp_path))
+        if event["type"] == "wrapper.routing.resolved"
+    ]
+    assert [record["issue"] for record in resolved] == [42, 43]
+    assert resolved[1]["selector_attempts"] == 3, (
+        "a changed issue bound the proposal prepared for its older text"
+    )
+
+
+def test_changed_feedback_loop_commands_invalidate_a_prepared_proposal(
+    tmp_path, monkeypatch
+) -> None:
+    _, _, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[_make_issue(42), _make_issue(43)],
+        wait_for_prepared=(43,),
+        close_after_send=42,
+        context_after_send=(
+            "## Feedback loops\n\n| Loop | Command |\n| --- | --- |\n"
+            "| Unit | `pytest -q changed_suite` |\n"
+        ),
+        max_iterations=2,
+        routing_credit_allowance=Decimal("5"),
+    )
+
+    assert exit_code == 0
+    assert len(spied["assessments"]) == 3
+    assert any(
+        "pytest -q changed_suite" in context
+        for context in spied["assessments"][-1][1].repository_context
+    )
+
+
+def test_an_exhausted_allowance_stops_preparing_without_stopping_work(
+    tmp_path, monkeypatch
+) -> None:
+    """AC8: exhaustion leaves an explicit outcome and strands no speculative loop.
+
+    The allowance here pays for the **Pickup**'s own assessment and no more, so
+    preparation meets the exhausted ledger on its first candidate. What must
+    *not* happen is the Run failing: the bound issue was routed before the
+    allowance ran out and its session is entitled to run to the end.
+    """
+    fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[_make_issue(number) for number in (42, 43, 44)],
+        wait_for_prepared=(43,),
+        routing_credit_allowance=Decimal("0.25"),
+    )
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+    assert fake_client.create_calls, "an exhausted allowance stopped the work"
+    assert fake_client.create_calls[0]["model"] == "claude-opus-5"
+    assert len(spied["assessments"]) == 1, spied["assessments"]
+    states = [record["state"] for record in _prepared_records(tmp_path)]
+    assert states and set(states) == {"unavailable"}, states
+    # Latched, not retried per candidate; shutdown may cancel an unstarted tail.
+    assert sum(
+        record["reason"] == "quota_exhausted" for record in _prepared_records(tmp_path)
+    ) == 1, "an exhausted desk kept asking"
+
+
+def test_preparation_cannot_buy_classification_after_routing_allowance_exhaustion(
+    tmp_path, monkeypatch
+) -> None:
+    classifications = []
+
+    async def classify(_proposer, _pair, item):
+        classifications.append(item.ref)
+        return "<task-type>docs</task-type>"
+
+    monkeypatch.setattr(loop_module.SessionTaskTypeProposer, "__call__", classify)
+    monkeypatch.setattr(
+        loop_module, "_make_task_type_label_client", _RecordingTaskTypeLabelClient
+    )
+    fake_client, _, _, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "task-type:implementation", "semver:none"]),
+            _make_issue(43, labels=["ready-for-agent"]),
+        ],
+        classifier_model="gpt-5.6-terra",
+        classifier_effort="high",
+        routing_credit_allowance=Decimal("0.25"),
+        wait_for_prepared=(43,),
+    )
+
+    assert exit_code == 0
+    assert classifications == []
+    assert fake_client.create_calls[0]["model"] == "claude-opus-5"
+    assert _prepared_records(tmp_path)[0]["reason"] == "quota_exhausted"
+
+
+def test_unavailable_dynamic_routing_leaves_the_next_static_pickup_useful(
+    tmp_path, monkeypatch
+) -> None:
+    fake_client, _, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[
+            _make_issue(42),
+            _make_issue(43, labels=["ready-for-agent", "task-type:docs"]),
+        ],
+        routing={"docs": ("gpt-5.6-terra", "low")},
+        routing_credit_allowance=Decimal("0"),
+    )
+
+    assert exit_code == 0
+    assert spied["assessments"] == []
+    assert [entry["issue"] for entry in _bound_pickups(tmp_path)] == [43]
+    assert fake_client.create_calls[0]["model"] == "gpt-5.6-terra"
+    assert fake_client.create_calls[0]["reasoning_effort"] == "low"
+
+
+def test_concurrent_preparation_shares_one_live_evidence_read(
+    tmp_path, monkeypatch
+) -> None:
+    """AC5: concurrent checks may share an in-flight request.
+
+    Five live reads are *asked for* here — the **Pickup**'s ``prepare`` and its
+    ``bind``, then one per prepared candidate — and only four are bought,
+    because the two preparations the configured concurrency lets overlap are
+    asking the identical question of the identical source at the same instant.
+    Answering it twice would spend a second round-trip against ADR-0057's
+    thousand-a-day evidence budget for bytes the Run already has in flight.
+
+    Not a cache, and the count says so: the Pickup's ``bind`` re-reads rather
+    than reusing what its own ``prepare`` read a moment earlier, because a
+    binding's authority is that its evidence is current.
+    """
+    assessed = asyncio.Event()
+    send = FakeCopilotSession.send_and_wait
+
+    def answer(request):
+        if "#45:" in request.issue:
+            assessed.set()
+        return _elects("claude-opus-5")(request)
+
+    async def work(session, prompt, **kwargs):
+        await asyncio.wait_for(assessed.wait(), timeout=1)
+        return await send(session, prompt, **kwargs)
+
+    monkeypatch.setattr(FakeCopilotSession, "send_and_wait", work)
+    _fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[_make_issue(number) for number in (42, 43, 44, 45)],
+        selector_concurrency=2,
+        evidence_delay=0.01,
+        answer=answer,
+        routing_credit_allowance=Decimal("10"),
+    )
+
+    assert exit_code == 0
+    assert len(spied["assessments"]) == 4, spied["assessments"]
+    assert spied["evidence"] == 4, (
+        f"{spied['evidence']} evidence reads; 5 were asked for and the two "
+        "overlapping preparations should have shared one"
+    )
+
+
+def test_a_dynamic_route_reaches_the_serial_work_sessions_own_arguments(
+    tmp_path, monkeypatch
+) -> None:
+    """The elected route is what ``create_session`` is actually called with.
+
+    The whole of AC9's "actually supplies the work session's settings": not the
+    proposal, not the readback, not the Queue cell — the request the
+    issue-owning session is opened with. A route that agrees everywhere except
+    here is a route that did not take effect.
+    """
+    fake_client, spied, exit_code = _dynamic_run(tmp_path, monkeypatch)
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+    assert fake_client.create_calls, "no work session was opened"
+    call = fake_client.create_calls[0]
+    assert call["model"] == "claude-opus-5"
+    assert call["reasoning_effort"] == "high"
+    assert spied["assessments"], "the Route selector was never asked"
+
+
+def test_the_dashboard_reads_the_dynamic_route_from_the_pickup_it_bound(
+    tmp_path, monkeypatch
+) -> None:
+    """One resolution feeds the session, the Event and the **Dashboard**.
+
+    The readback agreeing with the session is the same **Routing resolution**
+    arriving in two places, under a **Routing source** that says a selector
+    decided it — which is what stops a routing decision being quoted back as a
+    human instruction.
+    """
+    _fake_client, _spied, exit_code = _dynamic_run(tmp_path, monkeypatch)
+
+    assert exit_code == 0
+    (bound,) = _bound_pickups(tmp_path)
+    assert bound["model"] == "claude-opus-5"
+    assert bound["effort"] == "high"
+    assert bound["routing_source"] == "dynamic"
+
+
+def test_the_decisions_provenance_is_persisted_before_the_work_starts(
+    tmp_path, monkeypatch
+) -> None:
+    """AC9's local decision provenance, and it lands ahead of the session.
+
+    Provenance written afterwards is provenance that is missing exactly when
+    the Run died mid-decision, so the ordering is what is pinned rather than
+    merely the record's presence.
+
+    The single selector call is AC8's other half: ``bind`` re-read both live
+    sources at Pickup and found the verified inputs unchanged, so it reused the
+    proposal's assessment instead of buying a second one. One admitted call for
+    one issue is the whole point of charging the assessment to routing credits.
+    """
+    _fake_client, _spied, exit_code = _dynamic_run(tmp_path, monkeypatch)
+
+    assert exit_code == 0
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    resolved = [
+        event for event in events if event["type"] == "wrapper.routing.resolved"
+    ]
+    assert len(resolved) == 1, "the dynamic decision left no provenance"
+    record = resolved[0]
+    assert record["issue"] == 42
+    assert record["model"] == "claude-opus-5"
+    assert record["evidence_source"].startswith("https://artificialanalysis.ai/")
+    assert record["evidence_retrieved_at"]
+    assert record["capabilities_retrieved_at"]
+    assert record["routing_credits"] == "0.25"
+    assert record["selector_attempts"] == 1
+
+    order = [event["type"] for event in events]
+    assert order.index("wrapper.routing.resolved") < order.index(
+        "wrapper.pickup.bound"
+    )
+
+
+def test_an_invalid_selector_answer_refuses_rather_than_falling_back(
+    tmp_path, monkeypatch
+) -> None:
+    """AC11: no stale, default or cheaper-selector fallback — an explicit refusal.
+
+    Naming a configuration that is not on the candidate list is the classic
+    injected answer, and the failure mode that matters is not that it is
+    refused but *what happens next*: taking the Run's default pair would run
+    the issue on a route nobody elected and report it as routed.
+    """
+    fake_client, _spied, exit_code = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        answer=lambda _request: json.dumps(
+            {"candidate_identity": "nine", "summary": "not on the list"}
+        ),
+    )
+
+    assert fake_client.create_calls == [], "a refused route still opened a session"
+    assert exit_code != 0
+    skipped = [
+        event
+        for event in _pickup_events(tmp_path)
+        if event["type"] == "wrapper.pickup.skipped"
+    ]
+    assert skipped and "invalid_selector_output" in skipped[-1]["reason"]
+
+
+def test_an_unreachable_evidence_source_refuses_rather_than_guessing(
+    tmp_path, monkeypatch
+) -> None:
+    """A required source that failed is unavailable, never "assume the default"."""
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _wire_dynamic_ports(
+        monkeypatch,
+        rows=(_aa_row("aa-terra", 40.0, 200.0),),
+        answer=None,
+        listing=(_listed_model("gpt-5.6-terra", ["low", "high"]),),
+    )
+
+    async def _unreachable(*_args: Any, **_kwargs: Any) -> object:
+        raise RuntimeError("artificialanalysis.ai refused the connection")
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", _unreachable)
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            _dynamic_config(route_associations={"aa-terra": "gpt-5.6-terra@high"})
+        )
+    )
+
+    assert fake_client.create_calls == []
+    assert exit_code != 0
+    skipped = [
+        event
+        for event in _pickup_events(tmp_path)
+        if event["type"] == "wrapper.pickup.skipped"
+    ]
+    assert skipped and "source_unavailable" in skipped[-1]["reason"]
+
+
+def test_a_configured_routing_entry_keeps_the_selector_out_of_it(
+    tmp_path, monkeypatch
+) -> None:
+    """AC5: avoid the **Route selector** where a Static route applies.
+
+    The operator wrote this pair down for this **Task type**; spending a
+    selector call to be told something else would override an instruction with
+    an inference, which is the precedence ADR-0057 settles the other way.
+    """
+    fake_client, spied, exit_code = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        issue_labels=["ready-for-agent", "task-type:implementation"],
+        routing={"implementation": ("gpt-5.6-terra", "low")},
+    )
+
+    assert exit_code == 0
+    assert spied["assessments"] == [], "a Static route still bought a selector call"
+    assert fake_client.create_calls[0]["model"] == "gpt-5.6-terra"
+    assert fake_client.create_calls[0]["reasoning_effort"] == "low"
+
+
+def test_the_assessment_sees_the_issue_and_the_gates_it_must_pass(
+    tmp_path, monkeypatch
+) -> None:
+    """AC6's inputs arrive at the real selector, off the real checkout."""
+    _fake_client, spied, exit_code = _dynamic_run(tmp_path, monkeypatch)
+
+    assert exit_code == 0
+    (_selector, request) = spied["assessments"][0]
+    assert "#42" in request.issue
+    assert request.task_type
+    assert any("feedback loop" in entry for entry in request.repository_context)
+
+
+def test_a_classification_counts_toward_this_runs_routing_usage(
+    tmp_path, monkeypatch
+) -> None:
+    """AC10: classification attempts count toward routing usage.
+
+    The **Task-type classifier** runs *because* this Run routes dynamically —
+    AC5 settles the Task type before applicability is resolved — so a Run that
+    counted only the selector would under-report the spend its own routing
+    caused, and the allowance meant to bound that spend would bound half of it.
+    """
+    _fake_client, _spied, exit_code = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        classifier_model="gpt-5.6-terra",
+        classifier_effort="high",
+    )
+
+    assert exit_code == 0
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    (record,) = [
+        event for event in events if event["type"] == "wrapper.routing.resolved"
+    ]
+    assert record["classification_attempts"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Later dynamic attempts reselect from outcome evidence (#562, ADR-0057)
+# ---------------------------------------------------------------------------
+
+
+def _routing_records(tmp_path: Path) -> list[dict[str, Any]]:
+    """Every **Dynamic route** decision this Run recorded, in order."""
+    return [
+        event
+        for event in (json.loads(raw) for raw in _log_lines(tmp_path))
+        if event["type"] == "wrapper.routing.resolved"
+    ]
+
+
+@pytest.mark.parametrize("retry_model", ["claude-opus-5", "gpt-5.6-terra"])
+def test_a_permitted_retry_reassesses_with_the_previous_outcome(
+    tmp_path, monkeypatch, retry_model
+) -> None:
+    """The whole ticket, through the record an operator reads (AC1, AC3, AC6).
+
+    The first Iteration ends in silent no-progress, which the **Attempt
+    lifecycle** answers with one more attempt. Under the **Dynamic route** that
+    second **Pickup** does not inherit a fixed **Escalation rung** — there is
+    none, and ADR-0057 reserves none — it reassesses, and the assessment it buys
+    is handed what the first attempt ran on and what its ending was evidence of.
+
+    Both axes are on the record and neither is derived from the other: the
+    decision names the configuration, and ``lifecycle_position``/``attempt``
+    name where the issue sits. A record carrying only the first could not tell a
+    reassessed retry from a first election that happened to agree.
+    """
+    fake_client, spied, exit_code = _dynamic_run(
+        tmp_path, monkeypatch, max_iterations=2, max_nmt_strikes=9,
+        answer=lambda request: _elects(
+            retry_model if request.prior_attempts else "claude-opus-5"
+        )(request),
+    )
+
+    assert exit_code == 0
+    first, second = (request for _selector, request in spied["assessments"])
+    assert first.prior_attempts == ()
+    (evidence,) = second.prior_attempts
+    assert evidence.model == "claude-opus-5"
+    assert evidence.reasoning_effort == "high"
+    assert evidence.outcome is dynamic_route.PriorOutcome.DID_NOT_SOLVE
+    assert evidence.detail == "no_progress"
+    assert evidence.capability_evidence is True
+
+    opening, retry = _routing_records(tmp_path)
+    assert (opening["lifecycle_position"], opening["attempt"]) == ("fresh", 1)
+    assert opening["prior_attempts"] == []
+    assert (retry["lifecycle_position"], retry["attempt"]) == ("retrying", 2)
+    assert retry["prior_attempts"] == [
+        {
+            "model": "claude-opus-5",
+            "effort": "high",
+            "context_tier": "default",
+            "outcome": "did_not_solve",
+            "detail": "no_progress",
+            "capability_evidence": True,
+        }
+    ]
+    assert (retry["repeat_justification"] is not None) is (
+        retry_model == "claude-opus-5"
+    )
+
+    assert [
+        (e["issue"], e["model"], e["routing_source"], e["lifecycle_position"])
+        for e in _bound_pickups(tmp_path)
+    ] == [
+        (42, "claude-opus-5", "dynamic", "fresh"),
+        (42, retry_model, "dynamic", "retrying"),
+    ]
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "claude-opus-5", retry_model
+    ]
+    assert [call["reasoning_effort"] for call in fake_client.create_calls] == ["high", "high"]
+
+
+def test_a_crashed_attempt_is_reassessed_without_becoming_capability_evidence(
+    tmp_path, monkeypatch
+) -> None:
+    """AC2: the harness falling over says nothing about the route it fell on.
+
+    The retry still reassesses — current evidence and eligibility are re-read
+    either way — but the configuration that crashed is offered back with no
+    case to answer, so the selector may simply choose it again. A Run that
+    demoted a route for a transport failure would spend the rest of its life
+    avoiding whatever was running when the network blinked.
+    """
+    fake_client, spied, exit_code = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        max_iterations=2,
+        max_nmt_strikes=9,
+        on_send=_raise_a_transport_failure,
+    )
+
+    assert exit_code == 0
+    _first, second = (request for _selector, request in spied["assessments"])
+    (evidence,) = second.prior_attempts
+    assert evidence.outcome is dynamic_route.PriorOutcome.INFRASTRUCTURE_FAILURE
+    assert evidence.detail == "crash"
+    assert evidence.capability_evidence is False
+
+    _opening, retry = _routing_records(tmp_path)
+    assert retry["attempt"] == 2
+    assert retry["repeat_justification"] is None
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "claude-opus-5",
+        "claude-opus-5",
+    ]
+
+
+@pytest.mark.parametrize("default_effort", ["low", "high"])
+def test_an_explicitly_configured_rung_still_outranks_the_selector(
+    tmp_path, monkeypatch, default_effort
+) -> None:
+    """AC5: explicit static escalation is an instruction, not a starting point.
+
+    An operator who wrote an ``[escalation]`` block under the dynamic policy has
+    named the pair a stalled issue is retried at, and ADR-0057 keeps the
+    selector away from it exactly as it keeps it away from a ``[routing]`` entry
+    or a run-wide pin. So the retry runs on the rung, reports ``escalated``, and
+    buys no second assessment at all — a credit spent to contradict an
+    instruction is a credit spent for nothing.
+
+    A rung equal to the run-wide default is still explicit authority: that
+    default is only a placeholder until the dynamic election supplies a route.
+    """
+    _fake_client, spied, exit_code = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        max_iterations=2,
+        max_nmt_strikes=9,
+        reasoning_effort=default_effort,
+        escalation_rung=("gpt-5.6-terra", "high"),
+    )
+
+    assert exit_code == 0
+    assert len(spied["assessments"]) == 1, "a Static route bought a selector call"
+    assert [
+        (e["model"], e["effort"], e["routing_source"])
+        for e in _bound_pickups(tmp_path)
+    ] == [
+        ("claude-opus-5", "high", "dynamic"),
+        ("gpt-5.6-terra", "high", "escalated"),
+    ]
+    assert len(_routing_records(tmp_path)) == 1
+
+
+@pytest.mark.parametrize("refusal", ["invalid_output", "allowance", "eligibility"])
+def test_an_unavailable_later_route_blocks_the_retry_without_spending_it(
+    tmp_path, monkeypatch, refusal
+) -> None:
+    """AC4/AC8: a routing refusal is not an attempt, and not a **Strike**.
+
+    The first attempt stalls and the lifecycle grants a second; the second
+    election cannot be made. Nothing may be invented to fill the gap — no stale
+    decision, no built-in default — and nothing may be charged for the session
+    that never opened: the issue is left where the lifecycle put it rather than
+    driven to ``skipped`` by a decision it never got.
+
+    The Run ends non-zero because the last Iteration bound nothing, which is the
+    honest report: blocking the affected work *is* the required behaviour, and a
+    Run that reported success while silently declining to work its one issue
+    would be indistinguishable from one that had nothing to do.
+    """
+    answers = iter((_elects("claude-opus-5"), None))
+
+    def _answer(request: Any) -> Any:
+        chosen = next(answers)
+        return None if chosen is None else chosen(request)
+
+    listing = (
+        _listed_model("claude-opus-5", ["high"]),
+        _listed_model("gpt-5.6-terra", ["high"]),
+    )
+
+    def after_send() -> None:
+        if refusal == "eligibility":
+            for model in listing:
+                model.policy.state = "disabled"
+
+    fake_client, _spied, exit_code = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        max_iterations=2,
+        max_nmt_strikes=9,
+        answer=_answer,
+        listing=listing,
+        on_send=after_send,
+        routing_credit_allowance=Decimal("0.25") if refusal == "allowance" else Decimal("5"),
+    )
+
+    assert exit_code != 0
+    assert len(fake_client.create_calls) == 1, "a refused route still opened a session"
+    assert len(_routing_records(tmp_path)) == 1
+    assert _strikes(tmp_path) == []
+    skipped = [
+        event
+        for event in (json.loads(raw) for raw in _log_lines(tmp_path))
+        if event["type"] == "wrapper.pickup.skipped"
+    ]
+    assert skipped and "dynamic route unavailable" in skipped[-1]["reason"]
+
+
+@pytest.mark.parametrize("ending", ["no_progress", "crash"])
+def test_dynamic_attempt_exhaustion_admits_no_further_assessment(
+    tmp_path, monkeypatch, ending
+) -> None:
+    fake_client, spied, exit_code = _dynamic_run(
+        tmp_path, monkeypatch, max_iterations=5, max_nmt_strikes=1,
+        on_send=_raise_a_transport_failure if ending == "crash" else None,
+    )
+
+    assert exit_code == 1
+    assert len(fake_client.create_calls) == 2
+    assert len(spied["assessments"]) == 2
+    assert len(_strikes(tmp_path)) == 1
+    assert [record["attempt"] for record in _routing_records(tmp_path)] == [1, 2]
+
+
+def test_the_initial_dynamic_pickup_may_already_spend_max(
+    tmp_path, monkeypatch
+) -> None:
+    fake_client, _spied, exit_code = _dynamic_run(
+        tmp_path, monkeypatch,
+        listing=(_listed_model("claude-opus-5", ["high", "max"]),),
+        route_associations={"aa-opus": "claude-opus-5@max"},
+    )
+
+    assert exit_code == 0
+    (call,) = fake_client.create_calls
+    assert (call["model"], call["reasoning_effort"]) == ("claude-opus-5", "max")
+    (record,) = _routing_records(tmp_path)
+    assert (record["lifecycle_position"], record["effort"]) == ("fresh", "max")
+
+
+@pytest.mark.parametrize("authority", ["task_route", "run_override"])
+def test_static_authority_suppresses_dynamic_selection_across_attempts(
+    tmp_path, monkeypatch, authority
+) -> None:
+    fake_client, spied, exit_code = _dynamic_run(
+        tmp_path, monkeypatch, max_iterations=2, max_nmt_strikes=9,
+        issue_labels=["ready-for-agent", "task-type:docs"],
+        routing={"docs": ("gpt-5.6-terra", "high")} if authority == "task_route" else {},
+        routing_suppressed=authority == "run_override",
+    )
+
+    assert exit_code == 0
+    assert spied["assessments"] == []
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "gpt-5.6-terra", "gpt-5.6-terra"
+    ]
+    assert [bound["lifecycle_position"] for bound in _bound_pickups(tmp_path)] == [
+        "fresh", "retrying"
+    ]
+    assert _routing_records(tmp_path) == []
+
+
+# ---------------------------------------------------------------------------
+# Route publication — the final Routing resolution, projected (#563, ADR-0057)
+# ---------------------------------------------------------------------------
+
+
+def _delivery_events(tmp_path: Path) -> list[dict[str, Any]]:
+    """Every Route-delivery envelope written under this repo, oldest Run first.
+
+    Deliberately not :func:`_read_events`, which reads one Run's log: a pending
+    delivery is resumed by a *later* Run, so the property under test only
+    exists across two of them.
+    """
+    logs = sorted((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+    return [
+        event
+        for log in logs
+        for line in log.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+        for event in [json.loads(line)]
+        if event["type"] == "wrapper.routing.delivery"
+    ]
+
+
+def test_a_pickup_projects_its_final_route_onto_the_issue(
+    tmp_path, monkeypatch
+) -> None:
+    """The Pickup's own resolution reaches the tracker as one comment and label.
+
+    The projection is an *output adapter* of a record that already exists: the
+    comment names the exact triple, and the single owned Route label sits
+    beside the issue's own labels rather than replacing any of them.
+    """
+    _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_gh = loop_module._make_github_client()
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    )
+
+    assert exit_code == 0
+    assert len(fake_gh.route_comment_calls) == 1
+    _number, body = fake_gh.route_comment_calls[0]
+    assert "<!-- git-loopy-route:v1:" in body
+    route_labels = [
+        label
+        for label in fake_gh.issue_labels(42)
+        if label.startswith("git-loopy-route:")
+    ]
+    assert len(route_labels) == 1
+    assert "ready-for-agent" in fake_gh.issue_labels(42)
+    assert [event["status"] for event in _delivery_events(tmp_path)] == ["published"]
+
+
+def test_an_unchanged_route_is_not_published_a_second_time(
+    tmp_path, monkeypatch
+) -> None:
+    """A revalidation that re-elects the same triple is not news for the issue.
+
+    The durable delivery record is keyed on the assignment, so a second Run
+    over the same issue recognises its own projection instead of appending a
+    duplicate explanation of a route that never changed.
+    """
+    _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_gh = loop_module._make_github_client()
+
+    for _ in range(2):
+        assert (
+            asyncio.run(
+                loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+            )
+            == 0
+        )
+
+    assert len(fake_gh.route_comment_calls) == 1
+
+
+def test_a_refusing_tracker_leaves_the_recorded_work_to_proceed(
+    tmp_path, monkeypatch
+) -> None:
+    """Delivery is non-blocking once the canonical local record exists (AC5/AC6).
+
+    A permission failure on the comment is retained as pending local delivery
+    and reported as pending — never as published — while the Agent session the
+    already-recorded route authorises still runs.
+    """
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_gh = loop_module._make_github_client()
+    fake_gh._route_comment_errors[42] = RouteDeliveryError("HTTP 403")
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    )
+
+    assert exit_code == 0
+    assert len(fake_client.created) == 1, "the recorded route still ran its session"
+    assert [event["status"] for event in _delivery_events(tmp_path)] == ["pending"]
+    assert fake_gh.route_comment_calls == []
+
+
+def test_a_pending_delivery_is_resumed_by_a_later_run(tmp_path, monkeypatch) -> None:
+    """Pending delivery survives the Run that could not complete it (AC7).
+
+    The retry reads the durable local record rather than re-deciding anything,
+    so a tracker that comes back accepts the projection of the route that was
+    already final when it failed.
+    """
+    _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_gh = loop_module._make_github_client()
+    fake_gh._route_comment_errors[42] = RouteDeliveryError("HTTP 429")
+
+    assert (
+        asyncio.run(
+            loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+        )
+        == 0
+    )
+    fake_gh._route_comment_errors.clear()
+    assert (
+        asyncio.run(
+            loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+        )
+        == 0
+    )
+
+    assert len(fake_gh.route_comment_calls) == 1
+    assert "published" in [event["status"] for event in _delivery_events(tmp_path)]
+
+
+def test_a_final_route_that_cannot_be_recorded_locally_starts_no_work(
+    tmp_path, monkeypatch
+) -> None:
+    """Canonical local persistence precedes work *and* publication (AC5).
+
+    An event log that refuses the binding leaves no record of what the Agent
+    would have run on, so the iteration must not run one — and must not tell
+    the tracker about a route it could not write down.
+    """
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_gh = loop_module._make_github_client()
+    original = persist_module.EventLogWriter.write
+
+    def refuse_the_binding(self, envelope: dict[str, Any]) -> None:
+        if envelope.get("type") == "wrapper.pickup.bound":
+            raise OSError("event log is unwritable")
+        original(self, envelope)
+
+    monkeypatch.setattr(persist_module.EventLogWriter, "write", refuse_the_binding)
+
+    exit_code = asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    )
+
+    assert exit_code != 0
+    assert fake_client.created == []
+    assert fake_gh.route_comment_calls == []
+
+
+# --- Dynamic routing: reuse across Runs (#565, ADR-0057) --------------------
+
+
+def _routing_records(tmp_path: Path) -> list[dict[str, Any]]:
+    """Every ``wrapper.routing.resolved`` record in this clone, oldest Run first."""
+    logs = sorted(
+        (tmp_path / ".git-loopy" / "logs").glob("*.jsonl"), key=lambda p: p.name
+    )
+    return [
+        event
+        for path in logs
+        for raw in path.read_text(encoding="utf-8").splitlines()
+        if (event := json.loads(raw))["type"] == "wrapper.routing.resolved"
+    ]
+
+
+def test_a_later_run_revalidates_the_route_its_own_history_already_records(
+    tmp_path, monkeypatch
+) -> None:
+    """#565 AC1/AC3/AC9: fresh checks, no second selector call, both modes' serial half.
+
+    The whole slice end to end. The first Run elects and records; the second
+    Run derives a **Reusable route** from that record alone, re-reads both live
+    sources, finds the verified inputs unchanged, and opens its work session on
+    the same configuration without buying a selector call. What is pinned is
+    every link in that chain — the sources *were* read, the selector was *not*
+    asked, the new record points at the old decision, and the session actually
+    ran on the reused pair. A route that agrees everywhere except the session
+    is a route that did not take effect.
+    """
+    _fake, first, first_exit = _dynamic_run(tmp_path, monkeypatch)
+    assert first_exit == 0, f"the first Run failed: {first_exit}"
+    assert len(first["assessments"]) == 1
+
+    fake_client, second, second_exit = _dynamic_run(tmp_path, monkeypatch)
+
+    assert second_exit == 0, f"the reusing Run failed: {second_exit}"
+    assert second["assessments"] == [], "a matching reusable route still paid a selector"
+    assert second["evidence"] >= 1, "reuse skipped the freshness check it may not skip"
+    assert fake_client.create_calls, "the reusing Run opened no work session"
+    call = fake_client.create_calls[0]
+    assert (call["model"], call["reasoning_effort"]) == ("claude-opus-5", "high")
+
+    elected, revalidated = _routing_records(tmp_path)
+    assert elected["routing_reuse"] == "elected"
+    assert revalidated["routing_reuse"] == "revalidated"
+    assert revalidated["reused_proposal_id"] == elected["proposal_id"]
+    assert revalidated["reused_validated_at"] == elected["validated_at"]
+    assert revalidated["validated_at"] != elected["validated_at"]
+    assert revalidated["selector_attempts"] == 0
+    assert revalidated["routing_credits"] == "0"
+    assert revalidated["model"] == "claude-opus-5"
+    assert revalidated["relevant_input_identity"] == elected["relevant_input_identity"]
+
+
+def test_routing_never_feeds_its_own_inputs_so_reuse_does_not_decay(
+    tmp_path, monkeypatch
+) -> None:
+    """#565 AC6: the second reuse is as valid as the first.
+
+    The invalidation loop this forbids is the one #563 already had to close
+    once on the publishing side: routing writes something an input reader then
+    sees, so the next Run's inputs differ, so it reassesses, so it writes
+    again. Reuse adds two fresh candidates for that — the revalidation record
+    itself, and its ``validated_at`` timestamp. Neither may reach the verified
+    input identity, and a third Run that still revalidates against the *first*
+    Run's decision is the only assertion that says so: had either leaked, the
+    identity would have moved and the third Run would have paid a selector.
+    """
+    _dynamic_run(tmp_path, monkeypatch)
+    _dynamic_run(tmp_path, monkeypatch)
+
+    _fake, third, third_exit = _dynamic_run(tmp_path, monkeypatch)
+
+    assert third_exit == 0, f"the third Run failed: {third_exit}"
+    assert third["assessments"] == [], "reuse decayed into a fresh assessment"
+    elected, second, latest = _routing_records(tmp_path)
+    assert [r["routing_reuse"] for r in (second, latest)] == [
+        "revalidated",
+        "revalidated",
+    ]
+    assert latest["reused_proposal_id"] == elected["proposal_id"], (
+        "a revalidation was reused as if it were the original decision"
+    )
+    assert latest["relevant_input_identity"] == elected["relevant_input_identity"]
+
+
+def test_an_edited_task_type_decides_again_rather_than_reusing(
+    tmp_path, monkeypatch
+) -> None:
+    """#565 AC2/AC6: a relevant edit still invalidates.
+
+    The Task type is one of the things the assessment is *told* rather than
+    left to guess, so re-labelling the issue changes what the selector was
+    asked — and a cache that answered anyway would be answering a question
+    nobody asked. The new decision is a real one, bought inside the allowance,
+    and it names the record it supersedes so the history stays followable.
+    """
+    _dynamic_run(tmp_path, monkeypatch)
+
+    _fake, second, second_exit = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        issue_labels=["ready-for-agent", "task-type:docs"],
+    )
+
+    assert second_exit == 0, f"the reassessing Run failed: {second_exit}"
+    assert len(second["assessments"]) == 1, "a changed input was served from history"
+    elected, reassessed = _routing_records(tmp_path)
+    assert reassessed["routing_reuse"] == "elected"
+    assert reassessed["reused_proposal_id"] is None
+    assert reassessed["reassessed"] is True
+    assert reassessed["superseded_proposal_id"] == elected["proposal_id"]
+    assert (
+        reassessed["relevant_input_identity"] != elected["relevant_input_identity"]
+    ), "the identity did not notice the edit it exists to notice"
+
+
+def test_a_withdrawn_model_is_not_replayed_past_the_harness_it_left(
+    tmp_path, monkeypatch
+) -> None:
+    """#565 AC7: history cannot carry a model past a current capability check.
+
+    The sharpest thing a cache can get wrong. Between the two Runs the elected
+    model leaves the harness listing entirely; the recorded route still names
+    it, and replaying it would open a session on a model this account cannot
+    run. The second Run must elect from what the harness offers *now*, and the
+    session must be opened on that.
+    """
+    _dynamic_run(tmp_path, monkeypatch)
+
+    fake_client, second, second_exit = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        listing=(_listed_model("gpt-5.6-terra", ["low", "high"]),),
+        answer=_elects("gpt-5.6-terra"),
+    )
+
+    assert second_exit == 0, f"the re-electing Run failed: {second_exit}"
+    assert len(second["assessments"]) == 1, "a withdrawn model was replayed"
+    call = fake_client.create_calls[0]
+    assert call["model"] == "gpt-5.6-terra", "the work session ran on the stale route"
+    _elected, reassessed = _routing_records(tmp_path)
+    assert reassessed["routing_reuse"] == "elected"
+    assert reassessed["model"] == "gpt-5.6-terra"
+
+
+def test_a_run_wide_pin_outranks_a_reusable_route_it_never_consults(
+    tmp_path, monkeypatch
+) -> None:
+    """#565 AC5: a cached result is not authority, and an operator's pin is.
+
+    ADR-0057 keeps an explicit instruction ahead of any inference, and history
+    does not promote one inference into an instruction. A pinned Run therefore
+    opens its session on the pin, and — because it never even reaches the
+    router — leaves no routing record of its own for a later Run to mistake for
+    one.
+    """
+    _dynamic_run(tmp_path, monkeypatch)
+
+    fake_client, second, second_exit = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        routing_suppressed=True,
+        model="gpt-5.6-terra",
+        reasoning_effort="low",
+    )
+
+    assert second_exit == 0, f"the pinned Run failed: {second_exit}"
+    assert second["assessments"] == [], "a pinned Run assessed anyway"
+    call = fake_client.create_calls[0]
+    assert (call["model"], call["reasoning_effort"]) == ("gpt-5.6-terra", "low")
+    assert len(_routing_records(tmp_path)) == 1, "a pinned Run recorded a route"
+
+
+def test_an_unusable_routing_history_is_diagnosed_and_elected_afresh(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """#565 AC4: a torn record is not a cached route, and not a dead Run either.
+
+    Reuse is an optimisation over something every Run before it already did,
+    so a history that cannot be read costs a selector call and a diagnostic —
+    not a refused **Pickup**. What it must never do is pass silently: an
+    operator who is quietly paying for every assessment has no way to discover
+    the corrupt log causing it.
+    """
+    _dynamic_run(tmp_path, monkeypatch)
+    log = next((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+    log.write_text(
+        "".join(
+            (raw[: len(raw) // 2] if '"wrapper.routing.resolved"' in raw else raw) + "\n"
+            for raw in log.read_text(encoding="utf-8").splitlines()
+        ),
+        encoding="utf-8",
+    )
+
+    _fake, second, second_exit = _dynamic_run(tmp_path, monkeypatch)
+
+    assert second_exit == 0, "a torn routing record refused the whole Pickup"
+    assert len(second["assessments"]) == 1, "a torn record was served as a cached route"
+    diagnostics = capsys.readouterr().err
+    assert "reusable routing history" in diagnostics
+    assert log.name in diagnostics, "the diagnosis did not name the unusable log"

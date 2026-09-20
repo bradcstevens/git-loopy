@@ -128,6 +128,7 @@ from typing import (
     Iterable,
     Mapping,
     Protocol,
+    Sequence,
 )
 
 from copilot import CopilotClient
@@ -148,15 +149,57 @@ from git_loopy.staircase import PriceStaircase, StaircaseRefusal
 from git_loopy import rollup as rollup_module
 from git_loopy import worktree as worktree_module
 from git_loopy.active_issue import ActiveIssueBinding
+from git_loopy.attempt_evidence import AttemptEvidenceLedger
 from git_loopy.attempt_lifecycle import AttemptLedger, AttemptState
 from git_loopy.config import (
     RoutingResolution,
     RunConfig,
     TaskTypeError,
     resolve_iteration_model,
+    static_route_applies,
 )
 from git_loopy.copilot_client import make_copilot_client
+from git_loopy.dynamic_route import (
+    routing_provenance_payload,
+    ArtificialAnalysisSource,
+    DynamicRouteDecision,
+    DynamicRoutePrerequisites,
+    DynamicRouter,
+    FreshHarnessCapabilities,
+    ReusableRoute,
+    RoutingAdmissionLedger,
+    RoutingCallCancelled,
+    RoutingPrerequisiteError,
+    RoutingProposal,
+    RoutingRequest,
+    RoutingSourceError,
+    RoutingUnavailable,
+    RoutingUnavailableReason,
+    SelectorCallResult,
+    refresh_harness_evidence,
+    resolve_prerequisites,
+)
 from git_loopy.emit import EventEmitter
+from git_loopy.live_read import SharedLiveRead
+from git_loopy.gate import FeedbackLoop, parse_feedback_loops
+from git_loopy.measured_routing import (
+    MeasuredRouting,
+    load_measured_routing,
+    measured_routing_path,
+)
+from git_loopy.routing_input import build_routing_request
+from git_loopy.route_publication import (
+    RouteDeliveryStatus,
+    RoutePublicationStore,
+    RoutePublisher,
+)
+from git_loopy.route_reuse import ReusableRouteHistory, read_reusable_routes
+from git_loopy.route_preparation import (
+    PreparationOutcome,
+    PreparedRoute,
+    RoutePreparation,
+)
+from git_loopy.selector_session import RoutingCostMeter, SessionRouteSelector
 from git_loopy.escalation import EscalationLedger
 from git_loopy.persist import (
     IterationCounters,
@@ -218,6 +261,7 @@ from git_loopy.sources import (
     GitHubIssueSource,
     IssueSource,
     LABEL_PARALLEL_SAFE,
+    PICKUP_VALIDATED,
     PoolCandidate,
     PoolCollection,
     PrdsIssueSource,
@@ -898,6 +942,46 @@ async def _refresh_harness_capabilities(
 #: keeps one answer.
 _VERIFIABLE_EXECUTION_HOST = execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT
 
+#: The two refusals a **Routing preparation** proposal may draw at its own
+#: **Pickup** that say something about *the proposal* rather than about routing:
+#: it aged past its validity window while the Run worked something else, or the
+#: router no longer holds it as canonical. Both mean "assess again", never "do
+#: not work this issue" — preparing ahead is an optimisation over a Pickup that
+#: has always been able to prepare for itself, so nothing preparation does may
+#: turn a workable issue into a refused one (#566).
+_DISCARDABLE_PROPOSAL_REFUSALS: frozenset[RoutingUnavailableReason] = frozenset(
+    {
+        RoutingUnavailableReason.STALE_PROPOSAL,
+        RoutingUnavailableReason.INVALID_PROPOSAL,
+    }
+)
+
+
+def _remote_placement_refusal(config: RunConfig) -> str | None:
+    """Say why this host's harness cannot answer for a remote placement, or ``None``.
+
+    Shared by both selected policies because both rest on the same authority:
+    ADR-0057 wants the verdict from *the authenticated harness the Run actually
+    uses*, and names "another CLI installation" as explicitly not it. A
+    ``github-actions`` contribution opens its work session on a GitHub-hosted
+    runner authenticating as itself, so the operator's own listing describes a
+    different installation — and under a **Dynamic route** it is worse than
+    wrong in the abstract: the selector would *elect* from that listing, so the
+    Run would not merely mis-verify a route, it would choose one the runner may
+    have no access to at all. Refused by name rather than downgraded, which is
+    the criterion's own "fail explicitly before work".
+    """
+    if config.execution_host == _VERIFIABLE_EXECUTION_HOST:
+        return None
+    return (
+        f"the {config.execution_host!r} Execution host opens its work "
+        "sessions on a machine that authenticates as itself, so this "
+        "machine's model listing is not the listing that would run them. "
+        "A selected route can only be verified for the "
+        f"{_VERIFIABLE_EXECUTION_HOST!r} placement — run there, or leave "
+        "route_policy unset for this one."
+    )
+
 
 def _configured_static_routes(
     config: RunConfig,
@@ -913,13 +997,28 @@ def _configured_static_routes(
 
     Named rather than numbered, because the refusal an operator reads has to
     say *which* entry to go and fix.
+
+    Under a **Dynamic route** the run-wide default is omitted unless an explicit
+    flag or environment pin suppressed routing (#561). It is not a route this
+    Run can resolve to: every Task type the ``[routing]`` table does not cover
+    goes to the **Route selector**, and a selector that is unavailable refuses
+    rather than falling back. Verifying it anyway would refuse the whole Run
+    over a default the operator never asked to use — most sharply for the
+    kit's *own* built-in default on an account that does not carry it.
     """
-    routes: list[tuple[str, StaticRoute]] = [
-        (
-            "the run-wide default",
-            StaticRoute(config.model, config.reasoning_effort, config.context_tier),
+    routes: list[tuple[str, StaticRoute]] = []
+    default_can_run = (
+        config.route_policy is not RoutePolicy.DYNAMIC or config.routing_suppressed
+    )
+    if default_can_run:
+        routes.append(
+            (
+                "the run-wide default",
+                StaticRoute(
+                    config.model, config.reasoning_effort, config.context_tier
+                ),
+            )
         )
-    ]
     for key in sorted(config.routing):
         model, effort = config.routing[key]
         routes.append(
@@ -950,35 +1049,198 @@ async def _static_route_preflight(
     whatever the Pool happened to contain.
 
     **The placement is checked before the routes are**, because it decides
-    whether this host's answer is the answer at all. A remote **Execution
-    host** runs its work sessions under its own identity, so verifying the
-    operator's own listing and reporting it as that placement's verdict would
-    be the "another CLI installation" ADR-0057 rules out — stated as an
-    unsupported combination rather than papered over with a local read.
+    whether this host's answer is the answer at all.
+
+    A **Dynamic route** comes through here too (#561): under it a configured
+    ``[routing]`` entry still wins over the selector (AC5), so an entry the
+    harness refuses is just as dead as it is under a Static route — and the
+    selector's own candidates need no check here, having been elected from that
+    same listing.
 
     Args:
         config: The Run's frozen configuration.
         warn: Sink for the observed cause of an unreadable listing, which the
             ``unverifiable`` refusal can only guess at.
     """
-    if config.route_policy is not RoutePolicy.STATIC:
+    if config.route_policy is RoutePolicy.UNSELECTED:
         return None
-    if config.execution_host != _VERIFIABLE_EXECUTION_HOST:
-        return (
-            f"the {config.execution_host!r} Execution host opens its work "
-            "sessions on a machine that authenticates as itself, so this "
-            "machine's model listing is not the listing that would run them. "
-            "A Static route can only be verified for the "
-            f"{_VERIFIABLE_EXECUTION_HOST!r} placement — run there, or leave "
-            "route_policy unset for this one."
-        )
+    placement_refusal = _remote_placement_refusal(config)
+    if placement_refusal is not None:
+        return placement_refusal
+    routes = _configured_static_routes(config)
+    if not routes:
+        return None
     capabilities = await _refresh_harness_capabilities(warn=warn)
-    for name, route in _configured_static_routes(config):
+    for name, route in routes:
         try:
             validate_static_route(route, capabilities)
         except StaticRouteError as exc:
             return f"{name}: {exc}"
     return None
+
+
+class DynamicRouteUnavailable(RuntimeError):
+    """A **Dynamic route** could not be elected, and there is no second answer.
+
+    Carries the router's own closed reason
+    (:class:`~git_loopy.dynamic_route.RoutingUnavailableReason`) as its message,
+    so the **Pickup skip** an operator reads names which half of the decision
+    failed rather than merely that one did.
+    """
+
+
+def _assessed_task_type(resolution: RoutingResolution) -> str:
+    """The **Task type** the assessment is told this issue is, never a guess.
+
+    A resolution that settled on exactly one key reports it. Anything else —
+    no ``task-type:`` label the classifier could supply, several conflicting
+    ones, a key outside the ``[routing]`` table — reports ``unclassified``,
+    which is the honest word for it: ADR-0057 excludes similar names as proof
+    of identity, and picking one of two conflicting labels to show the selector
+    would be exactly that kind of guess wearing a fact's clothes.
+    """
+    if len(resolution.task_type_keys) == 1:
+        return resolution.task_type_keys[0]
+    return "unclassified"
+
+
+@dataclass(frozen=True)
+class _DynamicRoutingSetup:
+    """Everything one Run needs to route dynamically, resolved once at preflight.
+
+    One object rather than three constructor parameters because the three are
+    never individually meaningful: a Run either selected the policy and has all
+    of them, or did not and has none. It also keeps the "did this Run select
+    the policy?" question answerable by a single ``is None``, the way the
+    **Task-type classifier**'s pair already is.
+    """
+
+    prerequisites: DynamicRoutePrerequisites
+    feedback_loops: tuple[FeedbackLoop, ...]
+    measured: MeasuredRouting | None
+
+
+def _dynamic_route_preflight(
+    config: RunConfig, env: Mapping[str, str], *, repo_root: Path | None = None
+) -> tuple[_DynamicRoutingSetup | None, str | None]:
+    """Resolve the Run's dynamic routing, or say why it cannot start.
+
+    Answers ``(None, None)`` for every Run that did not select the policy, so
+    the legacy and Static paths keep costing nothing.
+
+    Resolved once for the whole Run rather than per Pickup, for the reason
+    ADR-0057 gives: the deadline, the routing-credit allowance, the selector
+    concurrency and the operator's own Artificial Analysis authorization are
+    *bounds the operator agreed to*, not defaults the Runner may invent, so a
+    Run missing one has nothing to fall back to — and discovering that at the
+    first Pickup means a session was already opened under a route nobody could
+    have elected. "Missing prerequisites start no dynamic work" is only true of
+    a check that runs before the first session.
+
+    The repository's own two contributions — its declared **Feedback loops**
+    and its **Measured routing** artifact — are read here for a weaker but
+    real reason: both are properties of the checkout rather than of an issue,
+    so a per-Pickup read would spend I/O to answer the same question again.
+    Neither can refuse the Run: an unreadable ``AGENTS.md`` or a malformed
+    artifact leaves the selector with less context, which is a worse assessment
+    and not an unsafe one.
+    """
+    if config.route_policy is not RoutePolicy.DYNAMIC:
+        return None, None
+    placement_refusal = _remote_placement_refusal(config)
+    if placement_refusal is not None:
+        return None, placement_refusal
+    try:
+        prerequisites = resolve_prerequisites(config, env)
+    except RoutingPrerequisiteError as exc:
+        return None, str(exc)
+    return (
+        _DynamicRoutingSetup(
+            prerequisites=prerequisites,
+            feedback_loops=_declared_feedback_loops(repo_root),
+            measured=_declared_measured_routing(repo_root),
+        ),
+        None,
+    )
+
+
+def _declared_feedback_loops(repo_root: Path | None) -> tuple[FeedbackLoop, ...]:
+    if repo_root is None:
+        return ()
+    try:
+        markdown = (repo_root / "AGENTS.md").read_text(encoding="utf-8")
+    except OSError:
+        return ()
+    try:
+        return tuple(parse_feedback_loops(markdown))
+    except Exception:
+        return ()
+
+
+def _declared_measured_routing(repo_root: Path | None) -> MeasuredRouting | None:
+    if repo_root is None:
+        return None
+    try:
+        return load_measured_routing(measured_routing_path(repo_root))
+    except Exception:
+        return None
+
+
+def _make_dynamic_router(
+    prerequisites: DynamicRoutePrerequisites,
+    *,
+    selector_assess: Callable[..., Awaitable[SelectorCallResult]],
+    recorder: Callable[[DynamicRouteDecision], Awaitable[object]],
+) -> DynamicRouter:
+    """Assemble the Run's router, as a module seam tests substitute.
+
+    A function here rather than a constructor call inline, on the discipline
+    ``_make_client`` / ``_refresh_harness_capabilities`` already keep: the two
+    ports that reach the network are named in one place, so an offline suite
+    replaces *this* and gets a real router driving real decisions over
+    scripted inputs — which is what AC13's "injected external ports" asks for
+    and what a substituted ``DynamicRouter`` would not give.
+
+    Both ports are wrapped in a :class:`SharedLiveRead` (#566, AC5). Under
+    **Routing preparation** several assessments are in flight at once and each
+    re-reads live evidence and live capabilities; two that overlap are asking
+    the identical question of the identical source, and answering it twice
+    costs the operator a second round-trip for an answer that cannot have
+    changed between them. It is deliberately *not* a cache: a read that has
+    already finished is never handed to a later caller, because the whole
+    authority of a Dynamic route is that its evidence is current.
+    """
+    source = ArtificialAnalysisSource(
+        prerequisites.api_key, associations=prerequisites.associations
+    )
+    return DynamicRouter(
+        evidence_fetch=SharedLiveRead(source.fetch),
+        capabilities_fetch=SharedLiveRead(_fetch_harness_evidence),
+        selector_assess=selector_assess,
+        recorder=recorder,
+        admission_ledger=RoutingAdmissionLedger(
+            deadline_seconds=prerequisites.deadline_seconds,
+            routing_credit_allowance=prerequisites.routing_credit_allowance,
+            selector_concurrency=prerequisites.selector_concurrency,
+        ),
+    )
+
+
+async def _fetch_harness_evidence() -> FreshHarnessCapabilities:
+    """The router's eligibility-and-capacity read, as a module seam.
+
+    Raises rather than answering ``None``, because the router's port is typed
+    for a value and turns every exception into
+    ``capabilities_unavailable`` — the same verdict, reached through the
+    contract the router already has, instead of a second ``None``-means-unknown
+    convention for the same fact.
+    """
+    fresh = await refresh_harness_evidence()
+    if fresh is None:
+        raise RoutingSourceError(
+            "the authenticated harness listing could not be read"
+        )
+    return fresh
 
 
 #: The **Wind-down** ladder as a rung lookup, derived from the family's ordered
@@ -1020,6 +1282,8 @@ class _Loop:
         rate_card: RateCard | None = None,
         classifier_pair: ClassifierPair | None = None,
         task_type_client: TaskTypeLabelClient | None = None,
+        route_tracker: gh_module.GitHubClient | None = None,
+        dynamic_routing: "_DynamicRoutingSetup | None" = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -1104,6 +1368,14 @@ class _Loop:
         # a **Status** the runner wrote back to the tracker would put it inside
         # the triage state machine it is only ever a consumer of.
         self._attempts = AttemptLedger()
+        # What each issue's earlier attempts ran on, and what their endings are
+        # evidence of (#562, ADR-0057). The third dial one ending turns, and it
+        # is a third ledger because the question is a third one: the rung asks
+        # whether the pair changes, the lifecycle asks whether the issue is
+        # worked at all, and this asks what the *next election* is told. A crash
+        # moves the lifecycle, leaves the rung alone, and lands here classified
+        # as evidence about the harness rather than about the route.
+        self._attempt_evidence = AttemptEvidenceLedger()
         # The **Task-type classifier**, as this Run's Pickups call it (#409,
         # ADR-0029). Assembled here rather than injected whole because the one
         # thing it must not get wrong is where its **Consumption** goes: the
@@ -1116,24 +1388,10 @@ class _Loop:
         #
         # A `None` pair makes the whole object inert, so neither Pickup carries
         # a second copy of "does this Run classify?".
+        self._classification_denials: dict[int | str, RoutingUnavailable] = {}
         self._classifier = PickupClassifier(
             pair=classifier_pair,
-            propose=SessionTaskTypeProposer(
-                client=self._client,
-                config=self._config,
-                event_log=self._writers.event_log,
-                sinks=self._sinks,
-                run_id=self._writers.run_id,
-                # The repository root, in both modes. A Lane classifies *before*
-                # its worktree exists — the Task type is what decides the pair
-                # the Lane is then created for — so there is no Lane path to
-                # read, and reading the issue's own content needs none.
-                working_directory=None,
-                send_timeout_seconds=config.send_timeout_seconds,
-                skill_exposure=self._skill_exposure,
-                cost_meter=self._session_observer,
-                warn=self._diag.warning,
-            ),
+            propose=self._propose_task_type,
             client=(
                 task_type_client
                 if task_type_client is not None
@@ -1175,6 +1433,70 @@ class _Loop:
             diag=self._diag,
             observer=self._rollup,
         )
+        self._route_publisher = (
+            None
+            if route_tracker is None
+            else RoutePublisher(
+                store=RoutePublicationStore(
+                    self._writers.event_log.path.parent.parent / "route-delivery.json"
+                ),
+                tracker=route_tracker,
+            )
+        )
+        # The **Route selector**'s router, or `None` for every Run that did not
+        # select the policy (#561, ADR-0057) — the same "a `None` makes the
+        # whole object inert" discipline the classifier above keeps, so no
+        # Pickup carries a second copy of "does this Run route dynamically?".
+        #
+        # Assembled here for the classifier's reason, doubled. Two of its four
+        # ports need things that exist only once this constructor has run: the
+        # selector session needs `self._session_observer`, so routing spend
+        # reaches the Run's **Consumption** exactly as an Iteration's does
+        # (AC10); and the recorder needs `self._emit`, because the provenance
+        # AC9 requires before work is an Event on this Run's own log.
+        self._dynamic_router = (
+            None
+            if dynamic_routing is None
+            else _make_dynamic_router(
+                dynamic_routing.prerequisites,
+                selector_assess=SessionRouteSelector(
+                    client=self._client,
+                    config=self._config,
+                    event_log=self._writers.event_log,
+                    sinks=self._sinks,
+                    run_id=self._writers.run_id,
+                    # The repository root, for the classifier's reason: the
+                    # assessment reads the issue, not a Lane's worktree, and a
+                    # Lane is routed before its worktree exists.
+                    working_directory=None,
+                    send_timeout_seconds=config.send_timeout_seconds,
+                    skill_exposure=self._skill_exposure,
+                    cost_meter=self._session_observer,
+                    warn=self._diag.warning,
+                ),
+                recorder=self._record_dynamic_route,
+            )
+        )
+        self._dynamic_routing = dynamic_routing
+        self._reusable_routes: ReusableRouteHistory | None = None
+        # **Routing preparation** exists only where routing does, and is bounded
+        # by the operator's own selector concurrency (#566, AC1). The desk is
+        # given the router's `prepare` through `self._prepare_route` rather than
+        # the router itself: what preparation may do is classify, check the
+        # Static route, check reuse, and propose — and handing it a router would
+        # be handing it `bind`, which is the binding preparation must never make.
+        self._preparation = (
+            None
+            if self._dynamic_router is None
+            else RoutePreparation(
+                prepare=self._prepare_route,
+                concurrency=dynamic_routing.prerequisites.selector_concurrency,
+                on_prepared=self._emit_route_prepared,
+                diag=self._diag,
+            )
+        )
+        #: The Run's in-flight preparation pass, independent of Iteration endings.
+        self._preparation_pass: asyncio.Task[None] | None = None
 
     @property
     def finalized_contributions(self) -> tuple[rolling_scheduler.Contribution, ...]:
@@ -1296,6 +1618,7 @@ class _Loop:
         event_type: str,
         *,
         iter_num: int | None,
+        require_persistence: bool = False,
         **payload: Any,
     ) -> dict[str, Any]:
         """Compose, scrub, persist, then fan out one wrapper-level event.
@@ -1311,7 +1634,34 @@ class _Loop:
         ``diag`` (warn-and-continue). Returns the composed **pre-scrub** envelope
         so callers can still read the SHA / subject off their own events.
         """
-        return self._emitter.emit(event_type, iter_num=iter_num, **payload)
+        return self._emitter.emit(
+            event_type,
+            iter_num=iter_num,
+            require_persistence=require_persistence,
+            **payload,
+        )
+
+    def _retry_route_delivery(self) -> None:
+        """Retry only durable pending Route projections; never re-decide a Route."""
+        route_publisher = getattr(self, "_route_publisher", None)
+        if route_publisher is None:
+            return
+        for delivery in route_publisher.retry_pending():
+            self._emit(
+                events_module.WRAPPER_ROUTING_DELIVERY,
+                iter_num=None,
+                issue=delivery.issue,
+                identity=delivery.identity,
+                label=delivery.label,
+                status=delivery.status.value,
+            )
+            if delivery.status is not RouteDeliveryStatus.PUBLISHED:
+                self._diag.warning(
+                    "route publication retry for issue #%s is %s: %s",
+                    delivery.issue,
+                    delivery.status.value,
+                    delivery.detail or "delivery remains pending",
+                )
 
     def _report_pool_exclusions(
         self, collection: PoolCollection, *, iter_num: int
@@ -1369,12 +1719,36 @@ class _Loop:
         self._emit(
             events_module.WRAPPER_PICKUP_BOUND,
             iter_num=iter_num,
+            require_persistence=True,
             issue=issue,
             reason=reason,
             position=position,
             considered=considered,
             **(resolution.as_pickup_payload() if resolution is not None else {}),
         )
+        if (
+            self._route_publisher is not None
+            and isinstance(issue, int)
+            and resolution is not None
+        ):
+            delivery = self._route_publisher.publish(
+                issue=issue, resolution=resolution
+            )
+            self._emit(
+                events_module.WRAPPER_ROUTING_DELIVERY,
+                iter_num=iter_num,
+                issue=issue,
+                identity=delivery.identity,
+                label=delivery.label,
+                status=delivery.status.value,
+            )
+            if delivery.status is not RouteDeliveryStatus.PUBLISHED:
+                self._diag.warning(
+                    "route publication for issue #%s is %s: %s",
+                    issue,
+                    delivery.status.value,
+                    delivery.detail or "delivery remains pending",
+                )
 
     def _emit_pickup_skipped(
         self,
@@ -1593,6 +1967,8 @@ class _Loop:
                 pickup.position,
                 len(pool),
             )
+            # Preparation may outlive this Iteration, but never the Run.
+            self._start_preparation_pass(pool, beside=active.ref)
 
             # 3) Build prompt (last-5 commits + the bound issue's block +
             #    prompt body). Exactly one issue: the agent is told which issue
@@ -1616,6 +1992,7 @@ class _Loop:
                 pre_sha = self._git.head_sha()
             except git_module.GitError as exc:
                 self._diag.error("git head_sha failed: %s; aborting iteration", exc)
+                await self._settle_preparation_pass()
                 self._finish_iteration(iter_num, outcome="no_progress")
                 return ("continue", 0, 0)
 
@@ -1932,6 +2309,9 @@ class _Loop:
         to, and source and position are separate axes precisely so that a
         same-pair retry stays tellable from an escalated one.
 
+        Under the Dynamic policy, an unpinned default is only a placeholder.
+        An explicit rung equal to that placeholder still suppresses selection.
+
         **The position comes from the Attempt lifecycle, not from the rung**
         (#412). Both ledgers read the same ending, but only the lifecycle sees
         every ending — a crash retries the issue on the pair it already had, and
@@ -1952,7 +2332,11 @@ class _Loop:
             lifecycle_position=position,
             escalated_pair=rung,
         )
-        if (escalated.model, escalated.reasoning_effort) == (
+        dynamic_placeholder = (
+            self._config.route_policy is RoutePolicy.DYNAMIC
+            and not static_route_applies(routed)
+        )
+        if not dynamic_placeholder and (escalated.model, escalated.reasoning_effort) == (
             routed.model,
             routed.reasoning_effort,
         ):
@@ -1966,6 +2350,34 @@ class _Loop:
         return escalated
 
     async def _classify_at_pickup(
+        self, item: AfkReadyItem, *, routed: RoutingResolution,
+        parallel_required: bool = False,
+    ) -> tuple[AfkReadyItem, RoutingResolution]:
+        try:
+            if self._preparation is not None:
+                await self._preparation.prioritize(item.ref)
+                current = await asyncio.to_thread(
+                    self._source.refresh_for_preparation, item
+                )
+                if current.outcome != PICKUP_VALIDATED:
+                    self._preparation.take(item.ref)
+                    raise DynamicRouteUnavailable(
+                        f"current candidate eligibility {current.outcome}"
+                    )
+                assert current.item is not None
+                item = current.item
+                if parallel_required and LABEL_PARALLEL_SAFE not in item.labels:
+                    raise DynamicRouteUnavailable("candidate is no longer parallel-safe")
+                try:
+                    routed = self._resolve_route(item, warn=self._diag.warning)
+                except TaskTypeError as exc:
+                    raise DynamicRouteUnavailable(f"current Task type refused: {exc}") from exc
+            return await self._classify_pickup(item, routed=routed)
+        finally:
+            if self._preparation is not None:
+                await self._preparation.finish_pickup(item.ref)
+
+    async def _classify_pickup(
         self, item: AfkReadyItem, *, routed: RoutingResolution
     ) -> tuple[AfkReadyItem, RoutingResolution]:
         """Read ``item``'s **Task type** off its own content, then re-route on it.
@@ -1999,15 +2411,24 @@ class _Loop:
                 byte-for-byte what it was before this seam existed.
 
         Returns:
-            The item to work and the **Routing resolution** to work it on. Never
-            raises: a classification is not an **Iteration**, and no way of
-            failing to acquire a label may cost the issue its Iteration or its
-            **Strike** count.
+            The item to work and the **Routing resolution** to work it on.
+
+        Raises:
+            DynamicRouteUnavailable: When this Run selected the **Dynamic
+                route**, no Static route applies to the settled **Task type**,
+                and the route could not be elected (#561). Raised rather than
+                returned because there is no second answer to return: AC11
+                forbids the stale, default and cheaper-selector fallbacks, so
+                the only honest outcome is that this issue is not worked this
+                time. Classification itself still never raises — a failure to
+                acquire a *label* costs the issue nothing.
         """
-        task_type_labelled = await self._classifier.labelled(item)
+        task_type_labelled = await self._labelled_for_routing(item)
+        if isinstance(task_type_labelled, RoutingUnavailable):
+            raise DynamicRouteUnavailable(task_type_labelled.reason.value)
         labelled = await self._bump_classifier.labelled(task_type_labelled)
         if task_type_labelled is item:
-            return labelled, routed
+            return labelled, await self._bound_route(labelled, routed)
         try:
             resolution = self._resolve_route(labelled, warn=lambda _message: None)
         except TaskTypeError as exc:
@@ -2022,7 +2443,7 @@ class _Loop:
                 item.ref,
                 exc,
             )
-            return item, routed
+            return item, await self._bound_route(item, routed)
         self._diag.info(
             "issue #%s classified as %s; routed to %s @ %s",
             labelled.ref,
@@ -2030,7 +2451,490 @@ class _Loop:
             resolution.model,
             resolution.reasoning_effort,
         )
-        return labelled, resolution
+        return labelled, await self._bound_route(labelled, resolution)
+
+    async def _bound_route(
+        self, item: AfkReadyItem, resolution: RoutingResolution
+    ) -> RoutingResolution:
+        """Settle this **Pickup**'s route and remember it as the attempt's own.
+
+        One seam for both halves, because they are one moment: the Pickup is the
+        only thing that knows which route the session below will run on, and the
+        ending that eventually arrives has no business re-deriving it. Wrapping
+        :meth:`_routed_dynamically` rather than living inside it is deliberate —
+        a **Static route** returns from there untouched, and a stalled Static
+        route is evidence about its own pair exactly as an elected one is.
+
+        Nothing is recorded for a route that could not be settled: the
+        refusal propagates, and an attempt that never opened a session is not an
+        attempt to have evidence about (AC4).
+        """
+        resolved = await self._routed_dynamically(item, resolution)
+        self._attempt_evidence.bound(item.ref, resolved)
+        return resolved
+
+    async def _propose_task_type(
+        self, pair: ClassifierPair, item: AfkReadyItem
+    ) -> str | None:
+        """Admit and meter each actual classification, never a cached label read."""
+        meter = RoutingCostMeter(self._session_observer)
+        proposer = SessionTaskTypeProposer(
+            client=self._client,
+            config=self._config,
+            event_log=self._writers.event_log,
+            sinks=self._sinks,
+            run_id=self._writers.run_id,
+            working_directory=None,
+            send_timeout_seconds=self._config.send_timeout_seconds,
+            skill_exposure=self._skill_exposure,
+            cost_meter=meter,
+            warn=self._diag.warning,
+        )
+
+        async def call() -> SelectorCallResult:
+            try:
+                output = await proposer(pair, item)
+            except asyncio.CancelledError:
+                raise RoutingCallCancelled(meter.drain()) from None
+            return SelectorCallResult(output=output, routing_credits=meter.drain())
+
+        router = self._dynamic_router
+        if router is None:
+            return await proposer(pair, item)
+        result = await router.classify(call)
+        if isinstance(result, RoutingUnavailable):
+            self._classification_denials[item.ref] = result
+            return None
+        assert result.output is None or isinstance(result.output, str)
+        return result.output
+
+    async def _labelled_for_routing(
+        self, item: AfkReadyItem
+    ) -> AfkReadyItem | RoutingUnavailable:
+        self._classification_denials.pop(item.ref, None)
+        labelled = await self._classifier.labelled(item)
+        return self._classification_denials.pop(item.ref, None) or labelled
+
+    async def _routed_dynamically(
+        self, item: AfkReadyItem, resolution: RoutingResolution
+    ) -> RoutingResolution:
+        """Elect this issue's route from live evidence, or refuse it outright.
+
+        The last step of a **Pickup**, and deliberately the last: it runs after
+        classification so the **Task type** it assesses is settled (AC5), and
+        before the Pickup Event so the record publishes the route the session
+        below is actually built with.
+
+        **A Static route still wins.** AC5 keeps the selector away from a Task
+        type the operator routed, an explicit flag or environment pin, and a
+        configured **Escalation rung** — :func:`static_route_applies` is where
+        that list lives, so the rule reads the same here as it does on the
+        record. Those are the routes ``_static_route_preflight`` already
+        verified against the harness, so the two halves cover the Run between
+        them with no gap and no overlap.
+
+        **Prepare then bind, both here.** The router's own two phases are what
+        AC8's "current evidence/eligibility checks at preparation and Pickup"
+        asks for: ``prepare`` assesses and takes no Lease, and ``bind`` re-reads
+        both sources and only buys a second selector call when the verified
+        inputs actually changed.
+
+        **A proposal prepared ahead binds here, or is discarded here** (#566).
+        Where **Routing preparation** already assessed this issue and its
+        proposal is still live, ``bind`` is handed *that* proposal — and does
+        exactly what it does for one prepared a line earlier: re-reads both
+        sources, compares the relevant input identity, and reassesses only what
+        moved. So the Pickup stays authoritative and preparation saves a
+        selector call and nothing else. A proposal the desk will not hand over,
+        or that the router then refuses as stale or unrecognised, falls through
+        to a fresh assessment rather than failing the Pickup: preparing ahead
+        is an optimisation on top of a Pickup that still works without it, and
+        starting work on a stale proposal is the one thing ADR-0057 rules out
+        flatly.
+
+        **A later attempt is the same call with more evidence** (#562). What
+        earlier attempts ran on and how they ended rides the request beside the
+        issue text, so a permitted retry reassesses rather than inheriting a
+        fixed rung — and a proposal prepared before an ending cannot survive it,
+        because the ending is part of the identity the router revalidates
+        against (AC7).
+
+        **A later Run revalidates rather than re-electing** (#565). Where this
+        clone's own Run logs already record a decision whose verified inputs
+        still match, ``rebind`` re-reads both live sources and reuses it
+        without buying a selector call; where they do not, it decides again
+        through the same admission ledger. The history is consulted *after* the
+        Static-route check above, because an operator's instruction is not
+        something a cache may participate in either.
+        """
+        router = self._dynamic_router
+        if router is None or static_route_applies(resolution):
+            return resolution
+        request = self._routing_request(item, resolution)
+        decision = await self._bound_dynamic_decision(item, request, router)
+        if isinstance(decision, RoutingUnavailable):
+            raise DynamicRouteUnavailable(decision.reason.value)
+        self._diag.info(
+            "issue #%s %s to %s @ %s (%s): %s",
+            item.ref,
+            "dynamically revalidated" if decision.reused else "dynamically routed",
+            decision.route.model,
+            decision.route.reasoning_effort,
+            decision.route.context_tier,
+            decision.summary,
+        )
+        return resolve_iteration_model(
+            self._config,
+            item.labels,
+            lifecycle_position=resolution.lifecycle_position,
+            dynamic_route=(
+                decision.route.model,
+                decision.route.reasoning_effort,
+                decision.route.context_tier,
+            ),
+        )
+
+    async def _bound_dynamic_decision(
+        self,
+        item: AfkReadyItem,
+        request: RoutingRequest,
+        router: DynamicRouter,
+    ) -> DynamicRouteDecision | RoutingUnavailable:
+        """Bind this Pickup's route from whichever assessment is available.
+
+        The precedence is the order the three cost the Run. A proposal this
+        Run already prepared is spent credit — discarding it would buy a second
+        assessment of inputs that have not moved. A **Reusable route** from an
+        earlier Run costs nothing either. A fresh prepare-and-bind is what is
+        left, and is what every Pickup did before preparation existed.
+        """
+        prepared = None if self._preparation is None else self._preparation.take(
+            item.ref
+        )
+        if prepared is not None:
+            decision = await router.bind(prepared, request)
+            if not isinstance(decision, RoutingUnavailable):
+                return decision
+            if decision.reason not in _DISCARDABLE_PROPOSAL_REFUSALS:
+                return decision
+            self._diag.info(
+                "issue #%s: prepared route was %s at its Pickup; assessing again",
+                item.ref,
+                decision.reason.value,
+            )
+        reusable = self._reusable_routes_for(item.ref)
+        if reusable:
+            return await router.rebind(reusable, request)
+        proposal = await router.prepare(request)
+        if isinstance(proposal, RoutingUnavailable):
+            return proposal
+        assert isinstance(proposal, RoutingProposal)
+        return await router.bind(proposal, request)
+
+    def _routing_request(
+        self, item: AfkReadyItem, resolution: RoutingResolution
+    ) -> RoutingRequest:
+        """This issue's assessment input, built the one way (#561, #566).
+
+        Shared by the **Pickup** and by **Routing preparation** rather than
+        written at each, because the two have to produce the *same* request for
+        an unchanged issue: the relevant input identity is what decides whether
+        a prepared proposal binds without a second selector call, and two
+        builders is two chances for it to differ over nothing.
+        """
+        return build_routing_request(
+            rendered_block=item.rendered_block,
+            issue_ref=item.ref,
+            task_type=_assessed_task_type(resolution),
+            lifecycle_position=resolution.lifecycle_position.value,
+            prior_attempts=self._attempt_evidence.prior_attempts(item.ref),
+            feedback_loops=_declared_feedback_loops(self._git.root),
+            measured=_declared_measured_routing(self._git.root),
+        )
+
+    def _start_preparation_pass(
+        self, pool: Sequence[AfkReadyItem], *, beside: int | str | None
+    ) -> None:
+        """Begin preparing the rest of the Pool beside the bound **Pickup**.
+
+        Fire-and-remember rather than awaited, which is the entire point: the
+        caller has already bound work or is draining Lanes for serial work, and
+        AC1 asks for the other eligible candidates to be prepared *within* the
+        configured concurrency and allowance rather than before the work.
+        Settled at Run shutdown, never by an Iteration waiting for the tail.
+        """
+        if self._preparation is None:
+            return
+        if self._preparation_pass is not None:
+            if not self._preparation_pass.done():
+                return
+            self._preparation_pass.result()
+        self._preparation_pass = asyncio.create_task(
+            self.prepare_ahead(
+                [item for item in pool if item.ref != beside],
+            ),
+            name=f"git-loopy-route-preparation-{beside}",
+        )
+
+    async def _settle_preparation_pass(self) -> None:
+        """Cancel and join preparation before the Run closes its event log."""
+        pass_task, self._preparation_pass = self._preparation_pass, None
+        if pass_task is None:
+            return
+        pass_task.cancel()
+        try:
+            await pass_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:  # noqa: BLE001 - never worth an Iteration
+            self._diag.warning("route preparation pass failed: %s", exc)
+
+    async def prepare_ahead(self, candidates: Sequence[AfkReadyItem]) -> None:
+        """Prepare proposals for eligible candidates behind the next **Pickup**.
+
+        The producer half of #566, called beside already-bound work or while
+        Lanes drain for serial-required work. Preparation runs beside useful
+        work, never as a prerequisite for starting an unrelated session.
+
+        ``candidates`` arrives in the **Pool**'s own order and is filtered, not
+        reordered — and it arrives already without whatever the caller is
+        working, because *that* is the one exclusion only the caller can make:
+        a serial **Iteration** has a single bound Pickup and a rolling driver
+        has every reserved **Lane**. Two more are dropped here, each because
+        preparing it would spend a classifier or selector call on work this Run
+        cannot take: a candidate the **Attempt lifecycle** has already defeated,
+        and one whose **Readiness** is not established. That filter asks the
+        same questions serial ``admit`` asks and asks them *again* rather than
+        remembering an answer — a blocker can close between a Pickup and this
+        call.
+
+        Nothing here may reach the Run: preparing ahead is an optimisation, and
+        an exception from it would fail an Iteration that needs nothing from it.
+        """
+        desk = self._preparation
+        if desk is None or desk.halted:
+            return
+        eligible: list[AfkReadyItem] = []
+        for item in candidates:
+            if self._attempts.defeated_by(item.ref) is not None:
+                continue
+            try:
+                verdict = self._source.readiness(item)
+            except Exception as exc:  # noqa: BLE001 - a read is never worth a Run
+                self._diag.warning(
+                    "route preparation could not read readiness for issue #%s: "
+                    "%s; leaving it to its own Pickup",
+                    item.ref,
+                    exc,
+                )
+                continue
+            if not verdict.admissible:
+                continue
+            eligible.append(item)
+        if not eligible:
+            return
+        try:
+            await desk.prepare_ahead(eligible)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - see the docstring
+            self._diag.warning("route preparation pass failed: %s", exc)
+
+    async def _prepare_route(self, item: AfkReadyItem) -> PreparedRoute:
+        """Prepare one eligible candidate's proposal, or say why there is none.
+
+        The order is AC3's, exactly: a missing **Task type** is classified
+        *first*, because whether an operator's **Static route** applies is a
+        question about the settled type and cannot be asked before it; and the
+        static check comes *before* any selector call, because a route the
+        operator wrote down needs no assessment and must not buy one.
+
+        Three of the four outcomes cost no **Route selector** call, and they
+        are kept apart rather than collapsed into "not proposed" because an
+        operator reading them is owed the difference: their own static route,
+        a **Reusable route** this issue's Pickup will revalidate for free, and
+        routing that could not propose at all.
+        """
+        router = self._dynamic_router
+        if router is None:  # pragma: no cover - the desk exists only with one
+            return PreparedRoute(ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE)
+        current = await asyncio.to_thread(self._source.refresh_for_preparation, item)
+        if current.outcome != PICKUP_VALIDATED:
+            return PreparedRoute(
+                ref=item.ref,
+                outcome=PreparationOutcome.UNAVAILABLE,
+                detail=f"current candidate eligibility {current.outcome}; no routing call",
+            )
+        assert current.item is not None
+        item = current.item
+        if self._attempts.defeated_by(item.ref) is not None:
+            return PreparedRoute(
+                ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
+                detail="Attempt lifecycle no longer admits this candidate",
+            )
+        labelled = await self._labelled_for_routing(item)
+        if isinstance(labelled, RoutingUnavailable):
+            return PreparedRoute(
+                ref=item.ref,
+                outcome=PreparationOutcome.UNAVAILABLE,
+                reason=labelled.reason,
+                detail=labelled.reason.value,
+            )
+        try:
+            resolution = self._resolve_route(labelled, warn=lambda _message: None)
+        except TaskTypeError as exc:
+            # The candidate's own labelling is broken. Its **Pickup** is where
+            # that becomes a skip with a record; preparation only declines to
+            # spend on it.
+            return PreparedRoute(
+                ref=item.ref,
+                outcome=PreparationOutcome.UNAVAILABLE,
+                detail=f"routing refused: {exc}",
+            )
+        if static_route_applies(resolution):
+            return PreparedRoute(ref=item.ref, outcome=PreparationOutcome.STATIC)
+        if self._reusable_routes_for(item.ref):
+            return PreparedRoute(ref=item.ref, outcome=PreparationOutcome.REUSABLE)
+        proposal = await router.prepare(self._routing_request(labelled, resolution))
+        if isinstance(proposal, RoutingUnavailable):
+            return PreparedRoute(
+                ref=item.ref,
+                outcome=PreparationOutcome.UNAVAILABLE,
+                reason=proposal.reason,
+                detail=proposal.reason.value,
+            )
+        return PreparedRoute(
+            ref=item.ref,
+            outcome=PreparationOutcome.PROPOSED,
+            proposal=proposal,
+        )
+
+    def _emit_route_prepared(self, prepared: PreparedRoute) -> None:
+        """Record what preparation reached, as a proposal and never a binding.
+
+        Its own Event type rather than a field on ``wrapper.routing.resolved``,
+        because the two answer different questions with different cardinality
+        and different authority: the resolution is what a session ran on, this
+        is what was assessed in advance for an issue that may never be worked.
+        A reader that could not tell them apart would show a **Pool** of
+        prepared issues as a Pool of routed ones.
+        """
+        proposal = prepared.proposal
+        evidence = None if proposal is None else proposal.work_evidence
+        selector = None if proposal is None else proposal.selector
+        usage = (
+            proposal.usage if proposal is not None
+            else self._dynamic_router.usage if self._dynamic_router is not None
+            else None
+        )
+        self._emit(
+            events_module.WRAPPER_ROUTING_PREPARED,
+            iter_num=None,
+            issue=prepared.ref,
+            state=prepared.outcome.value,
+            proposal_id=None if proposal is None else proposal.proposal_id,
+            model=None if proposal is None else proposal.route.model,
+            effort=None if proposal is None else proposal.route.reasoning_effort,
+            context_tier=None if proposal is None else proposal.route.context_tier,
+            summary=None if proposal is None else proposal.summary,
+            reason=None if prepared.reason is None else prepared.reason.value,
+            detail=prepared.detail,
+            prepared_at=(
+                None
+                if proposal is None
+                else events_module.format_timestamp(proposal.prepared_at)
+            ),
+            valid_until=(
+                None
+                if proposal is None
+                else events_module.format_timestamp(proposal.valid_until)
+            ),
+            relevant_input_identity=(
+                None if proposal is None else proposal.relevant_input_identity
+            ),
+            routing_credits=(
+                None if usage is None else str(usage.routing_credits)
+            ),
+            selector_attempts=(
+                None if usage is None else usage.selector_attempts
+            ),
+            classification_attempts=None if usage is None else usage.classification_attempts,
+            selector_model=None if selector is None else selector.model,
+            selector_effort=None if selector is None else selector.reasoning_effort,
+            selector_context_tier=None if selector is None else selector.context_tier,
+            evidence_source=None if evidence is None else evidence.source_identity,
+            source_model_identity=(
+                None if evidence is None else evidence.source_model_identity
+            ),
+            evidence_retrieved_at=(
+                None if proposal is None
+                else events_module.format_timestamp(proposal.evidence_retrieved_at)
+            ),
+            capabilities_retrieved_at=(
+                None if proposal is None
+                else events_module.format_timestamp(proposal.capabilities_retrieved_at)
+            ),
+            measurement_at=(
+                None if evidence is None or evidence.measurement_at is None
+                else events_module.format_timestamp(evidence.measurement_at)
+            ),
+            benchmark_version=None if evidence is None else evidence.benchmark_version,
+            conditions=None if evidence is None else evidence.conditions,
+            routing_overshot=None if usage is None else usage.overshot,
+        )
+
+    def _reusable_routes_for(self, ref: int | str) -> tuple[ReusableRoute, ...]:
+        """What this clone's earlier Runs already decided about ``ref`` (#565).
+
+        Derived once per Run and kept, because the answer cannot change while
+        the Run is in progress: the only writer of new routing records is this
+        Run, and this Run's own log is deliberately excluded — its decisions
+        are already in front of it in memory, and a half-flushed line is a
+        corrupt record rather than a reusable one.
+
+        A history that could not be read is *diagnosed and then treated as
+        empty* (AC4). Electing afresh is always available, costs a selector
+        call, and is what every Run before reuse existed already did — so a
+        torn log is a thing to report, not a thing to fail a **Pickup** over.
+        """
+        if self._reusable_routes is None:
+            log_path = self._writers.event_log.path
+            self._reusable_routes = read_reusable_routes(
+                log_path.parent, exclude=log_path
+            )
+            diagnosis = self._reusable_routes.diagnosis
+            if diagnosis is not None:
+                self._diag.warning("reusable routing history: %s", diagnosis)
+        return self._reusable_routes.for_issue(ref)
+
+    async def _record_dynamic_route(self, decision: DynamicRouteDecision) -> bool:
+        """Persist one **Dynamic route**'s provenance before any work starts.
+
+        The router's recorder port, and the whole of AC9's "persist local
+        decision provenance before work": ``bind`` calls this and refuses the
+        route under ``recorder_failed`` when it answers ``False``, so a route
+        whose provenance could not be written never reaches a session. That
+        ordering is the point — provenance written afterwards is provenance
+        that is missing exactly when the Run died mid-decision.
+
+        A second Event rather than more columns on ``wrapper.pickup.bound``,
+        which is the opposite of the call #407 made for the **Routing
+        resolution** and for the opposite reason: the resolution *is* the
+        Pickup's own outcome, while this is the audit behind it — which
+        evidence, retrieved when, assessed by which selector, at what cost.
+        Folding it in would describe one Pickup twice and would have nowhere to
+        put a decision the Pickup then refuses.
+        """
+        try:
+            self._emit(
+                events_module.WRAPPER_ROUTING_RESOLVED,
+                iter_num=None,
+                **routing_provenance_payload(decision),
+            )
+        except Exception as exc:
+            self._diag.error("dynamic route provenance not recorded: %s", exc)
+            return False
+        return True
 
     async def _pick_active_issue(
         self, pool: list[AfkReadyItem], *, iter_num: int
@@ -2082,8 +2986,11 @@ class _Loop:
         **Routed pair** it will never run on.
         """
         self._routes = {}
+        routing_refusals: dict[int | str, str] = {}
 
         def admit(item: AfkReadyItem) -> str | AdmissionRefusal | None:
+            if item.ref in routing_refusals:
+                return routing_refusals[item.ref]
             defeated = self._attempts.defeated_by(item.ref)
             if defeated is not None:
                 # The **Attempt lifecycle** filter (#412), asked before routing
@@ -2127,7 +3034,23 @@ class _Loop:
             self._routes[item.ref] = resolution
             return None
 
-        pickup = pick_serial(pool, admit=admit, pin=self._config.issue_pin)
+        while True:
+            pickup = pick_serial(pool, admit=admit, pin=self._config.issue_pin)
+            if pickup.item is None:
+                break
+            try:
+                bound, resolution = await self._classify_at_pickup(
+                    pickup.item, routed=self._routes[pickup.item.ref]
+                )
+            except DynamicRouteUnavailable as exc:
+                # Refuse this candidate once, not the useful Static work
+                # behind it. The ordered walk remains the only dispatcher.
+                routing_refusals[pickup.item.ref] = f"dynamic route unavailable: {exc}"
+                self._routes.pop(pickup.item.ref, None)
+                continue
+            self._routes[bound.ref] = resolution
+            pickup = dataclass_replace(pickup, item=bound)
+            break
         considered = len(pickup.considered)
         for skip in pickup.skipped:
             self._emit_pickup_skipped(
@@ -2146,11 +3069,6 @@ class _Loop:
             )
         if pickup.item is not None:
             assert pickup.position is not None and pickup.reason is not None
-            bound, resolution = await self._classify_at_pickup(
-                pickup.item, routed=self._routes[pickup.item.ref]
-            )
-            self._routes[bound.ref] = resolution
-            pickup = dataclass_replace(pickup, item=bound)
             self._emit_pickup_bound(
                 iter_num=iter_num,
                 issue=bound.ref,
@@ -2419,7 +3337,7 @@ class _Loop:
         *,
         iter_num: int | None = None,
     ) -> None:
-        """Offer one ending to the two ledgers that read one (#408, #412, #413).
+        """Offer one ending to the three ledgers that read one (#408, #412, #413, #562).
 
         Called from a serial **Iteration** and from a **Lane** alike, because
         both ledgers are per issue rather than per mode: neither the pair a
@@ -2428,8 +3346,10 @@ class _Loop:
 
         The ending is offered whole to each, and neither decision is duplicated
         here: escalation triggers on silent no-progress alone, the **Attempt
-        lifecycle** disposes of all five endings, and a condition restated at
-        this call site could disagree with the ones that matter.
+        lifecycle** disposes of all five endings, the **Attempt evidence**
+        ledger classifies every one of them for the next election (#562), and a
+        condition restated at this call site could disagree with the ones that
+        matter.
 
         **This is also where the Run's one Strike is charged** (#413). The
         ceiling counts the issues a Run has given up on, and the moment an issue
@@ -2441,6 +3361,7 @@ class _Loop:
         ending and the accounting scope that finalizes it are different moments.
         """
         self._escalation.observe(ref, record.outcome)
+        self._attempt_evidence.observe(ref, record.outcome)
         before = self._attempts.state(ref)
         after = self._attempts.observe(ref, record.outcome)
         if after is AttemptState.SKIPPED and before is not AttemptState.SKIPPED:
@@ -2554,6 +3475,7 @@ class _Loop:
             # #410: what this Run parsed, gate-checked.
             **run_start_payload(self._config),
         )
+        self._retry_route_delivery()
 
         exit_code = exit_code_for("iteration_cap")
         # Not `iteration_cap`: the only ways out of the loop below that skip
@@ -2624,6 +3546,7 @@ class _Loop:
                 )
                 raise
         finally:
+            await self._settle_preparation_pass()
             # Final wrapper.run.end always emits — even on early break or crash.
             try:
                 self._emit(
@@ -2826,7 +3749,9 @@ class _ParallelLoop:
         rate_card: RateCard | None = None,
         classifier_pair: ClassifierPair | None = None,
         task_type_client: TaskTypeLabelClient | None = None,
+        route_tracker: gh_module.GitHubClient | None = None,
         execution_host: execution_host_module.ExecutionHost | None = None,
+        dynamic_routing: "_DynamicRoutingSetup | None" = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -2925,6 +3850,9 @@ class _ParallelLoop:
         # `lane_id`) so it survives the reusable Lane slot moving on to
         # another issue once this contribution is admitted (#219 §7).
         self._lane_work: dict[str, _LaneWork] = {}
+        # At most one **Routing preparation** pass in flight across the whole
+        # driver, so the event-driven turn cannot become a routing service.
+        self._preparation_pass: asyncio.Task[object] | None = None
         # The contribution that owns each live Lane workspace.  Run-exit
         # reclamation needs this alongside the workspace to close interrupted
         # accounting after salvaging the branch.
@@ -3005,6 +3933,8 @@ class _ParallelLoop:
             usage_observer=self._cost_meter,
             classifier_pair=classifier_pair,
             task_type_client=task_type_client,
+            route_tracker=route_tracker,
+            dynamic_routing=dynamic_routing,
         )
 
     def request_stop_drain(self) -> None:
@@ -3105,6 +4035,63 @@ class _ParallelLoop:
             and is_lane_candidate(candidate)
         )
 
+    def _prepare_rolling_pool_ahead(self) -> None:
+        """Prepare routes for cached candidates no **Lane** has taken (#566).
+
+        The Rolling producer, and one bounded pass at a time: the driver turn
+        is event-driven and can come round many times a second, so a pass per
+        turn would be a background routing service rather than preparation
+        beside work. AC2 rules that out by name.
+
+        Reserved and already-worked candidates are excluded here rather than
+        inside the desk, because the driver is the only thing that knows them:
+        ``take`` removes a reserved candidate from the cache outright, and
+        ``eligible`` is the scheduler's own composed guard, so what is left is
+        exactly the set a Lane could still be given. What survives that is
+        re-read authoritatively when its bounded preparation starts, without
+        a reservation, refusing a candidate that is no longer open, no
+        longer labelled, or no longer **Ready** — because AC2 also forbids
+        acting on shallow membership, and the cached record carries neither the
+        issue's prose nor a current eligibility verdict. The desk is asked
+        which refs it has not settled *before* any of that, so the second turn
+        onwards costs no tracker read at all.
+
+        Fire-and-remember with no join: the pass is bounded by the desk, and
+        the Run's own shutdown cancels whatever is still outstanding.
+        """
+        desk = self._serial._preparation
+        pool = self._pool
+        if desk is None or pool is None or desk.halted:
+            return
+        if self._scheduler is not None and self._scheduler.serial_latched:
+            return
+        if self._preparation_pass is not None and not self._preparation_pass.done():
+            return
+        busy = {work.item.ref for work in self._lane_work.values()}
+        wanted = desk.unsettled(
+            ref
+            for ref in pool.candidate_refs
+            if ref not in busy and pool.eligible(pool.candidate(ref))
+        )
+        if not wanted:
+            return
+        # Only identities enter the desk. Its bounded callback re-reads each
+        # issue off the event loop immediately before any routing spend.
+        items = [
+            AfkReadyItem(
+                ref=ref,
+                title=pool.candidate(ref).title,
+                rendered_block="",
+                labels=pool.candidate(ref).labels,
+                blocked_by=pool.candidate(ref).blocked_by,
+            )
+            for ref in wanted
+        ]
+        self._preparation_pass = asyncio.create_task(
+            self._serial.prepare_ahead(items),
+            name="git-loopy-route-preparation-rolling",
+        )
+
     def _alloc_iter_num(self) -> int:
         """Allocate the next Run-wide sequence number for session tagging.
 
@@ -3164,6 +4151,7 @@ class _ParallelLoop:
             iter_num=None,
             **start_payload,
         )
+        self._serial._retry_route_delivery()
         self._report_parallel_degraded()
 
         # Same reasoning as `_Loop.drive` (#398): an interrupt bypasses the
@@ -3194,6 +4182,14 @@ class _ParallelLoop:
                 )
                 raise
         finally:
+            pass_task, self._preparation_pass = self._preparation_pass, None
+            if pass_task is not None:
+                pass_task.cancel()
+                try:
+                    await pass_task
+                except asyncio.CancelledError:
+                    pass
+            await self._serial._settle_preparation_pass()
             try:
                 self._serial._emit(
                     events_module.WRAPPER_RUN_END,
@@ -3363,6 +4359,8 @@ class _ParallelLoop:
                         self._guarded_lane_lifecycle(reservation)
                     )
                     self._pending.add(task)
+
+                self._prepare_rolling_pool_ahead()
 
                 serial_pool_seen = self._service_serial_required_work()
 
@@ -3731,6 +4729,15 @@ class _ParallelLoop:
                 reason=rolling_scheduler.SERIAL_LATCH_NOT_PARALLEL_SAFE,
                 serial_required=len(serial_required),
             )
+            if (
+                self._lane_work
+                and self._scheduler.remaining_units != 0
+                and not self._scheduler.abort_latched
+                and not self._scheduler.stop_latched
+            ):
+                if self._serial._preparation is not None:
+                    self._serial._preparation.interrupt_ahead()
+                self._serial._start_preparation_pass(serial_required, beside=None)
         return collection.complete
 
     def _report_serial_latch(
@@ -3903,13 +4910,34 @@ class _ParallelLoop:
         # a candidate whose human labelling is already broken is passed over,
         # not spent on. It runs before the worktree exists because what it
         # decides is the pair this Lane is created for.
-        item, resolution = await self._serial._classify_at_pickup(
-            item, routed=resolution
-        )
+        try:
+            item, resolution = await self._serial._classify_at_pickup(
+                item, routed=resolution, parallel_required=True
+            )
+        except DynamicRouteUnavailable as exc:
+            # The Lane half of AC11's explicit unavailable decision, and it
+            # takes the candidate out of this Run's rolling pool exactly as the
+            # routing refusal above does. Leaving it eligible looks kinder and
+            # is not: the scheduler refills the freed reservation from the same
+            # ordered pool, so the candidate comes straight back, buys another
+            # assessment, and is refused again — a hot loop that spends the
+            # whole routing-credit allowance and then spins on the exhausted
+            # deadline for as long as the Run lasts. Refusing once is also what
+            # AC10's "admit no additional routing calls after exhaustion"
+            # actually requires of the caller.
+            #
+            # Releasing the reservation is still what "preserve already-running
+            # work where possible" means here: every other Lane keeps its route
+            # and its session, and the freed slot goes to a candidate that can
+            # be routed rather than being held by one that cannot.
+            self._diag.warning("lane #%s dynamic route unavailable: %s", ref, exc)
+            passed_over(f"dynamic route unavailable: {exc}")
+            self._rolling_refused.add(ref)
+            scheduler.release(reservation)
+            return
         if scheduler.stop_latched or scheduler.abort_latched:
             scheduler.release(reservation)
             return
-
         model = resolution.model
         reasoning_effort = resolution.reasoning_effort
         context_tier = resolution.context_tier
@@ -5806,10 +6834,27 @@ async def run(
             control.close()
             return exit_code_for("preflight_failed")
 
-    # A Static route is verified against the authenticated harness *here*: after
-    # the host is known to be usable and before a single session is opened, so
-    # an unsupported or unverifiable selection costs no work at all (#560,
-    # ADR-0057). A Run that selected no policy never reaches the network for it.
+    # A selected route is verified against the authenticated harness *here*:
+    # after the host is known to be usable and before a single session is
+    # opened, so an unsupported or unverifiable selection costs no work at all
+    # (#560, #561, ADR-0057). A Run that selected no policy never reaches the
+    # network for it.
+    dynamic_routing, dynamic_refusal = _dynamic_route_preflight(
+        config, os.environ, repo_root=repo_root
+    )
+    if dynamic_refusal is not None:
+        print(
+            f"git-loopy: the selected Dynamic route was refused — "
+            f"{dynamic_refusal}",
+            file=sys.stderr,
+        )
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
+        return exit_code_for("preflight_failed")
+
     static_route_refusal = await _static_route_preflight(
         config,
         warn=lambda message: diag.warning(
@@ -6093,7 +7138,9 @@ async def run(
             rate_card=rate_card,
             classifier_pair=classifier_pair,
             task_type_client=task_type_client,
+            route_tracker=github_client,
             execution_host=selected_execution_host,
+            dynamic_routing=dynamic_routing,
         )
     except git_module.GitError as exc:
         # Rolling dispatch resolves where its **Lane workspaces** live up front

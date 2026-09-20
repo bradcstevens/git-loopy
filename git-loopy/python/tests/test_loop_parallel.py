@@ -93,6 +93,7 @@ aborting the Lane: see the ``test_parallel_*worktree_setup*`` tests.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import itertools
 import json
 import logging
@@ -101,6 +102,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -144,6 +146,7 @@ from git_loopy.session_outcome import (
 )
 from git_loopy.skill_catalog import build_skill_catalog
 from git_loopy.rolling_pool import RollingPool
+from git_loopy import dynamic_route
 from git_loopy import static_route
 from git_loopy.static_route import RoutePolicy
 from git_loopy.sources import MembershipSnapshot, PoolCandidate
@@ -154,6 +157,8 @@ from git_loopy.wrapper import (
     checkpoint_message,
 )
 from git_loopy.worktree import SetupResult
+from git_loopy import persist as persist_module
+from git_loopy.route_publication import RouteDeliveryError
 from tests.fakes import FakeGateRunner, FakeGitClient, FakeGitHubClient
 
 
@@ -486,7 +491,7 @@ def _wire_repo(
     merge_conflicts: Sequence[int] = (),
     release_versions: Sequence[str] = (),
 ) -> FakeGitClient:
-    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy").mkdir(exist_ok=True)
     (tmp_path / "git-loopy" / "prompt.md").write_text(
         "You are the agent. Implement the AFK-ready issues.\n", encoding="utf-8"
     )
@@ -7873,3 +7878,958 @@ def _script_harness(monkeypatch, *models) -> None:
         return static_route.HarnessCapabilities.from_listing(listing)
 
     monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", _refresh)
+
+
+def _dynamic_lane_ports(
+    monkeypatch, *, answer, capabilities_available=lambda: True
+) -> dict[str, list[Any]]:
+    """Substitute only the two ports a **Dynamic route** takes to the network.
+
+    A real :class:`~git_loopy.dynamic_route.DynamicRouter` over scripted inputs
+    — AC13's "injected external ports" — so what a Lane exercises here is the
+    Run's own routing boundary rather than a stand-in for it.
+    """
+    from types import SimpleNamespace
+    from decimal import Decimal
+
+    spied: dict[str, list[Any]] = {"assessments": []}
+
+    async def _fetch(method, url, headers):
+        del method, url, headers
+        return json.dumps(
+            {
+                "data": [
+                    {
+                        "id": "aa-opus",
+                        "name": "aa-opus",
+                        "slug": "aa-opus",
+                        "evaluations": {
+                            "artificial_analysis_intelligence_index": 70.0
+                        },
+                        "median_output_tokens_per_second": 90.0,
+                    },
+                    {
+                        "id": "aa-terra",
+                        "name": "aa-terra",
+                        "slug": "aa-terra",
+                        "evaluations": {
+                            "artificial_analysis_intelligence_index": 40.0
+                        },
+                        "median_output_tokens_per_second": 200.0,
+                    },
+                ],
+                "prompt_options": {"parallel_queries": 1},
+            }
+        ).encode("utf-8")
+
+    async def _capabilities():
+        if not capabilities_available():
+            return dynamic_route.FreshHarnessCapabilities(
+                retrieved_at=datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc),
+                capabilities=static_route.HarnessCapabilities.from_listing([]),
+                tier_capacities={},
+            )
+        return dynamic_route.FreshHarnessCapabilities(
+            retrieved_at=datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc),
+            capabilities=static_route.HarnessCapabilities.from_listing(
+                [
+                    SimpleNamespace(
+                        id=identifier,
+                        name=identifier,
+                        policy=SimpleNamespace(state="enabled", terms=""),
+                        billing=SimpleNamespace(
+                            multiplier=1.0,
+                            token_prices=SimpleNamespace(
+                                max_prompt_tokens=400_000, long_context=None
+                            ),
+                        ),
+                        supported_reasoning_efforts=["high"],
+                        default_reasoning_effort="high",
+                    )
+                    for identifier in ("claude-opus-5", "gpt-5.6-terra")
+                ]
+            ),
+            tier_capacities={
+                (identifier, "default"): 400_000
+                for identifier in ("claude-opus-5", "gpt-5.6-terra")
+            },
+        )
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", _fetch)
+    monkeypatch.setattr(loop_module, "_fetch_harness_evidence", _capabilities)
+
+    async def _assess(selector, request):
+        spied["assessments"].append((selector, request))
+        output = answer(request)
+        if inspect.isawaitable(output):
+            output = await output
+        return dynamic_route.SelectorCallResult(
+            output=output, routing_credits=Decimal("0.25")
+        )
+
+    # Unwrap any router a previous call in this test already installed, so a
+    # second Run's assessments are counted against its own spy rather than the
+    # first Run's closure (#565's multi-Run tests).
+    real_router = getattr(
+        loop_module._make_dynamic_router, "_real_router", loop_module._make_dynamic_router
+    )
+
+    def _router(prerequisites, *, selector_assess, recorder):
+        del selector_assess
+        return real_router(
+            prerequisites, selector_assess=_assess, recorder=recorder
+        )
+
+    _router._real_router = real_router  # type: ignore[attr-defined]
+    monkeypatch.setattr(loop_module, "_make_dynamic_router", _router)
+    return spied
+
+
+def _elects_lane_model(model: str):
+    def _answer(request) -> str:
+        (chosen,) = [c for c in request.candidates if c.model == model]
+        answer = {
+            "candidate_identity": chosen.stable_identity,
+            "summary": "strongest verified index for this Lane's work",
+        }
+        if any(
+            attempt.capability_evidence
+            and attempt.configuration
+            == (chosen.model, chosen.reasoning_effort, chosen.context_tier)
+            for attempt in request.prior_attempts
+        ):
+            answer["repeat_justification"] = (
+                "no eligible candidate scores higher on this evidence"
+            )
+        return json.dumps(answer)
+
+    return _answer
+
+
+def test_a_dynamic_route_reaches_each_lanes_own_work_session(
+    tmp_path, monkeypatch
+) -> None:
+    """AC13's second mode: rolling dispatch routes at the same Pickup seam.
+
+    The serial Iteration and a Lane contribution share one
+    ``_classify_at_pickup``, so a **Dynamic route** that works serially and not
+    in a Lane would mean two routing implementations rather than one boundary.
+    Both Lanes are routed independently — each buys its own assessment, because
+    a route is elected for *an issue* and not for a Run.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    exit_code = asyncio.run(loop_module.run(_dynamic_parallel_config()))
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    by_dir = {
+        Path(c["working_directory"]).name: c
+        for c in fake_client.create_calls
+        if c["working_directory"]
+    }
+    assert by_dir["issue-42"]["model"] == "claude-opus-5"
+    assert by_dir["issue-42"]["reasoning_effort"] == "high"
+    assert by_dir["issue-43"]["model"] == "claude-opus-5"
+    assert len(spied["assessments"]) == 2
+
+
+def test_a_lane_whose_dynamic_route_is_unavailable_opens_no_session(
+    tmp_path, monkeypatch
+) -> None:
+    """AC11 in rolling dispatch: refuse the Lane, never fall back to a default.
+
+    The Lane's reservation goes back to the scheduler rather than being held by
+    an issue that cannot start, and the run-wide default — which under this
+    policy was never verified, precisely because the selector was meant to
+    replace it — does not quietly take the route's place.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(
+        monkeypatch,
+        answer=lambda _request: json.dumps(
+            {"candidate_identity": "nine", "summary": "not on the list"}
+        ),
+    )
+
+    exit_code = asyncio.run(loop_module.run(_dynamic_parallel_config()))
+
+    # Nonzero because the only candidate could not be routed and nothing ran —
+    # the same answer the serial path gives, and the point of AC11: a Run that
+    # silently succeeded here would have succeeded by taking the unverified
+    # run-wide default the selector was meant to replace.
+    assert exit_code != 0
+    assert fake_client.create_calls == []
+    assert fake_git.active_worktrees == []
+
+
+def _dynamic_retry_lane_run(tmp_path, monkeypatch, *, outcome="no_progress", **overrides):
+    """A Lane and a later serial Pickup, sharing the real Run's ledgers."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    class OutcomeSession(_NoProgressFakeSession):
+        async def send_and_wait(self, prompt, *, timeout=60.0, **extra):
+            if outcome == "crash":
+                raise ConnectionError("offline harness transport failed")
+            if outcome == "advanced":
+                target = (
+                    fake_git.worktree_client(Path(self._working_directory))
+                    if self._working_directory else fake_git
+                )
+                target.simulate_agent_commit(subject="feat: advance without closing")
+            return await super().send_and_wait(prompt, timeout=timeout, **extra)
+
+    fake_client = _NoProgressFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    fake_client._session_cls = OutcomeSession
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(
+        monkeypatch,
+        answer=overrides.pop("answer", _elects_lane_model("claude-opus-5")),
+        capabilities_available=overrides.pop("capabilities_available", lambda: True),
+    )
+    exit_code = asyncio.run(loop_module.run(_dynamic_parallel_config(**overrides)))
+    return fake_client, spied, exit_code
+
+
+@pytest.mark.parametrize(
+    ("outcome", "prior_outcome", "position"),
+    [
+        ("no_progress", dynamic_route.PriorOutcome.DID_NOT_SOLVE, "retrying"),
+        ("crash", dynamic_route.PriorOutcome.INFRASTRUCTURE_FAILURE, "retrying"),
+        ("advanced", dynamic_route.PriorOutcome.ADVANCED, "fresh"),
+    ],
+)
+@pytest.mark.parametrize("retry_model", ["claude-opus-5", "gpt-5.6-terra"])
+def test_a_lane_outcome_reaches_its_next_dynamic_pickup(
+    tmp_path, monkeypatch, outcome, prior_outcome, position, retry_model
+) -> None:
+    """Both dispatch paths read one history without manufacturing Attempts."""
+    fake_client, spied, _exit_code = _dynamic_retry_lane_run(
+        tmp_path, monkeypatch, outcome=outcome, max_nmt_strikes=9,
+        answer=lambda request: _elects_lane_model(
+            retry_model if request.prior_attempts else "claude-opus-5"
+        )(request),
+    )
+
+    lane, retry = (
+        request
+        for _selector, request in spied["assessments"]
+        if "Test issue 42" in request.issue
+    )
+    assert lane.prior_attempts == ()
+    (evidence,) = retry.prior_attempts
+    assert evidence.model == "claude-opus-5"
+    assert evidence.outcome is prior_outcome
+    assert evidence.capability_evidence is (outcome == "no_progress")
+
+    resolved = [
+        e for e in _logged_events(tmp_path) if e["type"] == "wrapper.routing.resolved"
+    ]
+    assert [(e["issue"], e["attempt"], e["lifecycle_position"]) for e in resolved] == [
+        (42, 1, "fresh"),
+        (42, 2, position),
+    ]
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "claude-opus-5", retry_model
+    ]
+    assert [event["model"] for event in resolved] == ["claude-opus-5", retry_model]
+
+
+@pytest.mark.parametrize("outcome", ["no_progress", "crash"])
+def test_dynamic_lane_retry_exhaustion_starts_no_third_attempt(
+    tmp_path, monkeypatch, outcome
+) -> None:
+    fake_client, spied, exit_code = _dynamic_retry_lane_run(
+        tmp_path, monkeypatch, outcome=outcome, max_iterations=5, max_nmt_strikes=1
+    )
+
+    assert exit_code == 1
+    assert len(fake_client.create_calls) == 2
+    assert len([
+        request for _, request in spied["assessments"] if "Test issue 42" in request.issue
+    ]) == 2
+    events = _logged_events(tmp_path)
+    assert len([e for e in events if e["type"] == "wrapper.strike"]) == 1
+    assert [e["outcome"] for e in events if e["type"] == "wrapper.run.end"] == ["stuck"]
+
+
+def test_explicit_default_equal_rung_wins_after_a_dynamic_lane(
+    tmp_path, monkeypatch
+) -> None:
+    fake_client, spied, exit_code = _dynamic_retry_lane_run(
+        tmp_path, monkeypatch, escalation_rung=("gpt-5.6-terra", "high")
+    )
+
+    assert exit_code == 0
+    assert len([
+        request for _, request in spied["assessments"] if "Test issue 42" in request.issue
+    ]) == 1
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "claude-opus-5", "gpt-5.6-terra"
+    ]
+    bound = [e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pickup.bound"]
+    assert [(e["routing_source"], e["lifecycle_position"]) for e in bound] == [
+        ("dynamic", "fresh"), ("escalated", "retrying")
+    ]
+
+
+def test_a_run_wide_override_remains_authoritative_after_a_lane_retry(
+    tmp_path, monkeypatch
+) -> None:
+    fake_client, spied, exit_code = _dynamic_retry_lane_run(
+        tmp_path, monkeypatch, routing_suppressed=True,
+    )
+
+    assert exit_code == 0
+    assert spied["assessments"] == []
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "gpt-5.6-terra", "gpt-5.6-terra"
+    ]
+    bound = [e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pickup.bound"]
+    assert [e["routing_source"] for e in bound] == [
+        "defaulted_explicit_override", "defaulted_explicit_override"
+    ]
+
+
+@pytest.mark.parametrize("refusal", ["invalid_output", "allowance", "eligibility"])
+def test_unavailable_dynamic_retry_after_a_lane_spends_no_attempt(
+    tmp_path, monkeypatch, refusal
+) -> None:
+    eligible = True
+
+    def answer(request):
+        if request.prior_attempts:
+            return None
+        return _elects_lane_model("claude-opus-5")(request)
+
+    # Withdraw eligibility after the first session, not while binding its route.
+    if refusal == "eligibility":
+        original_send = _NoProgressFakeSession.send_and_wait
+
+        async def send_then_withdraw(session, *args, **kwargs):
+            nonlocal eligible
+            result = await original_send(session, *args, **kwargs)
+            eligible = False
+            return result
+
+        monkeypatch.setattr(_NoProgressFakeSession, "send_and_wait", send_then_withdraw)
+
+    config = {"routing_credit_allowance": Decimal("0.25")} if refusal == "allowance" else {}
+    fake_client, spied, exit_code = _dynamic_retry_lane_run(
+        tmp_path, monkeypatch, answer=answer,
+        capabilities_available=lambda: eligible, **config
+    )
+
+    expected_sessions = 2 if refusal == "invalid_output" else 1
+    assert exit_code == (0 if refusal == "invalid_output" else 1)
+    assert len(fake_client.create_calls) == expected_sessions
+    events = _logged_events(tmp_path)
+    assert not [e for e in events if e["type"] == "wrapper.strike"]
+    resolutions = [e for e in events if e["type"] == "wrapper.routing.resolved"]
+    assert len(resolutions) == expected_sessions
+    assert len([e for e in resolutions if e["issue"] == 42]) == 1
+    refused = [e for e in events if e["type"] == "wrapper.pickup.skipped"]
+    assert any(e["issue"] == 42 and "dynamic route unavailable" in e["reason"] for e in refused)
+    if refusal != "invalid_output":
+        assert len(spied["assessments"]) == 1
+
+
+def _dynamic_parallel_config(**overrides) -> RunConfig:
+    from decimal import Decimal
+
+    base: dict[str, Any] = dict(
+        model="gpt-5.6-terra",
+        reasoning_effort="high",
+        context_tier="default",
+        route_policy=RoutePolicy.DYNAMIC,
+        routing_deadline_seconds=30,
+        routing_credit_allowance=Decimal("5"),
+        selector_concurrency=1,
+        route_associations={
+            "aa-opus": "claude-opus-5@high",
+            "aa-terra": "gpt-5.6-terra@high",
+        },
+        issue_source="github",
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+    base.update(overrides)
+    return RunConfig(**base)
+
+
+def test_each_lanes_final_dynamic_route_is_published_to_its_own_issue(
+    tmp_path, monkeypatch
+) -> None:
+    """Rolling dispatch projects per issue, never per Run (#563, AC10).
+
+    Both Lanes elect the same triple here, which is the case a Run-scoped
+    projection would pass by accident: the delivery record is keyed on the
+    issue, so each Lane's own issue gets its own comment and its own single
+    owned Route label beside the labels a human put there.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    assert asyncio.run(loop_module.run(_dynamic_parallel_config())) == 0
+
+    assert sorted(number for number, _body in fake_gh.route_comment_calls) == [42, 43]
+    for number in (42, 43):
+        labels = fake_gh.issue_labels(number)
+        assert len([x for x in labels if x.startswith("git-loopy-route:")]) == 1
+        assert {"ready-for-agent", "parallel-safe"} <= set(labels)
+    deliveries = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.delivery"
+    ]
+    assert sorted(event["issue"] for event in deliveries) == [42, 43]
+    assert {event["status"] for event in deliveries} == {"published"}
+
+
+def test_one_lanes_refused_projection_does_not_hold_up_the_other(
+    tmp_path, monkeypatch
+) -> None:
+    """A tracker refusal is scoped to the issue it refused (#563, AC6).
+
+    Delivery is non-blocking, so a Lane whose comment the tracker rejected
+    still runs the route already recorded for it, and the Lane beside it still
+    publishes. The refusal is reported as pending — never as published.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+        route_comment_errors={43: RouteDeliveryError("HTTP 403")},
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    assert asyncio.run(loop_module.run(_dynamic_parallel_config())) == 0
+
+    assert len(fake_client.created) == 2, "both recorded routes still ran"
+    assert [number for number, _body in fake_gh.route_comment_calls] == [42]
+    deliveries = {
+        event["issue"]: event["status"]
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.delivery"
+    }
+    assert deliveries == {42: "published", 43: "pending"}
+
+
+def test_a_lane_whose_binding_cannot_be_recorded_opens_no_session(
+    tmp_path, monkeypatch
+) -> None:
+    """Canonical local persistence precedes Lane work too (#563, AC5).
+
+    A Lane that could not write down what it bound has no record of which pair
+    its Agent would have run on, so it must not open the session and must not
+    tell the tracker about a route it could not write down. The serial half of
+    this rule is
+    ``test_a_final_route_that_cannot_be_recorded_locally_starts_no_work``; the
+    two share one ``_emit_pickup_bound``, which is the point.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    original = persist_module.EventLogWriter.write
+
+    def refuse_the_binding(self, envelope: dict[str, Any]) -> None:
+        if envelope.get("type") == "wrapper.pickup.bound":
+            raise OSError("event log is unwritable")
+        original(self, envelope)
+
+    monkeypatch.setattr(persist_module.EventLogWriter, "write", refuse_the_binding)
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code != 0
+    assert fake_client.created == []
+    assert fake_gh.route_comment_calls == []
+
+
+# --- Dynamic routing: reuse across Runs (#565, ADR-0057) --------------------
+
+
+def _rolling_dynamic_run(tmp_path, monkeypatch, **overrides):
+    """A two-Lane rolling dynamic Run, repeatable inside one test."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=overrides.pop("issues", [
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ]),
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    on_work = overrides.pop("on_work", None)
+    if on_work is not None:
+        class ScriptedSession(_ParallelFakeSession):
+            async def send_and_wait(self, prompt, **kwargs):
+                await on_work(self, fake_gh)
+                return await super().send_and_wait(prompt, **kwargs)
+        fake_client._session_cls = ScriptedSession
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch,
+        *overrides.pop(
+            "harness",
+            (("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)),
+        ),
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(
+        monkeypatch,
+        answer=overrides.pop("answer", _elects_lane_model("claude-opus-5")),
+    )
+    exit_code = asyncio.run(loop_module.run(_dynamic_parallel_config(**overrides)))
+    return fake_client, spied, exit_code
+
+
+def _lane_routing_records(tmp_path) -> list[dict[str, Any]]:
+    """Every ``wrapper.routing.resolved`` record in this clone, oldest Run first."""
+    logs = sorted(
+        (tmp_path / ".git-loopy" / "logs").glob("*.jsonl"), key=lambda p: p.name
+    )
+    return [
+        event
+        for path in logs
+        for raw in path.read_text(encoding="utf-8").splitlines()
+        if (event := json.loads(raw))["type"] == "wrapper.routing.resolved"
+    ]
+
+
+def test_each_lane_revalidates_its_own_issues_recorded_route(
+    tmp_path, monkeypatch
+) -> None:
+    """#565 AC1/AC3 in rolling dispatch: reuse is per issue, not per Run.
+
+    A route is elected for *an issue*, so reuse has to be keyed the same way —
+    and a rolling Run is where a shared one would show, because two Lanes read
+    the history concurrently and would otherwise race for whichever record
+    happened to be newest. Both Lanes revalidate, neither buys a selector call,
+    and each points at the decision its own issue got.
+    """
+    _fake, first, first_exit = _rolling_dynamic_run(tmp_path, monkeypatch)
+    assert first_exit == 0, f"the first Run failed: {first_exit}"
+    assert len(first["assessments"]) == 2
+
+    fake_client, second, second_exit = _rolling_dynamic_run(tmp_path, monkeypatch)
+
+    assert second_exit == 0, f"the reusing Run failed: {second_exit}"
+    assert second["assessments"] == [], "a Lane paid for a route it already had"
+    by_dir = {
+        Path(c["working_directory"]).name: c
+        for c in fake_client.create_calls
+        if c["working_directory"]
+    }
+    assert by_dir["issue-42"]["model"] == "claude-opus-5"
+    assert by_dir["issue-43"]["model"] == "claude-opus-5"
+
+    records = _lane_routing_records(tmp_path)
+    elected = {r["issue"]: r for r in records if r["routing_reuse"] == "elected"}
+    revalidated = {
+        r["issue"]: r for r in records if r["routing_reuse"] == "revalidated"
+    }
+    assert set(revalidated) == {42, 43}, "a Lane was left out of the reuse"
+    for issue, record in revalidated.items():
+        assert record["reused_proposal_id"] == elected[issue]["proposal_id"], (
+            f"Lane #{issue} revalidated against another issue's decision"
+        )
+        assert record["selector_attempts"] == 0
+
+
+def _hold_lanes_for_preparation(client, tmp_path, ref):
+    class PreparingSession(_ParallelFakeSession):
+        async def send_and_wait(self, prompt, **kwargs):
+            async def prepared():
+                while not any(
+                    event["type"] == "wrapper.routing.prepared"
+                    and event["issue"] == ref
+                    for event in _logged_events(tmp_path)
+                ):
+                    await asyncio.sleep(0)
+            await asyncio.wait_for(prepared(), timeout=2)
+            return await super().send_and_wait(prompt, **kwargs)
+    client._session_cls = PreparingSession
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_rolling_pickup_uses_current_inputs_without_waiting_for_the_tail(
+    tmp_path, monkeypatch, changed
+) -> None:
+    tail_started = asyncio.Event()
+    next_work = asyncio.Event()
+    timed_out = False
+
+    async def answer(request):
+        nonlocal timed_out
+        if "#45:" in request.issue:
+            tail_started.set()
+            try:
+                await asyncio.wait_for(next_work.wait(), timeout=1)
+            except TimeoutError:
+                timed_out = True
+                raise
+        model = "gpt-5.6-terra" if "changed work" in request.issue else "claude-opus-5"
+        return _elects_lane_model(model)(request)
+
+    async def work(session, tracker):
+        ref = Path(session._working_directory).name
+        if ref in {"issue-42", "issue-43"}:
+            await asyncio.wait_for(tail_started.wait(), timeout=2)
+            if changed:
+                tracker.seed_issue(dataclass_replace(
+                    tracker.issue_view(44),
+                    body="## What to build\nchanged work\n\n## Acceptance criteria\n- pass",
+                ))
+        elif ref == "issue-44":
+            next_work.set()
+
+    client, spied, exit_code = _rolling_dynamic_run(
+        tmp_path, monkeypatch,
+        issues=[
+            _make_issue(ref, labels=["ready-for-agent", "parallel-safe"])
+            for ref in (42, 43, 44, 45)
+        ],
+        answer=answer, on_work=work, max_iterations=3,
+    )
+    assert exit_code == 0
+    assert next_work.is_set() and not timed_out
+    calls = {
+        Path(call["working_directory"]).name: call
+        for call in client.create_calls if call["working_directory"]
+    }
+    assert set(calls) == {"issue-42", "issue-43", "issue-44"}
+    assert calls["issue-44"]["model"] == (
+        "gpt-5.6-terra" if changed else "claude-opus-5"
+    )
+    assert calls["issue-44"]["reasoning_effort"] == "high"
+    assert sum("#44:" in request.issue for _, request in spied["assessments"]) == (
+        2 if changed else 1
+    )
+    cancelled = [
+        event for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.prepared" and event["issue"] == 45
+    ]
+    assert cancelled[-1]["state"] == "unavailable"
+    assert "cancelled" in cancelled[-1]["detail"]
+
+
+@pytest.mark.parametrize("unreadable", [False, True])
+def test_rolling_preparation_rereads_queued_readiness_without_spending(
+    tmp_path, monkeypatch, unreadable
+) -> None:
+    tracker_ready = asyncio.Event()
+    tracker = None
+
+    async def answer(request):
+        if "#44:" in request.issue:
+            await tracker_ready.wait()
+            assert tracker is not None
+            readiness = (
+                BlockedByRead.unprovable() if unreadable else BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="x/y#99", state="open"),),
+                )
+            )
+            tracker.seed_issue(dataclass_replace(
+                tracker.issue_view(45), blocked_by=readiness
+            ))
+        return _elects_lane_model("claude-opus-5")(request)
+
+    async def work(_session, current_tracker):
+        nonlocal tracker
+        tracker = current_tracker
+        tracker_ready.set()
+
+        async def prepared():
+            while not any(
+                event["type"] == "wrapper.routing.prepared" and event["issue"] == 45
+                for event in _logged_events(tmp_path)
+            ):
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(prepared(), timeout=2)
+
+    client, spied, exit_code = _rolling_dynamic_run(
+        tmp_path, monkeypatch,
+        issues=[
+            _make_issue(ref, labels=["ready-for-agent", "parallel-safe"])
+            for ref in (42, 43, 44, 45)
+        ],
+        answer=answer, on_work=work, max_iterations=2,
+    )
+    assert exit_code == 0
+    assert len(client.create_calls) == 2
+    assert all(call["model"] == "claude-opus-5" for call in client.create_calls)
+    assert not any("#45:" in request.issue for _, request in spied["assessments"])
+    (pending,) = [
+        event for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.prepared" and event["issue"] == 45
+    ]
+    assert pending["state"] == "unavailable"
+    assert not any(
+        event["type"] == "wrapper.pickup.bound" and event["issue"] == 45
+        for event in _logged_events(tmp_path)
+    )
+
+
+def test_serial_required_work_is_prepared_while_existing_lanes_drain(
+    tmp_path, monkeypatch
+) -> None:
+    discovered = False
+    observed_during_work = []
+
+    async def work(session, tracker):
+        nonlocal discovered
+        if session._working_directory is None:
+            return
+        if not discovered:
+            tracker.seed_issue(_make_issue(44, labels=["ready-for-agent"]))
+            discovered = True
+            return
+
+        async def prepared():
+            while not any(
+                event["type"] == "wrapper.routing.prepared" and event["issue"] == 44
+                for event in _logged_events(tmp_path)
+            ):
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(prepared(), timeout=2)
+        observed_during_work.append(Path(session._working_directory).name)
+
+    client, spied, exit_code = _rolling_dynamic_run(
+        tmp_path, monkeypatch, on_work=work, max_iterations=3,
+    )
+    assert exit_code == 0
+    assert [call["working_directory"] is None for call in client.create_calls] == [
+        False, False, True
+    ]
+    assert client.create_calls[-1]["model"] == "claude-opus-5"
+    assert sum("#44:" in request.issue for _, request in spied["assessments"]) == 1
+    assert observed_during_work == ["issue-43"]
+
+
+def test_a_rolling_run_prepares_the_candidates_no_lane_has_taken(
+    tmp_path, monkeypatch
+) -> None:
+    """AC1 in **Rolling** dispatch: the cache behind the Lanes is prepared too.
+
+    Two Lane slots and three **Parallel-safe** candidates, so exactly one stays
+    in the **Pool** while the other two are worked. It is prepared beside them,
+    which is the whole point: its **Pickup** arrives when a slot frees and
+    finds an assessment already made.
+
+    The Lanes are what must not change. Preparation reserves nothing and
+    reorders nothing, so both open sessions on the elected route exactly as
+    they did before this slice existed.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(number, labels=["ready-for-agent", "parallel-safe"])
+            for number in (42, 43, 44)
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+    _hold_lanes_for_preparation(fake_client, tmp_path, 44)
+
+    assert asyncio.run(loop_module.run(_dynamic_parallel_config())) == 0
+
+    prepared = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.prepared"
+    ]
+    assert prepared, "the candidate behind the Lanes was never prepared"
+    assert {event["issue"] for event in prepared} <= {42, 43, 44}
+    assert {event["state"] for event in prepared} == {"proposed"}
+    worked = {
+        event["issue"]
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.resolved"
+    }
+    assert {event["issue"] for event in prepared}.isdisjoint(worked), (
+        "a candidate a Lane was working was prepared beside it"
+    )
+
+
+def test_preparation_reserves_nothing_and_opens_no_session(
+    tmp_path, monkeypatch
+) -> None:
+    """AC7 and AC4: a proposal is not a **Lease** and not evidence of work.
+
+    The sharpest way a preparation desk could go wrong in **Rolling** dispatch
+    is to behave like a second dispatcher — taking a candidate out of the Pool,
+    claiming a Lane slot, or making the Run look busier than it is. Here the
+    prepared candidate must still be worked by an ordinary Lane, and the
+    session count must equal the number of issues rather than the number of
+    proposals.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(number, labels=["ready-for-agent", "parallel-safe"])
+            for number in (42, 43, 44)
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+    _hold_lanes_for_preparation(fake_client, tmp_path, 44)
+
+    assert asyncio.run(loop_module.run(_dynamic_parallel_config())) == 0
+
+    events = _logged_events(tmp_path)
+    prepared = [e for e in events if e["type"] == "wrapper.routing.prepared"]
+    resolved = [e for e in events if e["type"] == "wrapper.routing.resolved"]
+    assert prepared, "nothing was prepared, so nothing is being asserted"
+    # `max_iterations=2` caps the Run at two sessions. A proposal is not one.
+    assert len(fake_client.create_calls) == len(resolved) == 2, (
+        f"{len(fake_client.create_calls)} sessions for {len(resolved)} routes "
+        f"and {len(prepared)} proposals"
+    )
+    assert all(event["proposal_id"] for event in prepared), prepared
+    # A proposal names no binding: the Pickup's record is the only one that
+    # reports a **Routing source**.
+    assert all("routing_source" not in event for event in prepared), prepared

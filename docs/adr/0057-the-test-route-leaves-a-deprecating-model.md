@@ -57,12 +57,18 @@ does not review its own vendor's work — but the table is now two vendors rathe
 a future retune should treat that as a cost it is paying rather than a fact it inherited.
 
 **`claude-sonnet-5` was already on the pinned roster.** It needed no roster extension and no
-conformance-fixture change, which is deliberate: the roster is a function of CLI version
-([ADR-0019](0019-roster-derived-from-the-pinned-harness.md)), stamped at `1.0.75` and held in
-lockstep with `conformance/model-roster.json` across all four Runner family members. The
+conformance-fixture change, which was deliberate: the roster is a function of CLI version
+([ADR-0019](0019-roster-derived-from-the-pinned-harness.md)), then stamped at `1.0.75` and held
+in lockstep with `conformance/model-roster.json` across all four Runner family members. The
 otherwise-obvious replacement — `gemini-3.8-flash`, which would have kept Google on the table —
-is **off-roster**, and so are `gpt-6-astra`, `gemini-3.7-flash` and both Grok entries. Choosing
-one of those would have made a routing retune into a contract change.
+was **off-roster** at this decision, as were `gpt-6-astra`, `gemini-3.7-flash` and both Grok
+entries. Choosing one of those would then have made a routing retune into a contract change.
+
+The subsequent SDK 1.0.14 / CLI 1.0.85 upgrade
+([#594](https://github.com/bradcstevens/git-loopy/issues/594)) added Astra and both Grok
+entries; Gemini 3.8 and Gemini 3.7 remain off-roster. That refresh does
+not change this decision's recommended `test` route. See ADR-0019's upgrade record for the
+distinction between observed capabilities and account-unlisted compatibility entries.
 
 **`review` is still not `gpt-5.6-sol`.** Untouched, and worth restating because this retune had
 evidence pointing the other way: on Bug Hunt Bench — 105 planted bugs, pass@1, blind judge,
@@ -80,9 +86,10 @@ triple, a Pickup published it, and the Dashboard rendered it — and then
 `IterationSession.__aenter__` called `create_session(model=..., reasoning_effort=...)` and
 **dropped it**. The tier was decided, transported, reported, and never sent.
 
-This was not a cosmetic gap. Probing both runtimes directly, with no prompt sent:
+This was not a cosmetic gap. The decision-time probes used both runtimes directly,
+with no prompt sent:
 
-| Requested `context_tier` | native `1.0.84-9` | SDK-pinned `1.0.67` |
+| Requested `context_tier` | native `1.0.84-9` | then-SDK-pinned `1.0.67` |
 | --- | --- | --- |
 | omitted — what a Run did | **no tier reported at all** | **no tier reported at all** |
 | `"default"` | `default` | `default` |

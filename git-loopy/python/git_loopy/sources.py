@@ -21,7 +21,7 @@ ways the runner discovers AFK-ready work:
 Design notes:
 
 * **The IssueSource Protocol is the seam.** :mod:`git_loopy.loop` holds
-  one ``source: IssueSource`` and calls only the three Protocol methods.
+  one ``source: IssueSource`` and calls only its Protocol methods.
   Tests confirm structural conformance via ``isinstance(impl,
   IssueSource)`` runtime checks (Protocol is ``@runtime_checkable``).
 * **Detection-only PRDs completion.** Early drafts proposed an active
@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import logging
 import re
+import stat
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -64,6 +65,10 @@ from git_loopy.readiness import (
     BlockedByRead,
     Readiness,
     decide_readiness,
+)
+from git_loopy.route_identity import (
+    is_route_label,
+    is_route_projection_comment,
 )
 from git_loopy.wrapper import (
     actionable_close_refs,
@@ -698,6 +703,17 @@ class IssueSource(Protocol):
         """
         ...
 
+    def refresh_for_preparation(self, item: AfkReadyItem) -> Pickup:
+        """Authoritatively re-read one item before routing preparation.
+
+        Unlike :meth:`RollingIssueSource.pickup`, this applies to both serial
+        and Parallel work, so it validates the item's current eligibility and
+        **Readiness** without requiring the Parallel-only ``parallel-safe``
+        assertion. A failed read is ``unavailable``; a read that proves the
+        item can no longer be worked is ``stale``.
+        """
+        ...
+
     def handle_completions(
         self,
         *,
@@ -1109,6 +1125,90 @@ class GitHubIssueSource:
                 entry.defect.value,
             )
 
+    def refresh_for_preparation(self, item: AfkReadyItem) -> Pickup:
+        """Re-read one serial or Parallel candidate before preparing its route.
+
+        This is intentionally distinct from :meth:`pickup`: a Rolling
+        reservation requires the additional ``parallel-safe`` assertion, while
+        a serial candidate has no such requirement. Both paths must instead
+        prove current state, ``ready-for-agent``, AFK shape, and **Readiness**
+        from this authoritative read before selector work is spent.
+        """
+        if item.kind == "pr":
+            return self._refresh_pr_for_preparation(item)
+        if item.kind != "issue" or not isinstance(item.ref, int):
+            return Pickup(outcome=PICKUP_STALE)
+
+        try:
+            full = self._gh.issue_view(item.ref)
+        except gh_module.GhError as exc:
+            self._diag.warning(
+                "gh issue view #%s during preparation refresh failed: %s",
+                item.ref,
+                exc,
+            )
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
+
+        readiness = decide_readiness(full.blocked_by)
+        if readiness_unresolved(readiness):
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
+
+        labels = tuple(full.labels)
+        if (
+            full.state.upper() != "OPEN"
+            or LABEL_READY_FOR_AGENT not in labels
+            or not is_afk_ready(full.body or "")
+            or not readiness.admissible
+        ):
+            return Pickup(outcome=PICKUP_STALE)
+
+        return Pickup(
+            outcome=PICKUP_VALIDATED,
+            item=AfkReadyItem(
+                ref=full.number,
+                title=full.title,
+                rendered_block=_format_github_issue_block(full),
+                labels=labels,
+                created_at=full.created_at,
+                blocked_by=full.blocked_by,
+            ),
+        )
+
+    def _refresh_pr_for_preparation(self, item: AfkReadyItem) -> Pickup:
+        """Return the current dispatchable PR, if PR mode still permits it."""
+        if not self._include_prs or not isinstance(item.ref, int):
+            return Pickup(outcome=PICKUP_STALE)
+        try:
+            full = self._gh.pr_view(item.ref)
+        except gh_module.GhError as exc:
+            self._diag.warning(
+                "gh pr view #%s during preparation refresh failed: %s",
+                item.ref,
+                exc,
+            )
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
+
+        labels = tuple(full.labels)
+        if (
+            full.state.upper() != "OPEN"
+            or LABEL_READY_FOR_AGENT not in labels
+            or not is_pr_afk_ready(full)
+        ):
+            return Pickup(outcome=PICKUP_STALE)
+
+        return Pickup(
+            outcome=PICKUP_VALIDATED,
+            item=AfkReadyItem(
+                ref=full.number,
+                title=full.title,
+                rendered_block=_format_github_pr_block(full),
+                kind="pr",
+                head_sha=full.head_sha,
+                labels=labels,
+                created_at=full.created_at,
+            ),
+        )
+
     def pickup(self, ref: int | str) -> Pickup:
         """Re-read ``ref`` authoritatively and render it for dispatch.
 
@@ -1399,13 +1499,20 @@ def _format_github_issue_block(issue: gh_module.Issue) -> str:
 
     Emits a header line, blank line, body, then up to 5 newest-first
     comments behind a separator.
+
+    A Route projection (#563) is removed *before* the window is taken, not
+    after. It is this Runner's own output, so leaving it in would both spend
+    one of the five slots the loop reserves for what a human or an earlier
+    iteration actually said, and make publishing a route change the block that
+    the **Route selector**'s relevant input identity hashes — the assessment
+    invalidation loop ADR-0057 forbids.
     """
-    labels_str = ", ".join(issue.labels)
+    labels_str = ", ".join(_visible_labels(issue.labels))
     header = f"=== Issue #{issue.number}: {issue.title} [labels: {labels_str}] ==="
     body = issue.body or ""
 
     recent = sorted(
-        issue.comments,
+        _visible_comments(issue.comments),
         key=lambda c: c.created_at,
         reverse=True,
     )[:5]
@@ -1420,6 +1527,22 @@ def _format_github_issue_block(issue: gh_module.Issue) -> str:
     )
 
 
+def _visible_labels(labels: Sequence[str]) -> tuple[str, ...]:
+    """The issue's labels minus this Runner's own observational Route label."""
+    return tuple(label for label in labels if not is_route_label(label))
+
+
+def _visible_comments(
+    comments: Sequence[gh_module.Comment],
+) -> tuple[gh_module.Comment, ...]:
+    """The issue's comments minus this Runner's own Route projections."""
+    return tuple(
+        comment
+        for comment in comments
+        if not is_route_projection_comment(comment.body)
+    )
+
+
 def _format_github_pr_block(pr: gh_module.PullRequest) -> str:
     """Render one GitHub pull request as the prompt block.
 
@@ -1428,9 +1551,12 @@ def _format_github_pr_block(pr: gh_module.PullRequest) -> str:
     agent can tell a PR from an issue and apply PR mode per
     ``git-loopy/PROMPT.md`` (check out the branch, finish the diff, push, do
     **not** close/merge, return to the base branch). The agent brief lives
-    in the comments, so the up-to-5 recent comments are always included.
+    in the comments, so the up-to-5 recent comments are always included — which
+    is also why a Route projection is filtered out of them here (#563): a brief
+    evicted from the window by this Runner's own output is a PR the agent
+    cannot advance.
     """
-    labels_str = ", ".join(pr.labels)
+    labels_str = ", ".join(_visible_labels(pr.labels))
     header = (
         f"=== PR #{pr.number}: {pr.title} "
         f"[labels: {labels_str}] (branch: {pr.head_branch}) ==="
@@ -1438,7 +1564,7 @@ def _format_github_pr_block(pr: gh_module.PullRequest) -> str:
     body = pr.body or ""
 
     recent = sorted(
-        pr.comments,
+        _visible_comments(pr.comments),
         key=lambda c: c.created_at,
         reverse=True,
     )[:5]
@@ -1613,6 +1739,98 @@ class PrdsIssueSource:
         return PoolCollection(
             items=tuple(item for _, item in items),
             exclusions=tuple(exclusion for _, exclusion in exclusions),
+        )
+
+    def refresh_for_preparation(self, item: AfkReadyItem) -> Pickup:
+        """Re-read one locally collected item without escaping the PRDs tree."""
+        if item.kind != "issue" or not isinstance(item.ref, str):
+            return Pickup(outcome=PICKUP_STALE)
+
+        relative = Path(item.ref)
+        parts = relative.parts
+        if (
+            relative.is_absolute()
+            or relative.as_posix() != item.ref
+            or len(parts) != 3
+            or parts[0] != "prds"
+            or parts[1] == "done"
+            or not _RE_PRDS_NAME.match(parts[2])
+        ):
+            return Pickup(outcome=PICKUP_STALE)
+
+        try:
+            resolved_root = self._repo_root.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            self._diag.warning("prds: cannot resolve repository root: %s", exc)
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
+
+        prds_dir = self._repo_root / "prds"
+        try:
+            prds_stat = prds_dir.lstat()
+        except FileNotFoundError:
+            return Pickup(outcome=PICKUP_STALE)
+        except OSError as exc:
+            self._diag.warning("prds: cannot inspect %s: %s", prds_dir, exc)
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
+        if stat.S_ISLNK(prds_stat.st_mode) or not stat.S_ISDIR(prds_stat.st_mode):
+            return Pickup(outcome=PICKUP_STALE)
+        try:
+            resolved_prds_dir = prds_dir.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            self._diag.warning("prds: cannot resolve %s: %s", prds_dir, exc)
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
+        if resolved_prds_dir != resolved_root / "prds":
+            return Pickup(outcome=PICKUP_STALE)
+
+        feature_dir = prds_dir / parts[1]
+        try:
+            feature_stat = feature_dir.lstat()
+        except FileNotFoundError:
+            return Pickup(outcome=PICKUP_STALE)
+        except OSError as exc:
+            self._diag.warning("prds: cannot inspect %s: %s", feature_dir, exc)
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
+        if stat.S_ISLNK(feature_stat.st_mode) or not stat.S_ISDIR(feature_stat.st_mode):
+            return Pickup(outcome=PICKUP_STALE)
+        try:
+            resolved_feature_dir = feature_dir.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            self._diag.warning("prds: cannot resolve %s: %s", feature_dir, exc)
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
+        if resolved_feature_dir != resolved_prds_dir / parts[1]:
+            return Pickup(outcome=PICKUP_STALE)
+
+        md_path = feature_dir / parts[2]
+        try:
+            md_stat = md_path.lstat()
+        except FileNotFoundError:
+            return Pickup(outcome=PICKUP_STALE)
+        except OSError as exc:
+            self._diag.warning("prds: cannot inspect %s: %s", item.ref, exc)
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
+        if stat.S_ISLNK(md_stat.st_mode) or not stat.S_ISREG(md_stat.st_mode):
+            return Pickup(outcome=PICKUP_STALE)
+        try:
+            resolved_md_path = md_path.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            self._diag.warning("prds: cannot resolve %s: %s", item.ref, exc)
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
+        if resolved_md_path != resolved_feature_dir / parts[2]:
+            return Pickup(outcome=PICKUP_STALE)
+        try:
+            body = md_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            self._diag.warning("prds: could not read %s: %s", item.ref, exc)
+            return Pickup(outcome=PICKUP_UNAVAILABLE)
+        if not is_afk_ready(body):
+            return Pickup(outcome=PICKUP_STALE)
+        return Pickup(
+            outcome=PICKUP_VALIDATED,
+            item=AfkReadyItem(
+                ref=item.ref,
+                title=item.ref,
+                rendered_block=f"=== {item.ref} ===\n{body}",
+            ),
         )
 
     def handle_completions(

@@ -89,9 +89,12 @@ touching Sonnet 5 no longer reaches this table.
 - `git-loopy init` and `config routing use-recommended` seed these values. An operator who
   adopted the previous core keeps their written `[routing]` table — it is their Config, not the
   kit's — and `config routing use-recommended` is how they take the retune.
-- The tracked project Config (`git-loopy/config.toml`) carries the new table, and
-  `test_config.py` holds the two in lockstep, so the repository that owns the feature cannot
-  drift from what it ships.
+- At this retune, the tracked project Config (`git-loopy/config.toml`) carried the new table
+  and `test_config.py` held the two in lockstep. In
+  [#594](https://github.com/bradcstevens/git-loopy/issues/594), the maintainer explicitly
+  retained the project's subsequently customized routes and replaced that equality check
+  with checks of the intentional overrides. The built-in recommendation remains independently
+  pinned; its no-`max` rule does not prohibit an operator-authored project route using `max`.
 - Escalation is live for every Task type, including `planning`.
 - `gemini-3.6-flash` enters the routed set as the first Google model on it, so the roster's
   `minimal` floor and `high` ceiling are now load-bearing for a shipped route rather than

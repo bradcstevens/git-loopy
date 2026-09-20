@@ -126,9 +126,12 @@ __all__ = [
     "EventLogWriter",
     "RunSummaryWriter",
     "IterationCounters",
+    "RunFileIdentity",
     "WritersBundle",
     "create_writers",
     "make_run_id",
+    "parse_run_stem",
+    "run_stem",
     "ensure_gitignore_entry",
     "GITIGNORE_ENTRY",
 ]
@@ -146,6 +149,8 @@ _CROCKFORD_ALPHABET: str = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 # Validation regex for explicit ``run_id`` arguments. 26 chars, each from
 # the Crockford alphabet. Matches the output of :func:`make_run_id`.
 _RUN_ID_RE: re.Pattern[str] = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
+#: The width that regex pins, which is also what splits a stem back apart.
+_RUN_ID_LENGTH: int = 26
 
 # Filename timestamp format. Colons replaced with dashes for case-insensitive
 # filesystem safety (e.g. NTFS, HFS+). Trailing Z indicates UTC.
@@ -203,6 +208,46 @@ def make_run_id(
         time_ms = int(time.time() * 1000)
     rand_int = int.from_bytes(rand_bytes_fn(10), "big")
     return _crockford_b32(time_ms, 10) + _crockford_b32(rand_int, 16)
+
+
+# ---------------------------------------------------------------------------
+# The per-Run filename stem
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RunFileIdentity:
+    """What one Run's filename stem says about the Run that wrote it."""
+
+    run_id: str
+    started_at: datetime
+
+
+def run_stem(run_id: str, started_at: datetime) -> str:
+    """The shared stem every one of a Run's per-Run files is named for."""
+    return f"{_format_filename_ts(started_at)}-{run_id}"
+
+
+def parse_run_stem(stem: str) -> RunFileIdentity | None:
+    """Read a stem back, or ``None`` when it was not written by :func:`run_stem`.
+
+    The inverse lives beside the spelling it inverts on purpose: a reader that
+    re-derived ``<iso>-<run_id>`` for itself would keep reading files this
+    Runner had stopped writing, and the drift would show up as Runs that
+    silently cannot be discovered rather than as a failure anybody sees.
+    """
+    if len(stem) <= _RUN_ID_LENGTH or stem[-(_RUN_ID_LENGTH + 1)] != "-":
+        return None
+    timestamp, run_id = stem[: -(_RUN_ID_LENGTH + 1)], stem[-_RUN_ID_LENGTH:]
+    if not _RUN_ID_RE.fullmatch(run_id):
+        return None
+    try:
+        started_at = datetime.strptime(timestamp, _FILENAME_TS_FORMAT)
+    except ValueError:
+        return None
+    return RunFileIdentity(
+        run_id=run_id, started_at=started_at.replace(tzinfo=timezone.utc)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -559,7 +604,7 @@ def create_writers(
 
     ensure_gitignore_entry(repo_root)
 
-    stem = f"{_format_filename_ts(started_at)}-{run_id}"
+    stem = run_stem(run_id, started_at)
     logs_dir = repo_root / ".git-loopy" / "logs"
     runs_dir = repo_root / ".git-loopy" / "runs"
 

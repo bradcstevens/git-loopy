@@ -28,9 +28,9 @@ without a live backend.
 
 .. note::
 
-   ``ModelBilling`` carries **no** discount field at the pinned SDK
-   (``github-copilot-sdk==1.0.5``, CLI 1.0.67), although ADR-0026's survey table
-   lists ``billing.discountPercent``. The SDK's ``from_dict`` drops keys it does
+   ``ModelBilling`` carried **no** discount field in ADR-0026's original SDK
+   1.0.5 survey, and still has none in SDK 1.0.14 / CLI 1.0.85, although the
+   survey table lists ``billing.discountPercent``. The SDK's ``from_dict`` drops keys it does
    not model, so a discount the server states never reaches the kit at this pin.
    It is read defensively here — a future SDK that models it is recorded without
    further change — and is simply absent today.

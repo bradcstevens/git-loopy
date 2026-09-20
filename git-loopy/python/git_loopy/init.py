@@ -70,6 +70,7 @@ from git_loopy.scaffold_provenance import (
     record_scaffolded_assets,
 )
 from git_loopy.skill_install import (
+    RefreshOutcome,
     SkillInstallError,
     describe_refresh,
     installed_catalog_dir,
@@ -90,6 +91,32 @@ __all__ = ["run_init"]
 #: Sentinel so ``default_effort=None`` (leave effort unset) is distinguishable
 #: from "caller did not pass one". Explicit no reasoning is the string ``"none"``.
 _UNSET: object = object()
+
+#: The guarantee an abandoned setup can actually make (ADR-0058). Setup acquires
+#: the machine-wide Skill catalog *before* it collects a single answer
+#: (ADR-0025), so "nothing was written" was never true of the filesystem — only
+#: of the operator's choices. Saying the broad thing sends an operator looking
+#: for files that are really there, so the narrow claim is the one said, and any
+#: prerequisite residue is disclosed beside it rather than denied.
+_SETUP_SAVED_NOTHING = (
+    "no Config, prompt override, Skill policy, or tracker label was written"
+)
+
+
+def _prerequisite_residue(outcome: RefreshOutcome) -> str | None:
+    """What this invocation's prerequisite refresh leaves if setup is abandoned.
+
+    ``None`` when the refresh rewrote nothing — a catalog already at the pin is
+    read, not written, and a kept one is what a *failed* refresh fell back to.
+    Disclosing a residue there would be the mirror of the over-claim this
+    replaces: a disclaimer printed regardless of what happened.
+    """
+    if not outcome.changed:
+        return None
+    return (
+        f"The prerequisite Skill catalog install is machine-wide and remains at "
+        f"{outcome.catalog.root} (revision {outcome.catalog.short_revision})."
+    )
 
 
 @dataclass(frozen=True)
@@ -484,6 +511,18 @@ def run_init(
     input_fn: Callable[[str], str] = input
     output_fn: Callable[[str], None] = print
 
+    #: What this invocation's prerequisite refresh left on the machine, or
+    #: ``None`` when it wrote nothing. Every path that abandons setup reports it
+    #: rather than claiming the whole filesystem is untouched (ADR-0058).
+    prerequisite_residue: str | None = None
+
+    def abandoned(reason: str) -> str:
+        """Phrase an abandoned setup as the guarantee it can actually make."""
+        notice = f"{reason}; {_SETUP_SAVED_NOTHING}."
+        if prerequisite_residue is None:
+            return notice
+        return f"{notice} {prerequisite_residue}"
+
     # Setup is where git-loopy acquires the Skills it runs on, and it happens
     # before anything is collected: the Skill policy the operator is about to
     # choose is a choice *among the installed catalog*, so an empty catalog would
@@ -495,9 +534,10 @@ def run_init(
         try:
             outcome = refresh_installed_catalog(env=env)
         except SkillInstallError as exc:
-            warn(f"{exc}; nothing was written.")
+            warn(abandoned(str(exc)))
             return 1
         skills_source = outcome.catalog.root
+        prerequisite_residue = _prerequisite_residue(outcome)
         if outcome.warning:
             warn(outcome.warning)
         output_fn(describe_refresh(outcome))
@@ -662,7 +702,7 @@ def run_init(
                 **runner_options,
             )
             if answers is None:
-                output_fn("git-loopy init cancelled; nothing was written.")
+                output_fn(abandoned("git-loopy init cancelled"))
                 return 1
             if answers.scope not in scope_options:
                 raise _ScopeUnavailable(
@@ -699,7 +739,7 @@ def run_init(
                     installed_skills_dir=skills_source,
                 )
     except SkillPolicyCancelled:
-        output_fn("git-loopy init cancelled; nothing was written.")
+        output_fn(abandoned("git-loopy init cancelled"))
         return 1
     except _ScopeUnavailable as exc:
         warn(str(exc))
@@ -707,7 +747,7 @@ def run_init(
     except _SkillPolicyUnavailable as exc:
         # A Skill policy that cannot be resolved is never silently downgraded to
         # an open world: setup fails with the whole scope untouched.
-        warn(f"{exc}; nothing was written.")
+        warn(abandoned(str(exc)))
         return 1
 
     # Loading an existing Config can fail; do it before invalidating provenance
@@ -718,7 +758,7 @@ def run_init(
         release_version = read_runtime_release_version()
         previous_provenance = read_scaffold_provenance(targets.config_path.parent)
     except (ReleaseVersionError, ScaffoldProvenanceError) as exc:
-        warn(f"cannot record scaffold provenance: {exc}; nothing was written.")
+        warn(abandoned(f"cannot record scaffold provenance: {exc}"))
         return 1
 
     # Commit phase — every decision is in hand, so nothing above wrote anything.
@@ -743,7 +783,7 @@ def run_init(
         try:
             invalidate_scaffold_provenance(targets.config_path.parent)
         except ScaffoldProvenanceError as exc:
-            warn(f"cannot record scaffold provenance: {exc}; nothing was written.")
+            warn(abandoned(f"cannot record scaffold provenance: {exc}"))
             return 1
 
     try:

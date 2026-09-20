@@ -12,6 +12,13 @@
 > notes must still exist, be non-empty, and be committed at the tag. The reasoning below is
 > preserved as the record of what was decided at the time.
 
+> **Note (one sentence superseded by [ADR-0052](0052-the-release-line-advances-per-issue.md) and [#492](https://github.com/bradcstevens/git-loopy/issues/492)):**
+> The sentence “Artifacts selected as one packaged distribution require exact
+> Release-version equality” is superseded only for installed TUI helpers. Their
+> installer resolves the newest published Release at or below the tree's
+> declared Release version, then verifies the helper's identity against that
+> resolved version. No other part of this ADR changes.
+
 
 Git-loopy publishes one shared Semantic Versioning Release version for every
 Orchestrator, packaged Skill set, and TUI helper included in a distribution,

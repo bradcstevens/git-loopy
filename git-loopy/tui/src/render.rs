@@ -25,8 +25,9 @@ use crate::band::{ActivityBand, ACTIVITY_BAND_MIN_HEIGHT, QUEUE_MIN_HEIGHT};
 use crate::navigation::Screen;
 use crate::session::{DashboardFrame, Diagnostics};
 use crate::view::{
-    Activity, ContextFill, ContributionRow, DetailHeader, DrillIn, Header, LogLineView,
-    PeakContext, QueueRow, RouteView, SummaryRow, TerminalCapabilities,
+    Activity, ContextFill, ContributionRow, DeliveryView, DetailHeader, DrillIn, Header,
+    LogLineView, PeakContext, PreparationView, QueueRow, RouteView, SummaryRow,
+    TerminalCapabilities,
 };
 
 /// The placeholder for a value the Run has not measured.
@@ -546,7 +547,12 @@ fn draw_queue(
                 duration(row.active_seconds),
                 wall_clock(row.closed_at.as_deref(), glyphs),
                 row.iteration_count.to_string(),
-                route(row.route.as_ref(), routing),
+                route(
+                    row.route.as_ref(),
+                    row.delivery.as_ref(),
+                    row.preparation.as_ref(),
+                    routing,
+                ),
                 tokens(row.tokens_in, glyphs),
                 tokens(row.tokens_out, glyphs),
                 credits(row.credits, cost),
@@ -590,7 +596,7 @@ fn cost_placeholder<'a>(header: &Header, glyphs: &'a Glyphs) -> &'a str {
     }
 }
 
-/// One issue's **Routing resolution**, as a cell: its settings, never provenance.
+/// One issue's **Routing resolution**, as a cell: its settings and lifecycle position.
 ///
 /// `model @ effort` is the family's spelling of a pair; a non-default context tier
 /// uses a compact spelling so it remains readable in the fixed Route column. The pair is the
@@ -602,24 +608,76 @@ fn cost_placeholder<'a>(header: &Header, glyphs: &'a Glyphs) -> &'a str {
 /// every row would cost width to say nothing.
 ///
 /// A null half is the backend choosing, which is a fact rather than a gap, so
-/// it renders as `(backend)` rather than as the unknown placeholder.
-fn route(route: Option<&RouteView>, unknown: &str) -> String {
-    let Some(route) = route else {
-        return unknown.to_string();
+/// it renders as `(backend)` rather than as the unknown placeholder. Any
+/// tracker-delivery state renders as a suffix so publication can fail or lag
+/// without rewriting the pair itself.
+fn route(
+    route: Option<&RouteView>,
+    delivery: Option<&DeliveryView>,
+    preparation: Option<&PreparationView>,
+    unknown: &str,
+) -> String {
+    let lifecycle_suffix = route
+        .and_then(|route| route.lifecycle_position.as_deref())
+        .map(|position| format!(" ({})", position.replace('_', " ")))
+        .unwrap_or_default();
+    let rendered = match route {
+        Some(route) => match &route.context_tier {
+            Some(context_tier) => format!(
+                "{}@{}/{}",
+                route.model.clone().unwrap_or_else(|| "(backend)".into()),
+                route.effort.clone().unwrap_or_else(|| "(backend)".into()),
+                context_tier,
+            ),
+            None => format!(
+                "{} @ {}",
+                route.model.clone().unwrap_or_else(|| "(backend)".into()),
+                route.effort.clone().unwrap_or_else(|| "(backend)".into()),
+            ),
+        },
+        None => preparation.map_or_else(
+            || unknown.to_string(),
+            |preparation| match preparation.state.as_str() {
+                "proposed" => format!(
+                    "proposed {} @ {}",
+                    preparation
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| "(backend)".into()),
+                    preparation
+                        .effort
+                        .clone()
+                        .unwrap_or_else(|| "(backend)".into()),
+                ),
+                state => format!("preparation: {state}"),
+            },
+        ),
     };
-    match &route.context_tier {
-        Some(context_tier) => format!(
-            "{}@{}/{}",
-            route.model.clone().unwrap_or_else(|| "(backend)".into()),
-            route.effort.clone().unwrap_or_else(|| "(backend)".into()),
-            context_tier,
-        ),
-        None => format!(
-            "{} @ {}",
-            route.model.clone().unwrap_or_else(|| "(backend)".into()),
-            route.effort.clone().unwrap_or_else(|| "(backend)".into()),
-        ),
+    let delivery_suffix = delivery
+        .map(|delivery| format!(" [{}]", delivery.status))
+        .unwrap_or_default();
+    let preparation_suffix = if route.is_none() && preparation.is_some() {
+        " [not binding]"
+    } else {
+        ""
+    };
+    let suffix = format!("{lifecycle_suffix}{delivery_suffix}{preparation_suffix}");
+    if suffix.is_empty() {
+        return rendered;
     }
+    let prefix_width = usize::from(ROUTE_WIDTH).saturating_sub(suffix.len());
+    format!("{}{}", truncate_route(&rendered, prefix_width), suffix)
+}
+
+/// Reserve a fixed Route cell's final characters for observable route metadata.
+fn truncate_route(route: &str, width: usize) -> String {
+    if route.chars().count() <= width {
+        return route.to_string();
+    }
+    if width <= 3 {
+        return ".".repeat(width);
+    }
+    format!("{}...", route.chars().take(width - 3).collect::<String>())
 }
 
 /// What an empty Route cell says on this Run.
@@ -927,7 +985,7 @@ fn draw_breakdown(
                     .map_or_else(|| glyphs.unknown.to_string(), duration),
                 row.status.clone(),
                 duration(row.active_seconds),
-                route(row.route.as_ref(), routing),
+                route(row.route.as_ref(), None, None, routing),
                 tokens(row.consumption.tokens_in, glyphs),
                 tokens(row.consumption.tokens_out, glyphs),
                 tokens(row.consumption.cache_read, glyphs),

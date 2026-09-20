@@ -69,6 +69,7 @@ def _bare_loop(*, max_iterations: int) -> Any:
     )
     bare._wind_down_stage = None
     bare._wind_down_cause = None
+    bare._preparation_pass = None
     return bare
 
 

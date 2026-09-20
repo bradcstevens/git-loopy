@@ -25,6 +25,8 @@ from git_loopy.gh import (
     Repo,
 )
 from git_loopy.git import Commit, GitError, Worktree
+from git_loopy.release_publication import PublishedRelease, ReleaseServiceError
+from git_loopy.route_publication import RouteDeliveryError
 
 
 class FakeGitClient:
@@ -633,6 +635,8 @@ class FakeGitHubClient:
         issue_view_errors: Mapping[int, GhError] | None = None,
         issue_close_errors: Mapping[int, GhError] | None = None,
         issue_comment_errors: Mapping[int, GhError] | None = None,
+        route_comment_errors: Mapping[int, RouteDeliveryError] | None = None,
+        route_label_errors: Mapping[int, RouteDeliveryError] | None = None,
         pr_view_errors: Mapping[int, GhError] | None = None,
         gh_version: tuple[int, int, int] = MIN_GH_VERSION_FOR_READINESS,
     ) -> None:
@@ -658,12 +662,22 @@ class FakeGitHubClient:
         self._issue_comment_errors: dict[int, GhError] = dict(
             issue_comment_errors or {}
         )
+        self._route_comment_errors: dict[int, RouteDeliveryError] = dict(
+            route_comment_errors or {}
+        )
+        self._route_label_errors: dict[int, RouteDeliveryError] = dict(
+            route_label_errors or {}
+        )
         self._pr_view_errors: dict[int, GhError] = dict(pr_view_errors or {})
         # Read/write spies.
         self.issue_list_calls: list[tuple[str, str]] = []
         self.issue_view_calls: list[int] = []
         self.issue_close_calls: list[tuple[int, str]] = []
         self.issue_comment_calls: list[tuple[int, str]] = []
+        self.route_comment_calls: list[tuple[int, str]] = []
+        self.route_label_calls: list[tuple[int, tuple[str, ...], str]] = []
+        self.route_labels: set[str] = set()
+        self._route_comments: dict[int, list[str]] = {}
         self.pr_list_calls: list[tuple[str, str]] = []
         self.pr_view_calls: list[int] = []
         # The 429 **Pressure signal** (#309, #219 §6), counted by the same
@@ -767,6 +781,44 @@ class FakeGitHubClient:
         err = self._issue_comment_errors.get(number)
         if err is not None:
             self._fail(err)
+
+    def issue_comments(self, number: int) -> tuple[str, ...]:
+        if number not in self._issues:
+            raise RouteDeliveryError(f"issue #{number} not found")
+        return tuple(self._route_comments.get(number, ()))
+
+    def issue_labels(self, number: int) -> tuple[str, ...]:
+        try:
+            return tuple(self._issues[number].labels)
+        except KeyError as exc:
+            raise RouteDeliveryError(f"issue #{number} not found") from exc
+
+    def ensure_label(self, label: str) -> None:
+        self.route_labels.add(label)
+
+    def replace_route_label(
+        self, number: int, *, remove: Sequence[str], add: str
+    ) -> None:
+        error = self._route_label_errors.get(number)
+        if error is not None:
+            raise error
+        try:
+            labels = self._issues[number].labels
+        except KeyError as exc:
+            raise RouteDeliveryError(f"issue #{number} not found") from exc
+        labels[:] = [label for label in labels if label not in remove]
+        if add not in labels:
+            labels.append(add)
+        self.route_label_calls.append((number, tuple(remove), add))
+
+    def post_issue_comment(self, number: int, body: str) -> None:
+        error = self._route_comment_errors.get(number)
+        if error is not None:
+            raise error
+        if number not in self._issues:
+            raise RouteDeliveryError(f"issue #{number} not found")
+        self.route_comment_calls.append((number, body))
+        self._route_comments.setdefault(number, []).append(body)
 
     def pr_list(self, label: str, state: str = "open") -> list[PullRequest]:
         self.pr_list_calls.append((label, state))
@@ -873,3 +925,80 @@ class FakeGateRunner:
         if passed:
             return GateResult.green(("scripted",))
         return GateResult.red(("scripted",), self._failure)
+
+
+class FakeReleaseService:
+    """Scriptable in-memory :class:`~git_loopy.release_publication.ReleaseService`.
+
+    Extends the seam-fake pattern to the one external service a **Publication**
+    talks to. What it exists to script is the part a real host cannot be asked
+    to reproduce on demand: a write whose response was lost, a write that never
+    landed, and a host that cannot be read at all. Those three are
+    indistinguishable to a publisher that does not read back, which is the whole
+    reason the seam is here.
+
+    * ``fail_create`` — the next :meth:`create` raises ``ReleaseServiceError``
+      with this message.
+    * ``create_lands`` — with ``fail_create`` set, whether the Release was
+      nonetheless written before the conversation broke (a lost response).
+    * ``fail_view`` — every :meth:`view` raises with this message.
+    * ``view_failure_after_create`` — reads succeed until a create is attempted
+      and then stop, so the readback that would resolve an ambiguous write is
+      itself unavailable.
+    * ``edited_after_create`` — what the host ends up holding differs from what
+      was asked for, so only a readback can catch it.
+
+    :attr:`create_calls` records every attempted publication, so a test can
+    assert a retry created *nothing* rather than merely ending up correct.
+    """
+
+    def __init__(
+        self,
+        *,
+        releases: Mapping[str, PublishedRelease] | None = None,
+        fail_create: str | None = None,
+        create_lands: bool = False,
+        fail_view: str | None = None,
+        view_failure_after_create: str | None = None,
+        edited_after_create: Mapping[str, object] | None = None,
+    ) -> None:
+        self.releases: dict[str, PublishedRelease] = dict(releases or {})
+        self.create_calls: list[dict[str, object]] = []
+        self.view_calls: list[str] = []
+        self.fail_create = fail_create
+        self.create_lands = create_lands
+        self.fail_view = fail_view
+        self.view_failure_after_create = view_failure_after_create
+        self.edited_after_create = dict(edited_after_create or {})
+
+    def view(self, tag: str) -> PublishedRelease | None:
+        self.view_calls.append(tag)
+        if self.fail_view is not None:
+            raise ReleaseServiceError(self.fail_view)
+        return self.releases.get(tag)
+
+    def create(
+        self, *, tag: str, name: str, notes_path: Path, prerelease: bool
+    ) -> None:
+        body = Path(notes_path).read_text(encoding="utf-8")
+        self.create_calls.append(
+            {"tag": tag, "name": name, "body": body, "prerelease": prerelease}
+        )
+        published = PublishedRelease(
+            tag=tag,
+            name=name,
+            body=body,
+            prerelease=prerelease,
+            draft=False,
+        )
+        if self.fail_create is not None:
+            if self.create_lands:
+                self.releases[tag] = published
+            if self.view_failure_after_create is not None:
+                self.fail_view = self.view_failure_after_create
+            raise ReleaseServiceError(self.fail_create)
+        self.releases[tag] = (
+            replace(published, **self.edited_after_create)
+            if self.edited_after_create
+            else published
+        )

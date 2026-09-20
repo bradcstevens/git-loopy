@@ -11,7 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::event::{
     CommitRecorded, ContextWindowSample, Event, EventPayload, ExecutionHostDeclaration,
     InsightCapabilities, IssueRef, IterationEnd, IterationIssue, IterationSummary, Pickup,
-    ReleaseAdvanced, StopRequested,
+    ReleaseAdvanced, RoutingDelivery, RoutingDeliveryStatus, RoutingPrepared, RoutingResolved,
+    StopRequested, ROUTE_ELECTED, ROUTE_PREPARATION_PROPOSED, ROUTE_PREPARATION_REUSABLE,
+    ROUTE_PREPARATION_STATIC, ROUTE_PREPARATION_UNAVAILABLE, ROUTE_REVALIDATED,
 };
 use crate::timestamp::Timestamp;
 
@@ -175,6 +177,7 @@ pub(crate) struct ResolvedRoute {
     pub(crate) effort: Option<String>,
     pub(crate) context_tier: Option<String>,
     pub(crate) source: Option<String>,
+    pub(crate) lifecycle_position: Option<String>,
 }
 
 impl ResolvedRoute {
@@ -188,6 +191,7 @@ impl ResolvedRoute {
             && pickup.effort.is_none()
             && pickup.context_tier.is_none()
             && pickup.routing_source.is_none()
+            && pickup.lifecycle_position.is_none()
         {
             return None;
         }
@@ -201,6 +205,80 @@ impl ResolvedRoute {
                 .clone()
                 .filter(|context_tier| context_tier != "default"),
             source: pickup.routing_source.clone(),
+            lifecycle_position: pickup.lifecycle_position.clone(),
+        })
+    }
+}
+
+/// The delivery state of publishing one final route to an external tracker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RouteDelivery {
+    pub(crate) status: RoutingDeliveryStatus,
+    pub(crate) identity: Option<String>,
+    pub(crate) label: Option<String>,
+}
+
+impl RouteDelivery {
+    fn from_event(delivery: &RoutingDelivery) -> Self {
+        Self {
+            status: delivery.status,
+            identity: non_empty(delivery.identity.as_deref()),
+            label: non_empty(delivery.label.as_deref()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RoutePreparation {
+    pub(crate) state: String,
+    pub(crate) model: Option<String>,
+    pub(crate) effort: Option<String>,
+    pub(crate) context_tier: Option<String>,
+    pub(crate) summary: Option<String>,
+    pub(crate) proposal_id: Option<String>,
+    pub(crate) prepared_at: Option<String>,
+    pub(crate) valid_until: Option<String>,
+    pub(crate) relevant_input_identity: Option<String>,
+    pub(crate) selector_model: Option<String>,
+    pub(crate) selector_effort: Option<String>,
+    pub(crate) selector_context_tier: Option<String>,
+    pub(crate) evidence_source: Option<String>,
+    pub(crate) source_model_identity: Option<String>,
+    pub(crate) evidence_retrieved_at: Option<String>,
+    pub(crate) capabilities_retrieved_at: Option<String>,
+    pub(crate) measurement_at: Option<String>,
+    pub(crate) benchmark_version: Option<String>,
+    pub(crate) conditions: Option<String>,
+    pub(crate) routing_overshot: Option<bool>,
+    pub(crate) detail: Option<String>,
+    pub(crate) reason: Option<String>,
+}
+
+impl RoutePreparation {
+    fn from_event(prepared: &RoutingPrepared) -> Option<Self> {
+        Some(Self {
+            state: non_empty(prepared.state.as_deref())?,
+            model: non_empty(prepared.model.as_deref()),
+            effort: non_empty(prepared.effort.as_deref()),
+            context_tier: non_empty(prepared.context_tier.as_deref()),
+            summary: non_empty(prepared.summary.as_deref()),
+            proposal_id: non_empty(prepared.proposal_id.as_deref()),
+            prepared_at: non_empty(prepared.prepared_at.as_deref()),
+            valid_until: non_empty(prepared.valid_until.as_deref()),
+            relevant_input_identity: non_empty(prepared.relevant_input_identity.as_deref()),
+            selector_model: non_empty(prepared.selector_model.as_deref()),
+            selector_effort: non_empty(prepared.selector_effort.as_deref()),
+            selector_context_tier: non_empty(prepared.selector_context_tier.as_deref()),
+            evidence_source: non_empty(prepared.evidence_source.as_deref()),
+            source_model_identity: non_empty(prepared.source_model_identity.as_deref()),
+            evidence_retrieved_at: non_empty(prepared.evidence_retrieved_at.as_deref()),
+            capabilities_retrieved_at: non_empty(prepared.capabilities_retrieved_at.as_deref()),
+            measurement_at: non_empty(prepared.measurement_at.as_deref()),
+            benchmark_version: non_empty(prepared.benchmark_version.as_deref()),
+            conditions: non_empty(prepared.conditions.as_deref()),
+            routing_overshot: prepared.routing_overshot,
+            detail: non_empty(prepared.detail.as_deref()),
+            reason: non_empty(prepared.reason.as_deref()),
         })
     }
 }
@@ -253,6 +331,9 @@ pub(crate) struct IssueLedgerEntry {
     /// the Queue answers "what is this issue costing *now*", which outlives
     /// the Iteration that resolved it.
     pub(crate) route: Option<ResolvedRoute>,
+    /// The most recent tracker-delivery observation for that final route.
+    pub(crate) delivery: Option<RouteDelivery>,
+    pub(crate) preparation: Option<RoutePreparation>,
     pub(crate) log: Vec<LogLine>,
 }
 
@@ -272,6 +353,8 @@ impl IssueLedgerEntry {
             credits: BilledTotal::default(),
             premium_requests: BilledTotal::default(),
             route: None,
+            delivery: None,
+            preparation: None,
             log: Vec::new(),
         }
     }
@@ -522,11 +605,15 @@ impl DashboardState {
             }
             EventPayload::PickupBound(pickup) => {
                 self.append_lane_log(&pickup.issue, LOG_EVENT, &pickup_bound_text(pickup), now);
+                self.clear_route_preparation(&pickup.issue);
                 self.record_route(&pickup.issue, ResolvedRoute::from_pickup(pickup));
             }
             EventPayload::PickupSkipped(pickup) => {
                 self.append_lane_log(&pickup.issue, LOG_EVENT, &pickup_skipped_text(pickup), now)
             }
+            EventPayload::RoutingResolved(resolved) => self.record_route_resolution(resolved, now),
+            EventPayload::RoutingPrepared(prepared) => self.record_route_preparation(prepared, now),
+            EventPayload::RoutingDelivery(delivery) => self.record_route_delivery(delivery, now),
             EventPayload::AgentOutput(output) => {
                 self.append_log_block(&output.kind, &output.text, now)
             }
@@ -729,8 +816,51 @@ impl DashboardState {
         self.insert_entry(issue.clone());
         if let Some(entry) = self.ledger.get_mut(issue) {
             entry.route = Some(route.clone());
+            entry.delivery = None;
         }
         self.iteration_routes.insert(issue.clone(), route);
+    }
+
+    fn record_route_resolution(&mut self, resolved: &RoutingResolved, now: Option<Timestamp>) {
+        // A Lane log line and nothing else: the pair itself reaches the ledger
+        // from the Pickup that bound it, and a provenance record that also
+        // wrote the route would be a second authority for it. A record from
+        // before reuse existed says nothing here rather than guessing.
+        if let Some(text) = routing_resolution_text(resolved) {
+            self.append_lane_log(&resolved.issue, LOG_EVENT, &text, now);
+        }
+    }
+
+    fn record_route_preparation(&mut self, prepared: &RoutingPrepared, now: Option<Timestamp>) {
+        if let Some(preparation) = RoutePreparation::from_event(prepared) {
+            self.insert_entry(prepared.issue.clone());
+            if let Some(entry) = self.ledger.get_mut(&prepared.issue) {
+                entry.preparation = Some(preparation);
+            }
+        }
+        if let Some(text) = routing_preparation_text(prepared) {
+            self.append_lane_log(&prepared.issue, LOG_EVENT, &text, now);
+        }
+    }
+
+    fn clear_route_preparation(&mut self, issue: &IssueRef) {
+        self.insert_entry(issue.clone());
+        if let Some(entry) = self.ledger.get_mut(issue) {
+            entry.preparation = None;
+        }
+    }
+
+    fn record_route_delivery(&mut self, delivery: &RoutingDelivery, now: Option<Timestamp>) {
+        self.insert_entry(delivery.issue.clone());
+        if let Some(entry) = self.ledger.get_mut(&delivery.issue) {
+            entry.delivery = Some(RouteDelivery::from_event(delivery));
+        }
+        self.append_lane_log(
+            &delivery.issue,
+            LOG_EVENT,
+            &routing_delivery_text(delivery),
+            now,
+        );
     }
 
     fn record_pool(&mut self, issues: &[IssueRef]) {
@@ -1103,6 +1233,125 @@ fn pickup_issue_label(issue: &IssueRef) -> String {
         IssueRef::Number(number) => format!("#{number}"),
         IssueRef::Path(path) => path.clone(),
     }
+}
+
+fn routing_resolution_text(resolved: &RoutingResolved) -> Option<String> {
+    let origin = non_empty(resolved.reused_proposal_id.as_deref());
+    let superseded = non_empty(resolved.superseded_proposal_id.as_deref());
+    match resolved.routing_reuse.as_deref()? {
+        ROUTE_REVALIDATED => Some(match origin {
+            Some(origin) => format!("Route revalidated: reused {origin}, no new assessment"),
+            None => "Route revalidated: no new assessment".to_string(),
+        }),
+        ROUTE_ELECTED => Some(match superseded {
+            Some(superseded) => format!("Route assessed: {superseded} no longer validates"),
+            None => "Route assessed: no reusable route for this issue".to_string(),
+        }),
+        // A spelling this Dashboard does not know is reported as it arrived
+        // rather than translated into one of the two it does: guessing would
+        // make a newer Orchestrator's provenance read as something it is not.
+        other => Some(format!("Route resolved: {other}")),
+    }
+}
+
+fn routing_preparation_text(prepared: &RoutingPrepared) -> Option<String> {
+    match prepared.state.as_deref()? {
+        ROUTE_PREPARATION_PROPOSED => {
+            let model = non_empty(prepared.model.as_deref())?;
+            let effort =
+                non_empty(prepared.effort.as_deref()).unwrap_or_else(|| "default".to_string());
+            // "not bound" is carried in the line itself rather than left to the
+            // reader: this is the one Dashboard phrase that could be mistaken
+            // for a Pickup, and the Queue row it must not have written is the
+            // only other place an operator would check.
+            let mut text = format!("Route proposed: {model}@{effort} (not bound)");
+            for (label, value) in [
+                ("proposal", non_empty(prepared.proposal_id.as_deref())),
+                ("rationale", non_empty(prepared.summary.as_deref())),
+                (
+                    "identity",
+                    non_empty(prepared.relevant_input_identity.as_deref()),
+                ),
+                ("prepared", non_empty(prepared.prepared_at.as_deref())),
+                ("valid until", non_empty(prepared.valid_until.as_deref())),
+                (
+                    "evidence source",
+                    non_empty(prepared.evidence_source.as_deref()),
+                ),
+                (
+                    "source model",
+                    non_empty(prepared.source_model_identity.as_deref()),
+                ),
+                (
+                    "evidence retrieved",
+                    non_empty(prepared.evidence_retrieved_at.as_deref()),
+                ),
+                (
+                    "capabilities retrieved",
+                    non_empty(prepared.capabilities_retrieved_at.as_deref()),
+                ),
+                ("measured", non_empty(prepared.measurement_at.as_deref())),
+                (
+                    "benchmark",
+                    non_empty(prepared.benchmark_version.as_deref()),
+                ),
+                ("conditions", non_empty(prepared.conditions.as_deref())),
+            ] {
+                if let Some(value) = value {
+                    text.push_str(&format!("; {label}: {value}"));
+                }
+            }
+            if let Some(model) = non_empty(prepared.selector_model.as_deref()) {
+                let effort = non_empty(prepared.selector_effort.as_deref())
+                    .unwrap_or_else(|| "backend default".to_string());
+                text.push_str(&format!("; selector: {model}@{effort}"));
+                if let Some(tier) = non_empty(prepared.selector_context_tier.as_deref()) {
+                    text.push_str(&format!("/{tier}"));
+                }
+            }
+            if prepared.routing_overshot == Some(true) {
+                text.push_str("; overshot");
+            }
+            Some(text)
+        }
+        ROUTE_PREPARATION_STATIC => {
+            Some("Route preparation: static route applies, no selector call".to_string())
+        }
+        ROUTE_PREPARATION_REUSABLE => Some(
+            "Route preparation: an earlier decision is available for Pickup revalidation"
+                .to_string(),
+        ),
+        ROUTE_PREPARATION_UNAVAILABLE => {
+            let text = match non_empty(prepared.detail.as_deref())
+                .or_else(|| non_empty(prepared.reason.as_deref()))
+            {
+                Some(why) => {
+                    format!("Route not prepared: {why}; available for Pickup revalidation")
+                }
+                None => "Route not prepared; available for Pickup revalidation".to_string(),
+            };
+            Some(if prepared.routing_overshot == Some(true) {
+                format!("{text}; overshot")
+            } else {
+                text
+            })
+        }
+        // A spelling this Dashboard does not know is reported as it arrived
+        // rather than translated into one it does.
+        other => Some(format!("Route preparation: {other}")),
+    }
+}
+
+fn routing_delivery_text(delivery: &RoutingDelivery) -> String {
+    let mut text = format!("Route delivery: {}", delivery.status.as_str());
+    if let Some(label) = delivery.label.as_deref().filter(|label| !label.is_empty()) {
+        text.push_str(&format!(" ({label})"));
+    }
+    text
+}
+
+fn non_empty(value: Option<&str>) -> Option<String> {
+    value.filter(|value| !value.is_empty()).map(str::to_string)
 }
 
 fn split_log_block(kind: &str, text: &str, at: Option<Timestamp>) -> Vec<LogLine> {

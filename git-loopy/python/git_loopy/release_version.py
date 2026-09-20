@@ -35,7 +35,10 @@ _PYTHON_LOCKFILE = Path("git-loopy/python/uv.lock")
 _RUST_MANIFEST = Path("git-loopy/tui/Cargo.toml")
 _RUST_LOCKFILE = Path("git-loopy/tui/Cargo.lock")
 _TUI_PROBE = Path("git-loopy/tui/README.md")
-_RELEASE_FIXTURE = Path("git-loopy/conformance/release-version.json")
+# The one Conformance fixture that tracks the live Release version. Public
+# because a reader that spelled this path again is how a reader and this writer
+# drift apart without either being wrong on its own.
+LIVE_RELEASE_FIXTURE = Path("git-loopy/conformance/release-version.json")
 _RELEASE_NOTES_DIRECTORY = Path("docs/releases")
 RELEASE_VERSION_PATHS: tuple[Path, ...] = (
     Path("VERSION"),
@@ -46,7 +49,7 @@ RELEASE_VERSION_PATHS: tuple[Path, ...] = (
     _RUST_MANIFEST,
     _RUST_LOCKFILE,
     _TUI_PROBE,
-    _RELEASE_FIXTURE,
+    LIVE_RELEASE_FIXTURE,
 )
 BUMP_CLASS_LABEL_PREFIX = "semver:"
 BUMP_CLASS_KEYS: tuple[str, ...] = ("major", "minor", "patch", "none")
@@ -411,7 +414,7 @@ def write_repository_release_version(repository_root: Path, version: str) -> Non
     changes.
     """
     _validate_semver(version, "Release version")
-    python_version = _python_distribution_version(version)
+    python_version = python_distribution_version(version)
     authority = validate_repository_release_version(repository_root)
     updates = (
         _ReleaseVersionUpdate(repository_root / "VERSION", f"{version}\n"),
@@ -448,7 +451,7 @@ def write_repository_release_version(repository_root: Path, version: str) -> Non
                     "Python lockfile Release metadata",
                 ),
                 "git-loopy",
-                _python_distribution_version(authority),
+                python_distribution_version(authority),
                 python_version,
                 repository_root / _PYTHON_LOCKFILE,
             ),
@@ -495,14 +498,14 @@ def write_repository_release_version(repository_root: Path, version: str) -> Non
             ),
         ),
         _ReleaseVersionUpdate(
-            repository_root / _RELEASE_FIXTURE,
+            repository_root / LIVE_RELEASE_FIXTURE,
             _replace_release_fixture(
                 _read_metadata_text(
-                    repository_root / _RELEASE_FIXTURE, "Release fixture"
+                    repository_root / LIVE_RELEASE_FIXTURE, "Release fixture"
                 ),
                 authority,
                 version,
-                repository_root / _RELEASE_FIXTURE,
+                repository_root / LIVE_RELEASE_FIXTURE,
             ),
         ),
     )
@@ -709,7 +712,14 @@ def _stage_release_note_content(target: Path, content: str) -> Path:
     return Path(staged.name)
 
 
-def _python_distribution_version(version: str) -> str:
+def python_distribution_version(version: str) -> str:
+    """Return the PEP 440 spelling of one Release-line ``version``.
+
+    The Python distribution metadata is the one Release-version copy that
+    cannot carry the Semantic Versioning string verbatim, so every reader that
+    has to recognise what the writer wrote asks here rather than re-deriving
+    ``-dev.N`` → ``.devN`` for itself.
+    """
     match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:-dev\.(\d+))?", version)
     if match is None:
         raise ReleaseVersionError(
@@ -739,8 +749,8 @@ def _replace_release_fixture(
         ("expected_release_version", expected, version),
         (
             "expected_python_distribution_version",
-            _python_distribution_version(expected),
-            _python_distribution_version(version),
+            python_distribution_version(expected),
+            python_distribution_version(version),
         ),
     ):
         if fixture.get(key) != old:
