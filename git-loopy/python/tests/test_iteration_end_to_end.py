@@ -6242,8 +6242,9 @@ def test_a_crashed_attempt_is_reassessed_without_becoming_capability_evidence(
     ]
 
 
+@pytest.mark.parametrize("default_effort", ["low", "high"])
 def test_an_explicitly_configured_rung_still_outranks_the_selector(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, default_effort
 ) -> None:
     """AC5: explicit static escalation is an instruction, not a starting point.
 
@@ -6254,19 +6255,15 @@ def test_an_explicitly_configured_rung_still_outranks_the_selector(
     buys no second assessment at all — a credit spent to contradict an
     instruction is a credit spent for nothing.
 
-    The rung is deliberately a *different* pair from the run-wide default: a
-    rung equal to what the issue would have run on anyway is a no-op by
-    :meth:`_Loop._resolve_route`'s own rule, which would leave the Pickup
-    dynamic and prove nothing about precedence. It is also a pair the harness
-    really offers, because an ``[escalation]`` block is a **Static route** and
-    is verified at preflight like every other one.
+    A rung equal to the run-wide default is still explicit authority: that
+    default is only a placeholder until the dynamic election supplies a route.
     """
     _fake_client, spied, exit_code = _dynamic_run(
         tmp_path,
         monkeypatch,
         max_iterations=2,
         max_nmt_strikes=9,
-        reasoning_effort="low",
+        reasoning_effort=default_effort,
         escalation_rung=("gpt-5.6-terra", "high"),
     )
 
