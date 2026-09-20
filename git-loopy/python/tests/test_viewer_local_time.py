@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -359,3 +359,46 @@ def test_a_machine_that_is_not_posix_is_not_asked_for_etc_localtime(
 
     monkeypatch.setattr(viewer_zone.os, "name", "posix")
     assert viewer_zone.viewing_zone_resolves() is False
+
+
+@pytest.mark.parametrize(
+    "specification",
+    [
+        # The POSIX tail rule America/Nuuk, America/Godthab and
+        # America/Scoresbysund actually ship.
+        "<-02>2<-01>,M3.5.0/-1,M10.5.0/0",
+        "EST5EDT,M3.2.0/-1,M11.1.0",
+    ],
+)
+def test_a_signed_changeover_time_is_judged_by_this_platform_not_the_grammar(
+    monkeypatch: pytest.MonkeyPatch, specification: str
+) -> None:
+    """A rule glibc accepts and other tzcode refuses, judged by the host.
+
+    A changeover time may carry a sign, and real zones ship one. Whether it is
+    usable is not a property of the grammar: glibc applies it, and a tzcode
+    that does not refuses the *whole* specification and quietly answers UTC.
+    Modelling either platform's answer in the rules would be wrong on the
+    other, so the only defensible assertion is that the rendering agrees with
+    what this C library actually did — labelled when it gave up, and left
+    alone when it did not.
+    """
+    _viewing_from(monkeypatch, specification)
+
+    projected = viewer_local("2026-05-16T14:00:00.000Z")
+    # Both specifications place the viewer at a non-zero offset, so a zero one
+    # is this host reporting that it discarded the specification.
+    honoured = (
+        datetime(2026, 5, 16, 14, tzinfo=timezone.utc).astimezone().utcoffset()
+        != timedelta()
+    )
+
+    if honoured:
+        assert "unresolved" not in projected, (
+            f"this host applied TZ={specification} and must not call it broken"
+        )
+    else:
+        assert projected == "2026-05-16T14:00:00+00:00 UTC (local zone unresolved)", (
+            f"this host discarded TZ={specification} and answered UTC, which "
+            "must be labelled rather than shown as somebody's local time"
+        )

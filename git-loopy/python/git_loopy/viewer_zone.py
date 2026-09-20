@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import zoneinfo
 from functools import lru_cache
 from pathlib import Path
@@ -57,10 +58,10 @@ _RULE_DATE = r"(?:M\d{1,2}\.\d{1,2}\.\d{1,2}|J\d{1,3}|\d{1,3})"
 #: tzcode, and resolves to a silent UTC that must therefore be labelled.
 _POSIX_TZ = re.compile(
     rf"""^
-    {_ABBREVIATION}
+    (?P<standard_name>{_ABBREVIATION})
     (?P<standard>{_OFFSET})
     (?:
-        {_ABBREVIATION}
+        (?P<daylight_name>{_ABBREVIATION})
         (?P<daylight>{_OFFSET})?
         (?:
             ,(?P<start>{_RULE_DATE})(?:/(?P<start_time>{_OFFSET}))?
@@ -95,6 +96,37 @@ def _rule_date_in_range(text: str | None) -> bool:
     return int(text) <= 365
 
 
+def _this_platform_adopted(match: re.Match[str]) -> bool:
+    """Whether this C library really adopted a well-formed specification.
+
+    The rules above are the standard's, and tzcode implementations disagree
+    inside them: a *signed* changeover time — ``M3.5.0/-1``, the tail rule
+    America/Nuuk, America/Godthab and America/Scoresbysund actually ship — is
+    honoured by glibc and refused outright elsewhere. Encoding either answer
+    would be wrong on the other platform, and the refusal is silent: the whole
+    specification is discarded and the process is left in UTC, which is the
+    unlabelled-UTC defect all over again.
+
+    So the last question goes to the C library rather than to a model of it,
+    by asking which abbreviations it ended up using for the ``TZ`` now in
+    force. The test is containment, not position: a specification whose
+    daylight rule spans the entire year leaves some platforms reporting that
+    one abbreviation twice, and demanding a pair would condemn a clock that
+    works.
+    """
+    if not hasattr(time, "tzset"):  # pragma: no cover - POSIX hosts have it
+        # Without ``tzset`` there is no refreshed ``tzname`` to compare, and
+        # no silent POSIX substitution to catch. Saying "broken" here would
+        # only libel a working clock.
+        return True
+    declared = {
+        name.strip("<>")
+        for name in (match["standard_name"], match["daylight_name"])
+        if name
+    }
+    return set(time.tzname) <= declared
+
+
 def _posix_specification_resolves(specification: str) -> bool:
     """Whether a POSIX ``TZ`` specification yields a clock this member can use."""
     match = _POSIX_TZ.match(specification)
@@ -107,6 +139,7 @@ def _posix_specification_resolves(specification: str) -> bool:
         and _offset_in_range(match["end_time"], _MAX_CHANGEOVER_HOURS)
         and _rule_date_in_range(match["start"])
         and _rule_date_in_range(match["end"])
+        and _this_platform_adopted(match)
     )
 
 
