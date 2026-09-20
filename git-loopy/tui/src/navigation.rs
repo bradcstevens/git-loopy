@@ -33,6 +33,16 @@ pub enum Key {
     Open,
     /// Leave the detail for the Dashboard.
     Back,
+    /// Scroll the visible Queue or drill-in Log up by one page.
+    PageUp,
+    /// Scroll the visible Queue or drill-in Log down by one page.
+    PageDown,
+    /// Scroll the Dashboard's Activity tail up by one page without changing focus.
+    ActivityPageUp,
+    /// Scroll the Dashboard's Activity tail down by one page without changing focus.
+    ActivityPageDown,
+    /// Resume following the Log and Activity tails.
+    Follow,
     /// Collapse the Activity band to its stub, or restore it (ADR-0038).
     ToggleActivity,
     /// Ask for one more row of Activity band.
@@ -50,6 +60,50 @@ pub enum Flow {
     Continue,
     /// Stop, restoring the terminal on the way out.
     Quit,
+}
+
+/// A Log's view position, following the tail until the operator scrolls away.
+///
+/// Kept outside the semantic projection: moving a view changes no Run facts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LogPosition {
+    first: Option<usize>,
+}
+
+impl LogPosition {
+    /// The first visible line at the current retained length and viewport height.
+    pub fn offset(self, lines: usize, height: u16) -> usize {
+        let bottom = lines.saturating_sub(usize::from(height));
+        self.first.unwrap_or(bottom).min(bottom)
+    }
+
+    /// Whether newly arriving lines remain in view.
+    pub fn is_following(self) -> bool {
+        self.first.is_none()
+    }
+
+    pub(crate) fn scroll(&mut self, delta: isize, lines: usize, height: u16) {
+        if height == 0 {
+            return;
+        }
+        let bottom = lines.saturating_sub(usize::from(height));
+        let next = self
+            .offset(lines, height)
+            .saturating_add_signed(delta)
+            .min(bottom);
+        self.first = (next < bottom).then_some(next);
+    }
+
+    pub(crate) fn retain(&mut self, previous: Option<usize>, next: Option<usize>) {
+        match (previous, next) {
+            (Some(previous), Some(next)) => {
+                self.first = self
+                    .first
+                    .map(|first| first.saturating_sub(next.saturating_sub(previous)));
+            }
+            _ => *self = Self::default(),
+        }
+    }
 }
 
 /// The operator's position: which screen, and which issue is under the cursor.
@@ -78,12 +132,16 @@ impl Cursor {
         &self.selected
     }
 
+    pub(crate) fn open(&mut self, issue: IssueRef) {
+        self.selected = issue;
+        self.screen = Screen::DrillIn;
+    }
+
     /// Apply one intent against the Queue as it is currently projected.
     ///
-    /// The three Activity-band sizing intents never reach here: they move no
-    /// cursor and open no screen, so the session applies them to the band
-    /// before the cursor is consulted. They are matched explicitly rather than
-    /// swept up by a wildcard, so a tenth intent cannot become a silent no-op.
+    /// Activity sizing and scrolling never reach here: they move no cursor
+    /// and open no screen. They are matched explicitly rather than swept up
+    /// by a wildcard, so a new intent cannot become a silent no-op.
     pub(crate) fn apply(&mut self, key: Key, queue: &[IssueRef]) -> Flow {
         match key {
             Key::Quit => return Flow::Quit,
@@ -93,7 +151,14 @@ impl Cursor {
             Key::Last => self.jump(queue.last()),
             Key::Up => self.step(queue, -1),
             Key::Down => self.step(queue, 1),
-            Key::ToggleActivity | Key::GrowActivity | Key::ShrinkActivity => {}
+            Key::ToggleActivity
+            | Key::GrowActivity
+            | Key::ShrinkActivity
+            | Key::PageUp
+            | Key::PageDown
+            | Key::ActivityPageUp
+            | Key::ActivityPageDown
+            | Key::Follow => {}
         }
         Flow::Continue
     }

@@ -110,6 +110,8 @@ impl RunInputs {
 /// One line of an issue's bounded Log.
 #[derive(Clone, Debug)]
 pub(crate) struct LogLine {
+    /// Position in this issue's Log, including lines no longer retained.
+    pub(crate) ordinal: usize,
     pub(crate) at: Option<Timestamp>,
     pub(crate) kind: String,
     pub(crate) text: String,
@@ -1357,6 +1359,7 @@ fn non_empty(value: Option<&str>) -> Option<String> {
 fn split_log_block(kind: &str, text: &str, at: Option<Timestamp>) -> Vec<LogLine> {
     text.split('\n')
         .map(|line| LogLine {
+            ordinal: 0,
             at,
             kind: kind.to_string(),
             text: line.to_string(),
@@ -1414,7 +1417,10 @@ fn contribution_from(
     }
 }
 
-fn push_bounded(buffer: &mut Vec<LogLine>, line: LogLine) {
+fn push_bounded(buffer: &mut Vec<LogLine>, mut line: LogLine) {
+    line.ordinal = buffer
+        .last()
+        .map_or(0, |last| last.ordinal.saturating_add(1));
     if buffer.len() == LOG_TAIL_LINES {
         buffer.remove(0);
     }

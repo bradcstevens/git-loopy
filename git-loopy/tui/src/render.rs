@@ -14,7 +14,7 @@
 //! colour — read from the injected [`TerminalCapabilities`]; information,
 //! order, scope, localization, and empty states do not.
 
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::Line;
@@ -22,7 +22,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
 use crate::band::{ActivityBand, ACTIVITY_BAND_MIN_HEIGHT, QUEUE_MIN_HEIGHT};
-use crate::navigation::Screen;
+use crate::navigation::{LogPosition, Screen};
 use crate::session::{DashboardFrame, Diagnostics};
 use crate::view::{
     Activity, ContextFill, ContributionRow, DeliveryView, DetailHeader, DrillIn, Header,
@@ -207,12 +207,24 @@ pub fn draw_dashboard(frame: &mut Frame, dashboard: &DashboardFrame) {
     draw_queue(
         frame,
         bands.queue,
-        &view.dashboard.queue.rows,
+        &view.dashboard.queue.rows[dashboard.queue_offset.min(
+            view.dashboard
+                .queue
+                .rows
+                .len()
+                .saturating_sub(usize::from(bands.queue_rows().height)),
+        )..],
         cost_placeholder(&view.dashboard.header, &glyphs),
         routing_placeholder(&view.dashboard.header, &glyphs),
         &glyphs,
     );
-    draw_activity(frame, bands.activity, &view.dashboard.activity, &glyphs);
+    draw_activity(
+        frame,
+        bands.activity,
+        &view.dashboard.activity,
+        dashboard.activity_position,
+        &glyphs,
+    );
     draw_summary(
         frame,
         bands.summary,
@@ -268,6 +280,16 @@ pub struct DashboardBands {
 }
 
 impl DashboardBands {
+    /// Queue data cells, excluding the border and column headings.
+    pub(crate) fn queue_rows(&self) -> Rect {
+        Rect::new(
+            self.queue.x.saturating_add(1),
+            self.queue.y.saturating_add(2),
+            self.queue.width.saturating_sub(2),
+            self.queue.height.saturating_sub(3),
+        )
+    }
+
     /// The Activity band's header row, which is also its drag handle
     /// (ADR-0021, ADR-0038).
     ///
@@ -282,7 +304,7 @@ impl DashboardBands {
 
     /// Whether a pointer at these terminal coordinates landed on that handle.
     ///
-    /// The whole of hit-testing, and deliberately the library's rather than the
+    /// Deliberately the library's rather than the
     /// binary's: the coordinates a terminal reports mean nothing without the
     /// layout they were drawn in, and that layout is [`dashboard_bands`].
     pub fn hits_activity_handle(&self, column: u16, row: u16) -> bool {
@@ -815,13 +837,20 @@ fn consulted(skills: Option<&[String]>, glyphs: &Glyphs) -> String {
 /// active-only glance, so it stays attributable when the active row has
 /// scrolled out of a long Queue. The Queue cursor's own issue is what the
 /// drill-in shows.
-fn draw_activity(frame: &mut Frame, area: Rect, activity: &Activity, glyphs: &Glyphs) {
+fn draw_activity(
+    frame: &mut Frame,
+    area: Rect,
+    activity: &Activity,
+    position: LogPosition,
+    glyphs: &Glyphs,
+) {
     let title = match &activity.issue {
         Some(issue) => format!(" Activity {}{} ", glyphs.attribution, issue_label(issue)),
         None => " Activity ".to_string(),
     };
+    let offset = position.offset(activity.lines.len(), log_height(area));
     frame.render_widget(
-        Paragraph::new(log_lines(&activity.lines)).block(glyphs.block(title)),
+        Paragraph::new(log_lines(&activity.lines[offset..])).block(glyphs.block(title)),
         area,
     );
 }
@@ -864,15 +893,15 @@ pub fn draw_drill_in(frame: &mut Frame, dashboard: &DashboardFrame) {
     let view = &dashboard.view;
     let glyphs = Glyphs::for_terminal(&dashboard.capabilities);
     let area = frame.area();
-    // The Log is what a drill-in is opened for, so it is the band that keeps
-    // the remaining rows; the breakdown gives way on a short terminal.
-    let (breakdown_rows, _) = tail_heights(area.height, 9, 9);
-    let [detail, breakdown, log] = Layout::vertical([
-        Constraint::Length(HEADER_ROWS),
-        Constraint::Length(breakdown_rows),
-        Constraint::Min(3),
-    ])
-    .areas(area);
+    let Some(DrillInBands {
+        detail,
+        breakdown,
+        log,
+    }) = drill_in_bands(area)
+    else {
+        draw_minimum_size(frame, area);
+        return;
+    };
     draw_detail_header(
         frame,
         detail,
@@ -888,7 +917,36 @@ pub fn draw_drill_in(frame: &mut Frame, dashboard: &DashboardFrame) {
         routing_placeholder(&view.dashboard.header, &glyphs),
         &glyphs,
     );
-    draw_issue_log(frame, log, &view.drill_in, &glyphs);
+    draw_issue_log(frame, log, &view.drill_in, dashboard.log_position, &glyphs);
+}
+
+/// Shared by drawing and pointer input; the Log keeps the remaining rows.
+pub(crate) fn drill_in_bands(area: Rect) -> Option<DrillInBands> {
+    if area.width < MINIMUM_COLUMNS || area.height < MINIMUM_ROWS {
+        return None;
+    }
+    let (breakdown_rows, _) = tail_heights(area.height, 9, 9);
+    let [detail, breakdown, log] = Layout::vertical([
+        Constraint::Length(HEADER_ROWS),
+        Constraint::Length(breakdown_rows),
+        Constraint::Min(3),
+    ])
+    .areas(area);
+    Some(DrillInBands {
+        detail,
+        breakdown,
+        log,
+    })
+}
+
+pub(crate) struct DrillInBands {
+    pub(crate) detail: Rect,
+    pub(crate) breakdown: Rect,
+    pub(crate) log: Rect,
+}
+
+pub(crate) fn log_height(area: Rect) -> u16 {
+    area.inner(Margin::new(1, 1)).height
 }
 
 /// Join `segments` to fit `area`, giving up the least decisive ones first.
@@ -1023,9 +1081,16 @@ fn peak_context(peak: Option<&PeakContext>, glyphs: &Glyphs) -> String {
 }
 
 /// The issue's accumulated Log, across every Iteration that worked it.
-fn draw_issue_log(frame: &mut Frame, area: Rect, drill_in: &DrillIn, glyphs: &Glyphs) {
+fn draw_issue_log(
+    frame: &mut Frame,
+    area: Rect,
+    drill_in: &DrillIn,
+    position: LogPosition,
+    glyphs: &Glyphs,
+) {
+    let offset = position.offset(drill_in.log.lines.len(), log_height(area));
     frame.render_widget(
-        Paragraph::new(log_lines(&drill_in.log.lines)).block(glyphs.block(" Log ")),
+        Paragraph::new(log_lines(&drill_in.log.lines[offset..])).block(glyphs.block(" Log ")),
         area,
     );
 }

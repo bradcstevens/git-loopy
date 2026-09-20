@@ -27,7 +27,7 @@ pub use band::{
 };
 pub use event::{Event, EventPayload, InsightCapabilities, IssueRef};
 pub use input::{Admission, Input, InputQueue, Pointer, PointerAction};
-pub use navigation::{Flow, Key, Screen};
+pub use navigation::{Flow, Key, LogPosition, Screen};
 pub use render::{
     activity_ceiling, dashboard_bands, draw_dashboard, draw_drill_in, draw_frame, DashboardBands,
 };

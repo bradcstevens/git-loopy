@@ -96,19 +96,38 @@ did name rather than reporting nothing.
 
 ### Navigation
 
-`Screen`, `Key` and `DashboardSession::handle_key` are the whole model; `main.rs`
-only decides which key press means which `Key`.
+`DashboardSession` owns selection, pointer hit-testing, and view positions.
+`main.rs` only maps terminal reports to `Key` and `Pointer` inputs.
 
 | Intent | Keys |
 | --- | --- |
 | Move through the Queue | `↑`/`k`, `↓`/`j`, `Home`/`g`, `End`/`G` |
 | Open the selected issue | `Enter`, `→`, `l` |
 | Back to the Dashboard | `Esc`, `Backspace`, `←`, `h` |
+| Scroll the Queue or open Log by a page | `PageUp`, `PageDown` |
+| Scroll the Activity tail without changing focus | `Ctrl-PageUp`, `Ctrl-PageDown` |
+| Resume following the Log and Activity tails | `f` |
 | Quit | `q`, `Ctrl-C`, `Ctrl-D` |
 
 The cursor holds an **issue, not a row**. The Queue groups active before queued
 before history, so a row moves the moment an issue is activated, and a
 positional cursor would silently retarget under the operator's hands.
+
+A **single click** on a visible Queue row selects it and opens its Log; Back
+returns to the Dashboard. Headers, borders and empty space select nothing.
+No double-click timer or host clock is involved (ADR-0062).
+
+The wheel scrolls the **Queue**, **Log**, or **Activity** tail under the pointer
+without changing the selected issue or any Run facts. Log and Activity positions
+are independent: scrolling away from the bottom pauses following, and reaching
+the bottom resumes it. `f` restores following without needing a mouse.
+`Ctrl-PageUp`/`Ctrl-PageDown` also reach output before an Active issue is named,
+when there is no issue Log to open. Existing
+arrow/Home/End bindings still select issues, including while a Log is open.
+
+The Activity header still owns drag-to-resize and click-to-collapse; wheel input
+never resizes it or steals a held handle. `a` and `Shift-Up`/`Shift-Down` keep the
+same controls available without mouse reporting.
 
 ### Narrow terminals
 

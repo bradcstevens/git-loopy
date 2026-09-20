@@ -59,7 +59,7 @@ pub struct Pointer {
 
 /// The pointer gestures the Dashboard distinguishes.
 ///
-/// [`Wheel`](PointerAction::Wheel) is here precisely so that "the wheel never
+/// Wheel gestures are here precisely so that "the wheel never
 /// resizes" (ADR-0038) is a pinned behaviour of the shipped path rather than an
 /// event the caller happens not to forward: resize-by-wheel is the accidental
 /// gesture class ADR-0021's Context section is an argument against.
@@ -71,8 +71,12 @@ pub enum PointerAction {
     Drag,
     /// The button came back up.
     Release,
-    /// The wheel turned, either way.
+    /// A horizontal or directionless wheel gesture; it never resizes.
     Wheel,
+    /// Scroll towards the first row of the band under the pointer.
+    WheelUp,
+    /// Scroll towards the last row of the band under the pointer.
+    WheelDown,
 }
 
 /// What became of an offered input.
@@ -123,7 +127,8 @@ impl Delta {
 /// Whether this input's meaning depends on the terminal's current geometry.
 ///
 /// A pointer gesture is hit-tested against the laid-out bands, and an Activity
-/// sizing key is capped by the ceiling those bands leave, so both mean
+/// sizing key is capped by the ceiling those bands leave, and a page scroll
+/// depends on the height of its viewport, so these mean
 /// something different on a terminal of a different size. Nothing else in the
 /// buffer does: an Event is reduced identically at every size, and the drawn
 /// frame measures the surface it is handed.
@@ -131,7 +136,15 @@ fn depends_on_geometry(input: &Input) -> bool {
     matches!(
         input,
         Input::Pointer(_)
-            | Input::Key(Key::ToggleActivity | Key::GrowActivity | Key::ShrinkActivity)
+            | Input::Key(
+                Key::ToggleActivity
+                    | Key::GrowActivity
+                    | Key::ShrinkActivity
+                    | Key::PageUp
+                    | Key::PageDown
+                    | Key::ActivityPageUp
+                    | Key::ActivityPageDown
+            )
     )
 }
 

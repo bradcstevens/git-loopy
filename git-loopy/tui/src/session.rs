@@ -10,14 +10,16 @@
 //! That seam is what makes end-of-input, the final frame, and terminal
 //! restoration observable without a TTY, a child process, or a signal.
 
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 
 use crate::band::ActivityBand;
 use crate::event::{Event, IssueRef};
 use crate::input::{Input, Pointer, PointerAction};
-use crate::navigation::{Cursor, Flow, Key, Screen};
-use crate::render::{activity_ceiling, dashboard_bands, DashboardBands};
-use crate::state::{DashboardState, RunInputs};
+use crate::navigation::{Cursor, Flow, Key, LogPosition, Screen};
+use crate::render::{
+    activity_ceiling, dashboard_bands, drill_in_bands, log_height, DashboardBands,
+};
+use crate::state::{DashboardState, LogLine, RunInputs};
 use crate::timestamp::{Timestamp, Zone};
 use crate::view::{project_run_view, RunView, TerminalCapabilities, ViewContext};
 
@@ -35,6 +37,12 @@ pub struct DashboardFrame {
     pub screen: Screen,
     /// The issue under the cursor.
     pub selected: IssueRef,
+    /// The first Queue row visible, independent of the selected issue.
+    pub queue_offset: usize,
+    /// The drill-in Log's independent follow/scroll position.
+    pub log_position: LogPosition,
+    /// The visible Activity tail's position; never the Queue's selection.
+    pub activity_position: LogPosition,
     /// How tall the operator has asked the Activity band to be (ADR-0038).
     pub activity_band: ActivityBand,
     /// What the terminal drawing this frame can render.
@@ -98,6 +106,9 @@ pub struct DashboardSession {
     state: DashboardState,
     zone: Zone,
     cursor: Cursor,
+    queue_offset: usize,
+    log_position: LogPosition,
+    activity_position: LogPosition,
     capabilities: TerminalCapabilities,
     /// The operator's Activity band: intent, and whether it is showing.
     band: ActivityBand,
@@ -146,6 +157,9 @@ impl DashboardSession {
             state: DashboardState::new(inputs),
             zone,
             cursor: Cursor::new(drill_in),
+            queue_offset: 0,
+            log_position: LogPosition::default(),
+            activity_position: LogPosition::default(),
             capabilities: TerminalCapabilities::default(),
             band: ActivityBand::default(),
             terminal: Rect::default(),
@@ -191,7 +205,20 @@ impl DashboardSession {
         };
         self.last_instant = event.ts.or(self.last_instant);
         self.last_monotonic = event.observed_monotonic.or(self.last_monotonic);
+        let active = self.state.active_ref.clone();
+        let log_head = first_ordinal(self.state.issue_log(self.cursor.selected()));
+        let activity_head = first_ordinal(self.state.live_log());
         self.state.apply(&event);
+        self.log_position.retain(
+            log_head,
+            first_ordinal(self.state.issue_log(self.cursor.selected())),
+        );
+        if self.state.active_ref != active {
+            self.activity_position = LogPosition::default();
+        } else {
+            self.activity_position
+                .retain(activity_head, first_ordinal(self.state.live_log()));
+        }
     }
 
     /// Advance the projection's clock to `instant`.
@@ -246,6 +273,9 @@ impl DashboardSession {
             view: self.view(),
             screen: self.cursor.screen,
             selected: self.cursor.selected().clone(),
+            queue_offset: self.queue_offset,
+            log_position: self.log_position,
+            activity_position: self.activity_position,
             activity_band: self.band,
             capabilities: self.capabilities,
             diagnostics: self.diagnostics.clone(),
@@ -269,6 +299,7 @@ impl DashboardSession {
         self.capabilities.columns = Some(columns);
         self.capabilities.rows = Some(rows);
         self.grab = None;
+        self.fit_positions();
     }
 
     /// Where the four bands sit, or `None` when none of them are on screen.
@@ -302,6 +333,47 @@ impl DashboardSession {
     /// the operator will come back to.
     pub fn handle_key(&mut self, key: Key) -> Flow {
         match key {
+            Key::ActivityPageUp | Key::ActivityPageDown => {
+                if let Some(bands) = self.bands() {
+                    let height = log_height(bands.activity);
+                    let direction = if key == Key::ActivityPageUp { -1 } else { 1 };
+                    self.activity_position.scroll(
+                        direction * height as isize,
+                        self.state.live_log().len(),
+                        height,
+                    );
+                }
+                return Flow::Continue;
+            }
+            Key::Follow => {
+                self.log_position = LogPosition::default();
+                self.activity_position = LogPosition::default();
+                return Flow::Continue;
+            }
+            Key::PageUp | Key::PageDown => {
+                let direction = if key == Key::PageUp { -1 } else { 1 };
+                match self.cursor.screen {
+                    Screen::Dashboard => {
+                        if let Some(bands) = self.bands() {
+                            self.scroll_queue(
+                                direction * bands.queue_rows().height as isize,
+                                bands,
+                            );
+                        }
+                    }
+                    Screen::DrillIn => {
+                        if let Some(bands) = drill_in_bands(self.terminal) {
+                            let height = log_height(bands.log);
+                            self.log_position.scroll(
+                                direction * height as isize,
+                                self.state.issue_log(self.cursor.selected()).len(),
+                                height,
+                            );
+                        }
+                    }
+                }
+                return Flow::Continue;
+            }
             Key::ToggleActivity | Key::GrowActivity | Key::ShrinkActivity => {
                 let Some(ceiling) = self.ceiling() else {
                     return Flow::Continue;
@@ -311,6 +383,7 @@ impl DashboardSession {
                     Key::GrowActivity => self.band.grow(Some(ceiling)),
                     _ => self.band.shrink(Some(ceiling)),
                 }
+                self.fit_positions();
                 return Flow::Continue;
             }
             _ => {}
@@ -324,7 +397,26 @@ impl DashboardSession {
             .map(|row| row.issue)
             .collect();
         let screen = self.cursor.screen;
+        let selected = self.cursor.selected().clone();
         let flow = self.cursor.apply(key, &queue);
+        if self.cursor.selected() != &selected {
+            self.log_position = LogPosition::default();
+        }
+        if matches!(key, Key::Up | Key::Down | Key::First | Key::Last) {
+            if let (Some(bands), Some(index)) = (
+                self.bands(),
+                queue
+                    .iter()
+                    .position(|issue| issue == self.cursor.selected()),
+            ) {
+                let height = usize::from(bands.queue_rows().height);
+                if index < self.queue_offset {
+                    self.queue_offset = index;
+                } else if index >= self.queue_offset.saturating_add(height) {
+                    self.queue_offset = index.saturating_sub(height.saturating_sub(1));
+                }
+            }
+        }
         if self.cursor.screen != screen {
             // A handle taken off screen ends its drag. `Open` needs no mouse,
             // so it can arrive with the button still held; without this the
@@ -340,12 +432,21 @@ impl DashboardSession {
     /// The **drag → click → keys** ladder's first two rungs (ADR-0038). A press
     /// on the Activity band's header row takes the handle; a move sizes the
     /// band; a release lets go, and a release that never moved is a *click*,
-    /// which toggles **Collapsed**. The wheel is deliberately inert.
+    /// which toggles **Collapsed**. A Queue row press selects and opens its Log.
     ///
     /// Every event between the press and the release belongs to the handle,
     /// whatever it is over: that is what keeps a drag wandering down across the
     /// Queue from moving the cursor instead of the band.
     pub fn handle_pointer(&mut self, pointer: Pointer) -> Flow {
+        if matches!(
+            pointer.action,
+            PointerAction::WheelUp | PointerAction::WheelDown
+        ) {
+            if self.grab.is_none() {
+                self.scroll_at(pointer);
+            }
+            return Flow::Continue;
+        }
         let (Some(bands), Some(ceiling)) = (self.bands(), self.ceiling()) else {
             // Nothing to grab, and nothing a held grab could still mean.
             self.grab = None;
@@ -353,8 +454,11 @@ impl DashboardSession {
         };
         match pointer.action {
             // Never resizes, at either end of a drag or outside one.
-            PointerAction::Wheel => {}
+            PointerAction::Wheel | PointerAction::WheelUp | PointerAction::WheelDown => {}
             PointerAction::Press => {
+                if self.grab.is_some() {
+                    return Flow::Continue;
+                }
                 self.grab = bands
                     .hits_activity_handle(pointer.column, pointer.row)
                     .then_some(Grab {
@@ -362,6 +466,20 @@ impl DashboardSession {
                         height: self.band.on_screen_height(Some(ceiling)),
                         moved: false,
                     });
+                let rows = bands.queue_rows();
+                if rows.contains(Position::new(pointer.column, pointer.row)) {
+                    let view = self.view();
+                    let queue = &view.dashboard.queue.rows;
+                    let offset = self
+                        .queue_offset
+                        .min(queue.len().saturating_sub(usize::from(rows.height)));
+                    if let Some(row) = queue.get(offset + usize::from(pointer.row - rows.y)) {
+                        if self.cursor.selected() != &row.issue {
+                            self.log_position = LogPosition::default();
+                        }
+                        self.cursor.open(row.issue.clone());
+                    }
+                }
             }
             PointerAction::Drag => {
                 if let Some(grab) = self.grab {
@@ -386,8 +504,76 @@ impl DashboardSession {
                 }
             }
         }
+        self.fit_positions();
         Flow::Continue
     }
+
+    fn scroll_at(&mut self, pointer: Pointer) {
+        let point = Position::new(pointer.column, pointer.row);
+        let delta = if pointer.action == PointerAction::WheelUp {
+            -1
+        } else {
+            1
+        };
+        match self.cursor.screen {
+            Screen::Dashboard => {
+                let Some(bands) = self.bands() else { return };
+                if bands.queue.contains(point) {
+                    self.scroll_queue(delta, bands);
+                } else if bands.activity.contains(point) && !bands.activity_handle().contains(point)
+                {
+                    let count = self.view().dashboard.activity.lines.len();
+                    self.activity_position
+                        .scroll(delta, count, log_height(bands.activity));
+                }
+            }
+            Screen::DrillIn => {
+                let Some(bands) = drill_in_bands(self.terminal) else {
+                    return;
+                };
+                if bands.log.contains(point) {
+                    let count = self.view().drill_in.log.lines.len();
+                    self.log_position
+                        .scroll(delta, count, log_height(bands.log));
+                }
+            }
+        }
+    }
+
+    fn scroll_queue(&mut self, delta: isize, bands: DashboardBands) {
+        let height = bands.queue_rows().height;
+        if height > 0 {
+            let count = self.view().dashboard.queue.rows.len();
+            let bottom = count.saturating_sub(usize::from(height));
+            self.queue_offset = self
+                .queue_offset
+                .min(bottom)
+                .saturating_add_signed(delta)
+                .min(bottom);
+        }
+    }
+
+    fn fit_positions(&mut self) {
+        if let Some(bands) = drill_in_bands(self.terminal) {
+            self.log_position.scroll(
+                0,
+                self.state.issue_log(self.cursor.selected()).len(),
+                log_height(bands.log),
+            );
+        }
+        if let Some(bands) = dashboard_bands(self.terminal, &self.band) {
+            self.activity_position.scroll(
+                0,
+                self.state.live_log().len(),
+                log_height(bands.activity),
+            );
+            self.scroll_queue(0, bands);
+        }
+    }
+}
+
+fn first_ordinal(lines: &[LogLine]) -> Option<usize> {
+    lines.first().map(|line| line.ordinal)
 }
 
 /// Drive one Run to the end of its input.
