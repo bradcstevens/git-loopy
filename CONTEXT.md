@@ -1482,6 +1482,29 @@ the ordering constraint is the **Integration backlog**.
 _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap**, or
 **Rolling dispatch** instead.
 
+### Live routing (accepted design)
+
+These terms complete the vocabulary of
+[ADR-0057](docs/adr/0057-live-evidence-guides-per-issue-routing.md). The existing
+**Static route** and **Route selector** entries above describe their current
+implementation; this decision record does not establish delivery acceptance.
+
+**Dynamic routing**:
+Evidence-grounded choice of an issue's model, reasoning effort, and context tier,
+aimed at the shortest predicted time to an acceptance-passing result.
+_Avoid_: Calibration (an experiment), auto (the harness's own model choice).
+
+**Routing proposal**:
+A nonbinding recommendation for one eligible **Pool** candidate, together with the
+evidence and input identity it depends on. It is revalidated or superseded before
+**Pickup** reaches a **Routing resolution**, and reserves no work.
+_Avoid_: Routing resolution (binding), Lease (authority), assignment.
+
+**Route label**:
+The observational tracker label representing an issue's latest final **Routing
+resolution**. It is a projection, never authority to choose, override, or pin a route.
+_Avoid_: model pin, routing input.
+
 ## Relationships
 
 - A **Skill baseline** seeds a **Skill policy**; later **Skill catalog** changes do not
