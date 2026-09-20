@@ -731,9 +731,9 @@ class RollingScheduler:
         same scheduler turn tie-break by ascending issue number (§4.3-4.4).
 
         Args:
-            published: Whether this is Parallel progress. Resets the shared
-                consecutive-Strike count and cancels a pending abort drain
-                (§7.4, §7.7).
+            published: Whether this is Parallel progress. The driver feeds
+                that success to the shared Abandonment guard, then reconciles
+                its drain through the guard methods.
             reason: The terminal disposition for an unpublished contribution.
                 Defaults to :data:`REASON_SERIAL_FALLBACK`, the disposition
                 §4.14 gives recovery exhaustion — the only way an *admitted*
@@ -746,10 +746,7 @@ class RollingScheduler:
             self._admitted.remove(contribution)
         terminal = REASON_PUBLISHED if published else (reason or REASON_SERIAL_FALLBACK)
         self._finalize(contribution, reason=terminal)
-        if published and not self._stop_latched:
-            # §7.7: a green publication during an abort drain cancels it.
-            self._abort_latched = False
-        elif terminal == REASON_SERIAL_FALLBACK:
+        if terminal == REASON_SERIAL_FALLBACK:
             # §5.2: a K<=3 Integration fallback requests serial service
             # immediately, from already-validated Run-ledger state.
             self.request_serial(ref=contribution.ref, reason=REASON_SERIAL_FALLBACK)
@@ -794,18 +791,22 @@ class RollingScheduler:
         """Whether validated serial demand has stopped refill (#219 §5.3)."""
         return self._serial_latched
 
-    def strike_limit_reached(self) -> bool:
-        """Latch the drain-confirmed abort (#219 §7.7).
+    def abandonment_guard_reached(self) -> bool:
+        """Stop refill while started work drains (ADR-0061).
 
-        Stops new reservations and refill, but cancels nothing: every started
-        contribution and **Integration** operation finishes, and a later green
-        publication that resets **Strike** cancels the pending abort outright.
-        The Run exits stuck only at full quiescence with the limit still
-        reached, which is why this is a latch rather than an immediate exit.
+        The driver reads the shared guard; the scheduler never infers a reset
+        from contribution accounting or Strike totals.
         """
         if self._abort_latched:
             return False
         self._abort_latched = True
+        return True
+
+    def reset_abandonment_guard(self) -> bool:
+        """Lift only the guard's drain, never an operator Stop."""
+        if not self._abort_latched or self._stop_latched:
+            return False
+        self._abort_latched = False
         return True
 
     def request_stop_drain(self) -> None:

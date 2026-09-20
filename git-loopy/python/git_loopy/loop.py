@@ -11,7 +11,7 @@ together into a working ``git-loopy`` invocation. It owns:
   logger).
 * The per-run :class:`~git_loopy.ui.RunSummary` and
   :class:`~git_loopy.ui.Renderer`.
-* The :class:`~git_loopy.wrapper.NMTStrikeStateMachine`.
+* The per-issue Strike ledger and Run-scoped Abandonment guard.
 * The :class:`~git_loopy.sources.IssueSource` — the per-invocation
   backend that discovers AFK-ready work and applies the
   source-specific completion backstop. Constructed from
@@ -290,7 +290,8 @@ from git_loopy.task_type_writer import TaskTypeLabelClient
 from git_loopy.telemetry import otel as telemetry
 from git_loopy.ui import Renderer, RunSummary, get_console
 from git_loopy.wrapper import (
-    NMTStrikeStateMachine,
+    AbandonmentGuard,
+    StrikeLedger,
     checkpoint_message,
     did_iteration_make_progress,
     exit_code_for,
@@ -1326,15 +1327,16 @@ class _Loop:
         #: latches one. Held beside the two gesture flags because the ladder is
         #: a fact about the *Run*, not about the operator's input: the rolling
         #: driver latches the same ladder for a spent iteration cap and for a
-        #: drain-confirmed **Strike** abort, neither of which is a gesture.
+        #: drain-confirmed **Abandonment guard**, neither of which is a gesture.
         self._wind_down_stage: str | None = None
         #: The cause the announced rung was latched for. Held beside the rung
-        #: because only a ``strike_limit`` drain is revocable, so the clearing
+        #: because only an ``abandonment_guard`` drain is revocable, so the clearing
         #: Event has to know *which* cause the Run is currently draining for.
         self._wind_down_cause: str | None = None
         self._active_agent_task: asyncio.Task[object] | None = None
-        self._strike_machine = NMTStrikeStateMachine(
-            max_strikes=config.max_nmt_strikes
+        self._strike_ledger = StrikeLedger()
+        self._abandonment_guard = AbandonmentGuard(
+            limit=config.max_consecutive_abandonments
         )
         # The last Iteration's **Session outcome** (#403). Held as the record
         # rather than as the line it prints, because the per-issue attempt
@@ -1549,7 +1551,7 @@ class _Loop:
         ordered, non-decreasing ladder and ``cancel`` is legal only with
         ``operator_stop``, so a descent or a mis-caused cancellation is refused
         *here* rather than left to each announcing site to remember. The rolling
-        driver announces the iteration cap and the drain-confirmed Strike abort
+        driver announces the iteration cap and the drain-confirmed Abandonment guard
         from paths that never consult the operator's own latch, so without this
         a Run cancelled while either was pending would tell a Dashboard it had
         climbed back down to ``drain``.
@@ -1586,7 +1588,7 @@ class _Loop:
 
         The other half of :meth:`_announce_wind_down`, and here for the same
         reason: the legality rule belongs to the seam, not to the one call site
-        that happens to observe the transition today. Only ``strike_limit`` is
+        that happens to observe the transition today. Only ``abandonment_guard`` is
         revocable — a contribution publishing green makes the abort condition
         false — while an operator Stop and a spent iteration cap are durable,
         so neither may ever reach this Event (ADR-0043's asymmetry).
@@ -2165,7 +2167,7 @@ class _Loop:
             #    Checkpoint, a push is NOT Strike progress (it creates no commit).
             self._maybe_push(iter_num, new_commits, checkpoint_sha)
 
-            # 10) Strike state machine + emit appropriate events.
+            # 10) Observe the ending, charge its issue, then read the shared guard.
             commits_in_iter = len(new_commits)
             checkpoints_in_iter = int(checkpoint_sha is not None)
             made_progress = did_iteration_make_progress(
@@ -2193,20 +2195,16 @@ class _Loop:
                 content_filtered=session_watch.content_filtered,
                 no_more_tasks=session_watch.no_more_tasks,
             )
-            # Recorded *before* the Strike is read rather than after (#413): the
-            # ending is now what charges the ceiling — through the **Attempt
-            # lifecycle** it feeds — so a machine read first would report the
-            # count as it stood before this Iteration's own defeat.
+            # An ending may abandon an issue even after it committed (a timeout,
+            # for example). Preserve that Attempt/Strike fact, then let the
+            # observed Closed/advanced success reset only the Run's guard.
             if not operator_cancelled:
                 self._record_session_outcome(
                     active.ref, session_ending, iter_num=iter_num
                 )
-                outcome = self._strike_machine.tick(
-                    commits_in_iter=commits_in_iter,
-                    auto_closures_in_iter=auto_closures,
-                    checkpoints_in_iter=checkpoints_in_iter,
-                    pr_advances_in_iter=pr_advances,
-                )
+                if made_progress:
+                    self._abandonment_guard.record_progress()
+                outcome = "aborted" if self._abandonment_guard.reached else "continue"
             else:
                 outcome = "continue"
 
@@ -3351,8 +3349,8 @@ class _Loop:
         condition restated at this call site could disagree with the ones that
         matter.
 
-        **This is also where the Run's one Strike is charged** (#413). The
-        ceiling counts the issues a Run has given up on, and the moment an issue
+        **This is also where the issue's one Strike is charged** (#413). The
+        ledger records issues the Run has given up on, and the moment an issue
         is given up on is the moment its lifecycle reaches **skipped** — so the
         transition is the charge, and "exactly one Strike per skipped issue"
         falls out of the lifecycle's own monotonicity rather than out of anyone
@@ -3379,23 +3377,22 @@ class _Loop:
         record emitted anyway would show an operator a warning with an unchanged
         count beside it.
         """
-        outcome = self._strike_machine.tick(
-            commits_in_iter=0,
-            auto_closures_in_iter=0,
-            issues_skipped_in_iter=1,
-        )
+        self._strike_ledger.record_abandonment(ref)
+        self._abandonment_guard.record_abandonment()
         self._diag.warning(
-            "issue #%s is out of attempts this Run; strike %d of %d",
+            "issue #%s is out of attempts this Run; Strike recorded "
+            "(%d total); Abandonment guard %d of %d consecutive",
             ref,
-            self._strike_machine.strikes,
-            self._config.max_nmt_strikes,
+            self._strike_ledger.strikes,
+            self._abandonment_guard.consecutive,
+            self._abandonment_guard.limit,
         )
         self._emit(
             events_module.WRAPPER_STRIKE,
             iter_num=iter_num,
-            strikes=self._strike_machine.strikes,
-            max_strikes=self._config.max_nmt_strikes,
-            outcome=("abort" if outcome == "aborted" else "warn"),
+            issue=ref,
+            strikes=self._strike_ledger.strikes,
+            outcome="warn",
         )
 
     def _finish_iteration(
@@ -3408,7 +3405,7 @@ class _Loop:
         """Emit and persist one Orchestrator-owned normalized Iteration rollup."""
         payload = self._rollup.finish(
             iter_num=iter_num,
-            strikes=self._strike_machine.strikes,
+            strikes=self._strike_ledger.strikes,
             outcome=outcome,
             advanced_issues=advanced_issues,
         )
@@ -3472,7 +3469,7 @@ class _Loop:
             ),
             parallel_capabilities=events_module.python_parallel_capabilities(),
             max_iterations=self._config.max_iterations,
-            max_nmt_strikes=self._config.max_nmt_strikes,
+            max_consecutive_abandonments=self._config.max_consecutive_abandonments,
             # #410: what this Run parsed, gate-checked.
             **run_start_payload(self._config),
         )
@@ -3519,7 +3516,7 @@ class _Loop:
                         # #413: there *was* work and none of it could be taken.
                         # Distinct from `empty_pool` (which exits 0) because a
                         # Run that gave up is not a Run that finished, and
-                        # distinct from `stuck` because the ceiling was never
+                        # distinct from the guard because its limit was never
                         # reached — a single defeated issue ends a Run whose
                         # Pool held only that one. #541 joins them with the Pool
                         # that could not be read at all, for the same reason:
@@ -3529,10 +3526,10 @@ class _Loop:
                         break
                     if outcome == "aborted":
                         self._announce_wind_down(
-                            cause="strike_limit", stage="drain", draining=0
+                            cause="abandonment_guard", stage="drain", draining=0
                         )
-                        outcome_label = "stuck"
-                        exit_code = exit_code_for("stuck")
+                        outcome_label = "abandonment_guard"
+                        exit_code = exit_code_for("abandonment_guard")
                         break
             except Exception as exc:
                 # An unhandled crash inside an iteration MUST surface in
@@ -4132,7 +4129,7 @@ class _ParallelLoop:
             ),
             "parallel_capabilities": events_module.python_parallel_capabilities(),
             "max_iterations": self._config.max_iterations,
-            "max_nmt_strikes": self._config.max_nmt_strikes,
+            "max_consecutive_abandonments": self._config.max_consecutive_abandonments,
             # #410: what this Run parsed, gate-checked.
             **run_start_payload(self._config),
             # #304: only a Parallel-mode Run carries these, so a serial Run's
@@ -4284,7 +4281,10 @@ class _ParallelLoop:
                 reason = _run_reason_for(outcome)
                 return reason, exit_code_for(reason), iter_num
             if outcome == "aborted":
-                return "stuck", exit_code_for("stuck"), iter_num
+                self._serial._announce_wind_down(
+                    cause="abandonment_guard", stage="drain", draining=0
+                )
+                return "abandonment_guard", exit_code_for("abandonment_guard"), iter_num
 
     async def _drive_rolling(self) -> tuple[str, int, int]:
         """Drive Rolling dispatch to its terminal outcome (#219, ADR-0020).
@@ -4376,7 +4376,7 @@ class _ParallelLoop:
                 # Lane) is left latched but un-run — a serial Iteration is NEW
                 # work, and a drain finishes started work rather than starting
                 # more — and the very next idle-check below reports
-                # `iteration_cap` / `stuck` instead.
+                # `iteration_cap` / `abandonment_guard` instead.
                 if (
                     scheduler.remaining_units != 0
                     and not scheduler.abort_latched
@@ -4400,18 +4400,13 @@ class _ParallelLoop:
                             scheduler._units_spent,
                         )
                     if outcome == "aborted" and not scheduler.stop_latched:
-                        # §7.4, §7.7: the Strike machine is shared, so a serial
+                        # The Abandonment guard is shared, so a serial
                         # Iteration reaching its limit latches the same
                         # drain-confirmed abort a finalized Lane contribution
-                        # does (`_apply_strike_reaction`). Discarding it here
+                        # does. Discarding it here
                         # let a Parallel-mode Run emit the abort Event and then
                         # grant itself serial Iterations forever.
-                        if scheduler.strike_limit_reached():
-                            self._serial._announce_wind_down(
-                                cause="strike_limit",
-                                stage="drain",
-                                draining=scheduler.open_count,
-                            )
+                        self._sync_abandonment_guard()
                     if outcome in _SERIAL_DEFEATED_OUTCOMES:
                         # #413, and terminal *here* rather than latched for the
                         # idle-check, because the scheduler grants a serial turn
@@ -4467,7 +4462,7 @@ class _ParallelLoop:
                         scheduler._units_spent,
                     )
                 if scheduler.abort_latched and scheduler.quiescent:
-                    return "stuck", exit_code_for("stuck"), scheduler._units_spent
+                    return "abandonment_guard", exit_code_for("abandonment_guard"), scheduler._units_spent
                 if scheduler.remaining_units == 0:
                     self._announce_iteration_cap(scheduler.open_count)
                     if scheduler.quiescent:
@@ -4506,7 +4501,8 @@ class _ParallelLoop:
                                 scheduler._units_spent,
                             )
                         if outcome == "aborted":
-                            return "stuck", exit_code_for("stuck"), scheduler._units_spent
+                            self._sync_abandonment_guard()
+                            return "abandonment_guard", exit_code_for("abandonment_guard"), scheduler._units_spent
                         if outcome == "preflight_failed":
                             # #541, and the one place where the Iteration's
                             # refusal must NOT become the Run's answer. This
@@ -5106,6 +5102,7 @@ class _ParallelLoop:
         # loud (#408): a Lane that stalled silently is evidence about the
         # *issue*, and the Pickup that acts on it may well be a serial one.
         self._serial._observe_session_ending(lane_work.item.ref, lane_outcome)
+        self._sync_abandonment_guard()
         _report_session_outcome(
             self._diag, ref=lane_work.item.ref, record=lane_outcome
         )
@@ -5243,6 +5240,7 @@ class _ParallelLoop:
             ending = outcome.ending
             assert ending is not None
             self._serial._observe_session_ending(lane_work.item.ref, ending)
+            self._sync_abandonment_guard()
             _report_session_outcome(
                 self._diag, ref=lane_work.item.ref, record=ending
             )
@@ -5747,7 +5745,6 @@ class _ParallelLoop:
         assert self._scheduler is not None
         async with self._integration_lock:
             latched_before = self._scheduler.serial_latched
-            abort_latched_before = self._scheduler.abort_latched
             lane_work = self._lane_work.get(contribution.contribution_id)
             if lane_work is None:  # pragma: no cover - defensive
                 self._diag.error(
@@ -5760,11 +5757,9 @@ class _ParallelLoop:
             newly_admitted = self._scheduler.finalize(
                 contribution, published=published
             )
-            if abort_latched_before and not self._scheduler.abort_latched:
-                self._serial._announce_wind_down_lifted(
-                    cause="strike_limit",
-                    draining=self._scheduler.open_count,
-                )
+            if published:
+                self._serial._abandonment_guard.record_progress()
+            self._sync_abandonment_guard()
             if latched_before != self._scheduler.serial_latched:
                 # §5.2: an unpublished contribution requests serial service of
                 # its own. Reported on the same terms as the peek's latch —
@@ -5780,8 +5775,8 @@ class _ParallelLoop:
                     reason=rolling_scheduler.REASON_SERIAL_FALLBACK,
                     serial_required=None,
                 )
-            # A green publication is the only thing that can lift a Strike
-            # drain; it must not immediately re-latch from stale Strike state.
+            # Publication reaches advanced/Closed; private Lane progress did
+            # not. Only the shared guard, never cumulative Strikes, drives refill.
             self._finalize_contribution(contribution, published=published)
         # §4.4: this finalize freed an **Integration backlog** slot, lifting
         # backpressure, and each contribution it admitted from the parked FIFO
@@ -5914,8 +5909,7 @@ class _ParallelLoop:
         committed; only a published one is progress (``advanced``, or
         ``closed`` once its ``wrapper.auto_close`` lands).
         """
-        if not published:
-            self._apply_strike_reaction(contribution)
+        self._sync_abandonment_guard()
         self._open_lane_contributions.pop(contribution.contribution_id, None)
         lane_work = self._lane_work.get(contribution.contribution_id)
         if lane_work is not None and lane_work.reclaimed:
@@ -5926,7 +5920,7 @@ class _ParallelLoop:
         try:
             rollup = self._serial._rollup.finish(
                 iter_num=scope.iter_num,
-                strikes=self._serial._strike_machine.strikes,
+                strikes=self._serial._strike_ledger.strikes,
                 advanced_issues=(contribution.ref,) if published else (),
                 lane_issue=contribution.ref,
             )
@@ -5963,35 +5957,19 @@ class _ParallelLoop:
                 contribution.ref, exc,
             )
 
-    def _apply_strike_reaction(
-        self, contribution: rolling_scheduler.Contribution
-    ) -> None:
-        """Latch the scheduler's abort if the shared **Strike** ceiling is spent.
-
-        #219 §7.4, §7.6 had this *tick* the shared machine once per finalized
-        contribution, because a contribution that terminated unpublished was
-        itself a Strike. Since #413 the ceiling counts the issues the Run has
-        **skipped**, and those are charged where they happen — at the ending
-        that defeats the issue (:meth:`_Loop._observe_session_ending`), which a
-        Lane reaches as surely as a serial Iteration does. So nothing is charged
-        here and nothing is announced here; what is left is §7.7's
-        drain-confirmed abort, which still belongs at contribution finalization
-        because that is the moment the scheduler can act on it.
-
-        Reading the machine rather than a return value is deliberate: the Lane
-        whose ending crossed the ceiling and the contribution that finalizes it
-        are different moments, and a latch keyed to a value passed between them
-        would go missing whenever they were not the same one.
-        """
+    def _sync_abandonment_guard(self) -> None:
+        """Reconcile refill with the one guard shared by both execution modes."""
         assert self._scheduler is not None
-        if (
-            self._serial._strike_machine.outcome == "aborted"
-            and self._scheduler.strike_limit_reached()
-        ):
-            self._serial._announce_wind_down(
-                cause="strike_limit",
-                stage="drain",
-                draining=self._scheduler.open_count,
+        if self._serial._abandonment_guard.reached:
+            if self._scheduler.abandonment_guard_reached():
+                self._serial._announce_wind_down(
+                    cause="abandonment_guard",
+                    stage="drain",
+                    draining=self._scheduler.open_count,
+                )
+        elif self._scheduler.reset_abandonment_guard():
+            self._serial._announce_wind_down_lifted(
+                cause="abandonment_guard", draining=self._scheduler.open_count
             )
 
     async def _integrate_lane(

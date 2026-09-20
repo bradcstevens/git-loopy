@@ -24,13 +24,34 @@ def test_run_config_defaults_are_safe() -> None:
     assert cfg.reasoning_effort is None
     assert cfg.issue_source == "github"
     assert cfg.max_iterations == 0
-    assert cfg.max_nmt_strikes == 3
+    assert cfg.max_consecutive_abandonments == 3
+    assert cfg.max_nmt_strikes is None
     assert cfg.deny_tools == frozenset()
     assert cfg.deny_skills == frozenset()
     assert cfg.verbosity == 0
     assert cfg.render_reasoning is True
     assert cfg.otel_enabled is False
     assert cfg.send_timeout_seconds == 7200.0
+
+
+def test_run_config_exposes_the_canonical_abandonment_guard() -> None:
+    """The Run-facing guard is an integer and defaults to three abandonments."""
+    cfg = RunConfig()
+
+    assert cfg.max_consecutive_abandonments == 3
+
+
+def test_run_config_normalizes_the_legacy_guard_constructor_alias() -> None:
+    """Existing constructor callers still configure the canonical guard."""
+    cfg = RunConfig(max_nmt_strikes=5)
+
+    assert cfg.max_consecutive_abandonments == 5
+    assert cfg.max_nmt_strikes == 5
+
+
+def test_run_config_rejects_contradictory_guard_constructor_aliases() -> None:
+    with pytest.raises(ValueError, match="cannot disagree"):
+        RunConfig(max_consecutive_abandonments=5, max_nmt_strikes=4)
 
 
 def test_run_config_send_timeout_default_matches_constant() -> None:
@@ -92,6 +113,7 @@ def test_run_config_satisfies_session_config_protocol() -> None:
     [
         ("issue_source", "gitlab"),
         ("max_iterations", -1),
+        ("max_consecutive_abandonments", 0),
         ("max_nmt_strikes", 0),
         ("send_timeout_seconds", 0),
         ("send_timeout_seconds", -1.0),

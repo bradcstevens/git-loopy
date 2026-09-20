@@ -448,6 +448,7 @@ CONTRIBUTION_TERMINAL_REASONS: tuple[str, ...] = (
 WIND_DOWN_CAUSES: tuple[str, ...] = (
     "operator_stop",
     "strike_limit",
+    "abandonment_guard",
     "iteration_cap",
 )
 
@@ -458,17 +459,16 @@ WIND_DOWN_CAUSES: tuple[str, ...] = (
 WIND_DOWN_STAGES: tuple[str, ...] = ("drain", "cancel")
 
 # Only the operator's own Stop may reach the cancel rung. Nothing cancels a
-# spent iteration cap or a Strike drain — both are latches the Run entered on
+# spent iteration cap or an Abandonment guard drain — both are latches the Run entered on
 # its own, and neither has a second gesture behind it to escalate.
 WIND_DOWN_CANCEL_CAUSE = "operator_stop"
 
-# The only revocable cause, and therefore the only one
-# :data:`WRAPPER_STOP_LIFTED` may name: a contribution publishing green during
-# an abort drain makes the Strike condition false and un-latches it. An operator
+# Revocable causes (including historical Strike drains): success during an
+# Abandonment guard drain resets the shared guard and un-latches it. An operator
 # Stop and an iteration cap are durable, and a third ``stage`` value for
 # "cleared" was refused because a cleared operator Stop is representable
 # nonsense.
-WIND_DOWN_LIFTABLE_CAUSES: tuple[str, ...] = ("strike_limit",)
+WIND_DOWN_LIFTABLE_CAUSES: tuple[str, ...] = ("strike_limit", "abandonment_guard")
 
 # Calibration events (#371, ADR-0027). A **Calibration** is not a **Run** and a
 # **Trial** is not an **Iteration**, so its records get a type prefix of their own

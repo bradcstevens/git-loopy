@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.9 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.10 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -539,9 +539,15 @@ Runner that binds one issue per Iteration can have an **Attempt lifecycle** to c
   (§14.3), charged once, at the ending that defeats it. An Iteration that made no progress MUST
   NOT record a Strike of its own, and progress MUST NOT reset the counter: the lifecycle is
   monotonic, so an issue an advance rescued was never given up on and an issue that was is not
-  un-given-up-on by another issue's advance. `GIT_LOOPY_MAX_NMT_STRIKES` (default `3`) is
-  therefore *how many issues this Run may abandon before it stops*, and reaching it ends the Run
-  with exit `1` (§10, `stuck`).
+  un-given-up-on by another issue's advance. No accumulation of Strikes ends a Run.
+  ADR-0061 amends ADR-0041: a separate **Abandonment guard** counts consecutive abandonments
+  and resets whenever any issue reaches **Closed** or **advanced**. Its limit,
+  `GIT_LOOPY_MAX_CONSECUTIVE_ABANDONMENTS`, defaults to `3`. Reaching it stops refill and new
+  Iterations; started work drains. Success during that drain resets the same guard and permits
+  refill again unless an operator Stop or Iteration cap independently forbids it. If the guard
+  is still reached at quiescence, the Run ends with exit `1`, reason `abandonment_guard`.
+  A Lane advances only when Integration publishes it: private commits alone do not reset the
+  guard. Failed attempts, routing refusals and Checkpoints do not reset or increment it.
 - **A Runner without a Pickup** MUST keep the original accounting: an Iteration that made no
   progress records a Strike, `GIT_LOOPY_MAX_NMT_STRIKES` (default `3`) **consecutive**
   no-progress Iterations end the Run with exit `1` (§10, `stuck`), and progress resets the
@@ -551,6 +557,9 @@ Runner that binds one issue per Iteration can have an **Attempt lifecycle** to c
 MAY carry a `distributions` selector naming the members whose accounting it describes, and a case
 carrying none is family-wide. An adapter MUST run the cases naming its own distribution and MUST
 NOT run the others.
+Schema `3` adds Python-only guard limits, consecutive counts and issue statuses; the
+shell and PowerShell cases remain unchanged. `max_nmt_strikes` and
+`GIT_LOOPY_MAX_NMT_STRIKES` remain Python compatibility aliases for the guard, not a Strike ceiling.
 
 ## 7. Checkpoint (phase 1, MUST)
 
@@ -583,7 +592,8 @@ error (exit `2`).
 | ---- | -------------------- | -------------------------------------------------------------------- |
 | `0`  | Clean — queue empty  | An Iteration's collection (§2) finds the Pool empty.                 |
 | `0`  | Clean — cap reached  | The optional iteration cap `N` (§9) is reached.                      |
-| `1`  | Aborted — stuck      | The `GIT_LOOPY_MAX_NMT_STRIKES` Strike ceiling is spent (§6).        |
+| `1`  | Aborted — stuck      | A member without a Pickup spent its consecutive unproductive-Iteration ceiling (§6). |
+| `1`  | Aborted — abandonment guard | Python reached its consecutive-abandonment guard and started work has drained (§6). |
 | `1`  | Aborted — all skipped | A Pickup found the Pool non-empty and could bind none of it (§14.3). |
 | `1`  | Waiting — all blocked | Every Pickup refusal proved an open native blocker (§3.3.1).         |
 | `1`  | Aborted — preflight  | A required precondition failed before the first Iteration (§1), the Pool could not be read (§2.2), or an unread refusal left it unresolved (§3.3.1). |
@@ -624,7 +634,7 @@ The Stop itself takes **two stages** (ADR-0043), driven by the same gesture repe
 1. The first latches a wind-down. Refill, new **Lane** reservations and new **Iterations** stop at
    once; every started contribution and **Integration** operation runs to completion and
    integrates. The latch is durable — a later publication MUST NOT resume refill, which is what
-   distinguishes it from the drain a spent **Strike** ceiling latches.
+   distinguishes it from the revocable **Abandonment guard** drain.
 2. The second cancels the agent sessions still running, **salvaging** each one's workspace as a
    **Checkpoint** first. Cancellation is *requested*, never awaited.
 
@@ -649,6 +659,7 @@ built-in default** (config tiers arrive in phase 3; phase 1 honours CLI + env + 
 | `GIT_LOOPY_REASONING_EFFORT`   | 1     | `max` for the built-in model | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; omitted and explicit `none` are distinct. A recognized model-id suffix is peeled into this field, and selecting another model without an effort leaves it omitted so the backend chooses. |
 | `GIT_LOOPY_ISSUE_SOURCE`       | 1     | `github`         | `github` or `prds` (legacy local-markdown mode).              |
 | `GIT_LOOPY_MAX_NMT_STRIKES`    | 1     | `3`              | Consecutive no-progress Iterations before abort.              |
+| `GIT_LOOPY_MAX_CONSECUTIVE_ABANDONMENTS` | Python | `3` | Abandonment guard, reset by Closed/advanced; not a Strike ceiling. Python accepts the preceding variable as a legacy alias. |
 | `GIT_LOOPY_INCLUDE_PRS`        | 3     | off              | `1`/`true`/`yes` to also advance `ready-for-agent` PRs.       |
 | `GIT_LOOPY_INTERACTIVE`        | 2     | auto (TTY)       | MUST be honoured only by a member whose declared parallel capability manifest exposes this operator choice; Python still ignores it because terminal selection is structural: a TTY detaches the worker and keeps the parent as the attach client, while non-TTY stays on the direct line printer. |
 | `GIT_LOOPY_MODEL_SELECT`       | 3     | off              | `1` enters the startup model picker (**ModelSelectionMode**). |
@@ -698,13 +709,16 @@ failures only: they emit no special Event and do not change the worker's own Run
 
 Contract-2.4 puts **Wind-down** on the wire. A Run emits
 `wrapper.stop.requested` when it latches a drain or escalates it to cancellation:
-`cause` is one of `operator_stop`, `strike_limit`, or `iteration_cap`; `stage` is
+`cause` is one of `operator_stop`, `strike_limit`, `abandonment_guard`, or `iteration_cap`; `stage` is
 the ordered ladder `drain`, then `cancel`; and `draining` is the observed number
 of contributions still in flight (`0` for a serial Run). Only `operator_stop` may
 emit `cancel`. The Event records the true latch, not an input gesture, so each
-transition emits once and a third Stop gesture emits nothing. A green publication
-may clear only a Strike drain; that transition emits `wrapper.stop.lifted` with
-`cause: "strike_limit"` and its observed `draining` count. Dashboard consumers
+transition emits once and a third Stop gesture emits nothing. Closed/advanced success
+may clear only an Abandonment guard drain; that transition emits `wrapper.stop.lifted` with
+`cause: "abandonment_guard"` and its observed `draining` count. `strike_limit` remains in the
+vocabulary for historical traces, not as a spelling of the new guard. Python Run-start records
+carry `max_consecutive_abandonments`, not `max_nmt_strikes`; their `wrapper.strike` records
+identify the issue and cumulative accounting, with no `max_strikes` or abort outcome. Dashboard consumers
 derive their stopped state from these Events: a trace that predates them is
 unknown, and `wrapper.run.end` with `outcome: "interrupted"` is not a Stop.
 Note the shape: each is dotted `wrapper.<noun>.<verb>`, with underscores used only *within* a

@@ -692,8 +692,8 @@ uv run --project git-loopy/python git-loopy --model gpt-5.6-sol --reasoning-effo
 # startup — off by default (equivalently set GIT_LOOPY_MODEL_SELECT=1).
 uv run --project git-loopy/python git-loopy --select-model
 
-# Tolerate more no-progress iterations before aborting (default: 3).
-GIT_LOOPY_MAX_NMT_STRIKES=5 uv run --project git-loopy/python git-loopy
+# Stop only after more consecutive abandoned issues (default: 3).
+GIT_LOOPY_MAX_CONSECUTIVE_ABANDONMENTS=5 uv run --project git-loopy/python git-loopy
 
 # Deprecated: deny a tool or skill at the SDK permission gate (repeatable,
 # additive with GIT_LOOPY_DENY_TOOLS / the deprecated GIT_LOOPY_DENY_SKILLS).
@@ -781,7 +781,7 @@ reclaims nothing, and never reaches your issue tracker. It needs only `git`.
 | --------------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Clean — Pool empty    | `0`  | Start of an Iteration finds the ready-for-agent Pool empty.                                                                                                                                                                                        |
 | Clean — iteration cap | `0`  | Positional `<max-iterations>` reached without natural termination.                                                                                                                                                                                |
-| Aborted — stuck       | `1`  | `GIT_LOOPY_MAX_NMT_STRIKES` (default 3) consecutive iterations made no progress.                                                                                                                                                                             |
+| Aborted — abandonment guard | `1` | `abandonment_guard`: `GIT_LOOPY_MAX_CONSECUTIVE_ABANDONMENTS` (default 3) consecutive abandoned issues, reset when any issue is Closed or advanced. |
 | Aborted — preflight   | `1`  | Pre-loop setup failed: not inside a git repo, `gh` not authed or not on PATH, `CopilotClient` construction failed, writers bundle failed, or unknown `GIT_LOOPY_ISSUE_SOURCE`. Surfaces cleanly via stderr. |
 
 ---
@@ -797,7 +797,7 @@ reclaims nothing, and never reaches your issue tracker. It needs only `git`.
 | `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type** and **Bump-class classifiers** run on. Each reads an unlabelled issue's own content and writes a closed `task-type:` or `semver:` label back at **Pickup** (ADR-0029, ADR-0052). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
 | `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort both classifiers run at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
-| `GIT_LOOPY_MAX_NMT_STRIKES`                 | `3`                            | Consecutive no-progress iterations before aborting exit `1`. Integer ≥ 1.                                                                                                                                        |
+| `GIT_LOOPY_MAX_CONSECUTIVE_ABANDONMENTS`    | `3`                            | The Python Run's **Abandonment guard**. It exits `1` as `abandonment_guard` after this many consecutive abandoned issues; a Closed or advanced issue resets it. Integer ≥ 1. Per-issue **Strikes** are accounting only and never stop a Run. `GIT_LOOPY_MAX_NMT_STRIKES` is a legacy alias; setting both aliases differently in the environment is rejected. |
 | `GIT_LOOPY_WORKTREE_SETUP`         | unset (auto-detect)            | A shell command run in each freshly created **Lane** worktree, before that Lane's agent session starts, to prepare its environment (install deps, create a venv, ...) so the feedback loops can run there. Runs once per Lane creation with `cwd` set to the worktree. When unset/blank, a best-effort auto-detect picks a common install command for the project type (`uv.lock`→`uv sync`, `package-lock.json`→`npm ci`, `package.json`→`npm install`, `requirements.txt`→`pip install -r requirements.txt`, `go.mod`→`go mod download`, ...). A non-zero setup exit is surfaced in the diagnostics log but does not abort the Lane. |
 | `GIT_LOOPY_GATE_TIMEOUT_SECONDS`   | `3600` (one hour)              | The wall-clock bound each **feedback loop** the **Integration** gate runs must finish within. Integration re-runs the merged worktree's own `AGENTS.md` loops unattended after every Lane merge, so a loop waiting on a socket, a prompt or a lock would otherwise block the gate forever. On expiry the loop's whole process group is killed and the gate goes **red naming that loop, as a timeout** — kept distinct from a non-zero exit, because a timeout is not a test failure. |
 | `GIT_LOOPY_CREDIT_BUDGET_USD_PER_HOUR` | unset (contraction unavailable) | The authoritative AI-credit ceiling adaptation judges this Run's burn against. Without it, credit pressure is unknown rather than estimated. Credit never gates capacity or expansion; it only contracts the effective Lane limit under sustained burn. A malformed or non-positive value reads as unset rather than aborting the Run. |
@@ -867,7 +867,7 @@ route_policy = "static"    # opt in to the Static route; omit to keep today's be
 classifier_model = "gpt-5.4-mini"
 classifier_effort = "low"
 issue_source = "github"
-max_nmt_strikes = 5
+max_consecutive_abandonments = 5
 demotion_threshold = 3
 include_prs = true
 otel_enabled = false
@@ -880,7 +880,7 @@ deny_skills = []   # deprecated final guard — prefer omitting from enabled_ski
 The **persisted** knobs are `model`, `reasoning_effort`, `context_tier`, `route_policy`,
 `classifier_model`,
 `classifier_effort`, `issue_source`,
-`include_prs`, `max_nmt_strikes`, `demotion_threshold`, `otel_enabled`,
+`include_prs`, `max_consecutive_abandonments`, `demotion_threshold`, `otel_enabled`,
 `send_timeout_seconds`, `enabled_skills`, and the two denylists. The
 model/effort **capability gate** (below) still applies to a config-supplied
 model. The two denylists are
@@ -890,6 +890,14 @@ knobs are never read from a file: the positional `<max-iterations>` cap, `-v`
 verbosity, and `--no-reasoning`. A
 malformed `config.toml` aborts the run with a clean stderr message (exit `1`),
 never a traceback.
+
+`max_nmt_strikes` is a legacy persisted alias for
+`max_consecutive_abandonments`, and `GIT_LOOPY_MAX_NMT_STRIKES` is its
+environment counterpart. They configure only the **Abandonment guard**, never
+a Strike ceiling. At each scope, the canonical and legacy names must agree if
+both are present; a higher scope still wins over a lower one. `git-loopy config`
+accepts either spelling for `get` and `set`, lists the canonical name, and writes
+only that name when the guard is set, replacing its legacy alias in the selected scope.
 
 `enabled_skills` is the one key that does **not** union: it is the closed-world
 **Skill policy** allowlist (ADR-0015), and a project value *replaces* the global
@@ -1000,7 +1008,7 @@ git-loopy config edit --global
 The settable keys are exactly the [persisted knobs](#persistent-config-configtoml)
 above (`model`, `reasoning_effort`, `context_tier`, `route_policy`,
 `classifier_model`, `classifier_effort`,
-`issue_source`, `max_nmt_strikes`, `demotion_threshold`,
+`issue_source`, `max_consecutive_abandonments`, `demotion_threshold`,
 `include_prs`, `otel_enabled`, `send_timeout_seconds`,
 `deny_tools`, `deny_skills`). Per-run-only knobs are never persisted, so they are
 not `config` keys.

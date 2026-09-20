@@ -530,10 +530,10 @@ fn draw_header(
         (1, header.status.clone()),
         (
             3,
-            format!(
-                "strikes {}/{}",
-                header.strikes.current, header.strikes.limit
-            ),
+            match header.strikes.limit {
+                Some(limit) => format!("strikes {}/{limit}", header.strikes.current),
+                None => format!("strikes {}", header.strikes.current),
+            },
         ),
     ];
     segments.extend(routing_segment(header).map(|note| (5, note)));

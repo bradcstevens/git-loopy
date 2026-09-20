@@ -11,7 +11,7 @@ across all four sources. It is driven entirely through injected inputs — a par
 so no test here touches a real TTY, ``os.environ``, or the developer's ``~/.config``.
 
 The persisted (config-tiered) knobs are: ``model``, ``reasoning_effort``,
-``max_nmt_strikes``, ``issue_source``, ``include_prs``, ``deny_tools``,
+``max_consecutive_abandonments``, ``issue_source``, ``include_prs``, ``deny_tools``,
 ``deny_skills``, ``otel_enabled``, and ``send_timeout_seconds``.
 The per-run-only knobs (``max_iterations``, ``verbosity``, ``render_reasoning``)
 are NEVER read from a config file — they resolve from flags/env only.
@@ -74,7 +74,8 @@ def test_resolve_all_empty_yields_builtin_defaults() -> None:
     assert run.issue_source == "github"
     assert run.include_prs is None
     assert run.max_iterations == 0
-    assert run.max_nmt_strikes == 3
+    assert run.max_consecutive_abandonments == 3
+    assert run.max_nmt_strikes is None
     assert run.deny_tools == frozenset()
     assert run.deny_skills == frozenset()
     assert run.verbosity == 0
@@ -131,7 +132,7 @@ def test_skill_enable_and_disable_flags_are_captured_separately() -> None:
 
 def test_global_only_value_affects_run() -> None:
     resolved = _resolve(global_={"max_nmt_strikes": 7})
-    assert resolved.run.max_nmt_strikes == 7
+    assert resolved.run.max_consecutive_abandonments == 7
 
 
 # ---------------------------------------------------------------------------
@@ -498,26 +499,48 @@ def test_otel_unset_is_false() -> None:
 
 
 # ---------------------------------------------------------------------------
-# max_nmt_strikes: env > project > global > 3; invalid -> SystemExit.
+# max_consecutive_abandonments: env > project > global > 3; invalid -> SystemExit.
 # ---------------------------------------------------------------------------
 
 
-def test_max_nmt_strikes_project_beats_global() -> None:
-    resolved = _resolve(project={"max_nmt_strikes": 5}, global_={"max_nmt_strikes": 9})
-    assert resolved.run.max_nmt_strikes == 5
+def test_max_consecutive_abandonments_project_beats_global() -> None:
+    resolved = _resolve(
+        project={"max_consecutive_abandonments": 5},
+        global_={"max_consecutive_abandonments": 9},
+    )
+    assert resolved.run.max_consecutive_abandonments == 5
 
 
-def test_max_nmt_strikes_env_beats_config() -> None:
+def test_max_consecutive_abandonments_env_beats_config() -> None:
+    resolved = _resolve(
+        env={"GIT_LOOPY_MAX_CONSECUTIVE_ABANDONMENTS": "2"},
+        project={"max_consecutive_abandonments": 5},
+    )
+    assert resolved.run.max_consecutive_abandonments == 2
+
+
+def test_legacy_abandonment_guard_aliases_keep_their_scope_precedence() -> None:
     resolved = _resolve(
         env={"GIT_LOOPY_MAX_NMT_STRIKES": "2"},
-        project={"max_nmt_strikes": 5},
+        project={"max_consecutive_abandonments": 5},
+        global_={"max_nmt_strikes": 9},
     )
-    assert resolved.run.max_nmt_strikes == 2
+    assert resolved.run.max_consecutive_abandonments == 2
 
 
-def test_max_nmt_strikes_subone_config_aborts() -> None:
+def test_contradictory_abandonment_guard_aliases_in_one_scope_abort() -> None:
+    with pytest.raises(SystemExit, match="must agree"):
+        _resolve(
+            project={
+                "max_consecutive_abandonments": 5,
+                "max_nmt_strikes": 9,
+            }
+        )
+
+
+def test_max_consecutive_abandonments_subone_config_aborts() -> None:
     with pytest.raises(SystemExit):
-        _resolve(project={"max_nmt_strikes": 0})
+        _resolve(project={"max_consecutive_abandonments": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -671,7 +694,7 @@ def test_main_reads_project_config_into_run(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "config.toml").write_text(
-        'max_nmt_strikes = 9\nissue_source = "prds"\n', encoding="utf-8"
+        'max_consecutive_abandonments = 9\nissue_source = "prds"\n', encoding="utf-8"
     )
     captured: list = []
     _fake_loop_run(monkeypatch, captured)
@@ -680,7 +703,7 @@ def test_main_reads_project_config_into_run(monkeypatch, tmp_path) -> None:
 
     assert rc == 0
     assert len(captured) == 1
-    assert captured[0].max_nmt_strikes == 9
+    assert captured[0].max_consecutive_abandonments == 9
     assert captured[0].issue_source == "prds"
 
 

@@ -147,6 +147,9 @@ pub struct RunStart {
     /// The configured consecutive-Strike limit.
     #[serde(default)]
     pub max_nmt_strikes: Option<i64>,
+    /// A separate Abandonment guard; its presence removes any Strike ceiling.
+    #[serde(default)]
+    pub max_consecutive_abandonments: Option<i64>,
     /// The selected Execution host, declared once for the Run.
     #[serde(default)]
     pub execution_host: Option<ExecutionHostDeclaration>,

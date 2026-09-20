@@ -217,15 +217,18 @@ def _coerce_bool(raw: str) -> bool:
     )
 
 
-def _coerce_strikes(raw: str) -> int:
+def _coerce_max_consecutive_abandonments(raw: str) -> int:
     try:
         value = int(raw)
     except ValueError:
         raise ConfigCommandError(
-            f"max_nmt_strikes must be an integer >= 1 (got {raw!r})"
+            "max_consecutive_abandonments must be an integer >= 1 "
+            f"(got {raw!r})"
         ) from None
     if value < 1:
-        raise ConfigCommandError(f"max_nmt_strikes must be >= 1 (got {value})")
+        raise ConfigCommandError(
+            f"max_consecutive_abandonments must be >= 1 (got {value})"
+        )
     return value
 
 
@@ -331,7 +334,11 @@ _KEYS: dict[str, _Key] = {
             "classifier_effort", _coerce_effort, lambda rc: rc.run.classifier_effort
         ),
         _Key("issue_source", _coerce_issue_source, lambda rc: rc.run.issue_source),
-        _Key("max_nmt_strikes", _coerce_strikes, lambda rc: rc.run.max_nmt_strikes),
+        _Key(
+            "max_consecutive_abandonments",
+            _coerce_max_consecutive_abandonments,
+            lambda rc: rc.run.max_consecutive_abandonments,
+        ),
         _Key(
             "demotion_threshold",
             _coerce_demotion_threshold,
@@ -352,6 +359,7 @@ _KEYS: dict[str, _Key] = {
 
 #: The keys ``config set`` / ``config get`` accept (the persisted schema).
 SETTABLE_KEYS: tuple[str, ...] = tuple(_KEYS)
+_KEY_ALIASES = {"max_nmt_strikes": "max_consecutive_abandonments"}
 
 
 def coerce_value(key: str, raw: str) -> object:
@@ -360,7 +368,7 @@ def coerce_value(key: str, raw: str) -> object:
     Raises :class:`ConfigCommandError` for an unknown key or a value the resolver
     would reject (a non-effort, a sub-1 strike count, a non-boolean, ...).
     """
-    entry = _KEYS.get(key)
+    entry = _KEYS.get(_KEY_ALIASES.get(key, key))
     if entry is None:
         raise ConfigCommandError(_unknown_key_message(key))
     return entry.coerce(raw)
@@ -466,10 +474,13 @@ def run_set(
     success, 1 on a bad key / value / unavailable scope / malformed target file.
     """
     try:
+        key = _KEY_ALIASES.get(key, key)
         typed = coerce_value(key, value)
         resolved_scope = _resolve_scope(scope, repo_root)
         path = _scope_config_path(resolved_scope, repo_root, env)
         table = dict(settings.load_config_table(path))
+        if key == "max_consecutive_abandonments":
+            table.pop("max_nmt_strikes", None)
         table[key] = typed
         settings.write_config(path, table)
     except (ConfigCommandError, settings.SettingsError) as exc:
@@ -1148,7 +1159,7 @@ def run_get(
     except ConfigCommandError as exc:
         err(f"git-loopy: error: {exc}")
         return 1
-    entry = _KEYS.get(key)
+    entry = _KEYS.get(_KEY_ALIASES.get(key, key))
     if entry is None and task_type is None:
         err(f"git-loopy: error: {_unknown_key_message(key)}")
         return 1

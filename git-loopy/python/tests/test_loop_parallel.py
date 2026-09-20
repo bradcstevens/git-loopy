@@ -2083,9 +2083,9 @@ def test_a_stop_pressed_during_a_strike_drain_escalates_to_cancel(
     parallel._serial._active_agent_task = None
 
     scheduler.start()
-    assert scheduler.strike_limit_reached()
+    assert scheduler.abandonment_guard_reached()
     parallel._serial._announce_wind_down(
-        cause="strike_limit", stage="drain", draining=scheduler.open_count
+        cause="abandonment_guard", stage="drain", draining=scheduler.open_count
     )
     emitted.clear()
 
@@ -4520,7 +4520,7 @@ def test_repeated_never_started_dispatches_narrow_the_existing_host_pressure(
 
     assert built[0]._scheduler is not None
     assert built[0]._scheduler.effective_limit < host.capacity
-    assert built[0]._serial._strike_machine.strikes == 0
+    assert built[0]._serial._strike_ledger.strikes == 0
     assert any(
         event["pressure"] == "host"
         for event in _logged_events(tmp_path)
@@ -4549,7 +4549,7 @@ def test_sustained_dispatch_refusal_ends_the_run_as_an_environment_failure(
     assert asyncio.run(loop_module.run(cfg)) == loop_module.exit_code_for(
         "preflight_failed"
     )
-    assert built[0]._serial._strike_machine.strikes == 0
+    assert built[0]._serial._strike_ledger.strikes == 0
 
 
 def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
@@ -4613,7 +4613,7 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     assert len(built) == 1
     assert built[0]._serial._attempts.state(42) is AttemptState.FRESH
     assert built[0]._serial._attempts.state(43) is AttemptState.FRESH
-    assert built[0]._serial._strike_machine.strikes == 0
+    assert built[0]._serial._strike_ledger.strikes == 0
     # Both blameless failures finalize terminally and ahead of the re-offered
     # contributions, which the host then carried into Integration.
     reasons = [
@@ -4770,8 +4770,8 @@ def test_a_green_publication_lifts_the_strike_drain_on_the_wire(
         in {"wrapper.stop.requested", "wrapper.stop.lifted"}
     ]
     assert wind_down == [
-        ("wrapper.stop.requested", "strike_limit", "drain"),
-        ("wrapper.stop.lifted", "strike_limit", None),
+        ("wrapper.stop.requested", "abandonment_guard", "drain"),
+        ("wrapper.stop.lifted", "abandonment_guard", None),
     ]
     assert 42 in [ref for ref, _ in fake_gh.issue_close_calls]
 
@@ -4963,6 +4963,79 @@ class _RemoteBranchExecutionHost:
         )
 
 
+@dataclass
+class _AbandonmentSequenceHost(_RemoteBranchExecutionHost):
+    alternating: bool = True
+    calls: list[ContributionRequest] = field(default_factory=list)
+    _started: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+
+    async def run_contribution(self, request: ContributionRequest) -> ContributionOutcome:
+        self.calls.append(request)
+        if len(self.calls) >= self.capacity:
+            self._started.set()
+        await asyncio.wait_for(self._started.wait(), timeout=5)
+        if self.alternating and len(self.calls) % 2 == 0:
+            return await super().run_contribution(request)
+        return ContributionFailure(
+            reason="timeout",
+            classification="breach",
+            ending=SessionOutcomeRecord(
+                outcome=SessionOutcome.TIMEOUT,
+                progressed=False,
+                termination=SessionTermination.TIMED_OUT,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("alternating", "capacity", "limit", "started", "strikes", "reason"),
+    [
+        (True, 1, 3, 7, 4, "iteration_cap"),
+        (False, 1, 3, 3, 3, "abandonment_guard"),
+        (False, 4, 1, 4, 4, "abandonment_guard"),
+    ],
+)
+def test_rolling_dispatch_uses_consecutive_abandonments_and_accounts_for_drained_work(
+    tmp_path, monkeypatch, alternating, capacity, limit, started, strikes, reason,
+) -> None:
+    fake_git, _, _, _ = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(ref, labels=["ready-for-agent", "parallel-safe"])
+            for ref in range(1, 10)
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    host = _AbandonmentSequenceHost(
+        fake_git, capacity=capacity, alternating=alternating,
+    )
+    real_loop = loop_module._ParallelLoop
+    monkeypatch.setattr(
+        loop_module, "_ParallelLoop",
+        lambda *args, **kwargs: real_loop(*args, **{**kwargs, "execution_host": host}),
+    )
+
+    code = asyncio.run(loop_module.run(RunConfig(
+        issue_source="github", max_iterations=7,
+        max_consecutive_abandonments=limit,
+    )))
+
+    events = _logged_events(tmp_path)
+    assert code == loop_module.exit_code_for(reason)
+    assert len(host.calls) == started
+    assert len([e for e in events if e["type"] == "wrapper.contribution.end"]) == started
+    charged = [e for e in events if e["type"] == "wrapper.strike"]
+    assert [e["strikes"] for e in charged] == list(range(1, strikes + 1))
+    assert len({e["issue"] for e in charged}) == strikes
+    assert [e["outcome"] for e in events if e["type"] == "wrapper.run.end"] == [reason]
+    drains = [
+        e for e in events
+        if e["type"] == "wrapper.stop.requested" and e["cause"] == "abandonment_guard"
+    ]
+    assert len(drains) == (0 if alternating else 1)
+
+
 def test_parallel_loop_materializes_remote_contributions_before_integration(
     tmp_path, monkeypatch
 ) -> None:
@@ -5040,7 +5113,7 @@ def test_parallel_loop_treats_a_proven_missing_remote_ref_as_a_breach(
     assert fake_git.fetch_calls == []
     assert fake_client.created == []
     assert len(built) == 1
-    assert built[0]._serial._strike_machine.strikes == 2
+    assert built[0]._serial._strike_ledger.strikes == 2
 
 
 @dataclass
@@ -5113,7 +5186,7 @@ def test_parallel_loop_reoffers_an_unreachable_remote_without_a_strike(
     assert [request.issue_ref for request in host.calls].count(43) == 2
     assert fake_client.created == []
     assert len(built) == 1
-    assert built[0]._serial._strike_machine.strikes == 0
+    assert built[0]._serial._strike_ledger.strikes == 0
 
 
 @dataclass
@@ -6268,14 +6341,14 @@ def test_parallel_serial_iteration_strike_abort_stops_the_run_stuck(
 
     events = _logged_events(tmp_path)
     strikes = [e for e in events if e["type"] == "wrapper.strike"]
-    assert [s["outcome"] for s in strikes] == ["abort"], (
-        f"expected the issue's defeat to be the abort, got {strikes}"
+    assert [s["outcome"] for s in strikes] == ["warn"], (
+        f"expected issue accounting, not a Strike abort, got {strikes}"
     )
     assert [
         (event["cause"], event["stage"], event["draining"])
         for event in events
         if event["type"] == "wrapper.stop.requested"
-    ] == [("strike_limit", "drain", 0)]
+    ] == [("abandonment_guard", "drain", 0)]
 
     # --- The abort ends the Run, and no further serial Iteration is granted
     #     after it: §7.7 drains started work, it does not start new work.
@@ -6283,8 +6356,8 @@ def test_parallel_serial_iteration_strike_abort_stops_the_run_stuck(
     assert len(starts) == 2, f"expected exactly two Iterations, got {len(starts)}"
 
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
-    assert run_end["outcome"] == "stuck"
-    assert exit_code == loop_module.exit_code_for("stuck")
+    assert run_end["outcome"] == "abandonment_guard"
+    assert exit_code == loop_module.exit_code_for("abandonment_guard")
 
 
 def test_parallel_serial_iteration_that_binds_nothing_ends_the_run_all_skipped(
@@ -8208,7 +8281,7 @@ def test_dynamic_lane_retry_exhaustion_starts_no_third_attempt(
     ]) == 2
     events = _logged_events(tmp_path)
     assert len([e for e in events if e["type"] == "wrapper.strike"]) == 1
-    assert [e["outcome"] for e in events if e["type"] == "wrapper.run.end"] == ["stuck"]
+    assert [e["outcome"] for e in events if e["type"] == "wrapper.run.end"] == ["abandonment_guard"]
 
 
 def test_explicit_default_equal_rung_wins_after_a_dynamic_lane(

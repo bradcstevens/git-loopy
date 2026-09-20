@@ -144,6 +144,37 @@ fn a_strike_wind_down_lifts_only_when_the_trace_says_so() {
 }
 
 #[test]
+fn abandonment_guard_drains_and_lifts_without_a_strike_ceiling() {
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    let ctx = context("2026-05-16T00:00:01.000Z", 0);
+    for line in [
+        r#"{"type":"wrapper.run.start","max_consecutive_abandonments":3,"run_id":"run-1"}"#,
+        r#"{"type":"wrapper.strike","strikes":8,"issue":42,"run_id":"run-1"}"#,
+        r#"{"type":"wrapper.stop.requested","cause":"abandonment_guard","stage":"drain","draining":2,"run_id":"run-1"}"#,
+    ] {
+        state.apply(&Event::from_jsonl_line(line).expect("guard event decodes"));
+    }
+    let snapshot = view(&state, &ctx, IssueRef::number(42));
+    assert_eq!(
+        snapshot["dashboard"]["header"]["strikes"],
+        serde_json::json!({"current":8,"limit":null})
+    );
+    assert_eq!(state.wind_down(), Some(("abandonment_guard", "drain", 2)));
+    state.apply(&Event::from_jsonl_line(
+        r#"{"type":"wrapper.stop.lifted","cause":"strike_limit","draining":1,"run_id":"run-1"}"#,
+    ).expect("historical lift decodes"));
+    assert_eq!(state.wind_down(), Some(("abandonment_guard", "drain", 2)));
+    state.apply(&Event::from_jsonl_line(
+        r#"{"type":"wrapper.stop.lifted","cause":"abandonment_guard","draining":1,"run_id":"run-1"}"#,
+    ).expect("guard lift decodes"));
+    assert!(state.wind_down().is_none());
+    assert_eq!(
+        view(&state, &ctx, IssueRef::number(42))["dashboard"]["header"]["status"],
+        "running"
+    );
+}
+
+#[test]
 fn a_spent_iteration_cap_stays_draining_until_its_run_ends() {
     let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
     let ctx = context("2026-05-16T00:00:01.000Z", 0);

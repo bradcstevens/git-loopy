@@ -158,7 +158,7 @@ impl Declaration {
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct Strikes {
     pub current: i64,
-    pub limit: i64,
+    pub limit: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize)]

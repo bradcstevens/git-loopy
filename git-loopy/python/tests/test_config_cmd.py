@@ -78,7 +78,7 @@ def test_registry_covers_exactly_the_persisted_schema() -> None:
         "classifier_model",
         "classifier_effort",
         "issue_source",
-        "max_nmt_strikes",
+        "max_consecutive_abandonments",
         "demotion_threshold",
         "include_prs",
         "otel_enabled",
@@ -100,14 +100,14 @@ def test_coerce_bool_rejects_junk() -> None:
 
 
 def test_coerce_int_and_float_validate_bounds() -> None:
-    assert configcmd.coerce_value("max_nmt_strikes", "5") == 5
+    assert configcmd.coerce_value("max_consecutive_abandonments", "5") == 5
     assert configcmd.coerce_value("send_timeout_seconds", "1800") == 1800.0
     with pytest.raises(configcmd.ConfigCommandError):
-        configcmd.coerce_value("max_nmt_strikes", "0")
+        configcmd.coerce_value("max_consecutive_abandonments", "0")
     with pytest.raises(configcmd.ConfigCommandError):
         configcmd.coerce_value("send_timeout_seconds", "0")
     with pytest.raises(configcmd.ConfigCommandError):
-        configcmd.coerce_value("max_nmt_strikes", "notanint")
+        configcmd.coerce_value("max_consecutive_abandonments", "notanint")
 
 
 def test_coerce_enum_keys_validate_choices() -> None:
@@ -179,7 +179,9 @@ def test_set_writes_one_key_to_project_by_default_in_repo(tmp_path: Path) -> Non
 
 def test_set_preserves_existing_keys(tmp_path: Path) -> None:
     path = settings.project_config_path(tmp_path)
-    settings.write_config(path, {"model": "gpt-5.4", "max_nmt_strikes": 5})
+    settings.write_config(
+        path, {"model": "gpt-5.4", "max_consecutive_abandonments": 5}
+    )
     rc = configcmd.run_set(
         "reasoning_effort", "high", scope="project", repo_root=tmp_path,
         env=_env(tmp_path), out=_Sink(), err=_Sink(),
@@ -187,9 +189,31 @@ def test_set_preserves_existing_keys(tmp_path: Path) -> None:
     assert rc == 0
     assert tomllib.loads(path.read_text(encoding="utf-8")) == {
         "model": "gpt-5.4",
-        "max_nmt_strikes": 5,
+        "max_consecutive_abandonments": 5,
         "reasoning_effort": "high",
     }
+
+
+@pytest.mark.parametrize("key", ["max_nmt_strikes", "max_consecutive_abandonments"])
+def test_setting_the_guard_replaces_its_legacy_alias_without_conflicting_values(
+    tmp_path: Path, key: str,
+) -> None:
+    path = settings.project_config_path(tmp_path)
+    settings.write_config(path, {"model": "gpt-5.4", "max_nmt_strikes": 5})
+    out, err = _Sink(), _Sink()
+    assert configcmd.run_set(
+        key, "7", scope="project", repo_root=tmp_path,
+        env=_env(tmp_path), out=out, err=err,
+    ) == 0
+    assert settings.load_config_table(path) == {
+        "model": "gpt-5.4", "max_consecutive_abandonments": 7,
+    }
+    for read_key in ("max_nmt_strikes", "max_consecutive_abandonments"):
+        value = _Sink()
+        assert configcmd.run_get(
+            read_key, repo_root=tmp_path, env=_env(tmp_path), out=value, err=err,
+        ) == 0
+        assert value.text.strip() == "7"
 
 
 def test_set_enabled_skills_round_trips_explicit_empty_and_preserves_siblings(
@@ -255,11 +279,11 @@ def test_set_rejects_unknown_key(tmp_path: Path) -> None:
 def test_set_rejects_bad_value(tmp_path: Path) -> None:
     err = _Sink()
     rc = configcmd.run_set(
-        "max_nmt_strikes", "0", scope="project", repo_root=tmp_path,
+        "max_consecutive_abandonments", "0", scope="project", repo_root=tmp_path,
         env=_env(tmp_path), out=_Sink(), err=err,
     )
     assert rc == 1
-    assert "max_nmt_strikes" in err.text
+    assert "max_consecutive_abandonments" in err.text
     assert not settings.project_config_path(tmp_path).exists()
 
 
@@ -642,7 +666,7 @@ def test_get_works_outside_a_repo(tmp_path: Path) -> None:
 def test_list_shows_every_effective_key(tmp_path: Path) -> None:
     settings.write_config(
         settings.project_config_path(tmp_path),
-        {"model": "gpt-5.4", "max_nmt_strikes": 5},
+        {"model": "gpt-5.4", "max_consecutive_abandonments": 5},
     )
     out = _Sink()
     rc = configcmd.run_list(
@@ -651,7 +675,7 @@ def test_list_shows_every_effective_key(tmp_path: Path) -> None:
     assert rc == 0
     lines = set(out.lines)
     assert "model = gpt-5.4" in lines
-    assert "max_nmt_strikes = 5" in lines
+    assert "max_consecutive_abandonments = 5" in lines
     assert "issue_source = github" in lines  # default surfaces too
     assert "send_timeout_seconds = 7200" in lines  # whole float, no .0 tail
     # Every settable key appears exactly once.

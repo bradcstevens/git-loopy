@@ -652,14 +652,20 @@ class RunConfig:
             meaningful for ``issue_source == "github"``.
         max_iterations: Cap on iterations. ``0`` (the default) means
             unlimited.
-        max_nmt_strikes: Consecutive no-progress iterations tolerated
-            before the loop aborts non-zero. Must be ≥ 1.
+        max_consecutive_abandonments: Consecutive issues abandoned before the
+            **Abandonment guard** stops a Run non-zero. It resets whenever an
+            issue closes or advances. Must be ≥ 1.
+        max_nmt_strikes: Legacy compatibility alias for
+            :attr:`max_consecutive_abandonments`. It is not a Strike ceiling:
+            Strikes are per-issue accounting and never end a Run. New callers
+            must use :attr:`max_consecutive_abandonments`.
         demotion_threshold: How many no-progress **Lane contributions** one
             **Routed pair** may accumulate in a Run before **Demotion** replaces
             its **Measured routing** entry with the next pair up the price
             staircase (#366, ADR-0030). Counted per pair, so it is unrelated to
-            ``max_nmt_strikes`` — that one is a single Run-scoped counter every
-            Lane shares, and ends the Run. Must be ≥ 1.
+            ``max_consecutive_abandonments`` — the separate, resetting
+            Abandonment guard. Per-issue Strikes themselves never end a Run.
+            Must be ≥ 1.
         deny_tools: Tool names to reject at the SDK permission gate.
         deny_skills: Skill names (the ``arguments.skill`` value passed
             to the ``skill`` meta-tool) to reject.
@@ -788,7 +794,8 @@ class RunConfig:
     issue_source: Literal["github", "prds"] = "github"
     include_prs: bool | None = None
     max_iterations: int = 0
-    max_nmt_strikes: int = 3
+    max_consecutive_abandonments: int = 3
+    max_nmt_strikes: int | None = None
     demotion_threshold: int = 3
     deny_tools: frozenset[str] = field(default_factory=frozenset)
     deny_skills: frozenset[str] = field(default_factory=frozenset)
@@ -822,9 +829,30 @@ class RunConfig:
                 f"max_iterations must be ≥ 0 (0 = unlimited), got "
                 f"{self.max_iterations}"
             )
-        if self.max_nmt_strikes < 1:
+        if self.max_nmt_strikes is not None:
+            if self.max_nmt_strikes < 1:
+                raise ValueError(
+                    f"max_nmt_strikes must be ≥ 1, got {self.max_nmt_strikes}"
+                )
+            if (
+                self.max_consecutive_abandonments != 3
+                and self.max_nmt_strikes != 3
+                and self.max_consecutive_abandonments != self.max_nmt_strikes
+            ):
+                raise ValueError(
+                    "max_consecutive_abandonments and max_nmt_strikes "
+                    "cannot disagree"
+                )
+            if self.max_consecutive_abandonments == 3:
+                object.__setattr__(
+                    self,
+                    "max_consecutive_abandonments",
+                    self.max_nmt_strikes,
+                )
+        if self.max_consecutive_abandonments < 1:
             raise ValueError(
-                f"max_nmt_strikes must be ≥ 1, got {self.max_nmt_strikes}"
+                "max_consecutive_abandonments must be ≥ 1, got "
+                f"{self.max_consecutive_abandonments}"
             )
         if self.demotion_threshold < 1:
             raise ValueError(

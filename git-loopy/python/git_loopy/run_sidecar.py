@@ -77,7 +77,7 @@ def _config_to_payload(config: RunConfig) -> dict[str, Any]:
         "issue_source": config.issue_source,
         "include_prs": config.include_prs,
         "max_iterations": config.max_iterations,
-        "max_nmt_strikes": config.max_nmt_strikes,
+        "max_consecutive_abandonments": config.max_consecutive_abandonments,
         "demotion_threshold": config.demotion_threshold,
         "deny_tools": sorted(config.deny_tools),
         "deny_skills": sorted(config.deny_skills),
@@ -128,13 +128,29 @@ def _config_from_payload(payload: dict[str, Any]) -> RunConfig:
         for key, value in dict(payload.get("routing", {})).items()
     }
     escalation = payload.get("escalation_rung")
+    canonical_abandonments = payload.get("max_consecutive_abandonments")
+    legacy_abandonments = payload.get("max_nmt_strikes")
+    if (
+        canonical_abandonments is not None
+        and legacy_abandonments is not None
+        and int(canonical_abandonments) != int(legacy_abandonments)
+    ):
+        raise ValueError(
+            "max_consecutive_abandonments and max_nmt_strikes cannot disagree"
+        )
     return RunConfig(
         model=payload.get("model"),
         reasoning_effort=payload.get("reasoning_effort"),
         issue_source=payload.get("issue_source", "github"),
         include_prs=payload.get("include_prs"),
         max_iterations=int(payload.get("max_iterations", 0)),
-        max_nmt_strikes=int(payload.get("max_nmt_strikes", 3)),
+        max_consecutive_abandonments=int(
+            canonical_abandonments
+            if canonical_abandonments is not None
+            else legacy_abandonments
+            if legacy_abandonments is not None
+            else 3
+        ),
         demotion_threshold=int(payload.get("demotion_threshold", 3)),
         deny_tools=frozenset(str(item) for item in payload.get("deny_tools", [])),
         deny_skills=frozenset(str(item) for item in payload.get("deny_skills", [])),

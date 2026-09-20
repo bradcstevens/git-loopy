@@ -12,7 +12,8 @@ Precedence rules (ADR-0006), applied key by key:
   (project = ``<repo-root>/git-loopy/config.toml``; global =
   ``$XDG_CONFIG_HOME/git-loopy/config.toml`` then ``~/.config/...``).
 * CLI flags win over environment variables for scalar knobs (``GIT_LOOPY_MODEL``,
-  ``GIT_LOOPY_ISSUE_SOURCE``, ``GIT_LOOPY_MAX_NMT_STRIKES``, verbosity, ``--no-reasoning``).
+  ``GIT_LOOPY_ISSUE_SOURCE``, ``GIT_LOOPY_MAX_CONSECUTIVE_ABANDONMENTS``,
+  verbosity, ``--no-reasoning``).
 * ``enabled_skills`` replacement is presence-aware: an explicit empty project
   list replaces global Config, and even an empty ``GIT_LOOPY_ENABLED_SKILLS``
   replaces the configured base. Repeatable ``--enable-skill`` and
@@ -65,7 +66,8 @@ Env vars:
   ``long_context``), without suppressing per-task-type routing.
 * ``GIT_LOOPY_ISSUE_SOURCE`` — ``github`` (default, GitHub issues backend) or
   ``prds`` (legacy local-markdown ``prds/<feature>/NNN-*.md`` backend).
-* ``GIT_LOOPY_MAX_NMT_STRIKES`` — strike threshold (integer ≥ 1).
+* ``GIT_LOOPY_MAX_CONSECUTIVE_ABANDONMENTS`` — abandonment guard (integer ≥ 1).
+  ``GIT_LOOPY_MAX_NMT_STRIKES`` is a compatibility alias.
 * ``GIT_LOOPY_ENABLED_SKILLS`` — presence-aware, comma-separated exact
   replacement for the configured Skill-policy base; an empty value is an
   explicit empty replacement.
@@ -139,7 +141,7 @@ __all__ = [
     "ResolvedConfig",
 ]
 
-_DEFAULT_MAX_NMT_STRIKES = 3
+_DEFAULT_MAX_CONSECUTIVE_ABANDONMENTS = 3
 #: How many no-progress **Lane contributions** one **Routed pair** may
 #: accumulate in a Run before **Demotion** steps its **Measured routing** entry
 #: up the price staircase (#366, ADR-0030). Shares a value with the Strike limit
@@ -420,7 +422,9 @@ def build_parser() -> argparse.ArgumentParser:
             "classifier pair.\n"
             "  GIT_LOOPY_ISSUE_SOURCE       'github' (default) or 'prds' "
             "(legacy local-markdown).\n"
-            "  GIT_LOOPY_MAX_NMT_STRIKES    Strike threshold (default: 3).\n"
+            "  GIT_LOOPY_MAX_CONSECUTIVE_ABANDONMENTS\n"
+            "                              Abandonment guard (default: 3).\n"
+            "  GIT_LOOPY_MAX_NMT_STRIKES    Legacy alias for that guard.\n"
             "  GIT_LOOPY_EXECUTION_HOST     Execution-host placement "
             "(default: local; --execution-host wins).\n"
             "  GIT_LOOPY_GITHUB_ACTIONS_CAPACITY\n"
@@ -1715,38 +1719,88 @@ def _otel_enabled(
     return False
 
 
-def _resolve_max_nmt_strikes(
+def _resolve_max_consecutive_abandonments(
     env: Mapping[str, str],
     project: Mapping[str, object],
     global_: Mapping[str, object],
 ) -> int:
-    """Resolve the strike threshold: env > project > global > default.
+    """Resolve the abandonment guard: env > project > global > default.
 
     A malformed or sub-1 value aborts the run (via :class:`SystemExit`) rather
     than silently degrading — an unattended run must never quietly disable its
     own get-a-human safety valve.
+
+    ``max_nmt_strikes`` and ``GIT_LOOPY_MAX_NMT_STRIKES`` remain input aliases
+    for operators upgrading existing Config. A canonical and legacy value in
+    one scope must agree; a lower scope never participates in that comparison.
     """
-    raw = env.get("GIT_LOOPY_MAX_NMT_STRIKES")
-    if raw is not None and raw.strip():
+    env_value = _resolve_abandonment_env_scope(env)
+    if env_value is not None:
+        return env_value
+    project_value = _resolve_abandonment_config_scope(project, scope="project")
+    if project_value is not None:
+        return project_value
+    global_value = _resolve_abandonment_config_scope(global_, scope="global")
+    if global_value is not None:
+        return global_value
+    return _DEFAULT_MAX_CONSECUTIVE_ABANDONMENTS
+
+
+def _resolve_abandonment_env_scope(env: Mapping[str, str]) -> int | None:
+    """Read canonical and legacy guard aliases from the environment."""
+    values: list[tuple[str, int]] = []
+    for name in (
+        "GIT_LOOPY_MAX_CONSECUTIVE_ABANDONMENTS",
+        "GIT_LOOPY_MAX_NMT_STRIKES",
+    ):
+        raw = env.get(name)
+        if raw is None or not raw.strip():
+            continue
         try:
             value = int(raw)
         except ValueError as exc:
             raise SystemExit(
-                f"git-loopy: error: GIT_LOOPY_MAX_NMT_STRIKES must be a positive "
-                f"integer, got {raw!r}"
+                f"git-loopy: error: {name} must be a positive integer, got {raw!r}"
             ) from exc
-        return _validate_max_nmt_strikes(value, source="GIT_LOOPY_MAX_NMT_STRIKES")
-    pv = settings.table_int(project, "max_nmt_strikes", scope="project")
-    if pv is not None:
-        return _validate_max_nmt_strikes(pv, source="project config max_nmt_strikes")
-    gv = settings.table_int(global_, "max_nmt_strikes", scope="global")
-    if gv is not None:
-        return _validate_max_nmt_strikes(gv, source="global config max_nmt_strikes")
-    return _DEFAULT_MAX_NMT_STRIKES
+        values.append((name, _validate_max_consecutive_abandonments(value, source=name)))
+    return _resolve_abandonment_aliases(values, scope="environment")
 
 
-def _validate_max_nmt_strikes(value: int, *, source: str) -> int:
-    """Reject a sub-1 strike threshold with a clear, source-attributed error."""
+def _resolve_abandonment_config_scope(
+    table: Mapping[str, object], *, scope: str
+) -> int | None:
+    """Read canonical and legacy guard aliases from one persisted Config scope."""
+    values: list[tuple[str, int]] = []
+    for key in ("max_consecutive_abandonments", "max_nmt_strikes"):
+        value = settings.table_int(table, key, scope=scope)
+        if value is not None:
+            values.append(
+                (
+                    key,
+                    _validate_max_consecutive_abandonments(
+                        value, source=f"{scope} config {key}"
+                    ),
+                )
+            )
+    return _resolve_abandonment_aliases(values, scope=f"{scope} config")
+
+
+def _resolve_abandonment_aliases(
+    values: list[tuple[str, int]], *, scope: str
+) -> int | None:
+    """Return one scope's guard, refusing conflicting canonical/legacy aliases."""
+    if not values:
+        return None
+    if len(values) == 2 and values[0][1] != values[1][1]:
+        names = " and ".join(name for name, _value in values)
+        raise SystemExit(
+            f"git-loopy: error: {scope} {names} must agree when both are set"
+        )
+    return values[0][1]
+
+
+def _validate_max_consecutive_abandonments(value: int, *, source: str) -> int:
+    """Reject a sub-1 abandonment guard with a clear, source-attributed error."""
     if value < 1:
         raise SystemExit(
             f"git-loopy: error: {source} must be ≥ 1, got {value}"
@@ -1761,15 +1815,15 @@ def _resolve_demotion_threshold(
 ) -> int:
     """Resolve the **Demotion** threshold: env > project > global > default (#366).
 
-    Mirrors :func:`_resolve_max_nmt_strikes` deliberately — a knob that rewrites
+    Mirrors the abandonment-guard resolver deliberately — a knob that rewrites
     a *committed* file has no business inventing a resolution order of its own.
     A malformed or sub-1 value aborts rather than degrading: ``0`` would demote
     every pair that ever failed once, and an unattended Run must not quietly
     reinterpret the number that decides whether it edits the repository.
 
-    The value is unrelated to ``max_nmt_strikes`` despite sharing its default.
-    That one is a single Run-scoped counter every **Lane** shares and which ends
-    the Run; this one is per **Routed pair** and ends nothing (ADR-0030).
+    The value is unrelated to the **Abandonment guard** despite sharing its
+    default. The guard stops an unproductive Run; this count is per **Routed
+    pair** and ends nothing (ADR-0030).
     """
     raw = env.get("GIT_LOOPY_DEMOTION_THRESHOLD")
     if raw is not None and raw.strip():
@@ -2592,7 +2646,8 @@ def resolve_config(
 
     Pure over its injected inputs (no ``os.environ`` / filesystem / TTY access),
     so it is exhaustively unit-testable. The persisted (config-tiered) knobs are
-    ``model``, ``reasoning_effort``, ``max_nmt_strikes``, ``issue_source``,
+    ``model``, ``reasoning_effort``, ``max_consecutive_abandonments``,
+    ``issue_source``,
     ``include_prs``, ``enabled_skills``, ``deny_tools``, ``deny_skills``,
     ``otel_enabled``, ``send_timeout_seconds`` and the
     ``[routing]`` table. The
@@ -2647,7 +2702,9 @@ def resolve_config(
 
     issue_source = _resolve_issue_source(env, project, global_)
     include_prs = _resolve_include_prs_tiered(env, project, global_)
-    max_nmt_strikes = _resolve_max_nmt_strikes(env, project, global_)
+    max_consecutive_abandonments = _resolve_max_consecutive_abandonments(
+        env, project, global_
+    )
     demotion_threshold = _resolve_demotion_threshold(env, project, global_)
     model_raw = _resolve_persisted_str("GIT_LOOPY_MODEL", "model", env, project, global_)
     effort_raw = _resolve_persisted_str(
@@ -2702,7 +2759,7 @@ def resolve_config(
         issue_source=issue_source,  # type: ignore[arg-type]
         include_prs=include_prs,
         max_iterations=int(args.max_iterations),
-        max_nmt_strikes=max_nmt_strikes,
+        max_consecutive_abandonments=max_consecutive_abandonments,
         demotion_threshold=demotion_threshold,
         deny_tools=deny_tools,
         deny_skills=deny_skills,
@@ -2921,7 +2978,7 @@ def main(argv: list[str] | None = None) -> int:
     Raises:
         SystemExit: For early validation errors that we want to surface
             via argparse-style stderr handling (negative iterations,
-            unknown ISSUE_SOURCE, malformed MAX_NMT_STRIKES).
+            unknown ISSUE_SOURCE, malformed MAX_CONSECUTIVE_ABANDONMENTS).
     """
     argv = list(sys.argv[1:] if argv is None else argv)
 

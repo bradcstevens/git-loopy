@@ -665,7 +665,7 @@ def test_strike_limit_latches_a_drain_confirmed_abort() -> None:
     scheduler.start()
     scheduler.start_session(scheduler.reserve()[0])
 
-    scheduler.strike_limit_reached()
+    scheduler.abandonment_guard_reached()
 
     assert scheduler.phase == "draining_for_abort"
     assert scheduler.refillable == 0
@@ -690,15 +690,18 @@ def test_operator_stop_latches_a_drain_that_a_publication_cannot_resume() -> Non
     assert scheduler.reserve() == ()
 
 
-def test_a_later_publication_cancels_the_pending_abort() -> None:
+def test_only_the_shared_guard_can_clear_the_pending_abort() -> None:
     scheduler, source = _scheduler([11], lane_cap=1)
     scheduler.start()
     contribution = scheduler.start_session(scheduler.reserve()[0])
     scheduler.finish_work(contribution, changed=True)
-    scheduler.strike_limit_reached()
+    scheduler.abandonment_guard_reached()
 
     scheduler.finalize(contribution, published=True)
 
+    assert scheduler.phase == "draining_for_abort"
+    assert scheduler.reserve() == ()
+    assert scheduler.reset_abandonment_guard()
     assert scheduler.phase == "rolling"
     source.refs = [12]
     assert [r.item.ref for r in scheduler.reserve()] == [12]
@@ -807,7 +810,7 @@ def test_no_membership_read_while_serial_is_latched() -> None:
 def test_no_membership_read_while_draining_for_abort() -> None:
     scheduler, source = _scheduler([11, 12], lane_cap=3)
     scheduler.start()
-    scheduler.strike_limit_reached()
+    scheduler.abandonment_guard_reached()
     reads = source.membership_calls
 
     scheduler.reserve()

@@ -68,7 +68,7 @@ def test_the_glossary_names_wind_down_as_one_latch_with_three_causes() -> None:
     # One latch, entered for three reasons — and a Pool that ran out is not one
     # of them, which is the distinction the term exists to hold.
     assert "**Stop**" in entry
-    assert "**Strike**" in entry
+    assert "**Abandonment guard**" in entry
     assert "iteration cap" in entry
     assert "**Pool**" in entry
     assert "_Avoid_:" in entry
@@ -82,7 +82,7 @@ def test_the_glossary_records_the_stage_ladder_and_its_one_cancelling_cause() ->
     assert "`cancel`" in entry
     assert "non-decreasing" in entry
     # Only the operator's own Stop reaches the cancel rung: nothing cancels a
-    # spent cap or a Strike drain.
+    # spent cap or an Abandonment guard drain.
     assert "only an operator" in entry.lower() or "only the operator" in entry.lower()
 
 
@@ -90,7 +90,7 @@ def test_the_glossary_records_that_the_latch_is_shared_and_its_exit_is_not() -> 
     """ADR-0043's asymmetry, which the ADR itself originally omitted."""
     entry = _entry("Wind-down")
 
-    # A green publication revokes a Strike drain; a Stop and a cap are durable.
+    # A green publication revokes a guard drain; a Stop and a cap are durable.
     assert "publication" in entry
     assert "durable" in entry
     assert "lift" in entry

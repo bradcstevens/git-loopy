@@ -4162,8 +4162,8 @@ def test_one_strike_is_charged_per_issue_given_up_on(tmp_path, monkeypatch) -> N
     ] == [(7, "fresh"), (7, "retrying"), (31, "fresh"), (31, "retrying")]
 
 
-def test_a_run_that_gives_up_on_enough_issues_is_stuck(tmp_path, monkeypatch) -> None:
-    """`max_nmt_strikes` is how many issues this Run may abandon (#413).
+def test_consecutive_abandonments_end_the_run_under_the_guard(tmp_path, monkeypatch) -> None:
+    """The guard stops a systematically failing Run as quickly as before (#604).
 
     Two issues, a ceiling of two, and an Agent that declares the **NMT
     sentinel** — an ending taken at its word, so each issue is defeated on its
@@ -4196,10 +4196,10 @@ def test_a_run_that_gives_up_on_enough_issues_is_stuck(tmp_path, monkeypatch) ->
         )
     )
 
-    assert exit_code == loop_module.exit_code_for("stuck")
+    assert exit_code == loop_module.exit_code_for("abandonment_guard")
     assert [(s["strikes"], s["outcome"]) for s in _strikes(tmp_path)] == [
         (1, "warn"),
-        (2, "abort"),
+        (2, "warn"),
     ]
     assert [e["issue"] for e in _bound_pickups(tmp_path)] == [7, 31]
     run_end = next(
@@ -4207,7 +4207,50 @@ def test_a_run_that_gives_up_on_enough_issues_is_stuck(tmp_path, monkeypatch) ->
         for raw in _log_lines(tmp_path)
         if json.loads(raw)["type"] == "wrapper.run.end"
     )
-    assert run_end["outcome"] == "stuck"
+    assert run_end["outcome"] == "abandonment_guard"
+    assert [s["issue"] for s in _strikes(tmp_path)] == [7, 31]
+    assert all("max_strikes" not in s for s in _strikes(tmp_path))
+
+
+@pytest.mark.parametrize("success", ["closed", "advanced"])
+def test_success_between_abandonments_keeps_a_productive_run_alive(
+    tmp_path, monkeypatch, success: str,
+) -> None:
+    fake_client, _ = _wire_multi_issue_github(
+        tmp_path, monkeypatch,
+        [_dated(n, f"2026-01-{n:02d}T00:00:00Z") for n in range(1, 9)],
+    )
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_client._scripted_events = [
+        _sdk_event(
+            SessionEventType.ASSISTANT_MESSAGE,
+            AssistantMessageData(
+                content="<promise>NO MORE TASKS</promise>", message_id="m1",
+            ),
+        )
+    ]
+
+    def work() -> None:
+        turn = len(fake_client.created)
+        if turn % 2 == 0:
+            fake_git.simulate_agent_commit(
+                subject="Deliver workable progress",
+                body=f"Closes #{turn}" if success == "closed" else "",
+            )
+
+    fake_client.on_send = work
+    code = asyncio.run(loop_module.run(
+        RunConfig(issue_source="github", max_iterations=7, max_nmt_strikes=2)
+    ))
+
+    assert code == 0
+    assert [e["issue"] for e in _bound_pickups(tmp_path)] == (
+        [1, 2, 3, 4, 5, 6, 7] if success == "closed" else [1, 2, 2, 3, 3, 4, 4]
+    )
+    assert [s["strikes"] for s in _strikes(tmp_path)] == [1, 2, 3, 4]
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    assert next(e for e in events if e["type"] == "wrapper.run.end")["outcome"] == "iteration_cap"
 
 
 def test_a_run_whose_every_issue_is_defeated_ends_all_skipped(

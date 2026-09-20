@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.9",
+  "contract_version": "2.10",
   "event_schema_version": "1.2",
   "insight_capabilities": {
     "names": [
@@ -151,7 +151,7 @@
     },
     "wrapper.stop.requested": {
       "required_when_present": ["cause", "stage", "draining"],
-      "cause_values": ["operator_stop", "strike_limit", "iteration_cap"],
+      "cause_values": ["operator_stop", "strike_limit", "abandonment_guard", "iteration_cap"],
       "stage_values": ["drain", "cancel"],
       "stage_order": ["drain", "cancel"],
       "cancel_cause": "operator_stop",
@@ -160,8 +160,8 @@
     },
     "wrapper.stop.lifted": {
       "required_when_present": ["cause", "draining"],
-      "cause_values": ["strike_limit"],
-      "draining": "The observed count of contributions still in flight when a green publication clears the Strike drain."
+      "cause_values": ["strike_limit", "abandonment_guard"],
+      "draining": "The observed count of contributions still in flight when success clears the Abandonment guard drain. strike_limit remains readable for historical traces."
     },
     "agent.output": {
       "required_when_present": ["text", "kind"],

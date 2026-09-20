@@ -42,7 +42,7 @@ from git_loopy.calibration_search import (
 from git_loopy.measured_routing import ProvingTask
 from git_loopy.staircase import Candidate
 from git_loopy.trial_concurrency import InlineTrialDispatcher, TrialRequest, TrialResult
-from git_loopy.wrapper import NMTStrikeStateMachine
+from git_loopy.wrapper import StrikeLedger
 
 
 # --------------------------------------------------------------------------- #
@@ -265,12 +265,9 @@ class _AlwaysFailsRunner:
 def test_a_calibration_whose_every_trial_fails_ticks_no_strike() -> None:
     """The property the whole design rests on, asserted end to end.
 
-    **Strikes** are shared and consecutive and reaching the limit **aborts the
-    Run**, so the limit here is set to one: if anything in a search's path could
-    reach the counter, a staircase of red rungs would trip it several times over.
-    The machine is left untouched, so a Calibration has nothing to end.
+    A Calibration records no issue abandonment, however many Trials fail.
     """
-    machine = NMTStrikeStateMachine(max_strikes=1)
+    machine = StrikeLedger()
     runner = _AlwaysFailsRunner()
 
     result = search_price_staircase(
@@ -292,7 +289,6 @@ def test_a_calibration_whose_every_trial_fails_ticks_no_strike() -> None:
     assert result.winner is None
     assert runner.calls >= 2
     assert machine.strikes == 0
-    assert machine.outcome == "running"
 
 
 def test_no_calibration_module_can_reach_the_orchestrator() -> None:

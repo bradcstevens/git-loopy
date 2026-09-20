@@ -420,7 +420,7 @@ def _wind_down_snapshot(event: Mapping[str, object]) -> WindDownSnapshot | None:
     stage = event.get("stage")
     draining = _observed_count(event.get("draining"))
     if (
-        cause not in {"operator_stop", "strike_limit", "iteration_cap"}
+        cause not in {"operator_stop", "strike_limit", "abandonment_guard", "iteration_cap"}
         or stage not in {"drain", "cancel"}
         or draining is None
         or (stage == "cancel" and cause != "operator_stop")
@@ -504,7 +504,7 @@ class LiveRunState:
         run_id: str = "",
         model: str | None = None,
         reasoning_effort: str | None = None,
-        max_strikes: int = 0,
+        max_strikes: int | None = 0,
         monotonic: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], datetime] = _default_wall_clock,
     ) -> None:
@@ -724,9 +724,10 @@ class LiveRunState:
                 declared_routing = capabilities.get("routing")
                 if isinstance(declared_routing, bool):
                     self.routing_available = declared_routing
-            max_strikes = event.get("max_nmt_strikes")
-            if max_strikes is not None:
-                self.max_strikes = _coerce_int(max_strikes, self.max_strikes)
+            if _observed_count(event.get("max_consecutive_abandonments")) is not None:
+                self.max_strikes = None
+            elif event.get("max_nmt_strikes") is not None:
+                self.max_strikes = _coerce_int(event["max_nmt_strikes"], 0)
         elif etype == _ITERATION_START:
             self._mark_started()
             self.iteration = _coerce_int(event.get("iter"), self.iteration)
@@ -751,8 +752,8 @@ class LiveRunState:
         elif etype == _STOP_LIFTED:
             if (
                 self.wind_down is not None
-                and self.wind_down.cause == "strike_limit"
-                and event.get("cause") == "strike_limit"
+                and self.wind_down.cause in {"strike_limit", "abandonment_guard"}
+                and event.get("cause") == self.wind_down.cause
                 and _observed_count(event.get("draining")) is not None
             ):
                 self.wind_down = None
@@ -794,7 +795,8 @@ class LiveRunState:
             self._record_event_line(_log_pr_advanced_text(event))
         elif etype == _STRIKE:
             self.strikes = _coerce_int(event.get("strikes"), self.strikes)
-            self.max_strikes = _coerce_int(event.get("max_strikes"), self.max_strikes)
+            if self.max_strikes is not None:
+                self.max_strikes = _coerce_int(event.get("max_strikes"), self.max_strikes)
             self._iter_strike = True
         elif etype == _ITERATION_END:
             self._finalize_iteration(now)
@@ -2280,7 +2282,8 @@ def format_header(state: LiveRunState, *, now: float | None = None) -> str:
         f"  •  active {active}"
         f"  •  context {context_fill}"
         f"  •  {state.status}"
-        f"  •  strikes {state.strikes}/{state.max_strikes}"
+        f"  •  strikes {state.strikes}"
+        + (f"/{state.max_strikes}" if state.max_strikes is not None else "")
     )
 
 

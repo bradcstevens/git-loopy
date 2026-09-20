@@ -391,7 +391,7 @@ pub struct DashboardState {
     pub(crate) run_id: Option<String>,
     pub(crate) status: String,
     pub(crate) strikes: i64,
-    pub(crate) max_strikes: i64,
+    pub(crate) max_strikes: Option<i64>,
     pub(crate) started_at: Option<Timestamp>,
     pub(crate) ended_at: Option<Timestamp>,
     /// The Run's start on the monotonic axis, paired with [`Self::started_at`].
@@ -451,7 +451,7 @@ impl DashboardState {
             run_id: None,
             status: RUN_STARTING.to_string(),
             strikes: 0,
-            max_strikes: 0,
+            max_strikes: Some(0),
             started_at: None,
             ended_at: None,
             started_monotonic: None,
@@ -563,8 +563,10 @@ impl DashboardState {
                 if let Some(capabilities) = start.insight_capabilities {
                     self.capabilities = capabilities;
                 }
-                if let Some(limit) = start.max_nmt_strikes {
-                    self.max_strikes = limit;
+                if start.max_consecutive_abandonments.is_some() {
+                    self.max_strikes = None;
+                } else if let Some(limit) = start.max_nmt_strikes {
+                    self.max_strikes = Some(limit);
                 }
                 if let Some(execution_host) = &start.execution_host {
                     self.execution_host = ExecutionHostProvenance::from(execution_host);
@@ -637,8 +639,8 @@ impl DashboardState {
                 if let Some(strikes) = strike.strikes {
                     self.strikes = strikes;
                 }
-                if let Some(limit) = strike.max_strikes {
-                    self.max_strikes = limit;
+                if let (Some(_), Some(limit)) = (self.max_strikes, strike.max_strikes) {
+                    self.max_strikes = Some(limit);
                 }
             }
             EventPayload::IterationEnd(rollup) => {
@@ -653,11 +655,12 @@ impl DashboardState {
             }
             EventPayload::StopRequested(stop) => self.record_wind_down(stop),
             EventPayload::StopLifted(stop)
-                if self
-                    .wind_down
-                    .as_ref()
-                    .is_some_and(|wind_down| wind_down.cause == "strike_limit")
-                    && stop.cause.as_deref() == Some("strike_limit") =>
+                if self.wind_down.as_ref().is_some_and(|wind_down| {
+                    matches!(
+                        wind_down.cause.as_str(),
+                        "strike_limit" | "abandonment_guard"
+                    ) && stop.cause.as_deref() == Some(wind_down.cause.as_str())
+                }) =>
             {
                 if stop.draining.is_some_and(|count| count >= 0) {
                     self.wind_down = None;
@@ -676,8 +679,10 @@ impl DashboardState {
         else {
             return;
         };
-        if !matches!(cause, "operator_stop" | "strike_limit" | "iteration_cap")
-            || !matches!(stage, "drain" | "cancel")
+        if !matches!(
+            cause,
+            "operator_stop" | "strike_limit" | "abandonment_guard" | "iteration_cap"
+        ) || !matches!(stage, "drain" | "cancel")
             || draining < 0
             || (stage == "cancel" && cause != "operator_stop")
         {

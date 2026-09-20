@@ -50,7 +50,7 @@ _Avoid_: automation (too broad), tooling work, prompt engineering (a part, not t
 **Run**:
 One invocation of the git-loopy loop, identified by a `run_id`, spanning serial
 **Iterations** and/or parallel **Lane contributions** until its authorized work is
-exhausted, an **Automation stop** occurs, or the strike limit is reached.
+exhausted, an **Automation stop** occurs, or the **Abandonment guard** is reached.
 
 **Agent**:
 One live harness session doing work in a **Run**, bound to a single **Routed pair** for
@@ -417,16 +417,16 @@ _Avoid_: quit, kill, abort.
 **Wind-down**:
 The Run-scoped state in which no new work starts, announced on the trace so a client
 attaching to a draining Run is never shown a healthy one. It has two independent axes.
-Its **cause** is closed — an operator **Stop**, the **Strike** ceiling, or a spent
+Its **cause** is closed — an operator **Stop**, the **Abandonment guard**, or a spent
 iteration cap — and a **Pool** that simply ran out is *not* one: a Run that finished the
 work it had is not winding down. Its **stage** is an ordered, non-decreasing ladder:
 `drain` stops refill while started contributions finish and integrate, then `cancel`
 cancels the agent sessions still running, and only an operator Stop ever reaches
-`cancel`, because nothing cancels a spent cap or a Strike drain. The Run announces the
+`cancel`, because nothing cancels a spent cap or an Abandonment guard drain. The Run announces the
 **latch** rather than the gesture that asked for it, once per transition — so a third
-gesture announces nothing, and a Stop pressed during a Strike drain escalates rather
+gesture announces nothing, and a Stop pressed during an Abandonment guard drain escalates rather
 than re-latching. The latch is shared but its exit is asymmetric: a green publication
-makes a Strike abort's condition false and lifts that drain, which is announced too,
+makes the Abandonment guard's condition false and lifts that drain, which is announced too,
 while an operator Stop and a spent cap are durable and never lift. The count of
 contributions still in flight travels with it, and a serial Run's `0` is an observed
 none rather than an unknown. A trace carrying no Wind-down says nothing about whether
@@ -726,7 +726,7 @@ concept, never a code identifier. Named the "Ralph loop" until
 _Avoid_: Ralph loop (retired), ralph-afk (the retired brand), "ralph" in any form.
 
 **Config**:
-The persisted settings (model, reasoning effort, strike policy, denylists, ...) that carry across
+The persisted settings (model, reasoning effort, Abandonment guard, denylists, ...) that carry across
 runs so they need not be re-passed each time. Held on disk as a hand-editable `config.toml` in a
 **project** and/or **global** **scope**, and merged key by key along the precedence chain
 **CLI flag > env var > project > global > built-in default** (the denylists are the set *union*
@@ -1187,12 +1187,12 @@ _Avoid_: fallback, temporary, pending, unverified (that is an **Observation** cl
 
 **Demotion**:
 The Run-end replacement of a **Measured routing** entry whose **Routed pair** stopped making
-progress on real work. Its signal is counted per **Routed pair** from the Run's finalized
+progress on real work (ADR-0030). Its signal is counted per **Routed pair** from the Run's finalized
 **Lane contributions** — a contribution that reached a terminal disposition without publishing is
-a **no-progress** one — and deliberately *not* from the **Strike** counter, which is a single
-Run-scoped counter every **Lane** shares and any Lane's progress resets, so it can never carry a
-per-pair meaning; the Strike counter's own job, ending a Run that is going nowhere, is unchanged
-(ADR-0030). The threshold is **Config**, and it is an absolute bar rather than a comparison:
+a **no-progress** one — and deliberately *not* from the **Strike** ledger, which records abandoned
+issues and has no per-pair meaning. The separate **Abandonment guard** is shared by every
+**Lane** and serial **Iteration**, resets on Closed/advanced, and ends a systematically failing
+Run (ADR-0061). The threshold is **Config**, and it is an absolute bar rather than a comparison:
 nothing is claimed about which pair would have done better, only that this one is failing. It is
 evaluated and applied after the **Run** ends and never mid-Run, at the one quiescent point where
 every Lane has finalized and nothing is in flight to race it over the single tracked file — which

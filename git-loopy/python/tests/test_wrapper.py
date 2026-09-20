@@ -17,7 +17,8 @@ from git_loopy import wrapper
 from git_loopy.wrapper import (
     CHECKPOINT_TRAILER_KEY,
     CLOSE_KEYWORD_RE,
-    NMTStrikeStateMachine,
+    AbandonmentGuard,
+    StrikeLedger,
     checkpoint_message,
     did_iteration_make_progress,
     extract_close_refs,
@@ -214,136 +215,55 @@ def test_progress_both_nonzero_is_progress() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# NMTStrikeStateMachine                                                        #
+# Strike accounting and the separate Abandonment guard                         #
 # --------------------------------------------------------------------------- #
 
 
-def test_strike_machine_starts_running_with_zero_strikes() -> None:
-    sm = NMTStrikeStateMachine(max_strikes=3)
-    assert sm.outcome == "running"
-    assert sm.strikes == 0
+def test_strikes_are_per_issue_and_have_no_ceiling() -> None:
+    ledger = StrikeLedger()
+    for ref in range(100):
+        ledger.record_abandonment(ref)
+        ledger.record_abandonment(ref)
+    assert ledger.strikes == 100
 
 
-def test_strike_machine_default_max_strikes_is_three() -> None:
-    """The default ``MAX_NMT_STRIKES`` value is three."""
-    sm = NMTStrikeStateMachine()
-    assert sm.max_strikes == 3
-
-
-def test_strike_machine_no_progress_alone_charges_nothing() -> None:
-    """#413: an unproductive Iteration is not by itself something to charge.
-
-    Before the **Attempt lifecycle** an Iteration was the only unit the Run
-    could count, so a no-progress one had to be the Strike. Now the Run knows
-    which *issue* it gave up on, and that is what the ceiling is spent against.
-    """
-    sm = NMTStrikeStateMachine(max_strikes=3)
-    sm.tick(commits_in_iter=0, auto_closures_in_iter=0)
-    assert sm.strikes == 0
-    assert sm.outcome == "running"
-
-
-def test_strike_machine_charges_one_strike_per_skipped_issue() -> None:
-    sm = NMTStrikeStateMachine(max_strikes=3)
-    sm.tick(commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=1)
-    assert sm.strikes == 1
-    assert sm.outcome == "running"
-
-
-def test_strike_machine_charges_every_issue_skipped_in_one_iteration() -> None:
-    """Two Lanes defeated in one accounting scope are two issues, not one."""
-    sm = NMTStrikeStateMachine(max_strikes=3)
-    sm.tick(commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=2)
-    assert sm.strikes == 2
-    assert sm.outcome == "running"
-
-
-def test_strike_machine_progress_refunds_no_skipped_issue() -> None:
-    """A **Skip** is monotonic, so the Strike that recorded one must be too.
-
-    Resetting here would make the ceiling defeasible by exactly the Runs it
-    exists for: an issue that lands one commit between two defeats is the
-    ordinary shape of a Run grinding, not evidence the Run recovered
-    (ADR-0040).
-    """
-    sm = NMTStrikeStateMachine(max_strikes=3)
-    sm.tick(commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=1)
-    assert sm.strikes == 1
-    sm.tick(commits_in_iter=1, auto_closures_in_iter=0)
-    assert sm.strikes == 1
-    assert sm.outcome == "running"
-
-
-def test_strike_machine_aborts_at_max_strikes() -> None:
-    sm = NMTStrikeStateMachine(max_strikes=3)
+def test_abandonment_guard_defaults_to_three_consecutive_abandonments() -> None:
+    guard = AbandonmentGuard()
+    assert guard.limit == 3
     for _ in range(2):
-        outcome = sm.tick(
-            commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=1
-        )
-        assert outcome == "running"
-    outcome = sm.tick(
-        commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=1
-    )
-    assert outcome == "aborted"
-    assert sm.outcome == "aborted"
-    assert sm.strikes == 3
+        guard.record_abandonment()
+        assert not guard.reached
+    guard.record_abandonment()
+    assert guard.reached
+    assert guard.consecutive == 3
 
 
-def test_strike_machine_aborts_the_moment_one_tick_crosses_the_ceiling() -> None:
-    """A scope that defeats several issues at once cannot overshoot silently."""
-    sm = NMTStrikeStateMachine(max_strikes=2)
-    outcome = sm.tick(
-        commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=3
-    )
-    assert outcome == "aborted"
-    assert sm.strikes == 3
+def test_progress_resets_the_guard_but_refunds_no_strike() -> None:
+    guard = AbandonmentGuard(limit=2)
+    ledger = StrikeLedger()
+    for ref in range(100):
+        ledger.record_abandonment(ref)
+        guard.record_abandonment()
+        assert not guard.reached
+        guard.record_progress()
+        assert guard.consecutive == 0
+    assert ledger.strikes == 100
 
 
-def test_strike_machine_ignores_nmt_sentinel_whatever_the_iteration_did() -> None:
-    """The NMT sentinel is informational only — it never affects outcome."""
-    sm = NMTStrikeStateMachine(max_strikes=3)
-    sm.tick(commits_in_iter=0, auto_closures_in_iter=0, saw_nmt_sentinel=True)
-    assert sm.strikes == 0
-    sm.tick(commits_in_iter=1, auto_closures_in_iter=0, saw_nmt_sentinel=True)
-    assert sm.strikes == 0
-    assert sm.outcome == "running"
+def test_progress_during_a_drain_resets_the_guard() -> None:
+    guard = AbandonmentGuard(limit=1)
+    guard.record_abandonment()
+    assert guard.reached
+    guard.record_progress()
+    assert not guard.reached
+    guard.record_abandonment()
+    assert guard.reached
 
 
-def test_strike_machine_is_terminal_after_abort() -> None:
-    """Once ``aborted``, the state machine is frozen.
-
-    A reused state machine object — e.g. if a future caller leaks one
-    across runs — must not silently un-abort itself when given a
-    progress tick or keep counting strikes past the abort threshold.
-    """
-    sm = NMTStrikeStateMachine(max_strikes=2)
-    sm.tick(commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=1)
-    outcome = sm.tick(
-        commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=1
-    )
-    assert outcome == "aborted"
-    assert sm.strikes == 2
-
-    outcome = sm.tick(commits_in_iter=1, auto_closures_in_iter=0)
-    assert outcome == "aborted"
-    assert sm.strikes == 2
-
-    outcome = sm.tick(
-        commits_in_iter=0, auto_closures_in_iter=0, issues_skipped_in_iter=1
-    )
-    assert outcome == "aborted"
-    assert sm.strikes == 2
-
-
-@pytest.mark.parametrize("bad_max", [0, -1, -100])
-def test_strike_machine_rejects_non_positive_max_strikes(bad_max: int) -> None:
-    """``max_strikes`` must be ≥ 1 — zero or negative is nonsensical and
-    would abort on the first no-progress iteration. Caught early so a
-    mis-configured env var surfaces as a clear error instead of a silently
-    broken loop.
-    """
-    with pytest.raises(ValueError, match="max_strikes"):
-        NMTStrikeStateMachine(max_strikes=bad_max)
+@pytest.mark.parametrize("bad_limit", [0, -1, -100, True, 1.5])
+def test_abandonment_guard_rejects_invalid_limits(bad_limit: int) -> None:
+    with pytest.raises(ValueError, match="abandonment guard limit"):
+        AbandonmentGuard(limit=bad_limit)
 
 
 # --------------------------------------------------------------------------- #

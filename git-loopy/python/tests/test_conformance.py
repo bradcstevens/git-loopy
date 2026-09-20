@@ -118,7 +118,8 @@ from git_loopy.ui import RunSummary
 from git_loopy.ui.renderer import Renderer
 from git_loopy.wrapper import (
     CLOSE_KEYWORD_RE,
-    NMTStrikeStateMachine,
+    AbandonmentGuard,
+    StrikeLedger,
     did_iteration_make_progress,
     extract_close_refs,
 )
@@ -457,19 +458,21 @@ _PYTHON_PROGRESS_STRIKES = _cases_for(_PROGRESS_STRIKES, "python")
     ids=lambda case: case["id"],
 )
 def test_progress_and_strike_fixture(case: dict[str, Any]) -> None:
-    state = NMTStrikeStateMachine(max_strikes=case["max_strikes"])
+    state = StrikeLedger()
+    guard = AbandonmentGuard(limit=case.get("max_consecutive_abandonments", 3))
 
     for step in case["steps"]:
         signals = step["signals"]
         expected = step["expected"]
         assert did_iteration_make_progress(**signals) is expected["progress"]
-        assert (
-            state.tick(
-                **signals, issues_skipped_in_iter=step.get("issues_skipped", 0)
-            )
-            == expected["outcome"]
-        )
+        for _ in range(step.get("issues_skipped", 0)):
+            state.record_abandonment(state.strikes + 1)
+            guard.record_abandonment()
+        if step.get("issue_status") in {"closed", "advanced"}:
+            guard.record_progress()
         assert state.strikes == expected["strikes"]
+        assert guard.consecutive == expected.get("consecutive_abandonments", 0)
+        assert ("abandonment_guard" if guard.reached else "running") == expected["outcome"]
 
 
 def test_the_progress_strike_fork_leaves_every_member_something_to_run() -> None:
@@ -529,7 +532,7 @@ _EXIT_CODES = _load_fixture("exit-codes.json")
 
 @pytest.mark.parametrize(
     "case",
-    _EXIT_CODES["cases"],
+    _EXIT_CODES["cases"] + _EXIT_CODES["python_cases"],
     ids=lambda case: case["id"],
 )
 def test_exit_code_fixture(case: dict[str, Any]) -> None:
@@ -1052,7 +1055,7 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
-    assert _EVENT_SCHEMA["contract_version"] == "2.9"
+    assert _EVENT_SCHEMA["contract_version"] == "2.10"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:

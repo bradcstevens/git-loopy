@@ -68,12 +68,38 @@ def test_every_run_config_field_survives_the_detached_encoding() -> None:
     from git_loopy import run_sidecar
 
     carried = set(run_sidecar._config_to_payload(RunConfig()))
-    declared = {field.name for field in dataclasses.fields(RunConfig)}
+    declared = {
+        field.name
+        for field in dataclasses.fields(RunConfig)
+        if field.name != "max_nmt_strikes"
+    }
 
     assert declared - carried == set(), (
         "these RunConfig fields are dropped when a detached Run is encoded, so "
         "the child process runs on their defaults instead"
     )
+
+
+def test_detached_encoding_writes_canonical_guard_and_reads_legacy_payload() -> None:
+    """New sidecars name the guard; historical sidecars still resume correctly."""
+    from git_loopy import run_sidecar
+
+    payload = run_sidecar._config_to_payload(
+        RunConfig(max_consecutive_abandonments=5)
+    )
+    historical = run_sidecar._config_from_payload({"max_nmt_strikes": 2})
+
+    assert payload["max_consecutive_abandonments"] == 5
+    assert "max_nmt_strikes" not in payload
+    assert historical.max_consecutive_abandonments == 2
+
+    with pytest.raises(ValueError, match="cannot disagree"):
+        run_sidecar._config_from_payload(
+            {
+                "max_consecutive_abandonments": 2,
+                "max_nmt_strikes": 3,
+            }
+        )
 
 
 def test_a_detached_run_carries_the_selected_route_policy() -> None:

@@ -140,7 +140,12 @@ def test_strike_updates_count_and_max() -> None:
     assert state.max_strikes == 5
 
 
-def test_wind_down_is_folded_from_the_trace_and_a_strike_lift_clears_it() -> None:
+def test_wind_down_is_folded_from_the_trace_and_a_guard_lift_clears_it() -> None:
+    for cause in ("strike_limit", "abandonment_guard"):
+        _assert_guard_lift(cause)
+
+
+def _assert_guard_lift(cause: str) -> None:
     """A Dashboard learns a revocable Strike drain only from Run Events."""
     state = _make_state()
     state.render({"type": events_module.WRAPPER_RUN_START})
@@ -152,7 +157,7 @@ def test_wind_down_is_folded_from_the_trace_and_a_strike_lift_clears_it() -> Non
     state.render(
         {
             "type": events_module.WRAPPER_STOP_REQUESTED,
-            "cause": "strike_limit",
+            "cause": cause,
             "stage": "drain",
             "draining": 2,
         }
@@ -160,14 +165,14 @@ def test_wind_down_is_folded_from_the_trace_and_a_strike_lift_clears_it() -> Non
 
     assert state.status == "draining"
     assert state.wind_down is not None
-    assert state.wind_down.cause == "strike_limit"
+    assert state.wind_down.cause == cause
     assert state.wind_down.stage == "drain"
     assert state.wind_down.draining == 2
 
     state.render(
         {
             "type": events_module.WRAPPER_STOP_LIFTED,
-            "cause": "strike_limit",
+            "cause": cause,
             "draining": 1,
         }
     )
@@ -178,6 +183,17 @@ def test_wind_down_is_folded_from_the_trace_and_a_strike_lift_clears_it() -> Non
     state.render({"type": events_module.WRAPPER_RUN_END, "outcome": "interrupted"})
     assert state.status == "interrupted"
     assert state.wind_down is None
+
+
+def test_per_issue_strikes_have_no_ceiling_in_the_header() -> None:
+    state = _make_state()
+    state.render({
+        "type": events_module.WRAPPER_RUN_START,
+        "max_consecutive_abandonments": 3,
+    })
+    state.render({"type": events_module.WRAPPER_STRIKE, "strikes": 8, "issue": 42})
+    assert "strikes 8" in format_header(state)
+    assert "strikes 8/" not in format_header(state)
 
 
 def test_wind_down_never_regresses_or_lifts_an_operator_stop() -> None:
