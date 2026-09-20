@@ -5855,6 +5855,52 @@ def test_a_blocked_candidate_is_left_pending_without_being_assessed(
     assert len(spied["assessments"]) == 2, spied["assessments"]
 
 
+@pytest.mark.parametrize("change", ["blocked", "unreadable", "closed", "unlabelled"])
+def test_queued_eligibility_is_reread_before_any_preparation_spend(
+    tmp_path, monkeypatch, change
+) -> None:
+    classified = []
+
+    async def classify(_proposer, _pair, item):
+        classified.append(item.ref)
+        return "<task-type>implementation</task-type>"
+
+    def change_tail(request, tracker):
+        if "#43:" not in request.issue:
+            return
+        item = tracker.issue_view(44)
+        changes = {
+            "blocked": {"blocked_by": BlockedByRead(
+                total_count=1, nodes=(BlockerNode(ref="x/y#99", state="OPEN"),)
+            )},
+            "unreadable": {"blocked_by": BlockedByRead.unprovable()},
+            "closed": {"state": "CLOSED"},
+            "unlabelled": {"labels": ()},
+        }
+        tracker.seed_issue(dataclass_replace(item, **changes[change]))
+
+    monkeypatch.setattr(loop_module.SessionTaskTypeProposer, "__call__", classify)
+    monkeypatch.setattr(
+        loop_module, "_make_task_type_label_client", _RecordingTaskTypeLabelClient
+    )
+    _, _, spied, exit_code = _dynamic_pool_run(
+        tmp_path, monkeypatch,
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "task-type:implementation", "semver:none"]),
+            _make_issue(43, labels=["ready-for-agent", "task-type:implementation", "semver:none"]),
+            _make_issue(44, labels=["ready-for-agent"]),
+        ],
+        classifier_model="gpt-5.6-terra",
+        classifier_effort="high",
+        on_assess=change_tail,
+        wait_for_prepared=(43, 44),
+    )
+    assert exit_code == 0
+    assert classified == []
+    assert len(spied["assessments"]) == 2
+    assert _prepared_records(tmp_path)[-1]["state"] == "unavailable"
+
+
 def test_a_static_route_is_prepared_without_asking_the_selector(
     tmp_path, monkeypatch
 ) -> None:
