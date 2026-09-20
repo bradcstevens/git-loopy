@@ -1,0 +1,58 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Publication retry - throwaway logic prototype</title>
+<style>
+body{font:18px system-ui;max-width:800px;margin:3rem auto;color:#243142}
+button{padding:.6rem;margin:.3rem;border:1px solid #4675a9;background:white;cursor:pointer}
+dl{background:#edf3fa;padding:1rem}dt{font-weight:bold}dd{margin-bottom:.8rem}
+</style>
+<h1>Publication retry</h1>
+<p>THROWAWAY LOGIC PROTOTYPE for #589. Can a publisher resume the same proved
+Publication input after a lost response without ever replacing a public tag?
+Unknown state blocks writes; readback, not a transport response, decides success.</p>
+<dl id="state"></dl><div id="actions"></div>
+<h2>Guided walkthroughs</h2><nav id="tabs"></nav><div id="steps"></div>
+<script>
+const initial = () => ({tag:"absent",release:"absent",readable:true,archive:true,result:"not published",writes:0});
+function transition(before, action) {
+  const s = {...before};
+  if (action === "Reset") return initial();
+  if (action === "Lose tag response") {s.tag="matching";s.writes++;s.result="response lost; read back";}
+  if (action === "Lose Release response") {s.release="matching";s.writes++;s.result="response lost; read back";}
+  if (action === "Host unavailable") s.readable=false;
+  if (action === "Host answers") s.readable=true;
+  if (action === "Different public tag") s.tag="mismatching";
+  if (action === "Different Release notes") s.release="mismatching";
+  if (action === "Different source archive") s.archive=false;
+  if (action === "Retry same input") {
+    if (!s.readable) s.result="refused: unknown state";
+    else if (s.tag==="mismatching" || s.release==="mismatching" || !s.archive)
+      s.result="refused: changed content needs a new Release version";
+    else {
+      if(s.tag==="absent"){s.tag="matching";s.writes++;}
+      if(s.release==="absent"){s.release="matching";s.writes++;}
+      s.result="complete: identity, notes, marking and source archive agree";
+    }
+  }
+  return s;
+}
+const scenarios={
+  "Fresh and repeat":["Retry same input","Retry same input"],
+  "Interrupted tag":["Lose tag response","Retry same input"],
+  "Unanswered Release":["Lose tag response","Lose Release response","Host unavailable","Retry same input","Host answers","Retry same input"],
+  "Immutable tag":["Different public tag","Retry same input"],
+  "Notes disagree":["Lose tag response","Different Release notes","Retry same input"],
+  "Archive disagrees":["Lose tag response","Different source archive","Retry same input"]
+};
+let current=initial();
+const labels={tag:"Public tag",release:"GitHub Release",readable:"Remote state known",archive:"Source archive agrees",result:"Publication outcome",writes:"Total writes"};
+function render(){document.querySelector("#state").innerHTML=Object.entries(current).map(([k,v])=>`<dt>${labels[k]}</dt><dd>${v}</dd>`).join("");}
+function button(label,target,run){const b=document.createElement("button");b.textContent=label;b.onclick=run;target.append(b);}
+function act(action){current=transition(current,action);render();}
+["Reset","Retry same input","Lose tag response","Lose Release response","Host unavailable","Host answers","Different public tag","Different Release notes","Different source archive"].forEach(a=>button(a,document.querySelector("#actions"),()=>act(a)));
+Object.entries(scenarios).forEach(([name,steps])=>button(name,document.querySelector("#tabs"),()=>{
+  act("Reset");const panel=document.querySelector("#steps");panel.replaceChildren();
+  steps.forEach((a,i)=>button(`${i+1}. ${a}`,panel,()=>act(a)));
+}));
+render();
+</script>
