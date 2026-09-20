@@ -130,26 +130,17 @@ def _config_from_payload(payload: dict[str, Any]) -> RunConfig:
     escalation = payload.get("escalation_rung")
     canonical_abandonments = payload.get("max_consecutive_abandonments")
     legacy_abandonments = payload.get("max_nmt_strikes")
-    if (
-        canonical_abandonments is not None
-        and legacy_abandonments is not None
-        and int(canonical_abandonments) != int(legacy_abandonments)
-    ):
-        raise ValueError(
-            "max_consecutive_abandonments and max_nmt_strikes cannot disagree"
-        )
     return RunConfig(
         model=payload.get("model"),
         reasoning_effort=payload.get("reasoning_effort"),
         issue_source=payload.get("issue_source", "github"),
         include_prs=payload.get("include_prs"),
         max_iterations=int(payload.get("max_iterations", 0)),
-        max_consecutive_abandonments=int(
-            canonical_abandonments
-            if canonical_abandonments is not None
-            else legacy_abandonments
-            if legacy_abandonments is not None
-            else 3
+        max_consecutive_abandonments=(
+            int(canonical_abandonments) if canonical_abandonments is not None else None
+        ),
+        max_nmt_strikes=(
+            int(legacy_abandonments) if legacy_abandonments is not None else None
         ),
         demotion_threshold=int(payload.get("demotion_threshold", 3)),
         deny_tools=frozenset(str(item) for item in payload.get("deny_tools", [])),

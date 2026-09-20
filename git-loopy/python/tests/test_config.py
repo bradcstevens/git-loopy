@@ -49,9 +49,12 @@ def test_run_config_normalizes_the_legacy_guard_constructor_alias() -> None:
     assert cfg.max_nmt_strikes == 5
 
 
-def test_run_config_rejects_contradictory_guard_constructor_aliases() -> None:
+@pytest.mark.parametrize(("canonical", "legacy"), [(5, 4), (3, 7), (5, 3)])
+def test_run_config_rejects_contradictory_guard_constructor_aliases(
+    canonical: int, legacy: int,
+) -> None:
     with pytest.raises(ValueError, match="cannot disagree"):
-        RunConfig(max_consecutive_abandonments=5, max_nmt_strikes=4)
+        RunConfig(max_consecutive_abandonments=canonical, max_nmt_strikes=legacy)
 
 
 def test_run_config_send_timeout_default_matches_constant() -> None:

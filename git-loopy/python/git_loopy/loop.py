@@ -1335,9 +1335,9 @@ class _Loop:
         self._wind_down_cause: str | None = None
         self._active_agent_task: asyncio.Task[object] | None = None
         self._strike_ledger = StrikeLedger()
-        self._abandonment_guard = AbandonmentGuard(
-            limit=config.max_consecutive_abandonments
-        )
+        guard_limit = config.max_consecutive_abandonments
+        assert guard_limit is not None  # RunConfig normalizes omitted inputs.
+        self._abandonment_guard = AbandonmentGuard(limit=guard_limit)
         # The last Iteration's **Session outcome** (#403). Held as the record
         # rather than as the line it prints, because the per-issue attempt
         # lifecycle is keyed off the ending; recording it is all that happens

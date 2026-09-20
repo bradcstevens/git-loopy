@@ -4253,6 +4253,36 @@ def test_success_between_abandonments_keeps_a_productive_run_alive(
     assert next(e for e in events if e["type"] == "wrapper.run.end")["outcome"] == "iteration_cap"
 
 
+def test_advanced_status_resets_the_guard_without_erasing_a_timeout_strike(
+    tmp_path, monkeypatch,
+) -> None:
+    fake_client, _ = _wire_multi_issue_github(
+        tmp_path, monkeypatch,
+        [_dated(n, f"2026-01-{n:02d}T00:00:00Z") for n in range(1, 5)],
+    )
+    fake_git = FakeGitClient(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    def commit_then_timeout() -> None:
+        fake_git.simulate_agent_commit(subject="Partial implementation")
+        raise asyncio.TimeoutError()
+
+    fake_client.on_send = commit_then_timeout
+    assert asyncio.run(loop_module.run(RunConfig(
+        issue_source="github", max_iterations=3, max_consecutive_abandonments=1,
+    ))) == 0
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    assert [s["strikes"] for s in _strikes(tmp_path)] == [1, 2, 3]
+    rows = [
+        issue for event in events if event["type"] == "wrapper.iteration.end"
+        for issue in event["issues"]
+    ]
+    assert [(row["status"], row["ending"]) for row in rows] == [
+        ("advanced", "timeout"), ("advanced", "timeout"), ("advanced", "timeout"),
+    ]
+    assert [e["outcome"] for e in events if e["type"] == "wrapper.run.end"] == ["iteration_cap"]
+
+
 def test_a_run_whose_every_issue_is_defeated_ends_all_skipped(
     tmp_path, monkeypatch
 ) -> None:

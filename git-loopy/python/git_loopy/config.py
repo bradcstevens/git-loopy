@@ -654,7 +654,8 @@ class RunConfig:
             unlimited.
         max_consecutive_abandonments: Consecutive issues abandoned before the
             **Abandonment guard** stops a Run non-zero. It resets whenever an
-            issue closes or advances. Must be ≥ 1.
+            issue closes or advances. Must be ≥ 1. Omission is normalized to
+            the legacy alias, if supplied, or the default of three.
         max_nmt_strikes: Legacy compatibility alias for
             :attr:`max_consecutive_abandonments`. It is not a Strike ceiling:
             Strikes are per-issue accounting and never end a Run. New callers
@@ -794,7 +795,7 @@ class RunConfig:
     issue_source: Literal["github", "prds"] = "github"
     include_prs: bool | None = None
     max_iterations: int = 0
-    max_consecutive_abandonments: int = 3
+    max_consecutive_abandonments: int | None = None
     max_nmt_strikes: int | None = None
     demotion_threshold: int = 3
     deny_tools: frozenset[str] = field(default_factory=frozenset)
@@ -835,25 +836,22 @@ class RunConfig:
                     f"max_nmt_strikes must be ≥ 1, got {self.max_nmt_strikes}"
                 )
             if (
-                self.max_consecutive_abandonments != 3
-                and self.max_nmt_strikes != 3
+                self.max_consecutive_abandonments is not None
                 and self.max_consecutive_abandonments != self.max_nmt_strikes
             ):
                 raise ValueError(
                     "max_consecutive_abandonments and max_nmt_strikes "
                     "cannot disagree"
                 )
-            if self.max_consecutive_abandonments == 3:
-                object.__setattr__(
-                    self,
-                    "max_consecutive_abandonments",
-                    self.max_nmt_strikes,
-                )
-        if self.max_consecutive_abandonments < 1:
+        limit = self.max_consecutive_abandonments
+        if limit is None:
+            limit = self.max_nmt_strikes if self.max_nmt_strikes is not None else 3
+        if limit < 1:
             raise ValueError(
                 "max_consecutive_abandonments must be ≥ 1, got "
-                f"{self.max_consecutive_abandonments}"
+                f"{limit}"
             )
+        object.__setattr__(self, "max_consecutive_abandonments", limit)
         if self.demotion_threshold < 1:
             raise ValueError(
                 f"demotion_threshold must be ≥ 1, got {self.demotion_threshold}"

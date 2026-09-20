@@ -547,7 +547,11 @@ Runner that binds one issue per Iteration can have an **Attempt lifecycle** to c
   refill again unless an operator Stop or Iteration cap independently forbids it. If the guard
   is still reached at quiescence, the Run ends with exit `1`, reason `abandonment_guard`.
   A Lane advances only when Integration publishes it: private commits alone do not reset the
-  guard. Failed attempts, routing refusals and Checkpoints do not reset or increment it.
+  guard. An unsuccessful attempt that does not abandon its issue, a routing refusal, or a
+  Checkpoint changes neither count. A serial commit still reaches **advanced** when its session
+  subsequently times out or crashes: the existing Status and Session outcome are independent
+  facts. That success resets the guard even if the ending also charged a Strike; the Strike
+  and Attempt lifecycle fact remain recorded.
 - **A Runner without a Pickup** MUST keep the original accounting: an Iteration that made no
   progress records a Strike, `GIT_LOOPY_MAX_NMT_STRIKES` (default `3`) **consecutive**
   no-progress Iterations end the Run with exit `1` (§10, `stuck`), and progress resets the
