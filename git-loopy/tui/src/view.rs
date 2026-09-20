@@ -181,9 +181,7 @@ pub struct Queue {
 pub struct QueueRow {
     pub issue: IssueRef,
     pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub ending: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub commits: Option<i64>,
     pub started_at: Option<String>,
     pub active_seconds: f64,

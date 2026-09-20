@@ -799,6 +799,88 @@ def test_observed_zero_normalized_consumption_stays_zero() -> None:
     assert row.usage == UsageTally(model="claude-opus-4.8", tokens_in=0, tokens_out=0)
 
 
+def test_normalized_contribution_projects_ending_and_advance_detail() -> None:
+    """The Queue keeps an observed ending separate from its Status."""
+    clock = _FakeClock()
+    state = _make_state(clock)
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 1})
+    _collect(state, 42)
+    state.render(
+        {
+            "type": events_module.WRAPPER_ITERATION_END,
+            "iter": 1,
+            "outcome": "no-progress",
+            "duration_seconds": 3.0,
+            "issues": [
+                {
+                    "issue": 42,
+                    "status": "no-progress",
+                    "ending": "timeout",
+                    "first_started_at": None,
+                    "closed_at": None,
+                    "issue_elapsed_seconds": None,
+                    "active_seconds": 3.0,
+                    "cumulative_active_seconds": 3.0,
+                    "consumption": {
+                        "model": None,
+                        "tokens_in": None,
+                        "tokens_out": None,
+                    },
+                    "peak_context_window": None,
+                }
+            ],
+        }
+    )
+    stalled = queue_rows(state)[0]
+    assert (stalled.status, stalled.ending, stalled.commits) == (
+        "no-progress",
+        "timeout",
+        None,
+    )
+
+    state.render({"type": events_module.WRAPPER_ITERATION_START, "iter": 2})
+    state.render(
+        {
+            "type": events_module.WRAPPER_ISSUE_ACTIVATED,
+            "issue": 42,
+            "activated_at": "2026-05-16T00:00:04.000Z",
+            "binding_source": "working_marker",
+        }
+    )
+    state.render(
+        {
+            "type": events_module.WRAPPER_ITERATION_END,
+            "iter": 2,
+            "outcome": "advanced",
+            "duration_seconds": 2.0,
+            "issues": [
+                {
+                    "issue": 42,
+                    "status": "advanced",
+                    "commits": 1,
+                    "first_started_at": "2026-05-16T00:00:04.000Z",
+                    "closed_at": None,
+                    "issue_elapsed_seconds": None,
+                    "active_seconds": 2.0,
+                    "cumulative_active_seconds": 5.0,
+                    "consumption": {
+                        "model": None,
+                        "tokens_in": None,
+                        "tokens_out": None,
+                    },
+                    "peak_context_window": None,
+                }
+            ],
+        }
+    )
+    advanced = queue_rows(state)[0]
+    assert (advanced.status, advanced.ending, advanced.commits) == (
+        "advanced",
+        None,
+        1,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Billed Cost (#329) — the Queue and the Summary agree by construction
 # ---------------------------------------------------------------------------

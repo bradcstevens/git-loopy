@@ -282,6 +282,8 @@ class IssueLedgerEntry:
     first_seen_at: float
     first_seen_iter: int
     status: str = STATUS_QUEUED
+    ending: str | None = None
+    commits: int | None = None
     started_at: float | None = None
     started_wall: datetime | None = None
     waiting_duration: float | None = None
@@ -1649,6 +1651,8 @@ class LiveRunState:
         if entry.active_since is None:
             entry.active_since = since
         entry.status = STATUS_ACTIVE
+        entry.ending = None
+        entry.commits = None
         self.active_ref = ref
         # Attribute this iteration's pre-activation output (issue #34): flush the
         # pending buffer into the now-active issue's own accumulating Log, then
@@ -1854,6 +1858,9 @@ class LiveRunState:
                 item.usage_observed for item in entry.contributions
             )
             entry.status = contribution.status
+            ending = payload.get("ending")
+            entry.ending = ending if isinstance(ending, str) else None
+            entry.commits = _optional_nonnegative_int(payload.get("commits"))
             entry.active_duration = max(
                 0.0,
                 _coerce_float(
@@ -2331,6 +2338,8 @@ class QueueRow:
 
     ref: int | str
     status: str
+    ending: str | None
+    commits: int | None
     started_wall: datetime | None
     active_seconds: float
     is_active: bool
@@ -2377,6 +2386,8 @@ def queue_rows(state: LiveRunState, *, now: float | None = None) -> list[QueueRo
             QueueRow(
                 ref=ref,
                 status=entry.status,
+                ending=entry.ending,
+                commits=entry.commits,
                 started_wall=entry.started_wall,
                 active_seconds=entry.active_seconds(base),
                 is_active=is_active,

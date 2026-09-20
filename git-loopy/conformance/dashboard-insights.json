@@ -28,7 +28,9 @@
         "label": "Status",
         "scope": "issue",
         "fields": [
-          "status"
+          "status",
+          "ending",
+          "commits"
         ]
       },
       {
@@ -244,6 +246,8 @@
       "queue_row": [
         "issue",
         "status",
+        "ending",
+        "commits",
         "started_at",
         "active_seconds",
         "closed_at",
@@ -321,7 +325,9 @@
       ]
     },
     "optional_projection_fields": {
-      "queue_row": ["preparation"],
+      "queue_row": [
+        "preparation"
+      ],
       "preparation": [
         "model",
         "effort",
@@ -347,8 +353,15 @@
       ]
     },
     "preparation_projection": {
-      "required_fields": ["state"],
-      "states": ["proposed", "static", "reusable", "unavailable"],
+      "required_fields": [
+        "state"
+      ],
+      "states": [
+        "proposed",
+        "static",
+        "reusable",
+        "unavailable"
+      ],
       "nonbinding": "Queue preparation describes a pending Routing proposal, never a final route, Lease, reservation, or Pool-emptiness signal. It leaves status unchanged and disappears at the authoritative Pickup.",
       "historical": "Historical rows omit preparation. Sparse preparation records retain only the fields they actually supplied; missing provenance and measurement metadata stay unknown."
     },
@@ -424,7 +437,9 @@
             "integration_backlog": true,
             "adaptive_lane_limit": true,
             "contribution_events": true,
-            "execution_hosts": ["local"]
+            "execution_hosts": [
+              "local"
+            ]
           },
           "max_nmt_strikes": 3
         },
@@ -577,6 +592,8 @@
                   {
                     "issue": 42,
                     "status": "active",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-15T18:00:01-06:00",
                     "active_seconds": 2.0,
                     "closed_at": null,
@@ -685,6 +702,8 @@
                   {
                     "issue": 42,
                     "status": "closed",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-15T18:00:01-06:00",
                     "active_seconds": 4.0,
                     "closed_at": "2026-05-15T18:00:05-06:00",
@@ -1021,6 +1040,8 @@
                   {
                     "issue": 7,
                     "status": "active",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-16T05:30:01+05:30",
                     "active_seconds": 1.0,
                     "closed_at": null,
@@ -1034,6 +1055,8 @@
                   {
                     "issue": 9,
                     "status": "queued",
+                    "ending": null,
+                    "commits": null,
                     "started_at": null,
                     "active_seconds": 0.0,
                     "closed_at": null,
@@ -1143,6 +1166,8 @@
                   {
                     "issue": 9,
                     "status": "queued",
+                    "ending": null,
+                    "commits": null,
                     "started_at": null,
                     "active_seconds": 0.0,
                     "closed_at": null,
@@ -1156,6 +1181,8 @@
                   {
                     "issue": 7,
                     "status": "closed",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-16T05:30:01+05:30",
                     "active_seconds": 48.0,
                     "closed_at": "2026-05-16T05:30:50+05:30",
@@ -1367,7 +1394,9 @@
             "integration_backlog": true,
             "adaptive_lane_limit": true,
             "contribution_events": true,
-            "execution_hosts": ["local"]
+            "execution_hosts": [
+              "local"
+            ]
           },
           "max_nmt_strikes": 3
         },
@@ -1567,6 +1596,8 @@
                   {
                     "issue": 101,
                     "status": "active",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-17T09:00:05+00:00",
                     "active_seconds": 5.0,
                     "closed_at": null,
@@ -1580,6 +1611,8 @@
                   {
                     "issue": 102,
                     "status": "queued",
+                    "ending": null,
+                    "commits": null,
                     "started_at": null,
                     "active_seconds": 0.0,
                     "closed_at": null,
@@ -1708,6 +1741,8 @@
                   {
                     "issue": 102,
                     "status": "queued",
+                    "ending": null,
+                    "commits": null,
                     "started_at": null,
                     "active_seconds": 0.0,
                     "closed_at": null,
@@ -1721,6 +1756,8 @@
                   {
                     "issue": 101,
                     "status": "closed",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-17T09:00:05+00:00",
                     "active_seconds": 15.0,
                     "closed_at": "2026-05-17T09:00:20+00:00",
@@ -1865,7 +1902,9 @@
             "integration_backlog": true,
             "adaptive_lane_limit": true,
             "contribution_events": true,
-            "execution_hosts": ["local"]
+            "execution_hosts": [
+              "local"
+            ]
           },
           "rate_card": {
             "models": {
@@ -2267,7 +2306,11 @@
               "issue_elapsed_seconds": null,
               "active_seconds": 0,
               "cumulative_active_seconds": 0,
-              "consumption": {"model": null, "tokens_in": null, "tokens_out": null},
+              "consumption": {
+                "model": null,
+                "tokens_in": null,
+                "tokens_out": null
+              },
               "peak_context_window": null
             },
             {
@@ -2279,7 +2322,11 @@
               "issue_elapsed_seconds": null,
               "active_seconds": 0,
               "cumulative_active_seconds": 0,
-              "consumption": {"model": null, "tokens_in": null, "tokens_out": null},
+              "consumption": {
+                "model": null,
+                "tokens_in": null,
+                "tokens_out": null
+              },
               "peak_context_window": null
             },
             {
@@ -2291,7 +2338,11 @@
               "issue_elapsed_seconds": null,
               "active_seconds": 0,
               "cumulative_active_seconds": 0,
-              "consumption": {"model": null, "tokens_in": null, "tokens_out": null},
+              "consumption": {
+                "model": null,
+                "tokens_in": null,
+                "tokens_out": null
+              },
               "peak_context_window": null
             }
           ]
@@ -2354,6 +2405,8 @@
                   {
                     "issue": 310,
                     "status": "active",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-18T09:00:02-07:00",
                     "active_seconds": 6.0,
                     "closed_at": null,
@@ -2367,6 +2420,8 @@
                   {
                     "issue": 311,
                     "status": "active",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-18T09:00:03-07:00",
                     "active_seconds": 5.0,
                     "closed_at": null,
@@ -2474,6 +2529,8 @@
                   {
                     "issue": 310,
                     "status": "advanced",
+                    "ending": null,
+                    "commits": 1,
                     "started_at": "2026-05-18T09:00:02-07:00",
                     "active_seconds": 28.0,
                     "closed_at": null,
@@ -2482,12 +2539,13 @@
                     "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
-                    "premium_requests": null,
-                    "commits": 1
+                    "premium_requests": null
                   },
                   {
                     "issue": 311,
                     "status": "no-progress",
+                    "ending": "no_progress",
+                    "commits": null,
                     "started_at": "2026-05-18T09:00:03-07:00",
                     "active_seconds": 27.0,
                     "closed_at": null,
@@ -2496,8 +2554,7 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null,
-                    "ending": "no_progress"
+                    "premium_requests": null
                   }
                 ]
               },
@@ -2639,6 +2696,8 @@
                   {
                     "issue": 310,
                     "status": "advanced",
+                    "ending": null,
+                    "commits": 1,
                     "started_at": "2026-05-18T09:00:02-07:00",
                     "active_seconds": 28.0,
                     "closed_at": null,
@@ -2647,12 +2706,13 @@
                     "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
-                    "premium_requests": null,
-                    "commits": 1
+                    "premium_requests": null
                   },
                   {
                     "issue": 311,
                     "status": "no-progress",
+                    "ending": "no_progress",
+                    "commits": null,
                     "started_at": "2026-05-18T09:00:03-07:00",
                     "active_seconds": 27.0,
                     "closed_at": null,
@@ -2661,12 +2721,13 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null,
-                    "ending": "no_progress"
+                    "premium_requests": null
                   },
                   {
                     "issue": 312,
                     "status": "no-progress",
+                    "ending": "timeout",
+                    "commits": null,
                     "started_at": "2026-05-18T09:00:32-07:00",
                     "active_seconds": 18.0,
                     "closed_at": null,
@@ -2675,8 +2736,7 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null,
-                    "ending": "timeout"
+                    "premium_requests": null
                   }
                 ]
               },
@@ -2839,6 +2899,8 @@
                   {
                     "issue": 310,
                     "status": "advanced",
+                    "ending": null,
+                    "commits": 1,
                     "started_at": "2026-05-18T09:00:02-07:00",
                     "active_seconds": 28.0,
                     "closed_at": null,
@@ -2847,12 +2909,13 @@
                     "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
-                    "premium_requests": null,
-                    "commits": 1
+                    "premium_requests": null
                   },
                   {
                     "issue": 311,
                     "status": "no-progress",
+                    "ending": "no_progress",
+                    "commits": null,
                     "started_at": "2026-05-18T09:00:03-07:00",
                     "active_seconds": 27.0,
                     "closed_at": null,
@@ -2861,12 +2924,13 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null,
-                    "ending": "no_progress"
+                    "premium_requests": null
                   },
                   {
                     "issue": 312,
                     "status": "no-progress",
+                    "ending": "timeout",
+                    "commits": null,
                     "started_at": "2026-05-18T09:00:32-07:00",
                     "active_seconds": 18.0,
                     "closed_at": null,
@@ -2875,12 +2939,13 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null,
-                    "ending": "timeout"
+                    "premium_requests": null
                   },
                   {
                     "issue": 313,
                     "status": "advanced",
+                    "ending": null,
+                    "commits": 1,
                     "started_at": "2026-05-18T09:00:54-07:00",
                     "active_seconds": 19.0,
                     "closed_at": null,
@@ -2889,12 +2954,13 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null,
-                    "commits": 1
+                    "premium_requests": null
                   },
                   {
                     "issue": 314,
                     "status": "closed",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-18T09:01:14-07:00",
                     "active_seconds": 3.0,
                     "closed_at": "2026-05-18T09:01:14-07:00",
@@ -2909,6 +2975,7 @@
                     "issue": 315,
                     "status": "no-progress",
                     "ending": "no_more_tasks",
+                    "commits": null,
                     "started_at": null,
                     "active_seconds": 0.0,
                     "closed_at": null,
@@ -2923,6 +2990,7 @@
                     "issue": 316,
                     "status": "no-progress",
                     "ending": "content_filtered",
+                    "commits": null,
                     "started_at": null,
                     "active_seconds": 0.0,
                     "closed_at": null,
@@ -2937,6 +3005,7 @@
                     "issue": 317,
                     "status": "no-progress",
                     "ending": "crash",
+                    "commits": null,
                     "started_at": null,
                     "active_seconds": 0.0,
                     "closed_at": null,
@@ -3314,6 +3383,8 @@
                   {
                     "issue": 55,
                     "status": "active",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-19T13:00:01+01:00",
                     "active_seconds": 9.0,
                     "closed_at": null,
@@ -3433,6 +3504,8 @@
                   {
                     "issue": 55,
                     "status": "gone",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-19T13:00:01+01:00",
                     "active_seconds": 19.0,
                     "closed_at": null,
@@ -3562,7 +3635,9 @@
             "integration_backlog": true,
             "adaptive_lane_limit": true,
             "contribution_events": true,
-            "execution_hosts": ["local"]
+            "execution_hosts": [
+              "local"
+            ]
           },
           "rate_card": null,
           "max_nmt_strikes": 3
@@ -3778,6 +3853,8 @@
                   {
                     "issue": 601,
                     "status": "active",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-21T07:00:02-05:00",
                     "active_seconds": 5.0,
                     "closed_at": null,
@@ -3791,6 +3868,8 @@
                   {
                     "issue": 602,
                     "status": "active",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-21T07:00:02-05:00",
                     "active_seconds": 5.0,
                     "closed_at": null,
@@ -3893,6 +3972,8 @@
                   {
                     "issue": 601,
                     "status": "advanced",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-21T07:00:02-05:00",
                     "active_seconds": 27.0,
                     "closed_at": null,
@@ -3906,6 +3987,8 @@
                   {
                     "issue": 602,
                     "status": "no-progress",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-21T07:00:02-05:00",
                     "active_seconds": 27.0,
                     "closed_at": null,
@@ -4034,7 +4117,9 @@
             "integration_backlog": true,
             "adaptive_lane_limit": true,
             "contribution_events": true,
-            "execution_hosts": ["local"]
+            "execution_hosts": [
+              "local"
+            ]
           },
           "max_nmt_strikes": 3
         },
@@ -4187,6 +4272,8 @@
                   {
                     "issue": 42,
                     "status": "active",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-15T18:00:01-06:00",
                     "active_seconds": 2.0,
                     "closed_at": null,
@@ -4295,6 +4382,8 @@
                   {
                     "issue": 42,
                     "status": "closed",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-15T18:00:01-06:00",
                     "active_seconds": 4.0,
                     "closed_at": "2026-05-15T18:00:05-06:00",
@@ -4428,7 +4517,9 @@
             "integration_backlog": true,
             "adaptive_lane_limit": true,
             "contribution_events": true,
-            "execution_hosts": ["local"]
+            "execution_hosts": [
+              "local"
+            ]
           },
           "max_nmt_strikes": 3
         },
@@ -4609,6 +4700,8 @@
                   {
                     "issue": 42,
                     "status": "active",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-15T18:00:01-06:00",
                     "active_seconds": 2.0,
                     "closed_at": null,
@@ -4627,6 +4720,8 @@
                   {
                     "issue": 46,
                     "status": "queued",
+                    "ending": null,
+                    "commits": null,
                     "started_at": null,
                     "active_seconds": 0.0,
                     "closed_at": null,
@@ -4740,6 +4835,8 @@
                   {
                     "issue": 46,
                     "status": "queued",
+                    "ending": null,
+                    "commits": null,
                     "started_at": null,
                     "active_seconds": 0.0,
                     "closed_at": null,
@@ -4753,6 +4850,8 @@
                   {
                     "issue": 42,
                     "status": "closed",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-15T18:00:01-06:00",
                     "active_seconds": 4.0,
                     "closed_at": "2026-05-15T18:00:05-06:00",
@@ -4865,7 +4964,9 @@
             "integration_backlog": true,
             "adaptive_lane_limit": true,
             "contribution_events": true,
-            "execution_hosts": ["local"]
+            "execution_hosts": [
+              "local"
+            ]
           },
           "max_nmt_strikes": 3
         },
@@ -5115,6 +5216,8 @@
                   {
                     "issue": 88,
                     "status": "active",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-15T18:00:01-06:00",
                     "active_seconds": 2.0,
                     "closed_at": null,
@@ -5238,6 +5341,8 @@
                   {
                     "issue": 88,
                     "status": "no-progress",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-15T18:00:01-06:00",
                     "active_seconds": 4.0,
                     "closed_at": null,
@@ -5398,6 +5503,8 @@
                   {
                     "issue": 88,
                     "status": "no-progress",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-15T18:00:01-06:00",
                     "active_seconds": 4.0,
                     "closed_at": null,
@@ -5563,6 +5670,8 @@
                   {
                     "issue": 88,
                     "status": "closed",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-15T18:00:01-06:00",
                     "active_seconds": 8.0,
                     "closed_at": "2026-05-15T18:00:10-06:00",
@@ -5757,7 +5866,9 @@
             "integration_backlog": true,
             "adaptive_lane_limit": true,
             "contribution_events": true,
-            "execution_hosts": ["local"]
+            "execution_hosts": [
+              "local"
+            ]
           },
           "max_nmt_strikes": 3
         },
@@ -5946,6 +6057,8 @@
                   {
                     "issue": 51,
                     "status": "advanced",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-15T18:00:01-06:00",
                     "active_seconds": 2.0,
                     "closed_at": null,
@@ -6101,6 +6214,8 @@
                   {
                     "issue": 51,
                     "status": "closed",
+                    "ending": null,
+                    "commits": null,
                     "started_at": "2026-05-15T18:00:01-06:00",
                     "active_seconds": 5.0,
                     "closed_at": "2026-05-15T18:00:07-06:00",
@@ -6246,232 +6361,232 @@
     {
       "id": "release-line-advances-replace-the-header-placeholder",
       "inputs": {
-      "model": "gpt-5.6-sol",
-      "reasoning_effort": "high",
-      "max_strikes": 3,
-      "local_utc_offset_minutes": 0,
-      "drill_in_issue": 42
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high",
+        "max_strikes": 3,
+        "local_utc_offset_minutes": 0,
+        "drill_in_issue": 42
       },
       "events": [
-      {
-        "ts": "2026-05-16T00:00:00.000Z",
-        "observed_monotonic": 0,
-        "run_id": "01HXR0000000000000000000RL",
-        "iter": null,
-        "type": "wrapper.run.start",
-        "release_version": "1.2.3",
-        "schema_version": 1,
-        "insight_capabilities": {
-          "agent_output": true,
-          "structured_agent_events": true,
-          "token_usage": true,
-          "context_window": true,
-          "skill_consultation": true,
-          "cost": true,
-          "routing": true
+        {
+          "ts": "2026-05-16T00:00:00.000Z",
+          "observed_monotonic": 0,
+          "run_id": "01HXR0000000000000000000RL",
+          "iter": null,
+          "type": "wrapper.run.start",
+          "release_version": "1.2.3",
+          "schema_version": 1,
+          "insight_capabilities": {
+            "agent_output": true,
+            "structured_agent_events": true,
+            "token_usage": true,
+            "context_window": true,
+            "skill_consultation": true,
+            "cost": true,
+            "routing": true
+          },
+          "parallel_capabilities": {
+            "parallel_mode": true,
+            "rolling_dispatch": true,
+            "integration_backlog": true,
+            "adaptive_lane_limit": true,
+            "contribution_events": true,
+            "execution_hosts": [
+              "local"
+            ]
+          },
+          "max_nmt_strikes": 3
         },
-        "parallel_capabilities": {
-          "parallel_mode": true,
-          "rolling_dispatch": true,
-          "integration_backlog": true,
-          "adaptive_lane_limit": true,
-          "contribution_events": true,
-          "execution_hosts": [
-            "local"
-          ]
+        {
+          "ts": "2026-05-16T00:00:01.000Z",
+          "observed_monotonic": 1,
+          "run_id": "01HXR0000000000000000000RL",
+          "iter": null,
+          "type": "wrapper.release.advanced",
+          "bump_class": "patch",
+          "issue": 42,
+          "release_target": "1.2.4",
+          "release_version": "1.2.4-dev.1"
         },
-        "max_nmt_strikes": 3
-      },
-      {
-        "ts": "2026-05-16T00:00:01.000Z",
-        "observed_monotonic": 1,
-        "run_id": "01HXR0000000000000000000RL",
-        "iter": null,
-        "type": "wrapper.release.advanced",
-        "bump_class": "patch",
-        "issue": 42,
-        "release_target": "1.2.4",
-        "release_version": "1.2.4-dev.1"
-      },
-      {
-        "ts": "2026-05-16T00:00:02.000Z",
-        "observed_monotonic": 2,
-        "run_id": "01HXR0000000000000000000RL",
-        "iter": null,
-        "type": "wrapper.release.advanced",
-        "bump_class": "minor",
-        "issue": 43,
-        "release_target": "1.3.0",
-        "release_version": "1.3.0-dev.2"
-      }
+        {
+          "ts": "2026-05-16T00:00:02.000Z",
+          "observed_monotonic": 2,
+          "run_id": "01HXR0000000000000000000RL",
+          "iter": null,
+          "type": "wrapper.release.advanced",
+          "bump_class": "minor",
+          "issue": 43,
+          "release_target": "1.3.0",
+          "release_version": "1.3.0-dev.2"
+        }
       ],
       "snapshots": [
-      {
-        "after_event_count": 1,
-        "render_at_utc": "2026-05-16T00:00:00.000Z",
-        "render_at_monotonic": 0,
-        "expected": {
-          "dashboard": {
-            "header": {
-              "run_id": "01HXR0000000000000000000RL",
-              "model": "gpt-5.6-sol",
-              "reasoning_effort": "high",
-              "started_at": "2026-05-16T00:00:00+00:00",
-              "elapsed_seconds": 0.0,
-              "status": "running",
-              "strikes": {
-                "current": 0,
-                "limit": 3
+        {
+          "after_event_count": 1,
+          "render_at_utc": "2026-05-16T00:00:00.000Z",
+          "render_at_monotonic": 0,
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000RL",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-16T00:00:00+00:00",
+                "elapsed_seconds": 0.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
+                }
               },
-              "active_issue": null,
-              "active_seconds": null,
-              "context_fill": {
-                "availability": "not_observed",
-                "current_tokens": null,
-                "token_limit": null,
-                "percentage": null,
-                "effective_target_tokens": null,
-                "effective_ceiling_tokens": null
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": []
               },
-              "release_target": null,
-              "release_version": null,
-              "cost": {
-                "availability": "available"
+              "activity": {
+                "issue": null,
+                "lines": []
               },
-              "rate_card": {
-                "availability": "not_declared"
-              },
-              "routing": {
-                "availability": "available"
+              "summary": {
+                "rows": []
               }
             },
-            "queue": {
-              "columns": [
-                "issue",
-                "status",
-                "started_at",
-                "active_seconds",
-                "closed_at",
-                "iteration_count",
-                "route",
-                "tokens_in",
-                "tokens_out",
-                "credits",
-                "premium_requests"
-              ],
-              "rows": []
-            },
-            "activity": {
-              "issue": null,
-              "lines": []
-            },
-            "summary": {
-              "rows": []
+            "drill_in": {
+              "detail_header": {
+                "issue": 42,
+                "status": "gone",
+                "started_at": null,
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 0.0,
+                "iteration_count": 0
+              },
+              "iteration_breakdown": {
+                "rows": []
+              },
+              "log": {
+                "issue": 42,
+                "lines": []
+              }
             }
-          },
-          "drill_in": {
-            "detail_header": {
-              "issue": 42,
-              "status": "gone",
-              "started_at": null,
-              "closed_at": null,
-              "issue_elapsed_seconds": null,
-              "active_seconds": 0.0,
-              "iteration_count": 0
+          }
+        },
+        {
+          "after_event_count": 3,
+          "render_at_utc": "2026-05-16T00:00:02.000Z",
+          "render_at_monotonic": 2,
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000RL",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-16T00:00:00+00:00",
+                "elapsed_seconds": 2.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": "1.3.0",
+                "release_version": "1.3.0-dev.2",
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": []
+              },
+              "activity": {
+                "issue": null,
+                "lines": []
+              },
+              "summary": {
+                "rows": []
+              }
             },
-            "iteration_breakdown": {
-              "rows": []
-            },
-            "log": {
-              "issue": 42,
-              "lines": []
+            "drill_in": {
+              "detail_header": {
+                "issue": 42,
+                "status": "gone",
+                "started_at": null,
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 0.0,
+                "iteration_count": 0
+              },
+              "iteration_breakdown": {
+                "rows": []
+              },
+              "log": {
+                "issue": 42,
+                "lines": []
+              }
             }
           }
         }
-      },
-      {
-        "after_event_count": 3,
-        "render_at_utc": "2026-05-16T00:00:02.000Z",
-        "render_at_monotonic": 2,
-        "expected": {
-          "dashboard": {
-            "header": {
-              "run_id": "01HXR0000000000000000000RL",
-              "model": "gpt-5.6-sol",
-              "reasoning_effort": "high",
-              "started_at": "2026-05-16T00:00:00+00:00",
-              "elapsed_seconds": 2.0,
-              "status": "running",
-              "strikes": {
-                "current": 0,
-                "limit": 3
-              },
-              "active_issue": null,
-              "active_seconds": null,
-              "context_fill": {
-                "availability": "not_observed",
-                "current_tokens": null,
-                "token_limit": null,
-                "percentage": null,
-                "effective_target_tokens": null,
-                "effective_ceiling_tokens": null
-              },
-              "release_target": "1.3.0",
-              "release_version": "1.3.0-dev.2",
-              "cost": {
-                "availability": "available"
-              },
-              "rate_card": {
-                "availability": "not_declared"
-              },
-              "routing": {
-                "availability": "available"
-              }
-            },
-            "queue": {
-              "columns": [
-                "issue",
-                "status",
-                "started_at",
-                "active_seconds",
-                "closed_at",
-                "iteration_count",
-                "route",
-                "tokens_in",
-                "tokens_out",
-                "credits",
-                "premium_requests"
-              ],
-              "rows": []
-            },
-            "activity": {
-              "issue": null,
-              "lines": []
-            },
-            "summary": {
-              "rows": []
-            }
-          },
-          "drill_in": {
-            "detail_header": {
-              "issue": 42,
-              "status": "gone",
-              "started_at": null,
-              "closed_at": null,
-              "issue_elapsed_seconds": null,
-              "active_seconds": 0.0,
-              "iteration_count": 0
-            },
-            "iteration_breakdown": {
-              "rows": []
-            },
-            "log": {
-              "issue": 42,
-              "lines": []
-            }
-          }
-        }
-      }
       ]
     }
   ],

@@ -539,7 +539,12 @@ fn draw_queue(
     let mut columns = QUEUE_COLUMNS;
     columns[1].width = rows
         .iter()
-        .map(|row| status_cell(&row.status, row.ending.as_deref(), row.commits).len() as u16 + 2)
+        .map(|row| {
+            status_cell(&row.status, row.ending.as_deref(), row.commits)
+                .chars()
+                .count() as u16
+                + 2
+        })
         .max()
         .unwrap_or(12)
         .max(12);
@@ -579,7 +584,7 @@ fn status_cell(status: &str, ending: Option<&str>, commits: Option<i64>) -> Stri
         (_, Some("crash"), _) => format!("{status} · crashed"),
         (_, Some("no_more_tasks"), _) => format!("{status} · no work remains"),
         (_, Some("content_filtered"), _) => format!("{status} · content filtered"),
-        ("advanced", None, Some(commits)) => {
+        ("advanced", None, Some(commits)) if commits > 0 => {
             let unit = if commits == 1 { "commit" } else { "commits" };
             format!("advanced · {commits} {unit}")
         }

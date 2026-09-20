@@ -385,6 +385,7 @@ def test_pr_advance_is_progress_without_authoritative_closure_fields() -> None:
     assert payload["issues"][0]["status"] == "advanced"
     assert payload["issues"][0]["closed_at"] is None
     assert payload["issues"][0]["issue_elapsed_seconds"] is None
+    assert "commits" not in payload["issues"][0]
 
 
 def test_empty_rollup_normalizes_to_no_progress() -> None:
