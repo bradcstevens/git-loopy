@@ -2875,6 +2875,28 @@ def test_a_prepared_route_reads_back_its_rationale_and_provenance(
         )
 
 
+def test_an_unresolvable_viewer_zone_labels_the_readback_instead_of_faking_local(
+    zoneless_viewer: None,
+) -> None:
+    """#597 AC9 at the seam an operator actually reads.
+
+    A viewing machine whose zone does not resolve still gets a usable readback.
+    What it must not get is a bare ``+00:00``, because that is exactly what a
+    viewer genuinely in UTC is shown — so an operator six hours out would read
+    a correct-looking wall clock that is six hours wrong, with nothing on the
+    line to say so.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_prepared_event(evidence_retrieved_at="2026-09-19T08:45:00.000Z"))
+
+    out = " ".join(buf.getvalue().split())
+    assert "2026-09-19T08:45:00+00:00 UTC (local zone unresolved)" in out, (
+        "an unresolved zone must say so on the line it renders"
+    )
+    assert "2026-09-19T08:45:00.000Z" not in out
+
+
 def test_a_null_prepared_effort_is_not_presented_as_configured() -> None:
     renderer, _summary, buf = _make_renderer()
 
