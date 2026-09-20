@@ -87,11 +87,21 @@ fn render_lines(
     rows: u16,
     capabilities: TerminalCapabilities,
 ) -> Vec<String> {
+    render_scrolled_lines(view, columns, rows, capabilities, 0)
+}
+
+fn render_scrolled_lines(
+    view: &RunView,
+    columns: u16,
+    rows: u16,
+    capabilities: TerminalCapabilities,
+    queue_offset: usize,
+) -> Vec<String> {
     let dashboard = DashboardFrame {
         view: view.clone(),
         screen: Screen::Dashboard,
         selected: IssueRef::number(0),
-        queue_offset: 0,
+        queue_offset,
         log_position: Default::default(),
         activity_position: Default::default(),
         activity_band: Default::default(),
@@ -272,6 +282,27 @@ fn an_ascii_queue_keeps_the_ending_without_a_unicode_separator() {
     let timeout = queue.iter().find(|row| row.starts_with("#312")).unwrap();
     assert_eq!(cells(timeout)[1], "no-progress - timed out");
     assert!(queue.iter().all(|row| row.is_ascii()));
+}
+
+#[test]
+fn scrolling_past_a_long_ending_does_not_change_the_queue_columns() {
+    let mut view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    view.dashboard
+        .queue
+        .rows
+        .extend(view.dashboard.queue.rows.clone());
+    for row in &mut view.dashboard.queue.rows {
+        row.ending = None;
+        row.commits = None;
+    }
+    view.dashboard.queue.rows[0].ending = Some("timeout".to_string());
+    view.dashboard.queue.rows[0].commits = Some(1);
+    let before = render_scrolled_lines(&view, 170, 40, TerminalCapabilities::default(), 0);
+    let after = render_scrolled_lines(&view, 170, 40, TerminalCapabilities::default(), 1);
+    let before = band(&before, "Queue");
+    let after = band(&after, "Queue");
+    assert_ne!(cells(&before[1])[0], cells(&after[1])[0]);
+    assert_eq!(cells(&before[0]), cells(&after[0]));
 }
 
 #[test]

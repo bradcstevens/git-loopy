@@ -208,13 +208,14 @@ pub fn draw_dashboard(frame: &mut Frame, dashboard: &DashboardFrame) {
     draw_queue(
         frame,
         bands.queue,
-        &view.dashboard.queue.rows[dashboard.queue_offset.min(
+        &view.dashboard.queue.rows,
+        dashboard.queue_offset.min(
             view.dashboard
                 .queue
                 .rows
                 .len()
                 .saturating_sub(usize::from(bands.queue_rows().height)),
-        )..],
+        ),
         cost_placeholder(&view.dashboard.header, &glyphs),
         routing_placeholder(&view.dashboard.header, &glyphs),
         &glyphs,
@@ -554,6 +555,7 @@ fn draw_queue(
     frame: &mut Frame,
     area: Rect,
     rows: &[QueueRow],
+    offset: usize,
     cost: &str,
     routing: &str,
     glyphs: &Glyphs,
@@ -578,7 +580,7 @@ fn draw_queue(
         frame,
         area,
         &columns,
-        rows.iter().map(|row| {
+        rows.iter().skip(offset).map(|row| {
             vec![
                 issue_label(&row.issue),
                 status_cell(&row.status, row.ending.as_deref(), row.commits, glyphs),
