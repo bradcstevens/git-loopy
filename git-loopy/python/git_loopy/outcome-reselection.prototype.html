@@ -1,0 +1,129 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PROTOTYPE - outcome-aware Pickup</title>
+<style>
+body { max-width: 860px; margin: 3rem auto; padding: 1rem; font: 17px system-ui; color: #223; }
+h1 { font-size: 1.7rem; }
+button { margin: .3rem; padding: .6rem; cursor: pointer; }
+dt { font-weight: bold; } dd { margin: .2rem 0 1rem; }
+section { border-top: 2px solid #386a70; margin-top: 2rem; padding-top: 1rem; }
+[aria-selected="true"] { background: #386a70; color: white; }
+</style>
+<h1>PROTOTYPE - outcome-aware Pickup</h1>
+<p>Can a new Pickup reconsider the previous outcome without buying extra Attempts,
+mistaking a crash for inability, or overriding an explicit Static route?
+This in-memory sketch preserves fresh / retrying / skipped independently of the
+chosen configuration. No configuration changes while an Agent runs.</p>
+<section><h2>Current Run</h2><dl id="state"></dl><p id="notice"></p></section>
+<section><h2>Free play</h2><div id="actions"></div></section>
+<section><h2>Guided walkthroughs</h2><div id="tabs" role="tablist"></div>
+<p id="description"></p><div id="steps"></div></section>
+<script>
+const initial = () => ({
+  position: "fresh", strikes: 0, running: null, history: [], available: true,
+  explicitRung: false, allowance: 4, decision: null, notice: "Ready for Pickup."
+});
+function transition(before, action) {
+  const state = structuredClone(before);
+  if (action === "reset") return initial();
+  if (action === "unavailable") state.available = false;
+  if (action === "rung") state.explicitRung = true;
+  if (action === "pickup") {
+    if (state.running || state.position === "skipped") {
+      state.notice = "No new Agent: one is running or the lifecycle is terminal.";
+      return state;
+    }
+    const last = state.history.at(-1);
+    if (state.explicitRung && state.history.some(row => row.outcome === "unsolved")) {
+      state.running = "explicit Static rung (even when equal to the Run default)";
+      state.decision = "Static authority; no selector call.";
+    } else if (!state.available || state.allowance === 0) {
+      state.notice = "Routing unavailable. No Agent, no Attempt, no Strike.";
+      return state;
+    } else {
+      state.allowance--;
+      state.running = last?.outcome === "unsolved" ? "new verified configuration" : "verified max";
+      state.decision = last ? `Reassessed with ${last.outcome}; fresh eligibility.` : "First election may use max.";
+    }
+    state.notice = "Pickup bound; configuration fixed until this Agent ends.";
+  }
+  if (["advance", "unsolved", "crash", "timeout"].includes(action)) {
+    if (!state.running) {
+      state.notice = "No running Agent: no outcome to charge.";
+      return state;
+    }
+    state.history.push({ route: state.running, outcome: action, capabilityEvidence: action === "unsolved" });
+    state.running = null;
+    if (action !== "advance") {
+      state.position = action === "timeout" || state.position === "retrying" ? "skipped" : "retrying";
+      if (state.position === "skipped") state.strikes++;
+    }
+    state.notice = "Outcome recorded. Advancing work neither spends nor refunds lifecycle Attempts.";
+  }
+  return state;
+}
+</script>
+<script>
+let state = initial();
+const labels = {
+  reset: "Reset Run", pickup: "New Pickup", advance: "Advance work",
+  unsolved: "Fail to solve", crash: "Infrastructure crash", timeout: "Timeout",
+  unavailable: "Withdraw eligibility", rung: "Configure explicit Static rung"
+};
+const scenarios = [
+  ["Advancing work", "Progress supplies evidence but does not reset or spend Attempts.",
+    ["pickup", "advance", "pickup", "unsolved", "pickup", "advance", "pickup", "unsolved", "pickup"]],
+  ["Infrastructure", "A crash permits one retry, without evidence against the configuration.",
+    ["pickup", "crash", "pickup", "crash", "pickup"]],
+  ["Unavailable retry", "Fresh eligibility is mandatory; refusal is not another Attempt.",
+    ["pickup", "unsolved", "unavailable", "pickup"]],
+  ["Static authority", "An explicit rung equal to the default is still an instruction.",
+    ["rung", "pickup", "unsolved", "pickup"]],
+  ["Running Agent", "A second Pickup and changing eligibility cannot mutate a running Agent.",
+    ["pickup", "unavailable", "pickup", "advance", "pickup"]]
+];
+function render() {
+  const fields = {
+    "Lifecycle position": state.position, Strikes: state.strikes,
+    "Running configuration": state.running ?? "None",
+    "Previous attempts": state.history.map(row => `${row.route}: ${row.outcome} (capability evidence: ${row.capabilityEvidence})`).join("; ") || "None",
+    "Current eligibility": state.available ? "Available" : "Unavailable",
+    "Explicit Static rung": state.explicitRung ? "Configured" : "None",
+    "Remaining selector calls": state.allowance,
+    "Last decision": state.decision ?? "None"
+  };
+  document.querySelector("#state").replaceChildren(...Object.entries(fields).flatMap(([key, value]) => {
+    const term = document.createElement("dt"), detail = document.createElement("dd");
+    term.textContent = key; detail.textContent = value;
+    return [term, detail];
+  }));
+  document.querySelector("#notice").textContent = state.notice;
+}
+function button(action) {
+  const element = document.createElement("button");
+  element.textContent = labels[action];
+  element.onclick = () => { state = transition(state, action); render(); };
+  return element;
+}
+document.querySelector("#actions").append(...Object.keys(labels).map(button));
+scenarios.forEach(([name, description, actions], index) => {
+  const tab = document.createElement("button");
+  tab.textContent = name; tab.setAttribute("role", "tab");
+  tab.onclick = () => {
+    state = initial(); render();
+    document.querySelectorAll('[role="tab"]').forEach(other => other.setAttribute("aria-selected", String(other === tab)));
+    document.querySelector("#description").textContent = description;
+    const steps = actions.map((action, step) => {
+      const next = button(action);
+      next.textContent = `${step + 1}. ${labels[action]}`;
+      next.disabled = step !== 0;
+      const run = next.onclick;
+      next.onclick = () => { run(); next.disabled = true; if (steps[step + 1]) steps[step + 1].disabled = false; };
+      return next;
+    });
+    document.querySelector("#steps").replaceChildren(...steps);
+  };
+  document.querySelector("#tabs").append(tab);
+  if (index === 0) tab.click();
+});
+</script>
