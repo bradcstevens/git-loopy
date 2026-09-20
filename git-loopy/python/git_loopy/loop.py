@@ -4735,8 +4735,8 @@ class _ParallelLoop:
                 and not self._scheduler.abort_latched
                 and not self._scheduler.stop_latched
             ):
-                if self._preparation_pass is not None:
-                    self._preparation_pass.cancel()
+                if self._serial._preparation is not None:
+                    self._serial._preparation.interrupt_ahead()
                 self._serial._start_preparation_pass(serial_required, beside=None)
         return collection.complete
 
