@@ -841,6 +841,21 @@ fn a_routed_pickup_projects_its_context_tier() {
             "lifecycle_position": "fresh"
         })
     );
+    assert_eq!(
+        queue_row(&projected, 7)["route"]
+            .as_object()
+            .expect("route fields")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "model",
+            "effort",
+            "source",
+            "context_tier",
+            "lifecycle_position"
+        ]
+    );
 }
 
 #[test]
@@ -889,7 +904,9 @@ fn a_same_configuration_dynamic_retry_preserves_each_contributions_position() {
 #[test]
 fn a_legacy_pickup_projects_no_unobserved_lifecycle_position_or_tier() {
     let projected = reduce_jsonl(
-        &[r#"{"type":"wrapper.pickup.bound","iter":1,"issue":42,"model":"gpt-5-mini","effort":"medium","routing_source":"routed"}"#],
+        &[
+            r#"{"type":"wrapper.pickup.bound","iter":1,"issue":42,"model":"gpt-5-mini","effort":"medium","routing_source":"routed"}"#,
+        ],
         IssueRef::number(42),
     );
 
