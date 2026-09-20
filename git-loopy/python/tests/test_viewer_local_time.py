@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from git_loopy import viewer_zone
 from git_loopy.ui import local_time
 from git_loopy.ui.local_time import viewer_local
 
@@ -33,8 +34,10 @@ def _viewing_from(monkeypatch: pytest.MonkeyPatch, zone: str) -> None:
 
 @pytest.fixture(autouse=True)
 def _restore_host_zone() -> Iterator[None]:
-    """Leave the process's zone exactly as the suite found it."""
+    """Leave the process's zone, and the module's memo of it, as found."""
+    viewer_zone.forget_resolved_specifications()
     yield
+    viewer_zone.forget_resolved_specifications()
     if hasattr(time, "tzset"):  # pragma: no branch - POSIX hosts have it
         time.tzset()
 
@@ -143,9 +146,26 @@ def test_an_unresolvable_zone_is_labelled_rather_than_guessed(
 ) -> None:
     """AC9: the interface stays usable and says what it is showing.
 
-    A host with no timezone database still has to render a readback. What it
-    may not do is print a UTC instant that looks local.
+    This is driven by the *real* condition rather than a mock, because the
+    real condition does not raise: handed an unknown zone the C library
+    quietly resolves to UTC and hands back a clean ``+00:00``. A viewer would
+    then be shown a UTC instant as though it were their own wall clock, which
+    is precisely what ADR-0058 refuses.
     """
+    for unresolvable in ("Not/AZone", "Bogus", "../../etc/passwd"):
+        _viewing_from(monkeypatch, unresolvable)
+
+        projected = viewer_local("2026-05-16T14:00:00.000Z")
+
+        assert projected == (
+            "2026-05-16T14:00:00+00:00 UTC (local zone unresolved)"
+        ), f"TZ={unresolvable} was shown as though it were local time"
+
+
+def test_a_host_that_raises_instead_of_resolving_is_labelled_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other shape of the same failure: a host with no zone data at all."""
 
     class _NoZoneDatabase(datetime):
         def astimezone(self, tz: timezone | None = None) -> datetime:
@@ -153,6 +173,7 @@ def test_an_unresolvable_zone_is_labelled_rather_than_guessed(
                 raise OSError("no timezone database on this host")
             return super().astimezone(tz)
 
+    _viewing_from(monkeypatch, "America/Denver")
     monkeypatch.setattr(local_time, "datetime", _NoZoneDatabase)
 
     projected = viewer_local("2026-05-16T14:00:00.000Z")
@@ -232,6 +253,39 @@ def test_a_path_naming_no_tzfile_is_labelled(
     assert projected == "2026-05-16T14:00:00+00:00 UTC (local zone unresolved)"
 
 
+def test_a_posix_specification_needs_no_zone_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A host with no tz database still has a correct clock if ``TZ`` says so.
+
+    Labelling this as unresolved would be its own silent lie — the viewer's
+    clock is right, and telling them it is not would send them looking for a
+    fault that is not there.
+    """
+    _viewing_from(monkeypatch, "MST7MDT,M3.2.0,M11.1.0")
+
+    projected = viewer_local("2026-05-16T14:00:00.000Z")
+
+    assert projected == "2026-05-16T08:00:00-06:00"
+    assert "unresolved" not in projected
+
+
+def test_a_machine_with_no_tz_set_reads_its_own_configured_zone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No ``TZ`` is the ordinary case, and it is not a failure."""
+    if not hasattr(time, "tzset"):  # pragma: no cover - POSIX hosts have it
+        pytest.skip("this host cannot pin a local timezone")
+    monkeypatch.delenv("TZ", raising=False)
+    time.tzset()
+
+    projected = viewer_local("2026-05-16T14:00:00.000Z")
+
+    assert "unresolved" not in projected, (
+        "a normally configured machine must not be told its zone is broken"
+    )
+
+
 def test_a_field_that_is_not_an_instant_is_handed_back_untouched(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -274,3 +328,149 @@ def test_the_canonical_instant_itself_is_never_rewritten(
     ).isoformat() == datetime.fromisoformat(canonical).astimezone(
         timezone.utc
     ).isoformat()
+
+
+@pytest.mark.parametrize(
+    "specification",
+    [
+        # An operator writing an ISO-style four-digit offset: the realistic
+        # mistake, and one tzcode rejects outright for a silent UTC.
+        "IST-0530",
+        "UTC+0800",
+        "ABC596524",
+        "ABC5:99",
+        # Wider than any clock this member can represent.
+        "ABC24",
+        "ABC168",
+        # Changeover dates that name no real day.
+        "ABC1DEF,M13.9.9,M99.1.1",
+        "ABC1DEF,J0,J366",
+    ],
+)
+def test_a_specification_the_c_library_refuses_is_labelled(
+    monkeypatch: pytest.MonkeyPatch, specification: str
+) -> None:
+    """Shape is not the bound; the range is.
+
+    Each of these has a plausible POSIX *shape* and is rejected by the C
+    library, which then resolves to a clean ``+00:00``. Accepting the shape
+    alone would hand a viewer a UTC instant with no label — the defect this
+    module exists to close, re-created through the front door.
+    """
+    _viewing_from(monkeypatch, specification)
+
+    assert viewer_local("2026-05-16T14:00:00.000Z").endswith(
+        "UTC (local zone unresolved)"
+    ), f"TZ={specification} was shown as though it were local time"
+
+
+@pytest.mark.parametrize(
+    ("specification", "expected"),
+    [
+        ("EST5EDT,M3.2.0/2,M11.1.0", "2026-05-16T10:00:00-04:00"),
+        ("AEST-10AEDT,M10.1.0,M4.1.0/3", "2026-05-17T00:00:00+10:00"),
+        ("<+0545>-5:45", "2026-05-16T19:45:00+05:45"),
+        ("Etc/GMT+6", "2026-05-16T08:00:00-06:00"),
+        ("GMT0", "2026-05-16T14:00:00+00:00"),
+        # The widest offsets that still make a usable clock.
+        ("ABC-14", "2026-05-17T04:00:00+14:00"),
+        ("ABC23", "2026-05-15T15:00:00-23:00"),
+        # A changeover time at tzcode's own limit.
+        ("ABC1DEF,M3.2.0/167,M11.1.0", "2026-05-16T14:00:00+00:00"),
+    ],
+)
+def test_a_specification_the_c_library_honours_is_never_labelled(
+    monkeypatch: pytest.MonkeyPatch, specification: str, expected: str
+) -> None:
+    """The other half of the same bar, and it is not the lesser half.
+
+    Telling a viewer whose clock is right that it is unresolved sends them
+    hunting a fault that is not there, and downgrades a correct local
+    rendering to UTC to do it.
+    """
+    _viewing_from(monkeypatch, specification)
+
+    projected = viewer_local("2026-05-16T14:00:00.000Z")
+
+    assert projected == expected
+    assert "unresolved" not in projected
+
+
+@pytest.mark.parametrize("form", [":/etc/localtime", "/etc/localtime"])
+def test_a_path_shaped_tz_is_a_resolved_zone_not_a_broken_one(
+    monkeypatch: pytest.MonkeyPatch, form: str
+) -> None:
+    """``TZ=:/etc/localtime`` is a documented glibc idiom, not a fault."""
+    if not Path("/etc/localtime").exists():  # pragma: no cover - POSIX hosts
+        pytest.skip("this host keeps no /etc/localtime")
+    _viewing_from(monkeypatch, form)
+
+    projected = viewer_local("2026-05-16T14:00:00.000Z")
+
+    assert "unresolved" not in projected, (
+        f"TZ={form} names a readable zone and must not be called broken"
+    )
+
+
+def test_a_machine_that_is_not_posix_is_not_asked_for_etc_localtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows has no ``/etc/localtime`` and needs none.
+
+    It takes its zone from the operating system, where ``astimezone`` cannot
+    silently substitute UTC — so the POSIX proxy for "the C library lied to
+    me" would, applied there, condemn every correctly configured machine to a
+    fallback it does not need. The suite's other zone tests skip on Windows
+    for want of ``tzset``, so without this one the regression would ship.
+    """
+    monkeypatch.delenv("TZ", raising=False)
+    monkeypatch.setattr(viewer_zone, "_LOCALTIME", Path("/nonexistent/localtime"))
+
+    monkeypatch.setattr(viewer_zone.os, "name", "nt")
+    assert viewer_zone.viewing_zone_resolves() is True
+
+    monkeypatch.setattr(viewer_zone.os, "name", "posix")
+    assert viewer_zone.viewing_zone_resolves() is False
+
+
+@pytest.mark.parametrize(
+    "specification",
+    [
+        # The POSIX tail rule America/Nuuk, America/Godthab and
+        # America/Scoresbysund actually ship.
+        "<-02>2<-01>,M3.5.0/-1,M10.5.0/0",
+        "EST5EDT,M3.2.0/-1,M11.1.0",
+    ],
+)
+def test_a_signed_changeover_time_is_judged_by_this_platform_not_the_grammar(
+    monkeypatch: pytest.MonkeyPatch, specification: str
+) -> None:
+    """A rule glibc accepts and other tzcode refuses, judged by the host.
+
+    A changeover time may carry a sign, and real zones ship one. Whether it is
+    usable is not a property of the grammar: glibc applies it, and a tzcode
+    that does not refuses the *whole* specification and quietly answers UTC.
+    Modelling either platform's answer in the rules would be wrong on the
+    other, so the only defensible assertion is that the rendering agrees with
+    what this C library actually did — labelled when it gave up, and left
+    alone when it did not.
+    """
+    _viewing_from(monkeypatch, specification)
+
+    projected = viewer_local("2026-05-16T14:00:00.000Z")
+    # Both specifications place the viewer at a non-zero offset, so a zero one
+    # is this host reporting that it discarded the specification.
+    honoured = (
+        datetime(2026, 5, 16, 14, tzinfo=timezone.utc).astimezone().utcoffset()
+        != timedelta()
+    )
+
+    if honoured:
+        assert "unresolved" not in projected, (
+            f"this host applied TZ={specification} and must not call it broken"
+        )
+    else:
+        assert projected == "2026-05-16T14:00:00+00:00 UTC (local zone unresolved)", (
+            f"this host discarded TZ={specification} and answered UTC, which "
+            "must be labelled rather than shown as somebody's local time"
+        )

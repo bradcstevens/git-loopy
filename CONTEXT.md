@@ -688,10 +688,13 @@ remote back rather than by retrying blindly
 _Avoid_: release, deploy, upload, push (the git operation).
 
 **Distribution mode**:
-The promise one Release makes about what it carries. `source-only` is committed notes
-and the generated source archive and nothing else; it is *stated* by the operator
-starting a **Rehearsal**, never inferred from which credentials happen to be
-configured, and the publication seam offers no way to attach an artifact to one.
+The explicit promise one Release makes about what it carries. `source-only` publishes
+committed notes and source archives without launching helper-build, signing, attachment,
+or package-channel work. `artifact-bearing` promises the declared compiled TUI helper
+archives and their channel's trust evidence. The tagged `release-trust.json` is the
+repository authority; explicit publication inputs must agree with it, and credentials
+never choose the mode. A source-only **Rehearsal** and its publication seam cannot
+certify or attach helper artifacts.
 _Avoid_: release type, artifact mode, channel.
 
 **Autonomous loop**:

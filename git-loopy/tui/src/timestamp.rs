@@ -313,11 +313,16 @@ impl Timestamp {
         Timestamp { micros: 0 }
     }
 
-    /// The instant `seconds` after the Unix epoch.
-    pub fn from_unix_seconds(seconds: i64) -> Self {
-        Timestamp {
-            micros: seconds * MICROS_PER_SECOND,
-        }
+    /// The instant `seconds` after the Unix epoch, or `None` if unrepresentable.
+    ///
+    /// The seconds come off a TZif transition table, which is file bytes this
+    /// program did not write. A value beyond the microsecond axis is a file
+    /// this reader cannot honour, and saying so lets the caller fall back
+    /// rather than wrap silently into a plausible-looking wrong instant.
+    pub fn from_unix_seconds(seconds: i64) -> Option<Self> {
+        seconds
+            .checked_mul(MICROS_PER_SECOND)
+            .map(|micros| Timestamp { micros })
     }
 
     /// Parse one RFC 3339 instant, returning `None` for anything unusable.

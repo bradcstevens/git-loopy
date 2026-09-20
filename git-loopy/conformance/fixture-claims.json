@@ -94,7 +94,7 @@
       "rust": {"kind": "waived_out_of_scope", "reason": "Bump class is resolved from an issue's semver: labels at Pickup; the Dashboard never reads issue labels and only projects an emitted Release line."}
     },
     "release-trust.json": {
-      "python": {"kind": "claimed", "reason": "python/tests/test_release_trust.py drives fixture publication cases through production trust verification."},
+      "python": {"kind": "claimed", "reason": "python/tests/test_release_trust.py and python/tests/test_distribution_mode.py drive fixture publication cases and distribution mode through production trust verification."},
       "shell": {"kind": "waived_out_of_scope", "reason": "Release signing and attestation verification belong to distribution tooling, not an Orchestrator."},
       "powershell": {"kind": "waived_out_of_scope", "reason": "Release signing and attestation verification belong to distribution tooling, not an Orchestrator."},
       "rust": {"kind": "waived_out_of_scope", "reason": "Release signing and attestation verification belong to distribution tooling, not the Dashboard core."}

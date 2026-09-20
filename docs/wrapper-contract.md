@@ -1830,6 +1830,10 @@ validation and never a substitute for one.
   issue content, capabilities, evidence or policy MUST invalidate the proposal
   and buy another selection only within the remaining bounds. A proposal past
   its validity window MUST NOT be bound — the Pickup assesses again instead.
+  Bounding the selector's prompt MUST NOT hide a relevant source change:
+  the input identity also covers the full normalized issue, parsed runnable
+  Feedback-loop commands, and admitted local measurement behind that prompt.
+  Unrelated repository prose is not a routing input.
 - **Prioritise the next Pickup, and spend nothing on the ineligible.** The next
   candidate to be worked is prepared first. Finishing an Iteration MUST NOT
   wait for unrelated preparation. A Pickup MAY interrupt that preparation to
@@ -1843,6 +1847,8 @@ validation and never a substitute for one.
   not merely when the pass was scheduled. Task-type classification and selector
   calls share admission limits; reading an existing label is not a classification
   attempt. Persisting the settled Task type MUST NOT itself invalidate a proposal.
+  When serial-required work is discovered while Lanes drain, it takes preparation
+  priority over speculative Lane candidates without starting its work early.
 - **Only while a Run is running, and only within the operator's bounds.**
   Preparation MUST run on the Run's own event loop under the configured
   selector concurrency and routing-credit allowance, and MUST stop for the rest

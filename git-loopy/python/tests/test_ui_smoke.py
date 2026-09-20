@@ -1570,18 +1570,6 @@ _ALLOWED_UI_IMPORTS: frozenset[str] = frozenset(
         "decimal",
         "io",
         "typing",
-        # os / re / zoneinfo — resolving the *viewer's* zone (#597, ADR-0058).
-        # This package is where a record is spoken to a person, which is the
-        # boundary the ADR assigns timezone resolution to; the Rust core stays
-        # pure by pushing the same read out to its binary target. The read has
-        # to be explicit because `datetime.astimezone` already consults `TZ`
-        # implicitly and answers UTC either way — for a viewer who really is in
-        # UTC and for one whose zone does not resolve at all. Telling those two
-        # apart is the whole point, and it cannot be done after the conversion.
-        # None of the three couples the UI to a shell, a network or a store.
-        "os",
-        "re",
-        "zoneinfo",
         # Rich (the renderer's whole reason to exist)
         "rich",
         "rich.console",
@@ -1601,6 +1589,12 @@ _ALLOWED_UI_IMPORTS: frozenset[str] = frozenset(
         # Deep and pure (stdlib only); summary.py folds its per-Iteration
         # Consumption onto it. Not a shell/CLI/persist coupling.
         "git_loopy.usage",
+        # git_loopy.viewer_zone — the one ambient-environment seam the UI is
+        # allowed (#597, ADR-0058). Showing a person a wall clock requires
+        # knowing whether this machine can state its own, which the UI cannot
+        # answer without reading `TZ`. Keeping that read behind one deep module
+        # is what stops `os` and the filesystem spreading through `ui/`.
+        "git_loopy.viewer_zone",
     }
 )
 

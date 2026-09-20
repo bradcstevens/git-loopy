@@ -122,18 +122,22 @@ pub fn zone_from_tz_data(bytes: &[u8]) -> Option<Zone> {
     let transitions: Vec<ZoneTransition> = times
         .chunks_exact(time_size)
         .zip(indices)
-        .filter_map(|(time, index)| {
+        .map(|(time, index)| {
             let seconds = match time_size {
                 8 => i64::from_be_bytes(time.try_into().ok()?),
                 _ => i64::from(i32::from_be_bytes(time.try_into().ok()?)),
             };
             let (offset_minutes, _) = *offsets.get(usize::from(*index))?;
             Some(ZoneTransition {
-                at: Timestamp::from_unix_seconds(seconds),
+                at: Timestamp::from_unix_seconds(seconds)?,
                 offset_minutes,
             })
         })
-        .collect();
+        // One unreadable row rejects the whole file rather than being dropped:
+        // a transition table with a hole in it silently reports the *previous*
+        // offset for every instant the missing row governed, which is the
+        // quietly-wrong clock this change exists to abolish.
+        .collect::<Option<Vec<_>>>()?;
 
     // RFC 8536 leaves the offset before the first transition to the reader:
     // the first standard-time type is the conventional answer, because a file
@@ -173,7 +177,7 @@ fn parse_posix_tz(specification: &str) -> Option<ZoneTailRule> {
     // POSIX states the offset as what must be *added to local time* to reach
     // UTC, so `MST7` is seven hours behind UTC. Every other clock in this
     // family counts the other way, and so does this one from here on.
-    let standard_offset_minutes = -(read_offset(&mut rest)? / 60);
+    let standard_offset_minutes = -(read_offset(&mut rest, MAX_OFFSET_HOURS)? / 60);
 
     // No daylight abbreviation at all: standard time all year, which is what
     // `UTC0` and `<+0545>-5:45` say.
@@ -186,7 +190,7 @@ fn parse_posix_tz(specification: &str) -> Option<ZoneTailRule> {
     let daylight_offset_minutes = if rest.starts_with(',') || rest.is_empty() {
         standard_offset_minutes + 60
     } else {
-        -(read_offset(&mut rest)? / 60)
+        -(read_offset(&mut rest, MAX_OFFSET_HOURS)? / 60)
     };
 
     // A daylight abbreviation with no rules leaves the changeover
@@ -222,8 +226,22 @@ fn skip_abbreviation(specification: &str) -> Option<&str> {
     (end >= 3).then(|| &specification[end..])
 }
 
+/// The widest `hh` POSIX allows in a UTC offset.
+const MAX_OFFSET_HOURS: i32 = 24;
+
+/// The widest `hh` POSIX allows in a changeover time: a week either way.
+const MAX_CHANGEOVER_HOURS: i32 = 167;
+
 /// Read a `[+|-]hh[:mm[:ss]]` offset in seconds, advancing past it.
-fn read_offset(rest: &mut &str) -> Option<i32> {
+///
+/// `max_hours` is the bound POSIX puts on the field, and it is enforced rather
+/// than merely documented. These digits come from a TZif footer or a raw `TZ`
+/// value — neither is this program's to trust — and an unbounded `hh` both
+/// overflows the seconds arithmetic and, in a build without overflow checks,
+/// yields a wrapped offset that would be rendered as though it were real. A
+/// rejected specification becomes the announced UTC fallback instead, which is
+/// the only honest answer to input this program cannot read.
+fn read_offset(rest: &mut &str, max_hours: i32) -> Option<i32> {
     let mut text = *rest;
     let sign = match text.as_bytes().first() {
         Some(b'-') => {
@@ -253,8 +271,12 @@ fn read_offset(rest: &mut &str) -> Option<i32> {
         *part = text[..end].parse().ok()?;
         text = &text[end..];
     }
+    let [hours, minutes, seconds] = parts;
+    if hours > max_hours || minutes > 59 || seconds > 59 {
+        return None;
+    }
     *rest = text;
-    Some(sign * (parts[0] * 3_600 + parts[1] * 60 + parts[2]))
+    Some(sign * (hours * 3_600 + minutes * 60 + seconds))
 }
 
 /// Read one `Mm.w.d`, `Jn` or `n` changeover date, with its optional time.
@@ -264,7 +286,7 @@ fn parse_rule_date(specification: &str) -> Option<ZoneRuleDate> {
             let mut rest = time;
             // The changeover time is local wall clock, and POSIX allows a
             // whole day either side of the one it falls in.
-            let seconds = read_offset(&mut rest)?;
+            let seconds = read_offset(&mut rest, MAX_CHANGEOVER_HOURS)?;
             if !rest.is_empty() {
                 return None;
             }

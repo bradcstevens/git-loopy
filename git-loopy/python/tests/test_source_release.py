@@ -53,6 +53,12 @@ def _write_release_metadata(root: Path, version: str) -> None:
         f'[project]\nname = "git-loopy"\nversion = "{version}"\n',
         encoding="utf-8",
     )
+    trust_dir = root / "git-loopy/conformance"
+    trust_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(
+        REPOSITORY_ROOT / "git-loopy/conformance/release-trust.json",
+        trust_dir / "release-trust.json",
+    )
 
 
 def _tagged_repository(
@@ -139,6 +145,11 @@ def test_release_tag_rejects_invalid_publication_identity(
 def _copy_source_distribution(tmp_path: Path) -> Path:
     root = tmp_path / "source"
     (root / "git-loopy/python").mkdir(parents=True)
+    (root / "git-loopy/conformance").mkdir(parents=True)
+    shutil.copy2(
+        REPOSITORY_ROOT / "git-loopy/conformance/release-trust.json",
+        root / "git-loopy/conformance/release-trust.json",
+    )
     shutil.copy2(REPOSITORY_ROOT / "VERSION", root / "VERSION")
     shutil.copy2(
         REPOSITORY_ROOT / "git-loopy/python/pyproject.toml",
@@ -318,6 +329,7 @@ def test_tag_preflight_cli_emits_machine_readable_release_plan(
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "commit": _git(root, "rev-parse", "HEAD"),
+        "distribution_mode": "source-only",
         "notes_path": "docs/releases/v1.2.3-rc.1.md",
         "prerelease": True,
         "tag": "v1.2.3-rc.1",
