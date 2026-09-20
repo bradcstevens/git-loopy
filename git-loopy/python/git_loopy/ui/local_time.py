@@ -62,5 +62,8 @@ def viewer_local(instant: object) -> str:
         if not viewing_zone_resolves():
             return parsed.astimezone(timezone.utc).isoformat() + _UTC_FALLBACK
         return parsed.astimezone().isoformat()
-    except (OSError, OverflowError, ValueError):
+    except (OSError, OverflowError, ValueError, RuntimeError):
+        # ``RuntimeError`` belongs here: CPython raises "invalid GMT offset"
+        # for a `TZ` the C library accepted and Python cannot represent. A
+        # readback is not worth crashing a Run over, and the label says so.
         return parsed.astimezone(timezone.utc).isoformat() + _UTC_FALLBACK

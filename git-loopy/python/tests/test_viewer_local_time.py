@@ -15,6 +15,7 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -255,3 +256,106 @@ def test_the_canonical_instant_itself_is_never_rewritten(
     ).isoformat() == datetime.fromisoformat(canonical).astimezone(
         timezone.utc
     ).isoformat()
+
+
+@pytest.mark.parametrize(
+    "specification",
+    [
+        # An operator writing an ISO-style four-digit offset: the realistic
+        # mistake, and one tzcode rejects outright for a silent UTC.
+        "IST-0530",
+        "UTC+0800",
+        "ABC596524",
+        "ABC5:99",
+        # Wider than any clock this member can represent.
+        "ABC24",
+        "ABC168",
+        # Changeover dates that name no real day.
+        "ABC1DEF,M13.9.9,M99.1.1",
+        "ABC1DEF,J0,J366",
+    ],
+)
+def test_a_specification_the_c_library_refuses_is_labelled(
+    monkeypatch: pytest.MonkeyPatch, specification: str
+) -> None:
+    """Shape is not the bound; the range is.
+
+    Each of these has a plausible POSIX *shape* and is rejected by the C
+    library, which then resolves to a clean ``+00:00``. Accepting the shape
+    alone would hand a viewer a UTC instant with no label — the defect this
+    module exists to close, re-created through the front door.
+    """
+    _viewing_from(monkeypatch, specification)
+
+    assert viewer_local("2026-05-16T14:00:00.000Z").endswith(
+        "UTC (local zone unresolved)"
+    ), f"TZ={specification} was shown as though it were local time"
+
+
+@pytest.mark.parametrize(
+    ("specification", "expected"),
+    [
+        ("EST5EDT,M3.2.0/2,M11.1.0", "2026-05-16T10:00:00-04:00"),
+        ("AEST-10AEDT,M10.1.0,M4.1.0/3", "2026-05-17T00:00:00+10:00"),
+        ("<+0545>-5:45", "2026-05-16T19:45:00+05:45"),
+        ("Etc/GMT+6", "2026-05-16T08:00:00-06:00"),
+        ("GMT0", "2026-05-16T14:00:00+00:00"),
+        # The widest offsets that still make a usable clock.
+        ("ABC-14", "2026-05-17T04:00:00+14:00"),
+        ("ABC23", "2026-05-15T15:00:00-23:00"),
+        # A changeover time at tzcode's own limit.
+        ("ABC1DEF,M3.2.0/167,M11.1.0", "2026-05-16T14:00:00+00:00"),
+    ],
+)
+def test_a_specification_the_c_library_honours_is_never_labelled(
+    monkeypatch: pytest.MonkeyPatch, specification: str, expected: str
+) -> None:
+    """The other half of the same bar, and it is not the lesser half.
+
+    Telling a viewer whose clock is right that it is unresolved sends them
+    hunting a fault that is not there, and downgrades a correct local
+    rendering to UTC to do it.
+    """
+    _viewing_from(monkeypatch, specification)
+
+    projected = viewer_local("2026-05-16T14:00:00.000Z")
+
+    assert projected == expected
+    assert "unresolved" not in projected
+
+
+@pytest.mark.parametrize("form", [":/etc/localtime", "/etc/localtime"])
+def test_a_path_shaped_tz_is_a_resolved_zone_not_a_broken_one(
+    monkeypatch: pytest.MonkeyPatch, form: str
+) -> None:
+    """``TZ=:/etc/localtime`` is a documented glibc idiom, not a fault."""
+    if not Path("/etc/localtime").exists():  # pragma: no cover - POSIX hosts
+        pytest.skip("this host keeps no /etc/localtime")
+    _viewing_from(monkeypatch, form)
+
+    projected = viewer_local("2026-05-16T14:00:00.000Z")
+
+    assert "unresolved" not in projected, (
+        f"TZ={form} names a readable zone and must not be called broken"
+    )
+
+
+def test_a_machine_that_is_not_posix_is_not_asked_for_etc_localtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows has no ``/etc/localtime`` and needs none.
+
+    It takes its zone from the operating system, where ``astimezone`` cannot
+    silently substitute UTC — so the POSIX proxy for "the C library lied to
+    me" would, applied there, condemn every correctly configured machine to a
+    fallback it does not need. The suite's other zone tests skip on Windows
+    for want of ``tzset``, so without this one the regression would ship.
+    """
+    monkeypatch.delenv("TZ", raising=False)
+    monkeypatch.setattr(viewer_zone, "_LOCALTIME", Path("/nonexistent/localtime"))
+
+    monkeypatch.setattr(viewer_zone.os, "name", "nt")
+    assert viewer_zone.viewing_zone_resolves() is True
+
+    monkeypatch.setattr(viewer_zone.os, "name", "posix")
+    assert viewer_zone.viewing_zone_resolves() is False
