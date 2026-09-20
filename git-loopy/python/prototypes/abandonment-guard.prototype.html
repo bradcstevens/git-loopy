@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Throwaway: the Strike and the Abandonment guard</title>
+<style>
+body { max-width: 760px; margin: 3rem auto; font: 18px system-ui; color: #18302c; }
+button { margin: .3rem; padding: .7rem; cursor: pointer; }
+section { padding: 1rem; background: #edf6f2; margin: 1rem 0; }
+</style>
+<h1>The Strike belongs to the issue</h1>
+<p>THROWAWAY LOGIC PROTOTYPE, #604. Can a productive Run keep working after many
+abandonments while a broken Run still stops after three consecutive abandonments?
+A Closed or advanced issue resets the guard, never the Strike ledger. Started
+work may recover a draining Run; unrelated publication is not another success.</p>
+<section id="state"></section>
+<nav id="actions"></nav>
+<h2>Guided walkthroughs</h2>
+<nav id="tabs"></nav>
+<p id="explanation"></p>
+<div id="steps"></div>
+<script>
+const initial = () => ({ strikes: 0, consecutive: 0, limit: 3, ended: false });
+function reduce(state, action) {
+  if (action === "Reset") return initial();
+  if (state.ended) return state;
+  if (action === "Abandon issue")
+    return {...state, strikes: state.strikes + 1, consecutive: state.consecutive + 1};
+  if (action === "Issue Closed" || action === "Issue advanced")
+    return {...state, consecutive: 0};
+  if (action === "Started work drained")
+    return {...state, ended: state.consecutive >= state.limit};
+  return state;
+}
+</script>
+<script>
+let state = initial();
+const actions = ["Abandon issue", "Issue Closed", "Issue advanced",
+  "Checkpoint only", "Publish earlier work", "Started work drained", "Reset"];
+function render() {
+  document.querySelector("#state").textContent =
+    `Strikes charged: ${state.strikes}. Consecutive abandonments: ${state.consecutive}
+     of ${state.limit}. Run: ${state.ended ? "ended: abandonment_guard" :
+     state.consecutive >= state.limit ? "draining, refill stopped" : "working"}.`;
+}
+function button(label, parent, action) {
+  const button = document.createElement("button");
+  button.textContent = label;
+  button.onclick = action;
+  parent.append(button);
+}
+for (const action of actions)
+  button(action, document.querySelector("#actions"), () => {
+    state = reduce(state, action); render();
+  });
+const scenarios = [
+  ["Productive", "Four abandoned issues do not stop this productive Run.",
+   ["Abandon issue", "Issue Closed", "Abandon issue", "Issue advanced",
+    "Abandon issue", "Issue Closed", "Abandon issue", "Started work drained"]],
+  ["Broken", "Three consecutive abandonments stop refill; draining ends the Run.",
+   ["Abandon issue", "Checkpoint only", "Abandon issue", "Abandon issue",
+    "Started work drained"]],
+  ["Recovery", "A success from started work lifts the drain, without refunding Strikes.",
+   ["Abandon issue", "Abandon issue", "Abandon issue", "Issue advanced",
+    "Started work drained"]],
+  ["Old publication", "Publishing earlier work cannot erase newer abandonments.",
+   ["Issue advanced", "Abandon issue", "Abandon issue", "Abandon issue",
+    "Publish earlier work", "Started work drained"]]
+];
+for (const [title, explanation, steps] of scenarios)
+  button(title, document.querySelector("#tabs"), () => {
+    state = initial(); render();
+    document.querySelector("#explanation").textContent = explanation;
+    const panel = document.querySelector("#steps");
+    panel.replaceChildren();
+    steps.forEach((step, i) => button(`${i + 1}. ${step}`, panel, () => {
+      state = reduce(state, step); render();
+    }));
+  });
+render();
+</script>
