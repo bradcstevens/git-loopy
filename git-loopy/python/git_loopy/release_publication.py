@@ -138,18 +138,35 @@ class SubprocessReleaseService:
             raise ReleaseServiceError(
                 f"the Release for {tag} was reported as {type(payload).__name__}"
             )
-        assets = payload.get("assets") or []
+        for field, expected_type in (
+            ("tagName", str),
+            ("name", str),
+            ("body", str),
+            ("isPrerelease", bool),
+            ("isDraft", bool),
+            ("assets", list),
+        ):
+            if not isinstance(payload.get(field), expected_type):
+                raise ReleaseServiceError(
+                    f"the Release for {tag} has a missing or invalid {field}"
+                )
+        assets = payload["assets"]
+        if any(
+            not isinstance(asset, dict)
+            or not isinstance(asset.get("name"), str)
+            or not asset["name"]
+            for asset in assets
+        ):
+            raise ReleaseServiceError(
+                f"the Release for {tag} has unreadable assets"
+            )
         return PublishedRelease(
-            tag=str(payload.get("tagName", "")),
-            name=str(payload.get("name", "")),
-            body=str(payload.get("body", "")),
-            prerelease=bool(payload.get("isPrerelease")),
-            draft=bool(payload.get("isDraft")),
-            assets=tuple(
-                str(asset.get("name", ""))
-                for asset in assets
-                if isinstance(asset, dict)
-            ),
+            tag=payload["tagName"],
+            name=payload["name"],
+            body=payload["body"],
+            prerelease=payload["isPrerelease"],
+            draft=payload["isDraft"],
+            assets=tuple(asset["name"] for asset in assets),
         )
 
     def create(
@@ -614,17 +631,21 @@ def _push_proved_tag(
             f"{publication_input.tag}, but the publication input binds "
             f"{publication_input.tag_object}"
         )
-    pushed = _run_git(
-        repository_root,
-        "push",
-        "--quiet",
-        "--",
-        remote,
-        f"{parked}:refs/tags/{publication_input.tag}",
-    )
-    if pushed.returncode == 0:
-        return True
-    failure = pushed.stderr.strip() or "no diagnostic"
+    try:
+        pushed = _run_git(
+            repository_root,
+            "push",
+            "--quiet",
+            "--",
+            remote,
+            f"{parked}:refs/tags/{publication_input.tag}",
+        )
+    except ReleasePublicationError as exc:
+        failure = str(exc)
+    else:
+        if pushed.returncode == 0:
+            return True
+        failure = pushed.stderr.strip() or "no diagnostic"
     if _reconcile_remote_tag(repository_root, remote, publication_input) is None:
         raise ReleasePublicationError(
             f"pushing {publication_input.tag} failed and the remote does not "

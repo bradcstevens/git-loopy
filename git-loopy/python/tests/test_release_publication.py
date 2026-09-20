@@ -12,6 +12,8 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
+import subprocess
 from dataclasses import dataclass, replace
 from inspect import signature
 from pathlib import Path
@@ -444,6 +446,114 @@ def test_a_push_that_lost_a_race_is_resolved_by_reading_the_remote_back(
     )
 
 
+@pytest.mark.parametrize("write_lands", [False, True])
+@pytest.mark.parametrize("readback_available", [False, True])
+def test_a_timed_out_push_is_resolved_before_creating_the_release(
+    proved: Proved,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    write_lands: bool,
+    readback_available: bool,
+) -> None:
+    remote, checkout = _remote_checkout(proved, tmp_path)
+    service = FakeReleaseService()
+    real_run = subprocess.run
+    interrupted = False
+    pushes = 0
+
+    def transport(arguments, **kwargs):
+        nonlocal interrupted, pushes
+        if arguments[:2] == ["git", "push"]:
+            pushes += 1
+            if write_lands:
+                result = real_run(arguments, **kwargs)
+                assert result.returncode == 0, result.stderr
+            interrupted = True
+            raise subprocess.TimeoutExpired(arguments, 120)
+        if arguments[:2] == ["git", "ls-remote"] and interrupted:
+            if not readback_available:
+                raise subprocess.TimeoutExpired(arguments, 120)
+        return real_run(arguments, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", transport)
+    arguments = dict(
+        repository_root=checkout,
+        candidate_workspace=proved.workspace,
+        release_service=service,
+    )
+    if write_lands and readback_available:
+        outcome = publish_release(proved.publication_input, **arguments)
+        assert outcome.release_created
+    else:
+        with pytest.raises(ReleasePublicationError):
+            publish_release(proved.publication_input, **arguments)
+        assert service.create_calls == []
+    assert pushes == 1
+    assert (f"refs/tags/{TAG}" in _remote_refs(remote)) is write_lands
+
+    # A retry reads the first attempt's state; it never replaces its public tag.
+    monkeypatch.setattr(subprocess, "run", real_run)
+    outcome = publish_release(proved.publication_input, **arguments)
+    assert outcome.tag_created is not write_lands
+    assert _remote_refs(remote)[f"refs/tags/{TAG}"] == proved.publication_input.tag_object
+    assert len(service.create_calls) == 1
+
+
+def test_a_push_timeout_after_the_write_is_resolved_before_creating_the_release(
+    proved: Proved, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    remote, checkout = _remote_checkout(proved, tmp_path)
+    service = FakeReleaseService()
+    run = subprocess.run
+    pushes = []
+
+    def lose_response(args, **kwargs):
+        result = run(args, **kwargs)
+        if args[:2] == ["git", "push"]:
+            pushes.append(args)
+            assert result.returncode == 0, result.stderr
+            raise subprocess.TimeoutExpired(args, 120)
+        return result
+
+    monkeypatch.setattr(subprocess, "run", lose_response)
+    outcome = publish_release(
+        proved.publication_input,
+        repository_root=checkout,
+        candidate_workspace=proved.workspace,
+        release_service=service,
+    )
+
+    assert outcome.release_created
+    assert len(pushes) == 1
+    assert _remote_refs(remote)[f"refs/tags/{TAG}"] == proved.publication_input.tag_object
+    assert len(service.create_calls) == 1
+
+
+def test_a_successful_push_response_is_not_proof_that_the_tag_exists(
+    proved: Proved, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    remote, checkout = _remote_checkout(proved, tmp_path)
+    service = FakeReleaseService()
+    run = subprocess.run
+
+    def acknowledge_without_writing(args, **kwargs):
+        if args[:2] == ["git", "push"]:
+            return subprocess.CompletedProcess(args, 0, "", "")
+        return run(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", acknowledge_without_writing)
+    with pytest.raises(ReleasePublicationError, match="remote does not carry"):
+        publish_release(
+            proved.publication_input,
+            repository_root=checkout,
+            candidate_workspace=proved.workspace,
+            release_service=service,
+        )
+
+    assert f"refs/tags/{TAG}" not in _remote_refs(remote)
+    assert service.create_calls == []
+
+
 def test_a_race_that_published_another_commit_is_refused_and_never_forced(
     proved: Proved, tmp_path: Path
 ) -> None:
@@ -719,6 +829,47 @@ def test_the_production_release_host_reports_an_absent_release_as_absent(
     service = SubprocessReleaseService(repository_root=tmp_path)
 
     assert service.view(TAG) is None
+
+
+@pytest.mark.parametrize(
+    "difference",
+    [
+        {"isDraft": None},
+        {"isPrerelease": "false"},
+        {"assets": None},
+        {"assets": [None]},
+        {"assets": [{}]},
+        {"body": None},
+        {"tagName": 42},
+    ],
+)
+def test_incomplete_release_readback_is_unknown_not_matching(
+    proved: Proved,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    difference: dict[str, object],
+) -> None:
+    remote, checkout = _remote_checkout(proved, tmp_path)
+    payload = {
+        "tagName": TAG,
+        "name": release_title(VERSION),
+        "body": _notes_text(proved),
+        "isDraft": False,
+        "isPrerelease": False,
+        "assets": [],
+    }
+    _stub_gh(tmp_path, monkeypatch, stdout=json.dumps(payload | difference))
+    before = _remote_refs(remote)
+
+    with pytest.raises(ReleasePublicationError, match="unknown state"):
+        publish_release(
+            proved.publication_input,
+            repository_root=checkout,
+            candidate_workspace=proved.workspace,
+            release_service=SubprocessReleaseService(checkout),
+        )
+
+    assert _remote_refs(remote) == before
 
 
 def test_the_production_release_host_never_reads_a_failure_as_an_absence(
