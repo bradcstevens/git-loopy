@@ -1,0 +1,89 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Publication retry - throwaway logic prototype</title>
+<style>
+body { max-width: 850px; margin: 3rem auto; font: 17px system-ui; line-height: 1.5; color: #172b3a; }
+button { padding: .6rem; margin: .3rem; cursor: pointer; }
+section { padding: 1rem; background: #f2f6f8; margin: 1rem 0; }
+dt { font-weight: bold; } dd { margin-bottom: .5rem; }
+</style>
+<h1>Publication retry</h1>
+<p>THROWAWAY - issue #589, logic branch. Can one verified Publication input
+resume after a lost response without moving a public tag or editing a Release?
+Only readback can distinguish an absent write from a successful write whose
+response was lost. Matching state completes; mismatching or unknown state refuses.</p>
+<section><h2>Current state</h2><dl id="state"></dl></section>
+<h2>Free play</h2><div id="actions"></div>
+<h2>Guided walkthroughs</h2><div id="tabs"></div>
+<section><p id="description"></p><div id="steps"></div></section>
+<script>
+const initial = () => ({tag: "absent", release: "absent", readable: true,
+  tagWrites: 0, releaseWrites: 0, verdict: "Not attempted"});
+function transition(state, action) {
+  const s = {...state};
+  if (action === "Reset") return initial();
+  if (action === "Lose readback") s.readable = false;
+  if (action === "Restore readback") s.readable = true;
+  if (action === "Seed different tag") s.tag = "different";
+  if (action === "Seed different notes") s.release = "different";
+  if (action === "Retry" || action === "Lose tag response" ||
+      action === "Lose Release response") {
+    if (!s.readable) s.verdict = "Refused: remote state unknown";
+    else if (s.tag === "different" || s.release === "different")
+      s.verdict = "Refused: mismatch; use a new Release version for changed content";
+    else {
+      if (s.tag === "absent") { s.tag = "matching"; s.tagWrites++; }
+      if (action === "Lose tag response")
+        s.verdict = "Tag read back; interrupted before Release creation";
+      else {
+        if (s.release === "absent") { s.release = "matching"; s.releaseWrites++; }
+        s.verdict = action === "Lose Release response"
+          ? "Complete: successful server write proved by readback"
+          : "Complete: matching tag, Release, notes and source archive";
+      }
+    }
+  }
+  return s;
+}
+let state = initial();
+function render() {
+  document.querySelector("#state").replaceChildren();
+  const labels = {tag: "Public tag", release: "Release and notes",
+    readable: "Remote readable", tagWrites: "Tag creations",
+    releaseWrites: "Release creations", verdict: "Publication verdict"};
+  for (const [key, value] of Object.entries(state)) {
+    const term = document.createElement("dt"), detail = document.createElement("dd");
+    term.textContent = labels[key]; detail.textContent = value;
+    document.querySelector("#state").append(term, detail);
+  }
+}
+function button(parent, label, run) {
+  const b = document.createElement("button"); b.textContent = label; b.onclick = run;
+  document.querySelector(parent).append(b);
+}
+function dispatch(action) { state = transition(state, action); render(); }
+for (const action of ["Retry", "Lose tag response", "Lose Release response",
+  "Lose readback", "Restore readback", "Seed different tag", "Seed different notes", "Reset"])
+  button("#actions", action, () => dispatch(action));
+const scenarios = [
+  ["Matching retry", "The second attempt makes no additional writes.", ["Retry", "Retry"]],
+  ["Interrupted", "A public tag stays put while the missing Release is completed.",
+    ["Lose tag response", "Retry"]],
+  ["Lost response", "A server write is successful only when readback proves it.",
+    ["Lose Release response", "Retry"]],
+  ["Unknown", "Unreadable state cannot be assumed absent or successful.",
+    ["Lose tag response", "Lose readback", "Retry", "Restore readback", "Retry"]],
+  ["Mismatch", "A mismatch causes no write, even without a Release.",
+    ["Seed different tag", "Retry"]],
+  ["Different notes", "Existing notes are never silently rewritten.",
+    ["Seed different notes", "Retry"]]
+];
+function select([name, description, actions]) {
+  state = initial(); render();
+  document.querySelector("#description").textContent = name + ": " + description;
+  document.querySelector("#steps").replaceChildren();
+  actions.forEach((action, i) => button("#steps", `${i + 1}. ${action}`, () => dispatch(action)));
+}
+scenarios.forEach(s => button("#tabs", s[0], () => select(s)));
+select(scenarios[0]);
+</script>
