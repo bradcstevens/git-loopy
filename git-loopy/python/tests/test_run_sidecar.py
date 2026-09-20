@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
 import time
@@ -506,3 +508,95 @@ def test_the_client_reports_a_worker_that_failed_after_it_traced_work(
 
     assert rc == 1
     assert "internal detail" not in capsys.readouterr().err
+
+
+def test_the_python_launch_leaves_the_viewing_machines_clock_to_the_helper(
+    tmp_path: Path,
+) -> None:
+    """The Orchestrator states no offset and scrubs no environment (#597).
+
+    This is the defect from the other side. The helper used to default to a
+    zero offset and no launcher ever corrected it, so every operator read UTC
+    no matter where they stood; the helper now resolves the *viewing* machine
+    instead. That repair only holds while the launch keeps out of the way, and
+    it can be undone from here in two ways that no other test would notice:
+
+    * passing ``--utc-offset-minutes`` would pin every viewer to one clock —
+      the Run host's, or whatever the Orchestrator happened to compute; and
+    * handing the child a constructed environment would strip ``TZ``, so a
+      helper on a machine that knows perfectly well where it is would fall
+      back to labelled UTC.
+
+    Both are asserted at the real process boundary, against a helper that
+    records what it was actually given, because ``_helper_args`` returning the
+    right list proves nothing about the environment the exec inherits.
+    """
+    from git_loopy import run_sidecar, tui_release
+
+    trace_path = tmp_path / "run.trace.jsonl"
+    control_path = run_sidecar.control_path_for_trace(trace_path)
+    argv_path = tmp_path / "helper.argv"
+    zone_path = tmp_path / "helper.zone"
+
+    helper = tmp_path / "recording-dashboard.py"
+    helper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        f"open({str(argv_path)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+        f"open({str(zone_path)!r}, 'w').write(os.environ.get('TZ', '<unset>'))\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+
+    worker_script = tmp_path / "worker.py"
+    worker_script.write_text(
+        "import pathlib, sys, time\n"
+        "from git_loopy.run_control import RunControlArtifact\n"
+        "artifact = RunControlArtifact.acquire(pathlib.Path(sys.argv[1]))\n"
+        "time.sleep(120)\n",
+        encoding="utf-8",
+    )
+
+    # The viewing machine this Run is launched from. A helper that receives it
+    # can resolve the operator's own zone; one that does not, cannot.
+    environment = dict(os.environ, TZ="America/Denver")
+    worker = subprocess.Popen(
+        [sys.executable, str(worker_script), str(trace_path)], env=environment
+    )
+    original_environ = os.environ.get("TZ")
+    os.environ["TZ"] = "America/Denver"
+    original_resolve = tui_release.resolve_runtime_helper
+    tui_release.resolve_runtime_helper = (  # type: ignore[assignment]
+        lambda *_args, **_kwargs: helper
+    )
+    try:
+        run_sidecar.run_terminal_client(
+            repository_root=tmp_path,
+            config=_config(),
+            trace_path=trace_path,
+            control_path=control_path,
+            child=worker,
+            release_version="0.10.0",
+            warn=lambda _message: None,
+            diagnostics_path=tmp_path / "run.log",
+        )
+    finally:
+        tui_release.resolve_runtime_helper = original_resolve  # type: ignore[assignment]
+        if original_environ is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = original_environ
+        worker.kill()
+        worker.wait()
+
+    assert argv_path.exists(), "the client never reached the helper"
+    arguments = json.loads(argv_path.read_text(encoding="utf-8"))
+    assert "--utc-offset-minutes" not in arguments, (
+        "the Python launch pinned the Dashboard's clock; the viewing machine's "
+        "own zone is the default and the Orchestrator must not override it"
+    )
+    assert zone_path.read_text(encoding="utf-8") == "America/Denver", (
+        "the helper was handed a scrubbed environment, so it cannot resolve "
+        "the zone of the machine an operator is actually looking at"
+    )

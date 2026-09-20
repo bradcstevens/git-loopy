@@ -2689,6 +2689,8 @@ if [[ "${1:-}" == "--schema-version" ]]; then
   exit "${FAKE_TUI_PROBE_STATUS:-0}"
 fi
 printf '%s\n' "$label" >>"$FAKE_TUI_STARTED"
+printf '%s\n' "$*" >>"$FAKE_TUI_ARGV"
+printf '%s\n' "${TZ-<unset>}" >>"$FAKE_TUI_ZONE"
 delivered=0
 while IFS= read -r line; do
   delivered=$((delivered + 1))
@@ -2707,9 +2709,15 @@ EOF
 
 setup_tui_env() {
   local prefix="$1"
-  rm -f "$temp_dir/$prefix-tui.stdin" "$temp_dir/$prefix-tui.started"
+  rm -f "$temp_dir/$prefix-tui.stdin" "$temp_dir/$prefix-tui.started" \
+    "$temp_dir/$prefix-tui.argv" "$temp_dir/$prefix-tui.zone"
   export FAKE_TUI_STDIN="$temp_dir/$prefix-tui.stdin"
   export FAKE_TUI_STARTED="$temp_dir/$prefix-tui.started"
+  # What the launch actually handed the helper. Both belong to #597: the helper
+  # resolves the *viewing* machine's zone, which only works while this
+  # Orchestrator states no offset of its own and passes its environment through.
+  export FAKE_TUI_ARGV="$temp_dir/$prefix-tui.argv"
+  export FAKE_TUI_ZONE="$temp_dir/$prefix-tui.zone"
   # A clone-local helper is an artifact of this distribution, so contract §16
   # requires exact Release-version equality; the default fake is a well-installed
   # one and a case that wants drift says so explicitly.
@@ -2760,6 +2768,36 @@ assert_equal \
   "helper stdin and replay log parity"
 grep -q '"type": "wrapper.run.end"' "$FAKE_TUI_STDIN" ||
   fail "helper never received the final Run event"
+
+# Human-facing time belongs to the viewer (#597, ADR-0058). The helper resolves
+# the zone of the machine a person is actually looking at, which it can only do
+# while this Orchestrator keeps out of the way: state no offset, and hand the
+# child the environment the operator launched from. Both are observed at the
+# process boundary, because an Orchestrator that quietly pinned a clock would
+# leave every other assertion in this file green.
+tui_repo="$temp_dir/tui-viewer-zone"
+tui_bin="$temp_dir/tui-viewer-zone-bin"
+make_repo "$tui_repo"
+write_fake_tools "$tui_bin"
+write_fake_tui "$tui_repo/.git-loopy/bin/git-loopy-tui" "clone-local"
+setup_tui_env "viewer-zone"
+export FAKE_GH_LOG="$temp_dir/tui-viewer-zone-gh.log"
+export TZ="America/Denver"
+
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-viewer-zone.stdout" "$temp_dir/tui-viewer-zone.stderr" \
+  --interactive
+status=$?
+set -e
+unset TZ
+assert_equal "0" "$status" "viewer-zone Run exit"
+[[ -s "$FAKE_TUI_STARTED" ]] || fail "viewer-zone Run never started the helper"
+assert_equal "" "$(<"$FAKE_TUI_ARGV")" \
+  "the shell launch states no offset, so the helper resolves the viewer's zone"
+assert_equal "America/Denver" "$(<"$FAKE_TUI_ZONE")" \
+  "the helper inherits the viewing machine's zone from the launch"
 
 # Discovery falls through to PATH only when the clone has no pinned helper. The
 # two fakes label themselves, so "which one ran" is observed rather than assumed.
