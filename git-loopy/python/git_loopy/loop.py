@@ -1257,7 +1257,7 @@ class _Loop:
     """Stateful orchestrator for one ``git-loopy`` invocation.
 
     Bundles the long-lived per-run state — writers, summary, sink
-    fan-out, SDK client, source, strike state machine — so the public
+    fan-out, SDK client, source, Strike ledger and Abandonment guard — so the public
     :func:`run` function stays small and the per-iteration helper
     methods can read self instead of threading every value through
     their signatures.
@@ -2152,7 +2152,7 @@ class _Loop:
             #    so the Checkpoint is structurally excluded from both: it never
             #    counts as a commit in the Summary (it emits
             #    ``wrapper.checkpoint.recorded``, not ``wrapper.commit.recorded``)
-            #    and it never resets a Strike. Non-fatal — a failure warns and
+            #    and it never resets the guard. Non-fatal — a failure warns and
             #    the loop carries on (a local-only repo still completes).
             checkpoint_sha = self._maybe_checkpoint(
                 iter_num, issue_binding.active_ref
@@ -3718,10 +3718,10 @@ class _ParallelLoop:
     Composes a serial :class:`_Loop` (``self._serial``) both for serial
     Iterations (serial-required ``ready-for-agent`` work the scheduler's
     serial-latch / quiescence protocol grants exclusive ownership of base,
-    :meth:`_service_serial_required_work`) and to share ONE Strike
-    machine, event emitter, summary, and Checkpoint policy — so a Lane
-    contribution finalizing and a serial Iteration tick the same Strike
-    machine and write one consistent event / counter stream. The serial path
+    :meth:`_service_serial_required_work`) and to share ONE Strike ledger,
+    Abandonment guard, event emitter, summary, and Checkpoint policy. A Lane
+    and a serial Iteration feed the same ledger and guard and write one
+    consistent event / counter stream. The serial path
     is unaffected: :func:`run` only builds a ``_ParallelLoop`` when
     rolling dispatch.
     """
@@ -3938,7 +3938,7 @@ class _ParallelLoop:
     def request_stop_drain(self) -> None:
         """Stop refill and serial reservations while live work drains."""
         if self._scheduler is not None and self._scheduler.abort_latched:
-            # A Strike drain is already the first stage. The operator's first
+            # A guard drain is already the first stage. The operator's first
             # gesture escalates it rather than inventing a second drain event.
             self.request_stop_cancel()
             return
@@ -6672,7 +6672,7 @@ async def run(
 
         * ``0`` — clean termination (empty AFK-ready pool or
           ``max_iterations`` cap reached).
-        * ``1`` — abort (NMT strike threshold or
+        * ``1`` — abort (Abandonment guard, all-skipped Pool, or
           preflight / setup failure).
     """
     try:

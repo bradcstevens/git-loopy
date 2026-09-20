@@ -8,8 +8,8 @@ module never learns what a route is worth.
 
 Shaped after :mod:`git_loopy.classifier_session`, which solved the same problem
 for the **Task-type** and **Bump-class classifiers** — Run-scoped spend that is
-not an Iteration, so it allocates no summary row, never reaches the **Strike**
-machine, and still reports its **Consumption** to the Run's cost meter.
+not an Iteration, so it allocates no summary row, never feeds the Strike ledger
+or Abandonment guard, and still reports its **Consumption** to the Run's cost meter.
 """
 
 from __future__ import annotations

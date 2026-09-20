@@ -217,6 +217,7 @@ hand-edited. See
 | --------------------- | ---- | -------------------------------------------------------------------------------------- |
 | Clean — Pool empty    | `0`  | Start of an Iteration finds the ready-for-agent Pool empty.                            |
 | Clean — iteration cap | `0`  | Optional positional arg `N` reached without natural termination.                       |
+| **Aborted — stuck** | `1` | Shell and PowerShell: `GIT_LOOPY_MAX_NMT_STRIKES` (default 3) consecutive unproductive Iterations. |
 | **Aborted — abandonment guard** | `1` | Python `abandonment_guard`: three consecutive abandoned issues by default; it resets on Closed or advanced work. |
 | **Aborted — preflight** | `1`  | A required precondition failed before the first iteration: missing [`docs/agents/issue-tracker.md`](customization.md#auto-bootstrap-behavior) (i.e. `/setup-git-loopy-skills` hasn't run), `gh` not authed. |
 

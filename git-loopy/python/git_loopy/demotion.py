@@ -11,14 +11,13 @@ better, only that this one is failing.
 
 Design notes:
 
-* **The signal is per pair, and it is not the Strike counter.** ADR-0027
-  originally specified consecutive **Strikes**, which cannot be implemented:
-  :class:`~git_loopy.wrapper.NMTStrikeStateMachine` is one Run-scoped counter
-  every **Lane** shares and *any* Lane's progress resets, so a good pair's commit
-  erases what a bad pair accumulated. Worse, the limit that ends a Run is small,
-  so a threshold at or above it never fires and one below it fires on noise — the
-  usable range is empty. The Strike counter keeps its existing job (ending a Run
-  that is going nowhere) entirely unchanged.
+* **The signal is per pair, not the Strike ledger or Abandonment guard.**
+  ADR-0030 replaced ADR-0027's consecutive-Strike proposal with per-pair
+  no-progress accounting. Under ADR-0061,
+  :class:`~git_loopy.wrapper.StrikeLedger` records abandoned issues without
+  resetting or ending a Run. :class:`~git_loopy.wrapper.AbandonmentGuard` is
+  shared by every **Lane** and resets on Closed/advanced work, so neither
+  supplies Demotion's per-pair signal.
 
 * **The source is the finalized Contribution, not the Run summary.** ADR-0030
   says *"the record already knows which pair worked which issue and whether it

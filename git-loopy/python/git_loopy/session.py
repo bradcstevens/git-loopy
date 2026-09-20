@@ -576,7 +576,7 @@ class IterationSession:
         iter_num: 1-based iteration index. ``None`` for the two sessions that are
             deliberately not **Iterations** — a Trial and a **Task-type
             classifier** call — so neither allocates an Iteration number, occupies
-            a Run summary row, or hands the **Strike** machine something to count.
+            a Run summary row, or feeds the Strike ledger or Abandonment guard.
         event_identity: Extra keys stamped onto every record this session writes,
             supplied by its :class:`~git_loopy.session_scope.SessionScope`. A
             Trial's ``calibration_id`` / ``trial_id``; empty for a Run's own

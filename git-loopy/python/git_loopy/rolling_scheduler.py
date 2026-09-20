@@ -94,7 +94,7 @@ __all__ = [
 
 # Terminal dispositions of a **Lane contribution**, mirroring
 # :data:`git_loopy.events.CONTRIBUTION_TERMINAL_REASONS`. ``published`` is the
-# only Parallel progress; each of the others adds exactly one **Strike**.
+# only Parallel progress. Strike charges belong to the Attempt lifecycle.
 REASON_PUBLISHED = "published"
 REASON_UNCHANGED_BRANCH = "unchanged_branch"
 REASON_CHECKPOINT_FAILED = "checkpoint_failed"

@@ -21,8 +21,8 @@ not the constant names — are the contract; a parity test
 
 The model carries what the live **header band** needs (run id, model +
 reasoning effort, run-start wall clock, live-ticking elapsed timer, iteration
-number, run status, strike count ``x/N``) and, from issue #25, the **per-run
-ledger**: a record keyed by issue ref of every issue seen in any pool this run,
+number, run status, Strike count, historical Strike limit) and, from issue #25,
+the **per-run ledger**: a record keyed by issue ref of every issue seen in any pool this run,
 with its status (queued / active / closed / advanced / no-progress / gone) and
 its waiting + active timing. The active issue is attributed from the
 Orchestrator's immutable ``wrapper.issue.activated`` event; marker and fallback
@@ -785,7 +785,7 @@ class LiveRunState:
             self._record_event_line(_log_commit_text(event))
         elif etype == _CHECKPOINT_RECORDED:
             # A runner Checkpoint: a distinct Log line, but NOT a commit — it
-            # must not advance the issue or reset strikes.
+            # must not advance the issue or reset the Abandonment guard.
             self._record_event_line(_log_checkpoint_text(event))
         elif etype == _AUTO_CLOSE:
             self._record_closure(event.get("issue"), now, status=STATUS_CLOSED)

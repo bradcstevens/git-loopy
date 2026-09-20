@@ -22,8 +22,8 @@ The module composes four seams that already exist and modifies none of them:
 * **Work** — an :class:`~git_loopy.session.IterationSession` constructed directly
   against the Copilot client on the candidate pair, with ``iter_num=None``. That
   is the same carve-out :mod:`git_loopy.task_type_session` uses and for the same
-  reason: **Strikes** are shared and consecutive, so a session that could tick
-  them might end a **Run** that this one has nothing to do with (#371).
+  reason: the Run-wide **Abandonment guard** could otherwise end a **Run**
+  that this session has nothing to do with (#371, amended by ADR-0061).
 
 Design notes:
 
@@ -743,7 +743,7 @@ class ReplayTrialRunner:
             sinks=self._sinks,
             # Neither an Iteration nor a Run. No Iteration number to allocate, no
             # Run summary row to occupy, and structurally out of reach of the
-            # Strike machine, which is ticked by the orchestrator this path never
+            # ledger and guard, owned by the orchestrator this path never
             # enters. The scope also withholds the ``run_id``, so every record
             # this session writes — its ``usage.tokens`` above all — names the
             # Calibration and is unattributable to any Run (#371).

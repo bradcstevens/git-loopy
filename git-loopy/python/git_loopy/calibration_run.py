@@ -1065,7 +1065,7 @@ def _live_harness(
     :func:`git_loopy.trial._await` drives each session from there.
 
     A Calibration is **not a Run**, so this builds an event log and nothing else:
-    no run-summary writer, no Iteration numbers, no **Strike** machine. The
+    no run-summary writer, no Iteration numbers, no ledger or guard. The
     records the Trials write name the Calibration and are unattributable to any
     Run (#371).
     """

@@ -144,9 +144,9 @@ class MeasuredStatus(Enum):
     #: pair is cleared; which pair failed, and after how many Strikes, is kept.
     #:
     #: **Superseded by ADR-0030, and has no writer.** The rule this state
-    #: encodes is ADR-0027's, and it cannot be read: the Strike counter is one
-    #: shared per-Run machine that any Lane's progress resets, so there is no
-    #: per-pair Strike signal in the system to count. **Demotion** counts
+    #: encodes is ADR-0027's, not a per-pair signal: Strikes now record abandoned
+    #: issues, while the separate Run-wide Abandonment guard resets on any
+    #: Closed/advanced issue (ADR-0061). **Demotion** counts
     #: per-pair no-progress from the persisted run record instead and writes
     #: :attr:`PROVISIONAL`, because this state *clears* the pair and so falls
     #: through to the hand-authored bootstrap — the one outcome ADR-0030

@@ -427,8 +427,8 @@ CONTRIBUTION_SCOPED_EVENT_TYPES: frozenset[str] = frozenset(
 )
 
 # The behaviourally distinct terminal dispositions a ``wrapper.contribution.end``
-# MUST be able to tell apart. ``published`` is the only Parallel progress; the
-# three ordinary unpublished dispositions each add exactly one Strike.
+# MUST be able to tell apart. ``published`` is the only Parallel progress.
+# These dispositions do not charge Strikes; the Attempt lifecycle does.
 CONTRIBUTION_TERMINAL_REASONS: tuple[str, ...] = (
     "published",
     "unchanged_branch",

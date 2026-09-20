@@ -650,8 +650,8 @@ class RunSummary:
         zero.
 
         ``final_strikes`` is the last completed iteration's strike count
-        (not the sum) — strikes reset on progress in the wrapper
-        contract, so summing would mislead.
+        (not the sum): each row snapshots the Run's Strike count rather than
+        that Iteration's charges, so summing would double-count.
         """
         tokens_in = sum(s.tokens_in for s in self.completed)
         tokens_out = sum(s.tokens_out for s in self.completed)

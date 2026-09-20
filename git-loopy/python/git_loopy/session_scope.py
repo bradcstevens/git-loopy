@@ -4,9 +4,9 @@ Two of git-loopy's agent sessions are deliberately **not Iterations**: a **Trial
 (:mod:`git_loopy.trial`) and a **Task-type classifier** call
 (:mod:`git_loopy.task_type_session`). They are kept out of a **Run**'s Iteration
 accounting for one reason, stated by ADR-0027 for the Trial and by ADR-0029 for the
-classifier: **Strikes** are shared and consecutive, and reaching the limit ends the
-Run — so a session that ticked one could terminate an unattended overnight Run it
-has nothing to do with.
+classifier: unrelated sessions must not terminate an unattended Run. ADR-0061
+moves that backstop to the separate, Run-wide **Abandonment guard**; per-issue
+Strikes are now permanent accounting rather than a limit.
 
 ADR-0029's amendment asks that the two share *one* mechanism rather than two parallel
 carve-outs, and this module is it. Two hand-kept copies could drift, and the drift
@@ -17,10 +17,10 @@ without coming through here.
 The separation has two degrees, and the two callers take different ones:
 
 * **Not an Iteration** — both. The session carries ``iter_num=None``, so it allocates
-  no Iteration number and produces no Run summary row. The **Strike** part is
-  structural rather than a flag: Strikes are ticked by the orchestrator and the
-  rolling scheduler, and a session constructed directly against the client never
-  enters either. This module is what makes that placement explicit.
+  no Iteration number and produces no Run summary row. Isolation from the
+  **Strike** ledger and **Abandonment guard** is structural rather than a flag:
+  both belong to the orchestrator, which a session constructed directly against
+  the client never enters. This module makes that placement explicit.
 * **Not a Run** — the Trial only. A classifier call *is* a Run's spend and keeps its
   ``run_id``, because a per-issue call whose credits never reach the Summary is the
   failure ADR-0026 forbids. A Trial's spend belongs to the **Calibration** that

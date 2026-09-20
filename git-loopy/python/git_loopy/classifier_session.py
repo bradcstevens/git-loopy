@@ -2,7 +2,7 @@
 
 The **Task-type** and **Bump-class classifiers** are Run-scoped spend, but neither
 is an **Iteration**: each is not an Iteration. Their sessions use the shared ``not_an_iteration`` carve-out
-so they allocate no summary row and never reach the **Strike** machine. Their
+so they allocate no summary row and never reach the Strike ledger or guard. Their
 Consumption still reaches the Run's cost meter through the collector below.
 """
 
