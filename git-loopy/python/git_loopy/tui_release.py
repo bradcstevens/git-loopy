@@ -1585,6 +1585,9 @@ def verify_release_set(
 def _public_release_evidence(document: Any, names: Sequence[str]) -> dict[str, Any]:
     if not isinstance(document, dict) or not isinstance(document.get("assets"), list):
         raise TuiReleaseError("public Release readback must declare its assets")
+    for field in ("draft", "prerelease"):
+        if type(document.get(field)) is not bool:
+            raise TuiReleaseError(f"public Release {field} must be a boolean")
     assets: dict[str, Any] = {}
     for asset in document["assets"]:
         if not isinstance(asset, dict) or not isinstance(asset.get("name"), str):

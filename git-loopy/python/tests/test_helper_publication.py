@@ -258,6 +258,51 @@ def test_download_counters_are_not_release_identity(tmp_path: Path) -> None:
     )) == 7
 
 
+@pytest.mark.parametrize("defect", ["duplicate", "receipt-identity", "missing-local-receipt"])
+def test_missing_or_ambiguous_proof_cannot_complete(tmp_path: Path, defect: str) -> None:
+    host = PublicRelease(tmp_path)
+    receipt = next(host.built.glob("*.trust.json"))
+    if defect == "duplicate":
+        host.record["assets"].append(host.record["assets"][0])
+        diagnostic = "duplicates"
+    elif defect == "receipt-identity":
+        document = json.loads(receipt.read_text())
+        document["release_version"] = "9.9.9"
+        receipt.write_text(json.dumps(document))
+        diagnostic = "Release version"
+    else:
+        receipt.unlink()
+        diagnostic = "no trust receipt"
+
+    with pytest.raises(tui_release.TuiReleaseError, match=diagnostic):
+        host.verify()
+
+
+@pytest.mark.parametrize("body", [b"not json", b"[]", b'{"assets": false}'])
+def test_unreadable_release_readback_fails_closed(tmp_path: Path, body: bytes) -> None:
+    host = PublicRelease(tmp_path)
+    with pytest.raises(tui_release.TuiReleaseError, match="readback"):
+        tui_release.verify_published_release(
+            host.root, host.built, tag_ref=TAG,
+            distribution_mode="artifact-bearing", fetch=lambda _: body,
+        )
+
+
+def test_final_readback_does_not_coerce_a_boolean_marking(tmp_path: Path) -> None:
+    host = PublicRelease(tmp_path)
+
+    def fetch(url: str) -> bytes:
+        if url == RELEASE_URL and host.requests:
+            host.record["prerelease"] = 1
+        return host.fetch(url)
+
+    with pytest.raises(tui_release.TuiReleaseError, match="prerelease|changed during"):
+        tui_release.verify_published_release(
+            host.root, host.built, tag_ref=TAG,
+            distribution_mode="artifact-bearing", fetch=fetch,
+        )
+
+
 def test_unsigned_stable_cannot_be_read_back_as_a_completed_publication(tmp_path: Path) -> None:
     host = PublicRelease(tmp_path, version="1.2.3")
 

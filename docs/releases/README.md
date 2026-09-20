@@ -298,7 +298,7 @@ It requires the tagged `artifact-bearing` policy and complete locally verified
 build outputs, reads the public Release identity and prerelease marking, and
 downloads all 21 promised files from the canonical URLs. Every downloaded byte
 must match those build outputs, pass the existing checksum and trust gates,
-and contain the declared helper. Stable readback also verifies each archive's
+and each archive must contain the declared helper. Stable readback also verifies each archive's
 public attestation against the explicit repository. A final Release readback
 rejects identity or asset changes during verification; download counters are
 not identity.
