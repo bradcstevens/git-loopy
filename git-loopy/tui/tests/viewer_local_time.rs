@@ -19,7 +19,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use git_loopy_tui::{
     draw_dashboard, project_run_view, zone_from_posix_tz, zone_from_tz_data, DashboardFrame,
     DashboardSession, DashboardState, Diagnostics, Event, IssueRef, RunInputs, Screen,
-    TerminalCapabilities, Timestamp, ViewContext, Zone,
+    TerminalCapabilities, Timestamp, ViewContext, Zone, ZoneDaylightRule, ZoneRuleDate,
+    ZoneTailRule,
 };
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -233,6 +234,52 @@ fn an_explicit_fixed_offset_ignores_every_rule_including_an_explicit_zero() {
         rendered(WINTER_UTC, &fixed),
         "2026-01-16T08:00:00-06:00",
         "a deterministic fixture asked for one offset and gets exactly it"
+    );
+}
+
+#[test]
+fn annual_host_rules_keep_historical_dst_and_extend_the_recorded_endpoints() {
+    let changeover = |month, week| ZoneRuleDate::MonthWeekDay {
+        month,
+        week,
+        weekday: 0,
+        seconds: 7200,
+    };
+    let old = ZoneTailRule::with_daylight(
+        -420,
+        ZoneDaylightRule::new(-360, changeover(4, 1), changeover(10, 5)),
+    );
+    let new = ZoneTailRule::with_daylight(
+        -420,
+        ZoneDaylightRule::new(-360, changeover(3, 2), changeover(11, 1)),
+    );
+    let zone = Zone::from_year_rules(2006, &[old, new]).expect("annual rules");
+    for (utc, expected) in [
+        ("2005-03-15T14:00:00Z", "2005-03-15T07:00:00-07:00"),
+        ("2006-03-15T14:00:00Z", "2006-03-15T07:00:00-07:00"),
+        ("2007-03-15T14:00:00Z", "2007-03-15T08:00:00-06:00"),
+        (WINTER_UTC, WINTER_LOCAL),
+        (SUMMER_UTC, SUMMER_LOCAL),
+        ("2007-03-11T08:59:59Z", "2007-03-11T01:59:59-07:00"),
+        ("2007-03-11T09:00:00Z", "2007-03-11T03:00:00-06:00"),
+    ] {
+        assert_eq!(rendered(utc, &zone), expected);
+    }
+    assert!(Zone::from_year_rules(2006, &[]).is_none());
+    assert!(Zone::from_year_rules(9999, &[old, new]).is_none());
+}
+
+#[test]
+fn an_annual_bias_change_takes_effect_at_local_new_year() {
+    let zone = Zone::from_year_rules(1985, &[ZoneTailRule::fixed(330), ZoneTailRule::fixed(345)])
+        .expect("annual fixed offsets");
+    assert_eq!(
+        rendered("1985-12-31T18:29:59Z", &zone),
+        "1985-12-31T23:59:59+05:30"
+    );
+    assert_eq!(
+        rendered("1985-12-31T18:30:00Z", &zone),
+        "1986-01-01T00:15:00+05:45"
     );
 }
 
@@ -473,6 +520,147 @@ fn started_at(stdout: &str) -> String {
         .as_str()
         .expect("the header carries the Run's start")
         .to_string()
+}
+
+#[test]
+fn routing_provenance_uses_the_viewer_zone_in_fields_and_log_text() {
+    let prepared = serde_json::json!({
+        "ts": SUMMER_UTC,
+        "type": "wrapper.routing.prepared",
+        "issue": 42,
+        "state": "proposed",
+        "model": "gpt-5-mini",
+        "effort": "medium",
+        "prepared_at": WINTER_UTC,
+        "valid_until": SUMMER_UTC,
+        "evidence_retrieved_at": SUMMER_UTC,
+        "capabilities_retrieved_at": WINTER_UTC,
+        "measurement_at": "2026-05-16T00:00:00Z"
+    });
+    let input = format!("{}{}\n", trace(SUMMER_UTC), prepared);
+    let (code, stdout, stderr) = helper(&["--issue", "42"], &[("TZ", MOUNTAIN_POSIX)], &input);
+    assert_eq!(code, 0, "{stderr}");
+    let view: Value = serde_json::from_str(&stdout).expect("projection");
+    let preparation = &view["dashboard"]["queue"]["rows"][0]["preparation"];
+    let text = view["drill_in"]["log"]["lines"][0]["text"]
+        .as_str()
+        .expect("preparation log");
+    for (field, expected) in [
+        ("prepared_at", WINTER_LOCAL),
+        ("valid_until", SUMMER_LOCAL),
+        ("evidence_retrieved_at", SUMMER_LOCAL),
+        ("capabilities_retrieved_at", WINTER_LOCAL),
+        ("measurement_at", "2026-05-15T18:00:00-06:00"),
+    ] {
+        assert_eq!(preparation[field], expected, "{field}");
+        assert!(text.contains(expected), "{field}: {text}");
+    }
+}
+
+#[test]
+fn reused_routing_dates_are_local_without_rewriting_arbitrary_log_text() {
+    let input = format!(
+        "{}{}\n{}\n",
+        trace(SUMMER_UTC),
+        serde_json::json!({
+            "type": "wrapper.routing.resolved",
+            "issue": 42,
+            "routing_reuse": "revalidated",
+            "reused_proposal_id": "decision-1",
+            "reused_validated_at": WINTER_UTC
+        }),
+        serde_json::json!({
+            "type": "agent.output",
+            "lane_issue": 42,
+            "text": WINTER_UTC
+        }),
+    );
+    let (_, stdout, _) = helper(&["--issue", "42"], &[("TZ", MOUNTAIN_POSIX)], &input);
+    let view: Value = serde_json::from_str(&stdout).expect("projection");
+    let lines = &view["drill_in"]["log"]["lines"];
+    assert!(lines[0]["text"]
+        .as_str()
+        .expect("reuse")
+        .contains(WINTER_LOCAL));
+    assert_eq!(lines[1]["text"], WINTER_UTC);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_default_launch_uses_native_local_rules_without_tz() {
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+    use windows_sys::Win32::System::Time::{
+        GetDynamicTimeZoneInformation, SystemTimeToTzSpecificLocalTimeEx,
+        DYNAMIC_TIME_ZONE_INFORMATION, TIME_ZONE_ID_INVALID,
+    };
+    let mut zone = DYNAMIC_TIME_ZONE_INFORMATION::default();
+    assert_ne!(
+        unsafe { GetDynamicTimeZoneInformation(&mut zone) },
+        TIME_ZONE_ID_INVALID
+    );
+    for (year, month, day, hour) in [
+        (2006, 3, 15, 14),
+        (2007, 3, 15, 14),
+        (2026, 1, 16, 14),
+        (2026, 7, 1, 0),
+    ] {
+        let utc = SYSTEMTIME {
+            wYear: year,
+            wMonth: month,
+            wDay: day,
+            wHour: hour,
+            ..Default::default()
+        };
+        let mut local = SYSTEMTIME::default();
+        assert_ne!(
+            unsafe { SystemTimeToTzSpecificLocalTimeEx(&zone, &utc, &mut local) },
+            0
+        );
+        let canonical = format!("{year:04}-{month:02}-{day:02}T{hour:02}:00:00Z");
+        let local_wall = instant(&format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+            local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute, local.wSecond
+        ));
+        let utc_instant = instant(&canonical);
+        let offset = (local_wall.seconds_since(utc_instant) / 60.0) as i32;
+        let (code, stdout, stderr) = helper(&[], &[], &trace(&canonical));
+        assert_eq!(code, 0, "{stderr}");
+        assert!(
+            stderr.is_empty(),
+            "a working Windows zone fell back: {stderr}"
+        );
+        assert_eq!(
+            started_at(&stdout),
+            utc_instant.to_zoned_iso(&Zone::from_offset_minutes(offset))
+        );
+    }
+}
+
+#[test]
+fn malformed_provenance_is_preserved_and_multiline_routing_logs_stay_bounded() {
+    let malformed = "\u{2603}2026-05-16T14:00:00Z";
+    let prepared = serde_json::json!({
+        "type": "wrapper.routing.prepared",
+        "issue": 42,
+        "state": "proposed",
+        "model": "gpt-5-mini",
+        "prepared_at": malformed,
+        "summary": (0..300).map(|line| format!("line {line}")).collect::<Vec<_>>().join("\n")
+    });
+    let input = format!("{}{}\n", trace(SUMMER_UTC), prepared);
+    let (code, stdout, stderr) = helper(&["--issue", "42"], &[("TZ", MOUNTAIN_POSIX)], &input);
+    assert_eq!(code, 0, "{stderr}");
+    let view: Value = serde_json::from_str(&stdout).expect("projection");
+    assert_eq!(
+        view["dashboard"]["queue"]["rows"][0]["preparation"]["prepared_at"],
+        malformed
+    );
+    let lines = view["drill_in"]["log"]["lines"].as_array().expect("log");
+    assert_eq!(lines.len(), 200);
+    assert!(lines.last().expect("tail")["text"]
+        .as_str()
+        .expect("text")
+        .contains(malformed));
 }
 
 /// A tz database directory holding one zone, for the helper to resolve.

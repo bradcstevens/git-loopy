@@ -2,6 +2,12 @@
 
 **Status:** accepted
 
+**Amended by [ADR-0058](0058-init-precedes-the-run-and-clients-do-not-own-its-lifetime.md):**
+the detached-client model supersedes the in-process lifetime and sink-swap
+clauses below. Detach disconnects a client; a Dashboard fault leaves that client
+observing through the line printer without changing the Run's outcome. The
+terminal-restoration invariant remains; the old continuation model is historical.
+
 **Supersedes:** the exit-model clause of
 [ADR-0001](0001-observer-control-model-for-interactive-runner.md) (an unflagged app
 exit is a **Stop**). ADR-0001's peer-task core is upheld in full.

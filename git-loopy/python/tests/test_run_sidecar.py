@@ -512,6 +512,8 @@ def test_the_client_reports_a_worker_that_failed_after_it_traced_work(
 
 def test_the_python_launch_leaves_the_viewing_machines_clock_to_the_helper(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    denver_viewer: None,
 ) -> None:
     """The Orchestrator states no offset and scrubs no environment (#597).
 
@@ -564,11 +566,8 @@ def test_the_python_launch_leaves_the_viewing_machines_clock_to_the_helper(
     worker = subprocess.Popen(
         [sys.executable, str(worker_script), str(trace_path)], env=environment
     )
-    original_environ = os.environ.get("TZ")
-    os.environ["TZ"] = "America/Denver"
-    original_resolve = tui_release.resolve_runtime_helper
-    tui_release.resolve_runtime_helper = (  # type: ignore[assignment]
-        lambda *_args, **_kwargs: helper
+    monkeypatch.setattr(
+        tui_release, "resolve_runtime_helper", lambda *_args, **_kwargs: helper
     )
     try:
         run_sidecar.run_terminal_client(
@@ -582,11 +581,6 @@ def test_the_python_launch_leaves_the_viewing_machines_clock_to_the_helper(
             diagnostics_path=tmp_path / "run.log",
         )
     finally:
-        tui_release.resolve_runtime_helper = original_resolve  # type: ignore[assignment]
-        if original_environ is None:
-            os.environ.pop("TZ", None)
-        else:
-            os.environ["TZ"] = original_environ
         worker.kill()
         worker.wait()
 

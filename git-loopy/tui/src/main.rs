@@ -268,6 +268,7 @@ const TZ_DIRECTORIES: [&str; 5] = [
 ];
 
 /// The symlink every Unix host points at its own zone.
+#[cfg(not(windows))]
 const LOCALTIME: &str = "/etc/localtime";
 
 /// The viewing machine's zone rules, or why they could not be read.
@@ -300,24 +301,235 @@ fn resolve_viewing_zone() -> Result<Zone, String> {
                 )
             })
         }
-        Err(_) => {
-            let data = std::fs::read(LOCALTIME).map_err(|error| {
-                format!(
-                    "the viewing machine's timezone could not be read from \
-                     {LOCALTIME} ({error}); times are shown in UTC — set TZ to \
-                     a zone name such as America/Denver, or pass \
-                     --utc-offset-minutes for a fixed offset"
-                )
-            })?;
-            zone_from_tz_data(&data).ok_or_else(|| {
-                format!(
-                    "the viewing machine's timezone database at {LOCALTIME} \
-                     could not be decoded; times are shown in UTC — set TZ to \
-                     a zone name such as America/Denver, or pass \
-                     --utc-offset-minutes for a fixed offset"
-                )
-            })
+        Err(std::env::VarError::NotPresent) => system_viewing_zone(),
+        Err(std::env::VarError::NotUnicode(_)) => Err(
+            "TZ is not Unicode; times are shown in UTC -- unset TZ or use a valid timezone"
+                .to_string(),
+        ),
+    }
+}
+
+#[cfg(not(windows))]
+fn system_viewing_zone() -> Result<Zone, String> {
+    let data = std::fs::read(LOCALTIME).map_err(|error| {
+        format!(
+            "the viewing machine's timezone could not be read from \
+             {LOCALTIME} ({error}); times are shown in UTC -- set TZ or \
+             pass --utc-offset-minutes for a fixed offset"
+        )
+    })?;
+    zone_from_tz_data(&data).ok_or_else(|| {
+        format!(
+            "the timezone database at {LOCALTIME} could not be decoded; \
+             times are shown in UTC -- set TZ or pass --utc-offset-minutes"
+        )
+    })
+}
+
+#[cfg(windows)]
+fn system_viewing_zone() -> Result<Zone, String> {
+    use windows_sys::Win32::System::Time::{
+        GetDynamicTimeZoneInformation, DYNAMIC_TIME_ZONE_INFORMATION, TIME_ZONE_ID_INVALID,
+    };
+
+    let load = || -> Result<Zone, String> {
+        let mut information = DYNAMIC_TIME_ZONE_INFORMATION::default();
+        // The API writes the complete, correctly sized structure on success.
+        if unsafe { GetDynamicTimeZoneInformation(&mut information) } == TIME_ZONE_ID_INVALID {
+            return Err(format!(
+                "cannot read the Windows timezone: {}",
+                io::Error::last_os_error()
+            ));
         }
+        windows_viewing_zone(&information)
+    };
+    load().map_err(|reason| {
+        format!("{reason}; times are shown in UTC -- repair the Windows timezone or pass --utc-offset-minutes")
+    })
+}
+
+#[cfg(windows)]
+fn windows_viewing_zone(
+    information: &windows_sys::Win32::System::Time::DYNAMIC_TIME_ZONE_INFORMATION,
+) -> Result<Zone, String> {
+    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
+    use windows_sys::Win32::System::Time::{
+        GetDynamicTimeZoneInformationEffectiveYears, GetTimeZoneInformationForYear,
+        TIME_ZONE_INFORMATION,
+    };
+    let base = TIME_ZONE_INFORMATION {
+        Bias: information.Bias,
+        StandardBias: information.StandardBias,
+        StandardDate: information.StandardDate,
+        DaylightBias: information.DaylightBias,
+        DaylightDate: information.DaylightDate,
+        ..Default::default()
+    };
+    let base_rule = windows_year_rule(&base)?;
+    if information.DynamicDaylightTimeDisabled || information.TimeZoneKeyName[0] == 0 {
+        return Ok(Zone::from_rules(0, Vec::new(), Some(base_rule)));
+    }
+    let (mut first, mut last) = (0, 0);
+    // All pointers refer to live structures for the duration of this call.
+    let status =
+        unsafe { GetDynamicTimeZoneInformationEffectiveYears(information, &mut first, &mut last) };
+    if status == ERROR_FILE_NOT_FOUND || (status == ERROR_SUCCESS && first == 0 && last == 0) {
+        return Ok(Zone::from_rules(0, Vec::new(), Some(base_rule)));
+    }
+    if status != ERROR_SUCCESS {
+        return Err(format!(
+            "cannot read Windows timezone history: OS error {status}"
+        ));
+    }
+    if first > last || last > 9999 {
+        return Err(format!(
+            "invalid Windows timezone year range {first}..{last}"
+        ));
+    }
+    let mut rules = Vec::new();
+    for year in first..=last {
+        let mut annual = TIME_ZONE_INFORMATION::default();
+        // The year is bounded above, and the API initializes annual on success.
+        if unsafe { GetTimeZoneInformationForYear(year as u16, information, &mut annual) } == 0 {
+            return Err(format!(
+                "cannot read Windows timezone rules for {year}: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        rules.push(windows_year_rule(&annual)?);
+    }
+    Zone::from_year_rules(first as u16, &rules)
+        .ok_or_else(|| "Windows timezone history is not representable".to_string())
+}
+
+#[cfg(windows)]
+fn windows_year_rule(
+    information: &windows_sys::Win32::System::Time::TIME_ZONE_INFORMATION,
+) -> Result<git_loopy_tui::ZoneTailRule, String> {
+    use git_loopy_tui::{ZoneDaylightRule, ZoneRuleDate, ZoneTailRule};
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+
+    let offset = |adjustment: i32| {
+        information
+            .Bias
+            .checked_add(adjustment)
+            .and_then(i32::checked_neg)
+            .filter(|offset| (-1439..=1439).contains(offset))
+            .ok_or_else(|| "invalid Windows timezone offset".to_string())
+    };
+    if information.StandardDate.wMonth == 0 && information.DaylightDate.wMonth == 0 {
+        return Ok(ZoneTailRule::fixed(offset(0)?));
+    }
+    let date = |date: &SYSTEMTIME| -> Result<ZoneRuleDate, String> {
+        if date.wYear != 0
+            || !(1..=12).contains(&date.wMonth)
+            || !(1..=5).contains(&date.wDay)
+            || date.wDayOfWeek > 6
+            || date.wHour > 23
+            || date.wMinute > 59
+            || date.wSecond > 59
+            || date.wMilliseconds != 0
+        {
+            return Err("unsupported Windows timezone transition date".to_string());
+        }
+        Ok(ZoneRuleDate::MonthWeekDay {
+            month: u32::from(date.wMonth),
+            week: u32::from(date.wDay),
+            weekday: u32::from(date.wDayOfWeek),
+            seconds: i64::from(date.wHour) * 3600
+                + i64::from(date.wMinute) * 60
+                + i64::from(date.wSecond),
+        })
+    };
+    Ok(ZoneTailRule::with_daylight(
+        offset(information.StandardBias)?,
+        ZoneDaylightRule::new(
+            offset(information.DaylightBias)?,
+            date(&information.DaylightDate)?,
+            date(&information.StandardDate)?,
+        ),
+    ))
+}
+
+#[cfg(all(test, windows))]
+mod windows_zone_tests {
+    use super::*;
+    use windows_sys::Win32::Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, SYSTEMTIME};
+    use windows_sys::Win32::System::Time::{
+        EnumDynamicTimeZoneInformation, SystemTimeToTzSpecificLocalTimeEx,
+        DYNAMIC_TIME_ZONE_INFORMATION,
+    };
+
+    #[test]
+    fn windows_named_rules_match_native_historical_conversions() {
+        let names = [
+            "Mountain Standard Time",
+            "AUS Eastern Standard Time",
+            "Nepal Standard Time",
+            "UTC",
+        ];
+        let mut found = 0;
+        for index in 0.. {
+            let mut information = DYNAMIC_TIME_ZONE_INFORMATION::default();
+            let status = unsafe { EnumDynamicTimeZoneInformation(index, &mut information) };
+            if status != ERROR_SUCCESS {
+                assert_eq!(status, ERROR_NO_MORE_ITEMS);
+                break;
+            }
+            let end = information
+                .TimeZoneKeyName
+                .iter()
+                .position(|unit| *unit == 0)
+                .unwrap_or(information.TimeZoneKeyName.len());
+            let name = String::from_utf16(&information.TimeZoneKeyName[..end]).expect("zone name");
+            if !names.contains(&name.as_str()) {
+                continue;
+            }
+            found += 1;
+            let zone = windows_viewing_zone(&information).expect("native named zone rules");
+            for (year, month, day, hour) in [
+                (1999, 3, 15, 14),
+                (2006, 3, 15, 14),
+                (2007, 3, 15, 14),
+                (2026, 1, 16, 14),
+                (2026, 7, 1, 0),
+                (2026, 11, 1, 8),
+            ] {
+                let utc = SYSTEMTIME {
+                    wYear: year,
+                    wMonth: month,
+                    wDay: day,
+                    wHour: hour,
+                    ..Default::default()
+                };
+                let mut local = SYSTEMTIME::default();
+                assert_ne!(
+                    unsafe { SystemTimeToTzSpecificLocalTimeEx(&information, &utc, &mut local) },
+                    0
+                );
+                let instant = Timestamp::parse_rfc3339(&format!(
+                    "{year:04}-{month:02}-{day:02}T{hour:02}:00:00Z"
+                ))
+                .expect("UTC instant");
+                let wall = Timestamp::parse_rfc3339(&format!(
+                    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+                    local.wYear,
+                    local.wMonth,
+                    local.wDay,
+                    local.wHour,
+                    local.wMinute,
+                    local.wSecond
+                ))
+                .expect("local wall clock");
+                let expected = (wall.seconds_since(instant) / 60.0) as i32;
+                assert_eq!(
+                    zone.offset_minutes_at(instant),
+                    expected,
+                    "{name}: {instant}"
+                );
+            }
+        }
+        assert_eq!(found, names.len());
     }
 }
 
