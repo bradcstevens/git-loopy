@@ -18,6 +18,19 @@ supplies the per-model tier capability [ADR-0017](0017-context-tier-and-live-con
 requires, unblocks [#281](https://github.com/bradcstevens/git-loopy/issues/281), and
 corrects the diagnosis recorded in [#282](https://github.com/bradcstevens/git-loopy/issues/282).
 
+## SDK 1.0.13 maintenance refresh
+
+The maintenance release based on `0.11.0-dev.2` pins SDK `1.0.13` and its CLI
+`1.0.83`, both acquired through the Microsoft corporate package feeds. The live
+`models.list` capture used that exact CLI with auto-update disabled. The fixture
+and in-language stamp move to `1.0.83`, with all 19 observed models represented
+and seven historical, account-unlisted compatibility rows retained. The Python
+Runner README distinguishes those rows from fresh observations. Saved model
+choices and the unknown-model pass-through behavior are unchanged.
+
+The earlier CLI/SDK comparisons below describe the original investigation,
+not the maintenance release's current runtime.
+
 ## The premise that was wrong
 
 Reasoning-effort capability is not vendor data reaching the kit through two paths. In the
@@ -30,7 +43,7 @@ identical SDK code against three binaries on one account, minutes apart:
 
 | CLI | `gemini-3.5-flash` | `gemini-3.6-flash` |
 | --- | --- | --- |
-| **1.0.67** — pinned by `github-copilot-sdk==1.0.5`, the binary git-loopy runs | `low, medium, high` | *absent* |
+| **1.0.67** — pinned by `github-copilot-sdk==1.0.5` during the investigation | `low, medium, high` | *absent* |
 | 1.0.71 | `minimal, low, medium, high` | *absent* |
 | 1.0.75 — the operator's Homebrew install | `minimal, low, medium, high` | `minimal, low, medium, high` |
 

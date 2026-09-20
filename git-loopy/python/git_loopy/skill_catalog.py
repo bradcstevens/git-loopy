@@ -17,6 +17,7 @@ _SOURCE_KINDS = {
     "personal-agents": "personal",
     "plugin": "plugin",
     "custom": "custom",
+    "sdk": "custom",
     "builtin": "builtin",
 }
 _SDK_SKILL_SOURCES = frozenset(_SOURCE_KINDS)

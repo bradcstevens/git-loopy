@@ -87,6 +87,19 @@ a fallback. The other prerequisites (`gh` signed in, `git`, `copilot`) are liste
 The bootstrap is per-clone; subsequent invocations of `git-loopy` use
 the cached environment under `git-loopy/python/.venv/`.
 
+The Runner pins `github-copilot-sdk==1.0.13`, whose runtime is Copilot CLI
+`1.0.83`. This SDK is available through the Microsoft corporate Python feed.
+The pin, lockfile, and model-roster CLI stamp move together; offline tests
+cover the installed SDK's client/session and Skill-discovery interfaces.
+SDK-provided Skills use the existing `custom` source kind and still need an
+exposable filesystem path before an enabled Skill can enter a Run.
+
+On a corporate-feed machine, do not sync the public artifact URLs in the
+shared lockfile. Export its pins without downloading, inspect the exported
+requirements for direct URLs, install those pins through the configured feed
+with `uv pip`, and run with `uv run --no-sync`. Leave the shared lockfile's
+portable source URLs intact.
+
 ---
 
 ## Install (run from anywhere)
@@ -1234,8 +1247,20 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `gpt-5.6-sol`                 | `none` `low` `medium` `high` `xhigh` `max` |
 | `gpt-5.6-terra`               | `none` `low` `medium` `high` `xhigh` `max` |
 | `mai-code-1-flash-picker`     | `low` `medium` `high`                    |
+| `gpt-5.6-sol-fast`            | `none` `low` `medium` `high` `xhigh` `max` |
+| `mai-code-1.1-flash`          | `low` `medium` `high`                    |
+| `grok-4.5`                   | `low` `medium` `high`                    |
+| `gpt-6-astra`                | `low` `medium` `high` `xhigh` `max`      |
+| `grok-4.6`                   | `low` `medium` `high` `xhigh`            |
 
-This snapshot follows the current Copilot catalog. The retired
+This snapshot includes all 19 models observed through SDK `1.0.13` and its
+pinned CLI `1.0.83`. Seven earlier compatibility entries remain:
+`claude-sonnet-4.6`, `claude-sonnet-4.5`, `claude-opus-4.6`,
+`gemini-3.1-pro-preview`, `gemini-3.6-flash`, `gemini-3.5-flash`, and
+`mai-code-1-flash-picker`. Those seven were not offered to the account used for
+the refresh; their historical rows are not fresh availability claims.
+Existing configured models and efforts are unchanged, and unverified models
+remain on the unknown-model warning-and-pass-through path. The retired
 `claude-opus-4.5` id and the renamed `mai-code-1-flash-internal` id are not
 official choices; persisted legacy ids still use the unknown-model
 warn-and-pass-through path so the Copilot CLI remains the final authority.
