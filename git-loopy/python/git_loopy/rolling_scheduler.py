@@ -40,11 +40,10 @@ Design notes:
   retained). :meth:`finish_work` returns which happened, and
   :meth:`finalize` returns whatever freeing an H slot admitted from the parked
   FIFO, so the ordering rules live in one place.
-* **Terminal is terminal exactly once.** §7.6: every terminal unpublished
-  contribution adds exactly one Strike and no intermediate phase adds any. The
-  scheduler records the reaction on the finalized row rather than ticking the
-  Strike machine itself, because that machine is shared with serial
-  **Iterations** and belongs to the composed :class:`~git_loopy.loop._Loop`.
+* **Terminal is terminal exactly once.** The finalized row retains §7.6's
+  historical contribution reaction for replay. It does not charge a Strike or
+  reset the guard: the composed :class:`~git_loopy.loop._Loop` owns the shared
+  per-issue ledger and Abandonment guard.
 * **stdlib + the two Rolling seams only.** No SDK, no Rich, no peer-of-loop
   imports — the same constraint :mod:`git_loopy.rolling_pool` carries.
 """
@@ -117,9 +116,8 @@ SERIAL_LATCH_REASONS: tuple[str, ...] = (
     REASON_SERIAL_FALLBACK,
 )
 
-# What a finalized contribution does to the shared Strike machine (#219 §7.4,
-# §7.6). The scheduler records the reaction; :class:`~git_loopy.loop._Loop`
-# still owns the machine, because serial **Iterations** tick the same one.
+# Historical contribution-disposition vocabulary (#219 §7.4, §7.6), retained
+# for replay. These values no longer charge Strikes or reset the guard.
 STRIKE_RESET = "reset"
 STRIKE_ADD = "+1"
 STRIKE_NONE = "none"

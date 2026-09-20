@@ -58,14 +58,14 @@ Per-iteration sequence:
     Non-fatal: a missing remote/upstream, an auth failure, or a
     non-fast-forward warns and the loop carries on, so a local-only repo
     completes normally.
-12. **Strike accounting** (#413, ADR-0041): the **Strike** ceiling counts the
-    issues this Run has *given up on*, so nothing is charged here. One Strike
+12. **Strike accounting** (ADR-0041, amended by ADR-0061): the ledger records
+    issues this Run has *given up on*. One Strike
     is charged per issue, at the ending that moves it into the **Attempt
     lifecycle**'s ``skipped`` position (:meth:`_Loop._observe_session_ending`
     in step 10's neighbourhood, the one seam a serial Iteration and a **Lane**
-    share). An Iteration that made no progress charges nothing and progress
-    resets nothing; Checkpoints and pushes are still *not* progress, which is
-    what the §6 predicate reports on the Summary row.
+    share). An Iteration that made no progress charges nothing by itself.
+    Closed/advanced resets the separate Abandonment guard, never the Strike
+    ledger; Checkpoints and pushes are still *not* progress.
 13. Emit ``wrapper.iteration.end`` (renderer closes snapshot panel) and
     persist :class:`~git_loopy.persist.IterationCounters` from the
     closed snapshot.
@@ -1847,7 +1847,7 @@ class _Loop:
 
             * ``"continue"`` — iteration completed, loop should keep going.
             * ``"empty_pool"`` — AFK-ready pool was empty; clean exit 0.
-            * ``"aborted"`` — NMT strike machine tripped; abort exit 1.
+            * ``"aborted"`` — Abandonment guard reached; abort exit 1.
 
         OTel span tree: opens ``git_loopy.iteration`` for the entire body,
         with three children — ``git_loopy.collect_issues`` around the
@@ -2148,7 +2148,7 @@ class _Loop:
             #    work-in-progress in a single close-keyword-free Checkpoint
             #    commit so the next iteration starts from a clean tree and no
             #    work is ever lost. Deliberately AFTER the agent-commit
-            #    accounting above (step 6) and BEFORE the Strike machine below,
+            #    accounting above (step 6) and BEFORE the guard observation below,
             #    so the Checkpoint is structurally excluded from both: it never
             #    counts as a commit in the Summary (it emits
             #    ``wrapper.checkpoint.recorded``, not ``wrapper.commit.recorded``)
@@ -3910,9 +3910,9 @@ class _ParallelLoop:
         self._stop_cancel_requested = False
 
         # Compose a serial `_Loop` for serial Iterations AND to share its
-        # Strike machine / event emitter / summary counters / Checkpoint
+        # Strike ledger / Abandonment guard / event emitter / summary / Checkpoint
         # policy, so a Lane contribution finalizing and a serial Iteration
-        # tick ONE Strike machine and write ONE consistent event + counter
+        # feed ONE guard and ledger and write ONE consistent event + counter
         # stream.
         self._serial = _Loop(
             config=config,

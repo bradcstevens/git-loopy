@@ -1502,10 +1502,10 @@ evidence, and `config get routing` attributes it to its own
 
 It is deliberately narrow:
 
-- **It is not the Strike counter.** Strikes are one Run-scoped counter every Lane
-  shares, and any Lane's progress resets it, so a good pair's commit erases the
-  strikes a bad one was accumulating. Demotion counts per pair; the Strike limit
-  keeps its own unchanged job of ending a Run that is going nowhere.
+- **It is neither the Strike ledger nor the Abandonment guard.** Strikes record
+  abandoned issues and never reset or end a Run. The separate guard counts
+  consecutive abandonments across the Run and resets on Closed/advanced, so it
+  cannot describe one pair's performance. Demotion counts per pair.
 - **It never demotes a hand-written entry.** A `[routing]` entry you typed is your
   decision, however badly its pair performs, and this system does not overrule
   those — the artifact is only consulted where the entry actually in force is the

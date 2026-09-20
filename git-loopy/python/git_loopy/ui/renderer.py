@@ -447,7 +447,9 @@ class Renderer:
         text = Text()
         text.append("✓ ", style=STYLES["success"])
         text.append("wind-down lifted", style=STYLES["success"])
-        text.append("  (strike limit)", style=STYLES["meta"])
+        cause = event.get("cause")
+        if isinstance(cause, str):
+            text.append(f"  ({cause.replace('_', ' ')})", style=STYLES["meta"])
         self.console.print(text)
 
     def _on_run_end(self, event: dict[str, Any]) -> None:

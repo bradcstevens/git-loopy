@@ -147,8 +147,8 @@ def did_iteration_make_progress(
     reads it off the Agent's own message and it reaches
     :class:`~git_loopy.session_outcome.SessionOutcome` as an ending (#405) — and
     this predicate still ignores it, deliberately: an ending records what
-    happened, and progress is what the contract (§6) says the Strike counter is
-    made of.
+    happened, and progress is the independent contract (§6) predicate; neither
+    is a per-issue Strike charge.
 
     Args:
         commits_in_iter: Number of new agent commits the iteration produced.

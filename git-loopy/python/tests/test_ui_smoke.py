@@ -143,7 +143,8 @@ def test_styles_dict_exposes_required_tokens() -> None:
         )
 
 
-def test_renderer_names_wind_down_cause_and_stage() -> None:
+@pytest.mark.parametrize("cause", ["strike_limit", "abandonment_guard"])
+def test_renderer_names_wind_down_cause_and_stage(cause: str) -> None:
     renderer, _, output = _make_renderer()
 
     renderer.render(
@@ -154,12 +155,13 @@ def test_renderer_names_wind_down_cause_and_stage() -> None:
             "draining": 2,
         }
     )
-    renderer.render({"type": WRAPPER_STOP_LIFTED, "cause": "strike_limit"})
+    renderer.render({"type": WRAPPER_STOP_LIFTED, "cause": cause})
 
     rendered = output.getvalue()
     assert "operator stop / cancel" in rendered
     assert "2 contributions in flight" in rendered
     assert "wind-down lifted" in rendered
+    assert f"({cause.replace('_', ' ')})" in rendered
 
 
 # ---------------------------------------------------------------------------

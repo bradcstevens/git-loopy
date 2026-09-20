@@ -144,8 +144,8 @@ __all__ = [
 _DEFAULT_MAX_CONSECUTIVE_ABANDONMENTS = 3
 #: How many no-progress **Lane contributions** one **Routed pair** may
 #: accumulate in a Run before **Demotion** steps its **Measured routing** entry
-#: up the price staircase (#366, ADR-0030). Shares a value with the Strike limit
-#: and nothing else: that counter is Run-scoped, shared by every Lane, and ends
+#: up the price staircase (#366, ADR-0030). Shares a value with the Abandonment guard
+#: and nothing else: that guard is Run-scoped, shared by every Lane, and ends
 #: the Run — this one is per pair and ends nothing.
 _DEFAULT_DEMOTION_THRESHOLD = 3
 # Default model used when ``GIT_LOOPY_MODEL`` is unset. A bare base id (model id and
