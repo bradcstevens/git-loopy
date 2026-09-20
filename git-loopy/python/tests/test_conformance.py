@@ -1052,7 +1052,7 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
-    assert _EVENT_SCHEMA["contract_version"] == "2.8"
+    assert _EVENT_SCHEMA["contract_version"] == "2.9"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
@@ -1264,6 +1264,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "consumption",
                 "peak_context_window",
             ],
+            "issue_optional": ["ending", "commits"],
             "consumption_required": ["model", "tokens_in", "tokens_out"],
             # #329: the harness's reported billing, declared optional rather
             # than required. An Orchestrator that cannot observe it omits the
@@ -2215,6 +2216,8 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     assert live["expected"]["dashboard"]["queue"]["rows"][0] == {
         "issue": 42,
         "status": "active",
+        "ending": None,
+        "commits": None,
         "started_at": "2026-05-15T18:00:01-06:00",
         "active_seconds": 2.0,
         "closed_at": None,
@@ -2670,7 +2673,10 @@ def test_native_dashboard_cases_are_producer_verified() -> None:
             ).is_integer(), case["id"]
 
 
-def test_python_semantic_view_matches_every_dashboard_fixture_snapshot() -> None:
+@pytest.mark.parametrize("future_issue_fields", [False, True])
+def test_python_semantic_view_matches_every_dashboard_fixture_snapshot(
+    future_issue_fields: bool,
+) -> None:
     for case in _DASHBOARD_INSIGHTS["cases"]:
         offset = timezone(timedelta(minutes=case["inputs"]["local_utc_offset_minutes"]))
         run_started = datetime.fromisoformat(
@@ -2695,6 +2701,17 @@ def test_python_semantic_view_matches_every_dashboard_fixture_snapshot() -> None
         applied = 0
         for snapshot in case["snapshots"]:
             for event in case["events"][applied : snapshot["after_event_count"]]:
+                if future_issue_fields and event["type"] in {
+                    "wrapper.iteration.end",
+                    "wrapper.contribution.end",
+                }:
+                    event = {
+                        **event,
+                        "issues": [
+                            {**row, "future_detail": {"unknown": True}}
+                            for row in event.get("issues", [])
+                        ],
+                    }
                 at = datetime.fromisoformat(event["ts"].replace("Z", "+00:00"))
                 # The Orchestrator's two clocks are independent axes of the seam:
                 # the envelope ``ts`` is its wall clock, ``observed_monotonic``
@@ -2736,6 +2753,48 @@ def test_python_semantic_view_matches_every_dashboard_fixture_snapshot() -> None
 )
 def test_event_serialization_fixture(case: dict[str, Any]) -> None:
     assert events_module.to_jsonl_line(case["event"]) == case["jsonl"]
+
+
+def test_event_fixture_pins_additive_session_endings_per_issue() -> None:
+    """Every observed ending stays beside its issue Status, never inside it."""
+    cases = _EVENT_SCHEMA["session_ending_cases"]
+    python_case = next(
+        case for case in cases if case["id"] == "python-emits-each-session-ending-per-issue"
+    )
+    assert python_case["distributions"] == ["python"]
+    endings = [
+        issue for issue in python_case["issues"] if "ending" in issue
+    ]
+    assert [issue["ending"] for issue in endings] == [
+        outcome.value for outcome in SessionOutcome
+    ]
+    assert {issue["status"] for issue in endings} == {"no-progress"}
+    advanced = next(
+        issue for issue in python_case["issues"] if issue["status"] == "advanced"
+    )
+    assert advanced == {"issue": 310, "status": "advanced", "commits": 1}
+
+    native_case = next(
+        case
+        for case in cases
+        if case["id"] == "native-members-omit-an-unavailable-ending"
+    )
+    assert native_case["distributions"] == ["shell", "powershell"]
+    assert native_case["issues"] == [{"issue": 7, "status": "no-progress"}]
+    assert _EVENT_SCHEMA["payload_contracts"]["wrapper.iteration.end"][
+        "issue_optional"
+    ] == ["ending", "commits"]
+    assert _EVENT_SCHEMA["future_consumer"] == {
+        "unknown_issue_fields_are_ignored": ["ending", "commits"],
+        "known_status_values_are_unchanged": [
+            "queued",
+            "active",
+            "closed",
+            "advanced",
+            "no-progress",
+            "gone",
+        ],
+    }
 
 
 _RELEASE_VERSION = _load_fixture("release-version.json")

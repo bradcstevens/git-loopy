@@ -50,6 +50,7 @@ const UNAVAILABLE: &str = "n/a";
 /// narrow to carry every column: rank 0 is never dropped. It is a presentation
 /// decision only — the shared fixture lists `responsive_truncation` among its
 /// presentation exclusions — so no projected value changes with the width.
+#[derive(Clone, Copy)]
 struct Column {
     heading: &'static str,
     width: u16,
@@ -557,14 +558,30 @@ fn draw_queue(
     routing: &str,
     glyphs: &Glyphs,
 ) {
+    let mut columns = QUEUE_COLUMNS;
+    columns[1].width = rows
+        .iter()
+        .map(|row| {
+            status_cell(&row.status, row.ending.as_deref(), row.commits, glyphs)
+                .chars()
+                .count() as u16
+                + 2
+        })
+        .max()
+        .unwrap_or(12)
+        .max(12)
+        .min(
+            area.width
+                .saturating_sub(2 + columns[0].width + COLUMN_SPACING),
+        );
     draw_table(
         frame,
         area,
-        &QUEUE_COLUMNS,
+        &columns,
         rows.iter().map(|row| {
             vec![
                 issue_label(&row.issue),
-                row.status.clone(),
+                status_cell(&row.status, row.ending.as_deref(), row.commits, glyphs),
                 wall_clock(row.started_at.as_deref(), glyphs),
                 duration(row.active_seconds),
                 wall_clock(row.closed_at.as_deref(), glyphs),
@@ -584,6 +601,33 @@ fn draw_queue(
         " Queue ",
         glyphs,
     );
+}
+
+fn status_cell(
+    status: &str,
+    ending: Option<&str>,
+    commits: Option<i64>,
+    glyphs: &Glyphs,
+) -> String {
+    let mut cell = status.to_string();
+    if let ("advanced", Some(commits)) = (status, commits) {
+        if commits > 0 {
+            let unit = if commits == 1 { "commit" } else { "commits" };
+            cell.push_str(&format!(" {}{commits} {unit}", glyphs.attribution));
+        }
+    }
+    let ending = match ending {
+        Some("no_progress") => Some("left nothing"),
+        Some("timeout") => Some("timed out"),
+        Some("crash") => Some("crashed"),
+        Some("no_more_tasks") => Some("no work remains"),
+        Some("content_filtered") => Some("content filtered"),
+        _ => None,
+    };
+    if let Some(ending) = ending {
+        cell.push_str(&format!(" {}{ending}", glyphs.attribution));
+    }
+    cell
 }
 
 /// A token counter with thousands separators, or the unknown placeholder.

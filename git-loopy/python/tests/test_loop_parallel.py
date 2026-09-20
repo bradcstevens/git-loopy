@@ -5182,6 +5182,12 @@ def test_parallel_contribution_disposition_agrees_with_the_ending_it_reports(
     assert [
         contribution.reason for contribution in built[0].finalized_contributions
     ] == ["unchanged_branch", "unchanged_branch"]
+    endings = {
+        event["issue"]: event["issues"][0]["ending"]
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.contribution.end"
+    }
+    assert endings == {42: "no_progress", 43: "no_progress"}
 
 
 def test_parallel_lane_runs_worktree_setup_before_own_session(

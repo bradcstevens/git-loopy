@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.8 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.9 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -963,6 +963,17 @@ contribution requires `issue`, `status`, UTC RFC3339 `first_started_at`, closure
 closure-only `issue_elapsed_seconds`, `active_seconds`, `cumulative_active_seconds`,
 `consumption` (`model`, `tokens_in`, `tokens_out`), and nullable `peak_context_window`. Only
 authoritative source closure populates closure-only fields.
+
+Contract-2.9 addition within compatibility schema 1: an issue contribution may carry `ending`,
+one of the five **Session outcome** spellings, beside its unchanged `status`. This is the observed
+ending of that issue's attempt, not its enclosing Iteration's outcome; the same issue rows travel
+on `wrapper.contribution.end` for a Lane contribution. A normally completed session that advanced
+its issue has no ending. A timeout or crash remains an observed session failure even if it first
+committed, as the existing Session outcome and Attempt lifecycle require. An Orchestrator that
+cannot observe an ending omits it; a consumer never defaults that absence to an ending.
+An advanced contribution may carry its positive `commits` count, so a Queue can say what advanced
+without turning a zero or unavailable count into a claim. The Queue displays these facts inline
+in Status, without adding a column or changing the six Status values.
 
 Cost is the harness's reported billing — optional `credits`, `premium_requests`, `cache_read` and
 `cache_write`, added additively (ADR-0026). They are optional rather than required precisely so an

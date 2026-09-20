@@ -6,6 +6,7 @@ from operator import itemgetter
 
 from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy.rollup import IterationRollupAccumulator
+from git_loopy.session_outcome import SessionOutcome
 
 
 class _Clock:
@@ -250,6 +251,106 @@ def test_repeated_issue_uses_fallback_baseline_and_cumulative_active_time() -> N
     }
 
 
+@pytest.mark.parametrize("ending", list(SessionOutcome))
+def test_rollup_carries_each_session_ending_on_its_own_issue(
+    ending: SessionOutcome,
+) -> None:
+    """An ending stays with the issue attempt that produced it."""
+    rollup = IterationRollupAccumulator(
+        denomination=BilledCreditsDenomination(), monotonic=_Clock()
+    )
+    rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
+    rollup.observe(
+        {
+            "type": "wrapper.issue.activated",
+            "issue": 42,
+            "activated_at": "2026-05-16T00:00:00.000Z",
+            "binding_source": "working_marker",
+        }
+    )
+
+    rollup.record_ending(42, ending)
+
+    issue = rollup.finish(iter_num=1, strikes=0)["issues"][0]
+    assert issue["status"] == "no-progress"
+    assert issue["ending"] == ending.value
+
+
+def test_rollup_omits_an_ending_when_an_issue_advanced() -> None:
+    """Progress has no Session outcome and must not fabricate one."""
+    rollup = IterationRollupAccumulator(
+        denomination=BilledCreditsDenomination(), monotonic=_Clock()
+    )
+    rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
+    rollup.observe(
+        {
+            "type": "wrapper.issue.activated",
+            "issue": 42,
+            "activated_at": "2026-05-16T00:00:00.000Z",
+            "binding_source": "working_marker",
+        }
+    )
+    rollup.observe({"type": "wrapper.commit.recorded"})
+
+    rollup.record_ending(42, None)
+
+    issue = rollup.finish(iter_num=1, strikes=0)["issues"][0]
+    assert issue["status"] == "advanced"
+    assert "ending" not in issue
+
+
+@pytest.mark.parametrize("rolling", [False, True])
+def test_session_endings_belong_to_each_issue_attempt_not_the_accounting_scope(
+    rolling: bool,
+) -> None:
+    rollup = IterationRollupAccumulator(
+        denomination=BilledCreditsDenomination(), monotonic=_Clock()
+    )
+    if not rolling:
+        rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
+    for issue in (42, 43):
+        if rolling:
+            rollup.observe({"type": "wrapper.contribution.start", "issue": issue})
+        rollup.observe(
+            {
+                "type": "wrapper.issue.activated",
+                "issue": issue,
+                "lane_issue": issue,
+                "activated_at": "2026-05-16T00:00:00.000Z",
+                "binding_source": "lane_pickup",
+            }
+        )
+    rollup.record_ending(42, SessionOutcome.CRASH)
+    rollup.record_ending(43, SessionOutcome.TIMEOUT)
+    scopes = (43, 42) if rolling else (None,)
+    payloads = [
+        rollup.finish(iter_num=1, strikes=1, lane_issue=scope)
+        for scope in scopes
+    ]
+    assert all("ending" not in payload for payload in payloads)
+    assert {
+        row["issue"]: row["ending"]
+        for payload in payloads
+        for row in payload["issues"]
+    } == {42: "crash", 43: "timeout"}
+
+    rollup.observe({"type": "wrapper.iteration.start", "iter": 2})
+    rollup.observe(
+        {
+            "type": "wrapper.issue.activated",
+            "issue": 42,
+            "activated_at": "2026-05-16T00:00:05.000Z",
+            "binding_source": "serial_pickup",
+        }
+    )
+    rollup.observe({"type": "wrapper.commit.recorded"})
+    rollup.record_ending(42, None)
+    retry = rollup.finish(iter_num=2, strikes=1)["issues"][0]
+    assert retry["status"] == "advanced"
+    assert retry["commits"] == 1
+    assert "ending" not in retry
+
+
 def test_parallel_wave_produces_one_contribution_per_lane() -> None:
     clock = _Clock()
     rollup = IterationRollupAccumulator(
@@ -336,6 +437,7 @@ def test_pr_advance_is_progress_without_authoritative_closure_fields() -> None:
     assert payload["issues"][0]["status"] == "advanced"
     assert payload["issues"][0]["closed_at"] is None
     assert payload["issues"][0]["issue_elapsed_seconds"] is None
+    assert "commits" not in payload["issues"][0]
 
 
 def test_empty_rollup_normalizes_to_no_progress() -> None:

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.8",
+  "contract_version": "2.9",
   "event_schema_version": "1.2",
   "insight_capabilities": {
     "names": [
@@ -203,6 +203,7 @@
         "peak_context_window"
       ],
       "consumption_required": ["model", "tokens_in", "tokens_out"],
+      "issue_optional": ["ending", "commits"],
       "summary_optional": ["credits", "premium_requests", "cache_read", "cache_write"],
       "consumption_optional": ["credits", "premium_requests", "cache_read", "cache_write"],
       "billing": "The harness's reported billing, added additively. An Orchestrator that observes it reports it; one that cannot omits the keys entirely or reports them null. Null is unknown, never a zero that would read as free work, and never an estimate recomputed from tokens. cache_read and cache_write are components of tokens_in, not figures beside it: summing them into a token total double-counts.",
@@ -2417,6 +2418,28 @@
       "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000AA\", \"iter\": 3, \"type\": \"wrapper.pickup.bound\", \"considered\": 2, \"context_tier\": \"default\", \"effort\": null, \"gate_warnings\": [\"dropped_effort\"], \"issue\": 42, \"lifecycle_position\": \"fresh\", \"model\": \"gpt-5-mini\", \"position\": 1, \"reason\": \"order\", \"routing_source\": \"routed\", \"task_type_keys\": [\"docs\"]}\n"
     },
     {
+      "id": "issue-endings-are-additive-with-unchanged-statuses",
+      "distributions": ["python", "shell", "powershell", "rust"],
+      "note": "Every serializer preserves optional issue details, even where the Orchestrator cannot observe them itself. Consumers ignore unknown issue fields and never invent an ending for the absent case.",
+      "event": {
+        "ts": "2026-05-16T00:00:25.000Z",
+        "run_id": "01HXR0000000000000000000EE",
+        "iter": 1,
+        "type": "wrapper.iteration.end",
+        "issues": [
+          {"issue": 311, "status": "no-progress", "ending": "no_progress"},
+          {"issue": 312, "status": "no-progress", "ending": "timeout"},
+          {"issue": 317, "status": "no-progress", "ending": "crash"},
+          {"issue": 315, "status": "no-progress", "ending": "no_more_tasks"},
+          {"issue": 316, "status": "no-progress", "ending": "content_filtered"},
+          {"issue": 310, "status": "advanced", "commits": 1},
+          {"issue": 318, "status": "advanced", "ending": "timeout", "commits": 1},
+          {"issue": 7, "status": "no-progress"}
+        ]
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:25.000Z\", \"run_id\": \"01HXR0000000000000000000EE\", \"iter\": 1, \"type\": \"wrapper.iteration.end\", \"issues\": [{\"issue\": 311, \"status\": \"no-progress\", \"ending\": \"no_progress\"}, {\"issue\": 312, \"status\": \"no-progress\", \"ending\": \"timeout\"}, {\"issue\": 317, \"status\": \"no-progress\", \"ending\": \"crash\"}, {\"issue\": 315, \"status\": \"no-progress\", \"ending\": \"no_more_tasks\"}, {\"issue\": 316, \"status\": \"no-progress\", \"ending\": \"content_filtered\"}, {\"issue\": 310, \"status\": \"advanced\", \"commits\": 1}, {\"issue\": 318, \"status\": \"advanced\", \"ending\": \"timeout\", \"commits\": 1}, {\"issue\": 7, \"status\": \"no-progress\"}]}\n"
+    },
+    {
       "id": "parallel-degraded-to-serial-for-the-whole-run",
       "note": "A Parallel-mode Run whose issue source can never offer Lane work. Run-scoped: no contribution identity and no issue, because nothing was ever a candidate for a Lane. Members that schedule no Lane never produce this record and MUST still read and write these bytes.",
       "event": {
@@ -2430,5 +2453,28 @@
       },
       "jsonl": "{\"ts\": \"2026-05-16T00:00:26.000Z\", \"run_id\": \"01HXR0000000000000000000DE\", \"iter\": null, \"type\": \"wrapper.parallel.degraded\", \"issue_source\": \"prds\", \"lane_cap\": 4, \"reason\": \"source_not_rolling_capable\"}\n"
     }
-  ]
+  ],
+  "session_ending_cases": [
+    {
+      "id": "python-emits-each-session-ending-per-issue",
+      "distributions": ["python"],
+      "issues": [
+        {"issue": 311, "status": "no-progress", "ending": "no_progress"},
+        {"issue": 312, "status": "no-progress", "ending": "timeout"},
+        {"issue": 317, "status": "no-progress", "ending": "crash"},
+        {"issue": 315, "status": "no-progress", "ending": "no_more_tasks"},
+        {"issue": 316, "status": "no-progress", "ending": "content_filtered"},
+        {"issue": 310, "status": "advanced", "commits": 1}
+      ]
+    },
+    {
+      "id": "native-members-omit-an-unavailable-ending",
+      "distributions": ["shell", "powershell"],
+      "issues": [{"issue": 7, "status": "no-progress"}]
+    }
+  ],
+  "future_consumer": {
+    "unknown_issue_fields_are_ignored": ["ending", "commits"],
+    "known_status_values_are_unchanged": ["queued", "active", "closed", "advanced", "no-progress", "gone"]
+  }
 }

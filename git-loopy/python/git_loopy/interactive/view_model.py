@@ -202,6 +202,8 @@ def _queue_row(row: QueueRow, *, denomination: CostDenomination) -> dict[str, An
     return {
         "issue": row.ref,
         "status": row.status,
+        "ending": row.ending,
+        "commits": row.commits,
         "started_at": _timestamp(row.started_wall),
         "active_seconds": row.active_seconds,
         "closed_at": _timestamp(row.closed_wall),

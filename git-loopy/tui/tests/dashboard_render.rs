@@ -207,6 +207,74 @@ fn the_queue_band_lists_every_issue_in_the_locked_columns() {
 }
 
 #[test]
+fn the_queue_renders_session_endings_inline_with_status() {
+    let view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    let lines = render_lines(&view, 240, 40, TerminalCapabilities::default());
+    let queue = band(&lines, "Queue");
+    let status_by_issue: std::collections::BTreeMap<_, _> = queue[1..]
+        .iter()
+        .map(|row| {
+            let row = cells(row);
+            (row[0].clone(), row[1].clone())
+        })
+        .collect();
+
+    assert_eq!(
+        status_by_issue,
+        std::collections::BTreeMap::from([
+            ("#310".to_string(), "advanced · 1 commit".to_string()),
+            ("#311".to_string(), "no-progress · left nothing".to_string()),
+            ("#312".to_string(), "no-progress · timed out".to_string()),
+            ("#313".to_string(), "advanced · 1 commit".to_string()),
+            ("#314".to_string(), "closed".to_string()),
+            (
+                "#315".to_string(),
+                "no-progress · no work remains".to_string()
+            ),
+            (
+                "#316".to_string(),
+                "no-progress · content filtered".to_string()
+            ),
+            ("#317".to_string(), "no-progress · crashed".to_string()),
+        ])
+    );
+}
+
+#[test]
+fn the_queue_keeps_advanced_work_beside_a_lost_session_ending() {
+    let mut view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    view.dashboard.queue.rows[0].ending = Some("timeout".to_string());
+    let lines = render_lines(&view, 240, 40, TerminalCapabilities::default());
+    let queue = band(&lines, "Queue");
+    let advanced = cells(&queue[1]);
+    assert_eq!(advanced[1], "advanced · 1 commit · timed out");
+}
+
+#[test]
+fn a_narrow_queue_keeps_status_when_another_ending_is_longer() {
+    let view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    let lines = render_lines(&view, 40, 40, TerminalCapabilities::default());
+    let queue = band(&lines, "Queue");
+    assert_eq!(cells(&queue[0]), ["Issue", "Status"]);
+    let timeout = queue.iter().find(|row| row.starts_with("#312")).unwrap();
+    assert_eq!(cells(timeout), ["#312", "no-progress · timed out"]);
+}
+
+#[test]
+fn an_ascii_queue_keeps_the_ending_without_a_unicode_separator() {
+    let view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    let capabilities = TerminalCapabilities {
+        unicode: false,
+        ..TerminalCapabilities::default()
+    };
+    let lines = render_lines(&view, 240, 40, capabilities);
+    let queue = band(&lines, "Queue");
+    let timeout = queue.iter().find(|row| row.starts_with("#312")).unwrap();
+    assert_eq!(cells(timeout)[1], "no-progress - timed out");
+    assert!(queue.iter().all(|row| row.is_ascii()));
+}
+
+#[test]
 fn the_queue_shows_an_explicit_long_context_route_in_full() {
     let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
     let pickup = Event::from_jsonl_line(

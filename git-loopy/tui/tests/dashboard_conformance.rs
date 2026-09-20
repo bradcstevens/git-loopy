@@ -81,6 +81,7 @@ fn the_rust_core_matches_every_dashboard_fixture_snapshot() {
                 let decoded = Event::from_json(event).expect("a fixture Event decodes");
                 state.apply(&decoded);
             }
+
             applied = upto;
 
             let context = ViewContext {
@@ -108,4 +109,45 @@ fn the_rust_core_matches_every_dashboard_fixture_snapshot() {
             );
         }
     }
+}
+
+#[test]
+fn issue_endings_are_additive_and_absence_is_not_an_ending() {
+    let schema: Value = serde_json::from_str(include_str!("../../conformance/event-schema.json"))
+        .expect("the Event fixture is valid JSON");
+    let event = &schema["serialization_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["id"] == "issue-endings-are-additive-with-unchanged-statuses")
+        .unwrap()["event"];
+    let context = ViewContext {
+        now: instant(&event["ts"]),
+        now_monotonic: None,
+        zone: Zone::from_offset_minutes(0),
+        capabilities: TerminalCapabilities::default(),
+    };
+    let project = |event: &Value| {
+        let mut state = DashboardState::new(RunInputs::new("test-model", "high"));
+        state.apply(&Event::from_json(event).expect("additive issue fields decode"));
+        serde_json::to_value(project_run_view(&state, &context, &IssueRef::Number(311))).unwrap()
+    };
+    let projected = project(event);
+    for issue in event["issues"].as_array().unwrap() {
+        let row = projected["dashboard"]["queue"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["issue"] == issue["issue"])
+            .unwrap();
+        assert_eq!(row["status"], issue["status"]);
+        assert_eq!(row["ending"], issue["ending"]);
+        assert_eq!(row["commits"], issue["commits"]);
+    }
+
+    let mut future = event.clone();
+    for issue in future["issues"].as_array_mut().unwrap() {
+        issue["future_detail"] = serde_json::json!({"unknown": true});
+    }
+    assert_eq!(project(&future), projected);
 }

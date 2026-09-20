@@ -181,6 +181,8 @@ pub struct Queue {
 pub struct QueueRow {
     pub issue: IssueRef,
     pub status: String,
+    pub ending: Option<String>,
+    pub commits: Option<i64>,
     pub started_at: Option<String>,
     pub active_seconds: f64,
     pub closed_at: Option<String>,
@@ -523,6 +525,8 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
                 QueueRow {
                     issue: issue.clone(),
                     status: entry.status.clone(),
+                    ending: entry.ending.clone(),
+                    commits: entry.commits,
                     started_at: entry.started_at.map(|at| at.to_zoned_iso(context.zone)),
                     active_seconds: entry
                         .active_seconds(state.monotonic_at(context.now, context.now_monotonic)),

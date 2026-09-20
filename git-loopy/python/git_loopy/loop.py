@@ -3360,6 +3360,7 @@ class _Loop:
         had to answer *which* boundary in **Parallel mode**, where a Lane's
         ending and the accounting scope that finalizes it are different moments.
         """
+        self._rollup.record_ending(ref, record.outcome)
         self._escalation.observe(ref, record.outcome)
         self._attempt_evidence.observe(ref, record.outcome)
         before = self._attempts.state(ref)

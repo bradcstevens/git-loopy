@@ -314,6 +314,8 @@ pub(crate) struct IssueContribution {
 #[derive(Clone, Debug)]
 pub(crate) struct IssueLedgerEntry {
     pub(crate) status: String,
+    pub(crate) ending: Option<String>,
+    pub(crate) commits: Option<i64>,
     pub(crate) started_at: Option<Timestamp>,
     /// The open Active stint's start on the monotonic axis.
     pub(crate) active_since: Option<f64>,
@@ -343,6 +345,8 @@ impl IssueLedgerEntry {
     fn queued() -> Self {
         Self {
             status: STATUS_QUEUED.to_string(),
+            ending: None,
+            commits: None,
             started_at: None,
             active_since: None,
             active_duration: 0.0,
@@ -776,6 +780,8 @@ impl DashboardState {
             entry.active_since = now_monotonic;
         }
         entry.status = STATUS_ACTIVE.to_string();
+        entry.ending = None;
+        entry.commits = None;
     }
 
     fn mark_started(&mut self, now: Option<Timestamp>, now_monotonic: Option<f64>) {
@@ -1038,6 +1044,8 @@ impl DashboardState {
                 .expect("just pushed")
                 .status
                 .clone();
+            entry.ending = row.ending.clone();
+            entry.commits = row.commits.map(|commits| commits.max(0));
             if let Some(cumulative) = row.cumulative_active_seconds {
                 entry.active_duration = cumulative.max(0.0);
             }
