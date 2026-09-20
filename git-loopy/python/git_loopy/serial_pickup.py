@@ -36,6 +36,11 @@ Design notes:
   cases and :attr:`SerialPickup.skipped` is what tells them apart: an empty Pool
   is "there is no work" and ends a Run cleanly, while a Pool whose every
   candidate was refused is a Run going nowhere and owes a **Strike**.
+* **A refused candidate is not an unread one** (#542). A refusal that reports a
+  failed **Readiness** read carries :attr:`AdmissionRefusal.unresolved`, so the
+  terminal classifier can tell "I could not take this" from "I could not read
+  this" without parsing the operator-facing reason — the same discipline
+  ``waiting_on_blocker`` keeps for the opposite fact.
 * **Pure.** No clock, no I/O, no Config, and structurally unable to reach a
   terminal — which is how §7's "no selection path blocks for input" is kept true
   against a future confirmation prompt rather than merely observed to be true
@@ -98,11 +103,15 @@ class AdmissionRefusal:
 
     ``reason`` is the operator-facing Pickup-skip payload.
     ``waiting_on_blocker`` records a proved open native dependency without
-    asking a terminal caller to parse that payload.
+    asking a terminal caller to parse that payload. ``unresolved`` records the
+    opposite fact for the same reason (#542): this candidate was not refused at
+    all, its **Readiness** read simply did not complete, so it proves nothing a
+    terminal outcome may rest on.
     """
 
     reason: str
     waiting_on_blocker: bool = False
+    unresolved: bool = False
 
 
 #: Whether one candidate may be bound. A string keeps simple admission policies
@@ -128,6 +137,7 @@ class SerialSkip:
     position: int
     reason: str
     waiting_on_blocker: bool = False
+    unresolved: bool = False
 
 
 @dataclass(frozen=True)
@@ -248,6 +258,7 @@ def pick_serial(
                 position=position,
                 reason=refusal.reason,
                 waiting_on_blocker=refusal.waiting_on_blocker,
+                unresolved=refusal.unresolved,
             )
         )
     return SerialPickup(

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import importlib
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -24,18 +26,23 @@ from git_loopy.calibration_search import (
 )
 from git_loopy.trial_concurrency import InlineTrialDispatcher
 from git_loopy.denomination import BilledCreditsDenomination
+from git_loopy import dynamic_route
+from git_loopy import route_preparation
 from git_loopy import events as events_module
-from git_loopy import execution_host as execution_host_module
 from git_loopy import cli as cli_module
 from git_loopy import config as config_module
+from git_loopy import gh as gh_module
+from git_loopy import loop as loop_module
 from git_loopy import version as version_module
 from git_loopy import wrapper as wrapper_module
+from git_loopy.release_version import read_runtime_release_version
 from git_loopy.config import (
     CONTEXT_TIERS,
     MODEL_CONTEXT_TIERS,
     MODEL_REASONING_EFFORTS,
     EffortGateWarning,
     RoutingLifecyclePosition,
+    RoutingResolution,
     RoutingSource,
     TASK_TYPE_KEYS,
     RunConfig,
@@ -45,12 +52,21 @@ from git_loopy.config import (
     gate_reasoning_effort,
     resolve_iteration_model,
 )
+from git_loopy.attempt_evidence import AttemptEvidenceLedger
 from git_loopy.attempt_lifecycle import AttemptLedger, AttemptState
 from git_loopy.escalation import EscalationLedger
 from git_loopy.session_outcome import SessionOutcome
 from git_loopy.interactive.state import RETROACTIVE_BINDING_SOURCES, LiveRunState
-from git_loopy.release_version import read_runtime_release_version
 from git_loopy.run_readback import run_start_payload
+from git_loopy.static_route import (
+    HarnessCapabilities,
+    HarnessModel,
+    RoutePolicy,
+    StaticRoute,
+    StaticRouteError,
+    StaticRouteRefusal,
+    validate_static_route,
+)
 from git_loopy.gh import (
     LIST_MAX_LIMIT,
     LIST_PAGE_LIMIT,
@@ -93,7 +109,11 @@ from git_loopy.skill_policy import (
     resolve_skill_policy,
 )
 from git_loopy.skill_run_preflight import RunSkillPreflight
-from git_loopy.sources import is_afk_ready
+from git_loopy.sources import (
+    confirms_empty_pool,
+    is_afk_ready,
+    unbound_pool_outcome,
+)
 from git_loopy.ui import RunSummary
 from git_loopy.ui.renderer import Renderer
 from git_loopy.wrapper import (
@@ -516,6 +536,52 @@ def test_exit_code_fixture(case: dict[str, Any]) -> None:
     assert wrapper_module.exit_code_for(case["reason"]) == case["exit_code"]
 
 
+@pytest.mark.parametrize(
+    "case",
+    _EXIT_CODES["pool_emptiness_cases"],
+    ids=lambda case: case["id"],
+)
+def test_pool_emptiness_fixture(case: dict[str, Any]) -> None:
+    """Which read may claim the exit-`0` empty Pool (§2.2, #541).
+
+    Rides `exit-codes.json` rather than a fixture of its own because it decides
+    the same thing those cases map: a read that proved nothing is not entitled
+    to `empty_pool`, and the family's disagreement about that would show up as
+    one member exiting `0` where another exits `1` over identical data.
+    """
+    assert (
+        confirms_empty_pool(
+            complete=case["complete"], remaining=case["remaining"]
+        )
+        is case["confirms_empty"]
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _EXIT_CODES["unbound_pool_cases"],
+    ids=lambda case: case["id"],
+)
+def test_unbound_pool_fixture(case: dict[str, Any]) -> None:
+    """Which terminal reason a Pool that bound nothing is entitled to (#542).
+
+    The refusal-side companion to `pool_emptiness_cases`, on the same fixture
+    for the same reason: an unresolved candidate reports a read that failed,
+    not work the Run could not take, so the family must agree that it outranks
+    both `all_skipped` and `all_blocked` and ends the Run under
+    `preflight_failed`. Three members restating that rule would be three places
+    for a failed read to quietly become a terminal Pool fact again.
+    """
+    assert (
+        unbound_pool_outcome(
+            candidates=case["candidates"],
+            waiting=case["waiting"],
+            unresolved=case["unresolved"],
+        )
+        == case["outcome"]
+    )
+
+
 _EVENT_SCHEMA = _load_fixture("event-schema.json")
 _DASHBOARD_INSIGHTS = _load_fixture("dashboard-insights.json")
 
@@ -597,6 +663,41 @@ def test_python_normalized_rollup_fixture(case: dict[str, Any]) -> None:
         )
 
     assert actual == case["expected"]
+
+
+def test_wind_down_vocabulary_has_one_declaration() -> None:
+    """#457: the two **Wind-down** axes are declared once and pinned here.
+
+    ``cause``, the ordered ``stage`` ladder, the cancel rung's sole cause and
+    the single liftable cause all live in ``events`` beside the two literals
+    that carry them, so a port copying the family's vocabulary copies the
+    constraints with it. Before this they were fixture-only prose, pinned
+    against nothing — which is how a producer drifts from the schema a
+    Dashboard reads without any suite noticing.
+
+    The ``stage`` assertion is on a *list*, not a set: the ladder's order is
+    the contract that makes "non-decreasing" mean anything, and a set would
+    let ``cancel`` and ``drain`` swap places silently.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"]["wrapper.stop.requested"]
+    assert tuple(contract["cause_values"]) == events_module.WIND_DOWN_CAUSES
+    assert tuple(contract["stage_order"]) == events_module.WIND_DOWN_STAGES
+    assert set(contract["stage_values"]) == set(events_module.WIND_DOWN_STAGES)
+    assert contract["cancel_cause"] == events_module.WIND_DOWN_CANCEL_CAUSE
+
+    # The clearing Event's vocabulary is a strict subset of the same causes:
+    # only a Strike drain is revocable, so nothing else may ever lift.
+    lifted = _EVENT_SCHEMA["payload_contracts"]["wrapper.stop.lifted"]
+    assert tuple(lifted["cause_values"]) == events_module.WIND_DOWN_LIFTABLE_CAUSES
+    assert set(events_module.WIND_DOWN_LIFTABLE_CAUSES) < set(
+        events_module.WIND_DOWN_CAUSES
+    )
+
+    # Both are Run control, never Insight and never contribution-scoped.
+    assert set(_EVENT_SCHEMA["run_control_types"]) == {
+        events_module.WRAPPER_STOP_REQUESTED,
+        events_module.WRAPPER_STOP_LIFTED,
+    }
 
 
 def test_pickup_reason_vocabulary_has_one_declaration() -> None:
@@ -818,8 +919,50 @@ _NOT_EVENT_TYPES = frozenset(
         "REDACTED_SECRET",
         "CALIBRATION_EVENT_PREFIX",
         "PARALLEL_DEGRADE_SOURCE_NOT_ROLLING",
+        # A **Wind-down** payload value, not a type literal: the one ``cause``
+        # the cancel rung admits. Pinned instead by
+        # ``test_wind_down_vocabulary_has_one_declaration``.
+        "WIND_DOWN_CANCEL_CAUSE",
+        # The two ``routing_reuse`` spellings (#565). Payload values of
+        # ``wrapper.routing.resolved``, exported from ``events`` so the writer,
+        # the CLI readback and the reuse projection cannot drift apart. Pinned
+        # instead by the ``reuse`` clause of that type's payload contract.
+        "ROUTE_ELECTED",
+        "ROUTE_REVALIDATED",
+        # The four ``state`` spellings of ``wrapper.routing.prepared`` (#566),
+        # exported from ``events`` for the same reason and pinned instead by
+        # that type's ``state_values``, below.
+        "ROUTE_PREPARATION_PROPOSED",
+        "ROUTE_PREPARATION_STATIC",
+        "ROUTE_PREPARATION_REUSABLE",
+        "ROUTE_PREPARATION_UNAVAILABLE",
     }
 )
+
+
+def test_the_preparation_state_vocabulary_has_one_declaration() -> None:
+    """The four preparation spellings are the fixture's, exactly (#566).
+
+    They are payload values rather than event types, so the literal pin below
+    cannot reach them — and a Python rename that left the fixture behind would
+    leave a native port replaying a state it has never heard of. This is the
+    declaration that closes that gap, exactly as the ``reuse`` clause does for
+    ``routing_reuse``.
+    """
+    declared = (
+        events_module.ROUTE_PREPARATION_PROPOSED,
+        events_module.ROUTE_PREPARATION_STATIC,
+        events_module.ROUTE_PREPARATION_REUSABLE,
+        events_module.ROUTE_PREPARATION_UNAVAILABLE,
+    )
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_ROUTING_PREPARED
+    ]
+
+    assert list(declared) == contract["state_values"]
+    assert [outcome.value for outcome in route_preparation.PreparationOutcome] == (
+        contract["state_values"]
+    )
 
 
 def test_event_type_fixture_pins_every_exported_literal() -> None:
@@ -830,6 +973,11 @@ def test_event_type_fixture_pins_every_exported_literal() -> None:
         and isinstance(value := getattr(events_module, name), str)
     }
     assert actual == _EVENT_SCHEMA["event_types"]
+
+
+def test_wrapper_dashboard_fault_is_retired_and_unreusable() -> None:
+    assert "WRAPPER_DASHBOARD_FAULT" not in events_module.__all__
+    assert "wrapper.dashboard.fault" not in _EVENT_SCHEMA["event_types"].values()
 
 
 def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
@@ -897,10 +1045,14 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     2.4 adds the remaining Wind-down causes and the Strike-only lift Event. Both
     literals ride the existing 1.2 step because that step already made the
     Stop-event family a schema-visible change.
+
+    2.8 adds the **Route policy** to the Run readback (§14.3). Purely additive
+    on an already-optional section, so the wire axis stays at 1.2: a consumer
+    pinned to it reads every field it knew and skips one it does not.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
-    assert _EVENT_SCHEMA["contract_version"] == "2.4"
+    assert _EVENT_SCHEMA["contract_version"] == "2.8"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
@@ -949,6 +1101,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
         set(_EVENT_SCHEMA["contribution_identity"]["lifecycle_types"])
         | set(_EVENT_SCHEMA["contribution_identity"]["scheduler_scoped_types"])
         | set(_EVENT_SCHEMA["run_control_types"])
+        | {"wrapper.release.advanced"}
         # Calibration lifecycle records are no **Run**'s Insight (#371): they
         # carry no ``run_id``, and nothing a Calibration buys is delivered work.
         | set(_EVENT_SCHEMA["calibration_identity"]["lifecycle_types"])
@@ -986,6 +1139,11 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "harness_version",
                 "roster_cli_version",
                 "roster_diverged",
+                # #560, ADR-0057: the **Route policy** in force. Under `static`
+                # every pair above is published ungated, which a reader cannot
+                # tell from a set of pairs that passed the gate unless the
+                # policy that ungated them travels beside them.
+                "route_policy",
             ],
             "readback_pair_keys": [
                 "model",
@@ -1033,6 +1191,20 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "gate_warnings carries, and rides every configured pair "
                 "including the escalation rung, which nothing else gates "
                 "until an issue has already stalled."
+            ),
+            "readback_route_policy": (
+                "Contract 2.8. route_policy names the Route policy this Run "
+                "selected (ADR-0057): `unselected` -- the default, and today's "
+                "behaviour byte-for-byte -- or `static`, the operator-selected "
+                "Static route. It travels because under `static` the hardcoded "
+                "roster is not the authority and every pair above is published "
+                "UNGATED, which is otherwise indistinguishable from a set of "
+                "pairs that merely passed the gate. A consumer MUST NOT read "
+                "an empty gate_warnings under `static` as `the roster approved "
+                "this`; it means the roster was not asked. It also MUST NOT "
+                "treat an unrecognised policy name as `unselected`: a Runner "
+                "that names a policy this consumer does not know is describing "
+                "a Run whose routing it cannot explain."
             ),
             "readback_roster_divergence": (
                 "roster_diverged is THREE-valued: true, false, or null for an "
@@ -1376,25 +1548,33 @@ def test_event_fixture_pins_the_parallel_capability_manifest() -> None:
 
 
 def _execution_host_producers() -> tuple[str, ...]:
-    """Execution host placements with a production adapter in this distribution."""
-    source = (
-        Path(events_module.__file__).parent / "execution_host.py"
-    ).read_text(encoding="utf-8")
-    placements = re.findall(
+    """Execution host placements with a production adapter in this distribution.
+
+    Derived from the source of *every* host module rather than from
+    ``execution_host.py`` alone: the seam's whole point is that a second
+    placement lands in its own module (#460's
+    :mod:`git_loopy.github_actions_host`), and a derivation that only looked at
+    the seam's own file would silently stop noticing new adapters — the exact
+    drift this guard exists to catch.
+    """
+    package = Path(events_module.__file__).parent
+    # The returned expression must be a statement -- a line-start ``return``,
+    # not the word inside a docstring's prose.
+    pattern = (
         r"@property\s+def placement\(self\) -> Placement:.*?"
-        r'return "([^"]+)"',
-        source,
-        flags=re.DOTALL,
+        r"\n[ \t]+return (\"[^\"]+\"|[A-Za-z_][A-Za-z0-9_]*)[ \t]*\n"
     )
-    placements.extend(
-        getattr(execution_host_module, name)
-        for name in re.findall(
-            r"@property\s+def placement\(self\) -> Placement:.*?"
-            r"return (LOCAL_EXECUTION_HOST_PLACEMENT)",
-            source,
-            flags=re.DOTALL,
-        )
-    )
+    placements: list[str] = []
+    for path in sorted(package.glob("*host*.py")):
+        module = importlib.import_module(f"{events_module.__package__}.{path.stem}")
+        for returned in re.findall(
+            pattern, path.read_text(encoding="utf-8"), flags=re.DOTALL
+        ):
+            placements.append(
+                returned[1:-1]
+                if returned.startswith('"')
+                else getattr(module, returned)
+            )
     return tuple(dict.fromkeys(placements))
 
 
@@ -1406,7 +1586,7 @@ def test_event_fixture_pins_the_execution_host_declaration() -> None:
     declaration from the hosts it actually implements.
     """
     declaration = _EVENT_SCHEMA["parallel_capabilities"]["execution_hosts"]
-    assert declaration["identifiers"] == ["local"]
+    assert declaration["identifiers"] == ["local", "github-actions"]
     assert tuple(events_module.PYTHON_EXECUTION_HOSTS) == _execution_host_producers()
 
     manifest = events_module.python_parallel_capabilities()
@@ -1594,6 +1774,157 @@ def test_rolling_stream_orders_each_contribution_lifecycle() -> None:
                     seen.values()
                 ), where
     assert ordered_cases, "no pinned stream contains a Lane contribution"
+
+
+def test_the_production_router_projects_the_pinned_routing_provenance() -> None:
+    """The **Dynamic route**'s provenance record, driven through its own seam.
+
+    The fixture is the contract only while the code actually produces it, so
+    this rebuilds the pinned record from a real
+    :class:`~git_loopy.dynamic_route.DynamicRouteDecision` rather than trusting
+    a hand-written shape. A key renamed in Python without the fixture moving
+    fails here, not in a native port's replay six months later.
+    """
+    (pinned,) = [
+        event
+        for case in _EVENT_SCHEMA["rolling_stream_cases"]
+        for event in case["events"]
+        if event["type"] == events_module.WRAPPER_ROUTING_RESOLVED
+    ]
+    candidate = dynamic_route.AssessmentCandidate(
+        stable_identity="d" * 64,
+        model=pinned["model"],
+        reasoning_effort=pinned["effort"],
+        context_tier=pinned["context_tier"],
+        source_identity=pinned["evidence_source"],
+        source_model_identity=pinned["source_model_identity"],
+        intelligence_index=Decimal(pinned["intelligence_index"]),
+        public_output_tokens_per_second=Decimal(
+            pinned["public_output_tokens_per_second"]
+        ),
+        measurement_at=None,
+        benchmark_version=None,
+        conditions=None,
+    )
+    decision = dynamic_route.DynamicRouteDecision(
+        proposal_id=pinned["proposal_id"],
+        issue_ref=pinned["issue"],
+        route=dynamic_route.WorkRoute(
+            model=pinned["model"],
+            reasoning_effort=pinned["effort"],
+            context_tier=pinned["context_tier"],
+        ),
+        work_evidence=candidate,
+        summary=pinned["summary"],
+        selector=dynamic_route.SelectorSettings(
+            model=pinned["selector_model"],
+            reasoning_effort=pinned["selector_effort"],
+            context_tier=pinned["selector_context_tier"],
+            evidence=dynamic_route.EvidenceRecord(
+                source_identity=pinned["evidence_source"],
+                retrieved_at=datetime(2026, 5, 16, tzinfo=timezone.utc),
+                model_identity="aa-mini",
+                associated_copilot_model="gpt-5.4-mini",
+                associated_copilot_effort="low",
+                association_verified=True,
+                intelligence_index=Decimal("30"),
+                speed=Decimal("300"),
+                benchmark_version=None,
+                conditions=None,
+            ),
+        ),
+        relevant_input_identity=pinned["relevant_input_identity"],
+        lifecycle_position=pinned["lifecycle_position"],
+        prior_attempts=tuple(
+            dynamic_route.PriorAttempt(
+                model=row["model"],
+                reasoning_effort=row["effort"],
+                context_tier=row["context_tier"],
+                outcome=dynamic_route.PriorOutcome(row["outcome"]),
+                detail=row["detail"],
+            )
+            for row in pinned["prior_attempts"]
+        ),
+        repeat_justification=pinned["repeat_justification"],
+        validated_at=datetime.fromisoformat(
+            pinned["validated_at"].replace("Z", "+00:00")
+        ),
+        evidence_retrieved_at=datetime.fromisoformat(
+            pinned["evidence_retrieved_at"].replace("Z", "+00:00")
+        ),
+        capabilities_retrieved_at=datetime.fromisoformat(
+            pinned["capabilities_retrieved_at"].replace("Z", "+00:00")
+        ),
+        revalidated=pinned["revalidated"],
+        reassessed=pinned["reassessed"],
+        superseded_proposal_id=pinned["superseded_proposal_id"],
+        reused_proposal_id=pinned["reused_proposal_id"],
+        usage=dynamic_route.RoutingUsage(
+            routing_credits=Decimal(pinned["routing_credits"]),
+            classification_attempts=0,
+            selector_attempts=pinned["selector_attempts"],
+            in_flight=0,
+            overshoot_count=0,
+        ),
+    )
+
+    projected = dynamic_route.routing_provenance_payload(decision)
+
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_ROUTING_RESOLVED
+    ]
+    for key in contract["required_when_present"]:
+        assert key in projected, key
+    for key, value in pinned.items():
+        if key in ("ts", "run_id", "iter", "type"):
+            continue
+        assert projected[key] == value, key
+
+    # An unknown the source did not publish is a null, never a zero and never a
+    # key the Runner quietly dropped -- AC2's explicit unknowns.
+    for key in ("measurement_at", "benchmark_version", "conditions"):
+        assert key in projected and projected[key] is None, key
+
+
+def test_the_reuse_clause_declares_the_literals_the_runner_writes() -> None:
+    """#565: the ``routing_reuse`` vocabulary is closed, and this is where.
+
+    ``ROUTE_ELECTED`` and ``ROUTE_REVALIDATED`` are payload values rather than
+    event types, so ``event_types`` deliberately does not carry them — which
+    would leave two spellings a native port reads off nothing at all. The
+    contract's own ``reuse`` clause is their declaration, and this is what
+    keeps it honest when one of them is renamed in Python.
+    """
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_ROUTING_RESOLVED
+    ]
+    clause = contract["reuse"]
+    assert f"`{events_module.ROUTE_ELECTED}`" in clause
+    assert f"`{events_module.ROUTE_REVALIDATED}`" in clause
+    for key in ("reused_proposal_id", "reused_validated_at", "relevant_input_identity"):
+        assert key in clause, key
+
+
+def test_rolling_stream_places_release_advance_after_integration_publication() -> None:
+    """A Release line advances only after its contribution reaches base."""
+    advances = 0
+    required = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_RELEASE_ADVANCED
+    ]["required_when_present"]
+    for case in _EVENT_SCHEMA["rolling_stream_cases"]:
+        for index, event in enumerate(case["events"]):
+            if event["type"] != events_module.WRAPPER_RELEASE_ADVANCED:
+                continue
+            advances += 1
+            assert index > 1, case["id"]
+            closed = case["events"][index - 1]
+            assert closed["type"] == events_module.WRAPPER_AUTO_CLOSE
+            assert event["issue"] == closed["issue"]
+            published = case["events"][index - 2]
+            assert published["type"] == events_module.WRAPPER_INTEGRATION_PUBLISHED
+            assert event["issue"] == published["issue"]
+            assert all(key in event for key in required)
+    assert advances, "no pinned rolling stream advances a Release line"
 
 
 def test_rolling_stream_respects_the_bounded_integration_backlog() -> None:
@@ -2024,13 +2355,14 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     to gain, lose, or reorder a field that no column names, so a second
     implementation could disagree about the payload while agreeing about the
     headings. The inventory is asserted from the fixture's own
-    ``projection_fields`` against every snapshot of every case, and each
+    ``projection_fields`` and declared additive fields against every snapshot, and each
     rendered column is required to resolve onto that inventory -- so a new
     column cannot be added without a field to carry it, and a field cannot be
     renamed without the column following.
     """
     contract = _DASHBOARD_INSIGHTS["semantic_contract"]
     fields = contract["projection_fields"]
+    optional_fields = contract["optional_projection_fields"]
 
     checked_queue_rows = 0
     checked_breakdown_rows = 0
@@ -2061,22 +2393,25 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
             for row in expected["dashboard"]["queue"]["rows"]:
                 assert list(row) == fields["queue_row"], where
                 checked_queue_rows += 1
-                # A route is nullable where a consumption is not: the record's
-                # absence is what "nothing has priced this issue yet" looks
-                # like, so its keys are only asserted where one was resolved.
-                if row["route"] is not None:
-                    assert list(row["route"]) == fields["route"], where
-                    checked_routes += 1
             for row in expected["dashboard"]["summary"]["rows"]:
                 assert list(row) == fields["summary_row"], where
                 checked_summary_rows += 1
             for row in expected["drill_in"]["iteration_breakdown"]["rows"]:
                 assert list(row) == fields["iteration_breakdown_row"], where
                 assert list(row["consumption"]) == fields["consumption"], where
-                if row["route"] is not None:
-                    assert list(row["route"]) == fields["route"], where
-                    checked_routes += 1
                 checked_breakdown_rows += 1
+            for row in (
+                expected["dashboard"]["queue"]["rows"]
+                + expected["drill_in"]["iteration_breakdown"]["rows"]
+            ):
+                route = row["route"]
+                if route is not None:
+                    assert list(route) == fields["route"] + [
+                        field
+                        for field in optional_fields["route"]
+                        if field in route
+                    ], where
+                    checked_routes += 1
             for line in (
                 expected["dashboard"]["activity"]["lines"]
                 + expected["drill_in"]["log"]["lines"]
@@ -2410,11 +2745,14 @@ def test_event_serialization_fixture(case: dict[str, Any]) -> None:
 _RELEASE_VERSION = _load_fixture("release-version.json")
 
 
-def test_run_start_fixture_pins_exact_release_identity() -> None:
-    assert (
-        read_runtime_release_version()
-        == _RELEASE_VERSION["expected_release_version"]
-    )
+def test_run_start_release_version_matches_release_version_authority() -> None:
+    # event-schema.json's `release_version` sites are synthetic (#487): the
+    # wire form doesn't disagree with itself on a value it merely copies, so
+    # pinning the live version there would only make every Release bump
+    # rewrite the fixture. The live value is asserted here against the
+    # production decision seam instead, against the one fixture allowed to
+    # name it.
+    assert read_runtime_release_version() == _RELEASE_VERSION["expected_release_version"]
 
 
 _SKILL_CONSULTATION = _load_fixture("skill-consultation.json")
@@ -2480,14 +2818,12 @@ def test_the_model_roster_fixture_names_the_harness_it_describes() -> None:
     version at all, which is how it was twice "fixed" toward a binary the kit
     does not run while every assertion stayed green.
 
-    The stamp records the harness the *content* was captured against, which is
-    the operator's Homebrew CLI ``1.0.75``, and not the harness the kit spawns
-    (``github-copilot-sdk==1.0.5`` -> CLI ``1.0.67``). Stamping does not close
-    that gap; it makes it a fact somebody can read instead of an unknown.
-    Reconciling the two is a pinned-harness bump plus a regeneration, which
-    ADR-0019 requires to be one atomic change and which is owned elsewhere.
+    The SDK pin and roster stamp must move together. Checking the installed
+    SDK's published pin is offline: no account or live catalogue is needed.
     """
-    assert _MODEL_ROSTER["cli_version"] == "1.0.75"
+    from copilot._cli_version import CLI_VERSION
+
+    assert _MODEL_ROSTER["cli_version"] == CLI_VERSION
 
 
 def test_the_in_language_roster_stamp_tracks_the_fixture_it_restates() -> None:
@@ -2507,18 +2843,18 @@ def test_the_in_language_roster_stamp_tracks_the_fixture_it_restates() -> None:
     assert config_module.MODEL_ROSTER_CLI_VERSION == _MODEL_ROSTER["cli_version"]
 
 
-def test_the_roster_stamp_is_a_version_the_gemini_rows_actually_agree_with() -> None:
-    """The stamp is checkable against the fixture's own content, not decorative.
+def test_the_roster_preserves_compatibility_efforts_alongside_pinned_models() -> None:
+    """A pinned-harness refresh does not erase saved Config's compatibility rows.
 
-    ADR-0019 recorded the three CLI versions' answers side by side. Only
-    ``1.0.75`` reports ``minimal`` for **both** Gemini flash models; the pinned
-    ``1.0.67`` reports ``gemini-3.6-flash`` as absent entirely. So the two rows
-    that produced the whole investigation are exactly the rows that identify the
-    stamp, and a stamp moved without regenerating the content fails here.
+    ADR-0019 recorded that CLI ``1.0.67`` lacked the later Gemini capabilities.
+    CLI ``1.0.85`` verified Astra's ceiling. The upgrade account did not list
+    Gemini, so those rows are retained compatibility data, not a live capture.
     """
     roster = _MODEL_ROSTER["roster"]
     assert "minimal" in roster["gemini-3.5-flash"]
     assert "minimal" in roster["gemini-3.6-flash"]
+    assert "max" in roster["gpt-6-astra"]
+    assert "gemini-3.8-flash" not in roster
 
 
 def test_the_roster_fixture_pins_the_context_tier_half_of_the_roster() -> None:
@@ -2572,10 +2908,12 @@ def test_routing_resolution_fixture(case: dict[str, Any]) -> None:
         reasoning_effort=case["default"]["effort"],
         routing=routing,
         context_tier=case.get("context_tier", "default"),
+        route_policy=RoutePolicy.parse(case.get("route_policy")),
         routing_suppressed=case.get("routing_suppressed", False),
     )
     warnings: list[str] = []
     escalated = case.get("escalated")
+    elected = case.get("dynamic_route")
     result = resolve_iteration_model(
         config,
         case["labels"],
@@ -2587,6 +2925,11 @@ def test_routing_resolution_fixture(case: dict[str, Any]) -> None:
             None
             if escalated is None
             else (escalated["model"], escalated["effort"])
+        ),
+        dynamic_route=(
+            None
+            if elected is None
+            else (elected["model"], elected["effort"], elected["context_tier"])
         ),
     )
 
@@ -3229,6 +3572,108 @@ def _declared_fixture_contract_versions() -> dict[str, str]:
     return declared
 
 
+_FIXTURE_CLAIMS_FILENAME = "fixture-claims.json"
+_FIXTURE_CLAIM_MEMBERS = ("python", "shell", "powershell", "rust")
+_FIXTURE_CLAIM_KINDS = frozenset(
+    {"claimed", "waived_out_of_scope", "waived_owed"}
+)
+
+
+def _assert_fixture_claims_are_complete(
+    conformance_dir: Path, manifest: Mapping[str, Any]
+) -> None:
+    """Assert the Fixture-claim register accounts for the fixture directory."""
+    assert manifest.get("schema_version") == 1
+    assert re.fullmatch(r"\d+\.\d+", str(manifest.get("contract_version")))
+    assert manifest["members"] == list(_FIXTURE_CLAIM_MEMBERS)
+
+    fixture_names = {
+        path.name
+        for path in conformance_dir.glob("*.json")
+        if path.name != _FIXTURE_CLAIMS_FILENAME
+    }
+    claims = manifest.get("fixtures")
+    assert isinstance(claims, Mapping)
+    assert fixture_names == set(claims), (
+        "fixture claims do not match the Conformance directory: "
+        f"missing={sorted(fixture_names - set(claims))}, "
+        f"unknown={sorted(set(claims) - fixture_names)}"
+    )
+
+    for fixture_name, member_claims in claims.items():
+        assert isinstance(member_claims, Mapping), (
+            f"{fixture_name} does not account for every Runner-family member"
+        )
+        assert set(member_claims) == set(_FIXTURE_CLAIM_MEMBERS), (
+            f"{fixture_name} does not account for every Runner-family member"
+        )
+        for member, claim in member_claims.items():
+            assert isinstance(claim, Mapping), (
+                f"{fixture_name}/{member} is not a Fixture claim or waiver"
+            )
+            kind = claim.get("kind")
+            assert kind in _FIXTURE_CLAIM_KINDS, (
+                f"{fixture_name}/{member} has an unknown Fixture-claim kind"
+            )
+            reason = claim.get("reason")
+            assert isinstance(reason, str) and reason.strip(), (
+                f"{fixture_name}/{member} has no reason"
+            )
+            if kind == "waived_owed":
+                issue = claim.get("issue")
+                assert isinstance(issue, int) and issue > 0, (
+                    f"{fixture_name}/{member} owes a tracking issue"
+                )
+            else:
+                assert "issue" not in claim, (
+                    f"{fixture_name}/{member} has an issue without owed work"
+                )
+
+
+def test_fixture_claims_gate_discovers_an_unaccounted_fixture(tmp_path: Path) -> None:
+    """A fixture added to disk cannot bypass the family-accounting ratchet."""
+    (tmp_path / "added-after-manifest.json").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(AssertionError, match="added-after-manifest.json"):
+        _assert_fixture_claims_are_complete(
+            tmp_path,
+            {
+                "schema_version": 1,
+                "contract_version": "2.0",
+                "members": ["python", "shell", "powershell", "rust"],
+                "fixtures": {},
+            },
+        )
+
+
+def test_fixture_claims_gate_rejects_a_waiver_without_a_reason(tmp_path: Path) -> None:
+    """A waiver records the decision behind it rather than silent missing work."""
+    (tmp_path / "waived-fixture.json").write_text("{}\n", encoding="utf-8")
+    claims = {
+        member: {"kind": "claimed", "reason": "test fixture"}
+        for member in _FIXTURE_CLAIM_MEMBERS
+    }
+    claims["rust"] = {"kind": "waived_out_of_scope", "reason": ""}
+
+    with pytest.raises(AssertionError, match="waived-fixture.json/rust has no reason"):
+        _assert_fixture_claims_are_complete(
+            tmp_path,
+            {
+                "schema_version": 1,
+                "contract_version": "2.0",
+                "members": list(_FIXTURE_CLAIM_MEMBERS),
+                "fixtures": {"waived-fixture.json": claims},
+            },
+        )
+
+
+def test_fixture_claims_manifest_accounts_for_the_conformance_directory() -> None:
+    """The Integration gate accepts only a complete family decision register."""
+    _assert_fixture_claims_are_complete(
+        CONFORMANCE_DIR, _load_fixture(_FIXTURE_CLAIMS_FILENAME)
+    )
+
+
 def test_no_fixture_claims_a_contract_version_the_contract_has_not_reached() -> None:
     """AC3's together-bump is mechanical, not a reviewer's memory.
 
@@ -3275,6 +3720,19 @@ def test_the_python_capability_manifest_declares_the_written_contract() -> None:
     sides of that comparison are data.
     """
     assert version_module.WRAPPER_CONTRACT_VERSION == _written_contract_version()
+
+
+def test_the_contract_distinguishes_producer_and_consumer_stream_obligations() -> None:
+    """A distribution list obliges each role without making the Dashboard an emitter."""
+    contract = " ".join(_written_contract_text().split())
+
+    assert "producer" in contract
+    assert "drive the stream through its own production serializer" in contract
+    assert "match the pinned lines" in contract
+    assert "consumer" in contract
+    assert "fold the stream without diagnostics" in contract
+    assert "three Orchestrator suites" in contract
+    assert "unchanged" in contract
 
 
 def _selection_order_section() -> str:
@@ -3441,21 +3899,35 @@ def test_the_contract_states_a_task_type_labels_origin_is_unobservable() -> None
     assert "Task-type classifier" in section
 
 
+#: The contract revision whose text first described the **measured tier** — the
+#: one the two fixtures below pin their decisions against (§18). A literal
+#: rather than `_written_contract_version()`, because a later revision that
+#: changes something else entirely (2.6's unread-Pool rule, §2.2) leaves the
+#: measured tier exactly where it was, and a fixture that re-declared itself at
+#: every bump would claim a decision moved when nothing did.
+_MEASURED_TIER_CONTRACT_VERSION = "2.5"
+
+
 def test_the_measured_tier_fixtures_pin_the_contract_that_records_them() -> None:
     """The decision and its fixtures move as one change (§18).
 
     ``routing-resolution.json`` gained the measured-tier precedence cases and
     ``calibration-search.json`` is the search fixture; until the contract
     described the tier, both pinned behaviour no written contract stated. Now
-    that it does, they declare the version whose text explains them.
+    that it does, they declare the version whose text explains them — and keep
+    declaring *that* version, not whichever one the contract has since reached.
     """
     written = _written_contract_version()
     declared = _declared_fixture_contract_versions()
 
+    # Non-vacuity: the revision these fixtures name is one the contract reached.
+    assert tuple(int(p) for p in _MEASURED_TIER_CONTRACT_VERSION.split(".")) <= tuple(
+        int(p) for p in written.split(".")
+    )
     for fixture in ("routing-resolution.json", "calibration-search.json"):
-        assert declared[fixture] == written, (
+        assert declared[fixture] == _MEASURED_TIER_CONTRACT_VERSION, (
             f"{fixture} pins the measured tier but declares contract "
-            f"{declared[fixture]}, not {written}"
+            f"{declared[fixture]}, not {_MEASURED_TIER_CONTRACT_VERSION}"
         )
 
 
@@ -3510,6 +3982,169 @@ def test_routing_refusal_fixture(case: dict[str, Any]) -> None:
     for key in _TASK_TYPE_TAXONOMY:
         assert key in message
     assert warnings == []
+
+
+# ---------------------------------------------------------------------------
+# The **Static route** (#560, ADR-0057)
+# ---------------------------------------------------------------------------
+
+
+def _harness_from_fixture(listing: list[dict[str, Any]] | None):
+    """Build **Harness capabilities** from a fixture's model listing.
+
+    ``None`` is the read that did not complete — not an empty harness. The
+    distinction is the whole of the ``unverifiable`` verdict: an empty listing
+    is a harness that offers nothing, and a missing one is a harness nobody
+    managed to ask.
+    """
+    if listing is None:
+        return None
+    return HarnessCapabilities(
+        models={
+            entry["model"]: HarnessModel(
+                model=entry["model"],
+                eligible=entry["eligible"],
+                effort_configurable=entry["efforts"] is not None,
+                efforts=tuple(entry["efforts"] or ()),
+                context_tiers=tuple(entry["context_tiers"]),
+            )
+            for entry in listing
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _ROUTING_RESOLUTION["static_route_cases"],
+    ids=lambda case: case["id"],
+)
+def test_static_route_fixture(case: dict[str, Any]) -> None:
+    """One route, one harness, one verdict — checkable from outside any language.
+
+    The **Static route** is the first routing decision the hardcoded roster does
+    not get a vote in (ADR-0057): eligibility, the effort dial and the context
+    tier all come from the authenticated harness the Run actually spawns. That
+    makes these cases the only cross-member statement of *what the harness's
+    answer means*, and in particular of the two distinctions a member is most
+    likely to collapse — a model with no effort dial versus one whose dial
+    offers the value ``none``, and a harness that answered "no" versus one that
+    did not answer at all.
+    """
+    route = StaticRoute(
+        model=case["route"]["model"],
+        reasoning_effort=case["route"]["reasoning_effort"],
+        context_tier=case["route"]["context_tier"],
+    )
+    capabilities = _harness_from_fixture(case["harness"])
+
+    if case["verdict"] == "accepted":
+        validate_static_route(route, capabilities)
+        return
+
+    with pytest.raises(StaticRouteError) as refusal:
+        validate_static_route(route, capabilities)
+    assert refusal.value.refusal.value == case["verdict"]
+
+
+def test_the_static_route_fixture_exercises_every_refusal_it_names() -> None:
+    """A vocabulary a case never reaches is a rule no port has to implement."""
+    named = set(_ROUTING_RESOLUTION["static_route_refusals"])
+    reached = {case["verdict"] for case in _ROUTING_RESOLUTION["static_route_cases"]}
+
+    assert named == {refusal.value for refusal in StaticRouteRefusal}
+    assert named <= reached
+    assert "accepted" in reached
+
+
+def test_the_static_route_fixture_names_the_policies_the_kit_can_parse() -> None:
+    assert set(_ROUTING_RESOLUTION["static_route_policies"]) == {
+        policy.value for policy in RoutePolicy
+    }
+
+
+_DYNAMIC_RETRY = _ROUTING_RESOLUTION["dynamic_retry_cases"]
+
+#: The one configuration every retry case is bound with. Held still on purpose:
+#: what a member has to get right is the ending's *meaning*, and a fixture that
+#: also varied the route would let a wrong classification pass by agreeing with
+#: the wrong row.
+_RESOLUTION_FOR_RETRY_CASES = RoutingResolution(
+    model="synthetic-cheap-1",
+    reasoning_effort="low",
+    context_tier="default",
+    source=RoutingSource.DYNAMIC,
+    task_type_keys=("implementation",),
+    gate_warnings=(),
+    lifecycle_position=RoutingLifecyclePosition.FRESH,
+)
+
+
+@pytest.mark.parametrize(
+    "case", _DYNAMIC_RETRY, ids=lambda case: case["id"]
+)
+def test_dynamic_retry_fixture(case: dict[str, Any]) -> None:
+    """What one ending tells the *next* election, driven through the ledger.
+
+    ADR-0057's sharpest rule and the one a native port is most likely to get
+    wrong: a harness that fell over says nothing about the configuration it fell
+    on, and a Runner that demoted a route for a transport failure would spend
+    the rest of its life avoiding whatever was running when the network blinked.
+    So the fixture pins the whole classification rather than an example of it —
+    a member that maps four endings correctly and the fifth by accident is a
+    member that blacklists a capable configuration on the fifth.
+
+    The route is the same in every case because the route is not the variable:
+    exactly one thing changes between these rows, and it is the ending.
+    """
+    ledger = AttemptEvidenceLedger()
+    ledger.bound(7, _RESOLUTION_FOR_RETRY_CASES)
+    outcome = None if case["outcome"] is None else SessionOutcome(case["outcome"])
+    ledger.observe(7, outcome)
+
+    (recorded,) = ledger.prior_attempts(7)
+    assert recorded.outcome.value == case["prior_outcome"]
+    assert recorded.capability_evidence is case["capability_evidence"]
+    assert recorded.configuration == (
+        _RESOLUTION_FOR_RETRY_CASES.model,
+        _RESOLUTION_FOR_RETRY_CASES.reasoning_effort,
+        _RESOLUTION_FOR_RETRY_CASES.context_tier,
+    )
+    for initial, expected in (
+        (AttemptState.FRESH, case["after_fresh"]),
+        (AttemptState.RETRYING, case["after_retrying"]),
+    ):
+        lifecycle = AttemptLedger()
+        if initial is AttemptState.RETRYING:
+            lifecycle.observe(7, SessionOutcome.NO_PROGRESS)
+        assert lifecycle.observe(7, outcome).value == expected
+        assert lifecycle.skipped(7) is (expected == "skipped")
+
+
+def test_the_dynamic_retry_fixture_classifies_every_ending_there_is() -> None:
+    """A vocabulary a case never reaches is a rule no port has to implement.
+
+    Stated over the **Session outcome** enum rather than over the fixture, so an
+    ending added to the kit without a row here fails at the fixture instead of
+    being silently classified by whatever default the next member happens to
+    write. The absent ending — an **Iteration** that advanced its issue and so
+    reached no ending at all — is the ``null`` row, and it is required for the
+    same reason: a Runner that dropped it would reroute an issue three commits
+    into being solved.
+    """
+    named = {case["outcome"] for case in _DYNAMIC_RETRY}
+
+    assert named == {outcome.value for outcome in SessionOutcome} | {None}
+    assert set(_ROUTING_RESOLUTION["prior_outcomes"]) == {
+        verdict.value for verdict in dynamic_route.PriorOutcome
+    }
+    assert {case["prior_outcome"] for case in _DYNAMIC_RETRY} == set(
+        _ROUTING_RESOLUTION["prior_outcomes"]
+    )
+    assert [
+        case["prior_outcome"]
+        for case in _DYNAMIC_RETRY
+        if case["capability_evidence"]
+    ] == ["did_not_solve"]
 
 
 _CALIBRATION_SEARCH = _load_fixture("calibration-search.json")
@@ -4133,3 +4768,156 @@ def test_readiness_fixture_drives_the_python_readiness_seam(
     assert verdict.admissible is expected["admissible"], case["id"]
     assert verdict.skip_reason == expected["skip_reason"], case["id"]
     assert list(verdict.blockers) == expected.get("blockers", []), case["id"]
+
+
+# ---------------------------------------------------------------------------
+# #482: a scheduling distribution is obliged to emit the Membership read.
+# ---------------------------------------------------------------------------
+
+
+def _distributions_that_schedule_lanes() -> set[str]:
+    """Distributions this Run obliges to emit ``wrapper.pool.refreshed``.
+
+    Derived from ``parallel_capabilities`` -- the manifest every distribution
+    already declares under #311 AC3 -- rather than from a second,
+    hand-maintained list that could silently drift from it. A distribution
+    that cannot fill a second Lane (``parallel_mode: false``) collapses the
+    whole manifest false with it (pinned by
+    ``test_event_fixture_pins_the_parallel_capability_manifest``), so
+    ``parallel_mode`` alone is the obligation.
+    """
+    return {
+        name
+        for name, manifest in _EVENT_SCHEMA["parallel_capabilities"][
+            "orchestrators"
+        ].items()
+        if manifest["parallel_mode"]
+    }
+
+
+def test_membership_read_obligation_selects_at_least_one_distribution() -> None:
+    """#482: the gate cannot pass by sweeping an empty set.
+
+    If no distribution ever declared ``parallel_mode: true``, the obligation
+    below would vacuously hold whether or not the Membership read was ever
+    wired -- exactly the hole #481 fell through, where every encoding
+    assertion passed over an Event nothing produced.
+    """
+    assert _distributions_that_schedule_lanes(), (
+        "no distribution declares parallel_mode: true, so the Membership "
+        "read obligation would sweep nothing"
+    )
+
+
+def test_membership_read_obligation_excludes_non_scheduling_distributions() -> None:
+    """A distribution that does not schedule Lanes is not obliged to read it.
+
+    Both non-Python Orchestrators declare ``parallel_mode: false`` (they take
+    no rolling read at all), so getting this condition wrong in the
+    permissive direction would make the gate below false-positive the moment
+    either grows *any* scheduler-shaped code that happens to mention the
+    literal.
+    """
+    obliged = _distributions_that_schedule_lanes()
+    for name, manifest in _EVENT_SCHEMA["parallel_capabilities"][
+        "orchestrators"
+    ].items():
+        if not manifest["parallel_mode"]:
+            assert name not in obliged, name
+
+
+def test_a_lane_scheduling_distribution_emits_the_membership_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#482: obliges the Membership read to *happen*, not merely encode.
+
+    ``wrapper.pool.refreshed`` was pinned with a payload contract, a
+    source-order case, and a rolling-stream case -- and #481 found it emitted
+    by nothing, because every one of those assertions reads a fixture record
+    rather than this distribution's own runtime. This drives a real Parallel
+    Run end to end (the same harness :mod:`test_loop_parallel` uses) and
+    fails if no ``wrapper.pool.refreshed`` reaches the log, whichever
+    distribution the fixture obliges: today that is Python alone, and this
+    test would have failed against #481's silenced producer or before it
+    existed.
+    """
+    obliged = _distributions_that_schedule_lanes()
+    assert "python" in obliged, (
+        "the reference Runner no longer declares parallel_mode: true, so "
+        "this test's own harness would not exercise the obligation"
+    )
+
+    from tests.fakes import FakeGateRunner, FakeGitHubClient
+    from tests.test_loop_parallel import (
+        _ParallelFakeClient,
+        _logged_events,
+        _make_issue,
+        _usage_event,
+        _wire_repo,
+    )
+    from git_loopy.skill_catalog import build_skill_catalog
+
+    async def _stub_discover_skill_catalog(_client: object, **kwargs: object):
+        return build_skill_catalog(
+            (),
+            repo_root=Path(str(kwargs["repo_root"])),
+            installed_skills_dir=Path(str(kwargs["installed_skills_dir"])),
+        )
+
+    monkeypatch.setattr(
+        loop_module, "_discover_skill_catalog", _stub_discover_skill_catalog
+    )
+    monkeypatch.setattr(
+        loop_module.execution_host_module,
+        "local_execution_host_capacity",
+        lambda: 2,
+    )
+
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(
+        loop_module, "_make_gate_runner", lambda: FakeGateRunner()
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    events = _logged_events(tmp_path)
+    membership_reads = [
+        event
+        for event in events
+        if event["type"] == events_module.WRAPPER_POOL_REFRESHED
+    ]
+    assert membership_reads, (
+        "python declares parallel_mode: true and scheduled Lanes here, so "
+        "it is obliged to emit wrapper.pool.refreshed -- none was observed"
+    )
+    contract = _EVENT_SCHEMA["payload_contracts"][
+        events_module.WRAPPER_POOL_REFRESHED
+    ]
+    for key in contract["required_when_present"]:
+        assert key in membership_reads[0], key

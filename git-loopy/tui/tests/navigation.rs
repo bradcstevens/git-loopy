@@ -158,6 +158,37 @@ fn opening_a_row_shows_that_issue_and_back_returns_to_the_dashboard() {
 }
 
 #[test]
+fn a_membership_queue_deeper_than_the_lane_limit_stays_navigable() {
+    let mut session = DashboardSession::new(
+        RunInputs::default(),
+        Zone::from_offset_minutes(0),
+        IssueRef::parse(""),
+    );
+    session.ingest(
+        r#"{"type":"wrapper.run.start","run_id":"r","execution_host":{"starting_lane_limit":2}}"#,
+    );
+    session.ingest(r#"{"type":"wrapper.pool.refreshed","issues":[7,3,11]}"#);
+
+    assert_eq!(
+        queue_issues(&session),
+        [
+            IssueRef::number(7),
+            IssueRef::number(3),
+            IssueRef::number(11)
+        ]
+    );
+    session.handle_key(Key::Last);
+    assert_eq!(session.frame().selected, IssueRef::number(11));
+    assert_eq!(session.handle_key(Key::Open), Flow::Continue);
+    let frame = session.frame();
+    assert_eq!(frame.screen, Screen::DrillIn);
+    assert_eq!(
+        frame.view.drill_in.detail_header.issue,
+        IssueRef::number(11)
+    );
+}
+
+#[test]
 fn moving_inside_a_drill_in_retargets_it_without_leaving_the_screen() {
     let mut session = session_with_queue(&[7, 3, 11]);
     session.handle_key(Key::Down);

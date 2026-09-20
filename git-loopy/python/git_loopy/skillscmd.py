@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import os
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Mapping
 
 from . import settings
 from .config import SkillPolicyInput, SkillPolicyInputs
@@ -22,6 +21,7 @@ from .skill_catalog import (
     discover_skill_catalog,
 )
 from .skill_policy import (
+    ENABLED_SKILLS_ENV,
     SkillCatalog,
     SkillPolicyResolutionError,
     collect_project_skill_tracking,
@@ -105,7 +105,7 @@ class SkillSelectionModel:
 
 @dataclass(frozen=True)
 class SkillSelectionResult:
-    """Validated enabled names returned by either picker implementation."""
+    """Validated enabled names returned by the Skill picker."""
 
     enabled: tuple[str, ...]
 
@@ -120,100 +120,11 @@ def _read_picker_input(
     input_fn: Callable[[str], str],
     prompt: str,
 ) -> str | None:
+    """Read a confirmation input for commands that are not picker renderers."""
     try:
         return input_fn(prompt).strip()
     except (EOFError, KeyboardInterrupt):
         return None
-
-
-def _render_picker(
-    model: SkillSelectionModel,
-    output_fn: Callable[[str], None],
-    status: Sequence[str] = (),
-) -> None:
-    """Draw one round: the visible rows, then why the previous round was refused.
-
-    ``status`` is drawn *last*, because the line nearest the prompt is the only
-    position a plain terminal can dock: a reason printed before the repaint it
-    triggers scrolls off the moment the catalog is taller than the window, which
-    reads as "nothing happened" rather than as a refusal. Drawing it here is the
-    plain-terminal counterpart of the full-screen picker's status bar.
-    """
-    output_fn(f"Skills (filter: {model.query or 'all'}):")
-    enabled = frozenset(model.enabled)
-    for index, row in enumerate(model.visible_rows, start=1):
-        annotations = []
-        if row.required:
-            annotations.append("Required")
-        if row.blocked_reason is not None:
-            annotations.append(f"blocked: {row.blocked_reason}")
-        annotation = f" [{' | '.join(annotations)}]" if annotations else ""
-        description = f" - {row.description}" if row.description else ""
-        output_fn(
-            f"  {index}) [{'x' if row.name in enabled else ' '}] {row.name}"
-            f" ({row.source}; Copilot {_copilot_state(row.copilot_enabled)})"
-            f"{annotation}{description}"
-        )
-    if not model.visible_rows:
-        output_fn("  No matching Skills.")
-    for line in status:
-        output_fn(line)
-
-
-def run_plain_skill_picker(
-    model: SkillSelectionModel,
-    *,
-    input_fn: Callable[[str], str] = input,
-    output_fn: Callable[[str], None] = print,
-) -> SkillSelectionResult | None:
-    """Run the base-install searchable multi-select; return ``None`` on cancel."""
-    current = model
-    status: tuple[str, ...] = ()
-    cancel_tokens = frozenset({"q", "quit", "cancel"})
-    while True:
-        _render_picker(current, output_fn, status)
-        # Each round explains the one before it, so a reason is never repeated
-        # into a round that did not earn it.
-        status = ()
-        answer = _read_picker_input(
-            input_fn,
-            "Number toggles; text filters; blank clears; done saves; q cancels: ",
-        )
-        if answer is None or answer.casefold() in cancel_tokens:
-            return None
-        if answer.casefold() == "done":
-            errors = current.validation_errors
-            if errors:
-                status = tuple(f"  Cannot save: {error}." for error in errors) + (
-                    "  Type part of a named Skill to find it, then its number toggles it.",
-                )
-                continue
-            confirmation = _read_picker_input(
-                input_fn,
-                f"Save {len(current.enabled)} enabled Skill(s)? [y/N]: ",
-            )
-            if confirmation is None or confirmation.casefold() in cancel_tokens:
-                return None
-            if confirmation.casefold() in {"y", "yes"}:
-                return SkillSelectionResult(current.enabled)
-            status = ("  Not saved (the confirmation needs y); done asks again.",)
-            continue
-        if not answer:
-            current = current.filter("")
-            continue
-        try:
-            picked = int(answer) - 1
-        except ValueError:
-            current = current.filter(answer)
-            continue
-        visible = current.visible_rows
-        if not 0 <= picked < len(visible):
-            status = (f"  Please enter a number between 1 and {len(visible)}.",)
-            continue
-        try:
-            current = current.toggle(visible[picked].name)
-        except SkillSelectionError as exc:
-            status = (f"  Cannot toggle: {exc}.",)
 
 
 def run_textual_skill_picker(
@@ -224,11 +135,9 @@ def run_textual_skill_picker(
 ) -> SkillSelectionResult | None:
     """Run the Textual picker; return ``None`` on cancel.
 
-    Signature-compatible with :func:`run_plain_skill_picker` so the two are
-    interchangeable behind :data:`PickerRunner`. ``input_fn`` and ``output_fn``
-    are accepted and unused: a fullscreen app owns the terminal itself, and
-    accepting them is what lets one collection seam call either implementation
-    without knowing which it got.
+    ``input_fn`` and ``output_fn`` are accepted and unused: a fullscreen app
+    owns the terminal itself, while accepting them keeps the collection seam
+    independent of its renderer.
 
     Textual is imported **here**, not at module import, so ``--help`` and every
     non-interactive command keep a light import path even though Textual is now
@@ -239,50 +148,16 @@ def run_textual_skill_picker(
     return SkillPickerApp(model).run()
 
 
-def select_skill_picker(
-    *,
-    isatty: bool,
-    textual_importable: bool,
-) -> PickerRunner:
-    """Pick the renderer for one policy edit: optional TUI, else plain terminal.
-
-    The plain-terminal picker is the base installation's guarantee, so it is the
-    fallback for every invocation that cannot render a fullscreen app — the
-    Textual unavailable, or stdout not a terminal. Both implementations drive
-    the same :class:`SkillSelectionModel` and return the same
-    :class:`SkillSelectionResult`, so this decides presentation only.
-    """
-    if isatty and textual_importable:
-        return run_textual_skill_picker
-    return run_plain_skill_picker
-
-
-def _stdout_isatty() -> bool:
-    try:
-        return sys.stdout.isatty()
-    except (AttributeError, ValueError):  # pragma: no cover - closed/replaced stream
-        return False
-
-
-def _textual_importable() -> bool:
-    """Probe Textual availability without importing it.
-
-    ``find_spec`` costs no Textual import and no screen side effects.
-    """
-    try:
-        return importlib.util.find_spec("textual") is not None
-    except (ImportError, ValueError):  # pragma: no cover - defensive
-        return False
+def select_skill_picker() -> PickerRunner:
+    """Return the single fullscreen Skill-policy renderer."""
+    return run_textual_skill_picker
 
 
 def _resolve_picker_runner(picker_runner: PickerRunner | None) -> PickerRunner:
-    """Honour an injected picker; otherwise choose one for this invocation."""
+    """Honour an injected picker; otherwise use the one fullscreen renderer."""
     if picker_runner is not None:
         return picker_runner
-    return select_skill_picker(
-        isatty=_stdout_isatty(),
-        textual_importable=_textual_importable(),
-    )
+    return select_skill_picker()
 
 
 @dataclass(frozen=True)
@@ -371,10 +246,10 @@ def _configured_names(
     env: Mapping[str, str],
     required_skills: Iterable[str],
 ) -> tuple[str, ...]:
-    if "GIT_LOOPY_ENABLED_SKILLS" in env:
+    if ENABLED_SKILLS_ENV in env:
         return tuple(
             item
-            for raw in env.get("GIT_LOOPY_ENABLED_SKILLS", "").split(",")
+            for raw in env.get(ENABLED_SKILLS_ENV, "").split(",")
             if (item := raw.strip())
         )
     tables = settings.load_configs(repo_root, env)
@@ -840,7 +715,7 @@ def collect_skill_policy(
     fold the policy into its own single collect-then-commit Config write.
 
     An omitted ``picker_runner`` is resolved by :func:`select_skill_picker`, so
-    the optional-TUI decision is made once here rather than in each command.
+    every interaction host uses the same renderer.
 
     Raises :class:`SkillPolicyCancelled` when the operator cancels, and any
     member of :data:`SKILL_POLICY_FAILURES` when the policy cannot be resolved.

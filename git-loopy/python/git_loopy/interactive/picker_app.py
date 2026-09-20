@@ -16,11 +16,11 @@ The presentation half of the startup **model + reasoning-effort picker**
 
 ``enter`` advances/confirms; ``escape`` steps back from effort to model (or
 cancels from the model stage); ``q`` / ``Ctrl+C`` cancel (the orchestrator then
-keeps the env/default). This module imports Textual, so — like
-:mod:`git_loopy.interactive.app` — it is reached only on the interactive path,
-lazily, after :func:`git_loopy.interactive.picker.fetch_live_models` succeeds.
-The pure row model lives in :mod:`git_loopy.interactive.models`; everything here
-is presentation.
+keeps the env/default). This module imports Textual, so it is reached lazily, on
+the opt-in startup-picker path only, after
+:func:`git_loopy.interactive.picker.fetch_live_models` succeeds. The pure row
+model lives in :mod:`git_loopy.interactive.models`; everything here is
+presentation.
 """
 
 from __future__ import annotations
@@ -45,8 +45,7 @@ from git_loopy.interactive.models import (
 __all__ = ["ModelPickerApp", "ModelPickerScreen"]
 
 #: Widget ids for the two stage tables, so the shared ``RowSelected`` handler can
-#: tell which stage fired (mirrors how :mod:`git_loopy.interactive.app` routes by
-#: ``event.data_table.id``).
+#: tell which stage fired.
 _MODEL_TABLE = "picker-models"
 _EFFORT_TABLE = "picker-efforts"
 
@@ -197,6 +196,11 @@ class ModelPickerScreen(Screen["Selection | None"]):
             self.query_one(f"#{_MODEL_TABLE}", DataTable).focus()
         else:
             self.dismiss(None)
+
+    @property
+    def at_model_stage(self) -> bool:
+        """Whether Escape would leave this Screen rather than return to model rows."""
+        return self._chosen is None
 
     def action_cancel(self) -> None:
         """q / Ctrl+C: quit the picker; the orchestrator keeps the env/default."""

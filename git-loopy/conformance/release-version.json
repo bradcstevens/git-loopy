@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "expected_release_version": "0.9.0",
-  "expected_python_distribution_version": "0.9.0",
+  "expected_release_version": "0.11.0-dev.3",
+  "expected_python_distribution_version": "0.11.0.dev3",
   "valid_versions": [
     {
       "id": "stable",
@@ -71,13 +71,13 @@
       "error": "explicit Release-version bump"
     },
     {
-      "id": "missing-edited-notes",
+      "id": "missing-authored-notes",
       "tag_version": "1.2.3",
       "authority_version": "1.2.3",
       "annotated": true,
       "bumped": true,
       "notes": false,
-      "error": "edited release notes"
+      "error": "authored release notes"
     }
   ],
   "source_tree_drift_cases": [

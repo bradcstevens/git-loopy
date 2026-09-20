@@ -146,6 +146,15 @@ def test_gate_result_green_and_red_constructors() -> None:
     assert red.failure is failure
 
 
+def test_module_entrypoint_returns_nonzero_for_a_red_declared_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_agents(tmp_path, [("Tests", "false")])
+    monkeypatch.chdir(tmp_path)
+
+    assert gate.main() == 1
+
+
 # --------------------------------------------------------------------------- #
 # AgentsMdGateRunner — production adapter (real shell commands)                #
 # --------------------------------------------------------------------------- #

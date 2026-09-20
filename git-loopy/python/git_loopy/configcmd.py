@@ -37,11 +37,13 @@ Design (mirrors :mod:`git_loopy.init`):
 
 from __future__ import annotations
 
+import math
 import re
 import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Sequence
 
@@ -50,6 +52,7 @@ from git_loopy.config import (
     RECOMMENDED_ROUTING,
     REASONING_EFFORT_ORDER,
     REASONING_EFFORTS,
+    CONTEXT_TIERS,
     SUPPORTED_MODELS,
     TASK_TYPE_KEYS,
     TASK_TYPE_LABEL_PREFIX,
@@ -58,6 +61,13 @@ from git_loopy.config import (
     task_type_refusal,
     validate_task_type_key,
 )
+from git_loopy.interactive.models import (
+    default_cursor_index,
+    format_context_window,
+    format_multiplier,
+    format_reasoning,
+)
+from git_loopy.static_route import RoutePolicy, RoutePolicyError
 
 if TYPE_CHECKING:
     from git_loopy.cli import ResolvedConfig
@@ -112,6 +122,78 @@ def _coerce_effort(raw: str) -> str:
             f"reasoning_effort must be one of "
             f"{', '.join(REASONING_EFFORT_ORDER)} (got {raw!r})"
         )
+    return value
+
+
+def _coerce_context_tier(raw: str) -> str:
+    value = raw.strip().lower()
+    if value not in CONTEXT_TIERS:
+        raise ConfigCommandError(
+            f"context_tier must be one of {', '.join(sorted(CONTEXT_TIERS))} "
+            f"(got {raw!r})"
+        )
+    return value
+
+
+def _coerce_route_policy(raw: str) -> str:
+    """The **Route policy** (#560, ADR-0057), persisted as its own name.
+
+    Stored as the policy's plain name rather than the enum so the config file
+    stays a document an operator can read and edit; the resolver parses it back
+    through the same :meth:`RoutePolicy.parse` every other source goes through,
+    so a value accepted here can never be one a Run then rejects.
+    """
+    try:
+        return RoutePolicy.parse(raw).value
+    except RoutePolicyError as exc:
+        raise ConfigCommandError(str(exc)) from None
+
+
+def _coerce_routing_deadline(raw: str) -> float:
+    """Dynamic routing's finite wall-clock budget (#561, ADR-0057)."""
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ConfigCommandError(
+            f"routing_deadline_seconds must be a number > 0 (got {raw!r})"
+        ) from None
+    if not math.isfinite(value) or value <= 0:
+        raise ConfigCommandError(
+            f"routing_deadline_seconds must be finite and > 0 (got {raw!r})"
+        )
+    return value
+
+
+def _coerce_routing_credits(raw: str) -> str:
+    """The per-Run routing-credit allowance, persisted as an exact string.
+
+    A credit allowance written through a float is a different number of credits
+    than the operator authorized, and TOML has no decimal type — so the value is
+    validated as a :class:`~decimal.Decimal` here and stored as the text it
+    parsed from, which is the only lossless representation available.
+    """
+    try:
+        value = Decimal(raw.strip())
+    except ArithmeticError:
+        raise ConfigCommandError(
+            f"routing_credit_allowance must be a decimal number ≥ 0 (got {raw!r})"
+        ) from None
+    if not value.is_finite() or value < 0:
+        raise ConfigCommandError(
+            f"routing_credit_allowance must be finite and ≥ 0 (got {raw!r})"
+        )
+    return str(value)
+
+
+def _coerce_selector_concurrency(raw: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ConfigCommandError(
+            f"selector_concurrency must be an integer ≥ 1 (got {raw!r})"
+        ) from None
+    if value < 1:
+        raise ConfigCommandError(f"selector_concurrency must be ≥ 1 (got {raw!r})")
     return value
 
 
@@ -211,6 +293,35 @@ _KEYS: dict[str, _Key] = {
     for key in (
         _Key("model", _coerce_str, lambda rc: rc.run.model),
         _Key("reasoning_effort", _coerce_effort, lambda rc: rc.run.reasoning_effort),
+        _Key("context_tier", _coerce_context_tier, lambda rc: rc.run.context_tier),
+        _Key(
+            "route_policy",
+            _coerce_route_policy,
+            lambda rc: rc.run.route_policy.value,
+        ),
+        # Dynamic routing's three bounds (#561, ADR-0057). Persisted so an
+        # operator opts a repository in once, and each reads back as the string
+        # it was written as — an allowance rendered through a float would print
+        # a different number of credits than the one authorized.
+        _Key(
+            "routing_deadline_seconds",
+            _coerce_routing_deadline,
+            lambda rc: rc.run.routing_deadline_seconds,
+        ),
+        _Key(
+            "routing_credit_allowance",
+            _coerce_routing_credits,
+            lambda rc: (
+                None
+                if rc.run.routing_credit_allowance is None
+                else str(rc.run.routing_credit_allowance)
+            ),
+        ),
+        _Key(
+            "selector_concurrency",
+            _coerce_selector_concurrency,
+            lambda rc: rc.run.selector_concurrency,
+        ),
         # The **Task-type classifier**'s own pair (#377, ADR-0029). Two keys of
         # its own rather than a reuse of the run-wide pair: a classifier that
         # borrowed `model` would let the run-wide default determine the Task
@@ -496,20 +607,18 @@ def run_routing_unset(
 ) -> int:
     """Remove one task-type route from the chosen Config scope.
 
-    The one routing op open to a key outside the closed taxonomy, because it is
-    the remedy every other surface's refusal names (#375): a Config carrying a
-    pre-closure key is refused by ``routing set`` and by every read surface, so
-    if removal were refused too the only way to comply would be hand-edited
-    TOML. Sibling entries are rewritten untouched, valid or not — this op was
-    asked to remove one key, not to launder the file.
+    The one routing op open to a key outside the closed taxonomy. It remains a
+    precise manual edit, while ``git-loopy update`` owns the Release-caused
+    migration. Sibling entries are rewritten untouched, valid or not — this op
+    was asked to remove one key, not to launder the file.
 
     An out-of-taxonomy key with **no explicit scope** is cleared from *every*
     scope that carries it, because such a key is invalid in all of them and the
     refusal that sent the operator here cannot say which file it came from.
-    Scope otherwise defaults to project inside a repo, so the advertised remedy
-    would report success against the project file while a global key kept the
-    Run blocked. An explicit ``--project`` / ``--global`` still narrows it, and
-    a key inside the taxonomy is a scoped edit as before.
+    Scope otherwise defaults to project inside a repo, so an unscoped edit aimed
+    at a global legacy key would report success against the project file while
+    the global key kept the Run blocked. An explicit ``--project`` / ``--global``
+    still narrows it, and a key inside the taxonomy is a scoped edit as before.
 
     The key removed is the one **as spelled**, because a persisted table is read
     literally: ``task-type:docs`` and ``docs`` are two keys a Config can carry
@@ -631,6 +740,179 @@ def run_routing_use_recommended(
     return 0
 
 
+class _RoutingCancelled(Exception):
+    """Raised when the operator cancels the guided routing walk."""
+
+
+def _routing_prompt(input_fn: Callable[[str], str], text: str) -> str:
+    try:
+        raw = input_fn(text)
+    except (EOFError, KeyboardInterrupt) as exc:
+        raise _RoutingCancelled from exc
+    if raw.strip().lower() in {"q", "quit"}:
+        raise _RoutingCancelled
+    return raw.strip()
+
+
+def _routing_choice(
+    input_fn: Callable[[str], str],
+    output_fn: Callable[[str], None],
+    heading: str,
+    labels: Sequence[str],
+    *,
+    default_index: int,
+    selectable: Sequence[bool] | None = None,
+    prompt_label: str,
+) -> int:
+    """Render and collect one numbered choice in the routing-only command."""
+    output_fn(heading)
+    for number, label in enumerate(labels, start=1):
+        marker = " *" if number - 1 == default_index else ""
+        output_fn(f"  {number}) {label}{marker}")
+    while True:
+        answer = _routing_prompt(input_fn, f"{prompt_label} [{default_index + 1}]: ")
+        if not answer:
+            picked = default_index
+        else:
+            try:
+                picked = int(answer) - 1
+            except ValueError:
+                output_fn(f"  Please enter a number between 1 and {len(labels)}.")
+                continue
+            if not 0 <= picked < len(labels):
+                output_fn(f"  Please enter a number between 1 and {len(labels)}.")
+                continue
+        if selectable is not None and not selectable[picked]:
+            output_fn("  That option is unavailable (disabled by policy); pick another.")
+            continue
+        return picked
+
+
+def _routing_yes_no(
+    input_fn: Callable[[str], str], text: str, *, default: bool
+) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    while True:
+        answer = _routing_prompt(input_fn, f"{text} {suffix}: ").lower()
+        if not answer:
+            return default
+        if answer in {"y", "yes"}:
+            return True
+        if answer in {"n", "no"}:
+            return False
+
+
+def _routing_model_details(choice: "ModelChoice") -> str:
+    return ", ".join(
+        (
+            f"premium {format_multiplier(choice.multiplier)}",
+            f"ctx {format_context_window(choice.context_window)}",
+            f"reasoning: {format_reasoning(choice)}",
+        )
+    )
+
+
+def _collect_routing_model_and_effort(
+    *,
+    input_fn: Callable[[str], str],
+    output_fn: Callable[[str], None],
+    choices: Sequence["ModelChoice"],
+    default_model: str,
+    default_effort: str | None,
+) -> tuple[str, str | None]:
+    model_index = _routing_choice(
+        input_fn,
+        output_fn,
+        "Select a model:",
+        [
+            f"{choice.id}  ({_routing_model_details(choice)})"
+            + (" [disabled]" if not choice.selectable else "")
+            for choice in choices
+        ],
+        default_index=default_cursor_index(choices, preferred=default_model),
+        selectable=[choice.selectable for choice in choices],
+        prompt_label="Model",
+    )
+    chosen = choices[model_index]
+    if not chosen.supported_efforts:
+        output_fn(f"  {chosen.id} takes no reasoning effort; skipping.")
+        return chosen.id, None
+    efforts = list(chosen.supported_efforts)
+    effort_default = (
+        efforts.index(default_effort)
+        if chosen.id == default_model and default_effort in efforts
+        else efforts.index(chosen.default_effort)
+        if chosen.default_effort in efforts
+        else len(efforts) - 1
+    )
+    effort_index = _routing_choice(
+        input_fn,
+        output_fn,
+        f"Select a reasoning effort for {chosen.id}:",
+        efforts,
+        default_index=effort_default,
+        prompt_label="Reasoning effort",
+    )
+    return chosen.id, efforts[effort_index]
+
+
+def _collect_routing(
+    *,
+    input_fn: Callable[[str], str],
+    output_fn: Callable[[str], None],
+    fetch_choices: Callable[[], Sequence["ModelChoice"]],
+    warn: Callable[[str], None],
+) -> dict[str, tuple[str, str]]:
+    """Collect the guided routing walk without writing Config."""
+    from git_loopy import init as init_module
+
+    choices = init_module._load_model_choices(fetch_choices, warn=warn)
+    static_by_id = {choice.id: choice for choice in init_module._static_choices()}
+    by_id = {choice.id: choice for choice in choices}
+    for model, _effort in RECOMMENDED_ROUTING.values():
+        if model not in by_id:
+            choices.append(static_by_id[model])
+            by_id[model] = static_by_id[model]
+
+    output_fn("Recommended task-type routing:")
+    for key, (model, effort) in RECOMMENDED_ROUTING.items():
+        output_fn(
+            f"  task-type:{key} -> {model} @ {effort}  "
+            f"({_routing_model_details(by_id[model])})"
+        )
+    output_fn("Unlabelled issues use the global default model and effort.")
+
+    if _routing_yes_no(input_fn, "Use all recommended task-type routes?", default=True):
+        return dict(RECOMMENDED_ROUTING)
+
+    routing: dict[str, tuple[str, str]] = {}
+    override_choices = [choice for choice in choices if choice.supported_efforts]
+    for key, (recommended_model, recommended_effort) in RECOMMENDED_ROUTING.items():
+        action = _routing_choice(
+            input_fn,
+            output_fn,
+            f"task-type:{key} ({recommended_model} @ {recommended_effort}):",
+            ["keep recommended", "override", "skip"],
+            default_index=0,
+            prompt_label="Action",
+        )
+        if action == 2:
+            continue
+        if action == 0:
+            routing[key] = (recommended_model, recommended_effort)
+            continue
+        model, effort = _collect_routing_model_and_effort(
+            input_fn=input_fn,
+            output_fn=output_fn,
+            choices=override_choices,
+            default_model=recommended_model,
+            default_effort=recommended_effort,
+        )
+        assert effort is not None
+        routing[key] = (model, effort)
+    return routing
+
+
 def run_routing_guided(
     *,
     scope: str | None,
@@ -647,7 +929,7 @@ def run_routing_guided(
     try:
         resolved_scope = _resolve_scope(scope, repo_root)
         path = _scope_config_path(resolved_scope, repo_root, env)
-        routing = init_module.collect_routing(
+        routing = _collect_routing(
             input_fn=input_fn,
             output_fn=out,
             fetch_choices=fetch_choices or init_module._default_fetch_choices,
@@ -668,7 +950,7 @@ def run_routing_guided(
         else:
             table.pop("routing", None)
         settings.write_config(path, table)
-    except init_module.InitCancelled:
+    except _RoutingCancelled:
         out("git-loopy config routing cancelled; nothing was written.")
         return 1
     except (ConfigCommandError, settings.SettingsError) as exc:

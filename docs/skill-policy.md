@@ -272,13 +272,9 @@ git-loopy skills edit --global
 ```
 
 Opens the searchable multi-select picker, validates, then saves **one** policy
-atomically. Both renderings of the picker — the full-screen one from the
-full-screen Textual picker on a terminal and the plain numbered one everywhere
-else — drive the
-same selection model and obey the same rules; the keys for each are in
-[`docs/skills-setup.md`](skills-setup.md#the-skill-picker-has-two-renderings-and-one-set-of-rules).
-The full-screen picker is used on a terminal; the plain picker is used
-otherwise and returns the same selection.
+atomically. The full-screen Textual picker drives the same selection model and
+obeys the same rules described in
+[`docs/skills-setup.md`](skills-setup.md#the-skill-picker-and-its-rules).
 
 Two rules are enforced *in the picker*, not at save time:
 
@@ -288,9 +284,8 @@ Two rules are enforced *in the picker*, not at save time:
   off, with the reason, so you can see exactly what needs committing.
 
 A save that would not validate is **refused and names the offending Skill**
-rather than being silently corrected, and the refusal is drawn next to the
-prompt — a status bar in the full-screen picker, the line above the prompt in
-the plain one — so a catalog longer than the terminal cannot scroll it away.
+rather than being silently corrected, and the refusal is drawn in the picker's
+status bar — so a catalog longer than the terminal cannot scroll it away.
 
 ### `git-loopy skills sync` — re-import the Skill baseline
 
@@ -419,12 +414,152 @@ Every one of these is raised at **preflight**, before the first work session,
 and **none of them rewrites your saved policy**. A failing Run leaves the Config
 exactly as it found it, so the fix is always yours to make deliberately.
 
+### Check before starting a Run
+
+`git-loopy doctor` is the report half of Run-preflight recovery, following the
+same report-first shape as `git-loopy labels`. It resolves the exact
+environment and Skill policy a Run preflight resolves, without starting a Run,
+opening a picker, spending AI Credits, changing Copilot settings, or installing
+anything. It never refreshes the **installed catalog** either; only
+`doctor --apply` does (see
+[Refresh a stale installed catalog](#refresh-a-stale-installed-catalog)).
+
+```bash
+git-loopy doctor
+```
+
+Every environment precondition gets its own row: `git`, `copilot`, and `gh`
+resolve through `PATH` and name their resolved locations; the GitHub tracker is
+checked for authentication *and* for access to this repository; the tracker must
+carry the Labels a Run **reads**; and `AGENTS.md` must declare at least one
+runnable feedback loop. Every one of them is evaluated in a single pass, so one
+failure never hides the next, and each failing row names the command or operator
+action that owns its remedy.
+
+The Label row judges the presence of the names a Run reads and cannot create for
+itself — the triage roles, `parallel-safe`, `priority`, and `ready-for-agent`,
+the Label the Pool query filters on. It deliberately ignores two things the Run
+does not need. The `task-type:` and `semver:` taxonomies are *created on the way
+in*, so their absence stops nothing. And a drifted colour or description cannot
+stop a Run either, because a Run reads and writes Labels by name; drift stays
+`git-loopy labels`' business.
+
+These rows are report-only, including under `doctor --apply` — a repair lives
+where its cause lives, and a host's tooling, a tracker credential, and the Label
+vocabulary are each already owned by something else. Use
+`git-loopy labels --apply` for a missing Label and the row's stated command for
+host tooling or tracker access.
+
+Skill-policy rows name the Skill, the blocker in operator terms, the surface
+that carries it, and what to correct there:
+
+```
+ghost-skill | enabled Skill has no catalog winner | project policy | Config: <repo>/git-loopy/config.toml
+ghost-skill | enabled Skill has no catalog winner | environment replacement | Environment: GIT_LOOPY_ENABLED_SKILLS
+tdd         | Required Skill is disabled          | legacy deny guard       | Deny guard: deny_skills or GIT_LOOPY_DENY_SKILLS
+```
+
+The surface matters because the ones in [Configuring a policy](#configuring-a-policy)
+do not merge: `GIT_LOOPY_ENABLED_SKILLS` replaces the base outright, so while it
+is set the saved Config is not what a Run reads — and editing it would leave the
+Run failing exactly as before. For the same reason a Required Skill that a deny
+guard or a `--disable-skill` overlay *subtracted* names that guard rather than
+the base policy, which already lists the Skill and would be a dead end. A
+blocker under the **Minimal Skill policy** names the project Config, the scope
+`git-loopy skills edit` writes by default inside a repository.
+
+### Refresh a stale installed catalog
+
+Before doctor judges any Skill name it judges the install those names resolve
+against, because "missing from the catalog" has two causes that are repaired in
+opposite directions. The first Skill row of the report is that verdict, printed
+ahead of every policy row:
+
+```
+Skill catalog | matching | installed revision <sha> matches the pinned revision.
+Skill catalog | absent | no catalog is installed for pinned revision <sha>; refresh with `git-loopy doctor --apply`.
+Skill catalog | drifted | installed revision <sha> does not match pinned <sha>; refresh with `git-loopy doctor --apply`.
+```
+
+A `matching` install is the pinned revision *and* still holds exactly what its
+own record claims. `absent` means no usable install is recorded at all — never
+installed here, or an install whose record or Skill root has since been lost.
+`drifted` means a usable install that is not the pinned one: either an older
+revision, or the pinned revision whose contents were edited after it was
+written, and the row says which. Both non-matching verdicts exit non-zero on
+their own, because a Run resolves its Skills from that directory. The
+comparison is a read of the install record against the pinned revision, so
+plain `git-loopy doctor` reaches no network to make it and installs nothing.
+
+While the install is not `matching`, an enabled name with no catalog winner is
+attributed to the install rather than to the operator, and its remedy changes
+accordingly:
+
+```
+tdd | enabled Skill has no catalog winner; the installed catalog is drifted | project policy | Fix: refresh the pinned Skill catalog with `git-loopy doctor --apply`; do not prune this policy name.
+```
+
+Pruning that name would delete a valid selection to work around a stale install,
+so `doctor --apply` refreshes the pinned catalog **first** and re-resolves
+against the refreshed one before deciding any policy edit. A name the refreshed
+catalog carries is never removed, and if the refresh leaves the install still
+`absent` or `drifted` the repair is refused outright rather than contradicting
+the rows that just said not to prune.
+
+That refresh is the one part of doctor that reaches the pinned Skill source, and
+it refuses to guess when it cannot. An unreachable or failing upstream is
+reported as unverified — a warning, not a verdict — and doctor stops there:
+
+```
+Skill catalog | could not verify | Warning: could not refresh the Skill catalog from <repository>: <reason>
+```
+
+No Skill name is called missing from that state and no policy is written, which
+is what stops an offline laptop from being read as a Config full of Skills that
+no longer exist. Restore access to the pinned source and re-run.
+
+### Repair a saved policy
+
+```bash
+git-loopy doctor --apply
+```
+
+`--apply` refreshes the pinned Skill catalog first (see
+[Refresh a stale installed catalog](#refresh-a-stale-installed-catalog)), then
+prints its exact `Add:` and `Remove:` delta before it atomically writes the
+saved policy that carries every repairable blocker. It removes enabled names
+with no catalog winner and adds a catalog-backed **Required Skill** that the
+saved project or global policy omitted. It preserves every other Config key and
+never changes Copilot's own settings.
+
+A candidate repair is only written once the same resolver that produced the
+report agrees it clears **every** reported blocker, so a partial repair is never
+written: an enabled name that has no catalog winner but came from an
+`--enable-skill` overlay, a Required Skill a deny guard or `--disable-skill`
+subtracts, an untracked project Skill, and an unavailable inventory all leave
+the Config untouched and keep their own remedy. An environment replacement is
+not a saved policy at all, so `--apply` reports its remedy and writes nothing,
+and where no saved policy exists doctor says so rather than creating one.
+
+When every reported Skill-policy blocker is repairable and every environment
+precondition passes, the write leaves the next `doctor` and the next Run
+preflight clean; re-running `doctor --apply` then reports a healthy policy and
+writes nothing. A repair whose removals empty the list writes an explicit
+`enabled_skills = []` rather than dropping the key, because dropping it would
+hand the decision to a different surface instead of repairing this one.
+
+A clean preflight prints its passing rows and exits `0`; any blocker exits
+non-zero, which makes it suitable for a scripted pre-Run check. A failure it
+cannot attribute to a policy surface at all — an unreadable `PROMPT.md`, a
+corrupt installed Skill catalog — is reported as one `doctor could not resolve
+the Skill policy` line rather than mislabelled as a policy blocker.
+
 | Message on stderr | Why | Recovery |
 | --- | --- | --- |
 | `Enabled Skills are missing from the catalog` | a configured name resolves to nothing — a personal Skill you never installed here, a plugin you removed, or a typo | `git-loopy skills list` to see the real names, then `git-loopy skills edit` to drop or correct it |
 | `Required Skills are disabled` | the effective set omits a name the active `PROMPT.md` declares in `required-skills` — a `--disable-skill` overlay, a legacy deny guard, or a `GIT_LOOPY_ENABLED_SKILLS` / `enabled_skills` value that simply does not list it | if the base came from the environment, correct or unset `GIT_LOOPY_ENABLED_SKILLS`; otherwise `git-loopy skills edit` and re-enable it, or drop the overlay / `deny_skills` entry causing the subtraction |
 | `Enabled project Skills are not git-tracked` | a policy enables a Skill whose winning source is `project` and that is not committed, so it would not exist for a collaborator. No current Run can reach this: [ADR-0025](adr/0025-installed-skill-catalog.md) removed the project Skill source, and the check is kept only so a Runner that still exposes one fails closed | `git add` and commit the Skill, or `git-loopy skills edit` to disable it |
-| `Skill inventory is unavailable for explicit policy names` | you supplied an explicit policy but the Copilot inventory could not be resolved — Copilot missing, unauthenticated, or failing to start | fix the Copilot CLI installation / auth, then re-run; `git-loopy skills list` reports the same discovery failure in isolation |
+| `Skill inventory is unavailable for explicit policy names` | you supplied an explicit policy but the Copilot inventory could not be resolved — Copilot missing, unauthenticated, or failing to start | restore Copilot CLI access, then re-run `git-loopy doctor`; `git-loopy skills list` reports the same discovery failure in isolation |
 
 Preflight failures exit `1` and print
 `git-loopy: Skill policy preflight failed: <message>. Inspect the catalog and

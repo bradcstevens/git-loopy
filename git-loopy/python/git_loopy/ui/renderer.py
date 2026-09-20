@@ -42,6 +42,11 @@ from rich.console import Console
 from rich.text import Text
 
 from git_loopy.events import (
+    ROUTE_PREPARATION_PROPOSED,
+    ROUTE_PREPARATION_REUSABLE,
+    ROUTE_PREPARATION_STATIC,
+    ROUTE_PREPARATION_UNAVAILABLE,
+    ROUTE_REVALIDATED,
     ASSISTANT_MESSAGE,
     ASSISTANT_REASONING,
     SESSION_CREATED,
@@ -65,6 +70,9 @@ from git_loopy.events import (
     WRAPPER_PARALLEL_DEGRADED,
     WRAPPER_PARALLEL_SERIAL_FALLBACK,
     WRAPPER_PICKUP_BOUND,
+    WRAPPER_ROUTING_DELIVERY,
+    WRAPPER_ROUTING_PREPARED,
+    WRAPPER_ROUTING_RESOLVED,
     WRAPPER_POOL_EXCLUDED,
     WRAPPER_PR_ADVANCED,
     WRAPPER_PUSH_RECORDED,
@@ -571,13 +579,157 @@ class Renderer:
         provenance = _routing_source_phrase(event)
         if provenance:
             text.append(f"  {provenance}", style=STYLES["meta"])
+        lifecycle_position = _lifecycle_position_phrase(event)
+        if lifecycle_position:
+            text.append(f"  {lifecycle_position}", style=STYLES["meta"])
         tier = _context_tier_phrase(event)
         if tier:
             text.append(f"  {tier}", style=STYLES["meta"])
         self.console.print(text)
 
-    def _on_checkpoint_recorded(self, event: dict[str, Any]) -> None:
-        # A runner-authored Checkpoint (ADR-0004). Rendered DISTINCTLY from an
+    def _on_routing_resolved(self, event: dict[str, Any]) -> None:
+        # How this Pickup got its **Dynamic route** (#565, ADR-0057). The
+        # Pickup line below already says *what* was chosen; what it cannot say
+        # is whether a selector was paid for it, and that is the whole of AC8:
+        # freshly validated reuse, a new assessment, and a reassessment that
+        # found a recorded route no longer valid are three different things an
+        # operator is billed differently for.
+        #
+        # Every word here is read off the canonical record rather than worked
+        # out from the Run's own state — a readback that recomputes its
+        # explanation is a second implementation of the decision, and the one
+        # an operator checks against is the one that cannot be checked.
+        reuse = event.get("routing_reuse")
+        if not isinstance(reuse, str):
+            return
+        ref = event.get("issue")
+        origin = event.get("reused_proposal_id")
+        superseded = event.get("superseded_proposal_id")
+        text = Text()
+        text.append("⇌ ", style=STYLES["meta"])
+        text.append("routing ", style=STYLES["meta"])
+        text.append(f"#{ref}" if isinstance(ref, int) else str(ref))
+        if reuse == ROUTE_REVALIDATED:
+            text.append("  revalidated — reused without a new assessment")
+            if isinstance(origin, str) and origin:
+                text.append(f"  ({origin})", style=STYLES["meta"])
+            validated = event.get("reused_validated_at")
+            if isinstance(validated, str) and validated:
+                text.append(f"  decided {validated}", style=STYLES["meta"])
+        elif isinstance(superseded, str) and superseded:
+            text.append("  reassessed — a recorded route no longer validates")
+            text.append(f"  ({superseded})", style=STYLES["meta"])
+        else:
+            text.append("  assessed — no reusable route for this issue")
+        self.console.print(text)
+
+    def _on_routing_prepared(self, event: dict[str, Any]) -> None:
+        # **Routing preparation**'s readback (#566, ADR-0057). Every word here
+        # is chosen against one failure: an operator reading a proposal as a
+        # decision. It is not a Pickup, not a Lease, and not evidence the Pool
+        # is empty — so it borrows none of the Pickup line's vocabulary, and
+        # the pair it names is qualified as a proposal every time it appears.
+        #
+        # The three non-proposing outcomes are spelled out rather than left
+        # silent (AC4). Silence would make an operator's own Static route, a
+        # free revalidation and an exhausted allowance look identical, and the
+        # last is the only one of the three worth acting on.
+        state = event.get("state")
+        if not isinstance(state, str):
+            return
+        ref = event.get("issue")
+        text = Text()
+        text.append("⇢ ", style=STYLES["meta"])
+        text.append("route prepared ", style=STYLES["meta"])
+        text.append(f"#{ref}" if isinstance(ref, int) else str(ref))
+        if state == ROUTE_PREPARATION_PROPOSED:
+            model = event.get("model")
+            effort = event.get("effort")
+            tier = event.get("context_tier")
+            text.append("  proposal ")
+            text.append(
+                f"{model if isinstance(model, str) and model else 'backend default'}"
+                " @ "
+                f"{effort if isinstance(effort, str) and effort else 'backend default'}"
+            )
+            if isinstance(tier, str) and tier:
+                text.append(f" ({tier})", style=STYLES["meta"])
+            valid_until = event.get("valid_until")
+            if isinstance(valid_until, str) and valid_until:
+                text.append(f"  valid until {valid_until}", style=STYLES["meta"])
+            for label, field in (
+                ("proposal", "proposal_id"),
+                ("rationale", "summary"),
+                ("identity", "relevant_input_identity"),
+                ("prepared", "prepared_at"),
+                ("evidence source", "evidence_source"),
+                ("source model", "source_model_identity"),
+                ("evidence retrieved", "evidence_retrieved_at"),
+                ("capabilities retrieved", "capabilities_retrieved_at"),
+                ("measured", "measurement_at"),
+                ("benchmark", "benchmark_version"),
+                ("conditions", "conditions"),
+            ):
+                value = event.get(field)
+                if isinstance(value, str) and value:
+                    text.append(f"  {label} {value}", style=STYLES["meta"])
+            selector_model = event.get("selector_model")
+            selector_effort = event.get("selector_effort")
+            selector_tier = event.get("selector_context_tier")
+            if isinstance(selector_model, str) and selector_model:
+                selector = (
+                    f"  selector {selector_model} @ "
+                    f"{selector_effort if isinstance(selector_effort, str) and selector_effort else 'backend default'}"
+                )
+                if isinstance(selector_tier, str) and selector_tier:
+                    selector += f" ({selector_tier})"
+                text.append(selector, style=STYLES["meta"])
+            if event.get("routing_overshot") is True:
+                text.append("  overshot", style=STYLES["warning"])
+        elif state == ROUTE_PREPARATION_STATIC:
+            text.append("  static route applies — no selector call bought")
+        elif state == ROUTE_PREPARATION_REUSABLE:
+            text.append("  an earlier decision is available for Pickup revalidation")
+        elif state == ROUTE_PREPARATION_UNAVAILABLE:
+            text.append("  not prepared — available for Pickup revalidation")
+            detail = event.get("detail") or event.get("reason")
+            if isinstance(detail, str) and detail:
+                text.append(f"  ({detail})", style=STYLES["meta"])
+            if event.get("routing_overshot") is True:
+                text.append("  overshot", style=STYLES["warning"])
+        else:
+            return
+        self.console.print(text)
+
+    def _on_routing_delivery(self, event: dict[str, Any]) -> None:
+        # The observational Route projection's delivery state (#563, ADR-0057).
+        # The pair itself was decided and durably recorded before this event
+        # exists, so a line here is never a routing failure — it is a tracker
+        # comment or label that has not landed yet. A published delivery is
+        # silent at default verbosity: it repeats a Pickup the operator already
+        # saw, and printing it would bury the states that need a remedy.
+        status = event.get("status")
+        if not isinstance(status, str) or status == "published":
+            return
+        ref = event.get("issue")
+        label = event.get("label")
+        text = Text()
+        text.append("⇪ ", style=STYLES["meta"])
+        text.append("route publication ", style=STYLES["meta"])
+        text.append(f"#{ref}" if isinstance(ref, int) else str(ref))
+        text.append(
+            f"  {_DELIVERY_PHRASES.get(status, status.replace('_', ' '))}",
+            style=(
+                STYLES["warning"]
+                if status in _UNDELIVERED_ROUTE_PROJECTIONS
+                else STYLES["meta"]
+            ),
+        )
+        if isinstance(label, str) and label:
+            text.append(f"  {label}", style=STYLES["meta"])
+        self.console.print(text)
+
+    def _on_checkpoint_recorded(self, event: dict[str, Any]) -> None:        # A runner-authored Checkpoint (ADR-0004). Rendered DISTINCTLY from an
         # agent commit (different glyph, "checkpoint" label) and deliberately
         # NOT counted toward the Summary's commit tally — Checkpoints are
         # excluded from agent commit accounting.
@@ -883,6 +1035,23 @@ _ROUTING_SOURCE_PHRASES: dict[str, str] = {
     "defaulted_explicit_override": "routing suppressed",
 }
 
+#: What each Route-delivery state means to an operator, in words that stay
+#: about the *tracker*. ``stale`` is the one that cannot keep its wire spelling:
+#: a stale projection is a delivery a newer final Route overtook, which is the
+#: publisher behaving correctly rather than anything going wrong.
+_DELIVERY_PHRASES: dict[str, str] = {
+    "pending": "pending — comment not delivered",
+    "partial": "partial — label not delivered",
+    "failed": "failed — retries exhausted",
+    "stale": "superseded by a newer route",
+}
+
+#: The delivery states that still owe an operator something. A superseded
+#: projection owes nothing, so it prints without the warning colour.
+_UNDELIVERED_ROUTE_PROJECTIONS: frozenset[str] = frozenset(
+    {"pending", "partial", "failed"}
+)
+
 #: The sources whose phrase is completed by the keys the tracker actually
 #: carried. "routed docs" and "unconfigured chore" are claims about a label;
 #: "unlabelled" and "routing suppressed" are claims about its absence.
@@ -938,6 +1107,18 @@ def _routing_source_phrase(event: dict[str, Any]) -> str:
         if keys:
             phrase += " " + ", ".join(f"task-type:{key}" for key in keys)
     return phrase
+
+
+def _lifecycle_position_phrase(event: dict[str, Any]) -> str:
+    """Where this Pickup sits in the issue's **Attempt lifecycle**.
+
+    It is independent of the **Routing source**: an unchanged Dynamic route
+    can still be retrying, and a changed one is not necessarily escalated.
+    Legacy Pickup records did not carry the position, so their output remains
+    unchanged.
+    """
+    position = event.get("lifecycle_position")
+    return position.replace("_", " ") if isinstance(position, str) and position else ""
 
 
 def _context_tier_phrase(event: dict[str, Any]) -> str:
@@ -1144,6 +1325,9 @@ _HANDLERS: dict[str, Callable[[Renderer, dict[str, Any]], None]] = {
     WRAPPER_CONTRIBUTION_END: Renderer._on_contribution_end,
     WRAPPER_AFK_READY_COLLECTED: Renderer._on_afk_ready_collected,
     WRAPPER_PICKUP_BOUND: Renderer._on_pickup_bound,
+    WRAPPER_ROUTING_RESOLVED: Renderer._on_routing_resolved,
+    WRAPPER_ROUTING_PREPARED: Renderer._on_routing_prepared,
+    WRAPPER_ROUTING_DELIVERY: Renderer._on_routing_delivery,
     WRAPPER_POOL_EXCLUDED: Renderer._on_pool_excluded,
     WRAPPER_PARALLEL_SERIAL_FALLBACK: Renderer._on_parallel_serial_fallback,
     WRAPPER_PARALLEL_DEGRADED: Renderer._on_parallel_degraded,

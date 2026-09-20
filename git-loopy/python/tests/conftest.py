@@ -26,12 +26,25 @@ from __future__ import annotations
 
 import importlib
 import os
+from functools import partial
+from pathlib import Path
 
 import pytest
 
 from git_loopy import model_listing, skill_install
 from git_loopy.prompt import packaged_required_skills
 from git_loopy.skill_source import SkillSourceError, SkillSourcePin
+
+
+_RUN_TEST_MODULES = frozenset(
+    {
+        "test_conformance.py",
+        "test_iteration_end_to_end.py",
+        "test_loop_parallel.py",
+        "test_rate_card_run_start.py",
+        "test_sweep_run_start.py",
+    }
+)
 
 
 @pytest.fixture(autouse=True)
@@ -80,6 +93,86 @@ def _refuse_live_model_listing(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(model_listing, "fetch_live_models", _refuse)
+
+
+@pytest.fixture(autouse=True)
+def _declare_external_tools_for_run_tests(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve fake Run tools without relying on the developer's installed CLI."""
+    if request.path.name not in _RUN_TEST_MODULES:
+        return
+    loop = importlib.import_module("git_loopy.loop")
+    monkeypatch.setattr(
+        loop,
+        "resolve_run_environment_preflight",
+        partial(
+            loop.resolve_run_environment_preflight,
+            executable_finder=lambda name: str(tmp_path / "tools" / name),
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _declare_runnable_feedback_loop_for_run_tests(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> None:
+    """Give every synthetic Run repository the Integration contract it requires."""
+    if request.path.name not in _RUN_TEST_MODULES:
+        return
+    (tmp_path / "AGENTS.md").write_text(
+        "## Feedback loops\n\n"
+        "| Loop | Command |\n"
+        "| --- | --- |\n"
+        "| Tests | `uv run pytest` |\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _close_the_tracker_label_read(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Close the last wire a Run preflight reaches for: the tracker's labels.
+
+    Since #519 every github-source Run reads the repository's labels at
+    preflight to check the vocabulary it needs is present, through
+    :func:`git_loopy.loop._make_label_client`. Left alone that runs ``gh`` in the
+    process cwd — this checkout — so a Run test would read real labels and pass
+    for a reason that has nothing to do with the test.
+
+    Unconditional rather than allow-listed, in the shape of
+    :func:`_refuse_remote_skill_acquisition` above: a module that drives a Run
+    without being listed in :data:`_RUN_TEST_MODULES` fails loudly and says what
+    to do, instead of quietly succeeding on whoever's machine has ``gh``
+    authenticated.
+    """
+    from git_loopy import labels
+
+    class _StockedTracker:
+        """The vocabulary a synthetic Run repository is entitled to assume."""
+
+        def label_catalog(self) -> list[labels.TrackerLabel]:
+            return [
+                labels.TrackerLabel(spec.name, spec.color, spec.description)
+                for spec in labels.read_tracker_vocabulary(None)
+            ]
+
+    class _RefusedTracker:
+        def label_catalog(self) -> list[labels.TrackerLabel]:
+            raise AssertionError(
+                f"{request.path.name} drove a Run that read the tracker's labels; "
+                "the suite never reaches the network. Add the module to "
+                "tests/conftest.py's _RUN_TEST_MODULES, or inject a label client."
+            )
+
+    monkeypatch.setattr(
+        importlib.import_module("git_loopy.loop"),
+        "_make_label_client",
+        _StockedTracker if request.path.name in _RUN_TEST_MODULES else _RefusedTracker,
+    )
 
 
 @pytest.fixture(autouse=True)

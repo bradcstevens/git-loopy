@@ -126,9 +126,12 @@ __all__ = [
     "EventLogWriter",
     "RunSummaryWriter",
     "IterationCounters",
+    "RunFileIdentity",
     "WritersBundle",
     "create_writers",
     "make_run_id",
+    "parse_run_stem",
+    "run_stem",
     "ensure_gitignore_entry",
     "GITIGNORE_ENTRY",
 ]
@@ -146,6 +149,8 @@ _CROCKFORD_ALPHABET: str = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 # Validation regex for explicit ``run_id`` arguments. 26 chars, each from
 # the Crockford alphabet. Matches the output of :func:`make_run_id`.
 _RUN_ID_RE: re.Pattern[str] = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
+#: The width that regex pins, which is also what splits a stem back apart.
+_RUN_ID_LENGTH: int = 26
 
 # Filename timestamp format. Colons replaced with dashes for case-insensitive
 # filesystem safety (e.g. NTFS, HFS+). Trailing Z indicates UTC.
@@ -203,6 +208,46 @@ def make_run_id(
         time_ms = int(time.time() * 1000)
     rand_int = int.from_bytes(rand_bytes_fn(10), "big")
     return _crockford_b32(time_ms, 10) + _crockford_b32(rand_int, 16)
+
+
+# ---------------------------------------------------------------------------
+# The per-Run filename stem
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RunFileIdentity:
+    """What one Run's filename stem says about the Run that wrote it."""
+
+    run_id: str
+    started_at: datetime
+
+
+def run_stem(run_id: str, started_at: datetime) -> str:
+    """The shared stem every one of a Run's per-Run files is named for."""
+    return f"{_format_filename_ts(started_at)}-{run_id}"
+
+
+def parse_run_stem(stem: str) -> RunFileIdentity | None:
+    """Read a stem back, or ``None`` when it was not written by :func:`run_stem`.
+
+    The inverse lives beside the spelling it inverts on purpose: a reader that
+    re-derived ``<iso>-<run_id>`` for itself would keep reading files this
+    Runner had stopped writing, and the drift would show up as Runs that
+    silently cannot be discovered rather than as a failure anybody sees.
+    """
+    if len(stem) <= _RUN_ID_LENGTH or stem[-(_RUN_ID_LENGTH + 1)] != "-":
+        return None
+    timestamp, run_id = stem[: -(_RUN_ID_LENGTH + 1)], stem[-_RUN_ID_LENGTH:]
+    if not _RUN_ID_RE.fullmatch(run_id):
+        return None
+    try:
+        started_at = datetime.strptime(timestamp, _FILENAME_TS_FORMAT)
+    except ValueError:
+        return None
+    return RunFileIdentity(
+        run_id=run_id, started_at=started_at.replace(tzinfo=timezone.utc)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -507,6 +552,7 @@ def create_writers(
     *,
     run_id: str | None = None,
     started_at: datetime | None = None,
+    mirror_diagnostics_to_stderr: bool = True,
 ) -> WritersBundle:
     """Construct an aligned :class:`WritersBundle` for one ``git-loopy`` invocation.
 
@@ -529,6 +575,10 @@ def create_writers(
             base32). When :data:`None`, a fresh ULID is generated.
         started_at: Optional explicit wall-clock; defaults to
             :func:`datetime.now` in UTC.
+        mirror_diagnostics_to_stderr: Whether the diagnostics logger should
+            mirror records to ``sys.stderr`` as well as to the per-run ``.log``
+            file. Detached child Runs disable the stderr mirror because their
+            stderr already points at that same file.
 
     Returns:
         A :class:`WritersBundle` carrying the three writers + metadata.
@@ -554,7 +604,7 @@ def create_writers(
 
     ensure_gitignore_entry(repo_root)
 
-    stem = f"{_format_filename_ts(started_at)}-{run_id}"
+    stem = run_stem(run_id, started_at)
     logs_dir = repo_root / ".git-loopy" / "logs"
     runs_dir = repo_root / ".git-loopy" / "runs"
 
@@ -563,7 +613,11 @@ def create_writers(
         runs_dir / f"{stem}.json", run_id=run_id, started_at=started_at
     )
     diagnostics_path = logs_dir / f"{stem}.log"
-    logger = _build_diagnostics_logger(run_id, diagnostics_path)
+    logger = _build_diagnostics_logger(
+        run_id,
+        diagnostics_path,
+        mirror_to_stderr=mirror_diagnostics_to_stderr,
+    )
 
     return WritersBundle(
         run_id=run_id,
@@ -603,8 +657,10 @@ def _format_rfc3339_ms(dt: datetime) -> str:
     return f"{dt.strftime('%Y-%m-%dT%H:%M:%S')}.{millis:03d}Z"
 
 
-def _build_diagnostics_logger(run_id: str, log_path: Path) -> logging.Logger:
-    """Construct a per-run diagnostics logger with stderr + lazy-file handlers.
+def _build_diagnostics_logger(
+    run_id: str, log_path: Path, *, mirror_to_stderr: bool
+) -> logging.Logger:
+    """Construct a per-run diagnostics logger with lazy-file output.
 
     Removes any pre-existing handlers on the named logger before adding
     fresh ones so reusing a ``run_id`` (e.g. in tests) does not leak
@@ -625,9 +681,10 @@ def _build_diagnostics_logger(run_id: str, log_path: Path) -> logging.Logger:
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
 
-    stream_handler = logging.StreamHandler(sys.stderr)
-    stream_handler.setFormatter(fmt)
-    logger.addHandler(stream_handler)
+    if mirror_to_stderr:
+        stream_handler = logging.StreamHandler(sys.stderr)
+        stream_handler.setFormatter(fmt)
+        logger.addHandler(stream_handler)
 
     file_handler = _LazyMkdirFileHandler(
         str(log_path), mode="a", encoding="utf-8", delay=True

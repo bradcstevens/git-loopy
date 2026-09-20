@@ -283,6 +283,339 @@ def test_inventory_reports_vcs_commit_with_unknown_publication(
     assert inventory.edge_install is None
 
 
+def test_inventory_classifies_config_home_assets_from_scaffold_provenance(
+    tmp_path: Path,
+) -> None:
+    """The inventory resolves assets only through its injected environment."""
+    from git_loopy import scaffold_provenance
+
+    config_home = tmp_path / "config-home"
+    scope = config_home / "git-loopy"
+    config = scope / "config.toml"
+    prompt = scope / "PROMPT.md"
+    catalog = scope / "skills"
+    helper = scope / "bin" / "git-loopy-tui"
+    catalog.mkdir(parents=True)
+    helper.parent.mkdir(parents=True)
+    config.write_text("[run]\n", encoding="utf-8")
+    prompt.write_text("# Prompt\n", encoding="utf-8")
+    helper.touch()
+    scaffold_provenance.record_scaffolded_assets(
+        scope,
+        release_version="1.2.3",
+        assets={"config.toml": config, "PROMPT.md": prompt},
+        previous=None,
+    )
+
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(config_home)},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.assets == (
+        installation.InstalledAsset(
+            name="config.toml",
+            path=config,
+            present=True,
+            classification="untouched",
+            release_version="1.2.3",
+        ),
+        installation.InstalledAsset(
+            name="PROMPT.md",
+            path=prompt,
+            present=True,
+            classification="untouched",
+            release_version="1.2.3",
+        ),
+        installation.InstalledAsset(
+            name="installed catalog",
+            path=catalog,
+            present=True,
+            classification="unrecorded",
+            release_version=None,
+        ),
+        installation.InstalledAsset(
+            name="TUI helper",
+            path=helper,
+            present=True,
+            classification="unrecorded",
+            release_version=None,
+        ),
+    )
+
+
+def test_inventory_reports_an_asset_scaffold_provenance_never_covers_as_unrecorded(
+    tmp_path: Path,
+) -> None:
+    """An installed catalog is re-cut wholesale, so it is never operator work.
+
+    Scaffold provenance records the Config and the prompt override and nothing
+    else, so claiming a present catalog or helper as customized would refuse a
+    refresh ADR-0025 says happens on every Run anyway.
+    """
+    scope = tmp_path / "config-home" / "git-loopy"
+    (scope / "skills").mkdir(parents=True)
+    helper = scope / "bin" / "git-loopy-tui"
+    helper.parent.mkdir(parents=True)
+    helper.touch()
+
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert [
+        (asset.name, asset.classification)
+        for asset in inventory.assets
+        if asset.name in {"installed catalog", "TUI helper"}
+    ] == [("installed catalog", "unrecorded"), ("TUI helper", "unrecorded")]
+
+
+def test_inventory_reports_the_installed_catalog_where_its_owner_puts_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The Skill root is :mod:`git_loopy.skill_install`'s to place, not ours to guess.
+
+    ``update`` refreshes and ``uninstall`` removes the assets this record names
+    (#524, #529), so a second spelling of the catalog location here would send
+    both of them at a directory no Run reads — while ``info`` reported every
+    installed catalog as absent.
+    """
+    from git_loopy import skill_install
+
+    relocated = tmp_path / "elsewhere" / "catalog"
+    relocated.mkdir(parents=True)
+    monkeypatch.setattr(skill_install, "installed_catalog_dir", lambda _env: relocated)
+
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert [
+        (asset.path, asset.present)
+        for asset in inventory.assets
+        if asset.name == "installed catalog"
+    ] == [(relocated, True)]
+
+
+def test_inventory_classifies_changed_assets_as_customized(tmp_path: Path) -> None:
+    from git_loopy import scaffold_provenance
+
+    scope = tmp_path / "config-home" / "git-loopy"
+    config = scope / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[run]\n", encoding="utf-8")
+    scaffold_provenance.record_scaffolded_assets(
+        scope,
+        release_version="1.2.3",
+        assets={"config.toml": config},
+        previous=None,
+    )
+    config.write_text("[run]\nmodel = 'custom'\n", encoding="utf-8")
+
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.assets[0].classification == "customized"
+
+
+def test_inventory_treats_an_asset_without_provenance_as_customized(
+    tmp_path: Path,
+) -> None:
+    scope = tmp_path / "config-home" / "git-loopy"
+    config = scope / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[run]\n", encoding="utf-8")
+
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.assets[0].classification == "customized"
+
+
+def test_inventory_treats_an_asset_it_cannot_digest_as_customized(
+    tmp_path: Path,
+) -> None:
+    """Unreadable content proves nothing, and the unprovable case is the operator's.
+
+    This is the last branch that can hand ``update`` an ``untouched`` verdict it
+    has not earned, which is the one mistake that deletes work.
+    """
+    from git_loopy import scaffold_provenance
+
+    scope = tmp_path / "config-home" / "git-loopy"
+    config = scope / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[run]\n", encoding="utf-8")
+    scaffold_provenance.record_scaffolded_assets(
+        scope,
+        release_version="1.2.3",
+        assets={"config.toml": config},
+        previous=None,
+    )
+    config.unlink()
+    config.mkdir()
+
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.assets[0] == installation.InstalledAsset(
+        name="config.toml",
+        path=config,
+        present=True,
+        classification="customized",
+        release_version="1.2.3",
+    )
+
+
+def test_inventory_keeps_assets_when_scaffold_provenance_cannot_be_read(
+    tmp_path: Path,
+) -> None:
+    scope = tmp_path / "config-home" / "git-loopy"
+    config = scope / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[run]\n", encoding="utf-8")
+    (scope / "scaffold-provenance.json").write_text("{", encoding="utf-8")
+
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert inventory.assets[0].classification == "customized"
+
+
+def test_inventory_reports_an_absent_asset_as_unrecorded(tmp_path: Path) -> None:
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert [asset.classification for asset in inventory.assets] == [
+        "unrecorded",
+        "unrecorded",
+        "unrecorded",
+        "unrecorded",
+    ]
+
+
+def test_inventory_separates_an_absent_asset_from_one_it_cannot_prove(
+    tmp_path: Path,
+) -> None:
+    """Drift is only reportable against the assets that are actually there.
+
+    Both an absent catalog and a present one are ``unrecorded``, so presence is
+    the fact that keeps "you have not installed this" distinguishable from "this
+    is installed and Scaffold provenance proves nothing about it".
+    """
+    scope = tmp_path / "config-home" / "git-loopy"
+    (scope / "skills").mkdir(parents=True)
+
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert {asset.name: asset.present for asset in inventory.assets} == {
+        "config.toml": False,
+        "PROMPT.md": False,
+        "installed catalog": True,
+        "TUI helper": False,
+    }
+
+
+def test_inventory_reports_the_tui_helper_where_its_owner_puts_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Helper locations belong to :mod:`git_loopy.tui_release`, not to this record.
+
+    That module already carries every location a Run discovers a helper in, so
+    a further spelling here is how ``info`` comes to report a path no installer
+    writes — and ``uninstall`` (#529) to remove nothing. The second candidate is
+    the Windows artifact, which a record that inventoried only the extensionless
+    name would report as absent on every Windows machine.
+    """
+    from git_loopy import tui_release
+
+    relocated = tmp_path / "elsewhere" / "bin"
+    relocated.mkdir(parents=True)
+    windows = relocated / "git-loopy-tui.exe"
+    windows.touch()
+    monkeypatch.setattr(
+        tui_release,
+        "machine_local_helper_paths",
+        lambda _env: (relocated / "git-loopy-tui", windows),
+    )
+
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    assert [
+        (asset.path, asset.present)
+        for asset in inventory.assets
+        if asset.name == "TUI helper"
+    ] == [(windows, True)]
+
+
+def test_inventory_classifies_every_asset_scaffold_provenance_can_record(
+    tmp_path: Path,
+) -> None:
+    """Whatever ``init`` can record, ``info`` can report drift for.
+
+    The two lists are declared separately, so a Release that starts recording a
+    new editable asset without inventorying it would leave that asset drifting
+    silently — exactly the failure the record exists to end.
+    """
+    from git_loopy import scaffold_provenance
+
+    scope = tmp_path / "config-home" / "git-loopy"
+    scope.mkdir(parents=True)
+    written = {
+        name: scope / name for name in sorted(scaffold_provenance.SCAFFOLDED_ASSET_NAMES)
+    }
+    for name, path in written.items():
+        path.write_text(f"{name} body\n", encoding="utf-8")
+    scaffold_provenance.record_scaffolded_assets(
+        scope,
+        release_version="1.2.3",
+        assets=written,
+        previous=None,
+    )
+
+    inventory = installation.inspect_installation(
+        env={"XDG_CONFIG_HOME": str(tmp_path / "config-home")},
+        executable_path=tmp_path / "bin" / "git-loopy",
+        release_version_reader=lambda: "1.2.3",
+    )
+
+    classified = {
+        asset.path: (asset.classification, asset.release_version)
+        for asset in inventory.assets
+    }
+    assert {path: classified.get(path) for path in written.values()} == {
+        path: ("untouched", "1.2.3") for path in written.values()
+    }
+
+
 def test_inventory_json_shape_is_stable(tmp_path: Path) -> None:
     commit = "d" * 40
     _repository, executable = _write_checkout(
@@ -304,7 +637,36 @@ def test_inventory_json_shape_is_stable(tmp_path: Path) -> None:
         "resolved_commit": commit,
         "published": True,
         "edge_install": False,
-        "assets": [],
+        "assets": [
+            {
+                "name": "config.toml",
+                "path": str(tmp_path / "home/.config/git-loopy/config.toml"),
+                "present": False,
+                "classification": "unrecorded",
+                "release_version": None,
+            },
+            {
+                "name": "PROMPT.md",
+                "path": str(tmp_path / "home/.config/git-loopy/PROMPT.md"),
+                "present": False,
+                "classification": "unrecorded",
+                "release_version": None,
+            },
+            {
+                "name": "installed catalog",
+                "path": str(tmp_path / "home/.config/git-loopy/skills"),
+                "present": False,
+                "classification": "unrecorded",
+                "release_version": None,
+            },
+            {
+                "name": "TUI helper",
+                "path": str(tmp_path / "home/.config/git-loopy/bin/git-loopy-tui"),
+                "present": False,
+                "classification": "unrecorded",
+                "release_version": None,
+            },
+        ],
     }
 
 

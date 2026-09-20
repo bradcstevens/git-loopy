@@ -36,6 +36,7 @@ import pytest
 from git_loopy import skill_install
 from git_loopy.skill_install import (
     SkillInstallError,
+    inspect_installed_catalog,
     installed_catalog_dir,
     read_install_record,
     refresh_installed_catalog,
@@ -514,6 +515,77 @@ def test_a_catalog_carrying_a_symlink_is_not_installed(
         refresh_installed_catalog(_pin_for(root, revision), env=env)
 
     assert not installed_catalog_dir(env).exists()
+
+
+# ---------------------------------------------------------------------------
+# Judging the install against the pin
+#
+# `git-loopy doctor` reports the install before it judges any Skill name
+# (#518), so the verdict has to be reachable without a refresh: a stale catalog
+# must be distinguishable from an operator who enabled a Skill that never
+# existed, or doctor would prune a valid policy name to work around a stale
+# install. The comparison is therefore the pin against the record, offline.
+# ---------------------------------------------------------------------------
+
+
+def test_no_install_at_all_is_absent_rather_than_drifted(
+    upstream: tuple[Path, SkillSourcePin], config_home: Path
+) -> None:
+    """Nothing installed and something stale are different operator problems."""
+    _root, pin = upstream
+
+    status = inspect_installed_catalog(pin, _env(config_home))
+
+    assert status.state == "absent"
+    assert status.installed is None
+    assert status.pin is pin
+
+
+def test_the_pinned_install_is_matching_without_reaching_upstream(
+    upstream: tuple[Path, SkillSourcePin], config_home: Path
+) -> None:
+    """The pin decides, not the network: judged against an upstream that is gone."""
+    _root, pin = upstream
+    refresh_installed_catalog(pin, env=_env(config_home))
+
+    status = inspect_installed_catalog(_break_upstream(pin), _env(config_home))
+
+    assert status.state == "matching"
+    assert status.installed is not None
+    assert status.installed.revision == pin.revision
+
+
+def test_an_install_left_behind_by_a_bumped_pin_is_drifted(
+    upstream: tuple[Path, SkillSourcePin], config_home: Path
+) -> None:
+    """Both revisions survive the verdict, so a report can name each of them."""
+    root, old_pin = upstream
+    refresh_installed_catalog(old_pin, env=_env(config_home))
+    bumped = _pin_for(root, _publish(root, "code-review"))
+
+    status = inspect_installed_catalog(bumped, _env(config_home))
+
+    assert status.state == "drifted"
+    assert status.installed is not None
+    assert status.installed.revision == old_pin.revision
+    assert status.pin.revision == bumped.revision
+
+
+def test_a_hand_edited_catalog_is_drifted_at_the_pinned_revision(
+    upstream: tuple[Path, SkillSourcePin], config_home: Path
+) -> None:
+    """A partially written or edited catalog drifts without moving its revision."""
+    _root, pin = upstream
+    refresh_installed_catalog(pin, env=_env(config_home))
+    (installed_catalog_dir(_env(config_home)) / "tdd" / "SKILL.md").write_text(
+        "---\nname: tdd\ndescription: Edited in place.\n---\n", encoding="utf-8"
+    )
+
+    status = inspect_installed_catalog(pin, _env(config_home))
+
+    assert status.state == "drifted"
+    assert status.installed is not None
+    assert status.installed.revision == pin.revision
 
 
 def test_the_documented_setup_command_is_a_real_command() -> None:

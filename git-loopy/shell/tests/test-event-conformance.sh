@@ -118,6 +118,19 @@ if [[ "$(jq -r '.contribution_events' <<<"$GIT_LOOPY_PARALLEL_CAPABILITIES_JSON"
   )
 fi
 
+# #482: `parallel_mode` obliges the Membership read (`wrapper.pool.refreshed`,
+# #481's producer) rather than a hand-maintained list -- a distribution that
+# cannot fill a second Lane takes no rolling read at all, so it must name no
+# producer for the literal either. Getting this wrong in the permissive
+# direction is exactly the hole #481 fell through: every encoding assertion
+# passing over an Event nothing emits.
+if [[ "$(jq -r '.parallel_mode' <<<"$GIT_LOOPY_PARALLEL_CAPABILITIES_JSON")" == "false" ]]; then
+  if grep -rqE 'GIT_LOOPY_EVENT_TYPES\[WRAPPER_POOL_REFRESHED\]' \
+    "$port_dir/lib" "$port_dir/git-loopy.sh"; then
+    fail "parallel_mode is declared false but wrapper.pool.refreshed has a producer"
+  fi
+fi
+
 # A refusal an operator can act on, instead of a Lane cap accepted and ignored.
 # Without this the flag is a silent no-op: the Run is byte-identical to a serial
 # Run, so "Parallel mode is unimplemented here" and "nothing carries
@@ -155,10 +168,14 @@ for rejected in "-1" "1.5" "two" " 2"; do
     ! git_loopy_assert_parallel_supported 2>/dev/null
   ) || fail "a malformed Lane cap of '$rejected' must be rejected"
 done
-actual_release_version="$(git_loopy_read_release_version "$port_dir/../../VERSION")"
-expected_release_version="$(jq -r '.expected_release_version' "$release_fixture")"
-assert_equal "$expected_release_version" "$actual_release_version" \
-  "shell release-version decision seam matches release-version.json authority"
+# event-schema.json's `release_version` sites are synthetic (#487): the wire
+# form doesn't disagree with itself on a value it merely copies. The live
+# value is asserted here against the shell distribution's own production
+# decision seam instead, against the one fixture allowed to name it.
+assert_equal \
+  "$(jq -r '.expected_release_version' "$release_fixture")" \
+  "$(git_loopy_read_release_version "$_GIT_LOOPY_RELEASE_VERSION_PATH")" \
+  "shell Release version seam drifted from the shared Release version authority"
 
 while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"

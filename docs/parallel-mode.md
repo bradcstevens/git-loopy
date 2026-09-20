@@ -59,6 +59,27 @@ GIT_LOOPY_WORKTREE_SETUP='npm ci' git-loopy
 When no issue is Lane-eligible, the serial **Iteration driver** reaches the
 same outcomes and emits the existing degraded or serial-fallback Event.
 
+## Remote-host safety
+
+When `GIT_LOOPY_EXECUTION_HOST=github-actions` selects the GitHub Actions
+**Execution host**, the Run dispatches one `run-preflight.yml` job before it
+reserves a Lane. That job checks out the selected clean base revision and runs
+the target repository's declared `AGENTS.md` feedback loops. A red loop or an
+unavailable toolchain ends the Run as an environment preflight failure; it
+creates no **Lane contribution**, **Strike**, or **Demotion**.
+
+The target repository must install `run-preflight.yml`,
+`lane-contribution.yml`, and the shared
+`.github/actions/setup-lane-contribution` action; the host refuses before
+dispatch when either workflow is absent.
+
+Each later Lane is its own `lane-contribution.yml` run. The host's concurrency
+group is keyed by issue and cancels any in-progress contribution for that same
+issue, so a restarted Run supersedes an orphan rather than racing it. A refused
+dispatch is also not a Strike: its issue stays eligible and repeated refusals
+raise the existing host/setup **Pressure signal**, which can contract the
+effective Lane limit.
+
 ## Eligibility is yours to assert: `parallel-safe`
 
 The runner **never infers** that two issues can be worked at the same time. An
@@ -101,13 +122,14 @@ malfunctioning. The reasons it holds back:
   mid-Run, with nothing restarted.
 - **Integration backpressure** (below).
 - **A contracted Effective Lane limit.** The number of Lanes the runner may fill
-  *right now* starts at the host ceiling only when host load is observable and
-  otherwise uses its static-safe limit. It moves against **Pressure signals**:
-  sustained API rate limiting, AI-credit burn against a configured ceiling, host
-  or worktree-setup load, and the **Integration backlog**. It contracts quickly
-  and expands one Lane at a time against sustained evidence of health, and never
-  above host capacity. A signal the Run cannot observe is reported
-  *unknown* — never estimated, and never used as evidence that expanding is safe.
+  *right now* starts at `min(Lane cap, 3)`. A Lane cap of 10 opens three Lanes
+  at first when eligible work is available; that is normal startup, not a
+  fault. It moves against **Pressure signals**: sustained API rate limiting,
+  AI-credit burn against a configured ceiling, host or worktree-setup load, and
+  the **Integration backlog**. It contracts quickly and expands one Lane at a
+  time against sustained evidence of health, and never above host capacity. A
+  signal the Run cannot observe is reported *unknown* — never estimated, and
+  never used as evidence that expanding is safe.
 
 Each authoritative change emits `wrapper.concurrency.changed` carrying both the
 immutable host-declared cap and the current effective limit.
@@ -236,7 +258,10 @@ interleaving, not a fallback, and is reported as neither.
 
 - Each Lane is one active row in the **Dashboard**, with its own timer and
   **Log**.
-- The **Queue** accounts for an issue across every contribution it took.
+- The **Queue** accounts for every issue the Run has read, filling as it reads
+  membership, across every contribution an issue took. It can therefore be
+  deeper than the number of running Lanes; Queue rows are not a count of Lanes
+  the Run started.
 - Per-Lane records in `.git-loopy/logs/<iso>-<run_id>.jsonl` are attributed to
   their contribution, so a Lane being refilled never reattributes earlier work.
 

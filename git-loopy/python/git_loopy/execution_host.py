@@ -88,6 +88,7 @@ __all__ = [
     "ContributionSuccess",
     "ContributionFailure",
     "ContributionOutcome",
+    "HostPreflight",
     "ExecutionHost",
     "LOCAL_EXECUTION_HOST_ISOLATION_GRADE",
     "LOCAL_EXECUTION_HOST_PLACEMENT",
@@ -153,6 +154,11 @@ class ContributionRequest:
             backend default remains in force.
         reasoning_effort: The resolved reasoning effort paired with
             ``model``, or ``None`` when the backend chooses it.
+        context_tier: The run-level context tier (ADR-0017) the pair was
+            gated against, or ``None`` to leave the tier unsent. Carried
+            across the seam because ADR-0037 makes a resolved route take
+            effect wherever it is resolved, and a remote host that drops it
+            runs the contribution on no tier at all (#560).
         skill_policy: The Effective Skill policy in force for this
             contribution.
         run_id: The Run's ``run_id`` — handed to the host, never minted by
@@ -164,6 +170,7 @@ class ContributionRequest:
     base_revision: str
     model: str | None
     reasoning_effort: str | None
+    context_tier: str | None
     skill_policy: Any
     run_id: str
 
@@ -240,12 +247,20 @@ class ContributionFailure:
             started the contribution, or stalled without proving an ending.
         ending: The Agent session ending for a ``"breach"``. It is absent for
             ``"never_started"`` and ``"stall"``.
+        events: This contribution's Events, where the host has them. A failing
+            contribution can still have produced a complete stream --- a remote
+            host reads its artifact before it discovers the branch it names is
+            unreachable --- and discarding it would leave the operator a
+            terminal failure with no account of the hours that preceded it.
+            Empty for the local placement, which emits onto the Run's shared
+            trace as it works and so has no separate stream to hand back.
     """
 
     reason: str
     classification: ContributionFailureClass
     ending: session_outcome_module.SessionOutcomeRecord | None
     detail: str = ""
+    events: tuple[Mapping[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         if self.classification not in _CONTRIBUTION_FAILURE_CLASSES:
@@ -264,6 +279,19 @@ class ContributionFailure:
 ContributionOutcome = Union[ContributionSuccess, ContributionFailure]
 
 
+@dataclass(frozen=True)
+class HostPreflight:
+    """A Run-scoped host readiness result before any contribution dispatches.
+
+    A failed preflight reports an environment failure. It deliberately carries
+    no Agent ending, so it cannot enter an issue's Attempt, Strike, or Demotion
+    ledger.
+    """
+
+    passed: bool
+    detail: str = ""
+
+
 @runtime_checkable
 class ExecutionHost(Protocol):
     """*Where one Lane contribution executes* — the seam's Protocol.
@@ -277,7 +305,9 @@ class ExecutionHost(Protocol):
     :class:`LocalExecutionHost` is the production adapter; a test substitutes
     an in-memory fake satisfying this Protocol structurally — no subclassing
     required, but ``isinstance(host, ExecutionHost)`` works because the
-    decorator marks it ``@runtime_checkable``.
+    decorator marks it ``@runtime_checkable``. Every host must also ensure
+    that at most one live contribution exists for an issue; the Run relies on
+    that guarantee when a restarted Run supersedes prior work.
     """
 
     @property
@@ -307,6 +337,12 @@ class ExecutionHost(Protocol):
         branch is a value, not an exception, so callers (and tests) can
         branch on the outcome without a ``try``/``except``.
         """
+        ...
+
+    async def run_preflight(
+        self, *, run_id: str, base_revision: str
+    ) -> HostPreflight:
+        """Check host readiness once before this Run dispatches any Lane."""
         ...
 
 
@@ -403,6 +439,13 @@ class LocalExecutionHost:
     @property
     def capacity(self) -> int:
         return self._capacity
+
+    async def run_preflight(
+        self, *, run_id: str, base_revision: str
+    ) -> HostPreflight:
+        """Local Lanes need no remote-host preflight."""
+        del run_id, base_revision
+        return HostPreflight(passed=True)
 
     async def run_contribution(
         self, request: ContributionRequest

@@ -123,9 +123,11 @@ bash git-loopy/shell/git-loopy.sh
 ### Optional: `install.sh` — the launcher and the live interface
 
 `install.sh` installs the two halves of this clone's distribution: a small
-launcher shim on your `PATH` that runs this clone's `git-loopy.sh`, and the
-`git-loopy-tui` helper this clone's Release pins, staged into
-`.git-loopy/bin/` where the Orchestrator looks for it first.
+launcher shim on your `PATH` that runs this clone's `git-loopy.sh`, and (when
+compiled helper artifacts are published) the `git-loopy-tui` helper this clone's
+Release pins, staged into `.git-loopy/bin/` where the Orchestrator looks for it first.
+Under source-only releases, pass `--no-tui` to install the launcher alone; the
+runner operates in plain mode with its built-in streaming line printer.
 
 The clone command above is a **v0.9.0 Release** install, so
 `git-loopy --version` reports `git-loopy 0.9.0`. To install another named
@@ -265,7 +267,7 @@ phases and are not read by this port yet.
 ### The closed-world Skill policy fails closed here
 
 The Python Orchestrator implements the closed-world **Skill policy**
-([contract §17](../../docs/wrapper-contract.md#16-closed-world-skill-policy-skill-policy-rollout-must))
+([contract §17](../../docs/wrapper-contract.md#17-closed-world-skill-policy-skill-policy-rollout-must))
 first. This port has no `config.toml` tier yet, so it cannot honour one — and
 running an Iteration on a *wider* capability set than the operator configured is
 the outcome §17.6 exists to prevent. Every policy surface therefore **aborts

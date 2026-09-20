@@ -19,17 +19,28 @@ $script:EventTypes = [ordered]@{
     # refuse.
     WRAPPER_PICKUP_BOUND = "wrapper.pickup.bound"
     WRAPPER_PICKUP_SKIPPED = "wrapper.pickup.skipped"
+    # The two **Routing** records (contract 14.4, 14.5, ADR-0057): the elected
+    # triple's provenance, and the delivery state of projecting that final
+    # resolution onto its issue. Declared so this table stays the whole event
+    # vocabulary and its replay reads; never emitted here, because this
+    # Orchestrator resolves no Routed pair at all, and support is explicitly
+    # deferred rather than silently claimed. Carrying the literals is not a
+    # claim that it routes -- the insight capabilities below still say
+    # `routing = $false`, which is what a **Dashboard** reads.
+    WRAPPER_ROUTING_RESOLVED = "wrapper.routing.resolved"
+    WRAPPER_ROUTING_DELIVERY = "wrapper.routing.delivery"
+    # The nonbinding third (contract 14.6, #566): what **Routing preparation**
+    # reached for an eligible **Pool** candidate ahead of its Pickup. Declared
+    # on the same terms and never emitted here either.
+    WRAPPER_ROUTING_PREPARED = "wrapper.routing.prepared"
     WRAPPER_CHECKPOINT_RECORDED = "wrapper.checkpoint.recorded"
     WRAPPER_COMMIT_RECORDED = "wrapper.commit.recorded"
     WRAPPER_PUSH_RECORDED = "wrapper.push.recorded"
     WRAPPER_AUTO_CLOSE = "wrapper.auto_close"
+    WRAPPER_RELEASE_ADVANCED = "wrapper.release.advanced"
     WRAPPER_PR_ADVANCED = "wrapper.pr.advanced"
     WRAPPER_STRIKE = "wrapper.strike"
     WRAPPER_ASK_USER_ATTEMPTED = "wrapper.ask_user.attempted"
-    # Run-scoped record of a **Dashboard fault** (ADR-0024). Only an
-    # Orchestrator that hosts a Dashboard can emit it; this port hosts none, so
-    # it carries the literal for vocabulary parity and never produces the Event.
-    WRAPPER_DASHBOARD_FAULT = "wrapper.dashboard.fault"
     WRAPPER_POOL_REFRESHED = "wrapper.pool.refreshed"
     WRAPPER_CONTRIBUTION_START = "wrapper.contribution.start"
     WRAPPER_CONTRIBUTION_WORK_FINISHED = "wrapper.contribution.work_finished"

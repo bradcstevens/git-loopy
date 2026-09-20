@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import tomllib
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -21,7 +20,6 @@ from git_loopy.skillscmd import (
     SkillSelectionModel,
     SkillSelectionResult,
     SkillSelectionRow,
-    run_plain_skill_picker,
     run_skills_edit,
     run_skills_list,
 )
@@ -112,182 +110,10 @@ def test_skill_selection_filter_preserves_hidden_selections() -> None:
     assert filtered.enabled == ("alpha",)
 
 
-def test_plain_picker_searches_without_losing_selection_and_locks_invalid_rows() -> None:
-    model = SkillSelectionModel(
-        rows=(
-            SkillSelectionRow(
-                name="alpha",
-                source="packaged",
-                required=True,
-                description="Required workflow",
-            ),
-            SkillSelectionRow(name="beta", source="personal"),
-            SkillSelectionRow(
-                name="project-local",
-                source="project",
-                blocked_reason="not git-tracked",
-            ),
-        ),
-        enabled=("alpha", "beta"),
-    )
-    answers = iter(("alp", "1", "project", "1", "bet", "1", "done", "yes"))
-    output: list[str] = []
-
-    result = run_plain_skill_picker(
-        model,
-        input_fn=lambda _prompt: next(answers),
-        output_fn=output.append,
-    )
-
-    assert result is not None
-    assert result.enabled == ("alpha",)
-    rendered = "\n".join(output)
-    assert "Required" in rendered
-    assert "not git-tracked" in rendered
-
-
-def _refusal_model(enabled: tuple[str, ...]) -> SkillSelectionModel:
-    return SkillSelectionModel(
-        rows=(
-            SkillSelectionRow(name="alpha", source="packaged", required=True),
-            SkillSelectionRow(
-                name="project-local",
-                source="project",
-                blocked_reason="not git-tracked",
-            ),
-        ),
-        enabled=enabled,
-    )
-
-
-@pytest.mark.parametrize(
-    ("enabled", "answers", "expected"),
-    (
-        (("alpha", "project-local"), ("done", "q"), "Cannot save"),
-        (("alpha",), ("2", "q"), "Cannot toggle"),
-        (("alpha",), ("99", "q"), "Please enter a number between 1 and 2"),
-        (("alpha",), ("done", "n", "q"), "Not saved"),
-    ),
-)
-def test_plain_picker_keeps_its_refusal_next_to_the_prompt(
-    enabled: tuple[str, ...], answers: tuple[str, ...], expected: str
-) -> None:
-    """A refused round must still be readable after the repaint it triggers.
-
-    The plain picker redraws the whole catalog every round, so a reason printed
-    *before* that redraw scrolls off the moment the catalog is longer than the
-    terminal — the operator sees a fresh list, reads it as "nothing happened",
-    and has no way to learn which Skill is holding the save. Carrying the reason
-    into the next round draws it below the rows, in the only position a plain
-    terminal can dock: nearest the prompt. That is the counterpart of the
-    full-screen picker's status bar, and the only way ``docs/skills-setup.md``'s
-    "refused in place, with the reason shown" is true of both renderings.
-
-    The final case is the same failure worn differently: declining the save
-    confirmation repaints too, so "no" must also explain itself.
-    """
-    pending = iter(answers)
-    transcript: list[tuple[str, str]] = []
-
-    def _input(prompt: str) -> str:
-        transcript.append(("prompt", prompt))
-        return next(pending)
-
-    result = run_plain_skill_picker(
-        _refusal_model(enabled),
-        input_fn=_input,
-        output_fn=lambda line: transcript.append(("output", line)),
-    )
-
-    assert result is None
-    prompts = [index for index, (kind, _) in enumerate(transcript) if kind == "prompt"]
-    final_round = [
-        line
-        for kind, line in transcript[prompts[-2] + 1 : prompts[-1]]
-        if kind == "output"
-    ]
-    last_row = max(
-        index
-        for index, line in enumerate(final_round)
-        if re.match(r"^ +\d+\) ", line) is not None
-    )
-    below_the_rows = final_round[last_row + 1 :]
-    assert any(expected in line for line in below_the_rows), (
-        f"refusal not drawn below the repainted rows: {below_the_rows!r}"
-    )
-    reasons = [line for kind, line in transcript if kind == "output" and expected in line]
-    assert len(reasons) == 1, "a refusal is shown for its own round only"
-
-
-def test_picker_selection_takes_textual_only_with_the_extra_and_a_terminal() -> None:
-    """The optional picker is an *alternate renderer*, never a new requirement.
-
-    Both implementations drive the same :class:`SkillSelectionModel` and return
-    the same :class:`SkillSelectionResult`, so choosing between them is purely a
-    question of what the invocation can render. A non-terminal stdout (a pipe,
-    CI) keeps the plain-terminal path, while a terminal can use Textual from
-    the base installation.
-    """
-    assert (
-        skillscmd.select_skill_picker(isatty=True, textual_importable=True)
-        is skillscmd.run_textual_skill_picker
-    )
-    assert (
-        skillscmd.select_skill_picker(isatty=False, textual_importable=True)
-        is run_plain_skill_picker
-    )
-    assert (
-        skillscmd.select_skill_picker(isatty=True, textual_importable=False)
-        is run_plain_skill_picker
-    )
-
-
-def test_skill_policy_commands_never_import_textual_on_the_plain_path() -> None:
-    """Probing for the optional extra must not cost — or require — importing it.
-
-    Run in a clean subprocess so the assertion is deterministic regardless of
-    what the in-process session already imported. This is what keeps ``--help``,
-    every non-interactive command free of an unnecessary Textual import: the
-    probe is ``importlib.util.find_spec``, and the Textual picker is
-    imported only inside :func:`skillscmd.run_textual_skill_picker`.
-    """
-    import subprocess
-    import sys
-
-    code = (
-        "import sys\n"
-        "from git_loopy import skillscmd\n"
-        "assert skillscmd.select_skill_picker(\n"
-        "    isatty=False, textual_importable=True\n"
-        ") is skillscmd.run_plain_skill_picker\n"
-        # The real resolver runs its own probe; a non-TTY subprocess must land
-        # on the plain picker without Textual ever being imported.
-        "assert skillscmd._resolve_picker_runner(None) is skillscmd.run_plain_skill_picker\n"
-        "assert 'textual' not in sys.modules, 'textual imported on the plain path'\n"
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-    )
-
-    assert result.returncode == 0, (
-        f"lazy-import guard failed:\nstdout={result.stdout}\nstderr={result.stderr}"
-    )
-
-
-def test_skills_edit_without_an_injected_picker_resolves_one_at_the_seam(
+def test_skills_edit_uses_the_fullscreen_picker_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A real invocation picks its renderer through ``select_skill_picker``.
-
-    ``skills edit`` and ``init`` share :func:`collect_skill_policy`, so the
-    renderer decision belongs there once rather than in each command. Pinning
-    the *call* keeps the two commands from drifting apart; the decision itself
-    is pinned by ``test_picker_selection_takes_textual_only_with_the_extra``.
-    """
+    """The same renderer owns standalone editing and wizard Skill selection."""
     env = {"HOME": str(tmp_path / "home")}
     catalog = SkillCatalog(
         winners={"alpha": SkillCatalogWinner("alpha", "builtin", copilot_enabled=True)}
@@ -303,15 +129,13 @@ def test_skills_edit_without_an_injected_picker_resolves_one_at_the_seam(
     async def discover(client: Any, **kwargs: object) -> SkillCatalog:
         return catalog
 
-    calls: list[dict[str, object]] = []
+    seen: list[SkillSelectionModel] = []
 
-    def fake_select(**kwargs: object) -> Any:
-        calls.append(kwargs)
-        return lambda model, **_: SkillSelectionResult(model.enabled)
+    def fake_picker(model: SkillSelectionModel, **_kwargs: object) -> SkillSelectionResult:
+        seen.append(model)
+        return SkillSelectionResult(model.enabled)
 
-    monkeypatch.setattr(skillscmd, "select_skill_picker", fake_select)
-    monkeypatch.setattr(skillscmd, "_stdout_isatty", lambda: True)
-    monkeypatch.setattr(skillscmd, "_textual_importable", lambda: False)
+    monkeypatch.setattr(skillscmd, "run_textual_skill_picker", fake_picker)
 
     result = run_skills_edit(
         scope="global",
@@ -325,7 +149,7 @@ def test_skills_edit_without_an_injected_picker_resolves_one_at_the_seam(
     )
 
     assert result == 0
-    assert calls == [{"isatty": True, "textual_importable": False}]
+    assert seen[0].enabled == ("alpha",)
 
 
 def test_skills_edit_first_global_policy_seeds_from_copilot_and_packaged_fallback(

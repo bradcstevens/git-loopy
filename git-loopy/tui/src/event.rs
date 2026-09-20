@@ -101,12 +101,21 @@ pub enum EventPayload {
     IterationStart,
     /// `wrapper.afk_ready.collected`
     AfkReadyCollected(AfkReadyCollected),
+    /// `wrapper.pool.refreshed`
+    PoolRefreshed(PoolRefreshed),
+    /// `wrapper.release.advanced`
+    ReleaseAdvanced(ReleaseAdvanced),
     /// `wrapper.issue.activated`
     IssueActivated(IssueActivated),
     /// `wrapper.pickup.bound`
     PickupBound(Pickup),
     /// `wrapper.pickup.skipped`
     PickupSkipped(Pickup),
+    /// `wrapper.routing.delivery`
+    RoutingResolved(RoutingResolved),
+    RoutingDelivery(RoutingDelivery),
+    /// `wrapper.routing.prepared`
+    RoutingPrepared(Box<RoutingPrepared>),
     /// `agent.output`
     AgentOutput(AgentOutput),
     /// `usage.context_window`
@@ -218,6 +227,25 @@ pub struct AfkReadyCollected {
     pub issues: Vec<IssueRef>,
 }
 
+/// One non-authoritative Membership read during a Parallel Run.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct PoolRefreshed {
+    /// Cache membership in stable FIFO order.
+    #[serde(default, deserialize_with = "lenient_issue_refs")]
+    pub issues: Vec<IssueRef>,
+}
+
+/// One successfully committed **Release line** advance.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ReleaseAdvanced {
+    /// The highest stable version this Release line targets.
+    #[serde(default)]
+    pub release_target: Option<String>,
+    /// The current prerelease version, including its `dev.N` counter.
+    #[serde(default)]
+    pub release_version: Option<String>,
+}
+
 /// The authoritative Active-issue binding for one Iteration.
 #[derive(Clone, Debug, Deserialize)]
 pub struct IssueActivated {
@@ -268,12 +296,174 @@ pub struct Pickup {
     /// an effort the model refuses.
     #[serde(default, deserialize_with = "reported")]
     pub effort: Option<Option<String>>,
+    /// The root-session context tier completing the **Routing resolution**.
+    #[serde(default)]
+    pub context_tier: Option<String>,
     /// Which **Routing source** chose the pair (`routed`, one of the
     /// `defaulted_*` fallbacks, or `escalated`). Spelled in full on the wire
     /// because this record's own `reason` already answers "why" about the
     /// binding.
     #[serde(default)]
     pub routing_source: Option<String>,
+    /// Where this Pickup sits in the issue's **Attempt lifecycle**. This is
+    /// independent of the route settings and source: an unchanged Dynamic
+    /// route can still be a retry.
+    #[serde(default)]
+    pub lifecycle_position: Option<String>,
+}
+
+/// How one issue's final **Routing resolution** was arrived at.
+///
+/// Provenance, not authority: the [`Pickup`] record still carries the pair the
+/// session actually opened on. What this adds is the one thing that record
+/// cannot say — whether a Route selector was paid for it, or a prior Run's
+/// decision was revalidated against freshly read evidence and eligibility
+/// without one (#565, ADR-0057).
+///
+/// Every field is optional because Run logs written before reuse existed carry
+/// none of them, and a Dashboard that replays history has to stay readable
+/// over those.
+#[derive(Clone, Debug, Deserialize)]
+pub struct RoutingResolved {
+    /// The issue this route was resolved for.
+    pub issue: IssueRef,
+    /// `elected` or `revalidated`, when the Orchestrator recorded it.
+    #[serde(default)]
+    pub routing_reuse: Option<String>,
+    /// The original decision a revalidation reused, when there was one.
+    #[serde(default)]
+    pub reused_proposal_id: Option<String>,
+    /// The recorded decision a reassessment replaced, when there was one.
+    #[serde(default)]
+    pub superseded_proposal_id: Option<String>,
+}
+
+/// The `routing_reuse` spelling for a decision a selector was paid for.
+pub const ROUTE_ELECTED: &str = "elected";
+
+/// The `routing_reuse` spelling for a reuse revalidated without a selector.
+pub const ROUTE_REVALIDATED: &str = "revalidated";
+
+/// One candidate's **Routing preparation** outcome, prepared ahead of Pickup.
+///
+/// A proposal and never a binding (#566, ADR-0057). Nothing here may reach the
+/// Queue row's route: an issue whose route was only *prepared* has not been
+/// picked up, may never be, and its eventual Pickup re-reads every input before
+/// it binds anything. The record exists so an operator can see preparation
+/// happening — and so the three ways it can reach no proposal stay apart.
+///
+/// Every field but the issue is optional, because three of the four outcomes
+/// carry no pair at all and a Run log written before this event existed carries
+/// none of them.
+#[derive(Clone, Debug, Deserialize)]
+pub struct RoutingPrepared {
+    /// The issue a proposal was prepared for.
+    pub issue: IssueRef,
+    /// `proposed`, `static`, `reusable` or `unavailable`.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// The proposed model, present only for `proposed`.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The proposed reasoning effort, present only for `proposed`.
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub context_tier: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub proposal_id: Option<String>,
+    #[serde(default)]
+    pub prepared_at: Option<String>,
+    #[serde(default)]
+    pub valid_until: Option<String>,
+    #[serde(default)]
+    pub relevant_input_identity: Option<String>,
+    #[serde(default)]
+    pub selector_model: Option<String>,
+    #[serde(default)]
+    pub selector_effort: Option<String>,
+    #[serde(default)]
+    pub selector_context_tier: Option<String>,
+    #[serde(default)]
+    pub evidence_source: Option<String>,
+    #[serde(default)]
+    pub source_model_identity: Option<String>,
+    #[serde(default)]
+    pub evidence_retrieved_at: Option<String>,
+    #[serde(default)]
+    pub capabilities_retrieved_at: Option<String>,
+    #[serde(default)]
+    pub measurement_at: Option<String>,
+    #[serde(default)]
+    pub benchmark_version: Option<String>,
+    #[serde(default)]
+    pub conditions: Option<String>,
+    #[serde(default)]
+    pub routing_overshot: Option<bool>,
+    /// Why routing could not propose, for `unavailable`.
+    #[serde(default)]
+    pub detail: Option<String>,
+    /// The same fact as `detail` where the Orchestrator recorded only a reason.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// The `state` spelling for a nonbinding proposal waiting for its Pickup.
+pub const ROUTE_PREPARATION_PROPOSED: &str = "proposed";
+
+/// The `state` spelling for a candidate an operator's own route already covers.
+pub const ROUTE_PREPARATION_STATIC: &str = "static";
+
+/// The `state` spelling for a candidate an earlier decision revalidates free.
+pub const ROUTE_PREPARATION_REUSABLE: &str = "reusable";
+
+/// The `state` spelling for a candidate preparation could not assess.
+pub const ROUTE_PREPARATION_UNAVAILABLE: &str = "unavailable";
+
+/// One run-scoped delivery observation for a final **Routing resolution**.
+///
+/// Delivery is operational state about publishing an already-final route to the
+/// tracker, not a second route authority. It stays separate from
+/// [`Pickup`]'s decision/execution facts so a failed or pending publication
+/// cannot rewrite the pair the Runner chose.
+#[derive(Clone, Debug, Deserialize)]
+pub struct RoutingDelivery {
+    /// The issue whose final route publication this observation describes.
+    pub issue: IssueRef,
+    /// The publisher's idempotency identity, when recorded.
+    #[serde(default)]
+    pub identity: Option<String>,
+    /// The observational route label the publisher targeted, when recorded.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// How far tracker delivery got.
+    pub status: RoutingDeliveryStatus,
+}
+
+/// The final route publication's delivery state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingDeliveryStatus {
+    Published,
+    Pending,
+    Partial,
+    Failed,
+    Stale,
+}
+
+impl RoutingDeliveryStatus {
+    /// The literal status spelling carried on the wire.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Published => "published",
+            Self::Pending => "pending",
+            Self::Partial => "partial",
+            Self::Failed => "failed",
+            Self::Stale => "stale",
+        }
+    }
 }
 
 /// One timestamped, unclassified line of agent output.
@@ -555,6 +745,8 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         "wrapper.contribution.start" => EventPayload::ContributionStart(decode_or_default(value)),
         "wrapper.iteration.start" => EventPayload::IterationStart,
         "wrapper.afk_ready.collected" => EventPayload::AfkReadyCollected(decode_or_default(value)),
+        "wrapper.pool.refreshed" => EventPayload::PoolRefreshed(decode_or_default(value)),
+        "wrapper.release.advanced" => EventPayload::ReleaseAdvanced(decode_or_default(value)),
         "wrapper.issue.activated" => match serde_json::from_value(value.clone()) {
             Ok(activated) => EventPayload::IssueActivated(activated),
             // An activation naming no usable issue binds nothing; it is
@@ -570,6 +762,23 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         },
         "wrapper.pickup.skipped" => match serde_json::from_value(value.clone()) {
             Ok(pickup) => EventPayload::PickupSkipped(pickup),
+            Err(_) => EventPayload::Other,
+        },
+        // Provenance is only attributable when it names an issue; one that
+        // names none describes no Lane's route, the same way an unattributed
+        // Pickup does.
+        "wrapper.routing.resolved" => match serde_json::from_value(value.clone()) {
+            Ok(resolved) => EventPayload::RoutingResolved(resolved),
+            Err(_) => EventPayload::Other,
+        },
+        // Delivery is only attributable when it names an issue and a known
+        // delivery status. Otherwise it is unusable telemetry, not route truth.
+        "wrapper.routing.prepared" => match serde_json::from_value(value.clone()) {
+            Ok(prepared) => EventPayload::RoutingPrepared(Box::new(prepared)),
+            Err(_) => EventPayload::Other,
+        },
+        "wrapper.routing.delivery" => match serde_json::from_value(value.clone()) {
+            Ok(delivery) => EventPayload::RoutingDelivery(delivery),
             Err(_) => EventPayload::Other,
         },
         "agent.output" => EventPayload::AgentOutput(decode_or_default(value)),
@@ -625,6 +834,20 @@ fn lenient_timestamp<'de, D: Deserializer<'de>>(
         .as_ref()
         .and_then(Value::as_str)
         .and_then(Timestamp::parse_rfc3339))
+}
+
+/// Decode a list of issue identities, dropping any element that names none.
+///
+/// A **Membership read** is add-only, so a list it could only partly name must
+/// still open the rows it *did* name: an incomplete read is simply a smaller one
+/// (ADR-0042), never a read that reports nothing at all. Deliberately not shared
+/// with `wrapper.afk_ready.collected`, whose handler *is* the `gone` sweep — a
+/// quietly smaller authoritative Pool would retire live rows.
+fn lenient_issue_refs<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<IssueRef>, D::Error> {
+    let refs = Vec::<Value>::deserialize(deserializer)?;
+    Ok(refs.iter().filter_map(IssueRef::from_value).collect())
 }
 
 /// Decode the per-issue rollup rows, dropping any row that names no issue.

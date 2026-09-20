@@ -38,8 +38,9 @@ pub use state::{DashboardState, ExecutionHostProvenance, RunInputs};
 pub use timestamp::{Timestamp, Zone};
 pub use view::{
     project_run_view, Activity, ConsumptionView, ContextFill, ContributionRow, Dashboard,
-    DetailHeader, DrillIn, Header, IssueLog, IterationBreakdown, LogLineView, PeakContext, Queue,
-    QueueRow, RunView, Strikes, Summary, SummaryRow, TerminalCapabilities, ViewContext,
+    DeliveryView, DetailHeader, DrillIn, Header, IssueLog, IterationBreakdown, LogLineView,
+    PeakContext, Queue, QueueRow, RunView, Strikes, Summary, SummaryRow, TerminalCapabilities,
+    ViewContext,
 };
 
 /// The Event-schema major version this core decodes.

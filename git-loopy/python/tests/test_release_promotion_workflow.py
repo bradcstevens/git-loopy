@@ -1,0 +1,210 @@
+"""Static contract for the unattended Promotion workflow (ADR-0052).
+
+A Promotion happens at most a few times a year and never on a developer's
+machine, so the only feedback loop that can see a fault in it before an operator
+does is this one. Every assertion here stands for a way the workflow could be
+green and still publish nothing.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+
+
+REPOSITORY_ROOT = Path(__file__).parents[3]
+WORKFLOW_PATH = REPOSITORY_ROOT / ".github/workflows/release-promotion.yml"
+PUBLICATION_TOKEN = "secrets.RELEASE_PUBLICATION_TOKEN"
+
+
+@pytest.fixture(scope="module")
+def workflow() -> dict[Any, Any]:
+    if not WORKFLOW_PATH.is_file():
+        pytest.skip(f"no source checkout: {WORKFLOW_PATH} is absent")
+    document = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+    assert isinstance(document, dict)
+    return document
+
+
+def _steps(workflow: dict[Any, Any]) -> list[dict[Any, Any]]:
+    return workflow["jobs"]["promote"]["steps"]
+
+
+def _run_text(workflow: dict[Any, Any]) -> str:
+    return "\n".join(step["run"] for step in _steps(workflow) if "run" in step)
+
+
+def test_a_closed_milestone_and_a_stable_trunk_are_the_two_promotion_triggers(
+    workflow: dict[Any, Any],
+) -> None:
+    """`on: milestone` is the tracker event; `on: push` carries the exemption."""
+    # PyYAML resolves the unquoted key `on` to the boolean True.
+    assert workflow.get("on", workflow.get(True)) == {
+        "milestone": {"types": ["closed"]},
+        "push": {"branches": ["main"]},
+    }
+
+
+def test_a_promotion_waits_for_no_person(workflow: dict[Any, Any]) -> None:
+    """The one consequence ADR-0052 took deliberately, pinned against re-entry.
+
+    A protected `environment` is how a human approval would arrive here without
+    ever using the word: the platform holds the job until a named reviewer
+    releases it. `release-trust.json` confines credentials to exactly such an
+    environment, so the mechanism is present in this repository and one key away
+    from this workflow.
+    """
+    job = workflow["jobs"]["promote"]
+
+    assert "environment" not in job
+    assert not any("environment" in step for step in _steps(workflow))
+
+
+def test_a_promotion_is_refused_before_it_mutates_anything_without_its_token(
+    workflow: dict[Any, Any],
+) -> None:
+    """A tag pushed by `GITHUB_TOKEN` starts no run, so the token is load-bearing.
+
+    Nothing may be committed or tagged before this is known, or a refusal leaves
+    the trunk claiming a stable Release that was never published.
+    """
+    preflight, checkout = _steps(workflow)[:2]
+
+    assert PUBLICATION_TOKEN in yaml.safe_dump(preflight)
+    assert "exit 1" in preflight["run"]
+    assert checkout["uses"].startswith("actions/checkout@")
+    # Publication rides the same token: the checkout's remote is what every
+    # later `git push` in this job authenticates as.
+    assert PUBLICATION_TOKEN in checkout["with"]["token"]
+
+
+def test_the_workflows_own_token_stays_read_only(workflow: dict[Any, Any]) -> None:
+    assert workflow["permissions"] == {"contents": "read"}
+    assert "permissions" not in workflow["jobs"]["promote"]
+
+
+def test_a_promotion_commits_and_tags_with_a_committer_git_will_accept(
+    workflow: dict[Any, Any],
+) -> None:
+    """A GitHub runner configures no identity, and both `git` verbs refuse then.
+
+    The identity is set before the first step that writes an object rather than
+    beside one of them, because a `major` exemption tags without committing and
+    would otherwise reach `git tag -a` with none.
+    """
+    steps = _steps(workflow)
+    identity = next(
+        index
+        for index, step in enumerate(steps)
+        if "git config user.name" in step.get("run", "")
+    )
+    writers = [
+        index
+        for index, step in enumerate(steps)
+        if "git commit" in step.get("run", "") or "git tag" in step.get("run", "")
+    ]
+
+    assert writers, "the Promotion workflow writes no commit or tag"
+    assert identity < min(writers)
+    assert "git config user.email" in steps[identity]["run"]
+
+
+def test_only_the_milestone_event_reads_a_milestone(workflow: dict[Any, Any]) -> None:
+    """Prereleases consult no milestone at any point, in either trigger's path."""
+    readers = [
+        step
+        for step in _steps(workflow)
+        if "github.event.milestone" in yaml.safe_dump(step)
+    ]
+
+    assert readers, "no step reads the closed milestone that triggered a Promotion"
+    for step in readers:
+        assert step["if"] == "github.event_name == 'milestone'"
+    # The tagging step reaches its own decision from the trunk and the tags, so
+    # it runs under either trigger and asks no tracker anything.
+    tag = next(step for step in _steps(workflow) if "git tag" in step.get("run", ""))
+    assert "if" not in tag
+    assert "milestone" not in tag["run"]
+
+
+def test_a_promoted_line_is_committed_in_the_words_the_runner_uses(
+    workflow: dict[Any, Any],
+) -> None:
+    """One authority words a Release-line commit, and it is not this file."""
+    commit = next(step for step in _steps(workflow) if "git commit" in step.get("run", ""))
+
+    assert commit["if"] == "steps.milestone.outputs.promoted == 'true'"
+    assert commit["env"]["SUBJECT"] == "${{ steps.milestone.outputs.subject }}"
+    assert "$SUBJECT" in commit["run"]
+    assert "chore(release)" not in commit["run"]
+    assert 'git add -- "$NOTES_PATH" "$FRAGMENT_PATH"' in commit["run"]
+    assert commit["env"]["NOTES_PATH"] == "${{ steps.milestone.outputs.notes_path }}"
+    assert (
+        commit["env"]["FRAGMENT_PATH"]
+        == "${{ steps.milestone.outputs.fragment_path }}"
+    )
+
+
+def test_a_stable_release_is_tagged_from_either_trigger_and_a_prerelease_never_is(
+    workflow: dict[Any, Any],
+) -> None:
+    run_text = _run_text(workflow)
+    tag = next(step for step in _steps(workflow) if "git tag" in step.get("run", ""))
+
+    assert "python -m git_loopy.release_version" in run_text.replace("\n", " ")
+    assert "--promote-milestone" in run_text
+    # Only a stable `major.minor.patch` is tagged: a `dev.N` value matches this
+    # test under neither trigger and so reaches no channel.
+    assert r"^[0-9]+\.[0-9]+\.[0-9]+$" in tag["run"]
+    assert 'git tag -a "v$version"' in tag["run"]
+    assert "git push origin HEAD:main" in run_text
+    assert 'git push origin "${tagged[@]}"' in tag["run"]
+
+
+def test_every_stable_release_the_trunk_carries_is_tagged_not_just_its_head(
+    workflow: dict[Any, Any],
+) -> None:
+    """A Run pushes once per Iteration and lands a Release commit per issue.
+
+    So the value at the pushed head is routinely the `dev.N` advance that
+    *followed* a `major` Promotion, and a workflow reading `VERSION` alone would
+    drop the stable Release the exemption cut — silently, because finding
+    nothing to tag is indistinguishable from there being nothing to do. The
+    commits that touched `VERSION` and that no `v*` tag reaches are the
+    candidates instead, which also retries a tag an earlier run failed to push.
+    """
+    tag = next(step for step in _steps(workflow) if "git tag" in step.get("run", ""))
+
+    assert "--not --tags='v*'" in tag["run"]
+    assert "-- VERSION" in tag["run"]
+    # Read per candidate commit, and tagged on that commit: `source-release.yml`
+    # refuses a tag whose tree declares a different Release version.
+    assert 'git show "$commit:VERSION"' in tag["run"]
+    assert 'git tag -a "v$version" -m "Release $version" "$commit"' in tag["run"]
+    assert "tr -d '\\r\\n' < VERSION" not in _run_text(workflow)
+
+
+def test_no_tag_becomes_public_until_a_rehearsal_proved_that_exact_commit(
+    workflow: dict[Any, Any],
+) -> None:
+    """Supplementary to `test_release_rehearsal.py`, which is the actual proof.
+
+    All this pins is that the Promotion *asks* for it, on the candidate commit
+    rather than the head, and before the tag exists rather than after. A green
+    development ancestor is not proof of the commit being published
+    ([ADR-0059](https://github.com/bradcstevens/git-loopy/blob/9d33e78b8aba97ae16ee5a133aae1fca78905ed0/docs/adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md)).
+    """
+    tag = next(step for step in _steps(workflow) if "git tag" in step.get("run", ""))
+    run = tag["run"]
+
+    assert "python -m git_loopy.release_rehearsal" in run
+    assert '--candidate-commit "$commit"' in run
+    # The promise is stated, never inferred from what happens to be configured.
+    assert "--distribution-mode source-only" in run
+    assert run.index("release_rehearsal") < run.index('git tag -a "v$version"')
+    # `shell: bash` is `-eo pipefail`, so a refused rehearsal ends the step
+    # before the tag it would have proved is created.
+    assert tag["shell"] == "bash"

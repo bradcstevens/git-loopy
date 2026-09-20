@@ -4,7 +4,7 @@
     "subagentStop": [
       {
         "type": "command",
-        "bash": "/Users/bradcstevens/.copilot/skills/next/chain.sh complete"
+        "bash": "repo_root=$(git rev-parse --show-toplevel) && exec bash \"$repo_root/.github/hooks/git-loopy-chain.sh\" complete"
       }
     ]
   }

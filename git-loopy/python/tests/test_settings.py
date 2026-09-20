@@ -340,9 +340,43 @@ def test_dump_config_toml_header_is_comment_only(tmp_path: Path) -> None:
 
 def test_dump_config_toml_rejects_unsupported_value_type() -> None:
     with pytest.raises(settings.SettingsError):
-        settings.dump_config_toml({"nested": {"a": 1}})
-    with pytest.raises(settings.SettingsError):
         settings.dump_config_toml({"listed": [1, 2]})
+    with pytest.raises(settings.SettingsError):
+        settings.dump_config_toml({"nested": {"a": {"b": {"c": 1}}}})
+
+
+def test_dump_config_toml_round_trips_a_section_it_has_no_reader_for() -> None:
+    """A Config written by another Release is preserved, not refused.
+
+    The writer used to accept only a ``[section]`` of inline tables, so a
+    ``[section]`` of scalars raised — and the ``update`` repair (#527), whose
+    premise is rewriting a file an older Release wrote, could not rewrite the
+    very files it exists to unlock. Only ``[routing]``, whose reader refuses any
+    other entry shape, is still held to inline tables.
+    """
+    import tomllib
+
+    values = {"retired_block": {"attempts": 3, "label": "legacy", "on": False}}
+
+    assert tomllib.loads(settings.dump_config_toml(values)) == values
+
+
+def test_dump_config_toml_quotes_every_key_that_is_not_a_bare_toml_key() -> None:
+    """A preserved key is re-emitted as the same key, or the rewrite corrupts it.
+
+    ``a.b`` is the case that fails silently rather than loudly: emitted bare it
+    parses back as a *nested table*, so a whole-file rewrite the operator never
+    aimed at this file would quietly change what it says.
+    """
+    import tomllib
+
+    values = {
+        "a.b": 1,
+        "weird key": "x",
+        "task-type:legacy": {"docs": {"model": "gpt-5.4", "effort": "high"}},
+    }
+
+    assert tomllib.loads(settings.dump_config_toml(values)) == values
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +403,46 @@ def test_dump_config_toml_emits_routing_section_of_inline_tables() -> None:
     assert "[routing]" in text
     # One inline table per line — one value-literal per member, no array-of-tables.
     assert 'planning = { model = "claude-opus-4.8", effort = "max" }' in text
+    assert tomllib.loads(text) == values
+
+
+def test_dump_config_toml_quotes_a_routing_key_that_is_not_a_bare_toml_key() -> None:
+    import tomllib
+
+    values = {
+        "routing": {
+            "task-type:docs": {"model": "gpt-5.4", "effort": "high"},
+        }
+    }
+
+    text = settings.dump_config_toml(values)
+
+    assert '"task-type:docs" = { model = "gpt-5.4", effort = "high" }' in text
+    assert tomllib.loads(text) == values
+
+
+def test_dump_config_toml_emits_a_scalar_section_such_as_the_escalation_rung() -> None:
+    """Not every ``[section]`` is a table of inline tables — ``[escalation]`` is not.
+
+    Every whole-file rewrite goes through this writer: ``config routing set`` and
+    the Release-retired Config repair (#527) both load a table, replace
+    ``routing``, and re-dump. Forcing ``[escalation]``'s ``enabled`` / ``model``
+    / ``effort`` scalars into inline tables refused that rewrite, so a Config
+    carrying a rung could not be repaired at all — which is the lockout the
+    repair exists to end.
+    """
+    import tomllib
+
+    values = {
+        "escalation": {"enabled": True, "model": "claude-opus-5", "effort": "high"},
+        "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
+    }
+
+    text = settings.dump_config_toml(values)
+
+    assert "[escalation]" in text
+    assert "enabled = true" in text
+    assert 'docs = { model = "gpt-5-mini", effort = "medium" }' in text
     assert tomllib.loads(text) == values
 
 

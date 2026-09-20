@@ -19,6 +19,8 @@ are NEVER read from a config file — they resolve from flags/env only.
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from git_loopy import cli
@@ -29,6 +31,7 @@ from git_loopy.config import (
     SUPPORTED_MODELS,
     RunConfig,
 )
+from git_loopy.static_route import RoutePolicy
 
 
 def _args(argv: list[str] | None = None):
@@ -145,6 +148,157 @@ def test_project_overrides_global_key_by_key() -> None:
     assert resolved.run.model == "claude-sonnet-4.6"
     # ... global still supplies the key project leaves unset.
     assert resolved.run.issue_source == "prds"
+
+
+def test_context_tier_has_its_own_precedence_and_never_suppresses_static_routes() -> None:
+    """A context-only override constrains every static route without disabling it."""
+    resolved = _resolve(
+        ["--context-tier", "long_context"],
+        env={"GIT_LOOPY_CONTEXT_TIER": "default"},
+        project={
+            "context_tier": "default",
+            "routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}},
+        },
+        global_={"context_tier": "default"},
+        warn=lambda _message: None,
+    )
+
+    assert resolved.run.context_tier == "long_context"
+    assert dict(resolved.run.routing) == {"docs": ("gpt-5-mini", "medium")}
+    assert resolved.run.routing_suppressed is False
+
+
+# ---------------------------------------------------------------------------
+# The Route policy (#560, ADR-0057): selected, never inherited.
+# ---------------------------------------------------------------------------
+
+
+def test_route_policy_is_unselected_unless_an_operator_names_one() -> None:
+    """An existing Config is not reinterpreted as having chosen the new policy."""
+    assert _resolve().run.route_policy is RoutePolicy.UNSELECTED
+
+
+def test_route_policy_resolves_through_the_ordinary_precedence_chain() -> None:
+    assert (
+        _resolve(["--route-policy", "static"]).run.route_policy is RoutePolicy.STATIC
+    )
+    assert (
+        _resolve(env={"GIT_LOOPY_ROUTE_POLICY": "static"}).run.route_policy
+        is RoutePolicy.STATIC
+    )
+    assert (
+        _resolve(project={"route_policy": "static"}).run.route_policy
+        is RoutePolicy.STATIC
+    )
+    assert (
+        _resolve(global_={"route_policy": "static"}).run.route_policy
+        is RoutePolicy.STATIC
+    )
+
+
+def test_selecting_the_static_policy_does_not_suppress_per_issue_routing() -> None:
+    """A policy is not a pin: ``[routing]`` still chooses the pair per Task type."""
+    resolved = _resolve(
+        ["--route-policy", "static"],
+        project={"routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}}},
+    )
+    assert resolved.run.routing_suppressed is False
+    assert dict(resolved.run.routing) == {"docs": ("gpt-5-mini", "medium")}
+
+
+def test_selecting_the_dynamic_policy_reaches_the_run_config() -> None:
+    """``dynamic`` resolves to the member; what it *needs* is preflight's job.
+
+    #560 refused this name at resolution because nothing behind it existed.
+    Now it does, and the refusal an operator who has not supplied the
+    Artificial Analysis access or the bounded allowances deserves names the
+    missing prerequisite — which resolution cannot know and preflight can.
+    """
+    resolved = _resolve(["--route-policy", "dynamic"])
+    assert resolved.run.route_policy is RoutePolicy.DYNAMIC
+
+
+def test_an_unknown_policy_name_is_still_refused() -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        _resolve(["--route-policy", "measured"])
+    assert "measured" in str(excinfo.value)
+
+
+def test_dynamic_bounds_resolve_through_the_ordinary_precedence_chain() -> None:
+    """Each bound is an ordinary scalar; none of them is a pair (#561).
+
+    They follow ``--context-tier``'s discipline rather than ``--model``'s:
+    naming a *budget* is not naming a model, so nothing here suppresses
+    per-issue routing.
+    """
+    flagged = _resolve(
+        [
+            "--routing-deadline-seconds",
+            "120",
+            "--routing-credit-allowance",
+            "1.75",
+            "--selector-concurrency",
+            "4",
+        ],
+        project={"routing": {"docs": {"model": "gpt-5-mini", "effort": "medium"}}},
+    )
+    assert flagged.run.routing_deadline_seconds == 120.0
+    assert flagged.run.routing_credit_allowance == Decimal("1.75")
+    assert flagged.run.selector_concurrency == 4
+    assert flagged.run.routing_suppressed is False
+
+    env_resolved = _resolve(
+        env={
+            "GIT_LOOPY_ROUTING_DEADLINE_SECONDS": "60",
+            "GIT_LOOPY_ROUTING_CREDIT_ALLOWANCE": "0.5",
+            "GIT_LOOPY_SELECTOR_CONCURRENCY": "2",
+        }
+    )
+    assert env_resolved.run.routing_deadline_seconds == 60.0
+    assert env_resolved.run.routing_credit_allowance == Decimal("0.5")
+    assert env_resolved.run.selector_concurrency == 2
+
+    configured = _resolve(
+        project={"routing_deadline_seconds": 30.0, "selector_concurrency": 1},
+        global_={"routing_credit_allowance": "0.25", "selector_concurrency": 8},
+    )
+    assert configured.run.routing_deadline_seconds == 30.0
+    assert configured.run.routing_credit_allowance == Decimal("0.25")
+    assert configured.run.selector_concurrency == 1
+
+
+def test_a_dynamic_bound_outside_its_range_is_refused_by_name() -> None:
+    for argv, expected in (
+        (["--routing-deadline-seconds", "0"], "--routing-deadline-seconds"),
+        (["--routing-credit-allowance", "-1"], "--routing-credit-allowance"),
+        (["--selector-concurrency", "0"], "--selector-concurrency"),
+        (["--routing-credit-allowance", "lots"], "--routing-credit-allowance"),
+    ):
+        with pytest.raises(SystemExit) as excinfo:
+            _resolve(argv)
+        assert expected in str(excinfo.value)
+
+
+def test_the_association_table_is_config_only_and_read_per_scope() -> None:
+    """Verified associations are authored evidence, so they live in Config.
+
+    Project over global *per identity*, exactly as ``[routing]`` merges: an
+    operator correcting one association in a repository does not have to
+    restate every other one.
+    """
+    resolved = _resolve(
+        project={"route_associations": {"aa/opus": "claude-opus-4.8@max"}},
+        global_={
+            "route_associations": {
+                "aa/opus": "claude-opus-4.7@max",
+                "aa/mini": "gpt-5-mini@medium",
+            }
+        },
+    )
+    assert dict(resolved.run.route_associations) == {
+        "aa/opus": "claude-opus-4.8@max",
+        "aa/mini": "gpt-5-mini@medium",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -685,14 +839,16 @@ def test_resolve_malformed_routing_raises_loudly() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("model", ["claude-opus-5", "gemini-3.6-flash"])
+@pytest.mark.parametrize(
+    "model", ["claude-opus-5", "gemini-3.6-flash", "gpt-6-astra"]
+)
 def test_resolve_live_catalog_models_are_on_the_roster(model: str) -> None:
     """Models live in the Copilot catalog must not trip the off-roster advisory.
 
     A hand-maintained mirror of an external catalog can only be pinned against
     hard-coded ids: an assertion derived from
     :data:`~git_loopy.config.SUPPORTED_MODELS` is self-referential and stays
-    green while the roster drifts. Both ids shipped in the Copilot catalog
+    green while the roster drifts. These ids shipped in the Copilot catalog
     *after* the roster was last synced, so a config naming them warned on every
     startup even though the run itself worked.
     """
@@ -707,6 +863,35 @@ def test_resolve_live_catalog_models_are_on_the_roster(model: str) -> None:
         warn=warnings.append,
     )
     assert not any(model in w for w in warnings)
+
+
+@pytest.mark.parametrize("scope", ["project", "global_"])
+@pytest.mark.parametrize("effort", ["minimal", "high", "xhigh", "max"])
+def test_resolve_unverified_model_routing_preserves_effort_with_warning(
+    scope: str, effort: str,
+) -> None:
+    warnings: list[str] = []
+    run = _resolve(
+        **{
+            scope: {
+                "model": "gpt-6-astra",
+                "reasoning_effort": "high",
+                "routing": {
+                    "planning": {"model": "gpt-6-astra", "effort": "max"},
+                    "implementation": {"model": "gemini-3.8-flash", "effort": effort},
+                },
+            }
+        },
+        warn=warnings.append,
+    ).run
+
+    assert (run.model, run.reasoning_effort) == ("gpt-6-astra", "high")
+    assert dict(run.routing) == {
+        "planning": ("gpt-6-astra", "max"),
+        "implementation": ("gemini-3.8-flash", effort),
+    }
+    assert len(warnings) == 1
+    assert "['gemini-3.8-flash']" in warnings[0]
 
 
 
@@ -1130,3 +1315,85 @@ def test_the_rung_is_config_file_only_and_reads_no_environment_variable() -> Non
     )
 
     assert resolved.run.escalation_rung == cli._DEFAULT_ESCALATION_RUNG
+
+
+def test_a_static_route_gets_no_implicit_escalation_rung() -> None:
+    """A Static route stays fixed across retries unless escalation was *chosen*.
+
+    ADR-0057: an inherited built-in rung is not explicit authorization. The
+    rung is on by default precisely because the runner picked the routed pair
+    on the operator's behalf; a route the operator named is not the runner's to
+    move, and the same silent no-progress that earns a retry does not earn a
+    different model.
+    """
+    assert _resolve(["--route-policy", "static"]).run.escalation_rung is None
+
+
+def test_a_static_route_still_escalates_where_the_operator_configured_a_rung() -> None:
+    assert _resolve(
+        ["--route-policy", "static"],
+        project={"escalation": {"model": "gpt-5.6-sol", "effort": "high"}},
+    ).run.escalation_rung == ("gpt-5.6-sol", "high")
+
+
+def test_a_static_route_honours_an_explicit_escalation_switch() -> None:
+    """``enabled = true`` with no pair is still the operator asking for the rung."""
+    assert _resolve(
+        ["--route-policy", "static"],
+        project={"escalation": {"enabled": True}},
+    ).run.escalation_rung == cli._DEFAULT_ESCALATION_RUNG
+
+
+def test_dynamic_routing_gets_no_implicit_escalation_rung_either() -> None:
+    """The built-in rung is a *fixed* pair, which is the opposite of dynamic (#561).
+
+    ADR-0057 gives dynamic retries no fixed **Escalation rung** at all — a
+    later attempt reselects with current evidence and the previous outcome —
+    and that reselection is a dependent slice this one does not deliver. An
+    inherited built-in rung firing in the meantime would silently substitute
+    the legacy fixed escalation for the thing it is *not*, and report the
+    result as Dynamic routing. So an operator who never wrote an
+    ``[escalation]`` block gets no rung, exactly as under a Static route.
+    """
+    assert _resolve(["--route-policy", "dynamic"]).run.escalation_rung is None
+
+
+def test_dynamic_routing_still_escalates_where_the_operator_configured_a_rung() -> (
+    None
+):
+    """An ``[escalation]`` block an operator wrote is consent under any policy."""
+    assert _resolve(
+        ["--route-policy", "dynamic"],
+        project={"escalation": {"model": "gpt-5.6-sol", "effort": "high"}},
+    ).run.escalation_rung == ("gpt-5.6-sol", "high")
+
+
+def test_a_static_route_reaches_the_run_config_with_the_effort_selected() -> None:
+    """The run-wide default pair is not roster-gated under a Static route either.
+
+    ``claude-haiku-4.5`` has an empty roster row, so the legacy path drops the
+    effort here — before the pair ever reaches the :class:`RunConfig` — and the
+    per-issue resolver never sees what was asked for. Under ADR-0057 the
+    selected pair must survive to be verified against the authenticated harness.
+    """
+    resolved = _resolve(
+        ["--route-policy", "static"],
+        env={
+            "GIT_LOOPY_MODEL": "claude-haiku-4.5",
+            "GIT_LOOPY_REASONING_EFFORT": "high",
+        },
+        warn=lambda _message: None,
+    )
+    assert resolved.run.model == "claude-haiku-4.5"
+    assert resolved.run.reasoning_effort == "high"
+
+
+def test_an_unselected_policy_still_drops_it_at_the_run_config() -> None:
+    resolved = _resolve(
+        env={
+            "GIT_LOOPY_MODEL": "claude-haiku-4.5",
+            "GIT_LOOPY_REASONING_EFFORT": "high",
+        },
+        warn=lambda _message: None,
+    )
+    assert resolved.run.reasoning_effort is None

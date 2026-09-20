@@ -87,6 +87,7 @@ from typing import (
 )
 
 from git_loopy.readiness import BlockedByRead, BlockerNode
+from git_loopy.route_publication import RouteDeliveryError
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; see SubprocessLabelClient
     from git_loopy.labels import LabelSpec, TrackerLabel
@@ -892,6 +893,24 @@ class GitHubClient(Protocol):
         """
         ...
 
+    def issue_comments(self, number: int) -> Sequence[str]:
+        """Return comment bodies for Route-publication idempotency checks."""
+        ...
+
+    def issue_labels(self, number: int) -> Sequence[str]:
+        """Return current labels before replacing an owned Route association."""
+        ...
+
+    def ensure_label(self, label: str) -> None:
+        """Ensure one owned Route label exists."""
+        ...
+
+    def replace_route_label(
+        self, number: int, *, remove: Sequence[str], add: str
+    ) -> None:
+        """Change only this issue's Route-label association."""
+        ...
+
     def pr_list(self, label: str, state: str = "open") -> list[PullRequest]:
         """List pull requests filtered by ``label`` / ``state`` (``comments`` empty)."""
         ...
@@ -1156,6 +1175,69 @@ class SubprocessGitHubClient:
             GhError: If the comment subprocess fails.
         """
         self._checked(["issue", "comment", str(number), "--body", comment])
+
+    def post_issue_comment(self, number: int, body: str) -> None:
+        """Post a Route projection comment with a retryable delivery failure."""
+        try:
+            self.issue_comment(number, body)
+        except GhError as exc:
+            raise RouteDeliveryError(str(exc)) from exc
+
+    def issue_comments(self, number: int) -> tuple[str, ...]:
+        """Return current comments, translating delivery failures at this seam."""
+        try:
+            return tuple(comment.body for comment in self.issue_view(number).comments)
+        except GhError as exc:
+            raise RouteDeliveryError(str(exc)) from exc
+
+    def issue_labels(self, number: int) -> tuple[str, ...]:
+        """Return current labels, translating delivery failures at this seam."""
+        try:
+            return tuple(self.issue_view(number).labels)
+        except GhError as exc:
+            raise RouteDeliveryError(str(exc)) from exc
+
+    def ensure_label(self, label: str) -> None:
+        """Create an owned Route label once, without changing an existing label."""
+        try:
+            self._checked(
+                [
+                    "label",
+                    "create",
+                    label,
+                    "--color",
+                    "0969da",
+                    "--description",
+                    "Observational git-loopy Routing resolution.",
+                ]
+            )
+            return
+        except GhError as create_error:
+            try:
+                raw = self._checked(["label", "list", "--limit", "1000", "--json", "name"])
+                parsed = _parse_json(raw, [_GH_BIN, "label", "list"])
+            except GhError as read_error:
+                raise RouteDeliveryError(str(read_error)) from read_error
+            if (
+                isinstance(parsed, list)
+                and any(
+                    isinstance(entry, dict) and entry.get("name") == label
+                    for entry in parsed
+                )
+            ):
+                return
+            raise RouteDeliveryError(str(create_error)) from create_error
+
+    def replace_route_label(
+        self, number: int, *, remove: Sequence[str], add: str
+    ) -> None:
+        """Replace only the owned Route label associations on one issue."""
+        try:
+            for label in remove:
+                self._checked(["issue", "edit", str(number), "--remove-label", label])
+            self._checked(["issue", "edit", str(number), "--add-label", add])
+        except GhError as exc:
+            raise RouteDeliveryError(str(exc)) from exc
 
     def pr_list(self, label: str, state: str = "open") -> list[PullRequest]:
         """List pull requests filtered by label and state.

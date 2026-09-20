@@ -17,6 +17,8 @@ _SOURCE_KINDS = {
     "personal-agents": "personal",
     "plugin": "plugin",
     "custom": "custom",
+    # Provider-backed Skills are custom, not trusted runtime built-ins.
+    "sdk": "custom",
     "builtin": "builtin",
 }
 _SDK_SKILL_SOURCES = frozenset(_SOURCE_KINDS)

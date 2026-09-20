@@ -23,9 +23,7 @@ from git_loopy.interactive.skill_picker_app import (  # noqa: E402
 )
 from git_loopy.skillscmd import (  # noqa: E402
     SkillSelectionModel,
-    SkillSelectionResult,
     SkillSelectionRow,
-    run_plain_skill_picker,
 )
 
 
@@ -105,8 +103,6 @@ async def test_search_filters_rows_without_discarding_hidden_selections() -> Non
 
     assert app.return_value is not None
     assert app.return_value.enabled == ("codebase-design", "tdd")
-
-
 async def test_required_row_is_marked_and_cannot_be_disabled() -> None:
     """A Required Skill is visibly Required and refuses to leave the selection."""
     app = SkillPickerApp(_model())
@@ -173,28 +169,3 @@ async def test_confirm_is_refused_while_a_required_skill_is_unselected() -> None
 
     assert app.return_value is not None
     assert app.return_value.enabled == ("codebase-design", "tdd")
-
-
-async def test_both_pickers_return_the_same_result_for_the_same_decision() -> None:
-    """The optional picker is interchangeable with the plain one, byte for byte.
-
-    ``collect_skill_policy`` calls whichever runner it was handed and then puts
-    the result through one validation/commit seam, so the two implementations
-    must be substitutable: same type, same value, for the same operator
-    decision (here: switch ``codebase-design`` off, save).
-    """
-    plain_answers = iter(("1", "done", "yes"))
-    plain = run_plain_skill_picker(
-        _model(),
-        input_fn=lambda _prompt: next(plain_answers),
-        output_fn=lambda _line: None,
-    )
-
-    app = SkillPickerApp(_model())
-    async with app.run_test() as pilot:
-        await pilot.press("space")
-        await pilot.press("enter")
-        await pilot.pause()
-
-    assert type(app.return_value) is type(plain) is SkillSelectionResult
-    assert app.return_value == plain == SkillSelectionResult(("tdd",))

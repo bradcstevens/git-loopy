@@ -1,6 +1,6 @@
 {
   "fixture_schema_version": "1.4",
-  "wrapper_contract_version": "2.4",
+  "wrapper_contract_version": "2.8",
   "event_schema_version": "1.2",
   "semantic_contract": {
     "dashboard_band_order": [
@@ -224,6 +224,8 @@
         "active_issue",
         "active_seconds",
         "context_fill",
+        "release_target",
+        "release_version",
         "cost",
         "rate_card",
         "routing"
@@ -317,6 +319,39 @@
         "effort",
         "source"
       ]
+    },
+    "optional_projection_fields": {
+      "route": ["context_tier", "lifecycle_position"],
+      "queue_row": ["preparation"],
+      "preparation": [
+        "model",
+        "effort",
+        "context_tier",
+        "summary",
+        "proposal_id",
+        "prepared_at",
+        "valid_until",
+        "relevant_input_identity",
+        "selector_model",
+        "selector_effort",
+        "selector_context_tier",
+        "evidence_source",
+        "source_model_identity",
+        "evidence_retrieved_at",
+        "capabilities_retrieved_at",
+        "measurement_at",
+        "benchmark_version",
+        "conditions",
+        "routing_overshot",
+        "detail",
+        "reason"
+      ]
+    },
+    "preparation_projection": {
+      "required_fields": ["state"],
+      "states": ["proposed", "static", "reusable", "unavailable"],
+      "nonbinding": "Queue preparation describes a pending Routing proposal, never a final route, Lease, reservation, or Pool-emptiness signal. It leaves status unchanged and disappears at the authoritative Pickup.",
+      "historical": "Historical rows omit preparation. Sparse preparation records retain only the fields they actually supplied; missing provenance and measurement metadata stay unknown."
     },
     "binding_sources": {
       "marker": [
@@ -513,6 +548,8 @@
                   "effective_target_tokens": 20000,
                   "effective_ceiling_tokens": 28000
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -619,6 +656,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -953,6 +992,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "unavailable"
                 },
@@ -1073,6 +1114,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "unavailable"
                 },
@@ -1495,6 +1538,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -1634,6 +1679,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -2238,6 +2285,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -2356,6 +2405,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -2517,6 +2568,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -2712,6 +2765,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -3139,6 +3194,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "unavailable"
                 },
@@ -3256,6 +3313,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "unavailable"
                 },
@@ -3599,6 +3658,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -3712,6 +3773,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -4004,6 +4067,8 @@
                   "effective_target_tokens": 20000,
                   "effective_ceiling_tokens": 28000
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -4110,6 +4175,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -4422,6 +4489,8 @@
                   "effective_target_tokens": 20000,
                   "effective_ceiling_tokens": 28000
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -4457,7 +4526,8 @@
                     "route": {
                       "model": "gpt-5.6-sol",
                       "effort": "high",
-                      "source": "defaulted_no_task_type_label"
+                      "source": "defaulted_no_task_type_label",
+                      "lifecycle_position": "fresh"
                     },
                     "tokens_in": null,
                     "tokens_out": null,
@@ -4550,6 +4620,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -4598,7 +4670,8 @@
                     "route": {
                       "model": "gpt-5.6-sol",
                       "effort": "high",
-                      "source": "defaulted_no_task_type_label"
+                      "source": "defaulted_no_task_type_label",
+                      "lifecycle_position": "fresh"
                     },
                     "tokens_in": 100,
                     "tokens_out": 50,
@@ -4671,7 +4744,7 @@
       ]
     },
     {
-      "id": "escalation-reprices-a-stalled-issue-between-contributions",
+      "id": "dynamic-retry-reprices-an-issue-between-contributions",
       "inputs": {
         "model": "gpt-5.6-sol",
         "reasoning_effort": "high",
@@ -4733,7 +4806,7 @@
           "model": "gpt-5.4-mini",
           "effort": "low",
           "context_tier": "default",
-          "routing_source": "routed",
+          "routing_source": "dynamic",
           "task_type_keys": [
             "bugfix"
           ],
@@ -4831,7 +4904,7 @@
           "model": "claude-opus-5",
           "effort": "max",
           "context_tier": "default",
-          "routing_source": "escalated",
+          "routing_source": "dynamic",
           "task_type_keys": [
             "bugfix"
           ],
@@ -4922,6 +4995,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -4957,7 +5032,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "dynamic",
+                      "lifecycle_position": "fresh"
                     },
                     "tokens_in": null,
                     "tokens_out": null,
@@ -5042,6 +5118,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -5077,7 +5155,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "dynamic",
+                      "lifecycle_position": "fresh"
                     },
                     "tokens_in": 400,
                     "tokens_out": 120,
@@ -5139,7 +5218,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "dynamic",
+                      "lifecycle_position": "fresh"
                     },
                     "consumption": {
                       "model": "gpt-5.4-mini",
@@ -5198,6 +5278,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -5233,7 +5315,8 @@
                     "route": {
                       "model": "claude-opus-5",
                       "effort": "max",
-                      "source": "escalated"
+                      "source": "dynamic",
+                      "lifecycle_position": "retrying"
                     },
                     "tokens_in": 400,
                     "tokens_out": 120,
@@ -5295,7 +5378,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "dynamic",
+                      "lifecycle_position": "fresh"
                     },
                     "consumption": {
                       "model": "gpt-5.4-mini",
@@ -5359,6 +5443,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -5394,7 +5480,8 @@
                     "route": {
                       "model": "claude-opus-5",
                       "effort": "max",
-                      "source": "escalated"
+                      "source": "dynamic",
+                      "lifecycle_position": "retrying"
                     },
                     "tokens_in": 1300,
                     "tokens_out": 420,
@@ -5477,7 +5564,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "dynamic",
+                      "lifecycle_position": "fresh"
                     },
                     "consumption": {
                       "model": "gpt-5.4-mini",
@@ -5501,7 +5589,8 @@
                     "route": {
                       "model": "claude-opus-5",
                       "effort": "max",
-                      "source": "escalated"
+                      "source": "dynamic",
+                      "lifecycle_position": "retrying"
                     },
                     "consumption": {
                       "model": "claude-opus-5",
@@ -5737,6 +5826,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -5772,7 +5863,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "routed",
+                      "lifecycle_position": "fresh"
                     },
                     "tokens_in": 200,
                     "tokens_out": 60,
@@ -5834,7 +5926,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "routed",
+                      "lifecycle_position": "fresh"
                     },
                     "consumption": {
                       "model": "gpt-5.4-mini",
@@ -5888,6 +5981,8 @@
                   "effective_target_tokens": null,
                   "effective_ceiling_tokens": null
                 },
+                "release_target": null,
+                "release_version": null,
                 "cost": {
                   "availability": "available"
                 },
@@ -5923,7 +6018,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "routed",
+                      "lifecycle_position": "fresh"
                     },
                     "tokens_in": 500,
                     "tokens_out": 150,
@@ -6006,7 +6102,8 @@
                     "route": {
                       "model": "gpt-5.4-mini",
                       "effort": "low",
-                      "source": "routed"
+                      "source": "routed",
+                      "lifecycle_position": "fresh"
                     },
                     "consumption": {
                       "model": "gpt-5.4-mini",
@@ -6054,6 +6151,237 @@
             }
           }
         }
+      ]
+    },
+    {
+      "id": "release-line-advances-replace-the-header-placeholder",
+      "inputs": {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "high",
+      "max_strikes": 3,
+      "local_utc_offset_minutes": 0,
+      "drill_in_issue": 42
+      },
+      "events": [
+      {
+        "ts": "2026-05-16T00:00:00.000Z",
+        "observed_monotonic": 0,
+        "run_id": "01HXR0000000000000000000RL",
+        "iter": null,
+        "type": "wrapper.run.start",
+        "release_version": "1.2.3",
+        "schema_version": 1,
+        "insight_capabilities": {
+          "agent_output": true,
+          "structured_agent_events": true,
+          "token_usage": true,
+          "context_window": true,
+          "skill_consultation": true,
+          "cost": true,
+          "routing": true
+        },
+        "parallel_capabilities": {
+          "parallel_mode": true,
+          "rolling_dispatch": true,
+          "integration_backlog": true,
+          "adaptive_lane_limit": true,
+          "contribution_events": true,
+          "execution_hosts": [
+            "local"
+          ]
+        },
+        "max_nmt_strikes": 3
+      },
+      {
+        "ts": "2026-05-16T00:00:01.000Z",
+        "observed_monotonic": 1,
+        "run_id": "01HXR0000000000000000000RL",
+        "iter": null,
+        "type": "wrapper.release.advanced",
+        "bump_class": "patch",
+        "issue": 42,
+        "release_target": "1.2.4",
+        "release_version": "1.2.4-dev.1"
+      },
+      {
+        "ts": "2026-05-16T00:00:02.000Z",
+        "observed_monotonic": 2,
+        "run_id": "01HXR0000000000000000000RL",
+        "iter": null,
+        "type": "wrapper.release.advanced",
+        "bump_class": "minor",
+        "issue": 43,
+        "release_target": "1.3.0",
+        "release_version": "1.3.0-dev.2"
+      }
+      ],
+      "snapshots": [
+      {
+        "after_event_count": 1,
+        "render_at_utc": "2026-05-16T00:00:00.000Z",
+        "render_at_monotonic": 0,
+        "expected": {
+          "dashboard": {
+            "header": {
+              "run_id": "01HXR0000000000000000000RL",
+              "model": "gpt-5.6-sol",
+              "reasoning_effort": "high",
+              "started_at": "2026-05-16T00:00:00+00:00",
+              "elapsed_seconds": 0.0,
+              "status": "running",
+              "strikes": {
+                "current": 0,
+                "limit": 3
+              },
+              "active_issue": null,
+              "active_seconds": null,
+              "context_fill": {
+                "availability": "not_observed",
+                "current_tokens": null,
+                "token_limit": null,
+                "percentage": null,
+                "effective_target_tokens": null,
+                "effective_ceiling_tokens": null
+              },
+              "release_target": null,
+              "release_version": null,
+              "cost": {
+                "availability": "available"
+              },
+              "rate_card": {
+                "availability": "not_declared"
+              },
+              "routing": {
+                "availability": "available"
+              }
+            },
+            "queue": {
+              "columns": [
+                "issue",
+                "status",
+                "started_at",
+                "active_seconds",
+                "closed_at",
+                "iteration_count",
+                "route",
+                "tokens_in",
+                "tokens_out",
+                "credits",
+                "premium_requests"
+              ],
+              "rows": []
+            },
+            "activity": {
+              "issue": null,
+              "lines": []
+            },
+            "summary": {
+              "rows": []
+            }
+          },
+          "drill_in": {
+            "detail_header": {
+              "issue": 42,
+              "status": "gone",
+              "started_at": null,
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 0.0,
+              "iteration_count": 0
+            },
+            "iteration_breakdown": {
+              "rows": []
+            },
+            "log": {
+              "issue": 42,
+              "lines": []
+            }
+          }
+        }
+      },
+      {
+        "after_event_count": 3,
+        "render_at_utc": "2026-05-16T00:00:02.000Z",
+        "render_at_monotonic": 2,
+        "expected": {
+          "dashboard": {
+            "header": {
+              "run_id": "01HXR0000000000000000000RL",
+              "model": "gpt-5.6-sol",
+              "reasoning_effort": "high",
+              "started_at": "2026-05-16T00:00:00+00:00",
+              "elapsed_seconds": 2.0,
+              "status": "running",
+              "strikes": {
+                "current": 0,
+                "limit": 3
+              },
+              "active_issue": null,
+              "active_seconds": null,
+              "context_fill": {
+                "availability": "not_observed",
+                "current_tokens": null,
+                "token_limit": null,
+                "percentage": null,
+                "effective_target_tokens": null,
+                "effective_ceiling_tokens": null
+              },
+              "release_target": "1.3.0",
+              "release_version": "1.3.0-dev.2",
+              "cost": {
+                "availability": "available"
+              },
+              "rate_card": {
+                "availability": "not_declared"
+              },
+              "routing": {
+                "availability": "available"
+              }
+            },
+            "queue": {
+              "columns": [
+                "issue",
+                "status",
+                "started_at",
+                "active_seconds",
+                "closed_at",
+                "iteration_count",
+                "route",
+                "tokens_in",
+                "tokens_out",
+                "credits",
+                "premium_requests"
+              ],
+              "rows": []
+            },
+            "activity": {
+              "issue": null,
+              "lines": []
+            },
+            "summary": {
+              "rows": []
+            }
+          },
+          "drill_in": {
+            "detail_header": {
+              "issue": 42,
+              "status": "gone",
+              "started_at": null,
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 0.0,
+              "iteration_count": 0
+            },
+            "iteration_breakdown": {
+              "rows": []
+            },
+            "log": {
+              "issue": 42,
+              "lines": []
+            }
+          }
+        }
+      }
       ]
     }
   ],

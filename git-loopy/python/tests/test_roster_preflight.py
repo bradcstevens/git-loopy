@@ -537,6 +537,12 @@ def wiring(monkeypatch: pytest.MonkeyPatch) -> _Wiring:
     monkeypatch.setattr(roster_preflight, "notify_roster_drift", _fake_notify)
     monkeypatch.setattr(loop_module, "run", _fake_run)
     monkeypatch.setattr(
+        cli_module,
+        "_run_tty_sidecar",
+        lambda _config, **_kwargs: recorded.events.append("run") or 0,
+        raising=False,
+    )
+    monkeypatch.setattr(
         cli_module, "_make_model_listing", lambda: _listing(_roster())
     )
     return recorded

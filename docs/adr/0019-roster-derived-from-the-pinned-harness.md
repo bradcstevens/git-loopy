@@ -18,6 +18,23 @@ supplies the per-model tier capability [ADR-0017](0017-context-tier-and-live-con
 requires, unblocks [#281](https://github.com/bradcstevens/git-loopy/issues/281), and
 corrects the diagnosis recorded in [#282](https://github.com/bradcstevens/git-loopy/issues/282).
 
+## Upgrade record: SDK 1.0.14
+
+[#594](https://github.com/bradcstevens/git-loopy/issues/594) advances the SDK pin to
+1.0.14 and its CLI to 1.0.85. The refreshed fallback includes all 19 models returned
+by that pinned harness on the upgrade account, with their reported effort sets.
+The 1.0.67/1.0.71/1.0.75 comparisons below remain historical evidence, not current pins.
+
+**Migration exception:** to preserve existing saved Config behavior, the upgrade retains
+seven account-unlisted compatibility entries rather than deleting them: the two older
+Sonnet rows, Opus 4.6, the three existing Gemini rows, and `mai-code-1-flash-picker`.
+Their efforts were not reverified; the CLI stamp identifies the harness used to refresh
+the observed rows, not a claim that the account offered every compatibility entry.
+The Runner README lists both sets. The live listing remains the Run's authority.
+Gemini 3.8 was not an existing roster entry and was not returned by that listing.
+It remains off-roster, preserving configured selections and efforts through the
+warning-and-pass-through path rather than introducing an unverified capability gate.
+
 ## The premise that was wrong
 
 Reasoning-effort capability is not vendor data reaching the kit through two paths. In the
@@ -30,7 +47,7 @@ identical SDK code against three binaries on one account, minutes apart:
 
 | CLI | `gemini-3.5-flash` | `gemini-3.6-flash` |
 | --- | --- | --- |
-| **1.0.67** — pinned by `github-copilot-sdk==1.0.5`, the binary git-loopy runs | `low, medium, high` | *absent* |
+| **1.0.67** — pinned by `github-copilot-sdk==1.0.5` at the time of this investigation | `low, medium, high` | *absent* |
 | 1.0.71 | `minimal, low, medium, high` | *absent* |
 | 1.0.75 — the operator's Homebrew install | `minimal, low, medium, high` | `minimal, low, medium, high` |
 
@@ -195,10 +212,10 @@ is indistinguishable from the defective one, which is how the last correction we
   CLI is spawned and can change roster contents, so the pin bump and the fixture
   regeneration become one atomic change. This coupling is real and is accepted: it is the
   honest expression of a dependency that already existed and was merely unnamed.
-- **The pending SDK bump is now a known roster change.** The pin is two releases behind,
-  and the CLI it would move to sits between a version where `gemini-3.6-flash` is absent
-  and one where it is present. What that CLI reports must be established before the bump
-  lands.
+- **At decision time, the pending SDK bump was a known roster change.** The pin was two
+  releases behind, and the proposed CLI sat between a version where `gemini-3.6-flash`
+  was absent and one where it was present. That motivated verifying the new harness
+  before every bump; the SDK 1.0.14 upgrade record above documents the current refresh.
 - The prose stating that the fixture's keys *are* the supported-model set becomes false for
   the Python Orchestrator, which reads the live set. The contract must say which
   Orchestrators are held to the fixture and which are not.

@@ -33,6 +33,16 @@ SKILL_SOURCE_KINDS: frozenset[str] = frozenset(
 )
 
 
+#: The one name of the environment surface that replaces the base policy for a
+#: single Run. Named once so the resolver that reads it and the diagnostic that
+#: tells an operator to correct it can never disagree about what to correct.
+ENABLED_SKILLS_ENV = "GIT_LOOPY_ENABLED_SKILLS"
+
+#: The environment half of the deprecated deny guards, named here for the same
+#: reason: it is one of the surfaces a diagnostic sends an operator to correct.
+DENY_SKILLS_ENV = "GIT_LOOPY_DENY_SKILLS"
+
+
 def is_canonical_skill_name(value: object) -> bool:
     """Return whether a value is a canonical Skill policy identity."""
     return isinstance(value, str) and _SKILL_NAME.fullmatch(value) is not None
@@ -51,6 +61,28 @@ class SkillPolicyFallback(StrEnum):
 
     MINIMAL = "minimal"
     MIGRATION = "migration"
+
+
+class SkillPolicySurface(StrEnum):
+    """A surface an operator corrects to clear a Skill-policy blocker.
+
+    The four surfaces that supply a base policy, plus the deprecated deny
+    guards that subtract from it. Distinct from :class:`SkillPolicyScope`,
+    which names the *persisted* scope and deliberately survives an environment
+    replacement so an audited Run still records where its policy is saved. A
+    diagnostic needs the other answer — which surface an operator must correct
+    — because a surface that did not decide the outcome is a dead end: editing
+    the saved Config while ``GIT_LOOPY_ENABLED_SKILLS`` replaces the base, or
+    re-enabling a name a deny guard subtracts, both leave the Run failing
+    exactly as before.
+    """
+
+    PROJECT = "project"
+    GLOBAL = "global"
+    ENVIRONMENT = "environment"
+    MINIMAL = "minimal"
+    DENY_GUARD = "deny-guard"
+    DISABLE_OVERLAY = "disable-overlay"
 
 
 class SkillPolicyStartupState(StrEnum):
@@ -210,6 +242,77 @@ def collect_project_skill_tracking(
     )
 
 
+def select_skill_policy_surface(inputs: SkillPolicyInputs) -> SkillPolicySurface:
+    """Name the surface whose base policy a resolution judges.
+
+    The environment replacement wins over any saved scope because it replaces
+    the base outright for one Run, so it — not the scope it displaced — is what
+    carries a blocker an operator has to correct.
+    """
+    if inputs.environment.present:
+        return SkillPolicySurface.ENVIRONMENT
+    if inputs.project.present:
+        return SkillPolicySurface.PROJECT
+    if inputs.global_.present:
+        return SkillPolicySurface.GLOBAL
+    return SkillPolicySurface.MINIMAL
+
+
+def attribute_subtracted_skill(
+    name: str,
+    inputs: SkillPolicyInputs,
+    *,
+    legacy_denied: Iterable[str] = (),
+) -> SkillPolicySurface | None:
+    """Name the surface that subtracted a Skill, or ``None`` if none did.
+
+    ``None`` means the base surface simply never listed the name, which is a
+    different correction from removing it from a surface that takes it away
+    after the base supplied it.
+    """
+    if name in inputs.disable_skills:
+        return SkillPolicySurface.DISABLE_OVERLAY
+    if name in frozenset(legacy_denied):
+        return SkillPolicySurface.DENY_GUARD
+    return None
+
+
+def _select_base_scope(inputs: SkillPolicyInputs) -> SkillPolicyScope:
+    """Select the persisted scope an environment replacement does not displace."""
+    if inputs.project.present:
+        return SkillPolicyScope.PROJECT
+    if inputs.global_.present:
+        return SkillPolicyScope.GLOBAL
+    return SkillPolicyScope.MINIMAL
+
+
+def _select_enabled_names(
+    inputs: SkillPolicyInputs,
+    *,
+    required: frozenset[str],
+    legacy_denied: Iterable[str],
+) -> set[str]:
+    """Apply every policy surface in precedence order onto one enabled set.
+
+    The single place the surfaces combine, so the resolver a Run raises from
+    and the blocker report a diagnostic prints can never disagree about which
+    Skills are enabled.
+    """
+    if inputs.project.present:
+        enabled = set(inputs.project.names)
+    elif inputs.global_.present:
+        enabled = set(inputs.global_.names)
+    else:
+        enabled = set(required)
+
+    if inputs.environment.present:
+        enabled = set(inputs.environment.names)
+    enabled.update(inputs.enable_skills)
+    enabled.difference_update(inputs.disable_skills)
+    enabled.difference_update(legacy_denied)
+    return enabled
+
+
 def resolve_skill_policy(
     inputs: SkillPolicyInputs,
     *,
@@ -220,26 +323,61 @@ def resolve_skill_policy(
     tracked_project_skills: Iterable[str] = (),
 ) -> EffectiveSkillPolicy:
     """Resolve the selected configured scope into an Effective Skill policy."""
-    required = frozenset(required_skills)
-    if inputs.project.present:
-        scope = SkillPolicyScope.PROJECT
-        enabled = set(inputs.project.names)
-        fallback_state = None
-    elif inputs.global_.present:
-        scope = SkillPolicyScope.GLOBAL
-        enabled = set(inputs.global_.names)
-        fallback_state = None
-    else:
-        scope = SkillPolicyScope.MINIMAL
-        enabled = set(required)
-        fallback_state = fallback
+    required_names = tuple(required_skills)
+    legacy_denied_names = tuple(legacy_denied)
+    tracked_project_skill_names = tuple(tracked_project_skills)
+    blockers = find_skill_policy_blockers(
+        inputs,
+        catalog=catalog,
+        required_skills=required_names,
+        legacy_denied=legacy_denied_names,
+        tracked_project_skills=tracked_project_skill_names,
+    )
+    if blockers:
+        raise blockers[0]
 
-    if inputs.environment.present:
-        enabled = set(inputs.environment.names)
-    enabled.update(inputs.enable_skills)
-    enabled.difference_update(inputs.disable_skills)
-    legacy_denied_names = frozenset(legacy_denied)
-    enabled.difference_update(legacy_denied_names)
+    required = frozenset(required_names)
+    legacy_denied_set = frozenset(legacy_denied_names)
+    scope = _select_base_scope(inputs)
+    enabled = _select_enabled_names(
+        inputs,
+        required=required,
+        legacy_denied=legacy_denied_set,
+    )
+    source_kinds = {
+        name: catalog.winners[name].source_kind
+        for name in enabled
+    }
+    return EffectiveSkillPolicy(
+        enabled=tuple(enabled),
+        required=tuple(required),
+        legacy_denied=tuple(legacy_denied_set),
+        source_kinds=source_kinds,
+        base_scope=scope,
+        fallback=None if scope is not SkillPolicyScope.MINIMAL else fallback,
+    )
+
+
+def find_skill_policy_blockers(
+    inputs: SkillPolicyInputs,
+    *,
+    catalog: SkillCatalog,
+    required_skills: Iterable[str],
+    legacy_denied: Iterable[str] = (),
+    tracked_project_skills: Iterable[str] = (),
+) -> tuple[SkillPolicyResolutionError, ...]:
+    """Return every independent blocker the Run policy resolver can raise.
+
+    The resolver still raises the first result to preserve the Run's existing
+    fail-fast behavior. Diagnostics consume the complete result so one
+    report can name every correction an operator must make before retrying.
+    """
+    required = frozenset(required_skills)
+    enabled = _select_enabled_names(
+        inputs,
+        required=required,
+        legacy_denied=legacy_denied,
+    )
 
     explicit_policy = (
         inputs.project.present
@@ -248,36 +386,26 @@ def resolve_skill_policy(
         or bool(inputs.enable_skills)
     )
     if explicit_policy and not catalog.inventory_available:
-        raise SkillInventoryUnavailable(enabled)
+        return (SkillInventoryUnavailable(enabled),)
 
     missing_enabled = enabled.difference(catalog.winners)
     if missing_enabled and not catalog.inventory_available:
-        raise SkillInventoryUnavailable(missing_enabled)
+        return (SkillInventoryUnavailable(missing_enabled),)
+
+    blockers: list[SkillPolicyResolutionError] = []
     if missing_enabled:
-        raise MissingEnabledSkills(missing_enabled)
+        blockers.append(MissingEnabledSkills(missing_enabled))
 
     missing_required = required.difference(enabled)
     if missing_required:
-        raise MissingRequiredSkills(missing_required)
+        blockers.append(MissingRequiredSkills(missing_required))
 
     tracked = frozenset(tracked_project_skills)
     untracked_project = {
         name
-        for name in enabled
+        for name in enabled.intersection(catalog.winners)
         if catalog.winners[name].source_kind == "project" and name not in tracked
     }
     if untracked_project:
-        raise UntrackedProjectSkills(untracked_project)
-
-    source_kinds = {
-        name: catalog.winners[name].source_kind
-        for name in enabled
-    }
-    return EffectiveSkillPolicy(
-        enabled=tuple(enabled),
-        required=tuple(required),
-        legacy_denied=tuple(legacy_denied_names),
-        source_kinds=source_kinds,
-        base_scope=scope,
-        fallback=fallback_state,
-    )
+        blockers.append(UntrackedProjectSkills(untracked_project))
+    return tuple(blockers)

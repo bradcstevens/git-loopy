@@ -17,6 +17,7 @@ __all__ = [
     "RequiredSkills",
     "load_prompt",
     "minimal_skill_policy",
+    "packaged_prompt_path",
     "packaged_required_skills",
     "parse_required_skills",
     "resolve_required_skills",
@@ -200,13 +201,24 @@ def minimal_skill_policy() -> tuple[str, ...]:
     return packaged_required_skills()
 
 
+def packaged_prompt_path() -> Path:
+    """The Run instructions this distribution ships, as a filesystem path.
+
+    The last candidate in :func:`load_prompt`'s precedence chain, published
+    because ``update`` replaces an untouched override with exactly this content
+    (ADR-0054). Locating it a second time is how a refresh comes to record
+    provenance for a file no Run reads.
+    """
+    return Path(str(files("git_loopy") / settings.PROMPT_FILENAME))
+
+
 def load_prompt(repo_root: Path, env: Mapping[str, str]) -> str:
     """Load Run instructions with project, global, then packaged precedence."""
     candidates = (
         repo_root / "git-loopy" / "prompt.md",
         repo_root / "git-loopy" / settings.PROMPT_FILENAME,
         settings.global_prompt_path(env),
-        Path(str(files("git_loopy") / settings.PROMPT_FILENAME)),
+        packaged_prompt_path(),
     )
     for candidate in candidates:
         if candidate.exists():

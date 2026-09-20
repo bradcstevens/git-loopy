@@ -42,8 +42,8 @@ delivered in later phases, sequenced value-first
 ([ADR-0013](adr/0013-multi-language-runner-family.md#decision)):
 
 - **Phase 2 — live TUI + distribution.** The single shared `git-loopy-tui`
-  binary renders the Event schema for the shell and PowerShell ports (the Python
-  member already has its Textual Dashboard), plus prebuilt binaries and
+  binary renders the Event schema for every terminal-attached port, including the
+  Python member, plus prebuilt binaries and
   **package-manager distribution** (Homebrew, `winget`/`scoop`). The shell
   Orchestrator now **supervises** that helper — selection precedence, clone-local
   then `PATH` discovery, the `--schema-version` compatibility gate, and a
@@ -59,9 +59,10 @@ delivered in later phases, sequenced value-first
   a single archive is attached; an unsigned Windows archive reaches operators only
   through a clearly marked prerelease. Those rules live in
   [`release-trust.json`](../git-loopy/conformance/release-trust.json) and are
-  applied by `git_loopy.release_trust`.
-  The **package channels** now follow that publication: a stable Release
-  updates the Homebrew tap from the artifacts it just published — `brew tap
+  applied by `git_loopy.release_trust`. Under `source-only` distribution mode,
+  these helper builds and channel updates are not launched.
+  Under `artifact-bearing` mode, the **package channels** follow that publication:
+  a stable Release updates the Homebrew tap from the artifacts it just published — `brew tap
   bradcstevens/git-loopy && brew install git-loopy-tui` — rebuilding nothing and
   re-hashing nothing. What the formula is allowed to say is pinned in
   [`homebrew-tap.json`](../git-loopy/conformance/homebrew-tap.json) and enforced
@@ -69,7 +70,7 @@ delivered in later phases, sequenced value-first
   version, URL, host, digest, or coverage that is not this Release's. A
   `brew`-installed helper is a `PATH` helper, so it never displaces a clone-local
   one — see [the helper's README](../git-loopy/tui/README.md#homebrew).
-  The same Release now also updates the two Windows channels — `winget install
+  Under `artifact-bearing` mode, the same Release also updates the two Windows channels — `winget install
   bradcstevens.git-loopy-tui` and `scoop install git-loopy-tui` — from the one
   signed `x86_64-pc-windows-msvc` archive it published. Both are pinned in
   [`windows-channels.json`](../git-loopy/conformance/windows-channels.json) and
@@ -80,12 +81,14 @@ delivered in later phases, sequenced value-first
   the release runner actually observed. Both are `PATH` helpers too — see
   [the helper's README](../git-loopy/tui/README.md#winget-and-scoop). Until a
   helper is present or selected, the native ports stream plain text and run in
-  place from the clone. Both native installers now install both halves of their
-  distribution — a `git-loopy` launcher on your `PATH` and the clone's pinned,
-  checksum-verified `git-loopy-tui` staged into `.git-loopy/bin/` — the shell
-  port's `install.sh` with `--no-tui` / `--tui-archive` / `--tui-checksum`, and
+  place from the clone. When artifact assets are published, both native installers
+  install both halves of their distribution — a `git-loopy` launcher on your `PATH`
+  and the clone's pinned, checksum-verified `git-loopy-tui` staged into `.git-loopy/bin/` —
+  the shell port's `install.sh` with `--no-tui` / `--tui-archive` / `--tui-checksum`, and
   `install.ps1` with `-NoTui` / `-TuiArchive` / `-TuiChecksum` on Windows, Linux,
-  and macOS. A Run itself never downloads or updates software.
+  and macOS. For source-only releases where no compiled helpers are published,
+  passing `--no-tui` (or `-NoTui`) installs the launcher alone. A Run itself never
+  downloads or updates software.
 - **Phase 3 — config parity.** The `config.toml` precedence chain, the `init`
   wizard, the `config get/set/list/path/edit` subcommands, the model picker, and
   cost estimation reach the native ports (the Python member has these today; the
@@ -127,7 +130,7 @@ runner-authored work as agent progress.
 | Exit `0` — clean                 | empty ready-for-agent Pool **or** Iteration cap reached                                                                                         |
 | Exit `1` — aborted               | `GIT_LOOPY_MAX_NMT_STRIKES` tripped **or** preflight/setup failure (gh not authed, prompt file missing, etc.) |
 | Observability artefacts          | `.git-loopy/logs/<iso>-<run_id>.jsonl` (replay JSONL) + `.git-loopy/runs/<iso>-<run_id>.json` (per-iteration rollup) + `.git-loopy/logs/<iso>-<run_id>.log` (stderr mirror) |
-| Terminal UX                      | Rich-rendered iteration `Panel`s, per-iteration token + harness-billed **AI Credits** signal, run-end summary table                              |
+| Terminal UX                      | Detached TTY worker + `git-loopy-tui` attach client when available, line-printer fallback otherwise; Rich-rendered iteration `Panel`s, per-iteration token + harness-billed **AI Credits** signal, run-end summary table |
 | OpenTelemetry tracing            | opt-in via `uv sync --project git-loopy/python --extra otel` + `GIT_LOOPY_OTEL_ENABLED=1` (or `OTEL_EXPORTER_OTLP_ENDPOINT`)                            |
 | Prerequisites                    | `gh`, `git`, `copilot`, Python ≥ 3.11, `uv` (or `pip ≥ 24`)                                                                                    |
 

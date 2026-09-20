@@ -53,6 +53,12 @@ def _write_release_metadata(root: Path, version: str) -> None:
         f'[project]\nname = "git-loopy"\nversion = "{version}"\n',
         encoding="utf-8",
     )
+    trust_dir = root / "git-loopy/conformance"
+    trust_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(
+        REPOSITORY_ROOT / "git-loopy/conformance/release-trust.json",
+        trust_dir / "release-trust.json",
+    )
 
 
 def _tagged_repository(
@@ -80,7 +86,7 @@ def _tagged_repository(
         notes_path = root / "docs/releases" / f"v{authority_version}.md"
         notes_path.parent.mkdir(parents=True)
         notes_path.write_text(
-            f"# git-loopy {authority_version}\n\nEdited release notes.\n",
+            f"# git-loopy {authority_version}\n\nAgent-authored release notes.\n",
             encoding="utf-8",
         )
     else:
@@ -139,6 +145,11 @@ def test_release_tag_rejects_invalid_publication_identity(
 def _copy_source_distribution(tmp_path: Path) -> Path:
     root = tmp_path / "source"
     (root / "git-loopy/python").mkdir(parents=True)
+    (root / "git-loopy/conformance").mkdir(parents=True)
+    shutil.copy2(
+        REPOSITORY_ROOT / "git-loopy/conformance/release-trust.json",
+        root / "git-loopy/conformance/release-trust.json",
+    )
     shutil.copy2(REPOSITORY_ROOT / "VERSION", root / "VERSION")
     shutil.copy2(
         REPOSITORY_ROOT / "git-loopy/python/pyproject.toml",
@@ -184,7 +195,7 @@ def test_source_tree_identity_rejects_distribution_drift(
         package = root / "git-loopy/python/pyproject.toml"
         package.write_text(
             package.read_text(encoding="utf-8").replace(
-                'version = "0.9.0"',
+                f'version = "{RELEASE_FIXTURE["expected_release_version"]}"',
                 'version = "9.9.9"',
                 1,
             ),
@@ -318,6 +329,7 @@ def test_tag_preflight_cli_emits_machine_readable_release_plan(
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "commit": _git(root, "rev-parse", "HEAD"),
+        "distribution_mode": "source-only",
         "notes_path": "docs/releases/v1.2.3-rc.1.md",
         "prerelease": True,
         "tag": "v1.2.3-rc.1",

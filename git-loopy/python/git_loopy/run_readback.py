@@ -49,6 +49,7 @@ from git_loopy.config import (
     gate_context_tier,
     gate_reasoning_effort,
 )
+from git_loopy.static_route import RoutePolicy
 
 __all__ = [
     "PairReadback",
@@ -142,6 +143,10 @@ class RunReadback:
         harness_version: The Copilot CLI version the SDK spawns, or ``None`` when
             it could not be read.
         roster_cli_version: The CLI version the kit's roster was captured against.
+        route_policy: The **Route policy** this Run selected (#560, ADR-0057).
+            Carried rather than left implicit because a readback whose pairs are
+            ungated is otherwise indistinguishable from one whose pairs simply
+            passed the gate.
     """
 
     model: str | None
@@ -153,6 +158,7 @@ class RunReadback:
     routing_suppressed: bool
     harness_version: str | None
     roster_cli_version: str
+    route_policy: RoutePolicy = RoutePolicy.UNSELECTED
 
     @property
     def roster_diverged(self) -> bool | None:
@@ -196,16 +202,37 @@ class RunReadback:
             "harness_version": self.harness_version,
             "roster_cli_version": self.roster_cli_version,
             "roster_diverged": self.roster_diverged,
+            "route_policy": self.route_policy.value,
         }
 
 
-def _gate_pair(model: str, effort: str | None, *, context_tier: str) -> PairReadback:
+def _gate_pair(
+    model: str,
+    effort: str | None,
+    *,
+    context_tier: str,
+    route_policy: RoutePolicy = RoutePolicy.UNSELECTED,
+) -> PairReadback:
     """Gate one configured pair the way a **Pickup** would gate it.
 
     Both gates run — effort against the model, then the run-level tier against
     the model — because a routed pair meets both and a readback that checked one
     of them would clear a pair the Run would still downgrade.
+
+    Under the **Static route** (#560, ADR-0057) neither gate runs, for the same
+    reason :func:`git_loopy.config._gate_pair` skips them: the hardcoded roster
+    is no longer the authority, the authenticated harness is, and the Run
+    *refuses* a pair that harness will not take rather than downgrading it. A
+    readback that still consulted the roster here would print a route the Run
+    was never going to open.
     """
+    if route_policy is RoutePolicy.STATIC:
+        return PairReadback(
+            model=model,
+            effort=effort,
+            configured_effort=effort,
+            gate_warnings=(),
+        )
     gated = gate_reasoning_effort(model, effort)
     _, tier_warning = gate_context_tier(model, context_tier)
     warnings: tuple[GateWarning, ...] = tuple(
@@ -231,7 +258,14 @@ def build_run_readback(
     routes = tuple(
         RouteReadback(
             key=key,
-            **vars(_gate_pair(model, effort, context_tier=config.context_tier)),
+            **vars(
+                _gate_pair(
+                    model,
+                    effort,
+                    context_tier=config.context_tier,
+                    route_policy=config.route_policy,
+                )
+            ),
         )
         for key, (model, effort) in config.routing.items()
     )
@@ -243,7 +277,12 @@ def build_run_readback(
         escalation_rung=(
             None
             if rung is None
-            else _gate_pair(rung[0], rung[1], context_tier=config.context_tier)
+            else _gate_pair(
+                rung[0],
+                rung[1],
+                context_tier=config.context_tier,
+                route_policy=config.route_policy,
+            )
         ),
         routes=routes,
         unconfigured_keys=tuple(
@@ -252,6 +291,7 @@ def build_run_readback(
         routing_suppressed=config.routing_suppressed,
         harness_version=harness_version,
         roster_cli_version=MODEL_ROSTER_CLI_VERSION,
+        route_policy=config.route_policy,
     )
 
 

@@ -96,44 +96,46 @@ tune the Run instructions. This installs the commands but does not configure
 their issue tracker, labels, or domain layout - that is
 [Part 2](#part-2--configure-this-repo-with-setup-git-loopy-skills).
 
-Interactive `init` also establishes the scope's **Skill policy** — the
-closed-world set of Skills a Run may expose — through the same searchable
-picker as [`git-loopy skills edit`](../git-loopy/python/README.md). It is seeded
-from an existing lower-scope git-loopy policy, or, when none exists, from a
-fresh Copilot Skill baseline; Required Skills cannot be saved disabled, and an
-enabled project Skill that is not git-tracked blocks the save. `git-loopy init
---yes` persists the **Minimal Skill policy** — exactly the Required Skills —
-without contacting the machine's Copilot inventory, which keeps a first CI setup
-reproducible. Change a saved policy later with `git-loopy skills edit`.
+Interactive `init` opens one continuous wizard that establishes the scope's
+**Skill policy** — the closed-world set of Skills a Run may expose — through the
+same searchable picker as [`git-loopy skills edit`](../git-loopy/python/README.md).
+It is seeded from an existing lower-scope git-loopy policy, or, when none
+exists, from a fresh Copilot Skill baseline; Required Skills cannot be saved
+disabled, and an enabled project Skill that is not git-tracked blocks the save.
+Change a saved policy later with `git-loopy skills edit`.
+
+#### Navigating the setup wizard
+
+Use `up` and `down` to move, `space` to toggle a Skill, and `enter` to confirm
+the current step. `esc` goes back; at the first step, where there is nowhere to
+go back to, it cancels setup. `ctrl+c` cancels outright from any step.
+
+The wizard ends on a review screen. Check the proposed scope, config path,
+model, effort, routing, scaffold, and enabled-Skill count there: nothing is
+written until you select `Save`. `Back` returns to the preceding step, and
+`Cancel` leaves the configuration unchanged.
+
+For unattended setup, run `git-loopy init --yes`. It persists the built-in
+default model and effort and the **Minimal Skill policy** — exactly the Required
+Skills — without contacting the machine's Copilot inventory, which keeps a first
+CI setup reproducible. Piping answers into `git-loopy init` is no longer
+supported; without a terminal and without `--yes`, it fails with:
+
+```text
+git-loopy: error: init requires an interactive terminal; use --yes for non-interactive setup.
+```
 
 Setup is where a policy is *established*; everything else about operating one —
 the Config surfaces, the `git-loopy skills` commands, the resolved-policy audit
 event, the Python-first family transition, and every preflight failure with its
 recovery command — is in [`docs/skill-policy.md`](skill-policy.md).
 
-#### The Skill picker has two renderings, and one set of rules
+#### The Skill picker and its rules
 
 Every path that asks you to choose Skills — `init`, `skills edit`, and the
-one-time legacy migration below — opens the *same* picker over the *same*
-selection state. Only the drawing differs, and git-loopy picks the drawing for
-you:
-
-| | Full-screen picker | Plain picker |
-| --- | --- | --- |
-| Used when | stdout is a terminal | anywhere else — a pipe or CI |
-| Search | type to filter, live | type the text, then Enter |
-| Toggle | `Space` on the highlighted row | the row's number |
-| Clear the filter | delete the search text | an empty line |
-| Move | `Up` / `Down` | — the list is numbered |
-| Save | `Enter` | `done`, then `y` at the confirmation |
-| Cancel | `Esc` or `Ctrl+C` | `q` |
-
-The full-screen picker is available in the base installation. A non-terminal
-still uses the plain picker, and nothing is lost — the two are interchangeable
-and return the same selection. git-loopy probes for Textual without importing
-it, so non-interactive commands never pay for a screen they do not show.
-
-Both renderings obey identical rules, because both read one shared model:
+one-time legacy migration below — opens the *same* full-screen picker over the
+same selection state. It is part of the base Python Runner installation. The
+picker obeys these rules because it reads one shared model:
 
 - **Filtering never changes a selection.** Skills you enabled that the current
   search hides stay enabled and are saved. Canonical Skill names never contain a
@@ -146,10 +148,8 @@ Both renderings obey identical rules, because both read one shared model:
 - **Save is refused, not silently corrected**, whenever the selection would not
   validate; the refusal names the offending Skill.
 
-Every refusal is shown where you are about to type: the full-screen picker
-updates its status bar, and the plain picker redraws the reason *below* the
-list, on the line above the prompt — so a long catalog cannot scroll away the
-one line that explains why the last answer changed nothing.
+Every refusal is shown in the picker's status bar, so a long catalog cannot
+hide the one line that explains why the last action changed nothing.
 
 Copilot's own enabled state has no authority over a saved Skill policy — once
 established, the policy changes only through an explicit git-loopy action. When

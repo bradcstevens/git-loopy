@@ -331,6 +331,104 @@ def test_gone_issue_reappears_returns_to_queued() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Membership read -> queued, and nothing else (#481, ADR-0042)
+# ---------------------------------------------------------------------------
+
+
+def test_membership_read_adds_queued_rows_for_refs_never_seen() -> None:
+    """The **Queue** shows the Run's real scope, not just its started **Lanes**.
+
+    A **Parallel mode** Run drains a continuously refreshed cache, so a Queue
+    that only ever grew a row per Lane start read as "three issues of work
+    left" when it meant "three Lanes against a Queue of sixteen".
+    """
+    clock = _FakeClock()
+    state = _make_state(clock)
+    clock.advance(4)
+    state.render(
+        _ev(events_module.WRAPPER_POOL_REFRESHED, iter=None, issues=[42, 43, 44])
+    )
+
+    assert list(state.ledger) == [42, 43, 44], "the Queue keeps the read's order"
+    entry = state.ledger[43]
+    assert entry.status == STATUS_QUEUED
+    assert entry.first_seen_at == 4.0
+    assert entry.started_at is None
+    assert entry.started_wall is None
+    assert entry.active_seconds(clock()) == 0.0
+    assert entry.usage.tokens_in == 0
+    assert entry.usage.tokens_out == 0
+    assert not entry.usage_observed
+    assert state.active_ref is None
+
+
+def test_membership_read_never_downgrades_or_revives_a_known_row() -> None:
+    """A **Membership read** may only add rows (ADR-0042).
+
+    It is taken *during* a unit of work, so it routinely lists issues a Lane is
+    already working or has already finished. A read that reset those rows would
+    make a finished issue appear to reopen and an active one to un-start.
+    """
+    state = _make_state()
+    state.render(_ev(events_module.WRAPPER_ITERATION_START, iter=1))
+    state.render(_ev(events_module.WRAPPER_AFK_READY_COLLECTED, issues=[12, 13, 14]))
+    state.stream_message("<working issue=12>")
+    state.render(_ev(events_module.WRAPPER_AUTO_CLOSE, issue=12, sha="a", shas=["a"]))
+    state.render(_ev(events_module.WRAPPER_ITERATION_END, iter=1))
+    state.render(_ev(events_module.WRAPPER_ITERATION_START, iter=2))
+    state.render(_ev(events_module.WRAPPER_AFK_READY_COLLECTED, issues=[13]))
+    state.stream_message("<working issue=13>")
+    assert state.ledger[14].status == STATUS_GONE
+
+    state.render(
+        _ev(events_module.WRAPPER_POOL_REFRESHED, iter=None, issues=[12, 13, 14, 15])
+    )
+
+    assert state.ledger[12].status == STATUS_CLOSED
+    assert state.ledger[13].status == STATUS_ACTIVE
+    assert state.active_ref == 13
+    assert state.ledger[14].status == STATUS_GONE, "add-only: it never revives one"
+    assert state.ledger[15].status == STATUS_QUEUED
+
+
+def test_membership_read_never_sweeps_a_row_it_does_not_list() -> None:
+    """The ``gone`` sweep stays welded to the authoritative **Pool**.
+
+    ADR-0042 chose a distinct Event type precisely so a non-authoritative read
+    could never reach the sweep: an issue absent from a shallow read has not
+    left the Run's view, it was merely not eligible when the read was taken.
+    """
+    state = _make_state()
+    _start_iteration(state, iteration=1, issues=[12, 13])
+
+    state.render(_ev(events_module.WRAPPER_POOL_REFRESHED, iter=None, issues=[12]))
+
+    assert state.ledger[13].status == STATUS_QUEUED
+    # The authoritative Pool's sweep is untouched by the read that preceded it.
+    state.render(_ev(events_module.WRAPPER_ITERATION_END, iter=1))
+    _start_iteration(state, iteration=2, issues=[12])
+    assert state.ledger[13].status == STATUS_GONE
+
+
+def test_membership_read_naming_one_unusable_ref_still_adds_the_rest() -> None:
+    """An incomplete **Membership read** is simply a smaller one (ADR-0042).
+
+    Add-only means a truncated or partly unreadable read can only under-report.
+    A ref that names no issue identity costs only itself: it opens no phantom
+    row of its own, and it never discards the refs the read *did* name.
+    """
+    state = _make_state()
+
+    state.render(
+        _ev(events_module.WRAPPER_POOL_REFRESHED, iter=None, issues=[61, None, 63])
+    )
+
+    assert list(state.ledger) == [61, 63]
+    assert state.ledger[61].status == STATUS_QUEUED
+    assert state.ledger[63].status == STATUS_QUEUED
+
+
+# ---------------------------------------------------------------------------
 # Stop freezes the active timer
 # ---------------------------------------------------------------------------
 

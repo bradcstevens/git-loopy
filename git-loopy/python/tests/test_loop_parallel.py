@@ -93,12 +93,16 @@ aborting the Lane: see the ``test_parallel_*worktree_setup*`` tests.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import itertools
 import json
+import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -107,13 +111,13 @@ import pytest
 from copilot.generated.session_events import (
     AssistantMessageData,
     AssistantUsageData,
-    SessionErrorData,
     SessionEvent,
     SessionEventType,
 )
 
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
+from git_loopy import cli as cli_module
 from git_loopy import loop as loop_module
 from git_loopy import rolling_pressure
 from git_loopy.attempt_lifecycle import AttemptState
@@ -123,25 +127,29 @@ from git_loopy.execution_host import (
     ContributionOutcome,
     ContributionRequest,
     ContributionSuccess,
+    HostPreflight,
     IsolationGrade,
     Placement,
 )
-from git_loopy.events import WRAPPER_DASHBOARD_FAULT
 from git_loopy.gate import LoopFailure
-from git_loopy.interactive.driver import (
-    EXIT_DASHBOARD_FAULT,
-    InteractiveDriver,
-)
-from git_loopy.interactive.state import LiveRunState
-from git_loopy.interactive.terminal import TerminalOwner
+from git_loopy.interactive.state import LiveRunState, issue_detail, queue_rows
 from git_loopy.readiness import BlockedByRead, BlockerNode
+from git_loopy.release_version import (
+    RELEASE_VERSION_PATHS,
+    read_runtime_release_version,
+    validate_repository_release_version,
+)
 from git_loopy.session_outcome import (
     SessionOutcome,
     SessionOutcomeRecord,
     SessionTermination,
 )
 from git_loopy.skill_catalog import build_skill_catalog
-from git_loopy.sources import GitHubIssueSource, PoolCandidate
+from git_loopy.rolling_pool import RollingPool
+from git_loopy import dynamic_route
+from git_loopy import static_route
+from git_loopy.static_route import RoutePolicy
+from git_loopy.sources import MembershipSnapshot, PoolCandidate
 from git_loopy.staircase import Candidate, PriceStaircase
 from git_loopy.wrapper import (
     CHECKPOINT_TRAILER_KEY,
@@ -149,8 +157,9 @@ from git_loopy.wrapper import (
     checkpoint_message,
 )
 from git_loopy.worktree import SetupResult
+from git_loopy import persist as persist_module
+from git_loopy.route_publication import RouteDeliveryError
 from tests.fakes import FakeGateRunner, FakeGitClient, FakeGitHubClient
-from tests.test_interactive_terminal import FakeTerminal
 
 
 @pytest.fixture(autouse=True)
@@ -408,6 +417,11 @@ def _run_id(tmp_path: Path) -> str:
     return _logged_events(tmp_path)[0]["run_id"]
 
 
+def _run_summary(tmp_path: Path) -> dict[str, Any]:
+    runs_dir = tmp_path / ".git-loopy" / "runs"
+    return json.loads(next(runs_dir.glob("*.json")).read_text(encoding="utf-8"))
+
+
 def _lane_worktree_adds(fake_git: FakeGitClient) -> list[tuple[Path, str, str]]:
     """The **Lane** worktree adds only, dropping private Integration stages.
 
@@ -472,9 +486,12 @@ def _lane_branch_deletes(fake_git: FakeGitClient) -> list[str]:
 
 
 def _wire_repo(
-    tmp_path: Path, *, merge_conflicts: Sequence[int] = ()
+    tmp_path: Path,
+    *,
+    merge_conflicts: Sequence[int] = (),
+    release_versions: Sequence[str] = (),
 ) -> FakeGitClient:
-    (tmp_path / "git-loopy").mkdir()
+    (tmp_path / "git-loopy").mkdir(exist_ok=True)
     (tmp_path / "git-loopy" / "prompt.md").write_text(
         "You are the agent. Implement the AFK-ready issues.\n", encoding="utf-8"
     )
@@ -492,6 +509,56 @@ def _wire_repo(
         dirty=False,
         untracked=False,
         merge_conflicts=merge_conflicts,
+        release_versions=release_versions,
+    )
+
+
+def _wire_release_distribution(root: Path, version: str = "1.2.3") -> None:
+    (root / "VERSION").write_text(f"{version}\n", encoding="utf-8")
+    package_dir = root / "git-loopy" / "python" / "git_loopy"
+    package_dir.mkdir(parents=True, exist_ok=True)
+    (package_dir / "__init__.py").write_text(
+        f'__version__ = "{version}"\n', encoding="utf-8"
+    )
+    (package_dir / "VERSION").write_text(f"{version}\n", encoding="utf-8")
+    (package_dir.parent / "pyproject.toml").write_text(
+        f'[project]\nname = "git-loopy"\nversion = "{version}"\n',
+        encoding="utf-8",
+    )
+    (package_dir.parent / "uv.lock").write_text(
+        '\n'.join(
+            (
+                "[[package]]",
+                'name = "git-loopy"',
+                f'version = "{version.replace("-dev.", ".dev")}"',
+                'source = { editable = "." }',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    tui_dir = root / "git-loopy" / "tui"
+    tui_dir.mkdir()
+    (tui_dir / "Cargo.toml").write_text(
+        f'[package]\nname = "git-loopy-tui"\nversion = "{version}"\n',
+        encoding="utf-8",
+    )
+    (tui_dir / "Cargo.lock").write_text(
+        f'[[package]]\nname = "git-loopy-tui"\nversion = "{version}"\n',
+        encoding="utf-8",
+    )
+    (tui_dir / "README.md").write_text(
+        f'{{"name": "git-loopy-tui", "version": "{version}"}}\n',
+        encoding="utf-8",
+    )
+    conformance_dir = root / "git-loopy" / "conformance"
+    conformance_dir.mkdir()
+    (conformance_dir / "release-version.json").write_text(
+        json.dumps({
+            "expected_release_version": version,
+            "expected_python_distribution_version": version.replace("-dev.", ".dev"),
+        }) + "\n",
+        encoding="utf-8",
     )
 
 
@@ -581,6 +648,23 @@ def test_parallel_run_dispatches_two_lanes(tmp_path, monkeypatch) -> None:
 
     # Each Lane's commit advanced its OWN branch: two commit.recorded events.
     events = _logged_events(tmp_path)
+    membership_reads = [
+        event for event in events if event["type"] == "wrapper.pool.refreshed"
+    ]
+    assert len(membership_reads) == 1
+    assert membership_reads[0]["issues"] == [42, 43]
+    assert membership_reads[0]["iter"] is None
+    assert not {
+        "contribution_id",
+        "issue",
+        "lane_id",
+        "lane_issue",
+    }.intersection(membership_reads[0])
+    assert events.index(membership_reads[0]) < next(
+        index
+        for index, event in enumerate(events)
+        if event["type"] == "wrapper.contribution.start"
+    )
     commit_events = [e for e in events if e["type"] == "wrapper.commit.recorded"]
     assert len(commit_events) == 2, (
         f"expected one commit per Lane, got {len(commit_events)}"
@@ -645,6 +729,7 @@ def test_parallel_lanes_open_sessions_with_per_issue_routed_model(
         model="claude-opus-4.8",
         reasoning_effort="max",
         routing={"docs": ("gpt-5-mini", "medium")},
+        context_tier="long_context",
         issue_source="github",
         max_iterations=2,
         max_nmt_strikes=3,
@@ -664,9 +749,11 @@ def test_parallel_lanes_open_sessions_with_per_issue_routed_model(
     # The routed Lane (task-type:docs) opened on the routed (model, effort)...
     assert by_dir["issue-42"]["model"] == "gpt-5-mini"
     assert by_dir["issue-42"]["reasoning_effort"] == "medium"
+    assert by_dir["issue-42"]["context_tier"] == "long_context"
     # ...while the unlabelled Lane opened on the global default.
     assert by_dir["issue-43"]["model"] == "claude-opus-4.8"
     assert by_dir["issue-43"]["reasoning_effort"] == "max"
+    assert by_dir["issue-43"]["context_tier"] == "long_context"
 
 
 def test_parallel_auto_resolution_session_reuses_lane_routed_model(
@@ -905,7 +992,7 @@ def test_parallel_lanes_stamp_events_with_lane_issue(tmp_path, monkeypatch) -> N
         "integration_backlog": True,
         "adaptive_lane_limit": True,
         "contribution_events": True,
-        "execution_hosts": ["local"],
+        "execution_hosts": ["local", "github-actions"],
     }
     assert run_start["execution_host"] == {
         "placement": "local",
@@ -1908,7 +1995,7 @@ def test_second_stop_before_host_dispatch_starts_no_host_contribution(
     real_request = real_parallel_loop._build_contribution_request
 
     def inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
-        return real_parallel_loop(*args, execution_host=host, **kwargs)
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
 
     monkeypatch.setattr(loop_module, "_ParallelLoop", inject_host)
 
@@ -1941,6 +2028,74 @@ def test_second_stop_before_host_dispatch_starts_no_host_contribution(
     assert [event for event in events if event["type"] == "wrapper.strike"] == []
     (end,) = [event for event in events if event["type"] == "wrapper.contribution.end"]
     assert end["reason"] == "operator_stop"
+
+
+class _EmptyRollingSource:
+    """A membership seam that never offers a candidate.
+
+    The **Wind-down** ladder is a fact about latches, not about refill, so a
+    Pool the scheduler can never draw from keeps the test on the one axis it
+    is about.
+    """
+
+    def shallow_membership(self) -> MembershipSnapshot:
+        return MembershipSnapshot(candidates=(), complete=True)
+
+
+def test_a_stop_pressed_during_a_strike_drain_escalates_to_cancel(
+    monkeypatch,
+) -> None:
+    """One latch, two causes — so the operator's gesture climbs it (#457).
+
+    ADR-0043 makes the **Strike** abort and the operator **Stop** the *same*
+    primitive entered for different reasons, and #445 §J spells out what that
+    costs on the wire: a Stop pressed while a Strike drain is already in force
+    escalates rather than re-latching, and emits exactly one Event. Re-latching
+    would put a second ``drain`` on the trace that stopped nothing which was not
+    already stopped, and would leave the operator's *second* gesture as the
+    first thing that ever cancelled anything — one press behind the model
+    ``Ctrl+C`` established.
+
+    The scheduler here is the real one, because the whole decision is read off
+    its abort latch; a double would be asserting that the test knows what
+    ``abort_latched`` means.
+    """
+    diag = logging.getLogger("test.loop.parallel.escalation")
+    scheduler = loop_module.rolling_scheduler.RollingScheduler(
+        diag=diag,
+        pool=RollingPool(diag=diag, source=_EmptyRollingSource(), clock=lambda: 0.0),
+        lane_cap=2,
+        max_iterations=0,
+    )
+    parallel = object.__new__(loop_module._ParallelLoop)
+    parallel._scheduler = scheduler
+    parallel._stop_cancel_requested = False
+    parallel._active_agent_tasks = set()
+    parallel._serial = object.__new__(loop_module._Loop)
+    emitted: list[dict[str, Any]] = []
+    parallel._serial._emit = lambda event_type, **payload: emitted.append(
+        {"type": event_type, **payload}
+    )
+    parallel._serial._stop_drain_requested = False
+    parallel._serial._stop_cancel_requested = False
+    parallel._serial._wind_down_stage = None
+    parallel._serial._wind_down_cause = None
+    parallel._serial._active_agent_task = None
+
+    scheduler.start()
+    assert scheduler.strike_limit_reached()
+    parallel._serial._announce_wind_down(
+        cause="strike_limit", stage="drain", draining=scheduler.open_count
+    )
+    emitted.clear()
+
+    parallel.request_stop_drain()
+
+    assert [
+        (event["cause"], event["stage"], event["draining"]) for event in emitted
+    ] == [("operator_stop", "cancel", 0)]
+    assert parallel._serial._stop_drain_requested is True
+    assert parallel._stop_cancel_requested is True
 
 
 def test_parallel_the_first_stop_stops_refill_and_still_integrates_started_work(
@@ -2324,14 +2479,20 @@ def test_parallel_workspace_root_failure_refuses_the_run_at_preflight(
     assert fake_client.stop_call_count == 1
 
 
-@pytest.mark.parametrize("execution_host", ["github-actions", ""])
+@pytest.mark.parametrize("execution_host", ["kubernetes", "GitHub-Actions", ""])
 def test_unsupported_execution_host_refuses_the_run_at_preflight(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     execution_host: str,
 ) -> None:
-    """A host placement this distribution cannot drive is never downgraded."""
+    """A host placement this distribution cannot drive is never downgraded.
+
+    ``github-actions`` left this list when #460 gave it a production adapter,
+    which is the point: the refusal is derived from the declared manifest, so
+    it narrows exactly as the distribution grows and never guesses. A near-miss
+    spelling is refused like any other undeclared identifier.
+    """
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
 
@@ -2605,6 +2766,663 @@ def test_parallel_integration_lands_and_closes_both_lanes(
 
     # No worktrees left live once Integration has processed every contribution.
     assert fake_git.active_worktrees == []
+
+
+@pytest.mark.parametrize(
+    ("bump_class", "expected_version", "expected_commit", "expected_note_paths"),
+    (
+        (
+            "patch",
+            "1.2.4-dev.1",
+            "chore(release): advance Release line to 1.2.4-dev.1",
+            ("docs/releases/v1.2.4-dev.1.md",),
+        ),
+        (
+            "major",
+            "2.0.0",
+            "chore(release): promote Release line to 2.0.0",
+            (
+                "docs/releases/v2.0.0-dev.1.md",
+                "docs/releases/v2.0.0.md",
+            ),
+        ),
+        ("none", "1.2.3", None, ()),
+    ),
+)
+def test_parallel_integration_applies_only_bumped_release_lines_after_publication(
+    bump_class: str,
+    expected_version: str,
+    expected_commit: str | None,
+    expected_note_paths: tuple[str, ...],
+    tmp_path, monkeypatch
+) -> None:
+    """Only a bumped green contribution commits a post-Integration Release line."""
+    fake_git = _wire_repo(tmp_path)
+    _wire_release_distribution(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42,
+                labels=["ready-for-agent", "parallel-safe", f"semver:{bump_class}"],
+            )
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    )
+
+    assert exit_code == 0
+    assert validate_repository_release_version(tmp_path) == expected_version
+    release_advanced = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.release.advanced"
+    ]
+    if expected_commit is None:
+        assert fake_git.commit_paths_calls == []
+        assert release_advanced == []
+    else:
+        assert fake_git.commit_paths_calls == [
+            (
+                expected_commit,
+                (
+                    "VERSION",
+                    "git-loopy/python/git_loopy/__init__.py",
+                    "git-loopy/python/git_loopy/VERSION",
+                    "git-loopy/python/pyproject.toml",
+                    "git-loopy/python/uv.lock",
+                    "git-loopy/tui/Cargo.toml",
+                    "git-loopy/tui/Cargo.lock",
+                    "git-loopy/tui/README.md",
+                    "git-loopy/conformance/release-version.json",
+                    *expected_note_paths,
+                ),
+            )
+        ]
+        fragment_path = tmp_path / expected_note_paths[0]
+        assert fragment_path.read_text(encoding="utf-8") == (
+            f"# git-loopy {expected_version if bump_class == 'patch' else '2.0.0-dev.1'}\n\n"
+            "This development fragment advances the Release line to "
+            f"`{expected_version if bump_class == 'patch' else '2.0.0-dev.1'}` "
+            f"on the way to stable `{expected_version.split('-', 1)[0]}`.\n"
+        )
+        if bump_class == "major":
+            assert (tmp_path / expected_note_paths[1]).read_text(encoding="utf-8") == (
+                "# git-loopy 2.0.0\n\n"
+                "git-loopy 2.0.0 was promoted from the committed development fragments below.\n\n"
+                "## Development fragments\n\n"
+                "### 2.0.0-dev.1\n\n"
+                "This development fragment advances the Release line to "
+                "`2.0.0-dev.1` on the way to stable `2.0.0`.\n"
+            )
+        assert len(release_advanced) == 1
+        assert {
+            key: release_advanced[0][key]
+            for key in ("issue", "bump_class", "release_target", "release_version")
+        } == {
+            "issue": 42,
+            "bump_class": bump_class,
+            "release_target": expected_version.split("-", 1)[0],
+            "release_version": expected_version,
+        }
+        event_types = [event["type"] for event in _logged_events(tmp_path)]
+        release_index = event_types.index("wrapper.release.advanced")
+        assert event_types[release_index - 1] == "wrapper.auto_close"
+        assert (
+            event_types.index("wrapper.integration.published") < release_index
+        )
+    assert fake_gh.issue_view(42).state == "CLOSED"
+
+
+def test_parallel_integration_preserves_a_human_stable_release_note(
+    tmp_path, monkeypatch
+) -> None:
+    """A stable note a human already wrote survives the Promotion that ships it.
+
+    The generated draft is a floor, not a replacement (ADR-0052). A `major`
+    reaches stable under the Run itself, so the Promotion that would compose a
+    draft runs while the human's essay is already sitting at the conventional
+    location -- and overwriting it there would destroy prose nothing else holds
+    a copy of. The preserved note is still committed, because publication reads
+    what the tag carries rather than what the worktree happens to hold.
+    """
+    fake_git = _wire_repo(tmp_path)
+    _wire_release_distribution(tmp_path)
+    essay = "# git-loopy 2.0.0\n\nA human release essay.\n"
+    stable_note = tmp_path / "docs/releases/v2.0.0.md"
+    stable_note.parent.mkdir(parents=True, exist_ok=True)
+    stable_note.write_text(essay, encoding="utf-8")
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe", "semver:major"])
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 0
+
+    assert validate_repository_release_version(tmp_path) == "2.0.0"
+    assert stable_note.read_text(encoding="utf-8") == essay
+    committed_paths = [paths for _message, paths in fake_git.commit_paths_calls]
+    assert len(committed_paths) == 1
+    assert "docs/releases/v2.0.0.md" in committed_paths[0]
+    # The advance still authors its own fragment: the human wrote the stable
+    # note, not the development one the next Promotion composes from.
+    assert (tmp_path / "docs/releases/v2.0.0-dev.1.md").exists()
+    assert "docs/releases/v2.0.0-dev.1.md" in committed_paths[0]
+
+
+def test_parallel_integration_restores_the_release_line_when_its_commit_fails(
+    tmp_path, monkeypatch
+) -> None:
+    """A release commit failure leaves base with its prior complete version."""
+    fake_git = _wire_repo(tmp_path)
+    _wire_release_distribution(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42,
+                labels=["ready-for-agent", "parallel-safe", "semver:patch"],
+            )
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    def reject_release_commit(message: str, paths: Sequence[Path | str]) -> str:
+        fake_git.commit_paths_calls.append((message, tuple(str(path) for path in paths)))
+        raise git_module.GitError(["git", "commit"], 1, "pre-commit rejected release")
+
+    monkeypatch.setattr(fake_git, "commit_paths", reject_release_commit)
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 0
+
+    assert validate_repository_release_version(tmp_path) == "1.2.3"
+    # Both halves of the refused `commit_paths` are undone -- the working tree by
+    # the rewrite above, the index it had already staged by this. `git merge`
+    # aborts while any index entry differs from HEAD, so skipping this would
+    # demote every later Integration in the Run (see test_git.py's real-git
+    # proof of the same rule).
+    assert fake_git.unstage_paths_calls == [
+        (
+            *(str(path) for path in RELEASE_VERSION_PATHS),
+            "docs/releases/v1.2.4-dev.1.md",
+        )
+    ]
+    assert not (tmp_path / "docs/releases/v1.2.4-dev.1.md").exists()
+    # The publication already happened and cannot be retracted; a Release line
+    # that would not move is a diagnostic, never a veto on a landed issue.
+    assert fake_gh.issue_view(42).state == "CLOSED"
+    assert len(_lane_branch_deletes(fake_git)) == 1
+
+
+def test_parallel_integration_survives_a_release_tag_read_that_fails(
+    tmp_path, monkeypatch
+) -> None:
+    """A git failure reading the last stable Release never strands a landing.
+
+    The stable base behind a ``dev.N`` line comes from a ``git tag`` read, which
+    raises :class:`~git_loopy.git.GitError` rather than a Release error. Left
+    uncaught it would escape a *published* merge before the contribution is
+    finalized, crashing the Run with the issue open and the Lane branch alive.
+    """
+    fake_git = _wire_repo(tmp_path)
+    _wire_release_distribution(tmp_path, version="1.3.0-dev.7")
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42,
+                labels=["ready-for-agent", "parallel-safe", "semver:patch"],
+            )
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    def refuse_tag_read() -> str | None:
+        raise git_module.GitError(["git", "tag"], 128, "not a git repository")
+
+    monkeypatch.setattr(fake_git, "latest_release_version", refuse_tag_read)
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 0
+
+    assert validate_repository_release_version(tmp_path) == "1.3.0-dev.7"
+    assert fake_git.commit_paths_calls == []
+    assert fake_gh.issue_view(42).state == "CLOSED"
+    assert len(_lane_branch_deletes(fake_git)) == 1
+
+
+def test_parallel_integration_continues_a_prerelease_release_line(
+    tmp_path, monkeypatch
+) -> None:
+    """A new Run retains a persisted dev counter and its stable Release base."""
+    fake_git = _wire_repo(tmp_path, release_versions=("1.2.3",))
+    _wire_release_distribution(tmp_path, version="1.3.0-dev.7")
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42,
+                labels=["ready-for-agent", "parallel-safe", "semver:patch"],
+            )
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 0
+
+    assert validate_repository_release_version(tmp_path) == "1.3.0-dev.8"
+    assert fake_gh.issue_view(42).state == "CLOSED"
+
+
+def test_parallel_integration_advances_the_release_line_holding_the_integration_lock(
+    tmp_path, monkeypatch
+) -> None:
+    """Serialization is proved at the lock, not by racing two Lanes and hoping.
+
+    ADR-0052 places the advance inside the section ADR-0009 already serializes,
+    so the shared main worktree never sees two. The assertion reads the existing
+    Integration seam -- ``_integration_lock`` -- at the moment the advance runs.
+    """
+    fake_git = _wire_repo(tmp_path)
+    _wire_release_distribution(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42, labels=["ready-for-agent", "parallel-safe", "semver:patch"]
+            )
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    held: list[bool] = []
+    advance = loop_module._ParallelLoop._advance_release_line
+
+    def watch_the_lock(self: Any, item: Any) -> None:
+        held.append(self._integration_lock.locked())
+        advance(self, item)
+
+    monkeypatch.setattr(
+        loop_module._ParallelLoop, "_advance_release_line", watch_the_lock
+    )
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 0
+
+    assert held == [True]
+    assert validate_repository_release_version(tmp_path) == "1.2.4-dev.1"
+
+
+def test_parallel_no_lane_contribution_carries_a_release_version_change(
+    tmp_path, monkeypatch
+) -> None:
+    """Version files and Release notes move on base only -- never in a Lane.
+
+    Bumping inside a Lane's contribution would have every Lane touch the same
+    version-bearing files, conflicting on every Integration on hunks whose
+    conflict carries no meaning and spending the bounded auto-resolution budget
+    reconciling version numbers (ADR-0052). The `dev.N` notes fragment each
+    advance authors rides in that same Release commit and inherits the rule: a
+    Lane that wrote its own fragment would collide with every sibling Lane the
+    same way, and the fragment names a Release version a Lane cannot know.
+    """
+    fake_git = _wire_repo(tmp_path)
+    _wire_release_distribution(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42, labels=["ready-for-agent", "parallel-safe", "semver:minor"]
+            ),
+            _make_issue(
+                43, labels=["ready-for-agent", "parallel-safe", "semver:patch"]
+            ),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    release_write_roots: list[Path] = []
+    write_release = loop_module.write_repository_release_version
+
+    def record_write(root: Path, version: str) -> None:
+        release_write_roots.append(Path(root))
+        write_release(root, version)
+
+    monkeypatch.setattr(
+        loop_module, "write_repository_release_version", record_write
+    )
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                max_iterations=2,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 0
+
+    # Every version write was addressed at the shared base, never at a Lane
+    # workspace or a private Integration stage.
+    lane_roots = {path for path, _branch, _base in fake_git.worktree_adds}
+    assert len(lane_roots) == 4  # two Lane workspaces, two Integration stages
+    assert release_write_roots == [tmp_path, tmp_path]
+    # Both Lane workspaces and both private Integration stages: none of them
+    # ever staged a version-bearing path either.
+    lane_side_writes = [
+        (branch, message)
+        for (_path, branch, _base), client in zip(
+            fake_git.worktree_adds, fake_git.worktree_clients
+        )
+        for message, _paths in client.commit_paths_calls
+    ]
+    assert lane_side_writes == []
+    # Base did, twice -- one per bumped contribution, each carrying the version
+    # copies and the one `dev.N` fragment that advance authored.
+    assert [paths for _message, paths in fake_git.commit_paths_calls] == [
+        (
+            *(str(path) for path in RELEASE_VERSION_PATHS),
+            f"docs/releases/v{version}.md",
+        )
+        for version in ("1.3.0-dev.1", "1.3.0-dev.2")
+    ]
+
+
+def _release_line_after_run(
+    root: Path, monkeypatch, *, bump_classes: dict[int, str]
+) -> tuple[str, list[str]]:
+    """Run every issue in ``bump_classes`` to green; report the resulting line.
+
+    Runs in its own repository ``root`` so one test can replay the same Bump
+    classes in two Integration orders. Returns the trunk's resulting Release
+    version and the ordered Release-commit subjects, so a caller can read back
+    **which order** Integration applied the classes in as well as where the line
+    ended up.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    # Reuse conftest's synthetic Integration contract rather than restating it.
+    (root / "AGENTS.md").write_text(
+        (root.parent / "AGENTS.md").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    fake_git = _wire_repo(root)
+    _wire_release_distribution(root)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                ref, labels=["ready-for-agent", "parallel-safe", f"semver:{key}"]
+            )
+            for ref, key in bump_classes.items()
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                max_iterations=len(bump_classes),
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 0
+    assert sorted(fake_gh.issue_view(ref).state for ref in bump_classes) == [
+        "CLOSED"
+    ] * len(bump_classes)
+    return (
+        validate_repository_release_version(root),
+        [message for message, _paths in fake_git.commit_paths_calls],
+    )
+
+
+def test_parallel_integration_order_does_not_change_the_resulting_release_line(
+    tmp_path, monkeypatch
+) -> None:
+    """One minor and one patch land one version whichever integrates first.
+
+    The target is a running maximum and the counter a count, so neither folds
+    the previous version -- the property the whole scheme exists to preserve
+    (ADR-0052). The two runs are shown to have applied the classes in *opposite*
+    orders by their differing intermediate line, so the equal endpoint is the
+    ratchet and not a coincidence.
+    """
+    minor_first, minor_first_commits = _release_line_after_run(
+        tmp_path / "minor-first",
+        monkeypatch,
+        bump_classes={42: "minor", 43: "patch"},
+    )
+    patch_first, patch_first_commits = _release_line_after_run(
+        tmp_path / "patch-first",
+        monkeypatch,
+        bump_classes={42: "patch", 43: "minor"},
+    )
+
+    assert minor_first == patch_first == "1.3.0-dev.2"
+    assert minor_first_commits[0].endswith("1.3.0-dev.1")
+    assert patch_first_commits[0].endswith("1.2.4-dev.1")
+
+
+def test_parallel_major_promotion_restarts_the_next_release_line(
+    tmp_path, monkeypatch
+) -> None:
+    """A major stable Release becomes the next line's fresh stable base."""
+    version, commits = _release_line_after_run(
+        tmp_path / "major-then-patch",
+        monkeypatch,
+        bump_classes={42: "major", 43: "patch"},
+    )
+
+    assert version == "2.0.1-dev.1"
+    assert commits[0].endswith("2.0.0")
+    assert commits[1].endswith("2.0.1-dev.1")
+
+
+def test_git_loopy_version_reports_the_line_a_run_advanced(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """``git-loopy --version`` reads the value Integration just committed."""
+    fake_git = _wire_repo(tmp_path)
+    _wire_release_distribution(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42, labels=["ready-for-agent", "parallel-safe", "semver:minor"]
+            )
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    assert asyncio.run(
+        loop_module.run(
+            RunConfig(
+                model="claude-opus-4.8-max",
+                issue_source="github",
+                max_iterations=1,
+                max_nmt_strikes=3,
+                verbosity=0,
+                render_reasoning=False,
+            )
+        )
+    ) == 0
+    capsys.readouterr()
+
+    # The Run advanced the tree under ``tmp_path``; ``--version`` reads the
+    # Python distribution's own runtime copy, so point the reader at that tree's
+    # copy and otherwise exercise the real command surface.
+    runtime_version = tmp_path / "git-loopy" / "python" / "git_loopy" / "VERSION"
+    monkeypatch.setattr(
+        cli_module,
+        "read_runtime_release_version",
+        lambda path=None: read_runtime_release_version(path or runtime_version),
+    )
+
+    assert cli_module.main(["--version"]) == 0
+    assert capsys.readouterr().out == "git-loopy 1.3.0-dev.1\n"
 
 
 class _BaseWatchingGateRunner(FakeGateRunner):
@@ -3659,6 +4477,81 @@ class _TerminalFailureExecutionHost:
         )
 
 
+@dataclass
+class _RepeatedDispatchFailureHost(_TerminalFailureExecutionHost):
+    """A remote host that refuses enough dispatches to strain its capacity."""
+
+    failures_remaining: int = 14
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            return ContributionFailure(
+                reason="fake_dispatch_refused",
+                classification="never_started",
+                ending=None,
+            )
+        self.calls.append(request)
+        return await super().run_contribution(request)
+
+
+def test_repeated_never_started_dispatches_narrow_the_existing_host_pressure(
+    tmp_path, monkeypatch
+) -> None:
+    """Dispatch refusal reuses host/setup pressure; it is not a Strike signal."""
+    _fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _RepeatedDispatchFailureHost()
+    built: list[loop_module._ParallelLoop] = []
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        instance = real_parallel_loop(*args, **{**kwargs, "execution_host": host})
+        built.append(instance)
+        return instance
+
+    _wire_production_pressure(monkeypatch)
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    assert built[0]._scheduler is not None
+    assert built[0]._scheduler.effective_limit < host.capacity
+    assert built[0]._serial._strike_machine.strikes == 0
+    assert any(
+        event["pressure"] == "host"
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.concurrency.changed"
+    )
+
+
+def test_sustained_dispatch_refusal_ends_the_run_as_an_environment_failure(
+    tmp_path, monkeypatch
+) -> None:
+    """A host that cannot start work must not keep a zero-Lane Run alive."""
+    _fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _RepeatedDispatchFailureHost(failures_remaining=15)
+    built: list[loop_module._ParallelLoop] = []
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        instance = real_parallel_loop(*args, **{**kwargs, "execution_host": host})
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    assert asyncio.run(loop_module.run(cfg)) == loop_module.exit_code_for(
+        "preflight_failed"
+    )
+    assert built[0]._serial._strike_machine.strikes == 0
+
+
 def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     tmp_path, monkeypatch
 ) -> None:
@@ -3679,7 +4572,7 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     real_parallel_loop = loop_module._ParallelLoop
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
-        instance = real_parallel_loop(*args, execution_host=host, **kwargs)
+        instance = real_parallel_loop(*args, **{**kwargs, "execution_host": host})
         built.append(instance)
         return instance
 
@@ -3729,6 +4622,158 @@ def test_parallel_loop_finalizes_a_substituted_host_failure_without_a_session(
     assert len(reasons) == 4
     assert reasons[:2] == ["unchanged_branch", "unchanged_branch"]
     assert len(fake_git.merge_calls) == 2
+
+
+@dataclass
+class _StrikeThenPublishExecutionHost:
+    """One issue defeated outright, and one held until the abort latches.
+
+    The **Execution host** seam is the deterministic way to stage the one
+    ordering this test is about: the drain-confirmed **Strike** abort has to be
+    latched *while another contribution is still in flight*, so the green
+    publication that follows has something to revoke. A timeout ending defeats
+    its issue in a single attempt (it is outside the two retryable endings), so
+    the ceiling is reached without waiting on a **Pool** re-offer.
+    """
+
+    git: FakeGitClient
+    loops: list[Any]
+    held_ref: int
+    placement: Placement = "fake"
+    isolation_grade: IsolationGrade = "workspace separation only"
+    capacity: int = 4
+    #: Bound on the hold, so a Run that never latches the abort fails as a
+    #: readable assertion rather than as a test-suite timeout.
+    hold_limit: int = 5000
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        branch = git_module.lane_branch_name(request.run_id, request.issue_ref)
+        if request.issue_ref != self.held_ref:
+            return ContributionSuccess(
+                branch=branch,
+                sha=request.base_revision,
+                events=(),
+                placement=self.placement,
+                isolation_grade=self.isolation_grade,
+                ending=SessionOutcomeRecord(
+                    outcome=SessionOutcome.TIMEOUT,
+                    progressed=False,
+                    termination=SessionTermination.COMPLETED,
+                ),
+            )
+        for _ in range(self.hold_limit):
+            if any(
+                loop._scheduler is not None and loop._scheduler.abort_latched
+                for loop in self.loops
+            ):
+                break
+            await asyncio.sleep(0.001)
+        else:  # pragma: no cover - only on a regression that never latches
+            raise AssertionError("the Strike abort never latched while work was open")
+        source = self.git.add_worktree(
+            self.git.root / f"host-source-{request.issue_ref}",
+            branch=branch,
+            base=request.base_revision,
+        )
+        source.simulate_agent_commit(
+            subject=f"feat: issue {request.issue_ref}",
+            body=f"Closes #{request.issue_ref}",
+        )
+        self.git.remove_worktree(source.root)
+        return ContributionSuccess(
+            branch=branch,
+            sha=source.head_sha(),
+            events=(),
+            placement=self.placement,
+            isolation_grade=self.isolation_grade,
+            ending=SessionOutcomeRecord(
+                outcome=None,
+                progressed=True,
+                termination=SessionTermination.COMPLETED,
+            ),
+        )
+
+
+def test_a_green_publication_lifts_the_strike_drain_on_the_wire(
+    tmp_path, monkeypatch
+) -> None:
+    """The revocable half of the shared latch, end to end (#457, ADR-0043).
+
+    §7.7 has always let a green publication cancel a pending abort inside the
+    scheduler; what #457 adds is that the Run *says so*. A client that attached
+    while the drain was in force otherwise keeps rendering a draining Run
+    forever, because the fact that un-latched it never reached the trace.
+
+    One issue is defeated while another is still in flight, so the abort latches
+    with work outstanding; releasing that work publishes green and clears it.
+    Both Events are asserted in order, with their observed in-flight counts.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    built: list[loop_module._ParallelLoop] = []
+    host = _StrikeThenPublishExecutionHost(git=fake_git, loops=built, held_ref=42)
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        instance = real_parallel_loop(*args, **{**kwargs, "execution_host": host})
+        built.append(instance)
+        return instance
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    async def _bounded() -> int:
+        return await asyncio.wait_for(
+            loop_module.run(
+                RunConfig(
+                    model="claude-opus-4.8-max",
+                    issue_source="github",
+                    max_iterations=0,
+                    max_nmt_strikes=1,
+                    verbosity=0,
+                    render_reasoning=False,
+                )
+            ),
+            timeout=60,
+        )
+
+    asyncio.run(_bounded())
+
+    events = _logged_events(tmp_path)
+    wind_down = [
+        (
+            event["type"],
+            event.get("cause"),
+            event.get("stage"),
+        )
+        for event in events
+        if event["type"]
+        in {"wrapper.stop.requested", "wrapper.stop.lifted"}
+    ]
+    assert wind_down == [
+        ("wrapper.stop.requested", "strike_limit", "drain"),
+        ("wrapper.stop.lifted", "strike_limit", None),
+    ]
+    assert 42 in [ref for ref, _ in fake_gh.issue_close_calls]
 
 
 @dataclass
@@ -3783,7 +4828,7 @@ def test_parallel_loop_reclaims_the_placeholder_a_substituted_host_did_not_use(
     real_parallel_loop = loop_module._ParallelLoop
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
-        return real_parallel_loop(*args, execution_host=host, **kwargs)
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
 
     monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
 
@@ -3842,7 +4887,7 @@ def test_parallel_loop_discards_a_dirty_placeholder_branch_the_host_declined(
     real_parallel_loop = loop_module._ParallelLoop
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
-        return real_parallel_loop(*args, execution_host=host, **kwargs)
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
 
     monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
 
@@ -3878,6 +4923,13 @@ class _RemoteBranchExecutionHost:
     placement: Placement = "github-actions"
     isolation_grade: IsolationGrade = "machine boundary"
     capacity: int = 4
+    preflight_calls: list[tuple[str, str]] = field(default_factory=list)
+
+    async def run_preflight(
+        self, *, run_id: str, base_revision: str
+    ) -> HostPreflight:
+        self.preflight_calls.append((run_id, base_revision))
+        return HostPreflight(passed=True)
 
     async def run_contribution(
         self, request: ContributionRequest
@@ -3921,7 +4973,7 @@ def test_parallel_loop_materializes_remote_contributions_before_integration(
     real_parallel_loop = loop_module._ParallelLoop
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
-        return real_parallel_loop(*args, execution_host=host, **kwargs)
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
 
     monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
 
@@ -3975,7 +5027,7 @@ def test_parallel_loop_treats_a_proven_missing_remote_ref_as_a_breach(
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
         instance = real_parallel_loop(
-            *args, execution_host=_AbsentRemoteExecutionHost(), **kwargs
+            *args, **{**kwargs, "execution_host": _AbsentRemoteExecutionHost()}
         )
         built.append(instance)
         return instance
@@ -4048,7 +5100,7 @@ def test_parallel_loop_reoffers_an_unreachable_remote_without_a_strike(
     real_parallel_loop = loop_module._ParallelLoop
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
-        instance = real_parallel_loop(*args, execution_host=host, **kwargs)
+        instance = real_parallel_loop(*args, **{**kwargs, "execution_host": host})
         built.append(instance)
         return instance
 
@@ -4115,7 +5167,7 @@ def test_parallel_contribution_disposition_agrees_with_the_ending_it_reports(
 
     def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
         instance = real_parallel_loop(
-            *args, execution_host=_NoProgressEndingExecutionHost(), **kwargs
+            *args, **{**kwargs, "execution_host": _NoProgressEndingExecutionHost()}
         )
         built.append(instance)
         return instance
@@ -4375,6 +5427,10 @@ def test_parallel_over_a_non_rolling_source_reports_the_degrade(
     assert types.index("wrapper.run.start") < types.index(
         "wrapper.parallel.degraded"
     )
+    # A backend with no **Membership read** is not a backend with an empty one:
+    # ``shallow_membership`` lives on ``RollingIssueSource``, which ``prds``
+    # does not implement, so the Run emits no read at all (ADR-0042).
+    assert "wrapper.pool.refreshed" not in types
 
 
 def test_parallel_over_a_rolling_source_reports_no_degrade(
@@ -4482,6 +5538,7 @@ def test_parallel_reports_serial_fallback_when_nothing_carries_parallel_safe(
     assert types.index("wrapper.parallel.serial_fallback") < types.index(
         "wrapper.iteration.start"
     )
+    assert "wrapper.pool.refreshed" not in types
     # Dispatch is unchanged: the plain issue was still worked and closed.
     assert [n for (n, _c) in fake_gh.issue_close_calls] == [43]
 
@@ -4777,6 +5834,202 @@ def test_parallel_never_ends_empty_on_a_partial_pool_read(
         e for e in _logged_events(tmp_path) if e["type"] == "wrapper.run.end"
     )
     assert run_end["outcome"] == "empty_pool"
+
+
+class _ListRefusesWhenArmedGitHubClient(FakeGitHubClient):
+    """A tracker whose ``gh issue list`` refuses once, on demand.
+
+    The peer of :class:`_UnreadableOnceGitHubClient` for the *other* read
+    ``collect_pool`` makes. Armed rather than counted so a test can put the
+    refusal on one exact call — which is the whole point of #541's Parallel
+    half: the same transient failure means something different depending on
+    whether it lands on the driver's peek or inside the serial Iteration the
+    peek's evidence went on to grant.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._armed = False
+        self.list_refusals = 0
+
+    def arm(self) -> None:
+        self._armed = True
+
+    def issue_list(self, label: str, state: str = "open"):
+        if self._armed:
+            self._armed = False
+            self.list_refusals += 1
+            self.issue_list_calls.append((label, state))
+            raise gh_module.GhError(["gh", "issue", "list"], 1, "HTTP 502")
+        return super().issue_list(label, state)
+
+
+def test_parallel_recovers_when_a_granted_serial_turn_cannot_read_the_pool(
+    tmp_path, monkeypatch
+) -> None:
+    """Proof of work waiting outlives one refused read (#541, #219 §2.13).
+
+    A serial turn is granted only *after* the driver's peek latched serial
+    demand — so by the time the Iteration runs, the Run positively knows #44 is
+    in the **Pool**. If that Iteration's own ``gh issue list`` then gives out, it
+    has disproved nothing: it may not claim the Pool is empty (that is the #541
+    bug), and it equally may not end the Run, because the issue it would abandon
+    is one the Run can name.
+
+    The unreadable-Pool outcome is therefore terminal only where the serial
+    Iteration *is* the Run's whole view of the Pool. Here it is not, so the
+    driver polls, re-reads, and works #44 — otherwise a single 502 would decide
+    a Run's fate purely on which of two reads it happened to land on.
+    """
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = _ListRefusesWhenArmedGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(44, labels=["ready-for-agent"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+            serial_closes=True,
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    # Put the refusal inside the first serial Iteration's own collection —
+    # after the peek that proved #44 exists, before the Pickup that would bind
+    # it. A call counter could not name that moment; this can.
+    real_run_one_iteration = loop_module._Loop._run_one_iteration
+    armed = itertools.count(1)
+
+    async def _arm_then_iterate(self, iter_num: int):
+        if next(armed) == 1:
+            fake_gh.arm()
+        return await real_run_one_iteration(self, iter_num)
+
+    monkeypatch.setattr(
+        loop_module._Loop, "_run_one_iteration", _arm_then_iterate
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def _bounded() -> int:
+        # A Run that never re-reads would spin forever rather than terminate
+        # early, so bound it: hanging is a failure, not a pass.
+        return await asyncio.wait_for(loop_module.run(cfg), timeout=60)
+
+    exit_code = asyncio.run(_bounded())
+
+    # --- Non-vacuity: the serial Iteration's own Pool read really did refuse,
+    #     and that Iteration really did see nothing.
+    assert fake_gh.list_refusals == 1, "the serial Iteration's read never failed"
+    events = _logged_events(tmp_path)
+    collected = [e for e in events if e["type"] == "wrapper.afk_ready.collected"]
+    assert collected and collected[0]["issues"] == [], (
+        f"expected the first Iteration to collect nothing, got {collected}"
+    )
+
+    # --- The #541 regression itself, read off the Iteration that hit the failed
+    #     `gh issue list`: it must not record an empty Pool. Before the fix this
+    #     Iteration reported `empty_pool`, which the rollup normalizes to
+    #     `no_progress` — a Pool that was never read, filed as one that held
+    #     nothing.
+    iteration_ends = [e for e in events if e["type"] == "wrapper.iteration.end"]
+    assert iteration_ends, "expected the refused Iteration to still close"
+    assert iteration_ends[0]["outcome"] == "preflight_failed", (
+        f"the unread Pool was recorded as {iteration_ends[0]['outcome']!r}"
+    )
+
+    # --- #44 was not abandoned over one refused read.
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [44]
+    assert fake_gh.issue_view(44).state == "CLOSED"
+
+    # --- And the Run still ends truthfully, on a read that did complete.
+    assert exit_code == 0
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "empty_pool"
+
+
+def test_parallel_keeps_its_proven_empty_pool_when_the_fallback_read_gives_out(
+    tmp_path, monkeypatch
+) -> None:
+    """A proven-empty Pool survives a later read giving out (#541).
+
+    The other end of the same rule. When a Rolling Run finds no Lane work before
+    spending a unit, it hands the serial driver a **fallback** Iteration so the
+    Run ends on a collection rather than on a scheduler-only outcome. By then
+    the Pool's emptiness is already established twice over — the peek that read
+    the whole serial-required half, and the authoritative membership refresh the
+    terminal outcome rests on — so that Iteration is the accounting for a proven
+    fact, not the inquiry into it.
+
+    If *its* ``gh issue list`` gives out, nothing is overturned: a read that
+    proved nothing cannot unseat two reads that proved something. Ending at exit
+    ``1`` here would tell an operator to go repair a tracker that had just
+    answered the question twice.
+    """
+    monkeypatch.setattr(loop_module, "_ROLLING_EMPTY_POLL_INTERVAL", 0.01)
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = _ListRefusesWhenArmedGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(fake_git=fake_git, scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    # Arm on the announcement the driver makes immediately before the fallback
+    # Iteration, so the refusal lands on that Iteration's collection and on no
+    # earlier read — the two reads that proved the Pool empty must stay intact
+    # for this test to be about anything.
+    real_report = loop_module._ParallelLoop._report_serial_fallback
+
+    def _arm_then_report(self, scheduler):
+        fake_gh.arm()
+        return real_report(self, scheduler)
+
+    monkeypatch.setattr(
+        loop_module._ParallelLoop, "_report_serial_fallback", _arm_then_report
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def _bounded() -> int:
+        return await asyncio.wait_for(loop_module.run(cfg), timeout=60)
+
+    exit_code = asyncio.run(_bounded())
+
+    # --- Non-vacuity: the fallback Iteration's own read really did refuse.
+    assert fake_gh.list_refusals == 1, "the fallback Iteration's read never failed"
+
+    # --- The Run reports what it proved, not what the last read failed to see.
+    assert exit_code == 0
+    events = _logged_events(tmp_path)
+    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
+    assert run_end["outcome"] == "empty_pool"
+    assert fake_client.created == []
 
 
 class _TimelineFakeClient(_ParallelFakeClient):
@@ -5340,1364 +6593,17 @@ def test_parallel_concurrency_change_matches_the_pinned_wire_shape(
     assert change["pressure"] in contract["pressure_values"]
 
 
-# ---------------------------------------------------------------------------
-# Dashboard fault recovery under Rolling dispatch (#327)
-# ---------------------------------------------------------------------------
-#
-# #325 made a **Dashboard fault** an involuntary **Detach** and #326 extended
-# that to a Dashboard that never came up. Both were proved at the serial driver
-# seam. The failure that motivated the work was reported against
-# ``--interactive --parallel``, and Parallel mode is the mode with the most
-# **Agents** in flight to lose — so the recovery is proved *here*, through the
-# real :class:`~git_loopy.interactive.driver.InteractiveDriver` over the real
-# Rolling-dispatch driver, rather than inferred from the shared seam.
-
-
-class _RecordingSink:
-    """An ``EventSink`` that records every event, optionally delegating on.
-
-    Used twice per fault test: once wrapping the live
-    :class:`~git_loopy.interactive.state.LiveRunState` (what the **Dashboard**
-    saw before the fault) and once standing in for the parked line printer
-    (what landed in scrollback after it). Together they account for every event
-    of the **Run** exactly once — the drop/duplication check #327 asks for.
-    """
-
-    def __init__(self, inner: Any = None) -> None:
-        self.events: list[dict[str, Any]] = []
-        self._inner = inner
-
-    def render(self, event: dict[str, Any]) -> None:
-        self.events.append(event)
-        if self._inner is not None:
-            self._inner.render(event)
-
-    def stream_reasoning(self, delta: str, issue: int | str | None = None) -> None:
-        if self._inner is not None:
-            self._inner.stream_reasoning(delta, issue=issue)
-
-    def stream_message(self, delta: str, issue: int | str | None = None) -> None:
-        if self._inner is not None:
-            self._inner.stream_message(delta, issue=issue)
-
-    def __getattr__(self, name: str) -> Any:
-        # Everything the driver asks of the live state beyond the sink contract
-        # (``mark_stopped`` on a **Stop**) reaches the real ``LiveRunState``, so
-        # the recorder is a faithful stand-in rather than a narrower object that
-        # would make a regression look like an ``AttributeError``.
-        inner = self.__dict__.get("_inner")
-        if inner is None:
-            raise AttributeError(name)
-        return getattr(inner, name)
-
-
-class _ScrollbackDriver(InteractiveDriver):
-    """The real interactive driver with both sink ends instrumented.
-
-    Only the *parked line printer* is substituted (for a recorder), so the swap
-    seam, the **Terminal owner**, the fault classification and the exit code are
-    all the production ones.
-    """
-
-    def __init__(self, **kwargs: Any) -> None:
-        self.live = LiveRunState()
-        self.dashboard_events = _RecordingSink(inner=self.live)
-        self.scrollback_events = _RecordingSink()
-        super().__init__(self.dashboard_events, **kwargs)
-
-    def attach_detach(
-        self, *, sinks: Any, line_printer: Any, console: Any, record: Any = None
-    ) -> None:
-        super().attach_detach(
-            sinks=sinks,
-            line_printer=self.scrollback_events,
-            console=console,
-            record=record,
-        )
-
-
-class _FaultingDashboard:
-    """A **Dashboard** that raises when ``fault_now`` is set (#325).
-
-    Until then it behaves like the real app: it runs until the driver calls
-    ``exit`` on the loop's natural completion.
-    """
-
-    def __init__(
-        self,
-        state: Any,
-        *,
-        summary: Any = None,
-        log_source: Any = None,
-        fault_now: asyncio.Event,
-        error: Exception,
-    ) -> None:
-        self.state = state
-        self.summary = summary
-        self.log_source = log_source
-        self.exited = False
-        self.detach_requested = False
-        self._fault_now = fault_now
-        self._error = error
-        self._closed = asyncio.Event()
-
-    async def run_async(self) -> None:
-        closed = asyncio.ensure_future(self._closed.wait())
-        faulted = asyncio.ensure_future(self._fault_now.wait())
-        done, pending = await asyncio.wait(
-            {closed, faulted}, return_when=asyncio.FIRST_COMPLETED
-        )
-        for task in pending:
-            task.cancel()
-        if faulted in done:
-            raise self._error
-
-    def exit(self, *_args: Any, **_kwargs: Any) -> None:
-        self.exited = True
-        self._closed.set()
-
-
-def _fault_driver(
-    fault_now: asyncio.Event, *, error: Exception | None = None
-) -> _ScrollbackDriver:
-    """A driver whose Dashboard faults the moment ``fault_now`` is set."""
-    raised = error if error is not None else RuntimeError("render crashed")
-    return _ScrollbackDriver(
-        app_factory=lambda state, **kw: _FaultingDashboard(
-            state, fault_now=fault_now, error=raised, **kw
-        ),
-        terminal=TerminalOwner(FakeTerminal()),
-    )
-
-
-def _gated_client_cls(holds: dict[int, asyncio.Event]) -> type[_ParallelFakeClient]:
-    """A client whose Lane sessions block on a per-issue hold event.
-
-    Keeping each Lane suspended mid-session is what makes "every in-flight Lane
-    kept running" an assertion about genuine overlap rather than about a Run
-    that happened to finish before the Dashboard died.
-    """
-
-    class _GatedClient(_ParallelFakeClient):
-        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
-            session = await super().create_session(**kwargs)
-            working_directory = kwargs.get("working_directory")
-            if working_directory is not None and "/integrate/" not in str(
-                working_directory
-            ):
-                ref = int(Path(str(working_directory)).name.removeprefix("issue-"))
-                real_send_and_wait = session.send_and_wait
-
-                async def gated_send_and_wait(
-                    prompt: str,
-                    *,
-                    timeout: float = 60.0,
-                    _ref: int = ref,
-                    **extra: Any,
-                ) -> SessionEvent | None:
-                    await holds[_ref].wait()
-                    return await real_send_and_wait(prompt, timeout=timeout, **extra)
-
-                session.send_and_wait = gated_send_and_wait  # type: ignore[method-assign]
-            return session
-
-    return _GatedClient
-
-
-async def _settle(turns: int = 100) -> None:
-    """Yield to the event loop enough times for a pending swap to land."""
-    for _ in range(turns):
-        await asyncio.sleep(0)
-
-
-async def _until(
-    reached: Callable[[], bool],
-    run_task: "asyncio.Task[int]",
-    *,
-    what: str,
-    timeout: float = 10.0,
-) -> None:
-    """Yield until ``reached()``, failing rather than hanging if it never is.
-
-    A **Run** that ends early — or crashes — while the test is waiting for a
-    Lane to open would otherwise poll forever and hang the whole suite: the
-    regression it was written to catch would look like a stalled CI job rather
-    than a failing assertion. The Run's own outcome is surfaced first, because
-    that is the interesting half of such a failure.
-    """
-
-    async def poll() -> None:
-        while not reached():
-            if run_task.done():
-                run_task.result()
-                raise AssertionError(f"the Run ended before {what}")
-            await asyncio.sleep(0)
-
-    try:
-        await asyncio.wait_for(poll(), timeout=timeout)
-    except asyncio.TimeoutError:
-        raise AssertionError(f"timed out waiting for {what}") from None
-
-
-class _ResolutionYieldingClient(_ParallelFakeClient):
-    """A client whose **auto-resolution** sessions suspend before responding.
-
-    A real agent session awaits the harness and so hands the event loop back;
-    the in-process fake resolves without ever suspending, which would let a
-    whole Integration cascade run to completion before the driver's peer task
-    was scheduled at all — making "the Dashboard died mid-Integration" untestable
-    rather than untrue. Yielding models what the real session does, so the fault
-    is genuinely classified while the cascade is still in flight.
-    """
-
-    async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
-        session = await super().create_session(**kwargs)
-        working_directory = kwargs.get("working_directory")
-        if working_directory is not None and "/integrate/" in str(
-            working_directory
-        ):
-            real_send_and_wait = session.send_and_wait
-
-            async def yielding_send_and_wait(
-                prompt: str, *, timeout: float = 60.0, **extra: Any
-            ) -> SessionEvent | None:
-                await _settle(20)
-                return await real_send_and_wait(prompt, timeout=timeout, **extra)
-
-            session.send_and_wait = yielding_send_and_wait  # type: ignore[method-assign]
-        return session
-
-
-def test_parallel_dashboard_fault_leaves_every_in_flight_lane_running(
-    tmp_path, monkeypatch
-) -> None:
-    """A **Dashboard fault** mid-**Run** costs the view, never the **Lanes**.
-
-    Two ``parallel-safe`` issues open Lanes and are held mid-session; the
-    Dashboard then raises. The fault is an involuntary **Detach** (#325), so
-    both Lanes run to their natural outcome, both contributions integrate and
-    close, and the remainder of the Run prints to scrollback — with the fault
-    written to the **Run**'s durable record and reported in the exit code
-    exactly as it is in serial mode.
-    """
-    fake_git, fake_gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
-    holds = {42: asyncio.Event(), 43: asyncio.Event()}
-    opened: list[int] = []
-
-    class _CountingClient(_gated_client_cls(holds)):  # type: ignore[misc]
-        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
-            session = await super().create_session(**kwargs)
-            working_directory = kwargs.get("working_directory")
-            if working_directory is not None and "/integrate/" not in str(
-                working_directory
-            ):
-                opened.append(
-                    int(Path(str(working_directory)).name.removeprefix("issue-"))
-                )
-            return session
-
-    fake_client = _CountingClient(
-        fake_git=fake_git,
-        scripted_events=[_usage_event("claude-opus-4.8-max")],
-    )
-    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-
-    fault_now = asyncio.Event()
-    driver = _fault_driver(fault_now)
-
-    async def scenario() -> int:
-        run_task = asyncio.create_task(loop_module.run(cfg, driver=driver))
-        await _until(lambda: len(opened) >= 2, run_task, what="two open Lanes")
-        # Both Lanes are suspended inside their agent session — the Dashboard
-        # dies with the maximum amount of work in flight.
-        fault_now.set()
-        await _settle()
-        for ref in (42, 43):
-            holds[ref].set()
-        return await asyncio.wait_for(run_task, timeout=10)
-
-    exit_code = asyncio.run(scenario())
-
-    # The work came out clean, so the only remaining fact is the fault itself.
-    assert exit_code == EXIT_DASHBOARD_FAULT, f"got {exit_code}"
-
-    # Every in-flight Lane ran to its natural outcome: one commit each, both
-    # worktrees torn down, both contributions integrated onto base and closed.
-    events = _logged_events(tmp_path)
-    commits = [e for e in events if e["type"] == "wrapper.commit.recorded"]
-    assert len(commits) == 2, f"a Lane was lost with the Dashboard: {commits}"
-    assert len(_lane_worktree_removes(fake_git)) == 2
-    assert fake_git.active_worktrees == []
-    assert [n for (n, _c) in fake_gh.issue_close_calls] == [42, 43]
-    assert [e["issue"] for e in events if e["type"] == "wrapper.auto_close"] == [
-        42,
-        43,
-    ]
-
-    # The fault is in the durable record, so a replay tells it from a voluntary
-    # Detach — which records nothing.
-    faults = [e for e in events if e["type"] == WRAPPER_DASHBOARD_FAULT]
-    assert len(faults) == 1, f"expected one recorded fault, got {faults}"
-    assert faults[0]["error_type"] == "RuntimeError"
-    assert "render crashed" in faults[0]["error"]
-    # Run-scoped, never contribution-scoped: the fault is a fact about the
-    # Dashboard, not about any Lane, so a replay never attributes it to one.
-    assert faults[0].get("iter") is None
-    assert "lane_issue" not in faults[0]
-    assert "contribution_id" not in faults[0]
-
-    # The Run carried on in scrollback: both Lanes' closures printed there.
-    printed = [e["type"] for e in driver.scrollback_events.events]
-    assert "wrapper.auto_close" in printed
-    assert "wrapper.run.end" in printed
-
-
-def test_parallel_dashboard_fault_mid_integration_lets_auto_resolution_finish(
-    tmp_path, monkeypatch
-) -> None:
-    """A fault during **Integration** never leaves a partly merged state.
-
-    Issue 42's contribution gates red in its private **Integration stage** and
-    the Dashboard raises at that very gate run — the worst moment to lose the
-    view, with a merge staged and unpublished. Bounded auto-resolution keeps
-    running to its second, green attempt, the verified stage is published to
-    base and the issue closed; base never carries the red result, and no
-    worktree or branch is left behind.
-    """
-    fake_git = _wire_repo(tmp_path)
-    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
-
-    fake_gh = FakeGitHubClient(
-        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-        issues=[
-            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
-            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
-        ],
-    )
-    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
-
-    fake_client = _ResolutionYieldingClient(
-        fake_git=fake_git,
-        scripted_events=[_usage_event("claude-opus-4.8-max")],
-    )
-    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-
-    fault_now = asyncio.Event()
-
-    class _FaultingAtGate(FakeGateRunner):
-        """Kills the Dashboard on 42's first (red) gate run, mid-Integration."""
-
-        def run(self, worktree: Path) -> Any:
-            if Path(worktree).name == "issue-42":
-                fault_now.set()
-            return super().run(worktree)
-
-    monkeypatch.setattr(
-        loop_module,
-        "_make_gate_runner",
-        lambda: _FaultingAtGate(by_issue={42: [False, False, True]}, default=True),
-    )
-
-    cfg = RunConfig(
-        model="claude-opus-4.8-max",
-        issue_source="github",
-        max_iterations=2,
-        max_nmt_strikes=3,
-        verbosity=0,
-        render_reasoning=False,
-    )
-
-    driver = _fault_driver(fault_now, error=RuntimeError("dashboard died mid-merge"))
-    exit_code = asyncio.run(loop_module.run(cfg, driver=driver))
-
-    assert exit_code == EXIT_DASHBOARD_FAULT, f"got {exit_code}"
-
-    # Auto-resolution kept running past the fault: two bounded attempts in 42's
-    # own private stage, then a green publication.
-    resolution_dirs = [
-        c["working_directory"]
-        for c in fake_client.create_calls
-        if c["working_directory"] and "/integrate/" in c["working_directory"]
-    ]
-    assert len(resolution_dirs) == 2, (
-        f"auto-resolution stopped with the Dashboard: {resolution_dirs}"
-    )
-    assert all(wd.endswith("/issue-42") for wd in resolution_dirs)
-
-    # Nothing is left half-merged: base only ever received verified stages,
-    # both issues closed, every worktree torn down and every Lane branch reaped.
-    assert all("/integrate/" in b for b in fake_git.merge_calls)
-    assert sorted(n for (n, _c) in fake_gh.issue_close_calls) == [42, 43]
-    assert fake_git.active_worktrees == []
-    assert fake_gh.issue_comment_calls == [], "no serial-fallback breadcrumb"
-
-    events = _logged_events(tmp_path)
-    assert [e["issue"] for e in events if e["type"] == "wrapper.auto_close"] == [
-        42,
-        43,
-    ]
-    assert len([e for e in events if e["type"] == WRAPPER_DASHBOARD_FAULT]) == 1
-
-    # The swap took effect while the Integration cascade was still emitting, so
-    # the operator watched the rest of it happen in scrollback rather than being
-    # told about it only after the fact.
-    printed = [e["type"] for e in driver.scrollback_events.events]
-    assert "wrapper.auto_close" in printed
-
-
-def test_parallel_dashboard_fault_drops_or_duplicates_no_lane_event(
-    tmp_path, monkeypatch
-) -> None:
-    """Every event is rendered exactly once across the fault swap.
-
-    The always-on replay JSONL is the authority on what the **Run** emitted
-    (it is written independently of which sinks are registered), so the two
-    halves of the operator's view — what the **Dashboard** saw before the fault
-    and what the line printer saw after it — must partition it exactly: no
-    **Lane contribution**'s event rendered twice, none lost in the handoff, and
-    each Lane's per-issue attribution intact on both sides.
-    """
-    fake_git, _gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
-    holds = {42: asyncio.Event(), 43: asyncio.Event()}
-    fake_client = _gated_client_cls(holds)(
-        fake_git=fake_git,
-        scripted_events=[_usage_event("claude-opus-4.8-max")],
-    )
-    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-
-    fault_now = asyncio.Event()
-    driver = _fault_driver(fault_now)
-
-    async def scenario() -> int:
-        run_task = asyncio.create_task(loop_module.run(cfg, driver=driver))
-        # Let one Lane's session start and stream before the fault, so the
-        # split genuinely falls mid-Run rather than before it.
-        await _until(
-            lambda: len(fake_client.created) >= 2, run_task, what="two open Lanes"
-        )
-        holds[42].set()
-        await _settle()
-        fault_now.set()
-        await _settle()
-        holds[43].set()
-        return await asyncio.wait_for(run_task, timeout=10)
-
-    exit_code = asyncio.run(scenario())
-    assert exit_code == EXIT_DASHBOARD_FAULT, f"got {exit_code}"
-
-    def _identity(event: dict[str, Any]) -> tuple[Any, ...]:
-        return (
-            event["type"],
-            event.get("iter"),
-            event.get("lane_issue"),
-            event.get("issue"),
-            event.get("ts"),
-        )
-
-    logged = [_identity(e) for e in _logged_events(tmp_path)]
-    seen = [_identity(e) for e in driver.dashboard_events.events] + [
-        _identity(e) for e in driver.scrollback_events.events
-    ]
-
-    assert seen == logged, "the swap dropped, duplicated or reordered an event"
-
-    # The split is real on both sides — the assertion above would also hold if
-    # the Dashboard had seen everything or nothing.
-    assert driver.dashboard_events.events, "nothing reached the live Dashboard"
-    assert driver.scrollback_events.events, "nothing reached the line printer"
-
-    # Per-Lane accounting after the fault is the accounting that happened: one
-    # commit per Lane, each stamped with its own issue, across the two halves.
-    lane_commits = [
-        e["lane_issue"]
-        for e in _logged_events(tmp_path)
-        if e["type"] == "wrapper.commit.recorded"
-    ]
-    assert sorted(lane_commits) == [42, 43]
-
-
-def test_parallel_dashboard_fault_keeps_refill_within_the_lane_cap(
-    tmp_path, monkeypatch
-) -> None:
-    """Refill and the **Lane cap** behave normally after the swap (#327).
-
-    Four eligible ``parallel-safe`` issues against host capacity 2: the Dashboard
-    dies with both slots occupied, and the scheduler carries on exactly as it
-    would have — no third Lane while the cap is full, prompt refill the moment a
-    slot frees, and the whole **Pool** drained to a truthful ``empty_pool``.
-    """
-    fake_git = _wire_repo(tmp_path)
-    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
-
-    fake_gh = FakeGitHubClient(
-        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-        issues=[
-            _make_issue(n, labels=["ready-for-agent", "parallel-safe"])
-            for n in (42, 43, 44, 45)
-        ],
-    )
-    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
-
-    holds = {n: asyncio.Event() for n in (42, 43, 44, 45)}
-    opened: list[int] = []
-
-    class _CountingGatedClient(_gated_client_cls(holds)):  # type: ignore[misc]
-        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
-            session = await super().create_session(**kwargs)
-            working_directory = kwargs.get("working_directory")
-            if working_directory is not None and "/integrate/" not in str(
-                working_directory
-            ):
-                opened.append(
-                    int(Path(str(working_directory)).name.removeprefix("issue-"))
-                )
-            return session
-
-    fake_client = _CountingGatedClient(
-        fake_git=fake_git,
-        scripted_events=[_usage_event("claude-opus-4.8-max")],
-    )
-    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
-
-    real_add_worktree = fake_git.add_worktree
-    real_remove_worktree = fake_git.remove_worktree
-    live_lane_worktrees: set[Path] = set()
-    high_water_mark = 0
-
-    def tracked_add_worktree(path: Path, *, branch: str, base: str) -> FakeGitClient:
-        child = real_add_worktree(path, branch=branch, base=base)
-        if "/integrate/" not in str(path):
-            live_lane_worktrees.add(Path(path))
-            nonlocal high_water_mark
-            high_water_mark = max(high_water_mark, len(live_lane_worktrees))
-        return child
-
-    def tracked_remove_worktree(path: Path, *, force: bool = False) -> None:
-        real_remove_worktree(path, force=force)
-        live_lane_worktrees.discard(Path(path))
-
-    monkeypatch.setattr(fake_git, "add_worktree", tracked_add_worktree)
-    monkeypatch.setattr(fake_git, "remove_worktree", tracked_remove_worktree)
-
-    cfg = RunConfig(
-        model="claude-opus-4.8-max",
-        issue_source="github",
-        max_iterations=0,  # unlimited: drive until the pool drains
-        max_nmt_strikes=3,
-        verbosity=0,
-        render_reasoning=False,
-    )
-
-    fault_now = asyncio.Event()
-    driver = _fault_driver(fault_now)
-
-    async def scenario() -> int:
-        run_task = asyncio.create_task(loop_module.run(cfg, driver=driver))
-        await _until(lambda: len(opened) >= 2, run_task, what="two open Lanes")
-        fault_now.set()
-        await _settle()
-
-        # The swap changed nothing about dispatch: the cap still withholds a
-        # third Lane while both slots are occupied.
-        assert len(opened) == 2, f"a 3rd Lane opened past the cap: {opened}"
-
-        # Freeing one slot still refills promptly, without waiting for the
-        # other held Lane.
-        holds[opened[0]].set()
-        await _until(
-            lambda: len(opened) >= 3, run_task, what="the freed slot to refill"
-        )
-
-        for ref in (42, 43, 44, 45):
-            holds[ref].set()
-        return await asyncio.wait_for(run_task, timeout=10)
-
-    exit_code = asyncio.run(scenario())
-
-    assert exit_code == EXIT_DASHBOARD_FAULT, f"got {exit_code}"
-    assert high_water_mark == 2, (
-        f"expected the Lane cap (2) to bind, saw high water mark {high_water_mark}"
-    )
-    lane_issues = sorted(
-        int(b.split("/issue-")[1]) for (_p, b, _base) in _lane_worktree_adds(fake_git)
-    )
-    assert lane_issues == [42, 43, 44, 45], "the fault stranded a candidate"
-
-    events = _logged_events(tmp_path)
-    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
-    assert run_end["outcome"] == "empty_pool"
-
-
-def test_parallel_dashboard_fault_at_startup_runs_every_lane_in_scrollback(
-    tmp_path, monkeypatch
-) -> None:
-    """A Dashboard that never comes up still runs the whole **Wave** (#326).
-
-    The factory raises before there is anything to peer with, so the swap
-    happens before the loop task exists: every Lane's event goes to the line
-    printer from the **Run**'s first line, nothing is handed to a Dashboard that
-    was never there, and the exit code is left to the work — this is the
-    Textual-unavailable path's behaviour, and Parallel mode learns no second
-    one.
-    """
-    fake_git, fake_gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
-
-    def exploding_factory(_state: Any, **_kw: Any) -> Any:
-        raise RuntimeError("dashboard could not start")
-
-    driver = _ScrollbackDriver(
-        app_factory=exploding_factory, terminal=TerminalOwner(FakeTerminal())
-    )
-
-    exit_code = asyncio.run(loop_module.run(cfg, driver=driver))
-
-    # The exit code is the work's own: nothing was taken from the operator
-    # mid-Run, so there is no fault to report in it.
-    assert exit_code == 0, f"got {exit_code}"
-
-    events = _logged_events(tmp_path)
-    assert len([e for e in events if e["type"] == "wrapper.commit.recorded"]) == 2
-    assert [n for (n, _c) in fake_gh.issue_close_calls] == [42, 43]
-    assert fake_git.active_worktrees == []
-
-    faults = [e for e in events if e["type"] == WRAPPER_DASHBOARD_FAULT]
-    assert len(faults) == 1
-    assert faults[0]["error_type"] == "RuntimeError"
-
-    # Nothing was rendered into a live view that never existed; every event of
-    # the Run is in scrollback, behind the notice that explains why it is there.
-    assert driver.dashboard_events.events == []
-    printed = [e["type"] for e in driver.scrollback_events.events]
-    assert printed[0] == WRAPPER_DASHBOARD_FAULT
-    assert printed == [e["type"] for e in events]
-
-
-class _DetachingDashboard(_FaultingDashboard):
-    """The operator's voluntary **Detach** (``d``), for the contrast case."""
-
-    async def run_async(self) -> None:
-        await self._fault_now.wait()
-        self.detach_requested = True
-        self.exit()
-
-
-def test_parallel_voluntary_detach_records_no_dashboard_fault(
-    tmp_path, monkeypatch
-) -> None:
-    """A voluntary **Detach** under Rolling dispatch stays indistinguishable.
-
-    The two Detaches share one continuation, so what tells them apart in a
-    replay is the record: an operator who chose to detach leaves no
-    ``wrapper.dashboard.fault`` behind and keeps the work's own exit code. The
-    contrast is what makes the fault tests above assert something.
-    """
-    fake_git, fake_gh, _client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
-    holds = {42: asyncio.Event(), 43: asyncio.Event()}
-    fake_client = _gated_client_cls(holds)(
-        fake_git=fake_git,
-        scripted_events=[_usage_event("claude-opus-4.8-max")],
-    )
-    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-
-    detach_now = asyncio.Event()
-    driver = _ScrollbackDriver(
-        app_factory=lambda state, **kw: _DetachingDashboard(
-            state, fault_now=detach_now, error=RuntimeError("unused"), **kw
-        ),
-        terminal=TerminalOwner(FakeTerminal()),
-    )
-
-    async def scenario() -> int:
-        run_task = asyncio.create_task(loop_module.run(cfg, driver=driver))
-        await _until(
-            lambda: len(fake_client.created) >= 2, run_task, what="two open Lanes"
-        )
-        detach_now.set()
-        await _settle()
-        for ref in (42, 43):
-            holds[ref].set()
-        return await asyncio.wait_for(run_task, timeout=10)
-
-    exit_code = asyncio.run(scenario())
-
-    assert exit_code == 0, "a Detach returns the work's own exit code"
-    events = _logged_events(tmp_path)
-    assert [e for e in events if e["type"] == WRAPPER_DASHBOARD_FAULT] == []
-    # ...and the Lanes ran on into scrollback exactly as they do after a fault.
-    assert len([e for e in events if e["type"] == "wrapper.commit.recorded"]) == 2
-    assert [n for (n, _c) in fake_gh.issue_close_calls] == [42, 43]
-    assert fake_git.active_worktrees == []
-    assert driver.scrollback_events.events, "the Detach never reached the printer"
-
-
-def test_parallel_dashboard_fault_never_masks_a_stuck_run(
-    tmp_path, monkeypatch
-) -> None:
-    """A renderer crash never rewrites the outcome of the work (#325 in parallel).
-
-    :data:`~git_loopy.interactive.driver.EXIT_DASHBOARD_FAULT` is the *only
-    remaining fact* about a Run that came out clean; a Run that ended ``stuck``
-    already carries the fact worth reporting, and reporting the Dashboard
-    instead would tell a supervising script the wrong thing. The rule is the
-    serial one and Parallel mode keeps it.
-
-    Both issues are ``parallel-safe`` and their **Lanes** are held mid-session
-    when the Dashboard raises, so this is a genuine mid-**Run** swap over live
-    Lanes — and each declares the **NMT sentinel**, so both are **skipped** on
-    that first attempt, the shared **Strike** machine reaches its limit and the
-    Run ends ``stuck`` with its Lanes drained.
-    """
-    fake_git = _wire_repo(tmp_path)
-    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
-
-    fake_gh = FakeGitHubClient(
-        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-        issues=[
-            _make_issue(n, labels=["ready-for-agent", "parallel-safe"])
-            for n in (42, 43)
-        ],
-    )
-    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
-
-    holds = {42: asyncio.Event(), 43: asyncio.Event()}
-    opened: list[int] = []
-
-    class _StuckGatedClient(_gated_client_cls(holds)):  # type: ignore[misc]
-        """Held Lanes whose agent declares NMT — the Strike machine's input."""
-
-        _session_cls = _NoProgressFakeSession
-
-        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
-            session = await super().create_session(**kwargs)
-            working_directory = kwargs.get("working_directory")
-            if working_directory is not None and "/integrate/" not in str(
-                working_directory
-            ):
-                opened.append(
-                    int(Path(str(working_directory)).name.removeprefix("issue-"))
-                )
-            return session
-
-    fake_client = _StuckGatedClient(
-        fake_git=fake_git,
-        scripted_events=[
-            _usage_event("claude-opus-4.8-max"),
-            _no_more_tasks_event(),
-        ],
-    )
-    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
-
-    cfg = RunConfig(
-        model="claude-opus-4.8-max",
-        issue_source="github",
-        max_iterations=0,  # unbounded: only the Strike limit can stop this Run
-        max_nmt_strikes=2,
-        verbosity=0,
-        render_reasoning=False,
-    )
-
-    fault_now = asyncio.Event()
-    driver = _fault_driver(fault_now)
-
-    async def scenario() -> int:
-        run_task = asyncio.create_task(loop_module.run(cfg, driver=driver))
-        await _until(lambda: len(opened) >= 2, run_task, what="two open Lanes")
-        fault_now.set()
-        await _settle()
-        for ref in (42, 43):
-            holds[ref].set()
-        return await asyncio.wait_for(run_task, timeout=60)
-
-    exit_code = asyncio.run(scenario())
-
-    # The fault was classified mid-Run, over live Lanes...
-    events = _logged_events(tmp_path)
-    assert len([e for e in events if e["type"] == WRAPPER_DASHBOARD_FAULT]) == 1
-    assert driver.scrollback_events.events, "the swap never reached the printer"
-    assert len(_lane_worktree_adds(fake_git)) >= 2, "no Lane was ever in flight"
-
-    # ...and the work's own outcome is what the exit code reports.
-    run_end = next(e for e in events if e["type"] == "wrapper.run.end")
-    assert run_end["outcome"] == "stuck"
-    assert exit_code == loop_module.exit_code_for("stuck")
-    assert exit_code != EXIT_DASHBOARD_FAULT
-
-
-# --------------------------------------------------------------------------- #
-# Lane Pickup records (#397)                                                   #
-# --------------------------------------------------------------------------- #
-
-
-def test_a_lane_pickup_records_what_it_bound_and_where(tmp_path, monkeypatch) -> None:
-    """#397: every unit of work has a Pickup, so every Pickup leaves a record.
-
-    ADR-0032 made **Pickup** universal — a serial **Iteration** and a **Lane**
-    alike — and a record only one of them writes would make a Parallel Run's
-    selection exactly as unauditable as serial's was before that ADR.
-    """
-    fake_git = _wire_repo(tmp_path)
-    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
-    fake_gh = FakeGitHubClient(
-        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-        issues=[
-            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
-            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
-        ],
-    )
-    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
-    monkeypatch.setattr(
-        loop_module,
-        "_make_client",
-        lambda: _ParallelFakeClient(
-            fake_git=fake_git, scripted_events=[_usage_event("claude-opus-4.8-max")]
-        ),
-    )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
-
-    assert asyncio.run(
-        loop_module.run(
-            RunConfig(
-                model="claude-opus-4.8-max",
-                issue_source="github",
-                max_iterations=2,
-                max_nmt_strikes=3,
-                verbosity=0,
-                render_reasoning=False,
-            )
-        )
-    ) == 0
-
-    events = _logged_events(tmp_path)
-    bound = [e for e in events if e["type"] == "wrapper.pickup.bound"]
-    assert {e["issue"] for e in bound} == {42, 43}
-    for event in bound:
-        assert event["reason"] == "order"
-        assert event["position"] >= 1
-        assert event["considered"] >= event["position"]
-        # A Pickup precedes the contribution it creates, so it can name none.
-        assert "contribution_id" not in event
-        assert event["iter"] is None
-
-    # Every Lane's binding is in the stream before the session it bound for.
-    types = [e["type"] for e in events]
-    assert types.index("wrapper.pickup.bound") < types.index(
-        "wrapper.issue.activated"
-    )
-
-
-def _spy_lane_reservations(monkeypatch) -> list[int | str]:
-    """Record every ref a **Lane** paid an authoritative **Pickup** read for.
-
-    ``RollingIssueSource.pickup`` is the reservation: it is the only path from a
-    cached candidate to Lane work, and #219 §2.10 makes it the read a Lane must
-    pay before dispatching. So the refs passed to it *are* the candidates this
-    Run offered a Lane, which is the fact #439 changes and the one an outcome
-    assertion cannot see — a candidate refused candidacy and one reserved and
-    then declined reach the same worktrees and the same ``pickup.bound``
-    records, and differ only in what they cost per scheduler turn.
-    """
-    reserved: list[int | str] = []
-    real_pickup = GitHubIssueSource.pickup
-
-    def _recording(self: GitHubIssueSource, ref: int | str):
-        reserved.append(ref)
-        return real_pickup(self, ref)
-
-    monkeypatch.setattr(GitHubIssueSource, "pickup", _recording)
-    return reserved
-
-
-def test_parallel_dispatch_waits_for_a_blocker_to_close_before_reserving_a_lane(
-    tmp_path, monkeypatch
-) -> None:
-    """#439: a blocked candidate never consumes a Lane or a release cycle.
-
-    **Rolling dispatch** refuses it *candidacy*, so it is never reserved — where
-    reserving and then declining it at **Pickup** would hand it straight back to
-    the cache it came from and re-reserve it on the very next scheduler turn,
-    for the rest of the Run. The reservation ledger is what says which happened:
-    one read per candidate, taken when it was actually dispatchable.
-
-    It is refused rather than dropped, so the **Membership read** that sees the
-    blocker closed is the whole of what promotes it — mid-Run, with no restart.
-    """
-    fake_git = _wire_repo(tmp_path)
-    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
-    reserved = _spy_lane_reservations(monkeypatch)
-    blocked = _make_issue(
-        31,
-        labels=["ready-for-agent", "parallel-safe"],
-        blocked_by=BlockedByRead(
-            total_count=1,
-            nodes=(BlockerNode(ref="x/y#7", state="open"),),
-        ),
-    )
-    fake_gh = FakeGitHubClient(
-        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-        issues=[
-            blocked,
-            _make_issue(7, labels=["ready-for-agent", "parallel-safe"]),
-        ],
-    )
-    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
-    monkeypatch.setattr(
-        loop_module,
-        "_make_client",
-        lambda: _ParallelFakeClient(
-            fake_git=fake_git, scripted_events=[_usage_event("claude-opus-4.8-max")]
-        ),
-    )
-
-    class _UnblockAfterFirstIntegration(FakeGateRunner):
-        def run(self, worktree: Path):
-            fake_gh.seed_issue(
-                replace(blocked, blocked_by=BlockedByRead(total_count=0))
-            )
-            return super().run(worktree)
-
-    monkeypatch.setattr(
-        loop_module,
-        "_make_gate_runner",
-        lambda: _UnblockAfterFirstIntegration(),
-    )
-
-    assert asyncio.run(
-        loop_module.run(
-            RunConfig(
-                model="claude-opus-4.8-max",
-                issue_source="github",
-                max_iterations=2,
-                max_nmt_strikes=3,
-                verbosity=0,
-                render_reasoning=False,
-            )
-        )
-    ) == 0
-
-    assert [
-        int(path.name.removeprefix("issue-"))
-        for path, _branch, _base in _lane_worktree_adds(fake_git)
-    ] == [7, 31]
-    bound = [
-        event["issue"]
-        for event in _logged_events(tmp_path)
-        if event["type"] == "wrapper.pickup.bound"
-    ]
-    assert bound == [7, 31]
-    # One reservation each, and #31's is the one that dispatched it. Reserving
-    # and declining would have charged an authoritative read per turn it spent
-    # blocked, and left a release behind each time.
-    assert reserved == [7, 31]
-
-
-def test_parallel_serial_fallback_skips_a_candidate_rolling_dispatch_refused(
-    tmp_path, monkeypatch
-) -> None:
-    """Lane-then-serial: the scheduler refused it, so the fallback cannot bind it.
-
-    A serial **Iteration** taken while Lane concurrency is throttled works
-    whatever sits at the **Pool**'s head, including a **Parallel-safe** issue no
-    Lane would touch. Both seams read the same tracker fact, so the verdict has
-    to be the same one — and the serial half is the half that leaves a record,
-    because a serial **Pickup** has somewhere to put a skip and Lane candidacy
-    does not.
-    """
-    fake_git = _wire_repo(tmp_path)
-    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
-    reserved = _spy_lane_reservations(monkeypatch)
-    blocked = _make_issue(
-        44,
-        labels=["ready-for-agent", "parallel-safe"],
-        blocked_by=BlockedByRead(
-            total_count=1,
-            nodes=(BlockerNode(ref="x/y#7", state="open"),),
-        ),
-    )
-    fake_gh = FakeGitHubClient(
-        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-        issues=[
-            blocked,
-            _make_issue(45, labels=["ready-for-agent"]),
-        ],
-    )
-    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
-
-    class _UnblockDuringSerialSession(_ParallelFakeSession):
-        async def send_and_wait(
-            self, prompt: str, *, timeout: float = 60.0, **extra: Any
-        ) -> SessionEvent | None:
-            result = await super().send_and_wait(prompt, timeout=timeout, **extra)
-            if self._working_directory is None:
-                fake_gh.seed_issue(
-                    replace(blocked, blocked_by=BlockedByRead(total_count=0))
-                )
-            return result
-
-    class _UnblockDuringSerialClient(_ParallelFakeClient):
-        _session_cls = _UnblockDuringSerialSession
-
-    monkeypatch.setattr(
-        loop_module,
-        "_make_client",
-        lambda: _UnblockDuringSerialClient(
-            fake_git=fake_git,
-            scripted_events=[_usage_event("claude-opus-4.8-max")],
-            serial_closes=True,
-        ),
-    )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
-
-    assert asyncio.run(
-        loop_module.run(
-            RunConfig(
-                model="claude-opus-4.8-max",
-                issue_source="github",
-                max_iterations=2,
-                max_nmt_strikes=3,
-                verbosity=0,
-                render_reasoning=False,
-            )
-        )
-    ) == 0
-
-    skipped = [
-        event
-        for event in _logged_events(tmp_path)
-        if event["type"] == "wrapper.pickup.skipped"
-    ]
-    assert [event["issue"] for event in skipped] == [44]
-    assert skipped[0]["reason"] == "blocked_by_open_dependency: x/y#7"
-    assert [
-        int(path.name.removeprefix("issue-"))
-        for path, _branch, _base in _lane_worktree_adds(fake_git)
-    ] == [44]
-    # The Lane read #44 once — after the blocker closed. The turns it spent
-    # blocked cost no reservation at all.
-    assert reserved == [44]
-
-
-def test_a_lane_refuses_an_issue_a_serial_iteration_already_found_blocked(
-    tmp_path, monkeypatch
-) -> None:
-    """Serial-then-Lane: the other order, with Lane capacity going spare.
-
-    The serial half of a **Parallel-mode** Run reaches the whole **Pool**, so it
-    meets a blocked **Parallel-safe** candidate before any Lane does and leaves
-    a ``wrapper.pickup.skipped`` behind. Nothing about that record narrows Lane
-    candidacy — **Readiness** is not Run state the way the **Attempt
-    lifecycle** is — so the Lane has to refuse it on its own, from the blockers
-    the **Membership read** carried, on every turn concurrency is available.
-
-    Two serial-required issues, so the Run takes two serial turns with a Lane
-    walk between them: the second walk is the one that happens *after* the
-    serial Pickup already published its verdict on #44.
-    """
-    fake_git = _wire_repo(tmp_path)
-    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
-    reserved = _spy_lane_reservations(monkeypatch)
-    fake_gh = FakeGitHubClient(
-        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-        issues=[
-            _make_issue(
-                44,
-                labels=["ready-for-agent", "parallel-safe"],
-                blocked_by=BlockedByRead(
-                    total_count=1,
-                    nodes=(BlockerNode(ref="x/y#7", state="open"),),
-                ),
-            ),
-            _make_issue(45, labels=["ready-for-agent"]),
-            _make_issue(46, labels=["ready-for-agent"]),
-        ],
-    )
-    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
-    monkeypatch.setattr(
-        loop_module,
-        "_make_client",
-        lambda: _ParallelFakeClient(
-            fake_git=fake_git,
-            scripted_events=[_usage_event("claude-opus-4.8-max")],
-            serial_closes=True,
-        ),
-    )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
-
-    asyncio.run(
-        loop_module.run(
-            RunConfig(
-                model="claude-opus-4.8-max",
-                issue_source="github",
-                max_iterations=2,
-                max_nmt_strikes=3,
-                verbosity=0,
-                render_reasoning=False,
-            )
-        )
-    )
-
-    events = _logged_events(tmp_path)
-    assert [e["issue"] for e in events if e["type"] == "wrapper.pickup.bound"] == [
-        45,
-        46,
-    ]
-    skipped = [e for e in events if e["type"] == "wrapper.pickup.skipped"]
-    # Both serial Pickups walked past it, under the reason that names the
-    # blocker rather than under an authoring fault the operator would go and
-    # try to fix.
-    assert [e["issue"] for e in skipped] == [44, 44]
-    assert {e["reason"] for e in skipped} == {"blocked_by_open_dependency: x/y#7"}
-    # And no Lane ever offered it one, though two Lanes stood free throughout.
-    assert reserved == []
-    assert _lane_worktree_adds(fake_git) == []
-
-
-def test_a_lane_whose_routing_is_refused_leaves_a_skip_behind(
-    tmp_path, monkeypatch
-) -> None:
-    """A released reservation used to evaporate "with no trace" (#219 section 3.3).
-
-    That was defensible while the candidate simply stayed eligible for another
-    Lane. It is not defensible as the *only* record, because a candidate whose
-    label never parses is refused by every Lane forever — the exact
-    indefinitely-passed-over shape ADR-0032 exists to make visible.
-    """
-    fake_git = _wire_repo(tmp_path)
-    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
-    fake_gh = FakeGitHubClient(
-        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-        issues=[
-            _make_issue(
-                42,
-                labels=[
-                    "ready-for-agent",
-                    "parallel-safe",
-                    "task-type:not-a-real-key",
-                ],
-            ),
-        ],
-    )
-    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
-    monkeypatch.setattr(
-        loop_module,
-        "_make_client",
-        lambda: _ParallelFakeClient(
-            fake_git=fake_git, scripted_events=[_usage_event("claude-opus-4.8-max")]
-        ),
-    )
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
-
-    asyncio.run(
-        loop_module.run(
-            RunConfig(
-                model="claude-opus-4.8-max",
-                issue_source="github",
-                max_iterations=1,
-                max_nmt_strikes=3,
-                verbosity=0,
-                render_reasoning=False,
-            )
-        )
-    )
-
-    skipped = [
-        e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pickup.skipped"
-    ]
-    assert [e["issue"] for e in skipped] == [42]
-    assert "not-a-real-key" in skipped[0]["reason"]
-    assert skipped[0]["position"] == 1
-    assert skipped[0]["considered"] == 1
-    assert skipped[0]["iter"] is None
-
-
-class _RefusedLaneSession(_ParallelFakeSession):
-    """A Lane whose every call the harness refused: an error, then silence.
-
-    Commits nothing, exactly as an Agent that never got an answer would, and
-    reports the refusal the only way the harness ever does — on the Event stream,
-    without raising at the Orchestrator's boundary.
-    """
-
-    async def send_and_wait(
-        self, prompt: str, *, timeout: float = 60.0, **_extra: Any
-    ) -> SessionEvent | None:
-        self.send_and_wait_calls.append((prompt, timeout))
-        refusal = SessionEvent(
-            data=SessionErrorData(
-                error_type="AuthenticationError",
-                message="Bad credentials.",
-                status_code=401,
-            ),
-            id=uuid4(),
-            timestamp=datetime(2026, 5, 16, tzinfo=timezone.utc),
-            type=SessionEventType.SESSION_ERROR,
-        )
-        if self._on_event is not None:
-            self._on_event(refusal)
-        return refusal
-
-
-class _RefusedLaneClient(_ParallelFakeClient):
-    _session_cls = _RefusedLaneSession
-
-
-def test_parallel_lane_records_its_session_ending_and_error_identity(
-    tmp_path, monkeypatch
-) -> None:
-    """A Lane's ending is data in **Parallel mode** too (#403).
-
-    A Lane that was refused for its whole contribution looked identical to a Lane
-    whose Agent read the issue and shrugged: the ending was logged as
-    "no-progress" and the harness's own account of *why* went nowhere. Both are
-    now recorded — the failure record in the replay log, the ending and its
-    identity in the Run's diagnostics, attributed to the Lane's own issue.
-    """
-    fake_git = _wire_repo(tmp_path)
-    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
-    fake_gh = FakeGitHubClient(
-        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
-    )
-    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
-    fake_client = _RefusedLaneClient(fake_git=fake_git, scripted_events=[])
-    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
-
-    cfg = RunConfig(
-        model="claude-opus-4.8-max",
-        issue_source="github",
-        max_iterations=1,
-        max_nmt_strikes=3,
-        verbosity=0,
-        render_reasoning=False,
-    )
-    asyncio.run(loop_module.run(cfg))
-
-    logs = tmp_path / ".git-loopy" / "logs"
-    recorded = [
-        event
-        for event in _logged_events(tmp_path)
-        if event["type"] == "session.error"
-    ]
-    assert recorded and recorded[0]["status_code"] == 401
-
-    diagnostics = next(iter(logs.glob("*.log"))).read_text(encoding="utf-8")
-    assert "authentication_failed" in diagnostics
-    assert "no_progress" in diagnostics
-
-
-class _FilteredLaneSession(_ParallelFakeSession):
-    """A Lane whose calls a content filter refused: a usage record, no commit.
-
-    The refusal never raises and never reaches ``session.error`` — the harness
-    reports it as a verdict on the per-call usage record and lets the session
-    finish politely, which is exactly why the ending needed a detector (#405).
-    """
-
-    async def send_and_wait(
-        self, prompt: str, *, timeout: float = 60.0, **_extra: Any
-    ) -> SessionEvent | None:
-        self.send_and_wait_calls.append((prompt, timeout))
-        filtered = SessionEvent(
-            data=AssistantUsageData(
-                model="claude-haiku-4.5",
-                input_tokens=1200.0,
-                output_tokens=0.0,
-                content_filter_triggered=True,
-                finish_reason="content_filter",
-            ),
-            id=uuid4(),
-            timestamp=datetime(2026, 5, 16, tzinfo=timezone.utc),
-            type=SessionEventType.ASSISTANT_USAGE,
-        )
-        if self._on_event is not None:
-            self._on_event(filtered)
-        return filtered
-
-
-class _FilteredLaneClient(_ParallelFakeClient):
-    _session_cls = _FilteredLaneSession
-
-
-def test_parallel_lane_ending_is_content_filtered_when_its_calls_were(
-    tmp_path, monkeypatch
-) -> None:
-    """A Lane reads the same two detectors the serial Iteration does (#405).
-
-    Nothing about content filtering is serial-only, so a Lane that spent its
-    whole contribution being refused must not be recorded as one whose Agent
-    read the issue and shrugged. The Lane's own progress answer — an agent
-    commit or a Checkpoint on its branch — is still what decides whether the
-    refusal was an ending or something the contribution recovered from.
-    """
-    fake_git = _wire_repo(tmp_path)
-    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
-    fake_gh = FakeGitHubClient(
-        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
-        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
-    )
-    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
-    fake_client = _FilteredLaneClient(fake_git=fake_git, scripted_events=[])
-    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
-    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
-
-    cfg = RunConfig(
-        model="claude-opus-4.8-max",
-        issue_source="github",
-        max_iterations=1,
-        max_nmt_strikes=3,
-        verbosity=0,
-        render_reasoning=False,
-    )
-    asyncio.run(loop_module.run(cfg))
-
-    diagnostics = next(
-        iter((tmp_path / ".git-loopy" / "logs").glob("*.log"))
-    ).read_text(encoding="utf-8")
-    assert "session for #42 ended content_filtered" in diagnostics
-
-
-def _dashboard_projection(state: Any) -> dict[str, Any]:
-    """The issue-centric Dashboard facts a reader must be able to rebuild."""
-    from git_loopy.interactive.state import issue_detail, queue_rows
-
-    rows = queue_rows(state, now=10_000.0)
+def _dashboard_projection(state: LiveRunState) -> dict[str, Any]:
     return {
-        "queue": [
-            (
-                row.ref,
-                row.status,
-                row.active_seconds,
-                row.started_wall,
-                row.closed_wall,
-                row.usage.model,
-                row.usage.tokens_in,
-                row.usage.tokens_out,
-                row.usage_observed,
-                row.iteration_count,
-            )
-            for row in rows
-        ],
+        "queue": [(row.ref, row.status) for row in queue_rows(state)],
         "contributions": {
-            row.ref: [
-                (c.kind, c.lane, c.iteration, c.status, c.outcome, c.active_seconds)
-                for c in issue_detail(state, row.ref).contributions
+            ref: [
+                (item.kind, item.lane, item.iteration, item.outcome, item.status)
+                for item in issue_detail(state, ref).contributions
             ]
-            for row in rows
-        },
-        "logs": {
-            row.ref: [line.text for line in state.log(row.ref)] for row in rows
+            for ref in state.ledger
         },
     }
-
-
-def _run_summary(tmp_path: Path) -> dict[str, Any]:
-    """The durable per-Run accounting record (``.git-loopy/runs/*.json``)."""
-    runs_dir = tmp_path / ".git-loopy" / "runs"
-    return json.loads(
-        next(runs_dir.glob("*.json")).read_text(encoding="utf-8")
-    )
 
 
 def test_a_rolling_run_replays_from_its_own_record_to_the_same_dashboard(
@@ -6754,8 +6660,8 @@ def test_a_rolling_run_replays_from_its_own_record_to_the_same_dashboard(
         replayed.render(event)
 
     live_view = _dashboard_projection(live)
-    assert [ref for (ref, *_rest) in live_view["queue"]] == [42, 43, 44]
-    assert all(row[1] == "closed" for row in live_view["queue"])
+    assert [ref for (ref, _status) in live_view["queue"]] == [42, 43, 44]
+    assert all(status == "closed" for (_ref, status) in live_view["queue"])
     assert [
         (c[0], c[1], c[2], c[3], c[4])
         for c in live_view["contributions"][42]
@@ -7454,3 +7360,1476 @@ def test_a_parallel_run_start_reads_back_the_routing_it_parsed(
     assert refused["configured_effort"] == "high"
     assert refused["effort"] is None
     assert refused["gate_warnings"] == ["incapable_model"]
+
+
+class _SupervisionClock:
+    """A monotonic clock a host double can advance to model a long remote job."""
+
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
+
+
+@dataclass
+class _BackdatedEventExecutionHost(_RemoteBranchExecutionHost):
+    """A remote host whose Events arrive batched, late and backdated (#460).
+
+    Actions publishes no supported live log stream, so a remote contribution's
+    Events cannot arrive as it works: they are uploaded as an end-of-job
+    artifact and read in one go once the job completes. The host double
+    reproduces exactly that — a whole stream, produced hours before the
+    orchestrator ever sees it, on a machine whose own clock the orchestrator
+    cannot read.
+    """
+
+    clock: _SupervisionClock | None = None
+    remote_seconds: float = 0.0
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        outcome = await super().run_contribution(request)
+        if self.clock is not None:
+            self.clock.value += self.remote_seconds
+        assert isinstance(outcome, ContributionSuccess)
+        return dataclass_replace(
+            outcome,
+            events=(
+                {
+                    "ts": "2026-09-09T18:00:00.000Z",
+                    "run_id": request.run_id,
+                    "iter": None,
+                    "type": "assistant.message",
+                    "text": f"remote work on {request.issue_ref}",
+                },
+                {
+                    "ts": "2026-09-09T21:45:00.000Z",
+                    "run_id": request.run_id,
+                    "iter": None,
+                    "type": "assistant.message",
+                    "text": f"remote finish on {request.issue_ref}",
+                },
+            ),
+        )
+
+
+def test_remote_contribution_events_reach_the_runs_stream_backdated(
+    tmp_path, monkeypatch
+) -> None:
+    """A remote contribution's Events are the Run's Events, late but attributed.
+
+    Ingest re-stamps nothing: the backdated wall clock the remote machine wrote
+    survives, and the identity triple is added so the Dashboard and a replaying
+    reader attribute the stream to the issue that produced it rather than to
+    whichever Lane slot is free by the time the artifact is read.
+    """
+    fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _BackdatedEventExecutionHost(fake_git)
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    ingested = [
+        event
+        for event in _logged_events(tmp_path)
+        if event.get("type") == "assistant.message"
+    ]
+    assert len(ingested) == 4
+    assert {event["ts"] for event in ingested} == {
+        "2026-09-09T18:00:00.000Z",
+        "2026-09-09T21:45:00.000Z",
+    }
+    for event in ingested:
+        assert event["iter"] is None
+        assert event["run_id"] == _run_id(tmp_path)
+        assert event["issue"] in (42, 43)
+        assert isinstance(event["contribution_id"], str) and event["contribution_id"]
+        assert "observed_monotonic" not in event
+    assert {event["issue"] for event in ingested} == {42, 43}
+
+
+def test_a_remote_contributions_duration_is_never_rendered_as_near_zero(
+    tmp_path, monkeypatch
+) -> None:
+    """Local agent time is measured in-process, and a remote session is not.
+
+    ``agent_seconds`` is accumulated by the local agent-session path, so a
+    contribution that ran on another machine would report zero for work that
+    took hours — the Summary and the Dashboard would then render a six-hour
+    remote contribution as instantaneous. What the orchestrator *can* honestly
+    measure is the span it supervised the host across, so that is what a
+    non-local placement reports.
+    """
+    fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+
+    clock = _SupervisionClock()
+    monkeypatch.setattr(loop_module.time, "monotonic", clock)
+    host = _BackdatedEventExecutionHost(
+        fake_git, clock=clock, remote_seconds=6 * 60 * 60
+    )
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    ends = [
+        event
+        for event in _logged_events(tmp_path)
+        if event.get("type") == "wrapper.contribution.end"
+    ]
+    assert len(ends) == 2
+    assert [end["summary"]["agent_seconds"] for end in ends] == [6 * 60 * 60.0] * 2
+
+
+def test_the_run_builds_the_github_actions_host_the_operator_named(
+    tmp_path, monkeypatch
+) -> None:
+    """A declared placement is *constructed*, never merely tolerated at preflight."""
+    built: list[tuple[str, int]] = []
+    timeouts: list[float] = []
+    hosts: list[_RemoteBranchExecutionHost] = []
+
+    class _RecordingHost(_RemoteBranchExecutionHost):
+        pass
+
+    def _fake_factory(placement: str, *, send_timeout_seconds: float) -> Any:
+        assert placement == "github-actions"
+        # The Run's own send timeout has to cross the machine boundary on the
+        # request: the job is a fresh process elsewhere and inherits none of
+        # this Run's configuration, so a host built without it would leave the
+        # SDK's one-minute default standing over an hours-long contribution.
+        timeouts.append(send_timeout_seconds)
+        host = _RecordingHost(fake_git)
+        hosts.append(host)
+        built.append((host.placement, host.capacity))
+        return host
+
+    fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    initial_base = fake_git.head_sha()
+    cfg = dataclass_replace(cfg, execution_host="github-actions")
+    monkeypatch.setattr(loop_module, "_make_execution_host", _fake_factory)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    assert built == [("github-actions", 4)]
+    assert timeouts == [cfg.send_timeout_seconds]
+    assert hosts[0].preflight_calls == [(_run_id(tmp_path), initial_base)]
+    run_start = next(
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.run.start"
+    )
+    assert run_start["execution_host"] == {
+        "placement": "github-actions",
+        "isolation_grade": "machine boundary",
+        "capacity": 4,
+        "starting_lane_limit": run_start["execution_host"]["starting_lane_limit"],
+    }
+    assert all(
+        event["host"] == "github-actions"
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.contribution.start"
+    )
+
+
+def test_a_failed_remote_green_base_preflight_starts_no_lane_or_strike(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """A broken remote environment ends the Run before issue accounting begins."""
+    fake_git, fake_gh, fake_client, cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    initial_base = fake_git.head_sha()
+
+    @dataclass
+    class _FailingPreflightHost(_RemoteBranchExecutionHost):
+        async def run_preflight(
+            self, *, run_id: str, base_revision: str
+        ) -> HostPreflight:
+            self.preflight_calls.append((run_id, base_revision))
+            return HostPreflight(passed=False, detail="target toolchain is unavailable")
+
+        async def run_contribution(
+            self, request: ContributionRequest
+        ) -> ContributionOutcome:
+            raise AssertionError(f"preflight should have blocked {request.issue_ref}")
+
+    host = _FailingPreflightHost(fake_git)
+    cfg = dataclass_replace(cfg, execution_host="github-actions")
+    monkeypatch.setattr(
+        loop_module, "_make_execution_host", lambda *_args, **_kwargs: host
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == loop_module.exit_code_for(
+        "preflight_failed"
+    )
+
+    assert len(host.preflight_calls) == 1
+    assert host.preflight_calls[0][1] == initial_base
+    assert fake_client.created == []
+    assert fake_gh.issue_close_calls == []
+    assert "green-base preflight failed" in capsys.readouterr().err
+
+
+def test_an_execution_host_that_cannot_be_built_refuses_the_run_at_preflight(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """A declared host with no account ceiling is refused, never downgraded."""
+    _fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    cfg = dataclass_replace(cfg, execution_host="github-actions")
+
+    def _refuse(placement: str, *, send_timeout_seconds: float) -> Any:
+        del send_timeout_seconds
+        raise ValueError(
+            "GIT_LOOPY_GITHUB_ACTIONS_CAPACITY must be a finite positive integer"
+        )
+
+    monkeypatch.setattr(loop_module, "_make_execution_host", _refuse)
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code == loop_module.exit_code_for("preflight_failed")
+    error = capsys.readouterr().err
+    assert "github-actions" in error
+    assert "GIT_LOOPY_GITHUB_ACTIONS_CAPACITY" in error
+
+
+@dataclass
+class _UnfetchableRemoteHost(_BackdatedEventExecutionHost):
+    """A host whose branch cannot be fetched, but whose Events already arrived.
+
+    The two facts are independent: the artifact is read in full before any
+    fetch is attempted, so a remote that has gone away afterwards says nothing
+    about what the session did.
+    """
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        outcome = await super().run_contribution(request)
+        assert isinstance(outcome, ContributionSuccess)
+        return dataclass_replace(outcome, remote="https://example.test/gone.git")
+
+
+def test_a_contribution_whose_branch_cannot_be_fetched_keeps_its_events(
+    tmp_path, monkeypatch
+) -> None:
+    """Materialization failing must not erase the account of the work it failed on.
+
+    The host has already read the complete artifact by the time the fetch is
+    attempted --- Events, ending and all. Ingesting only after a successful
+    fetch means a remote that has gone away takes hours of observable Events
+    with it, leaving the operator a terminal failure with nothing preceding it
+    on the stream and no way to tell a stall from real work that could not be
+    collected.
+    """
+    fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _UnfetchableRemoteHost(fake_git)
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    asyncio.run(loop_module.run(cfg))
+
+    messages = [
+        event
+        for event in _logged_events(tmp_path)
+        if event.get("type") == "assistant.message"
+        and str(event.get("text", "")).startswith("remote ")
+    ]
+    assert messages, "a failed fetch discarded the contribution's whole Event stream"
+    assert {message["issue"] for message in messages} == {42, 43}
+
+
+def test_remote_consumption_reaches_the_runs_ai_credit_meter(
+    tmp_path, monkeypatch
+) -> None:
+    """A Run that spends its allowance remotely must still feel the pressure.
+
+    Consumption has two accountants: the Iteration rollup that fills the
+    Summary, and the Run-scoped cost meter AI-credit pressure is judged
+    against. Ingest reaches the first through the emitter; if it does not also
+    reach the second, a Run could burn every credit it has on remote
+    contributions while reporting credit pressure as unknown --- and keep
+    opening Lanes on the strength of that.
+
+    Asserted on the meter's own billed total rather than on the fact that an
+    observer was called, because the payload has to survive the meter's
+    *parsing* too: a Consumption Event whose token fields are misspelled is
+    observed just as dutifully and bills nothing.
+    """
+    fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    host = _ConsumingRemoteHost(fake_git)
+    meters: list[Any] = []
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        loop = real_parallel_loop(*args, **{**kwargs, "execution_host": host})
+        meters.append(loop._cost_meter)
+        return loop
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    assert meters, "the parallel loop was never constructed"
+    billed = meters[0]()
+    assert billed == pytest.approx(1.5), (
+        "each remote contribution's billed Credits must reach the Run's meter"
+    )
+
+    # And the *same* Events reach the Iteration rollup exactly once. The
+    # emitter already fed it on the way to the log, so an ingest that fed it
+    # again would double every remote token in the Summary while fixing the
+    # meter --- which the per-contribution accrual is what shows.
+    ends = [
+        event
+        for event in _logged_events(tmp_path)
+        if event.get("type") == "wrapper.contribution.end"
+    ]
+    assert ends, "expected a finalized row per Lane contribution"
+    for end in ends:
+        consumption = end["issues"][0]["consumption"]
+        assert consumption["tokens_in"] == 1000, (
+            "the remote accrual is counted once, on its canonical field names"
+        )
+        assert consumption["tokens_out"] == 500
+
+
+@dataclass
+class _ConsumingRemoteHost(_RemoteBranchExecutionHost):
+    """A remote host whose contribution spent real tokens on another machine."""
+
+    async def run_contribution(
+        self, request: ContributionRequest
+    ) -> ContributionOutcome:
+        outcome = await super().run_contribution(request)
+        assert isinstance(outcome, ContributionSuccess)
+        return dataclass_replace(
+            outcome,
+            events=(
+                {
+                    "ts": "2026-09-09T18:00:00.000Z",
+                    "run_id": request.run_id,
+                    "iter": None,
+                    "type": "usage.tokens",
+                    "input": 1000,
+                    "output": 500,
+                    "credits": "0.75",
+                },
+            ),
+        )
+
+
+def test_a_static_route_reaches_each_lanes_own_work_session(
+    tmp_path, monkeypatch
+) -> None:
+    """Rolling dispatch honours the same verified triple, at the same seam (#560).
+
+    The serial Iteration and a Lane contribution resolve the same **Routing
+    resolution** and must open the same request with it — one route/capability
+    boundary, two dispatch modes, not two routing implementations.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                42, labels=["ready-for-agent", "parallel-safe", "task-type:docs"]
+            ),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch,
+        ("wide-model", ["low", "high"], True),
+        ("narrow-model", None, True),
+    )
+
+    cfg = RunConfig(
+        model="wide-model",
+        reasoning_effort="high",
+        routing={"docs": ("narrow-model", None)},
+        context_tier="long_context",
+        route_policy=RoutePolicy.STATIC,
+        issue_source="github",
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    exit_code = asyncio.run(loop_module.run(cfg))
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    by_dir = {
+        Path(c["working_directory"]).name: c
+        for c in fake_client.create_calls
+        if c["working_directory"]
+    }
+    # The routed Lane runs on a model with no effort dial, so it is sent no
+    # effort argument at all — and keeps the tier the harness prices for it.
+    assert by_dir["issue-42"]["model"] == "narrow-model"
+    assert by_dir["issue-42"]["reasoning_effort"] is None
+    assert by_dir["issue-42"]["context_tier"] == "long_context"
+    # ...and the unlabelled Lane runs on the verified run-wide default.
+    assert by_dir["issue-43"]["model"] == "wide-model"
+    assert by_dir["issue-43"]["reasoning_effort"] == "high"
+    assert by_dir["issue-43"]["context_tier"] == "long_context"
+
+
+def test_a_refused_static_route_opens_no_lane_at_all(tmp_path, monkeypatch) -> None:
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(monkeypatch, ("wide-model", ["low", "high"], False))
+
+    cfg = RunConfig(
+        model="wide-model",
+        reasoning_effort="high",
+        context_tier="long_context",
+        route_policy=RoutePolicy.STATIC,
+        issue_source="github",
+        max_iterations=2,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == 1
+    assert fake_client.create_calls == []
+    assert fake_git.active_worktrees == []
+
+
+def _script_harness(monkeypatch, *models) -> None:
+    """Answer the Run's capability refresh with a scripted harness listing.
+
+    ``models`` are ``(id, efforts, long_context)`` triples; ``efforts=None`` is
+    the harness's own spelling of a model with no effort dial.
+    """
+    from types import SimpleNamespace
+
+    listing = [
+        SimpleNamespace(
+            id=identifier,
+            name=identifier,
+            policy=SimpleNamespace(state="enabled", terms=""),
+            billing=SimpleNamespace(
+                multiplier=1.0,
+                token_prices=SimpleNamespace(
+                    long_context=SimpleNamespace(max_prompt_tokens=400_000)
+                    if long_context
+                    else None
+                ),
+            ),
+            supported_reasoning_efforts=efforts,
+            default_reasoning_effort=(efforts or [None])[0],
+        )
+        for identifier, efforts, long_context in models
+    ]
+
+    async def _refresh(**_kwargs):
+        return static_route.HarnessCapabilities.from_listing(listing)
+
+    monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", _refresh)
+
+
+def _dynamic_lane_ports(
+    monkeypatch, *, answer, capabilities_available=lambda: True
+) -> dict[str, list[Any]]:
+    """Substitute only the two ports a **Dynamic route** takes to the network.
+
+    A real :class:`~git_loopy.dynamic_route.DynamicRouter` over scripted inputs
+    — AC13's "injected external ports" — so what a Lane exercises here is the
+    Run's own routing boundary rather than a stand-in for it.
+    """
+    from types import SimpleNamespace
+    from decimal import Decimal
+
+    spied: dict[str, list[Any]] = {"assessments": []}
+
+    async def _fetch(method, url, headers):
+        del method, url, headers
+        return json.dumps(
+            {
+                "data": [
+                    {
+                        "id": "aa-opus",
+                        "name": "aa-opus",
+                        "slug": "aa-opus",
+                        "evaluations": {
+                            "artificial_analysis_intelligence_index": 70.0
+                        },
+                        "median_output_tokens_per_second": 90.0,
+                    },
+                    {
+                        "id": "aa-terra",
+                        "name": "aa-terra",
+                        "slug": "aa-terra",
+                        "evaluations": {
+                            "artificial_analysis_intelligence_index": 40.0
+                        },
+                        "median_output_tokens_per_second": 200.0,
+                    },
+                ],
+                "prompt_options": {"parallel_queries": 1},
+            }
+        ).encode("utf-8")
+
+    async def _capabilities():
+        if not capabilities_available():
+            return dynamic_route.FreshHarnessCapabilities(
+                retrieved_at=datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc),
+                capabilities=static_route.HarnessCapabilities.from_listing([]),
+                tier_capacities={},
+            )
+        return dynamic_route.FreshHarnessCapabilities(
+            retrieved_at=datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc),
+            capabilities=static_route.HarnessCapabilities.from_listing(
+                [
+                    SimpleNamespace(
+                        id=identifier,
+                        name=identifier,
+                        policy=SimpleNamespace(state="enabled", terms=""),
+                        billing=SimpleNamespace(
+                            multiplier=1.0,
+                            token_prices=SimpleNamespace(
+                                max_prompt_tokens=400_000, long_context=None
+                            ),
+                        ),
+                        supported_reasoning_efforts=["high"],
+                        default_reasoning_effort="high",
+                    )
+                    for identifier in ("claude-opus-5", "gpt-5.6-terra")
+                ]
+            ),
+            tier_capacities={
+                (identifier, "default"): 400_000
+                for identifier in ("claude-opus-5", "gpt-5.6-terra")
+            },
+        )
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", _fetch)
+    monkeypatch.setattr(loop_module, "_fetch_harness_evidence", _capabilities)
+
+    async def _assess(selector, request):
+        spied["assessments"].append((selector, request))
+        output = answer(request)
+        if inspect.isawaitable(output):
+            output = await output
+        return dynamic_route.SelectorCallResult(
+            output=output, routing_credits=Decimal("0.25")
+        )
+
+    # Unwrap any router a previous call in this test already installed, so a
+    # second Run's assessments are counted against its own spy rather than the
+    # first Run's closure (#565's multi-Run tests).
+    real_router = getattr(
+        loop_module._make_dynamic_router, "_real_router", loop_module._make_dynamic_router
+    )
+
+    def _router(prerequisites, *, selector_assess, recorder):
+        del selector_assess
+        return real_router(
+            prerequisites, selector_assess=_assess, recorder=recorder
+        )
+
+    _router._real_router = real_router  # type: ignore[attr-defined]
+    monkeypatch.setattr(loop_module, "_make_dynamic_router", _router)
+    return spied
+
+
+def _elects_lane_model(model: str):
+    def _answer(request) -> str:
+        (chosen,) = [c for c in request.candidates if c.model == model]
+        answer = {
+            "candidate_identity": chosen.stable_identity,
+            "summary": "strongest verified index for this Lane's work",
+        }
+        if any(
+            attempt.capability_evidence
+            and attempt.configuration
+            == (chosen.model, chosen.reasoning_effort, chosen.context_tier)
+            for attempt in request.prior_attempts
+        ):
+            answer["repeat_justification"] = (
+                "no eligible candidate scores higher on this evidence"
+            )
+        return json.dumps(answer)
+
+    return _answer
+
+
+def test_a_dynamic_route_reaches_each_lanes_own_work_session(
+    tmp_path, monkeypatch
+) -> None:
+    """AC13's second mode: rolling dispatch routes at the same Pickup seam.
+
+    The serial Iteration and a Lane contribution share one
+    ``_classify_at_pickup``, so a **Dynamic route** that works serially and not
+    in a Lane would mean two routing implementations rather than one boundary.
+    Both Lanes are routed independently — each buys its own assessment, because
+    a route is elected for *an issue* and not for a Run.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    exit_code = asyncio.run(loop_module.run(_dynamic_parallel_config()))
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+
+    by_dir = {
+        Path(c["working_directory"]).name: c
+        for c in fake_client.create_calls
+        if c["working_directory"]
+    }
+    assert by_dir["issue-42"]["model"] == "claude-opus-5"
+    assert by_dir["issue-42"]["reasoning_effort"] == "high"
+    assert by_dir["issue-43"]["model"] == "claude-opus-5"
+    assert len(spied["assessments"]) == 2
+
+
+def test_a_lane_whose_dynamic_route_is_unavailable_opens_no_session(
+    tmp_path, monkeypatch
+) -> None:
+    """AC11 in rolling dispatch: refuse the Lane, never fall back to a default.
+
+    The Lane's reservation goes back to the scheduler rather than being held by
+    an issue that cannot start, and the run-wide default — which under this
+    policy was never verified, precisely because the selector was meant to
+    replace it — does not quietly take the route's place.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(
+        monkeypatch,
+        answer=lambda _request: json.dumps(
+            {"candidate_identity": "nine", "summary": "not on the list"}
+        ),
+    )
+
+    exit_code = asyncio.run(loop_module.run(_dynamic_parallel_config()))
+
+    # Nonzero because the only candidate could not be routed and nothing ran —
+    # the same answer the serial path gives, and the point of AC11: a Run that
+    # silently succeeded here would have succeeded by taking the unverified
+    # run-wide default the selector was meant to replace.
+    assert exit_code != 0
+    assert fake_client.create_calls == []
+    assert fake_git.active_worktrees == []
+
+
+def _dynamic_retry_lane_run(tmp_path, monkeypatch, *, outcome="no_progress", **overrides):
+    """A Lane and a later serial Pickup, sharing the real Run's ledgers."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    class OutcomeSession(_NoProgressFakeSession):
+        async def send_and_wait(self, prompt, *, timeout=60.0, **extra):
+            if outcome == "crash":
+                raise ConnectionError("offline harness transport failed")
+            if outcome == "advanced":
+                target = (
+                    fake_git.worktree_client(Path(self._working_directory))
+                    if self._working_directory else fake_git
+                )
+                target.simulate_agent_commit(subject="feat: advance without closing")
+            return await super().send_and_wait(prompt, timeout=timeout, **extra)
+
+    fake_client = _NoProgressFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    fake_client._session_cls = OutcomeSession
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(
+        monkeypatch,
+        answer=overrides.pop("answer", _elects_lane_model("claude-opus-5")),
+        capabilities_available=overrides.pop("capabilities_available", lambda: True),
+    )
+    exit_code = asyncio.run(loop_module.run(_dynamic_parallel_config(**overrides)))
+    return fake_client, spied, exit_code
+
+
+@pytest.mark.parametrize(
+    ("outcome", "prior_outcome", "position"),
+    [
+        ("no_progress", dynamic_route.PriorOutcome.DID_NOT_SOLVE, "retrying"),
+        ("crash", dynamic_route.PriorOutcome.INFRASTRUCTURE_FAILURE, "retrying"),
+        ("advanced", dynamic_route.PriorOutcome.ADVANCED, "fresh"),
+    ],
+)
+@pytest.mark.parametrize("retry_model", ["claude-opus-5", "gpt-5.6-terra"])
+def test_a_lane_outcome_reaches_its_next_dynamic_pickup(
+    tmp_path, monkeypatch, outcome, prior_outcome, position, retry_model
+) -> None:
+    """Both dispatch paths read one history without manufacturing Attempts."""
+    fake_client, spied, _exit_code = _dynamic_retry_lane_run(
+        tmp_path, monkeypatch, outcome=outcome, max_nmt_strikes=9,
+        answer=lambda request: _elects_lane_model(
+            retry_model if request.prior_attempts else "claude-opus-5"
+        )(request),
+    )
+
+    lane, retry = (
+        request
+        for _selector, request in spied["assessments"]
+        if "Test issue 42" in request.issue
+    )
+    assert lane.prior_attempts == ()
+    (evidence,) = retry.prior_attempts
+    assert evidence.model == "claude-opus-5"
+    assert evidence.outcome is prior_outcome
+    assert evidence.capability_evidence is (outcome == "no_progress")
+
+    resolved = [
+        e for e in _logged_events(tmp_path) if e["type"] == "wrapper.routing.resolved"
+    ]
+    assert [(e["issue"], e["attempt"], e["lifecycle_position"]) for e in resolved] == [
+        (42, 1, "fresh"),
+        (42, 2, position),
+    ]
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "claude-opus-5", retry_model
+    ]
+    assert [event["model"] for event in resolved] == ["claude-opus-5", retry_model]
+
+
+@pytest.mark.parametrize("outcome", ["no_progress", "crash"])
+def test_dynamic_lane_retry_exhaustion_starts_no_third_attempt(
+    tmp_path, monkeypatch, outcome
+) -> None:
+    fake_client, spied, exit_code = _dynamic_retry_lane_run(
+        tmp_path, monkeypatch, outcome=outcome, max_iterations=5, max_nmt_strikes=1
+    )
+
+    assert exit_code == 1
+    assert len(fake_client.create_calls) == 2
+    assert len([
+        request for _, request in spied["assessments"] if "Test issue 42" in request.issue
+    ]) == 2
+    events = _logged_events(tmp_path)
+    assert len([e for e in events if e["type"] == "wrapper.strike"]) == 1
+    assert [e["outcome"] for e in events if e["type"] == "wrapper.run.end"] == ["stuck"]
+
+
+def test_explicit_default_equal_rung_wins_after_a_dynamic_lane(
+    tmp_path, monkeypatch
+) -> None:
+    fake_client, spied, exit_code = _dynamic_retry_lane_run(
+        tmp_path, monkeypatch, escalation_rung=("gpt-5.6-terra", "high")
+    )
+
+    assert exit_code == 0
+    assert len([
+        request for _, request in spied["assessments"] if "Test issue 42" in request.issue
+    ]) == 1
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "claude-opus-5", "gpt-5.6-terra"
+    ]
+    bound = [e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pickup.bound"]
+    assert [(e["routing_source"], e["lifecycle_position"]) for e in bound] == [
+        ("dynamic", "fresh"), ("escalated", "retrying")
+    ]
+
+
+def test_a_run_wide_override_remains_authoritative_after_a_lane_retry(
+    tmp_path, monkeypatch
+) -> None:
+    fake_client, spied, exit_code = _dynamic_retry_lane_run(
+        tmp_path, monkeypatch, routing_suppressed=True,
+    )
+
+    assert exit_code == 0
+    assert spied["assessments"] == []
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "gpt-5.6-terra", "gpt-5.6-terra"
+    ]
+    bound = [e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pickup.bound"]
+    assert [e["routing_source"] for e in bound] == [
+        "defaulted_explicit_override", "defaulted_explicit_override"
+    ]
+
+
+@pytest.mark.parametrize("refusal", ["invalid_output", "allowance", "eligibility"])
+def test_unavailable_dynamic_retry_after_a_lane_spends_no_attempt(
+    tmp_path, monkeypatch, refusal
+) -> None:
+    eligible = True
+
+    def answer(request):
+        if request.prior_attempts:
+            return None
+        return _elects_lane_model("claude-opus-5")(request)
+
+    # Withdraw eligibility after the first session, not while binding its route.
+    if refusal == "eligibility":
+        original_send = _NoProgressFakeSession.send_and_wait
+
+        async def send_then_withdraw(session, *args, **kwargs):
+            nonlocal eligible
+            result = await original_send(session, *args, **kwargs)
+            eligible = False
+            return result
+
+        monkeypatch.setattr(_NoProgressFakeSession, "send_and_wait", send_then_withdraw)
+
+    config = {"routing_credit_allowance": Decimal("0.25")} if refusal == "allowance" else {}
+    fake_client, spied, exit_code = _dynamic_retry_lane_run(
+        tmp_path, monkeypatch, answer=answer,
+        capabilities_available=lambda: eligible, **config
+    )
+
+    expected_sessions = 2 if refusal == "invalid_output" else 1
+    assert exit_code == (0 if refusal == "invalid_output" else 1)
+    assert len(fake_client.create_calls) == expected_sessions
+    events = _logged_events(tmp_path)
+    assert not [e for e in events if e["type"] == "wrapper.strike"]
+    resolutions = [e for e in events if e["type"] == "wrapper.routing.resolved"]
+    assert len(resolutions) == expected_sessions
+    assert len([e for e in resolutions if e["issue"] == 42]) == 1
+    refused = [e for e in events if e["type"] == "wrapper.pickup.skipped"]
+    assert any(e["issue"] == 42 and "dynamic route unavailable" in e["reason"] for e in refused)
+    if refusal != "invalid_output":
+        assert len(spied["assessments"]) == 1
+
+
+def _dynamic_parallel_config(**overrides) -> RunConfig:
+    from decimal import Decimal
+
+    base: dict[str, Any] = dict(
+        model="gpt-5.6-terra",
+        reasoning_effort="high",
+        context_tier="default",
+        route_policy=RoutePolicy.DYNAMIC,
+        routing_deadline_seconds=30,
+        routing_credit_allowance=Decimal("5"),
+        selector_concurrency=1,
+        route_associations={
+            "aa-opus": "claude-opus-5@high",
+            "aa-terra": "gpt-5.6-terra@high",
+        },
+        issue_source="github",
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+    base.update(overrides)
+    return RunConfig(**base)
+
+
+def test_each_lanes_final_dynamic_route_is_published_to_its_own_issue(
+    tmp_path, monkeypatch
+) -> None:
+    """Rolling dispatch projects per issue, never per Run (#563, AC10).
+
+    Both Lanes elect the same triple here, which is the case a Run-scoped
+    projection would pass by accident: the delivery record is keyed on the
+    issue, so each Lane's own issue gets its own comment and its own single
+    owned Route label beside the labels a human put there.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    assert asyncio.run(loop_module.run(_dynamic_parallel_config())) == 0
+
+    assert sorted(number for number, _body in fake_gh.route_comment_calls) == [42, 43]
+    for number in (42, 43):
+        labels = fake_gh.issue_labels(number)
+        assert len([x for x in labels if x.startswith("git-loopy-route:")]) == 1
+        assert {"ready-for-agent", "parallel-safe"} <= set(labels)
+    deliveries = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.delivery"
+    ]
+    assert sorted(event["issue"] for event in deliveries) == [42, 43]
+    assert {event["status"] for event in deliveries} == {"published"}
+
+
+def test_one_lanes_refused_projection_does_not_hold_up_the_other(
+    tmp_path, monkeypatch
+) -> None:
+    """A tracker refusal is scoped to the issue it refused (#563, AC6).
+
+    Delivery is non-blocking, so a Lane whose comment the tracker rejected
+    still runs the route already recorded for it, and the Lane beside it still
+    publishes. The refusal is reported as pending — never as published.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+        route_comment_errors={43: RouteDeliveryError("HTTP 403")},
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+
+    assert asyncio.run(loop_module.run(_dynamic_parallel_config())) == 0
+
+    assert len(fake_client.created) == 2, "both recorded routes still ran"
+    assert [number for number, _body in fake_gh.route_comment_calls] == [42]
+    deliveries = {
+        event["issue"]: event["status"]
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.delivery"
+    }
+    assert deliveries == {42: "published", 43: "pending"}
+
+
+def test_a_lane_whose_binding_cannot_be_recorded_opens_no_session(
+    tmp_path, monkeypatch
+) -> None:
+    """Canonical local persistence precedes Lane work too (#563, AC5).
+
+    A Lane that could not write down what it bound has no record of which pair
+    its Agent would have run on, so it must not open the session and must not
+    tell the tracker about a route it could not write down. The serial half of
+    this rule is
+    ``test_a_final_route_that_cannot_be_recorded_locally_starts_no_work``; the
+    two share one ``_emit_pickup_bound``, which is the point.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    original = persist_module.EventLogWriter.write
+
+    def refuse_the_binding(self, envelope: dict[str, Any]) -> None:
+        if envelope.get("type") == "wrapper.pickup.bound":
+            raise OSError("event log is unwritable")
+        original(self, envelope)
+
+    monkeypatch.setattr(persist_module.EventLogWriter, "write", refuse_the_binding)
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+    exit_code = asyncio.run(loop_module.run(cfg))
+
+    assert exit_code != 0
+    assert fake_client.created == []
+    assert fake_gh.route_comment_calls == []
+
+
+# --- Dynamic routing: reuse across Runs (#565, ADR-0057) --------------------
+
+
+def _rolling_dynamic_run(tmp_path, monkeypatch, **overrides):
+    """A two-Lane rolling dynamic Run, repeatable inside one test."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=overrides.pop("issues", [
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ]),
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    on_work = overrides.pop("on_work", None)
+    if on_work is not None:
+        class ScriptedSession(_ParallelFakeSession):
+            async def send_and_wait(self, prompt, **kwargs):
+                await on_work(self, fake_gh)
+                return await super().send_and_wait(prompt, **kwargs)
+        fake_client._session_cls = ScriptedSession
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch,
+        *overrides.pop(
+            "harness",
+            (("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)),
+        ),
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(
+        monkeypatch,
+        answer=overrides.pop("answer", _elects_lane_model("claude-opus-5")),
+    )
+    exit_code = asyncio.run(loop_module.run(_dynamic_parallel_config(**overrides)))
+    return fake_client, spied, exit_code
+
+
+def _lane_routing_records(tmp_path) -> list[dict[str, Any]]:
+    """Every ``wrapper.routing.resolved`` record in this clone, oldest Run first."""
+    logs = sorted(
+        (tmp_path / ".git-loopy" / "logs").glob("*.jsonl"), key=lambda p: p.name
+    )
+    return [
+        event
+        for path in logs
+        for raw in path.read_text(encoding="utf-8").splitlines()
+        if (event := json.loads(raw))["type"] == "wrapper.routing.resolved"
+    ]
+
+
+def test_each_lane_revalidates_its_own_issues_recorded_route(
+    tmp_path, monkeypatch
+) -> None:
+    """#565 AC1/AC3 in rolling dispatch: reuse is per issue, not per Run.
+
+    A route is elected for *an issue*, so reuse has to be keyed the same way —
+    and a rolling Run is where a shared one would show, because two Lanes read
+    the history concurrently and would otherwise race for whichever record
+    happened to be newest. Both Lanes revalidate, neither buys a selector call,
+    and each points at the decision its own issue got.
+    """
+    _fake, first, first_exit = _rolling_dynamic_run(tmp_path, monkeypatch)
+    assert first_exit == 0, f"the first Run failed: {first_exit}"
+    assert len(first["assessments"]) == 2
+
+    fake_client, second, second_exit = _rolling_dynamic_run(tmp_path, monkeypatch)
+
+    assert second_exit == 0, f"the reusing Run failed: {second_exit}"
+    assert second["assessments"] == [], "a Lane paid for a route it already had"
+    by_dir = {
+        Path(c["working_directory"]).name: c
+        for c in fake_client.create_calls
+        if c["working_directory"]
+    }
+    assert by_dir["issue-42"]["model"] == "claude-opus-5"
+    assert by_dir["issue-43"]["model"] == "claude-opus-5"
+
+    records = _lane_routing_records(tmp_path)
+    elected = {r["issue"]: r for r in records if r["routing_reuse"] == "elected"}
+    revalidated = {
+        r["issue"]: r for r in records if r["routing_reuse"] == "revalidated"
+    }
+    assert set(revalidated) == {42, 43}, "a Lane was left out of the reuse"
+    for issue, record in revalidated.items():
+        assert record["reused_proposal_id"] == elected[issue]["proposal_id"], (
+            f"Lane #{issue} revalidated against another issue's decision"
+        )
+        assert record["selector_attempts"] == 0
+
+
+def _hold_lanes_for_preparation(client, tmp_path, ref):
+    class PreparingSession(_ParallelFakeSession):
+        async def send_and_wait(self, prompt, **kwargs):
+            async def prepared():
+                while not any(
+                    event["type"] == "wrapper.routing.prepared"
+                    and event["issue"] == ref
+                    for event in _logged_events(tmp_path)
+                ):
+                    await asyncio.sleep(0)
+            await asyncio.wait_for(prepared(), timeout=2)
+            return await super().send_and_wait(prompt, **kwargs)
+    client._session_cls = PreparingSession
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_rolling_pickup_uses_current_inputs_without_waiting_for_the_tail(
+    tmp_path, monkeypatch, changed
+) -> None:
+    tail_started = asyncio.Event()
+    next_work = asyncio.Event()
+    timed_out = False
+
+    async def answer(request):
+        nonlocal timed_out
+        if "#45:" in request.issue:
+            tail_started.set()
+            try:
+                await asyncio.wait_for(next_work.wait(), timeout=1)
+            except TimeoutError:
+                timed_out = True
+                raise
+        model = "gpt-5.6-terra" if "changed work" in request.issue else "claude-opus-5"
+        return _elects_lane_model(model)(request)
+
+    async def work(session, tracker):
+        ref = Path(session._working_directory).name
+        if ref in {"issue-42", "issue-43"}:
+            await asyncio.wait_for(tail_started.wait(), timeout=2)
+            if changed:
+                tracker.seed_issue(dataclass_replace(
+                    tracker.issue_view(44),
+                    body="## What to build\nchanged work\n\n## Acceptance criteria\n- pass",
+                ))
+        elif ref == "issue-44":
+            next_work.set()
+
+    client, spied, exit_code = _rolling_dynamic_run(
+        tmp_path, monkeypatch,
+        issues=[
+            _make_issue(ref, labels=["ready-for-agent", "parallel-safe"])
+            for ref in (42, 43, 44, 45)
+        ],
+        answer=answer, on_work=work, max_iterations=3,
+    )
+    assert exit_code == 0
+    assert next_work.is_set() and not timed_out
+    calls = {
+        Path(call["working_directory"]).name: call
+        for call in client.create_calls if call["working_directory"]
+    }
+    assert set(calls) == {"issue-42", "issue-43", "issue-44"}
+    assert calls["issue-44"]["model"] == (
+        "gpt-5.6-terra" if changed else "claude-opus-5"
+    )
+    assert calls["issue-44"]["reasoning_effort"] == "high"
+    assert sum("#44:" in request.issue for _, request in spied["assessments"]) == (
+        2 if changed else 1
+    )
+    cancelled = [
+        event for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.prepared" and event["issue"] == 45
+    ]
+    assert cancelled[-1]["state"] == "unavailable"
+    assert "cancelled" in cancelled[-1]["detail"]
+
+
+@pytest.mark.parametrize("unreadable", [False, True])
+def test_rolling_preparation_rereads_queued_readiness_without_spending(
+    tmp_path, monkeypatch, unreadable
+) -> None:
+    tracker_ready = asyncio.Event()
+    tracker = None
+
+    async def answer(request):
+        if "#44:" in request.issue:
+            await tracker_ready.wait()
+            assert tracker is not None
+            readiness = (
+                BlockedByRead.unprovable() if unreadable else BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="x/y#99", state="open"),),
+                )
+            )
+            tracker.seed_issue(dataclass_replace(
+                tracker.issue_view(45), blocked_by=readiness
+            ))
+        return _elects_lane_model("claude-opus-5")(request)
+
+    async def work(_session, current_tracker):
+        nonlocal tracker
+        tracker = current_tracker
+        tracker_ready.set()
+
+        async def prepared():
+            while not any(
+                event["type"] == "wrapper.routing.prepared" and event["issue"] == 45
+                for event in _logged_events(tmp_path)
+            ):
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(prepared(), timeout=2)
+
+    client, spied, exit_code = _rolling_dynamic_run(
+        tmp_path, monkeypatch,
+        issues=[
+            _make_issue(ref, labels=["ready-for-agent", "parallel-safe"])
+            for ref in (42, 43, 44, 45)
+        ],
+        answer=answer, on_work=work, max_iterations=2,
+    )
+    assert exit_code == 0
+    assert len(client.create_calls) == 2
+    assert all(call["model"] == "claude-opus-5" for call in client.create_calls)
+    assert not any("#45:" in request.issue for _, request in spied["assessments"])
+    (pending,) = [
+        event for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.prepared" and event["issue"] == 45
+    ]
+    assert pending["state"] == "unavailable"
+    assert not any(
+        event["type"] == "wrapper.pickup.bound" and event["issue"] == 45
+        for event in _logged_events(tmp_path)
+    )
+
+
+def test_serial_required_work_is_prepared_while_existing_lanes_drain(
+    tmp_path, monkeypatch
+) -> None:
+    discovered = False
+    observed_during_work = []
+
+    async def work(session, tracker):
+        nonlocal discovered
+        if session._working_directory is None:
+            return
+        if not discovered:
+            tracker.seed_issue(_make_issue(44, labels=["ready-for-agent"]))
+            discovered = True
+            return
+
+        async def prepared():
+            while not any(
+                event["type"] == "wrapper.routing.prepared" and event["issue"] == 44
+                for event in _logged_events(tmp_path)
+            ):
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(prepared(), timeout=2)
+        observed_during_work.append(Path(session._working_directory).name)
+
+    client, spied, exit_code = _rolling_dynamic_run(
+        tmp_path, monkeypatch, on_work=work, max_iterations=3,
+    )
+    assert exit_code == 0
+    assert [call["working_directory"] is None for call in client.create_calls] == [
+        False, False, True
+    ]
+    assert client.create_calls[-1]["model"] == "claude-opus-5"
+    assert sum("#44:" in request.issue for _, request in spied["assessments"]) == 1
+    assert observed_during_work == ["issue-43"]
+
+
+def test_a_rolling_run_prepares_the_candidates_no_lane_has_taken(
+    tmp_path, monkeypatch
+) -> None:
+    """AC1 in **Rolling** dispatch: the cache behind the Lanes is prepared too.
+
+    Two Lane slots and three **Parallel-safe** candidates, so exactly one stays
+    in the **Pool** while the other two are worked. It is prepared beside them,
+    which is the whole point: its **Pickup** arrives when a slot frees and
+    finds an assessment already made.
+
+    The Lanes are what must not change. Preparation reserves nothing and
+    reorders nothing, so both open sessions on the elected route exactly as
+    they did before this slice existed.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(number, labels=["ready-for-agent", "parallel-safe"])
+            for number in (42, 43, 44)
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+    _hold_lanes_for_preparation(fake_client, tmp_path, 44)
+
+    assert asyncio.run(loop_module.run(_dynamic_parallel_config())) == 0
+
+    prepared = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.prepared"
+    ]
+    assert prepared, "the candidate behind the Lanes was never prepared"
+    assert {event["issue"] for event in prepared} <= {42, 43, 44}
+    assert {event["state"] for event in prepared} == {"proposed"}
+    worked = {
+        event["issue"]
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.resolved"
+    }
+    assert {event["issue"] for event in prepared}.isdisjoint(worked), (
+        "a candidate a Lane was working was prepared beside it"
+    )
+
+
+def test_preparation_reserves_nothing_and_opens_no_session(
+    tmp_path, monkeypatch
+) -> None:
+    """AC7 and AC4: a proposal is not a **Lease** and not evidence of work.
+
+    The sharpest way a preparation desk could go wrong in **Rolling** dispatch
+    is to behave like a second dispatcher — taking a candidate out of the Pool,
+    claiming a Lane slot, or making the Run look busier than it is. Here the
+    prepared candidate must still be worked by an ordinary Lane, and the
+    session count must equal the number of issues rather than the number of
+    proposals.
+    """
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(number, labels=["ready-for-agent", "parallel-safe"])
+            for number in (42, 43, 44)
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+    _hold_lanes_for_preparation(fake_client, tmp_path, 44)
+
+    assert asyncio.run(loop_module.run(_dynamic_parallel_config())) == 0
+
+    events = _logged_events(tmp_path)
+    prepared = [e for e in events if e["type"] == "wrapper.routing.prepared"]
+    resolved = [e for e in events if e["type"] == "wrapper.routing.resolved"]
+    assert prepared, "nothing was prepared, so nothing is being asserted"
+    # `max_iterations=2` caps the Run at two sessions. A proposal is not one.
+    assert len(fake_client.create_calls) == len(resolved) == 2, (
+        f"{len(fake_client.create_calls)} sessions for {len(resolved)} routes "
+        f"and {len(prepared)} proposals"
+    )
+    assert all(event["proposal_id"] for event in prepared), prepared
+    # A proposal names no binding: the Pickup's record is the only one that
+    # reports a **Routing source**.
+    assert all("routing_source" not in event for event in prepared), prepared

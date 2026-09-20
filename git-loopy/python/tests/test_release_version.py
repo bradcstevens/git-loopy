@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import stat
 import subprocess
 import sys
 import tomllib
@@ -11,6 +12,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from packaging.version import Version
+
+import git_loopy.release_version as release_version
+from git_loopy.release_version import (
+    ReleaseVersionError,
+    release_line_from_version,
+    validate_repository_release_version,
+    write_repository_release_version,
+)
 
 
 CONFORMANCE_DIR = Path(__file__).parents[2] / "conformance"
@@ -212,8 +222,8 @@ def test_repository_release_metadata_matches_root_authority() -> None:
 
 def test_installed_python_distribution_metadata_matches_release_version() -> None:
     assert (
-        distribution_version("git-loopy")
-        == RELEASE_VERSION_FIXTURE["expected_python_distribution_version"]
+        Version(distribution_version("git-loopy"))
+        == Version(RELEASE_VERSION_FIXTURE["expected_python_distribution_version"])
     )
 
 
@@ -233,21 +243,443 @@ def test_locked_python_distribution_metadata_matches_release_version() -> None:
 
 
 def test_no_fixture_other_than_release_version_contains_live_release_version() -> None:
-    """The live Release version is named by exactly one fixture: release-version.json.
-
-    Every other fixture uses synthetic version literals (e.g. "1.2.3") so that bumping
-    the repository VERSION file causes no fixture diffs in the family oracle.
-    """
+    # release-version.json is the single Conformance fixture allowed to name
+    # the live Release version (#487). Every other fixture proves a wire form
+    # or a decision the members can disagree about; the version is neither,
+    # so pinning it anywhere else would make an unrelated Release bump
+    # rewrite fixtures the gate has no reason to touch.
     live_version = (REPOSITORY_ROOT / "VERSION").read_text(encoding="utf-8").strip()
-    offending: dict[str, list[str]] = {}
-    for path in sorted(CONFORMANCE_DIR.glob("*.json")):
-        if path.name == "release-version.json":
-            continue
-        text = path.read_text(encoding="utf-8")
-        if live_version in text:
-            offending[path.name] = [
-                line for line in text.splitlines() if live_version in line
-            ]
-    assert offending == {}, (
-        f"Fixture(s) other than release-version.json contain the live Release version string {live_version!r}: {offending}"
+
+    offenders = [
+        fixture_path.name
+        for fixture_path in sorted(CONFORMANCE_DIR.glob("*.json"))
+        if fixture_path.name != "release-version.json"
+        and live_version in fixture_path.read_text(encoding="utf-8")
+    ]
+
+    assert offenders == [], (
+        f"live Release version {live_version!r} pinned outside "
+        f"release-version.json in: {offenders}"
     )
+
+
+def _write_release_distribution(root: Path, version: str = "1.2.3-dev.4") -> None:
+    _write_repository_metadata(root, version)
+    python_version = version.replace("-dev.", ".dev")
+    (root / "git-loopy/python/uv.lock").write_text(
+        '\n'.join(
+            (
+                "[[package]]",
+                'name = "git-loopy"',
+                f'version = "{python_version}"',
+                'source = { editable = "." }',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    (root / "git-loopy/tui").mkdir(parents=True)
+    (root / "git-loopy/tui/Cargo.toml").write_text(
+        '\n'.join(
+            (
+                "[package]",
+                'name = "git-loopy-tui"',
+                f'version = "{version}"',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    (root / "git-loopy/tui/Cargo.lock").write_text(
+        '\n'.join(
+            (
+                "[[package]]",
+                'name = "git-loopy-tui"',
+                f'version = "{version}"',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    (root / "git-loopy/tui/README.md").write_text(
+        f'{{"name": "git-loopy-tui", "version": "{version}"}}\n',
+        encoding="utf-8",
+    )
+    (root / "git-loopy/conformance").mkdir()
+    (root / "git-loopy/conformance/release-version.json").write_text(
+        json.dumps({
+            "expected_release_version": version,
+            "expected_python_distribution_version": python_version,
+            "fixture": "unchanged",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    (root / "git-loopy/conformance/other.json").write_text(
+        '{"fixture": "unchanged"}\n',
+        encoding="utf-8",
+    )
+
+
+def test_release_writer_advances_all_distribution_copies(tmp_path: Path) -> None:
+    _write_release_distribution(tmp_path)
+    modes_before = {
+        path.relative_to(tmp_path): stat.S_IMODE(path.stat().st_mode)
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    write_repository_release_version(tmp_path, "2.3.4-dev.5")
+
+    assert validate_repository_release_version(
+        tmp_path, publication_version="2.3.4-dev.5"
+    ) == "2.3.4-dev.5"
+    assert (tmp_path / "git-loopy/python/uv.lock").read_text(encoding="utf-8") == (
+        '[[package]]\nname = "git-loopy"\nversion = "2.3.4.dev5"\n'
+        'source = { editable = "." }\n'
+    )
+    assert (tmp_path / "git-loopy/tui/Cargo.toml").read_text(encoding="utf-8") == (
+        '[package]\nname = "git-loopy-tui"\nversion = "2.3.4-dev.5"\n'
+    )
+    assert (tmp_path / "git-loopy/tui/Cargo.lock").read_text(encoding="utf-8") == (
+        '[[package]]\nname = "git-loopy-tui"\nversion = "2.3.4-dev.5"\n'
+    )
+    assert (tmp_path / "git-loopy/tui/README.md").read_text(encoding="utf-8") == (
+        '{"name": "git-loopy-tui", "version": "2.3.4-dev.5"}\n'
+    )
+    assert json.loads(
+        (tmp_path / "git-loopy/conformance/release-version.json").read_text(
+            encoding="utf-8"
+        )
+    ) == {
+        "expected_release_version": "2.3.4-dev.5",
+        "expected_python_distribution_version": "2.3.4.dev5",
+        "fixture": "unchanged",
+    }
+    assert (tmp_path / "git-loopy/conformance/other.json").read_text(
+        encoding="utf-8"
+    ) == '{"fixture": "unchanged"}\n'
+    assert {
+        path.relative_to(tmp_path): stat.S_IMODE(path.stat().st_mode)
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    } == modes_before
+
+
+def test_release_writer_promotes_the_live_fixture_with_the_distribution(
+    tmp_path: Path,
+) -> None:
+    _write_release_distribution(tmp_path)
+
+    write_repository_release_version(tmp_path, "1.2.3")
+
+    fixture = json.loads(
+        (tmp_path / "git-loopy/conformance/release-version.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert fixture["expected_release_version"] == "1.2.3"
+    assert fixture["expected_python_distribution_version"] == "1.2.3"
+    assert fixture["fixture"] == "unchanged"
+    assert Path("git-loopy/conformance/release-version.json") in (
+        release_version.RELEASE_VERSION_PATHS
+    )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{",
+        "[]",
+        "{}",
+        '{"expected_release_version": 1, '
+        '"expected_python_distribution_version": "1.2.3.dev4"}',
+        '{"expected_release_version": "9.0.0", '
+        '"expected_python_distribution_version": "1.2.3.dev4"}',
+        '{"expected_release_version": "1.2.3-dev.4", '
+        '"expected_python_distribution_version": "9.0.0"}',
+        '{"expected_release_version": 1, '
+        '"expected_release_version": "1.2.3-dev.4", '
+        '"expected_python_distribution_version": "1.2.3.dev4"}',
+    ],
+)
+def test_release_writer_refuses_invalid_fixture_without_touching_distribution(
+    tmp_path: Path, content: str,
+) -> None:
+    _write_release_distribution(tmp_path)
+    (tmp_path / "git-loopy/conformance/release-version.json").write_text(
+        content, encoding="utf-8"
+    )
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(ReleaseVersionError, match="Release fixture"):
+        write_repository_release_version(tmp_path, "2.3.4-dev.5")
+
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    } == before
+
+
+def test_release_line_reader_continues_a_dev_counter_from_its_stable_release() -> None:
+    last_stable, release_line = release_line_from_version(
+        "1.3.0-dev.7",
+        last_stable_version="1.2.3",
+    )
+
+    assert last_stable == "1.2.3"
+    assert release_line.target == "1.3.0"
+    assert release_line.counter == 7
+
+
+def test_release_promotion_cli_stabilizes_only_a_matching_closed_milestone(
+    tmp_path: Path,
+) -> None:
+    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    notes = tmp_path / "docs/releases"
+    notes.mkdir(parents=True)
+    (notes / "v1.3.0-dev.1.md").write_text(
+        "# git-loopy 1.3.0-dev.1\n\nFirst development fragment.\n",
+        encoding="utf-8",
+    )
+    (notes / "v1.3.0-dev.7.md").write_text(
+        "# git-loopy 1.3.0-dev.7\n\nFinal development fragment.\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "github-output"
+
+    result = _run_validator(
+        tmp_path,
+        "--promote-milestone",
+        "v1.3.0",
+        "--milestone-state",
+        "CLOSED",
+        "--github-output",
+        str(output),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert result.stderr == ""
+    assert validate_repository_release_version(tmp_path) == "1.3.0"
+    assert (notes / "v1.3.0.md").read_text(encoding="utf-8") == (
+        "# git-loopy 1.3.0\n\n"
+        "git-loopy 1.3.0 was promoted from the committed development fragments below.\n\n"
+        "## Development fragments\n\n"
+        "### 1.3.0-dev.1\n\n"
+        "First development fragment.\n\n"
+        "### 1.3.0-dev.7\n\n"
+        "Final development fragment.\n"
+    )
+    assert output.read_text(encoding="utf-8") == (
+        "promoted=true\n"
+        "version=1.3.0\n"
+        "subject=chore(release): promote Release line to 1.3.0\n"
+        "notes_path=docs/releases/v1.3.0.md\n"
+        "fragment_path=docs/releases/v1.3.0-dev.7.md\n"
+    )
+
+
+def test_release_promotion_cli_appends_its_decision_to_a_shared_step_output(
+    tmp_path: Path,
+) -> None:
+    """A step's output file is shared, so a Promotion never truncates it."""
+    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    output = tmp_path / "github-output"
+    output.write_text("already=recorded\n", encoding="utf-8")
+
+    result = _run_validator(
+        tmp_path,
+        "--promote-milestone",
+        "v1.3.0",
+        "--milestone-state",
+        "CLOSED",
+        "--github-output",
+        str(output),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines()[0] == "already=recorded"
+
+
+def test_release_promotion_cli_outputs_the_synthesized_current_fragment_path(
+    tmp_path: Path,
+) -> None:
+    """A Promotion tells its workflow to stage every fragment it synthesized."""
+    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    notes = tmp_path / "docs/releases"
+    notes.mkdir(parents=True)
+    (notes / "v1.3.0-dev.1.md").write_text(
+        "# git-loopy 1.3.0-dev.1\n\nFirst development fragment.\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "github-output"
+
+    result = _run_validator(
+        tmp_path,
+        "--promote-milestone",
+        "v1.3.0",
+        "--milestone-state",
+        "CLOSED",
+        "--github-output",
+        str(output),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (notes / "v1.3.0-dev.7.md").is_file()
+    assert "fragment_path=docs/releases/v1.3.0-dev.7.md\n" in output.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_release_promotion_cli_preserves_a_human_authored_stable_note(
+    tmp_path: Path,
+) -> None:
+    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    notes = tmp_path / "docs/releases"
+    notes.mkdir(parents=True)
+    stable_note = notes / "v1.3.0.md"
+    stable_note.write_text(
+        "# git-loopy 1.3.0\n\nA human release essay.\n",
+        encoding="utf-8",
+    )
+
+    result = _run_validator(
+        tmp_path,
+        "--promote-milestone",
+        "v1.3.0",
+        "--milestone-state",
+        "CLOSED",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert stable_note.read_text(encoding="utf-8") == (
+        "# git-loopy 1.3.0\n\nA human release essay.\n"
+    )
+
+
+def test_release_promotion_cli_leaves_an_unmatched_milestone_prerelease_untouched(
+    tmp_path: Path,
+) -> None:
+    _write_release_distribution(tmp_path, version="1.3.0-dev.7")
+    output = tmp_path / "github-output"
+
+    result = _run_validator(
+        tmp_path,
+        "--promote-milestone",
+        "v1.2.4",
+        "--milestone-state",
+        "CLOSED",
+        "--github-output",
+        str(output),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert validate_repository_release_version(tmp_path) == "1.3.0-dev.7"
+    assert output.read_text(encoding="utf-8") == "promoted=false\n"
+
+
+def test_release_writer_refuses_invalid_semver_without_touching_distribution(
+    tmp_path: Path,
+) -> None:
+    _write_release_distribution(tmp_path)
+    before = {
+        path.relative_to(tmp_path): (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(ReleaseVersionError, match="Semantic Versioning"):
+        write_repository_release_version(tmp_path, "2.3")
+
+    after = {
+        path.relative_to(tmp_path): (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+
+
+def test_release_writer_restores_every_copy_when_replacement_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_release_distribution(tmp_path)
+    before = {
+        path.relative_to(tmp_path): (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    replace = release_version.os.replace
+    failed = False
+
+    def fail_uv_lock_replacement(source: str | Path, destination: str | Path) -> None:
+        nonlocal failed
+        if Path(destination) == tmp_path / "git-loopy/python/uv.lock" and not failed:
+            failed = True
+            raise OSError("simulated replacement failure")
+        replace(source, destination)
+
+    monkeypatch.setattr(release_version.os, "replace", fail_uv_lock_replacement)
+
+    with pytest.raises(ReleaseVersionError, match="all copies were restored"):
+        write_repository_release_version(tmp_path, "2.3.4-dev.5")
+
+    after = {
+        path.relative_to(tmp_path): (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+
+
+def test_release_writer_refuses_unreadable_copy_without_touching_distribution(
+    tmp_path: Path,
+) -> None:
+    _write_release_distribution(tmp_path)
+    cargo_lock = tmp_path / "git-loopy/tui/Cargo.lock"
+    cargo_lock.unlink()
+    cargo_lock.mkdir()
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(ReleaseVersionError, match="cannot read Rust lockfile"):
+        write_repository_release_version(tmp_path, "2.3.4-dev.5")
+
+    after = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    assert not list(tmp_path.rglob("*.git-loopy-release"))
+
+
+def test_release_writer_removes_staged_files_when_staging_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_release_distribution(tmp_path)
+    fsync = release_version.os.fsync
+    calls = 0
+
+    def fail_second_copy_backup_fsync(file_descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            raise OSError("simulated staging failure")
+        fsync(file_descriptor)
+
+    monkeypatch.setattr(
+        release_version.os, "fsync", fail_second_copy_backup_fsync
+    )
+
+    with pytest.raises(ReleaseVersionError, match="cannot stage"):
+        write_repository_release_version(tmp_path, "2.3.4-dev.5")
+
+    assert not list(tmp_path.rglob("*.git-loopy-release"))

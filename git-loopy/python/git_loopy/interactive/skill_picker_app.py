@@ -1,8 +1,7 @@
-"""``git_loopy.interactive.skill_picker_app`` — the optional Skill picker (issue #231).
+"""``git_loopy.interactive.skill_picker_app`` — the Skill picker (issue #231).
 
-The presentation half of **Skill policy** editing. The base installation's
-searchable multi-select is :func:`git_loopy.skillscmd.run_plain_skill_picker`;
-this is an alternate renderer and controller over the *same*
+The presentation half of **Skill policy** editing. This is the single renderer
+and controller over the shared
 :class:`~git_loopy.skillscmd.SkillSelectionModel`, returning the same
 :class:`~git_loopy.skillscmd.SkillSelectionResult` (or ``None`` on cancel). Every
 operator action is applied by asking that shared model — ``filter``, ``toggle``,
@@ -23,9 +22,8 @@ off-screen and is still in the saved policy afterwards.
 
 This module imports Textual at the top, so — like
 :mod:`git_loopy.interactive.picker_app` — it is reached through a lazy import
-(:func:`git_loopy.skillscmd.run_textual_skill_picker`). The dependency is now
-in the base installation, but keeping the lazy boundary keeps non-interactive
-commands' import path light.
+(:func:`git_loopy.skillscmd.run_textual_skill_picker`) and non-interactive
+commands keep a light import path.
 """
 
 from __future__ import annotations

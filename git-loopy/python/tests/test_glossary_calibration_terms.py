@@ -1106,7 +1106,7 @@ def test_the_classifier_entry_still_matches_the_shipped_session() -> None:
     *real* Iteration number, whatever withholds it.
     """
     entry = _entry("Task-type classifier")
-    session = _doc("git-loopy/python/git_loopy/task_type_session.py")
+    session = _doc("git-loopy/python/git_loopy/classifier_session.py")
 
     assert "cheapest pair on the live roster" in entry
     assert "never the run-wide default" in entry

@@ -2463,6 +2463,26 @@ def test_pickup_renders_the_routed_pair_at_default_verbosity() -> None:
     assert "#7" in out
     assert "gpt-5-mini @ medium" in out
     assert "task-type:docs" in out
+    assert "fresh" in out
+
+
+def test_pickup_renders_its_retry_position_separately_from_the_route() -> None:
+    """The same route on a retry is not the first attempt again."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_pickup_event(lifecycle_position="retrying"))
+
+    assert "retrying" in buf.getvalue()
+
+
+def test_legacy_pickup_omits_an_unknown_lifecycle_position() -> None:
+    """A pre-lifecycle record stays as compact as it was when recorded."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_pickup_event(lifecycle_position=None))
+
+    assert "fresh" not in buf.getvalue()
+    assert "retrying" not in buf.getvalue()
 
 
 def test_pickup_renders_the_no_label_fallback_most_compactly_of_all() -> None:
@@ -2601,6 +2621,325 @@ def test_a_pickup_carrying_no_routing_still_renders_its_issue() -> None:
     )
 
     assert "#7" in buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Route delivery — a tracker projection that lagged, not a route that failed
+# (#563)
+# ---------------------------------------------------------------------------
+
+
+def _delivery_event(**payload: Any) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "type": events_module.WRAPPER_ROUTING_DELIVERY,
+        "issue": 7,
+        "identity": "c3e505e1e9cb9a7e5a5e086e8a1e71b6",
+        "label": "git-loopy-route:gpt-5-mini-medium-d-0d3d445fe66d",
+        "status": "published",
+    }
+    event.update(payload)
+    return event
+
+
+def test_a_published_route_projection_is_quiet_at_default_verbosity() -> None:
+    """The happy path is the common path, and it says nothing an operator needs.
+
+    A Pickup already printed the pair; repeating it once more per issue only to
+    report that a comment landed would drown the one delivery state that *is*
+    news.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_delivery_event())
+
+    assert buf.getvalue() == ""
+
+
+@pytest.mark.parametrize(
+    ("status", "phrase"),
+    [
+        ("pending", "pending"),
+        ("partial", "partial"),
+        ("failed", "failed"),
+        ("stale", "superseded"),
+    ],
+)
+def test_an_undelivered_route_projection_says_so_without_blaming_the_route(
+    status: str, phrase: str
+) -> None:
+    """Delivery state is about the tracker, never about the pair (#563, AC9).
+
+    The Route is already decided and already recorded locally when this prints,
+    so the line has to be readable as "the comment did not land" rather than as
+    "routing failed" — those have opposite remedies.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_delivery_event(status=status))
+
+    out = buf.getvalue()
+    assert "#7" in out
+    assert phrase in out
+    assert "route publication" in out
+
+
+def _resolved_event(**payload: Any) -> dict[str, Any]:
+    """A ``wrapper.routing.resolved`` record, as a Runner writes one."""
+    event: dict[str, Any] = {
+        "type": events_module.WRAPPER_ROUTING_RESOLVED,
+        "issue": 7,
+        "proposal_id": "01JD00000000000000000000NEW",
+        "model": "claude-opus-5",
+        "effort": "high",
+        "context_tier": "default",
+        "routing_reuse": events_module.ROUTE_ELECTED,
+        "reused_proposal_id": None,
+        "reused_validated_at": None,
+        "superseded_proposal_id": None,
+        "relevant_input_identity": "9f2c1d6a4b8e",
+    }
+    event.update(payload)
+    return event
+
+
+def test_a_freshly_validated_reuse_is_distinguishable_from_an_assessment() -> None:
+    """#565 AC8: the one fact the Pickup line cannot carry.
+
+    The pair is already on the Pickup line; what an operator cannot see there
+    is whether a selector call was bought for it. Reuse, a first assessment and
+    a reassessment of a route that no longer validates are three different
+    bills, so they have to read as three different lines.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _resolved_event(
+            routing_reuse=events_module.ROUTE_REVALIDATED,
+            reused_proposal_id="01JD00000000000000000000OLD",
+            reused_validated_at="2026-09-18T20:00:00.000Z",
+        )
+    )
+
+    out = buf.getvalue()
+    assert "routing" in out
+    assert "#7" in out
+    assert "revalidated" in out
+    assert "01JD00000000000000000000OLD" in out, (
+        "a reuse that does not name the decision it reused is not provenance"
+    )
+    assert "2026-09-18T20:00:00.000Z" in out
+
+
+def test_a_first_assessment_says_it_had_nothing_to_reuse() -> None:
+    """The baseline case still reads as an assessment, not as a silent default."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_resolved_event())
+
+    out = buf.getvalue()
+    assert "assessed" in out
+    assert "revalidated" not in out
+    assert "reassessed" not in out
+
+
+def test_a_stale_recorded_route_reads_as_a_reassessment_not_a_reuse() -> None:
+    """#565 AC8's third state: history was there, and it did not validate.
+
+    An operator who sees only "assessed" cannot tell a Run that had nothing to
+    reuse from one whose recorded route stopped matching — and the second is
+    the one worth looking into, because something about the issue, the policy
+    or the harness moved.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_resolved_event(superseded_proposal_id="01JD00000000000000000000OLD"))
+
+    out = buf.getvalue()
+    assert "reassessed" in out
+    assert "01JD00000000000000000000OLD" in out
+    assert "revalidated" not in out
+
+
+# ---------------------------------------------------------------------------
+# **Routing preparation** (#566) — a proposal, and never a binding
+# ---------------------------------------------------------------------------
+
+
+def _prepared_event(**payload: Any) -> dict[str, Any]:
+    """A ``wrapper.routing.prepared`` record, as a Runner writes one."""
+    event: dict[str, Any] = {
+        "type": events_module.WRAPPER_ROUTING_PREPARED,
+        "issue": 7,
+        "state": events_module.ROUTE_PREPARATION_PROPOSED,
+        "proposal_id": "01JD00000000000000000000PRE",
+        "model": "claude-opus-5",
+        "effort": "high",
+        "context_tier": "default",
+        "summary": "strongest verified index for this work",
+        "reason": None,
+        "detail": None,
+        "prepared_at": "2026-09-19T09:00:00.000Z",
+        "valid_until": "2026-09-19T09:05:00.000Z",
+        "relevant_input_identity": "9f2c1d6a4b8e",
+        "routing_credits": "0.25",
+        "selector_attempts": 2,
+    }
+    event.update(payload)
+    return event
+
+
+def test_a_prepared_route_never_reads_as_a_decision() -> None:
+    """#566 AC4: proposal state is visible without being presented as a binding.
+
+    The whole risk of showing preparation at all. An operator who reads a
+    proposal as a decision believes an issue is routed that has not been picked
+    up, may never be picked up, and whose eventual **Pickup** re-reads every
+    input before it binds anything. So the line says "prepared", names the pair
+    as a *proposal*, and borrows none of the Pickup line's vocabulary.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_prepared_event())
+
+    out = buf.getvalue()
+    assert "#7" in out
+    assert "prepared" in out
+    assert "claude-opus-5" in out
+    assert "routed" not in out, "a proposal claimed the Pickup's word"
+    assert "bound" not in out, "a proposal claimed a Lease"
+
+
+def test_a_prepared_route_reads_back_its_rationale_and_provenance() -> None:
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _prepared_event(
+            selector_model="gpt-5.6-terra",
+            selector_effort="high",
+            selector_context_tier="long_context",
+            evidence_source="benchmark-index",
+            source_model_identity="claude-opus-5@2026-09",
+            evidence_retrieved_at="2026-09-19T08:45:00.000Z",
+            capabilities_retrieved_at="2026-09-19T08:46:00.000Z",
+            measurement_at="2026-09-18T00:00:00.000Z",
+            benchmark_version="swe-bench-verified-2",
+            conditions="repository coding",
+            routing_overshot=True,
+        )
+    )
+
+    out = " ".join(buf.getvalue().split())
+    for expected in (
+        "strongest verified index for this work",
+        "01JD00000000000000000000PRE",
+        "9f2c1d6a4b8e",
+        "2026-09-19T09:00:00.000Z",
+        "2026-09-19T09:05:00.000Z",
+        "gpt-5.6-terra",
+        "long_context",
+        "benchmark-index",
+        "claude-opus-5@2026-09",
+        "2026-09-19T08:45:00.000Z",
+        "2026-09-19T08:46:00.000Z",
+        "2026-09-18T00:00:00.000Z",
+        "swe-bench-verified-2",
+        "repository coding",
+        "overshot",
+    ):
+        assert expected in out
+
+
+def test_a_null_prepared_effort_is_not_presented_as_configured() -> None:
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_prepared_event(effort=None))
+
+    out = buf.getvalue()
+    assert "backend default" in out
+    assert "None" not in out
+
+
+def test_a_statically_routed_candidate_says_the_selector_was_not_asked() -> None:
+    """#566 AC3: "no proposal" has causes an operator is owed.
+
+    An operator who wrote a ``[routing]`` entry and then sees nothing prepared
+    for the issues it covers has no way to tell their instruction was honoured
+    from routing being broken. The line names their own route as the reason.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _prepared_event(
+            state=events_module.ROUTE_PREPARATION_STATIC,
+            proposal_id=None,
+            model=None,
+            effort=None,
+            context_tier=None,
+            summary=None,
+        )
+    )
+
+    out = buf.getvalue()
+    assert "#7" in out
+    assert "static route" in out
+    assert "no selector call" in out
+
+
+def test_a_revalidatable_candidate_is_available_for_pickup_revalidation() -> None:
+    """A **Reusable route** is why preparation did nothing, not a failure."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _prepared_event(
+            state=events_module.ROUTE_PREPARATION_REUSABLE,
+            proposal_id=None,
+            model=None,
+            summary=None,
+        )
+    )
+
+    out = buf.getvalue()
+    assert "available for Pickup revalidation" in out
+    assert "unavailable" not in out
+
+
+def test_an_unpreparable_candidate_does_not_blame_its_pickup() -> None:
+    """#566 AC8: exhaustion is explicit, and it is not a refusal to work.
+
+    The distinction the line has to carry: preparation could not assess this
+    issue in advance, and its **Pickup** will assess it for itself. Phrasing it
+    as a routing failure would send an operator looking for a broken issue.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _prepared_event(
+            state=events_module.ROUTE_PREPARATION_UNAVAILABLE,
+            proposal_id=None,
+            model=None,
+            effort=None,
+            context_tier=None,
+            summary=None,
+            reason=None,
+            detail="preparation cancelled; Pickup must validate its own route",
+            routing_overshot=True,
+        )
+    )
+
+    out = " ".join(buf.getvalue().split())
+    assert "#7" in out
+    assert "not prepared" in out
+    assert "preparation cancelled; Pickup must validate its own route" in out
+    assert "overshot" in out
+
+
+def test_a_prepared_record_from_a_runner_that_predates_the_state_is_ignored() -> None:
+    """An unreadable record is skipped rather than rendered as a blank claim."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_prepared_event(state=None))
+
+    assert buf.getvalue() == ""
 
 
 # ---------------------------------------------------------------------------

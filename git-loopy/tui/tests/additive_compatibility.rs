@@ -98,6 +98,49 @@ fn an_unknown_event_type_and_unknown_fields_do_not_change_the_projection() {
 }
 
 #[test]
+fn a_membership_read_from_a_later_release_still_adds_exactly_its_rows() {
+    let case = baseline_case();
+    let plain = vec![
+        json!({"ts": "2026-05-16T00:00:00.000Z", "run_id": "r", "type": "wrapper.run.start"}),
+        json!({
+            "ts": "2026-05-16T00:00:02.000Z",
+            "run_id": "r",
+            "iter": null,
+            "type": "wrapper.pool.refreshed",
+            "issues": [42, 81]
+        }),
+    ];
+    let mut extended = plain.clone();
+    // A field this core does not model, on the Membership read itself.
+    extended[1]["a_field_from_a_later_release"] = json!({"nested": [1, 2, 3]});
+    // An Event type this core does not model at all, after the read.
+    extended.push(json!({
+        "ts": "2026-05-16T00:00:03.000Z",
+        "run_id": "r",
+        "iter": null,
+        "type": "wrapper.some.future.signal",
+        "detail": {"anything": true}
+    }));
+
+    let projected = reduce(&extended, &case);
+    assert_eq!(
+        projected,
+        reduce(&plain, &case),
+        "a Membership read a later release widened still says exactly what this \
+         one understands, and an unmodelled Event beside it says nothing"
+    );
+
+    let issues: Vec<Value> = projected["dashboard"]["queue"]["rows"]
+        .as_array()
+        .expect("rows is a list")
+        .iter()
+        .map(|row| row["issue"].clone())
+        .collect();
+    // Equal-over-an-empty-Queue would be a vacuous parity claim.
+    assert_eq!(issues, vec![json!(42), json!(81)]);
+}
+
+#[test]
 fn execution_host_silence_is_unknown_in_legacy_traces() {
     let mut state = DashboardState::new(RunInputs::default());
     let legacy_run_start = Event::from_json(&json!({

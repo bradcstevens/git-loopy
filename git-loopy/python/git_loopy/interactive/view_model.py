@@ -113,6 +113,8 @@ def _header(state: LiveRunState) -> dict[str, Any]:
             state.context_window,
             available=state.context_window_available,
         ),
+        "release_target": state.release_target,
+        "release_version": state.release_version,
         # Cost is unknown for more than one reason, and only the Run-start
         # declaration carries which (ADR-0026): a nulled figure cannot, because
         # the Wrapper contract lets a producer signal an unobservable
@@ -155,11 +157,16 @@ def _route(route: ResolvedRoute | None) -> dict[str, Any] | None:
     """
     if route is None:
         return None
-    return {
+    projected = {
         "model": route.model,
         "effort": route.effort,
         "source": route.source,
     }
+    if route.context_tier is not None:
+        projected["context_tier"] = route.context_tier
+    if route.lifecycle_position is not None:
+        projected["lifecycle_position"] = route.lifecycle_position
+    return projected
 
 
 def _context_fill(

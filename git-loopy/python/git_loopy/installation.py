@@ -1,33 +1,112 @@
-"""Read the identity half of git-loopy's installation inventory.
+"""Read git-loopy's installation inventory: its identity, and what has drifted.
 
 The inventory is deliberately descriptive: callers receive unknown facts as
 ``None`` rather than an exception or an inferred channel.  Commands that need a
 safe mutation boundary can therefore share this record without treating an
 unproven installation as one they own.
+
+The same rule governs the config-home assets.  An asset is reported as the
+operator's work whenever Scaffold provenance covers it and cannot prove the
+content is git-loopy's, so a refresh built on this record errs toward leaving
+prose alone (ADR-0054).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import zlib
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Callable, Literal, Mapping
 from urllib.parse import unquote, urlparse
 
+from git_loopy import skill_install, tui_release
 from git_loopy.release_version import read_runtime_release_version
+from git_loopy.scaffold_provenance import (
+    ScaffoldedAsset,
+    ScaffoldProvenance,
+    ScaffoldProvenanceError,
+    read_scaffold_provenance,
+)
+from git_loopy.settings import global_dir
 
 __all__ = [
     "INSTALLATION_SCHEMA_VERSION",
     "InstallChannel",
+    "InstalledAsset",
     "Installation",
     "inspect_installation",
 ]
 
 INSTALLATION_SCHEMA_VERSION = 1
 _COMMIT = re.compile(r"[0-9a-f]{7,64}\Z", re.IGNORECASE)
+AssetClassification = Literal["untouched", "customized", "unrecorded"]
+
+
+@dataclass(frozen=True)
+class _ConfigHomeAsset:
+    """One asset git-loopy installs, and what Scaffold provenance says about it.
+
+    ``locate`` resolves every path one asset answers to, most specific first, so
+    a platform that renames the artifact is still inventoried; the first path is
+    what an absent asset reports.  It is a resolver rather than a filename
+    because the location belongs to whichever module installs the asset — a
+    second spelling here is how ``info`` comes to report a path no Run reads.
+    ``provenance_name`` is the record key when Scaffold provenance covers the
+    asset and ``None`` when it never does.  The **installed catalog** and the TUI
+    helper are machine-managed — a catalog someone edits is re-cut wholesale
+    (ADR-0025) — so the fail-safe that protects operator prose does not apply.
+    """
+
+    name: str
+    locate: Callable[[Mapping[str, str]], tuple[Path, ...]]
+    provenance_name: str | None
+
+
+def _covered(name: str) -> _ConfigHomeAsset:
+    """Declare an operator-editable asset Scaffold provenance records.
+
+    The record keys an asset by filename and digests ``<scope>/<name>``
+    (:mod:`git_loopy.scaffold_provenance`), so its key and its location are one
+    fact and are spelled once here.
+    """
+    return _ConfigHomeAsset(
+        name=name,
+        locate=lambda env: (global_dir(env) / name,),
+        provenance_name=name,
+    )
+
+
+def _tui_helper_paths(env: Mapping[str, str]) -> tuple[Path, ...]:
+    """Ask the module that owns where a helper is found.
+
+    ``git-loopy update`` installs the machine-local helper and ``uninstall``
+    (#529) removes it, while the shell installer stages a *clone-local* one and a
+    package manager puts one on ``PATH`` — neither of which is git-loopy's to
+    refresh or delete.  So the location this record reports is the one
+    :mod:`git_loopy.tui_release` declares, rather than a further spelling that
+    could only ever agree with it by luck.
+    """
+    return tui_release.machine_local_helper_paths(env)
+
+
+_CONFIG_HOME_ASSETS = (
+    _covered("config.toml"),
+    _covered("PROMPT.md"),
+    _ConfigHomeAsset(
+        name="installed catalog",
+        locate=lambda env: (skill_install.installed_catalog_dir(env),),
+        provenance_name=None,
+    ),
+    _ConfigHomeAsset(
+        name="TUI helper",
+        locate=_tui_helper_paths,
+        provenance_name=None,
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -39,12 +118,33 @@ class InstallChannel:
 
 
 @dataclass(frozen=True)
+class InstalledAsset:
+    """One config-home asset and what its Scaffold provenance proves."""
+
+    name: str
+    path: Path
+    present: bool
+    classification: AssetClassification
+    release_version: str | None
+
+    def json_dict(self) -> dict[str, str | bool | None]:
+        """Return this asset's documented JSON representation."""
+        return {
+            "name": self.name,
+            "path": str(self.path),
+            "present": self.present,
+            "classification": self.classification,
+            "release_version": self.release_version,
+        }
+
+
+@dataclass(frozen=True)
 class Installation:
     """A stable, read-only description of one git-loopy installation.
 
-    ``assets`` intentionally starts empty.  The inventory's Config-home asset
-    half arrives separately, while keeping this record additive for consumers
-    that begin with the identity half.
+    ``assets`` identifies the fixed config-home inventory.  An absent asset is
+    ``unrecorded``; an existing asset without matching Scaffold provenance is
+    ``customized`` so the safe refresh path never assumes ownership.
     """
 
     artifact: str
@@ -54,7 +154,7 @@ class Installation:
     resolved_commit: str | None
     published: bool | None
     edge_install: bool | None
-    assets: tuple[object, ...] = ()
+    assets: tuple[InstalledAsset, ...] = ()
 
     def json_dict(self) -> dict[str, object]:
         """Return the documented, JSON-serializable inventory shape."""
@@ -70,7 +170,7 @@ class Installation:
             "resolved_commit": self.resolved_commit,
             "published": self.published,
             "edge_install": self.edge_install,
-            "assets": list(self.assets),
+            "assets": [asset.json_dict() for asset in self.assets],
         }
 
 
@@ -100,7 +200,99 @@ def inspect_installation(
         resolved_commit=commit,
         published=published,
         edge_install=edge_install,
+        assets=_inspect_assets(env),
     )
+
+
+def _inspect_assets(env: Mapping[str, str]) -> tuple[InstalledAsset, ...]:
+    """Classify the fixed config-home inventory from its scoped provenance.
+
+    Inventory remains total when its evidence is unreadable.  A mutator must
+    still surface that error, but this descriptive seam has no proof that a
+    covered asset is ours, so it classifies it as customized.
+    """
+    scope_dir = global_dir(env)
+    try:
+        provenance = read_scaffold_provenance(scope_dir)
+    except ScaffoldProvenanceError:
+        provenance = None
+    return tuple(
+        _classify_asset(
+            asset=asset,
+            path=_asset_path(env, asset),
+            provenance=_recorded(provenance, asset),
+        )
+        for asset in _CONFIG_HOME_ASSETS
+    )
+
+
+def _asset_path(env: Mapping[str, str], asset: _ConfigHomeAsset) -> Path:
+    """Resolve the path one asset actually answers to in this environment."""
+    candidates = asset.locate(env)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _recorded(
+    provenance: ScaffoldProvenance | None, asset: _ConfigHomeAsset
+) -> ScaffoldedAsset | None:
+    if provenance is None or asset.provenance_name is None:
+        return None
+    return provenance.assets.get(asset.provenance_name)
+
+
+def _classify_asset(
+    *,
+    asset: _ConfigHomeAsset,
+    path: Path,
+    provenance: ScaffoldedAsset | None,
+) -> InstalledAsset:
+    """Report what Scaffold provenance proves, failing safe only where it can.
+
+    An asset provenance never covers is ``unrecorded`` however it looks on disk:
+    claiming it as the operator's would be a fail-safe against a risk that does
+    not exist, and would refuse a refresh that is machine-managed by design.
+    """
+    present = path.exists()
+    if asset.provenance_name is None or not present:
+        return InstalledAsset(
+            name=asset.name,
+            path=path,
+            present=present,
+            classification="unrecorded",
+            release_version=None,
+        )
+    if provenance is None:
+        return InstalledAsset(
+            name=asset.name,
+            path=path,
+            present=True,
+            classification="customized",
+            release_version=None,
+        )
+    try:
+        digest = _digest(path)
+    except OSError:
+        return InstalledAsset(
+            name=asset.name,
+            path=path,
+            present=True,
+            classification="customized",
+            release_version=provenance.release_version,
+        )
+    return InstalledAsset(
+        name=asset.name,
+        path=path,
+        present=True,
+        classification="untouched" if digest == provenance.sha256 else "customized",
+        release_version=provenance.release_version,
+    )
+
+
+def _digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _absolute_path(path: Path) -> Path:

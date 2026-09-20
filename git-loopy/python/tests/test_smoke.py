@@ -23,12 +23,87 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 RELEASE_VERSION_FIXTURE = json.loads(
     (
         Path(__file__).parents[2] / "conformance" / "release-version.json"
     ).read_text(encoding="utf-8")
 )
+
+
+def _isolate_empty_pool_subprocess() -> None:
+    """Inject only external seams into the real console-script subprocess."""
+    from functools import partial
+
+    from git_loopy import loop, model_listing, skill_install
+    from git_loopy.skill_catalog import build_skill_catalog
+
+    class EmptyPoolClient:
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+    async def models() -> list[object]:
+        return []
+
+    async def discover(_client: object, **kwargs: object):
+        return build_skill_catalog(
+            (),
+            repo_root=Path(str(kwargs["repo_root"])),
+            installed_skills_dir=Path(str(kwargs["installed_skills_dir"])),
+        )
+
+    root = skill_install.installed_catalog_dir(os.environ)
+    catalog = skill_install.InstalledCatalog(
+        root=root,
+        repository="bradcstevens/git-loopy-skills",
+        revision="a" * 40,
+        skills=tuple(sorted(path.parent.name for path in root.glob("*/SKILL.md"))),
+        sha256=skill_install.catalog_digest(root),
+    )
+    patch = pytest.MonkeyPatch()
+    patch.setattr(model_listing, "fetch_live_models", models)
+    patch.setattr(loop, "_make_client", EmptyPoolClient)
+    patch.setattr(loop, "_discover_skill_catalog", discover)
+    patch.setattr(
+        loop,
+        "refresh_installed_catalog",
+        lambda: skill_install.RefreshOutcome(
+            catalog=catalog, action=skill_install.ACTION_CURRENT
+        ),
+    )
+    patch.setattr(
+        loop,
+        "resolve_run_environment_preflight",
+        partial(
+            loop.resolve_run_environment_preflight,
+            executable_finder=lambda name: (
+                sys.executable if name == "copilot" else shutil.which(name)
+            ),
+        ),
+    )
+
+
+@pytest.fixture
+def offline_empty_pool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, installed_skill_catalog
+) -> None:
+    """Carry the in-process suite's isolation across the subprocess boundary."""
+    bootstrap = tmp_path / "bootstrap"
+    bootstrap.mkdir()
+    (bootstrap / "sitecustomize.py").write_text(
+        "from tests.test_smoke import _isolate_empty_pool_subprocess\n"
+        "_isolate_empty_pool_subprocess()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "PYTHONPATH",
+        os.pathsep.join((str(bootstrap), str(Path(__file__).parents[1]))),
+    )
 
 
 def _current_environment_console_script() -> str | None:
@@ -296,7 +371,9 @@ def test_git_loopy_rejects_unknown_max_nmt_strikes(tmp_path, monkeypatch) -> Non
     )
 
 
-def test_git_loopy_prds_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
+def test_git_loopy_prds_empty_pool_exits_zero(
+    tmp_path, monkeypatch, offline_empty_pool
+) -> None:
     """``ISSUE_SOURCE=prds`` with no ``prds/`` directory exits 0 cleanly.
 
     PRDs mode is now implemented (issue #11). Without a ``prds/``
@@ -304,6 +381,13 @@ def test_git_loopy_prds_empty_pool_exits_zero(tmp_path, monkeypatch) -> None:
     which the loop treats as the empty-pool fast path → exit 0.
     """
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "AGENTS.md").write_text(
+        "## Feedback loops\n\n"
+        "| Loop | Command |\n"
+        "| --- | --- |\n"
+        "| Tests | `uv run pytest` |\n",
+        encoding="utf-8",
+    )
     # Provide a prompt file so we don't fail on prompt resolution.
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
@@ -355,7 +439,7 @@ def test_git_loopy_outside_git_repo_fails_cleanly(tmp_path) -> None:
 
 
 def test_git_loopy_no_git_loopy_folder_runs_off_packaged_prompt(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, offline_empty_pool
 ) -> None:
     """A repo with no ``git-loopy/`` folder runs off the packaged default prompt.
 
@@ -367,6 +451,13 @@ def test_git_loopy_no_git_loopy_folder_runs_off_packaged_prompt(
     resolution succeeded off the packaged default with zero setup.
     """
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "AGENTS.md").write_text(
+        "## Feedback loops\n\n"
+        "| Loop | Command |\n"
+        "| --- | --- |\n"
+        "| Tests | `uv run pytest` |\n",
+        encoding="utf-8",
+    )
     # Deliberately no git-loopy/ directory: force the packaged-default fallback.
     monkeypatch.setenv("GIT_LOOPY_ISSUE_SOURCE", "prds")
     result = subprocess.run(

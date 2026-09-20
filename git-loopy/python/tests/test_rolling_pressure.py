@@ -17,8 +17,9 @@ from dataclasses import dataclass, field
 import pytest
 
 from git_loopy.gh import GhError
-from git_loopy.rolling_concurrency import STATIC_SAFE_LANE_LIMIT
+from git_loopy.rolling_concurrency import HOST_PRESSURE_RATIO, STATIC_SAFE_LANE_LIMIT
 from git_loopy.rolling_pressure import (
+    HostSetupPressure,
     OBSERVATION_INTERVAL_SECONDS,
     PressureBudgets,
     PressureMonitor,
@@ -287,6 +288,22 @@ def test_a_platform_without_a_run_queue_reports_host_pressure_unknown() -> None:
         cpu_count=4,
     )
 
+    assert telemetry.read().host_pressure is None
+
+
+def test_dispatch_failure_pressure_is_unknown_until_repeated_and_decays_on_success() -> None:
+    """A transient refusal never turns an unobservable host into false calm."""
+    pressure = HostSetupPressure()
+    telemetry = RunPressureTelemetry(
+        budgets=PressureBudgets(), load_average=lambda: None, host_setup_pressure=pressure
+    )
+
+    assert telemetry.read().host_pressure is None
+    pressure.record_dispatch_failure()
+    assert telemetry.read().host_pressure is None
+    pressure.record_dispatch_failure()
+    assert telemetry.read().host_pressure > HOST_PRESSURE_RATIO
+    pressure.record_successful_dispatch()
     assert telemetry.read().host_pressure is None
 
 

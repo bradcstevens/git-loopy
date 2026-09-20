@@ -106,6 +106,13 @@ _STRIKE = "wrapper.strike"
 # pool, commits, closures, and per-iteration boundaries all flow through the
 # same #22 fan-out, so the ledger folds out of them with no new plumbing.
 _AFK_READY_COLLECTED = "wrapper.afk_ready.collected"
+_RELEASE_ADVANCED = "wrapper.release.advanced"
+#: One **Membership read** (#481, ADR-0042): the shallow, non-authoritative
+#: read **Rolling dispatch** takes *during* a unit of work. It is add-only —
+#: it may open a ``queued`` row for a ref this Run has not seen and may touch
+#: nothing else. Deliberately **not** folded through ``_record_pool``, whose
+#: handler *is* the ``gone`` sweep: one authority, one sweep.
+_POOL_REFRESHED = "wrapper.pool.refreshed"
 #: The two halves of one **Pickup** walk (#397). Attributed to the issue each
 #: names rather than to the **Active issue**, which is the whole value of the
 #: record: a skip folded into the issue a Run was working would say the Run
@@ -369,6 +376,8 @@ class ResolvedRoute:
     model: str | None
     effort: str | None
     source: str | None
+    context_tier: str | None = None
+    lifecycle_position: str | None = None
 
 
 @dataclass(frozen=True)
@@ -523,6 +532,11 @@ class LiveRunState:
         #: that routes publishes a resolution on every bound Pickup, including
         #: the one an explicit ``--model`` pinned.
         self.routing_available: bool | None = None
+        #: The latest successfully committed **Release line** this Run announced.
+        #: Both parts update together: a partial Event must not create a Release
+        #: line from telemetry the Orchestrator did not complete.
+        self.release_target: str | None = None
+        self.release_version: str | None = None
         # An absent declaration is historical silence, not evidence the Run used
         # the local host.
         self.execution_host = ExecutionHostSnapshot()
@@ -744,6 +758,14 @@ class LiveRunState:
                 self.status = _STATUS_RUNNING
         elif etype == _AFK_READY_COLLECTED:
             self._record_pool(event.get("issues"), now)
+        elif etype == _POOL_REFRESHED:
+            self._record_membership(event.get("issues"), now)
+        elif etype == _RELEASE_ADVANCED:
+            release_target = event.get("release_target")
+            release_version = event.get("release_version")
+            if isinstance(release_target, str) and isinstance(release_version, str):
+                self.release_target = release_target
+                self.release_version = release_version
         elif etype == _PICKUP_BOUND:
             self._record_pickup_line(
                 event.get("issue"), _log_pickup_bound_text(event), now
@@ -1557,6 +1579,34 @@ class LiveRunState:
             if entry.status == STATUS_QUEUED and ref not in present:
                 entry.status = STATUS_GONE
 
+    def _record_membership(self, issues: Any, now: float) -> None:
+        """Fold one ``pool.refreshed`` **Membership read** into the ledger.
+
+        Add-only, and that is the whole of it (ADR-0042). A ref this Run has
+        not seen opens a ``queued`` row so the **Queue** shows the Run's real
+        scope rather than the count of **Lanes** that happen to have started;
+        every ref already in the ledger is left exactly as it is, whatever
+        status it carries, because a read taken *during* a unit of work
+        routinely lists issues a Lane is working or has finished.
+
+        It never sweeps and never sets ``_iter_pool``: this read is not an
+        Iteration's input, and an issue it does not list has not left the Run's
+        view — it was merely not eligible at the instant the read was taken.
+
+        An element that names no issue identity costs only itself. Add-only
+        means a partly unreadable read can only under-report, so it is simply a
+        smaller read — never one that discards the refs it did name, and never
+        one that opens a phantom row keyed by the thing it could not read.
+        """
+        for ref in issues if isinstance(issues, list) else ():
+            if not isinstance(ref, (int, str)) or isinstance(ref, bool):
+                continue
+            ref = self._normalize_ref(ref)
+            if ref not in self.ledger:
+                self.ledger[ref] = IssueLedgerEntry(
+                    ref=ref, first_seen_at=now, first_seen_iter=self.iteration
+                )
+
     def _scan_for_marker(self, text: Any) -> None:
         """Project legacy traces that lack an authoritative activation event."""
         if self._authoritative_binding or not text:
@@ -2013,16 +2063,34 @@ def _pickup_route(event: Mapping[str, Any]) -> ResolvedRoute | None:
     a value — the backend chooses — and is what makes the *presence* test, not
     the truthiness of the halves, the one that decides.
     """
-    keys = ("model", "effort", "routing_source")
+    keys = (
+        "model",
+        "effort",
+        "context_tier",
+        "routing_source",
+        "lifecycle_position",
+    )
     if not any(key in event for key in keys):
         return None
     model = event.get("model")
     effort = event.get("effort")
+    context_tier = event.get("context_tier")
+    lifecycle_position = event.get("lifecycle_position")
     source = event.get("routing_source")
     return ResolvedRoute(
         model=model if isinstance(model, str) else None,
         effort=effort if isinstance(effort, str) else None,
         source=source if isinstance(source, str) else None,
+        # The default tier was historically implicit in Dashboard projections.
+        # An explicit non-default tier is the operator-facing constraint.
+        context_tier=(
+            context_tier
+            if isinstance(context_tier, str) and context_tier != "default"
+            else None
+        ),
+        lifecycle_position=(
+            lifecycle_position if isinstance(lifecycle_position, str) else None
+        ),
     )
 
 

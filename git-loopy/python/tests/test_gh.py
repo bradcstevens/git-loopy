@@ -27,6 +27,7 @@ from git_loopy.gh import (
     parse_gh_version,
     verify_readiness_capability,
 )
+from git_loopy.route_publication import RouteDeliveryError
 from git_loopy.readiness import (
     SKIP_READINESS_UNPROVABLE,
     BlockedByRead,
@@ -810,6 +811,20 @@ def test_issue_comment_nonzero_subprocess_raises(monkeypatch) -> None:
     with pytest.raises(GhError) as exc_info:
         issue_comment(42, "body")
     assert exc_info.value.returncode == 1
+
+
+def test_route_comment_translates_gh_failure_into_retryable_delivery_error(
+    monkeypatch,
+) -> None:
+    """The output adapter receives a delivery failure, never a client API leak."""
+
+    def fake_run(cmd, **kw):
+        return _completed(cmd, code=1, stderr="HTTP 403: insufficient permissions")
+
+    _install_fake_run(monkeypatch, fake_run)
+
+    with pytest.raises(RouteDeliveryError, match="403"):
+        SubprocessGitHubClient().post_issue_comment(42, "Route projection")
 
 
 def test_issue_close_passes_comment_via_argv_no_escaping(monkeypatch) -> None:
