@@ -1,0 +1,85 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PROTOTYPE - Helper publication proof</title>
+<style>
+body { max-width: 850px; margin: 3rem auto; font: 18px system-ui; color: #163029; }
+button { margin: .3rem; padding: .6rem; cursor: pointer; }
+section { background: #eef5f1; padding: 1rem; margin: 1rem 0; }
+dt { font-weight: bold; } dd { margin-bottom: .6rem; }
+</style>
+<h1>When is a helper Release complete?</h1>
+<p>THROWAWAY LOGIC PROTOTYPE for #592. Does a successful upload prove delivery?
+This model keeps source-only independent, refuses incomplete artifact promises,
+and requires public downloads to match the verified build. It neither chooses
+a Release target nor changes an existing public tag.</p>
+<section id="state"></section>
+<div id="actions"></div>
+<h2>Guided walkthroughs</h2>
+<nav id="scenarios"></nav>
+<p id="explanation"></p>
+<div id="steps"></div>
+<script id="model">
+const initial = () => ({mode: "source-only", built: false, trusted: false,
+  attached: false, downloaded: false, cancelled: false});
+function transition(state, action) {
+  if (action === "reset") return initial();
+  if (action === "artifact-bearing") return {...initial(), mode: action};
+  if (state.mode === "source-only") return state;
+  if (action === "cancel") return {...state, cancelled: true};
+  if (state.cancelled) return state;
+  if (action === "build") return {...state, built: true};
+  if (action === "trust" && state.built) return {...state, trusted: true};
+  if (action === "attach" && state.trusted) return {...state, attached: true};
+  if (action === "download" && state.attached) return {...state, downloaded: true};
+  if (action === "missing") return {...state, downloaded: false};
+  return state;
+}
+function verdict(state) {
+  if (state.mode === "source-only") return "Source promise only; no helper work scheduled";
+  if (state.cancelled) return "Incomplete: publication was cancelled";
+  if (!state.built) return "Incomplete: not all seven targets are built";
+  if (!state.trusted) return "Incomplete: channel trust evidence is missing";
+  if (!state.attached) return "Incomplete: attachment has not finished";
+  if (!state.downloaded) return "Incomplete: canonical downloads have not matched the build";
+  return "Complete: all promised public bytes match the verified build";
+}
+</script>
+<script>
+const actions = {reset: "Source-only", "artifact-bearing": "Artifact-bearing",
+  build: "Build all seven targets", trust: "Prove channel trust",
+  attach: "Upload succeeds", download: "Read back every canonical download",
+  missing: "An archive is missing or altered", cancel: "Cancel publication"};
+const scenarios = [
+  ["Source-only", "An upload or secret cannot change the selected promise.",
+    ["reset", "build", "trust", "attach"]],
+  ["Delivered prerelease", "Checksum-only prerelease trust is intentional, not stable signing.",
+    ["artifact-bearing", "build", "trust", "attach", "download"]],
+  ["Upload is not proof", "A successful upload with one inaccessible archive remains incomplete.",
+    ["artifact-bearing", "build", "trust", "attach", "missing"]],
+  ["Cancelled", "Cancellation never turns an artifact promise into a source promise.",
+    ["artifact-bearing", "build", "cancel", "attach", "download"]]
+];
+let state = initial();
+function render() {
+  document.querySelector("#state").innerHTML = "<h2>" + verdict(state) + "</h2><dl>" +
+    Object.entries(state).map(([key, value]) => "<dt>" + key + "</dt><dd>" + value + "</dd>").join("") + "</dl>";
+}
+function button(action) {
+  const button = document.createElement("button");
+  button.textContent = actions[action];
+  button.onclick = () => { state = transition(state, action); render(); };
+  return button;
+}
+Object.keys(actions).forEach(action => document.querySelector("#actions").append(button(action)));
+scenarios.forEach(([title, explanation, steps]) => {
+  const tab = document.createElement("button");
+  tab.textContent = title;
+  tab.onclick = () => {
+    state = initial(); render();
+    document.querySelector("#explanation").textContent = explanation;
+    document.querySelector("#steps").replaceChildren(...steps.map(button));
+  };
+  document.querySelector("#scenarios").append(tab);
+});
+render();
+</script>
