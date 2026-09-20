@@ -1,0 +1,86 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PROTOTYPE - Dashboard pointer navigation</title>
+<style>
+body { max-width: 850px; margin: 3rem auto; font: 18px system-ui; color: #18302d; background: #f5f6f2 }
+button { margin: .3rem; padding: .6rem; cursor: pointer }
+section { background: white; padding: 1rem; margin: 1rem 0 }
+dt { font-weight: bold } dd { margin-bottom: .5rem }
+</style>
+<h1>PROTOTYPE - a click opens, a wheel only scrolls</h1>
+<p>Question: can a Queue click remain reversible while wheel scrolling changes only
+the view, and Log follow resumes at the bottom without a clock? This throwaway logic
+demo assumes one existing Activity tail. It does not redesign the Dashboard.</p>
+<section><h2>Current state</h2><dl id="state"></dl></section>
+<section><h2>Free play</h2><div id="actions"></div></section>
+<section><h2>Guided walkthroughs</h2><div id="tabs"></div><p id="intro"></p><div id="steps"></div></section>
+<script>
+const initial = () => ({screen: "Dashboard", selected: 42, queue: 0, log: null,
+  activity: null, lines: 12, height: 4, collapsed: false, grabbed: false});
+function transition(before, action) {
+  const s = {...before};
+  const bottom = s.lines - s.height;
+  const scroll = (value, delta) => {
+    const offset = Math.max(0, Math.min(bottom, (value ?? bottom) + delta));
+    return offset === bottom ? null : offset;
+  };
+  if (action === "grab") s.grabbed = true;
+  else if (action === "release" && s.grabbed) { s.grabbed = false; s.collapsed = !s.collapsed; }
+  else if (s.grabbed) return s;
+  else if (action === "click") { s.screen = "Log"; s.selected = 43; s.log = null; }
+  else if (action === "back") s.screen = "Dashboard";
+  else if (action === "queueDown" && s.screen === "Dashboard") s.queue = Math.min(5, s.queue + 1);
+  else if (action === "logUp" && s.screen === "Log") s.log = scroll(s.log, -1);
+  else if (action === "logDown" && s.screen === "Log") s.log = scroll(s.log, 1);
+  else if (action === "activityUp" && s.screen === "Dashboard" && !s.collapsed) s.activity = scroll(s.activity, -1);
+  else if (action === "append") s.lines++;
+  else if (action === "follow") { s.log = null; s.activity = null; }
+  return s;
+}
+const labels = {click:"Click Queue issue #43", back:"Back", miss:"Click header / gap",
+  queueDown:"Wheel down over Queue", logUp:"Wheel up over Log", logDown:"Wheel down over Log",
+  activityUp:"Wheel up over Activity", append:"Agent adds a Log line", follow:"Follow (f)",
+  grab:"Press Activity handle", release:"Release Activity handle"};
+const scenarios = [
+  ["Reversible click", "Open a row, return with Back, then miss a row. Only the view changes.",
+    ["click", "back", "miss"]],
+  ["Wheel is not selection", "Scroll the Queue and Activity independently; the selected issue stays #42.",
+    ["queueDown", "activityUp", "append"]],
+  ["Follow with release", "Pause the Log, append output, then return to its bottom and follow again.",
+    ["click", "logUp", "append", "logDown", "logDown", "append"]],
+  ["Handle capture wins", "A wheel or row click cannot steal a held handle.",
+    ["grab", "queueDown", "click", "release"]]
+];
+let current = initial();
+function render() {
+  const fields = {Screen:current.screen, "Selected issue":current.selected,
+    "Queue first row":current.queue, "Log first row":current.log ?? current.lines-current.height,
+    "Log follows":current.log === null, "Activity first row":current.activity ?? current.lines-current.height,
+    "Activity follows":current.activity === null, "Retained lines":current.lines,
+    "Activity collapsed":current.collapsed, "Handle held":current.grabbed};
+  document.querySelector("#state").replaceChildren(...Object.entries(fields).flatMap(([name,value]) => {
+    const dt = document.createElement("dt"), dd = document.createElement("dd");
+    dt.textContent = name; dd.textContent = value; return [dt,dd];
+  }));
+}
+function button(label, run) {
+  const b = document.createElement("button"); b.textContent = label; b.onclick = run; return b;
+}
+function act(action) { current = transition(current, action); render(); }
+document.querySelector("#actions").replaceChildren(...Object.keys(labels).map(action =>
+  button(labels[action], () => act(action))));
+function walkthrough(index) {
+  current = initial(); render();
+  const [,intro,steps] = scenarios[index];
+  document.querySelector("#intro").textContent = intro;
+  const buttons = steps.map((action,i) => button(`${i+1}. ${labels[action]}`, () => {
+    act(action); buttons[i].disabled = true;
+    if (buttons[i+1]) buttons[i+1].disabled = false;
+  }));
+  buttons.forEach((b,i) => b.disabled = i !== 0);
+  document.querySelector("#steps").replaceChildren(...buttons);
+}
+document.querySelector("#tabs").replaceChildren(...scenarios.map(([title],i) =>
+  button(title, () => walkthrough(i))));
+walkthrough(0);
+</script>
