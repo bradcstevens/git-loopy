@@ -1741,6 +1741,7 @@ class LiveRunState:
             if entry is not None and entry.status == STATUS_ACTIVE:
                 if self._iter_commits > 0:
                     entry.status = STATUS_ADVANCED
+                    entry.commits = self._iter_commits
                     entry.ended_at = now
                 else:
                     entry.status = STATUS_NO_PROGRESS
@@ -1764,6 +1765,7 @@ class LiveRunState:
             entry.active_since = None
             if self._lane_commits.get(key, 0) > 0:
                 entry.status = STATUS_ADVANCED
+                entry.commits = self._lane_commits[key]
                 entry.ended_at = now
             else:
                 entry.status = STATUS_NO_PROGRESS
@@ -1860,7 +1862,15 @@ class LiveRunState:
             entry.status = contribution.status
             ending = payload.get("ending")
             entry.ending = ending if isinstance(ending, str) else None
-            entry.commits = _optional_nonnegative_int(payload.get("commits"))
+            if entry.status != STATUS_ADVANCED:
+                entry.commits = None
+            elif not is_lane:
+                summary = event.get("summary")
+                entry.commits = (
+                    _optional_nonnegative_int(summary.get("commits"))
+                    if isinstance(summary, Mapping)
+                    else None
+                )
             entry.active_duration = max(
                 0.0,
                 _coerce_float(

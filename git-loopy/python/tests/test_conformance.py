@@ -1264,7 +1264,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "consumption",
                 "peak_context_window",
             ],
-            "issue_optional": ["ending", "commits"],
+            "issue_optional": ["ending"],
             "consumption_required": ["model", "tokens_in", "tokens_out"],
             # #329: the harness's reported billing, declared optional rather
             # than required. An Orchestrator that cannot observe it omits the
@@ -2758,7 +2758,7 @@ def test_event_fixture_pins_additive_session_endings_per_issue() -> None:
     advanced = next(
         issue for issue in python_case["issues"] if issue["status"] == "advanced"
     )
-    assert advanced == {"issue": 310, "status": "advanced", "commits": 1}
+    assert advanced == {"issue": 310, "status": "advanced"}
 
     native_case = next(
         case
@@ -2769,9 +2769,9 @@ def test_event_fixture_pins_additive_session_endings_per_issue() -> None:
     assert native_case["issues"] == [{"issue": 7, "status": "no-progress"}]
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.iteration.end"][
         "issue_optional"
-    ] == ["ending", "commits"]
+    ] == ["ending"]
     assert _EVENT_SCHEMA["future_consumer"] == {
-        "unknown_issue_fields_are_ignored": ["ending", "commits"],
+        "unknown_issue_fields_are_ignored": ["ending"],
         "known_status_values_are_unchanged": [
             "queued",
             "active",

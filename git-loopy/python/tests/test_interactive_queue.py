@@ -849,6 +849,13 @@ def test_normalized_contribution_projects_ending_and_advance_detail() -> None:
     )
     state.render(
         {
+            "type": events_module.WRAPPER_COMMIT_RECORDED,
+            "issue": 42,
+            "sha": "0123456789abcdef0123456789abcdef01234567",
+        }
+    )
+    state.render(
+        {
             "type": events_module.WRAPPER_ITERATION_END,
             "iter": 2,
             "outcome": "advanced",
@@ -857,7 +864,6 @@ def test_normalized_contribution_projects_ending_and_advance_detail() -> None:
                 {
                     "issue": 42,
                     "status": "advanced",
-                    "commits": 1,
                     "first_started_at": "2026-05-16T00:00:04.000Z",
                     "closed_at": None,
                     "issue_elapsed_seconds": None,

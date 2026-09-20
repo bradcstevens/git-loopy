@@ -296,7 +296,7 @@ def test_rollup_omits_an_ending_when_an_issue_advanced() -> None:
 
     issue = rollup.finish(iter_num=1, strikes=0)["issues"][0]
     assert issue["status"] == "advanced"
-    assert issue["commits"] == 1
+    assert "commits" not in issue
     assert "ending" not in issue
 
 

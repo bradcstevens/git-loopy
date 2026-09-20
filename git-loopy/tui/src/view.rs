@@ -16,7 +16,7 @@ use serde::Serialize;
 use crate::event::{ContextWindowSample, IssueRef, IterationSummary};
 use crate::state::{
     DashboardState, IssueContribution, IssueLedgerEntry, IterationRow, LogLine, ResolvedRoute,
-    RouteDelivery, RoutePreparation, STATUS_ACTIVE, STATUS_GONE, STATUS_QUEUED,
+    RouteDelivery, RoutePreparation, STATUS_ACTIVE, STATUS_ADVANCED, STATUS_GONE, STATUS_QUEUED,
 };
 use crate::timestamp::{Timestamp, Zone};
 
@@ -526,7 +526,9 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
                     issue: issue.clone(),
                     status: entry.status.clone(),
                     ending: entry.ending.clone(),
-                    commits: entry.commits,
+                    commits: (entry.status == STATUS_ADVANCED)
+                        .then_some(entry.commits)
+                        .flatten(),
                     started_at: entry.started_at.map(|at| at.to_zoned_iso(context.zone)),
                     active_seconds: entry
                         .active_seconds(state.monotonic_at(context.now, context.now_monotonic)),

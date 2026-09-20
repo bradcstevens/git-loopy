@@ -629,6 +629,11 @@ impl DashboardState {
             }
             EventPayload::UsageTokens(usage) => self.record_usage(usage),
             EventPayload::CommitRecorded(commit) => {
+                if let Some(active) = self.active_ref.clone() {
+                    if let Some(entry) = self.ledger.get_mut(&active) {
+                        entry.commits = Some(entry.commits.unwrap_or(0) + 1);
+                    }
+                }
                 self.append_log_block(LOG_EVENT, &commit_log_text(commit), now)
             }
             EventPayload::Strike(strike) => {
@@ -732,6 +737,9 @@ impl DashboardState {
                 self.append_lane_log(lane, &output.kind, &output.text, now)
             }
             EventPayload::CommitRecorded(commit) => {
+                if let Some(entry) = self.ledger.get_mut(lane) {
+                    entry.commits = Some(entry.commits.unwrap_or(0) + 1);
+                }
                 self.append_lane_log(lane, LOG_EVENT, &commit_log_text(commit), now)
             }
             EventPayload::UsageTokens(usage) => {
@@ -920,6 +928,8 @@ impl DashboardState {
             entry.active_since = since;
         }
         entry.status = STATUS_ACTIVE.to_string();
+        entry.ending = None;
+        entry.commits = None;
         for line in pending {
             push_bounded(&mut entry.log, line);
         }
@@ -1043,7 +1053,15 @@ impl DashboardState {
                 .status
                 .clone();
             entry.ending = row.ending.clone();
-            entry.commits = row.commits.map(|commits| commits.max(0));
+            if entry.status != STATUS_ADVANCED {
+                entry.commits = None;
+            } else if !is_lane {
+                entry.commits = rollup
+                    .summary
+                    .as_ref()
+                    .and_then(|summary| summary.commits)
+                    .filter(|commits| *commits > 0);
+            }
             if let Some(cumulative) = row.cumulative_active_seconds {
                 entry.active_duration = cumulative.max(0.0);
             }

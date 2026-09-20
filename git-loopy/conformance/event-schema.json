@@ -203,7 +203,7 @@
         "peak_context_window"
       ],
       "consumption_required": ["model", "tokens_in", "tokens_out"],
-      "issue_optional": ["ending", "commits"],
+      "issue_optional": ["ending"],
       "summary_optional": ["credits", "premium_requests", "cache_read", "cache_write"],
       "consumption_optional": ["credits", "premium_requests", "cache_read", "cache_write"],
       "billing": "The harness's reported billing, added additively. An Orchestrator that observes it reports it; one that cannot omits the keys entirely or reports them null. Null is unknown, never a zero that would read as free work, and never an estimate recomputed from tokens. cache_read and cache_write are components of tokens_in, not figures beside it: summing them into a token total double-counts.",
@@ -2442,7 +2442,7 @@
         {"issue": 317, "status": "no-progress", "ending": "crash"},
         {"issue": 315, "status": "no-progress", "ending": "no_more_tasks"},
         {"issue": 316, "status": "no-progress", "ending": "content_filtered"},
-        {"issue": 310, "status": "advanced", "commits": 1}
+        {"issue": 310, "status": "advanced"}
       ]
     },
     {
@@ -2452,7 +2452,7 @@
     }
   ],
   "future_consumer": {
-    "unknown_issue_fields_are_ignored": ["ending", "commits"],
+    "unknown_issue_fields_are_ignored": ["ending"],
     "known_status_values_are_unchanged": ["queued", "active", "closed", "advanced", "no-progress", "gone"]
   }
 }

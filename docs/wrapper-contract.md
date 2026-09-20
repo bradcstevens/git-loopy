@@ -967,8 +967,8 @@ authoritative source closure populates closure-only fields.
 An issue contribution may additionally carry `ending`, one of the five **Session outcome**
 spellings, beside its unchanged `status`. It is omitted when the session advanced the issue or the
 Orchestrator cannot observe its ending; a consumer treats that absence as unknown rather than a
-default ending. An advanced contribution may carry its positive `commits` count, so a Queue can say
-what advanced without turning a zero or unavailable count into a claim.
+default ending. A Queue derives its advanced detail from the recorded commits, without widening
+this normalized contribution.
 
 Cost is the harness's reported billing — optional `credits`, `premium_requests`, `cache_read` and
 `cache_write`, added additively (ADR-0026). They are optional rather than required precisely so an

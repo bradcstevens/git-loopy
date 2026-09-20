@@ -246,6 +246,8 @@
       "queue_row": [
         "issue",
         "status",
+        "ending",
+        "commits",
         "started_at",
         "active_seconds",
         "closed_at",
@@ -2030,8 +2032,7 @@
                 "cache_read": 8267,
                 "cache_write": 5235
               },
-              "peak_context_window": null,
-              "commits": 1
+              "peak_context_window": null
             },
             {
               "issue": 311,
@@ -2198,8 +2199,7 @@
                 "tokens_in": null,
                 "tokens_out": null
               },
-              "peak_context_window": null,
-              "commits": 1
+              "peak_context_window": null
             }
           ]
         },
@@ -2510,8 +2510,7 @@
                     "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
-                    "premium_requests": null,
-                    "commits": 1
+                    "premium_requests": null
                   },
                   {
                     "issue": 311,
@@ -2526,8 +2525,7 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null,
-                    "ending": "no_progress"
+                    "premium_requests": null
                   }
                 ]
               },
@@ -2679,8 +2677,7 @@
                     "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
-                    "premium_requests": null,
-                    "commits": 1
+                    "premium_requests": null
                   },
                   {
                     "issue": 311,
@@ -2695,8 +2692,7 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null,
-                    "ending": "no_progress"
+                    "premium_requests": null
                   },
                   {
                     "issue": 312,
@@ -2711,8 +2707,7 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null,
-                    "ending": "timeout"
+                    "premium_requests": null
                   }
                 ]
               },
@@ -2885,8 +2880,7 @@
                     "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
-                    "premium_requests": null,
-                    "commits": 1
+                    "premium_requests": null
                   },
                   {
                     "issue": 311,
@@ -2901,8 +2895,7 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null,
-                    "ending": "no_progress"
+                    "premium_requests": null
                   },
                   {
                     "issue": 312,
@@ -2917,8 +2910,7 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null,
-                    "ending": "timeout"
+                    "premium_requests": null
                   },
                   {
                     "issue": 313,
@@ -2933,8 +2925,7 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null,
-                    "commits": 1
+                    "premium_requests": null
                   },
                   {
                     "issue": 314,
@@ -3951,7 +3942,7 @@
                     "issue": 601,
                     "status": "advanced",
                     "ending": null,
-                    "commits": null,
+                    "commits": 1,
                     "started_at": "2026-05-21T07:00:02-05:00",
                     "active_seconds": 27.0,
                     "closed_at": null,
@@ -6028,7 +6019,7 @@
                     "issue": 51,
                     "status": "advanced",
                     "ending": null,
-                    "commits": null,
+                    "commits": 1,
                     "started_at": "2026-05-15T18:00:01-06:00",
                     "active_seconds": 2.0,
                     "closed_at": null,

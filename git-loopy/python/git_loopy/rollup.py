@@ -382,8 +382,6 @@ class IterationRollupAccumulator:
         }
         if status != "advanced" and contribution.ending is not None:
             payload["ending"] = contribution.ending.value
-        if status == "advanced" and contribution.commits > 0:
-            payload["commits"] = contribution.commits
         return payload
 
 
