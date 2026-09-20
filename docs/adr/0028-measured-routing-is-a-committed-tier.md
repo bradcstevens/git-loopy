@@ -11,8 +11,8 @@
 treats Calibration results as evidence for dynamic choices, permits concise forecast
 rationales in canonical Run events, and authorizes bounded automatic selection explicitly.
 Its reusable local records are not another committed routing table or machine writes into
-human Config. The new policy is not yet implemented; the original artifact's meaning and
-this decision's rationale are preserved below.
+human Config. Delivery is judged against the new policy; the original artifact's meaning
+and this decision's rationale are preserved below.
 
 Once **Calibration** ([ADR-0027](0027-routing-is-calibrated-by-measurement.md)) produces a
 better **Routed pair**, something has to own it. The proposal was that git-loopy write the

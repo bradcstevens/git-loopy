@@ -1,6 +1,6 @@
 # Live evidence guides per-issue routing under explicit operator authority
 
-**Status:** accepted design; not yet implemented.
+**Status:** accepted design; implementation acceptance is tracked by the delivery issues.
 
 Decided in a human-led `/grill-with-docs` session under the model-routing map
 [#280](https://github.com/bradcstevens/git-loopy/issues/280). This records the new

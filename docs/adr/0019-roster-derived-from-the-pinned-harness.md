@@ -4,8 +4,8 @@
 
 **Accepted-design amendment:** [ADR-0057](0057-live-evidence-guides-per-issue-routing.md)
 retains the actual harness as authority, requires fresh eligibility at proposal/Pickup
-boundaries, and refuses invalid selected routes instead of rewriting them. Its new routing
-policy is not yet implemented; this entry's historical investigation remains intact.
+boundaries, and refuses invalid selected routes instead of rewriting them. Delivery is
+judged against that policy; this entry's historical investigation remains intact.
 
 `conformance/model-roster.json` was hand-transcribed and had drifted twice. The question
 asked was which of two disagreeing surfaces should be authoritative: the SDK's
