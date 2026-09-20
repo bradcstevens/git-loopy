@@ -20,6 +20,7 @@ mod session;
 mod state;
 mod timestamp;
 mod view;
+mod zoneinfo;
 
 pub use band::{
     ActivityBand, ACTIVITY_BAND_COLLAPSED_HEIGHT, ACTIVITY_BAND_HEIGHT, ACTIVITY_BAND_MIN_HEIGHT,
@@ -35,13 +36,16 @@ pub use session::{
     drive_dashboard, DashboardFrame, DashboardSession, DashboardSurface, Diagnostics,
 };
 pub use state::{DashboardState, ExecutionHostProvenance, RunInputs};
-pub use timestamp::{Timestamp, Zone};
+pub use timestamp::{
+    Timestamp, Zone, ZoneDaylightRule, ZoneRuleDate, ZoneTailRule, ZoneTransition,
+};
 pub use view::{
     project_run_view, Activity, ConsumptionView, ContextFill, ContributionRow, Dashboard,
     DeliveryView, DetailHeader, DrillIn, Header, IssueLog, IterationBreakdown, LogLineView,
     PeakContext, Queue, QueueRow, RunView, Strikes, Summary, SummaryRow, TerminalCapabilities,
     ViewContext,
 };
+pub use zoneinfo::{zone_from_posix_tz, zone_from_tz_data};
 
 /// The Event-schema major version this core decodes.
 pub const SUPPORTED_EVENT_SCHEMA_VERSION: u32 = 1;

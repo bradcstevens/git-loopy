@@ -19,9 +19,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use git_loopy_tui::{
-    draw_frame, drive_dashboard, project_run_view, Admission, DashboardFrame, DashboardSession,
-    DashboardState, DashboardSurface, Event, Input, InputQueue, IssueRef, Key, Pointer,
-    PointerAction, RunInputs, TerminalCapabilities, Timestamp, ViewContext, Zone,
+    draw_frame, drive_dashboard, project_run_view, zone_from_posix_tz, zone_from_tz_data,
+    Admission, DashboardFrame, DashboardSession, DashboardState, DashboardSurface, Event, Input,
+    InputQueue, IssueRef, Key, Pointer, PointerAction, RunInputs, TerminalCapabilities, Timestamp,
+    ViewContext, Zone,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::{Hide, Show};
@@ -48,6 +49,10 @@ writes the projected semantic Dashboard view as JSON on standard output; with
 Attach mode replays and follows a local trace from its beginning on the
 controlling terminal until wrapper.run.end or control-lock release.
 
+Human-facing instants are shown in the viewing machine's own timezone, read
+from TZ or the system timezone database and applied at each Event's instant
+(ADR-0058). Stored Events stay UTC.
+
 options:
       --attach TRACE            replay and follow this local JSONL trace
       --control CONTROL         the Run control artifact that reports liveness
@@ -56,7 +61,8 @@ options:
                                 (default: the last readable Event's instant)
       --render-at-monotonic S   the monotonic reading of --render-at, so
                                 durations survive a wall-clock adjustment
-      --utc-offset-minutes N    render instants at this offset from UTC
+      --utc-offset-minutes N    render instants at this fixed offset from UTC
+                                instead of the viewing machine's own zone
       --issue REF               drill in on this issue number or path
       --model NAME              the configured model for this Run
       --reasoning-effort LEVEL  the configured reasoning effort for this Run
@@ -83,6 +89,8 @@ struct Options {
     render_at: Option<Timestamp>,
     render_at_monotonic: Option<f64>,
     zone: Zone,
+    /// Why the viewing machine's zone could not be resolved, when it could not.
+    zone_diagnostic: Option<String>,
     drill_in: IssueRef,
     inputs: RunInputs,
     render: bool,
@@ -110,23 +118,13 @@ fn main() -> ExitCode {
             print!("{text}");
             ExitCode::SUCCESS
         }
-        Ok(Invocation::Project(options)) if options.attach.is_some() => match attach(&options) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(message) => {
-                eprintln!("git-loopy-tui: {message}");
-                ExitCode::from(EXIT_NO_TERMINAL)
-            }
-        },
-        Ok(Invocation::Project(options)) if options.render => match render(&options) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(message) => {
-                eprintln!("git-loopy-tui: {message}");
-                ExitCode::from(EXIT_NO_TERMINAL)
-            }
-        },
         Ok(Invocation::Project(options)) => {
-            project(&options);
-            ExitCode::SUCCESS
+            // Said before the terminal is taken, so it survives on the screen
+            // the operator gets back rather than under the alternate one.
+            if let Some(reason) = &options.zone_diagnostic {
+                eprintln!("git-loopy-tui: {reason}");
+            }
+            run(&options)
         }
         Err(message) => {
             eprintln!("git-loopy-tui: {message}");
@@ -136,10 +134,28 @@ fn main() -> ExitCode {
     }
 }
 
+fn run(options: &Options) -> ExitCode {
+    let outcome = if options.attach.is_some() {
+        attach(options)
+    } else if options.render {
+        render(options)
+    } else {
+        project(options);
+        Ok(())
+    };
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("git-loopy-tui: {message}");
+            ExitCode::from(EXIT_NO_TERMINAL)
+        }
+    }
+}
+
 fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> {
     let mut render_at = None;
     let mut render_at_monotonic = None;
-    let mut offset_minutes = 0i32;
+    let mut offset_minutes = None;
     let mut drill_in = None;
     let mut model = None;
     let mut reasoning_effort = None;
@@ -182,9 +198,10 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
             }
             "--utc-offset-minutes" => {
                 let raw = value()?;
-                offset_minutes = raw
-                    .parse::<i32>()
-                    .map_err(|_| format!("--utc-offset-minutes is not a number: {raw}"))?;
+                offset_minutes = Some(
+                    raw.parse::<i32>()
+                        .map_err(|_| format!("--utc-offset-minutes is not a number: {raw}"))?,
+                );
             }
             "--attach" => attach = Some(PathBuf::from(value()?)),
             "--control" => control = Some(PathBuf::from(value()?)),
@@ -212,10 +229,22 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
         (None, Some(_)) => unreachable!("--control without --attach already returned"),
     };
 
+    // An explicit offset is an override, so it is taken exactly as given —
+    // including an explicit zero — and the viewing machine is never consulted.
+    // That is what keeps a fixture deterministic on any host.
+    let (zone, zone_diagnostic) = match offset_minutes {
+        Some(minutes) => (Zone::from_offset_minutes(minutes), None),
+        None => match resolve_viewing_zone() {
+            Ok(zone) => (zone, None),
+            Err(reason) => (Zone::utc_fallback(), Some(reason)),
+        },
+    };
+
     Ok(Invocation::Project(Box::new(Options {
         render_at,
         render_at_monotonic,
-        zone: Zone::from_offset_minutes(offset_minutes),
+        zone,
+        zone_diagnostic,
         drill_in: drill_in.unwrap_or_else(|| IssueRef::parse("")),
         inputs: RunInputs {
             model,
@@ -224,6 +253,94 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
         render,
         attach,
     })))
+}
+
+/// The directories a tz database is conventionally installed in.
+///
+/// Searched in order after `TZDIR`, because a host may have more than one and
+/// the first readable copy of a named zone is the one `libc` would have used.
+const TZ_DIRECTORIES: [&str; 5] = [
+    "/usr/share/zoneinfo",
+    "/var/db/timezone/zoneinfo",
+    "/usr/lib/zoneinfo",
+    "/usr/share/lib/zoneinfo",
+    "/etc/zoneinfo",
+];
+
+/// The symlink every Unix host points at its own zone.
+const LOCALTIME: &str = "/etc/localtime";
+
+/// The viewing machine's zone rules, or why they could not be read.
+///
+/// This is the whole of the helper's ambient environment where time is
+/// concerned, and it lives in the binary target on purpose (ADR-0013,
+/// ADR-0058): the library is handed rules and never goes looking for them.
+///
+/// `TZ` is honoured first, exactly as `libc` honours it, so an operator can
+/// view a Run in a zone that is not the host's — including an attached viewer
+/// whose Run is executing somewhere else entirely.
+fn resolve_viewing_zone() -> Result<Zone, String> {
+    match std::env::var("TZ") {
+        Ok(raw) => {
+            // POSIX: a leading colon means the rest names a file, and an empty
+            // TZ means UTC. Neither is a failure to resolve.
+            let specification = raw.strip_prefix(':').unwrap_or(&raw);
+            if specification.is_empty() {
+                return Ok(Zone::utc());
+            }
+            if let Some(zone) = named_zone(specification) {
+                return Ok(zone);
+            }
+            zone_from_posix_tz(specification).ok_or_else(|| {
+                format!(
+                    "TZ={raw} names neither a readable timezone nor a POSIX \
+                     timezone specification; times are shown in UTC — set TZ \
+                     to a zone name such as America/Denver, or pass \
+                     --utc-offset-minutes for a fixed offset"
+                )
+            })
+        }
+        Err(_) => {
+            let data = std::fs::read(LOCALTIME).map_err(|error| {
+                format!(
+                    "the viewing machine's timezone could not be read from \
+                     {LOCALTIME} ({error}); times are shown in UTC — set TZ to \
+                     a zone name such as America/Denver, or pass \
+                     --utc-offset-minutes for a fixed offset"
+                )
+            })?;
+            zone_from_tz_data(&data).ok_or_else(|| {
+                format!(
+                    "the viewing machine's timezone database at {LOCALTIME} \
+                     could not be decoded; times are shown in UTC — set TZ to \
+                     a zone name such as America/Denver, or pass \
+                     --utc-offset-minutes for a fixed offset"
+                )
+            })
+        }
+    }
+}
+
+/// The rules for a zone named the way `TZ` names one, if a database has it.
+fn named_zone(name: &str) -> Option<Zone> {
+    let path = Path::new(name);
+    if path.is_absolute() {
+        return zone_from_tz_data(&std::fs::read(path).ok()?);
+    }
+    // A zone name is a path *inside* a database directory, so a name that
+    // climbs out of one is not a zone name at all.
+    if name.is_empty()
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    std::env::var_os("TZDIR")
+        .map(PathBuf::from)
+        .into_iter()
+        .chain(TZ_DIRECTORIES.iter().map(PathBuf::from))
+        .find_map(|directory| zone_from_tz_data(&std::fs::read(directory.join(path)).ok()?))
 }
 
 /// The compatibility answer an Orchestrator gates fullscreen startup on.
@@ -272,7 +389,7 @@ fn project(options: &Options) {
             .or(last_instant)
             .unwrap_or_else(Timestamp::epoch),
         now_monotonic: options.render_at_monotonic.or(last_monotonic),
-        zone: options.zone,
+        zone: options.zone.clone(),
         capabilities: TerminalCapabilities::default(),
     };
     let view = project_run_view(&state, &context, &options.drill_in);
@@ -285,7 +402,7 @@ fn project(options: &Options) {
 fn dashboard_session(options: &Options, capabilities: TerminalCapabilities) -> DashboardSession {
     let mut session = DashboardSession::new(
         options.inputs.clone(),
-        options.zone,
+        options.zone.clone(),
         options.drill_in.clone(),
     )
     .with_capabilities(capabilities);

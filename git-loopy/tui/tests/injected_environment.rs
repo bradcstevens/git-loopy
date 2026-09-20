@@ -33,11 +33,11 @@ fn project(state: &DashboardState, context: ViewContext) -> Value {
         .expect("the view serializes")
 }
 
-fn at(now: &str, zone: Zone, capabilities: TerminalCapabilities) -> ViewContext {
+fn at(now: &str, zone: &Zone, capabilities: TerminalCapabilities) -> ViewContext {
     ViewContext {
         now: Timestamp::parse_rfc3339(now).expect("an RFC 3339 instant"),
         now_monotonic: None,
-        zone,
+        zone: zone.clone(),
         capabilities,
     }
 }
@@ -64,11 +64,11 @@ fn terminal_capabilities_never_change_a_projected_value() {
     };
 
     let zone = Zone::from_offset_minutes(-360);
-    let baseline = project(&state, at("2026-05-16T00:00:05Z", zone, plain));
+    let baseline = project(&state, at("2026-05-16T00:00:05Z", &zone, plain));
 
     for capabilities in [rich, unknown, TerminalCapabilities::default()] {
         assert_eq!(
-            project(&state, at("2026-05-16T00:00:05Z", zone, capabilities)),
+            project(&state, at("2026-05-16T00:00:05Z", &zone, capabilities)),
             baseline,
             "capabilities {capabilities:?} changed the semantic view"
         );
@@ -81,13 +81,13 @@ fn the_zone_moves_only_the_rendering_of_instants() {
     let capabilities = TerminalCapabilities::default();
     let utc = project(
         &state,
-        at("2026-05-16T00:00:05Z", Zone::utc(), capabilities),
+        at("2026-05-16T00:00:05Z", &Zone::utc(), capabilities),
     );
     let kolkata = project(
         &state,
         at(
             "2026-05-16T00:00:05Z",
-            Zone::from_offset_minutes(330),
+            &Zone::from_offset_minutes(330),
             capabilities,
         ),
     );
@@ -118,8 +118,8 @@ fn elapsed_measurements_come_from_the_injected_instant() {
     let capabilities = TerminalCapabilities::default();
     let zone = Zone::utc();
 
-    let early = project(&state, at("2026-05-16T00:00:05Z", zone, capabilities));
-    let late = project(&state, at("2026-05-16T00:01:05Z", zone, capabilities));
+    let early = project(&state, at("2026-05-16T00:00:05Z", &zone, capabilities));
+    let late = project(&state, at("2026-05-16T00:01:05Z", &zone, capabilities));
 
     assert_eq!(
         early["dashboard"]["header"]["elapsed_seconds"],
@@ -132,7 +132,7 @@ fn elapsed_measurements_come_from_the_injected_instant() {
     // Re-projecting at the same instant is deterministic: the host clock never
     // participates, so a fixture snapshot stays reproducible forever.
     assert_eq!(
-        project(&state, at("2026-05-16T00:00:05Z", zone, capabilities)),
+        project(&state, at("2026-05-16T00:00:05Z", &zone, capabilities)),
         early
     );
 }

@@ -64,7 +64,7 @@ impl Default for TerminalCapabilities {
 }
 
 /// Everything the projection needs that the Event stream does not carry.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ViewContext {
     /// The instant the Dashboard is being rendered at.
     pub now: Timestamp,
@@ -74,7 +74,10 @@ pub struct ViewContext {
     /// the Run's start and this render cannot move them. Left `None` the axis
     /// is derived from [`Self::now`], preserving the wall-clock behaviour.
     pub now_monotonic: Option<f64>,
-    /// The zone every rendered instant is projected into.
+    /// The rules every rendered instant is projected through.
+    ///
+    /// A rule set rather than one offset, so an instant is rendered at the
+    /// offset that zone was on *then* (ADR-0058).
     pub zone: Zone,
     /// The renderer's terminal capabilities.
     pub capabilities: TerminalCapabilities,
@@ -450,7 +453,7 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
         run_id: state.run_id.clone(),
         model: state.model().map(str::to_string),
         reasoning_effort: state.reasoning_effort().map(str::to_string),
-        started_at: state.started_at.map(|at| at.to_zoned_iso(context.zone)),
+        started_at: state.started_at.map(|at| at.to_zoned_iso(&context.zone)),
         elapsed_seconds: state
             .elapsed_seconds(state.monotonic_at(context.now, context.now_monotonic)),
         status: state.status.clone(),
@@ -523,10 +526,10 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
                 QueueRow {
                     issue: issue.clone(),
                     status: entry.status.clone(),
-                    started_at: entry.started_at.map(|at| at.to_zoned_iso(context.zone)),
+                    started_at: entry.started_at.map(|at| at.to_zoned_iso(&context.zone)),
                     active_seconds: entry
                         .active_seconds(state.monotonic_at(context.now, context.now_monotonic)),
-                    closed_at: entry.closed_at.map(|at| at.to_zoned_iso(context.zone)),
+                    closed_at: entry.closed_at.map(|at| at.to_zoned_iso(&context.zone)),
                     iteration_count: entry.contributions.len(),
                     route: entry.route.as_ref().map(RouteView::project),
                     delivery: entry.delivery.as_ref().map(DeliveryView::project),
@@ -619,10 +622,10 @@ fn drill_in_view(state: &DashboardState, context: &ViewContext, issue: &IssueRef
                 .unwrap_or_else(|| STATUS_GONE.to_string()),
             started_at: entry
                 .and_then(|entry| entry.started_at)
-                .map(|at| at.to_zoned_iso(context.zone)),
+                .map(|at| at.to_zoned_iso(&context.zone)),
             closed_at: entry
                 .and_then(|entry| entry.closed_at)
-                .map(|at| at.to_zoned_iso(context.zone)),
+                .map(|at| at.to_zoned_iso(&context.zone)),
             issue_elapsed_seconds: entry.and_then(|entry| entry.issue_elapsed_seconds),
             active_seconds: entry
                 .map(|entry| {
@@ -692,7 +695,7 @@ fn log_lines(lines: &[LogLine], context: &ViewContext) -> Vec<LogLineView> {
     lines
         .iter()
         .map(|line| LogLineView {
-            at: line.at.map(|at| at.to_zoned_iso(context.zone)),
+            at: line.at.map(|at| at.to_zoned_iso(&context.zone)),
             kind: line.kind.clone(),
             text: line.text.clone(),
         })

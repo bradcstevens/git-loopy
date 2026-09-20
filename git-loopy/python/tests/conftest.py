@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import importlib
 import os
+import time
+from collections.abc import Iterator
 from functools import partial
 from pathlib import Path
 
@@ -220,3 +222,24 @@ def installed_skill_catalog(
         module = importlib.import_module(module_name)
         monkeypatch.setattr(module, "refresh_installed_catalog", _refresh)
     return catalog
+
+
+@pytest.fixture
+def denver_viewer(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Pin the viewing machine to ``America/Denver`` for one test.
+
+    Viewer-local timestamps (#597, ADR-0058) are only assertable to the exact
+    character if the test controls the zone the viewing machine reports. Denver
+    is the zone the ticket's own reproduction used, and it observes DST, so the
+    same fixture proves the summer and winter offsets are resolved per instant
+    rather than once.
+    """
+    if not hasattr(time, "tzset"):  # pragma: no cover - POSIX hosts have it
+        pytest.skip("this host cannot pin a local timezone")
+    monkeypatch.setenv("TZ", "America/Denver")
+    time.tzset()
+    try:
+        yield
+    finally:
+        monkeypatch.undo()
+        time.tzset()
