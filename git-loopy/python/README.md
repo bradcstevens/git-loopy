@@ -291,6 +291,9 @@ Release-retired `[routing]` keys in the global Config. Only `--project` — whic
 repairs a *tracked* file, and is the one exception to ADR-0054's machine-local
 scope — needs a repository.
 
+Source-only Releases carry no helper assets of their own; they can still consume
+an eligible older helper under the same checksum, identity, and schema checks.
+
 That helper is one a Run attaches to. The Python Runner resolves a helper in this
 order, first hit wins:
 
@@ -307,9 +310,18 @@ requires Release-version equality or a verified resolved fallback identity
 plain text. A `PATH` helper is someone else's installation, so drift there is
 only a warning. A machine-local refusal names `git-loopy update` as its repair,
 because an `upgrade` that has outrun its `update` or unverified drift is the one
-thing that produces it. If no usable helper is published at or below the installed
-version, or if the Release index cannot be read, `update` reports an actionable
-diagnostic and exits non-zero.
+thing that produces it.
+
+A maintenance refusal is attributed to **published identity**, never to the
+scratch directory a candidate was unpacked in — that directory is gone before
+the message reaches you. Three failures are distinguished, and each exits
+non-zero without disturbing an existing verified installation:
+
+| Refusal | What it means | Remedy |
+| --- | --- | --- |
+| `no published git-loopy-tui Release carrying <archive> is at or below <version>` | No Release at or below the installed one attaches *this host's* archive and checksum. The archive is named so a host the Release line defers is distinguishable from a helper nobody has published yet. | Wait for a Release that publishes this host's helper, or stage a clone-local helper at `<repo>/.git-loopy/bin/`. |
+| `... can serve this Runner; the newest candidate, Release <version>, was rejected: ...` | A helper *was* published, and the newest one at or below the installed Release cannot decode this Runner's Event schema. Sharing a version line is not proof of interoperability. | Upgrade to a Release whose published helper speaks this Event schema; the reason names the range the candidate answers with. |
+| `cannot read published helper Releases from <url>` / `cannot download release artifact <url>` | The Release index or an asset was unreachable or unreadable. | Retry once the host is reachable; nothing was activated. |
 
 For the global `PROMPT.md` override, **Scaffold provenance** is the safety
 boundary: an `untouched` override is replaced with this Release's packaged

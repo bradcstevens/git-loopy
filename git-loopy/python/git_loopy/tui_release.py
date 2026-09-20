@@ -33,6 +33,7 @@ from typing import Any, Callable, Mapping, Sequence
 from urllib.request import urlopen
 
 from .events import EVENT_SCHEMA_VERSION
+from .distribution_mode import DistributionModeError, resolve_distribution_mode
 from .release_version import ReleaseVersionError, is_prerelease, read_release_version
 from .settings import global_dir
 
@@ -856,6 +857,16 @@ def refresh_machine_local_helper(
     than from ``tui-artifacts.json``, because an installed Runner has no source
     checkout; reading that fixture relative to the working directory would let
     an unrelated tree redirect where ``update`` looks.
+
+    A refusal is attributed to published identity, never to where a candidate
+    was unpacked. Absence names the host archive it required, because "no
+    Release publishes a helper" and "no Release publishes *this host's* helper"
+    are different faults with different remedies and are otherwise
+    indistinguishable. An exhausted history names the *newest* rejected
+    candidate — the helper newest-at-or-below would have chosen — rather than
+    the oldest, and names it by its Release and artifact, because the scratch
+    directory each candidate is verified in is deleted before the refusal
+    reaches anybody.
     """
     artifact = artifact_resolver(host_system(), host_machine(), host_libc())
     destination = global_dir(env) / "bin" / artifact.executable_name
@@ -875,7 +886,7 @@ def refresh_machine_local_helper(
     remaining_versions = list(published_versions)
     selected_version: str | None = None
     extracted_helper: Path | None = None
-    last_probe_error: TuiReleaseError | None = None
+    newest_rejection: tuple[str, str] | None = None
 
     with tempfile.TemporaryDirectory(
         prefix=f".{HELPER_COMMAND_NAME}-", dir=destination.parent
@@ -925,7 +936,11 @@ def refresh_machine_local_helper(
                     extracted, event_schema_version=event_schema_version
                 )
             except TuiReleaseError as exc:
-                last_probe_error = exc
+                if newest_rejection is None:
+                    newest_rejection = (
+                        candidate_version,
+                        str(exc).replace(str(extracted), artifact.archive_name),
+                    )
                 remaining_versions = [
                     v for v in remaining_versions if v != candidate_version
                 ]
@@ -940,11 +955,18 @@ def refresh_machine_local_helper(
             break
 
         if selected_version is None or extracted_helper is None:
-            if last_probe_error is not None:
-                raise last_probe_error
+            if newest_rejection is not None:
+                rejected_version, reason = newest_rejection
+                raise TuiReleaseError(
+                    f"no published git-loopy-tui Release carrying "
+                    f"{artifact.archive_name} at or below declared Release version "
+                    f"{release_version!r} can serve this Runner; the newest "
+                    f"candidate, Release {rejected_version!r}, was rejected: "
+                    f"{reason}"
+                )
             raise TuiReleaseError(
-                "no published git-loopy-tui Release is at or below declared Release "
-                f"version {release_version!r}"
+                f"no published git-loopy-tui Release carrying {artifact.archive_name} "
+                f"is at or below declared Release version {release_version!r}"
             )
 
         backup_helper = scratch / "backup_helper"
@@ -1582,6 +1604,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     identity.add_argument("--tag-ref", help="the publication ref, when tagging")
     identity.add_argument(
+        "--distribution-mode",
+        help="explicit publication distribution mode (e.g. 'source-only')",
+    )
+    identity.add_argument(
         "--github-output",
         type=Path,
         help="append the resolved version and tag to this GitHub output file",
@@ -1636,6 +1662,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.repository_root,
                 tag_ref=args.tag_ref,
             )
+            try:
+                dist_mode = resolve_distribution_mode(
+                    args.repository_root,
+                    explicit_mode=args.distribution_mode,
+                )
+            except DistributionModeError as exc:
+                raise TuiReleaseError(str(exc)) from exc
+
             if args.github_output is not None:
                 with args.github_output.open("a", encoding="utf-8") as handle:
                     handle.write(f"version={version}\n")
@@ -1643,6 +1677,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     handle.write(
                         f"prerelease={'true' if is_prerelease(version) else 'false'}\n"
                     )
+                    handle.write(f"distribution_mode={dist_mode}\n")
             print(version)
         elif args.command == "verify-plan":
             for artifact in verify_release_plan(

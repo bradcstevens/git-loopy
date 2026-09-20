@@ -133,6 +133,10 @@ def trunk_repository(root: Path, version: str, *, agents_md: str = AGENTS_MD) ->
     (root / "git-loopy/conformance/event-schema.json").write_text(
         '{"contract_version": "2.8"}\n', encoding="utf-8"
     )
+    shutil.copy2(
+        REPOSITORY_ROOT / "git-loopy/conformance/release-trust.json",
+        root / "git-loopy/conformance/release-trust.json",
+    )
     (root / "AGENTS.md").write_text(agents_md, encoding="utf-8")
 
     git(root, "init", "-q", "-b", "main")
