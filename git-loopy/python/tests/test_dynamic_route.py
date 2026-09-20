@@ -396,6 +396,60 @@ def test_dynamic_router_reports_prerequisite_and_source_failures() -> None:
     ]
 
 
+def test_classification_is_admitted_before_spend_and_counts_only_actual_calls() -> None:
+    ledger = dynamic_route.RoutingAdmissionLedger(
+        deadline_seconds=30,
+        routing_credit_allowance=Decimal("0.25"),
+        selector_concurrency=1,
+    )
+    calls = []
+
+    async def classify():
+        calls.append("classified")
+        return dynamic_route.SelectorCallResult(
+            output="docs", routing_credits=Decimal("0.25")
+        )
+
+    async def exercise():
+        result, refusal = await ledger.run_classification(classify)
+        assert result.output == "docs" and refusal is None
+        result, refusal = await ledger.run_classification(classify)
+        assert result is None and refusal is not None
+
+    asyncio.run(exercise())
+    assert calls == ["classified"]
+    assert ledger.snapshot().classification_attempts == 1
+    assert ledger.snapshot().selector_attempts == 0
+    assert ledger.snapshot().routing_credits == Decimal("0.25")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["run_selector", "run_classification"])
+async def test_cancellation_keeps_reported_routing_spend(kind) -> None:
+    ledger = dynamic_route.RoutingAdmissionLedger(
+        deadline_seconds=30, routing_credit_allowance=Decimal("0.25"),
+        selector_concurrency=1,
+    )
+    started = asyncio.Event()
+
+    async def billed_then_cancelled():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise dynamic_route.RoutingCallCancelled(Decimal("0.30")) from None
+
+    task = asyncio.create_task(getattr(ledger, kind)(billed_then_cancelled))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    usage = ledger.snapshot()
+    assert usage.routing_credits == Decimal("0.30")
+    assert usage.overshot and usage.in_flight == 0
+    assert usage.classification_attempts + usage.selector_attempts == 1
+
+
 def test_classification_usage_exhausts_quota_before_selector_admission() -> None:
     evidence, capabilities = _fresh_router_inputs()
     selector_calls = 0
@@ -1777,6 +1831,8 @@ def _repeat_router(
     outputs: list[object],
     assessments: list[dynamic_route.AssessmentRequest],
     recorded: list[dynamic_route.DynamicRouteDecision] | None = None,
+    *,
+    ledger: dynamic_route.RoutingAdmissionLedger | None = None,
 ) -> dynamic_route.DynamicRouter:
     evidence, capabilities = _fresh_router_inputs(score="80")
 
@@ -1805,7 +1861,7 @@ def _repeat_router(
         capabilities_fetch=fetch_capabilities,
         selector_assess=assess,
         recorder=record,
-        admission_ledger=dynamic_route.RoutingAdmissionLedger(
+        admission_ledger=ledger or dynamic_route.RoutingAdmissionLedger(
             deadline_seconds=30,
             routing_credit_allowance=Decimal("5"),
             selector_concurrency=1,
@@ -1827,6 +1883,47 @@ def _retry_request(outcome: dynamic_route.PriorOutcome) -> dynamic_route.Routing
             ),
         ),
     )
+
+
+@pytest.mark.parametrize(
+    ("limit", "reason"),
+    [
+        ("allowance", dynamic_route.RoutingUnavailableReason.QUOTA_EXHAUSTED),
+        ("deadline", dynamic_route.RoutingUnavailableReason.DEADLINE_EXHAUSTED),
+    ],
+)
+def test_a_later_assessment_uses_the_original_routing_limits(limit, reason) -> None:
+    now = 0.0
+    ledger = dynamic_route.RoutingAdmissionLedger(
+        deadline_seconds=5,
+        routing_credit_allowance=Decimal("0.1") if limit == "allowance" else Decimal("5"),
+        selector_concurrency=1,
+        monotonic=lambda: now,
+    )
+    assessments: list[dynamic_route.AssessmentRequest] = []
+    answer = {
+        "candidate_identity": _elected_decision().work_evidence.stable_identity,
+        "summary": "Forecast from the published evidence.",
+    }
+    router = _repeat_router([answer], assessments, ledger=ledger)
+    request = _routing_request()
+    proposal = asyncio.run(router.prepare(request))
+    assert isinstance(proposal, dynamic_route.RoutingProposal)
+    assert isinstance(
+        asyncio.run(router.bind(proposal, request)), dynamic_route.DynamicRouteDecision
+    )
+    if limit == "deadline":
+        now = 6.0
+
+    refused = asyncio.run(router.prepare(
+        _retry_request(dynamic_route.PriorOutcome.INFRASTRUCTURE_FAILURE)
+    ))
+
+    assert isinstance(refused, dynamic_route.RoutingUnavailable)
+    assert refused.reason is reason
+    assert refused.usage.selector_attempts == 1
+    assert refused.usage.routing_credits == Decimal("0.1")
+    assert len(assessments) == 1
 
 
 def test_repeating_a_configuration_that_did_not_solve_the_task_needs_a_reason() -> None:
@@ -2083,6 +2180,7 @@ def _reusable_from(
         selector_context_tier=decision.selector.context_tier,
         relevant_input_identity=decision.relevant_input_identity,
         validated_at=decision.validated_at,
+        repeat_justification=decision.repeat_justification,
     )
 
 
@@ -2114,6 +2212,31 @@ def test_changed_attempt_evidence_invalidates_cross_run_reuse(change) -> None:
     assert dynamic_route.routing_provenance_payload(decision)["attempt"] == (
         3 if change == "omitted_history" else 2
     )
+
+
+def test_reuse_cannot_repeat_an_unsolved_configuration_without_justification() -> None:
+    request = _retry_request(dynamic_route.PriorOutcome.DID_NOT_SOLVE)
+    identity = _elected_decision().work_evidence.stable_identity
+    answer = {
+        "candidate_identity": identity,
+        "summary": "Forecast from the only eligible evidenced configuration.",
+        "repeat_justification": "No alternative is currently eligible and evidenced.",
+    }
+    router = _repeat_router([answer], [])
+    proposal = asyncio.run(router.prepare(request))
+    assert isinstance(proposal, dynamic_route.RoutingProposal)
+    first = asyncio.run(router.bind(proposal, request))
+    assert isinstance(first, dynamic_route.DynamicRouteDecision)
+    ungrounded = replace(_reusable_from(first), repeat_justification=None)
+    assessments: list[dynamic_route.AssessmentRequest] = []
+    later_router = _repeat_router([answer], assessments)
+
+    decision = asyncio.run(later_router.rebind([ungrounded], request))
+
+    assert isinstance(decision, dynamic_route.DynamicRouteDecision)
+    assert decision.reused is False
+    assert len(assessments) == 1
+    assert decision.repeat_justification == answer["repeat_justification"]
 
 
 def test_a_matching_reusable_route_is_revalidated_without_a_selector_call() -> None:

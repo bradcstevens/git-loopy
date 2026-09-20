@@ -21,11 +21,19 @@ being read live.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import Awaitable, Callable, Generic, TypeVar
 
 __all__ = ["SharedLiveRead"]
 
 T = TypeVar("T")
+
+
+@dataclass
+class _Read(Generic[T]):
+    task: asyncio.Task[T]
+    waiters: int = 0
+    shared: bool = False
 
 
 class SharedLiveRead(Generic[T]):
@@ -41,8 +49,7 @@ class SharedLiveRead(Generic[T]):
 
     def __init__(self, read: Callable[[], Awaitable[T]]) -> None:
         self._read = read
-        self._in_flight: asyncio.Future[T] | None = None
-        self._joined = 0
+        self._in_flight: _Read[T] | None = None
         self._shared_reads = 0
 
     @property
@@ -52,42 +59,27 @@ class SharedLiveRead(Generic[T]):
 
     async def __call__(self) -> T:
         """Return the live read's result, joining one already in flight."""
-        in_flight = self._in_flight
-        if in_flight is not None:
-            self._joined += 1
-            # Shielded so one caller's cancellation cannot cancel the read
-            # every other caller is waiting on. ``asyncio.shield`` propagates
-            # the cancellation to *this* await and leaves the future running.
-            return await asyncio.shield(in_flight)
-        future: asyncio.Future[T] = asyncio.get_running_loop().create_future()
-        self._in_flight = future
-        self._joined = 0
+        read = self._in_flight
+        if read is None or read.task.done():
+            read = _Read(asyncio.create_task(self._read()))
+            self._in_flight = read
+            read.task.add_done_callback(lambda _task: self._completed(read))
+        read.waiters += 1
+        read.shared = read.shared or read.waiters > 1
         try:
-            result = await self._read()
-        except BaseException as exc:
-            # Failures are shared exactly as results are: callers that asked
-            # the same question at the same instant get the same answer, and a
-            # failure is an answer. Retrying per-caller would defeat the point
-            # and would turn one unreachable source into ``n`` round-trips.
-            self._settle(future, exc=exc)
-            raise
-        self._settle(future, result=result)
-        return result
+            return await asyncio.shield(read.task)
+        finally:
+            read.waiters -= 1
+            if read.waiters == 0 and not read.task.done():
+                # Nobody needs the request now. Do not leave a source call
+                # running beyond cancellation or the Run's deadline.
+                read.task.cancel()
+                await asyncio.gather(read.task, return_exceptions=True)
 
-    def _settle(
-        self,
-        future: asyncio.Future[T],
-        *,
-        result: T | None = None,
-        exc: BaseException | None = None,
-    ) -> None:
-        if self._joined:
+    def _completed(self, read: _Read[T]) -> None:
+        if read.shared:
             self._shared_reads += 1
-        self._in_flight = None
-        self._joined = 0
-        if future.done():  # pragma: no cover - nothing else settles it
-            return
-        if exc is not None:
-            future.set_exception(exc)
-        else:
-            future.set_result(result)  # type: ignore[arg-type]
+        if self._in_flight is read:
+            self._in_flight = None
+        if not read.task.cancelled():
+            read.task.exception()

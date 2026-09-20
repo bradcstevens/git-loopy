@@ -2463,6 +2463,26 @@ def test_pickup_renders_the_routed_pair_at_default_verbosity() -> None:
     assert "#7" in out
     assert "gpt-5-mini @ medium" in out
     assert "task-type:docs" in out
+    assert "fresh" in out
+
+
+def test_pickup_renders_its_retry_position_separately_from_the_route() -> None:
+    """The same route on a retry is not the first attempt again."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_pickup_event(lifecycle_position="retrying"))
+
+    assert "retrying" in buf.getvalue()
+
+
+def test_legacy_pickup_omits_an_unknown_lifecycle_position() -> None:
+    """A pre-lifecycle record stays as compact as it was when recorded."""
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_pickup_event(lifecycle_position=None))
+
+    assert "fresh" not in buf.getvalue()
+    assert "retrying" not in buf.getvalue()
 
 
 def test_pickup_renders_the_no_label_fallback_most_compactly_of_all() -> None:

@@ -177,6 +177,7 @@ pub(crate) struct ResolvedRoute {
     pub(crate) effort: Option<String>,
     pub(crate) context_tier: Option<String>,
     pub(crate) source: Option<String>,
+    pub(crate) lifecycle_position: Option<String>,
 }
 
 impl ResolvedRoute {
@@ -190,6 +191,7 @@ impl ResolvedRoute {
             && pickup.effort.is_none()
             && pickup.context_tier.is_none()
             && pickup.routing_source.is_none()
+            && pickup.lifecycle_position.is_none()
         {
             return None;
         }
@@ -203,6 +205,7 @@ impl ResolvedRoute {
                 .clone()
                 .filter(|context_tier| context_tier != "default"),
             source: pickup.routing_source.clone(),
+            lifecycle_position: pickup.lifecycle_position.clone(),
         })
     }
 }

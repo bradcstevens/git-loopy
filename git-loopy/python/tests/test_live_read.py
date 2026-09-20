@@ -92,8 +92,9 @@ async def test_an_unreachable_source_answers_every_joined_caller() -> None:
 
 
 @pytest.mark.asyncio
-async def test_one_cancelled_caller_leaves_the_shared_read_alone() -> None:
-    """A joined caller giving up cannot cancel the read others are awaiting."""
+@pytest.mark.parametrize("cancel_owner", [False, True])
+async def test_one_cancelled_caller_leaves_the_shared_read_alone(cancel_owner) -> None:
+    """No caller owns cancellation of a read others are still awaiting."""
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -107,9 +108,10 @@ async def test_one_cancelled_caller_leaves_the_shared_read_alone() -> None:
     await started.wait()
     joiner = asyncio.create_task(shared())
     await asyncio.sleep(0)
-    joiner.cancel()
+    cancelled, remaining = (owner, joiner) if cancel_owner else (joiner, owner)
+    cancelled.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await joiner
+        await cancelled
     release.set()
 
-    assert await owner == "snapshot"
+    assert await remaining == "snapshot"

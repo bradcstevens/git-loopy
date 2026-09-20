@@ -2346,6 +2346,175 @@ class TestPickup:
         assert impl.pickup(31).outcome == sources_module.PICKUP_STALE
 
 
+class TestPreparationRefresh:
+    """The pre-selector fresh read shared by serial and Parallel Pickup."""
+
+    @staticmethod
+    def _issue_item(number: int = 31) -> AfkReadyItem:
+        return AfkReadyItem(
+            ref=number,
+            title="stale title",
+            rendered_block="stale prompt",
+            labels=("ready-for-agent",),
+        )
+
+    def test_a_serial_issue_is_refreshed_without_parallel_safe(self) -> None:
+        """Preparation must not inherit Rolling pickup's Lane-only assertion."""
+        current = _make_issue(
+            31,
+            body="## What to build\nfresh work\n\n## Acceptance criteria\n- fresh",
+            labels=["ready-for-agent"],
+        )
+        source = GitHubIssueSource(
+            _silent_logger(), gh=FakeGitHubClient(issues=[current])
+        )
+
+        refreshed = source.refresh_for_preparation(self._issue_item())
+
+        assert refreshed.outcome == sources_module.PICKUP_VALIDATED
+        assert refreshed.item is not None
+        assert refreshed.item.title == "Test issue 31"
+        assert "fresh work" in refreshed.item.rendered_block
+        assert refreshed.item.labels == ("ready-for-agent",)
+
+    @pytest.mark.parametrize(
+        "current",
+        [
+            _make_issue(31, state="CLOSED"),
+            _make_issue(31, labels=[]),
+            _make_issue(31, body="## What to build\nincomplete"),
+            _make_issue(
+                31,
+                blocked_by=BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="octo/kit#7", state="open"),),
+                ),
+            ),
+        ],
+        ids=("closed", "relabeled", "body-no-longer-afk-ready", "blocked"),
+    )
+    def test_currently_unworkable_issue_is_stale(
+        self, current: gh_module.Issue
+    ) -> None:
+        source = GitHubIssueSource(
+            _silent_logger(), gh=FakeGitHubClient(issues=[current])
+        )
+
+        assert (
+            source.refresh_for_preparation(self._issue_item()).outcome
+            == sources_module.PICKUP_STALE
+        )
+
+    def test_unreadable_issue_is_unavailable(self) -> None:
+        source = GitHubIssueSource(
+            _silent_logger(),
+            gh=FakeGitHubClient(
+                issue_view_errors={31: gh_module.GhError(["gh"], 1, "HTTP 502")}
+            ),
+        )
+
+        assert (
+            source.refresh_for_preparation(self._issue_item()).outcome
+            == sources_module.PICKUP_UNAVAILABLE
+        )
+
+    def test_issue_with_unprovable_readiness_is_unavailable(self) -> None:
+        source = GitHubIssueSource(
+            _silent_logger(),
+            gh=FakeGitHubClient(
+                issues=[_make_issue(31, blocked_by=BlockedByRead.unprovable())]
+            ),
+        )
+
+        assert (
+            source.refresh_for_preparation(self._issue_item()).outcome
+            == sources_module.PICKUP_UNAVAILABLE
+        )
+
+    def test_pr_requires_enabled_pr_support_and_a_current_agent_brief(self) -> None:
+        item = AfkReadyItem(
+            ref=7, title="stale PR", rendered_block="stale", kind="pr"
+        )
+        current = _make_pr(7, comments=(_brief_comment(),))
+
+        enabled = GitHubIssueSource(
+            _silent_logger(), gh=FakeGitHubClient(prs=[current]), include_prs=True
+        ).refresh_for_preparation(item)
+        disabled = GitHubIssueSource(
+            _silent_logger(), gh=FakeGitHubClient(prs=[current])
+        ).refresh_for_preparation(item)
+        no_brief = GitHubIssueSource(
+            _silent_logger(), gh=FakeGitHubClient(prs=[_make_pr(7)]), include_prs=True
+        ).refresh_for_preparation(item)
+
+        assert enabled.validated is True
+        assert enabled.item is not None
+        assert enabled.item.kind == "pr"
+        assert "Agent Brief" in enabled.item.rendered_block
+        assert disabled.outcome == sources_module.PICKUP_STALE
+        assert no_brief.outcome == sources_module.PICKUP_STALE
+
+    def test_unreadable_pr_is_unavailable(self) -> None:
+        source = GitHubIssueSource(
+            _silent_logger(),
+            gh=FakeGitHubClient(
+                pr_view_errors={7: gh_module.GhError(["gh"], 1, "HTTP 502")}
+            ),
+            include_prs=True,
+        )
+
+        assert (
+            source.refresh_for_preparation(
+                AfkReadyItem(ref=7, title="stale PR", rendered_block="stale", kind="pr")
+            ).outcome
+            == sources_module.PICKUP_UNAVAILABLE
+        )
+
+    def test_local_markdown_is_reread_before_preparation(self, tmp_path: Path) -> None:
+        issue_path = tmp_path / "prds" / "feature" / "001-work.md"
+        issue_path.parent.mkdir(parents=True)
+        issue_path.write_text(
+            "## What to build\nfresh work\n\n## Acceptance criteria\n- done",
+            encoding="utf-8",
+        )
+        source = PrdsIssueSource(tmp_path, _silent_logger())
+        item = AfkReadyItem(
+            ref="prds/feature/001-work.md", title="stale", rendered_block="stale"
+        )
+
+        refreshed = source.refresh_for_preparation(item)
+        issue_path.write_text("## What to build\nincomplete", encoding="utf-8")
+
+        assert refreshed.validated is True
+        assert refreshed.item is not None
+        assert "fresh work" in refreshed.item.rendered_block
+        assert (
+            source.refresh_for_preparation(item).outcome
+            == sources_module.PICKUP_STALE
+        )
+
+    def test_local_markdown_symlink_is_stale_without_reading_its_target(
+        self, tmp_path: Path
+    ) -> None:
+        outside = tmp_path / "outside.md"
+        outside.write_text(
+            "## What to build\noutside\n\n## Acceptance criteria\n- done",
+            encoding="utf-8",
+        )
+        feature = tmp_path / "prds" / "feature"
+        feature.mkdir(parents=True)
+        (feature / "001-work.md").symlink_to(outside)
+        source = PrdsIssueSource(tmp_path, _silent_logger())
+
+        refreshed = source.refresh_for_preparation(
+            AfkReadyItem(
+                ref="prds/feature/001-work.md", title="stale", rendered_block="stale"
+            )
+        )
+
+        assert refreshed.outcome == sources_module.PICKUP_STALE
+
+
 class TestRollingSourceSplit:
     """Rolling dispatch is a GitHub-only capability, asked for structurally."""
 

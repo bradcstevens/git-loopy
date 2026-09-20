@@ -306,6 +306,8 @@
     "wrapper.routing.prepared": {
       "required_when_present": ["issue", "state"],
       "state_values": ["proposed", "static", "reusable", "unavailable"],
+      "optional_provenance_fields": ["selector_model", "selector_effort", "selector_context_tier", "evidence_source", "source_model_identity", "evidence_retrieved_at", "capabilities_retrieved_at", "measurement_at", "benchmark_version", "conditions", "routing_overshot"],
+      "provenance_note": "New proposals retain the selector configuration, source identity and model association, fresh retrieval timestamps and available measurement metadata. Historical records may omit these fields. A null measurement date, version or condition is unknown, never the retrieval date. Cancellation is an unavailable outcome with explicit detail, and all preparation tasks finish or are cancelled before wrapper.run.end. A Pickup never waits for unrelated tail preparation.",
       "emitted": "Once per eligible Pool candidate a running Runner prepared a Routing proposal for, ahead of the Pickup that may later bind it -- contract 14.6's Routing preparation. A Run under any other Route policy emits it never, and a Runner that prepares nothing stays conforming by emitting nothing.",
       "ordering": "Preparation records precede the wrapper.routing.resolved and wrapper.pickup.bound of the issue they describe, when that issue is picked up at all. Many are never followed by either: preparing an issue is not a claim that it will be worked.",
       "not_a_binding": "Contract 14.6, ADR-0057, issue #566. This record is NONBINDING and a consumer MUST NOT render it as a Routing resolution. It does not bind a Routed pair, does not open or alter an Agent session, does not take a Lease, does not reserve or reorder a candidate, and does not establish that the issue is admissible. The route a session actually runs on is ALWAYS the one on wrapper.pickup.bound, which is resolved by a Pickup that re-reads the live sources for itself; where the two disagree the Pickup is right and the proposal was superseded. A consumer MUST NOT read the presence or absence of these records as evidence about whether the Pool is empty.",
@@ -1426,7 +1428,18 @@
           "valid_until": "2026-05-16T00:00:07.050Z",
           "relevant_input_identity": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "routing_credits": "0.25",
-          "selector_attempts": 1
+          "selector_attempts": 1,
+          "selector_model": "claude-opus-5",
+          "selector_effort": "high",
+          "selector_context_tier": "default",
+          "evidence_source": "https://artificialanalysis.ai/api/v2/data/llms/models",
+          "source_model_identity": "aa-opus",
+          "evidence_retrieved_at": "2026-05-16T00:00:02.000Z",
+          "capabilities_retrieved_at": "2026-05-16T00:00:02.010Z",
+          "measurement_at": null,
+          "benchmark_version": null,
+          "conditions": null,
+          "routing_overshot": false
         },
         {
           "ts": "2026-05-16T00:00:02.200Z",
@@ -1864,7 +1877,7 @@
       "jsonl": [
         "{\"ts\": \"2026-05-16T00:00:01.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pool.refreshed\", \"issues\": [42, 43, 44, 46]}\n",
         "{\"ts\": \"2026-05-16T00:00:02.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.concurrency.changed\", \"configured_lane_limit\": 3, \"credit_state\": null, \"effective_lane_limit\": 2, \"host_state\": \"healthy\", \"pressure\": null, \"rate_limit_state\": \"healthy\"}\n",
-        "{\"ts\": \"2026-05-16T00:00:02.100Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.routing.prepared\", \"context_tier\": \"default\", \"detail\": null, \"effort\": \"high\", \"issue\": 42, \"model\": \"claude-opus-5\", \"prepared_at\": \"2026-05-16T00:00:02.050Z\", \"proposal_id\": \"01HXR0000000000000000000R1\", \"reason\": null, \"relevant_input_identity\": \"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\", \"routing_credits\": \"0.25\", \"selector_attempts\": 1, \"state\": \"proposed\", \"summary\": \"highest verified Intelligence Index among the runnable configurations\", \"valid_until\": \"2026-05-16T00:00:07.050Z\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:02.100Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.routing.prepared\", \"benchmark_version\": null, \"capabilities_retrieved_at\": \"2026-05-16T00:00:02.010Z\", \"conditions\": null, \"context_tier\": \"default\", \"detail\": null, \"effort\": \"high\", \"evidence_retrieved_at\": \"2026-05-16T00:00:02.000Z\", \"evidence_source\": \"https://artificialanalysis.ai/api/v2/data/llms/models\", \"issue\": 42, \"measurement_at\": null, \"model\": \"claude-opus-5\", \"prepared_at\": \"2026-05-16T00:00:02.050Z\", \"proposal_id\": \"01HXR0000000000000000000R1\", \"reason\": null, \"relevant_input_identity\": \"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\", \"routing_credits\": \"0.25\", \"routing_overshot\": false, \"selector_attempts\": 1, \"selector_context_tier\": \"default\", \"selector_effort\": \"high\", \"selector_model\": \"claude-opus-5\", \"source_model_identity\": \"aa-opus\", \"state\": \"proposed\", \"summary\": \"highest verified Intelligence Index among the runnable configurations\", \"valid_until\": \"2026-05-16T00:00:07.050Z\"}\n",
         "{\"ts\": \"2026-05-16T00:00:02.200Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.routing.resolved\", \"attempt\": 1, \"benchmark_version\": null, \"capabilities_retrieved_at\": \"2026-05-16T00:00:02.150Z\", \"conditions\": null, \"context_tier\": \"default\", \"effort\": \"high\", \"evidence_retrieved_at\": \"2026-05-16T00:00:02.100Z\", \"evidence_source\": \"https://artificialanalysis.ai/api/v2/data/llms/models\", \"intelligence_index\": \"70.0\", \"issue\": 42, \"lifecycle_position\": \"fresh\", \"measurement_at\": null, \"model\": \"claude-opus-5\", \"prior_attempts\": [], \"proposal_id\": \"01HXR0000000000000000000R1\", \"public_output_tokens_per_second\": \"90.0\", \"reassessed\": false, \"relevant_input_identity\": \"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\", \"repeat_justification\": null, \"reused_proposal_id\": null, \"reused_validated_at\": null, \"revalidated\": true, \"routing_credits\": \"0.25\", \"routing_reuse\": \"elected\", \"selector_attempts\": 1, \"selector_context_tier\": \"default\", \"selector_effort\": \"low\", \"selector_model\": \"gpt-5.4-mini\", \"source_model_identity\": \"aa-opus\", \"summary\": \"highest verified Intelligence Index among the runnable configurations\", \"superseded_proposal_id\": null, \"validated_at\": \"2026-05-16T00:00:02.150Z\"}\n",
         "{\"ts\": \"2026-05-16T00:00:02.400Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pickup.bound\", \"considered\": 4, \"issue\": 42, \"position\": 1, \"reason\": \"order\"}\n",
         "{\"ts\": \"2026-05-16T00:00:02.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.routing.delivery\", \"identity\": \"c46130bb0f803d9b447c86458c7322d3f48e8fb36c8e0772ab285b856f0e6b7b\", \"issue\": 42, \"label\": \"git-loopy-route:claude-opus-5-high-d-bc4730b42709\", \"status\": \"published\"}\n",

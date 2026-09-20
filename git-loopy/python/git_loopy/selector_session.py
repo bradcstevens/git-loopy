@@ -23,6 +23,7 @@ from git_loopy.dynamic_route import (
     AssessmentCandidate,
     AssessmentRequest,
     PriorAttempt,
+    RoutingCallCancelled,
     SelectorCallResult,
     SelectorSettings,
 )
@@ -320,32 +321,35 @@ class SessionRouteSelector:
             from git_loopy.session import IterationSession
 
             factory = IterationSession
-        async with factory(
-            self._client,
-            config=self._config,
-            event_log=self._event_log,
-            sinks=self._sinks,
-            **not_an_iteration(RunScope(self._run_id), event_observer=collector),
-            model=selector.model,
-            reasoning_effort=selector.reasoning_effort,
-            context_tier=selector.context_tier,
-            working_directory=self._working_directory,
-            skill_exposure=self._skill_exposure,
-        ) as session:
-            try:
-                await session.send_and_wait(
-                    build_assessment_prompt(request),
-                    timeout=self._send_timeout_seconds,
-                )
-            except asyncio.TimeoutError:
-                self._report(
-                    "the Route selector timed out after "
-                    f"{self._send_timeout_seconds}s"
-                )
-            except Exception as exc:
-                self._report(
-                    f"the Route selector raised {type(exc).__name__}: {exc}"
-                )
+        try:
+            async with factory(
+                self._client,
+                config=self._config,
+                event_log=self._event_log,
+                sinks=self._sinks,
+                **not_an_iteration(RunScope(self._run_id), event_observer=collector),
+                model=selector.model,
+                reasoning_effort=selector.reasoning_effort,
+                context_tier=selector.context_tier,
+                working_directory=self._working_directory,
+                skill_exposure=self._skill_exposure,
+            ) as session:
+                try:
+                    await session.send_and_wait(
+                        build_assessment_prompt(request),
+                        timeout=self._send_timeout_seconds,
+                    )
+                except asyncio.TimeoutError:
+                    self._report(
+                        "the Route selector timed out after "
+                        f"{self._send_timeout_seconds}s"
+                    )
+                except Exception as exc:
+                    self._report(
+                        f"the Route selector raised {type(exc).__name__}: {exc}"
+                    )
+        except asyncio.CancelledError:
+            raise RoutingCallCancelled(collector.routing_credits) from None
         return SelectorCallResult(
             output=collector.answer,
             routing_credits=collector.routing_credits,

@@ -23,6 +23,7 @@ from git_loopy.dynamic_route import (
     EvidenceRecord,
     PriorAttempt,
     PriorOutcome,
+    RoutingCallCancelled,
     SelectorSettings,
 )
 from git_loopy import selector_session
@@ -159,6 +160,24 @@ def test_the_selector_session_runs_on_the_elected_settings() -> None:
     assert result.output == (
         '{"candidate_identity": "one", "summary": "highest index of the two"}'
     )
+
+
+def test_cancelled_preparation_reports_billing_through_session_cleanup() -> None:
+    class CancelledSession(_FakeSession):
+        async def send_and_wait(self, prompt: str, *, timeout: float) -> None:
+            await super().send_and_wait(prompt, timeout=timeout)
+            raise asyncio.CancelledError
+
+        async def __aexit__(self, *_exc: Any) -> bool:
+            self._observer.observe(_usage_event(Decimal("0.20")))
+            return False
+
+    selector = _selector(
+        None, (_usage_event(Decimal("0.30")),), session_factory=CancelledSession
+    )
+    with pytest.raises(RoutingCallCancelled) as cancelled:
+        asyncio.run(selector(_settings(), _request()))
+    assert cancelled.value.routing_credits == Decimal("0.50")
 
 
 def test_the_assessment_carries_the_issue_and_nothing_the_router_withheld() -> None:

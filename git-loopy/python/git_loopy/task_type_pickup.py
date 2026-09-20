@@ -124,6 +124,8 @@ class PickupClassifier:
             of failing to classify may abort the Iteration or the **Run**, and
             a caller must not have to know which collaborator failed.
         """
+        if _labelled_keys(item):
+            return item
         remembered = self.inferred.get(item.ref)
         if remembered is not None:
             return self._with_key(item, remembered)

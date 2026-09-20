@@ -377,6 +377,7 @@ class ResolvedRoute:
     effort: str | None
     source: str | None
     context_tier: str | None = None
+    lifecycle_position: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2062,12 +2063,19 @@ def _pickup_route(event: Mapping[str, Any]) -> ResolvedRoute | None:
     a value — the backend chooses — and is what makes the *presence* test, not
     the truthiness of the halves, the one that decides.
     """
-    keys = ("model", "effort", "context_tier", "routing_source")
+    keys = (
+        "model",
+        "effort",
+        "context_tier",
+        "routing_source",
+        "lifecycle_position",
+    )
     if not any(key in event for key in keys):
         return None
     model = event.get("model")
     effort = event.get("effort")
     context_tier = event.get("context_tier")
+    lifecycle_position = event.get("lifecycle_position")
     source = event.get("routing_source")
     return ResolvedRoute(
         model=model if isinstance(model, str) else None,
@@ -2079,6 +2087,9 @@ def _pickup_route(event: Mapping[str, Any]) -> ResolvedRoute | None:
             context_tier
             if isinstance(context_tier, str) and context_tier != "default"
             else None
+        ),
+        lifecycle_position=(
+            lifecycle_position if isinstance(lifecycle_position, str) else None
         ),
     )
 

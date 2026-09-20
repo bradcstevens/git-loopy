@@ -579,6 +579,9 @@ class Renderer:
         provenance = _routing_source_phrase(event)
         if provenance:
             text.append(f"  {provenance}", style=STYLES["meta"])
+        lifecycle_position = _lifecycle_position_phrase(event)
+        if lifecycle_position:
+            text.append(f"  {lifecycle_position}", style=STYLES["meta"])
         tier = _context_tier_phrase(event)
         if tier:
             text.append(f"  {tier}", style=STYLES["meta"])
@@ -1069,6 +1072,18 @@ def _routing_source_phrase(event: dict[str, Any]) -> str:
         if keys:
             phrase += " " + ", ".join(f"task-type:{key}" for key in keys)
     return phrase
+
+
+def _lifecycle_position_phrase(event: dict[str, Any]) -> str:
+    """Where this Pickup sits in the issue's **Attempt lifecycle**.
+
+    It is independent of the **Routing source**: an unchanged Dynamic route
+    can still be retrying, and a changed one is not necessarily escalated.
+    Legacy Pickup records did not carry the position, so their output remains
+    unchanged.
+    """
+    position = event.get("lifecycle_position")
+    return position.replace("_", " ") if isinstance(position, str) and position else ""
 
 
 def _context_tier_phrase(event: dict[str, Any]) -> str:

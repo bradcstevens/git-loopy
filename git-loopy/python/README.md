@@ -1176,19 +1176,28 @@ What this is not, and it matters more than what it is:
 - **It does not run when your Run does not.** There is no daemon. Preparation
   lives on the Run's own event loop, holds its proposals in memory, and stops
   when the Run stops.
+- **A slow tail does not hold the next Pickup.** Preparation may continue
+  between Iterations. Pickup joins only its own in-flight assessment and
+  interrupts unrelated preparation to free routing capacity. Interrupted
+  assessments are recorded as unavailable, not as reusable proposals; their
+  eventual Pickup may reassess only within the remaining allowance. Cancellation
+  does not undo provider billing already incurred.
 
 It stays inside the bounds you already configured: `selector_concurrency` caps
 how many assessments overlap, `routing_credit_allowance` caps what they may
 spend, and preparation stops for the rest of the Run the moment either is gone —
 the work already routed carries on regardless. Candidates that are blocked,
 unreadable or otherwise not currently eligible are left alone and cost nothing.
-Neither does an issue your `[routing]` table already covers, or one a previous
-Run's decision will revalidate for free.
+Each candidate is re-read when its preparation starts, not just when the Pool
+was collected. Classification shares the same admission limits and occurs
+before the Static-route check. An already-classified issue your `[routing]`
+table covers costs no classifier or selector call. A previous Run's decision
+is offered for fresh revalidation, not assumed to match.
 
 ```text
 ⇢ route prepared #43  proposal claude-opus-5 @ high (default)  valid until 2026-09-19T09:05:00.000Z
 ⇢ route prepared #44  static route applies — no selector call bought
-⇢ route prepared #45  an earlier decision revalidates — nothing to assess
+⇢ route prepared #45  an earlier decision is available for Pickup revalidation
 ⇢ route prepared #46  not prepared — its Pickup decides for itself  (quota_exhausted)
 ```
 
@@ -1197,6 +1206,14 @@ Dashboard's Lane log, always phrased as a proposal. If you are reading a trace
 later, that is the distinction to hold on to: `wrapper.routing.prepared` is what
 was assessed in advance, and `wrapper.routing.resolved` is what a session
 actually ran on.
+
+Proposal readback includes its rationale and evidence provenance while leaving
+the Queue's final route unset. Retrieval timestamps say when a source was read,
+not when its benchmark was measured. Pickup re-reads issue eligibility, current
+evidence and capabilities, and the repository's declared Feedback-loop commands
+and local measurements. Relevant changes require another selection; unchanged
+inputs reuse the proposal without another selector call. A refused Dynamic
+candidate does not prevent eligible Static work behind it from proceeding.
 
 ### Route comments and labels
 

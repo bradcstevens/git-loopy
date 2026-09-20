@@ -154,6 +154,10 @@ class RoutePreparation:
         self._prepared: dict[int | str, PreparedRoute] = {}
         self._settled: set[int | str] = set()
         self._in_progress: set[int | str] = set()
+        self._tasks: dict[int | str, asyncio.Task[PreparedRoute | None]] = {}
+        self._pickups: set[int | str] = set()
+        self._priority = asyncio.Condition()
+        self._limit = asyncio.Semaphore(concurrency)
         self._halted = False
 
     @property
@@ -210,25 +214,89 @@ class RoutePreparation:
         ]
         if not pending:
             return ()
-        reached: list[PreparedRoute] = []
-        head, rest = pending[0], pending[1:]
-        first = await self._prepare_one(head)
-        if first is not None:
-            reached.append(first)
-        if self._halted or not rest:
-            return tuple(reached)
-        limit = asyncio.Semaphore(self._concurrency)
+        head_done = asyncio.Event()
 
-        async def bounded(candidate: _Candidate) -> PreparedRoute | None:
-            async with limit:
-                if self._halted:
-                    return None
-                return await self._prepare_one(candidate)
+        async def bounded(candidate: _Candidate, *, head: bool) -> PreparedRoute | None:
+            try:
+                if not head:
+                    await head_done.wait()
+                async with self._priority:
+                    await self._priority.wait_for(
+                        lambda: not self._pickups or candidate.ref in self._pickups
+                    )
+                async with self._limit:
+                    if self._halted:
+                        return None
+                    return await self._prepare_one(candidate)
+            except asyncio.CancelledError:
+                self._cancelled(candidate.ref)
+                raise
+            finally:
+                if head:
+                    head_done.set()
 
-        for outcome in await asyncio.gather(*(bounded(one) for one in rest)):
-            if outcome is not None:
-                reached.append(outcome)
-        return tuple(reached)
+        tasks: dict[int | str, asyncio.Task[PreparedRoute | None]] = {}
+        for candidate in pending:
+            if candidate.ref in self._in_progress:
+                continue
+            self._in_progress.add(candidate.ref)
+            task = asyncio.create_task(bounded(candidate, head=not tasks))
+            tasks[candidate.ref] = task
+            self._tasks[candidate.ref] = task
+        try:
+            results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    raise result
+            return tuple(result for result in results if isinstance(result, PreparedRoute))
+        finally:
+            for ref, task in tasks.items():
+                if task.cancelled():
+                    self._cancelled(ref)
+                self._in_progress.discard(ref)
+                self._tasks.pop(ref, None)
+
+    async def prioritize(self, ref: int | str) -> None:
+        """Free routing slots for Pickup, joining only its own preparation.
+
+        Completed proposals survive. Interrupted assessments are explicitly
+        unavailable, not reusable results; their eventual Pickup may assess
+        within the remaining allowance.
+        """
+        async with self._priority:
+            self._pickups.add(ref)
+            self._priority.notify_all()
+        interrupted = tuple(
+            task for other, task in self._tasks.items() if other not in self._pickups
+        )
+        for task in interrupted:
+            task.cancel()
+        await asyncio.gather(
+            *interrupted,
+            return_exceptions=True,
+        )
+        own = self._tasks.get(ref)
+        if own is not None and not own.cancelled():
+            await asyncio.shield(own)
+
+    async def finish_pickup(self, ref: int | str) -> None:
+        """Resume preparation after this authoritative route has settled."""
+        async with self._priority:
+            self._pickups.discard(ref)
+            self._priority.notify_all()
+
+    def _cancelled(self, ref: int | str) -> None:
+        if ref in self._settled:
+            return
+        self._settled.add(ref)
+        if self._on_prepared is not None:
+            self._on_prepared(
+                PreparedRoute(
+                    ref=ref,
+                    outcome=PreparationOutcome.UNAVAILABLE,
+                    detail="preparation cancelled; Pickup must validate its own route",
+                )
+            )
 
     def take(self, ref: int | str) -> RoutingProposal | None:
         """Hand this issue's proposal to its **Pickup**, once and only if live.
@@ -267,10 +335,10 @@ class RoutePreparation:
         for ref in refs:
             self._prepared.pop(ref, None)
             self._settled.discard(ref)
+            self._pickups.discard(ref)
 
     async def _prepare_one(self, candidate: _Candidate) -> PreparedRoute | None:
         ref = candidate.ref
-        self._in_progress.add(ref)
         try:
             outcome = await self._prepare(candidate)
         except Exception as exc:  # noqa: BLE001 - preparation never fails a Run
@@ -285,10 +353,12 @@ class RoutePreparation:
                     type(exc).__name__,
                     exc,
                 )
-            self._settled.add(ref)
-            return None
-        finally:
-            self._in_progress.discard(ref)
+            outcome = PreparedRoute(
+                ref=ref,
+                outcome=PreparationOutcome.UNAVAILABLE,
+                reason=RoutingUnavailableReason.SELECTOR_UNAVAILABLE,
+                detail="preparation failed; see Run diagnostics",
+            )
         self._settled.add(ref)
         if outcome.outcome is PreparationOutcome.PROPOSED:
             self._prepared[ref] = outcome

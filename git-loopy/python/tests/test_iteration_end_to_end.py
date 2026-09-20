@@ -40,6 +40,7 @@ After ``loop.run`` returns, the test asserts:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import itertools
 import json
 import os
@@ -139,7 +140,9 @@ class FakeCopilotSession:
         # loop's pre- and post-iteration ``head_sha`` reads — so an injected
         # commit advances the fake git log while the SDK "runs".
         if self._on_send is not None:
-            self._on_send()
+            sent = self._on_send()
+            if inspect.isawaitable(sent):
+                await sent
         last: SessionEvent | None = None
         for evt in self._scripted_events:
             if self._on_event is not None:
@@ -5479,8 +5482,11 @@ def _wire_dynamic_ports(
 
     async def _assess(selector: Any, request: Any) -> Any:
         spied["assessments"].append((selector, request))
+        output = None if answer is None else answer(request)
+        if inspect.isawaitable(output):
+            output = await output
         return dynamic_route.SelectorCallResult(
-            output=None if answer is None else answer(request),
+            output=output,
             routing_credits=Decimal("0.25"),
         )
 
@@ -5616,8 +5622,18 @@ def _dynamic_pool_run(tmp_path, monkeypatch, *, issues, **overrides):
     fake_client = FakeCopilotClient(scripted_events=[])
     close_after_send = overrides.pop("close_after_send", None)
     edit_after_send = overrides.pop("edit_after_send", None)
+    context_after_send = overrides.pop("context_after_send", None)
+    wait_for_prepared = set(overrides.pop("wait_for_prepared", ()))
 
-    def _after_send() -> None:
+    async def _after_send() -> None:
+        async def prepared() -> None:
+            while not wait_for_prepared.issubset(
+                record["issue"] for record in _prepared_records(tmp_path)
+            ):
+                await asyncio.sleep(0)
+
+        if wait_for_prepared:
+            await asyncio.wait_for(prepared(), timeout=2)
         if close_after_send is not None:
             fake_gh.issue_close(close_after_send, "worked")
         if edit_after_send is not None:
@@ -5625,19 +5641,33 @@ def _dynamic_pool_run(tmp_path, monkeypatch, *, issues, **overrides):
             fake_gh.seed_issue(
                 dataclass_replace(fake_gh.issue_view(number), body=body)
             )
+        if context_after_send is not None:
+            (tmp_path / "AGENTS.md").write_text(context_after_send, encoding="utf-8")
 
-    if close_after_send is not None or edit_after_send is not None:
+    if (
+        close_after_send is not None or edit_after_send is not None
+        or context_after_send is not None or wait_for_prepared
+    ):
         fake_client.on_send = _after_send
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
     monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    answer = overrides.pop("answer", _elects("claude-opus-5"))
+    on_assess = overrides.pop("on_assess", None)
+
+    async def assess(request):
+        if on_assess is not None:
+            on_assess(request, fake_gh)
+        output = None if answer is None else answer(request)
+        return await output if inspect.isawaitable(output) else output
+
     spied = _wire_dynamic_ports(
         monkeypatch,
         rows=overrides.pop(
             "rows",
             (_aa_row("aa-opus", 70.0, 90.0), _aa_row("aa-terra", 40.0, 200.0)),
         ),
-        answer=overrides.pop("answer", _elects("claude-opus-5")),
+        answer=assess,
         listing=overrides.pop(
             "listing",
             (
@@ -5682,6 +5712,7 @@ def test_the_pool_behind_the_pickup_is_prepared_within_the_allowance(
         tmp_path,
         monkeypatch,
         issues=[_make_issue(number) for number in (42, 43, 44)],
+        wait_for_prepared=(43, 44),
         routing_credit_allowance=Decimal("5"),
     )
 
@@ -5692,6 +5723,13 @@ def test_the_pool_behind_the_pickup_is_prepared_within_the_allowance(
     )
     assert all(record["state"] == "proposed" for record in prepared), prepared
     assert all(record["model"] == "claude-opus-5" for record in prepared), prepared
+    assert all(record["selector_model"] == "claude-opus-5" for record in prepared)
+    assert all(
+        record["evidence_source"] == "https://artificialanalysis.ai/api/v2/data/llms/models"
+        for record in prepared
+    )
+    assert all(record["evidence_retrieved_at"] for record in prepared)
+    assert all(record["measurement_at"] is None for record in prepared)
     # One for the bound Pickup, one for each prepared candidate. Nothing is
     # assessed twice and nothing eligible is skipped.
     assert len(spied["assessments"]) == 3, spied["assessments"]
@@ -5726,6 +5764,56 @@ def test_preparation_never_precedes_the_pickup_it_runs_beside(
     (bound,) = _bound_pickups(tmp_path)
     assert bound["issue"] == 42, "preparation reordered the Pool"
     assert fake_client.create_calls[0]["model"] == "claude-opus-5"
+
+
+def test_a_delayed_preparation_cannot_hold_the_next_static_pickup(
+    tmp_path, monkeypatch
+) -> None:
+    tail_started = asyncio.Event()
+    next_pickup = asyncio.Event()
+    timed_out = False
+    send = FakeCopilotSession.send_and_wait
+
+    async def answer(request):
+        nonlocal timed_out
+        if "#44:" in request.issue:
+            tail_started.set()
+            try:
+                await asyncio.wait_for(next_pickup.wait(), timeout=0.5)
+            except TimeoutError:
+                timed_out = True
+                raise
+        return _elects("claude-opus-5")(request)
+
+    async def work(session, prompt, **kwargs):
+        if "=== Issue #42:" in prompt:
+            await asyncio.wait_for(tail_started.wait(), timeout=1)
+        else:
+            next_pickup.set()
+        return await send(session, prompt, **kwargs)
+
+    monkeypatch.setattr(FakeCopilotSession, "send_and_wait", work)
+    fake_client, _, _, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[
+            _make_issue(42),
+            _make_issue(43, labels=["ready-for-agent", "task-type:docs"]),
+            _make_issue(44),
+        ],
+        answer=answer,
+        close_after_send=42,
+        max_iterations=2,
+        routing={"docs": ("gpt-5.6-terra", "low")},
+        routing_credit_allowance=Decimal("5"),
+    )
+
+    assert exit_code == 0
+    assert next_pickup.is_set()
+    assert not timed_out, "the next Pickup waited for unrelated preparation"
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "claude-opus-5", "gpt-5.6-terra"
+    ]
 
 
 def test_a_blocked_candidate_is_left_pending_without_being_assessed(
@@ -5820,6 +5908,7 @@ def test_a_prepared_proposal_binds_at_its_pickup_without_a_second_call(
         tmp_path,
         monkeypatch,
         issues=issues,
+        wait_for_prepared=(43,),
         close_after_send=42,
         max_iterations=2,
         routing_credit_allowance=Decimal("5"),
@@ -5855,6 +5944,7 @@ def test_a_changed_issue_invalidates_its_prepared_proposal(
         tmp_path,
         monkeypatch,
         issues=issues,
+        wait_for_prepared=(43,),
         close_after_send=42,
         edit_after_send=(
             43,
@@ -5878,6 +5968,31 @@ def test_a_changed_issue_invalidates_its_prepared_proposal(
     )
 
 
+def test_changed_feedback_loop_commands_invalidate_a_prepared_proposal(
+    tmp_path, monkeypatch
+) -> None:
+    _, _, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[_make_issue(42), _make_issue(43)],
+        wait_for_prepared=(43,),
+        close_after_send=42,
+        context_after_send=(
+            "## Feedback loops\n\n| Loop | Command |\n| --- | --- |\n"
+            "| Unit | `pytest -q changed_suite` |\n"
+        ),
+        max_iterations=2,
+        routing_credit_allowance=Decimal("5"),
+    )
+
+    assert exit_code == 0
+    assert len(spied["assessments"]) == 3
+    assert any(
+        "pytest -q changed_suite" in context
+        for context in spied["assessments"][-1][1].repository_context
+    )
+
+
 def test_an_exhausted_allowance_stops_preparing_without_stopping_work(
     tmp_path, monkeypatch
 ) -> None:
@@ -5892,6 +6007,7 @@ def test_an_exhausted_allowance_stops_preparing_without_stopping_work(
         tmp_path,
         monkeypatch,
         issues=[_make_issue(number) for number in (42, 43, 44)],
+        wait_for_prepared=(43,),
         routing_credit_allowance=Decimal("0.25"),
     )
 
@@ -5903,6 +6019,59 @@ def test_an_exhausted_allowance_stops_preparing_without_stopping_work(
     assert states and set(states) == {"unavailable"}, states
     # Latched, not retried per candidate: one refusal, then silence.
     assert len(states) == 1, "an exhausted desk kept asking"
+
+
+def test_preparation_cannot_buy_classification_after_routing_allowance_exhaustion(
+    tmp_path, monkeypatch
+) -> None:
+    classifications = []
+
+    async def classify(_proposer, _pair, item):
+        classifications.append(item.ref)
+        return "<task-type>docs</task-type>"
+
+    monkeypatch.setattr(loop_module.SessionTaskTypeProposer, "__call__", classify)
+    monkeypatch.setattr(
+        loop_module, "_make_task_type_label_client", _RecordingTaskTypeLabelClient
+    )
+    fake_client, _, _, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "task-type:implementation", "semver:none"]),
+            _make_issue(43, labels=["ready-for-agent"]),
+        ],
+        classifier_model="gpt-5.6-terra",
+        classifier_effort="high",
+        routing_credit_allowance=Decimal("0.25"),
+        wait_for_prepared=(43,),
+    )
+
+    assert exit_code == 0
+    assert classifications == []
+    assert fake_client.create_calls[0]["model"] == "claude-opus-5"
+    assert _prepared_records(tmp_path)[0]["reason"] == "quota_exhausted"
+
+
+def test_unavailable_dynamic_routing_leaves_the_next_static_pickup_useful(
+    tmp_path, monkeypatch
+) -> None:
+    fake_client, _, spied, exit_code = _dynamic_pool_run(
+        tmp_path,
+        monkeypatch,
+        issues=[
+            _make_issue(42),
+            _make_issue(43, labels=["ready-for-agent", "task-type:docs"]),
+        ],
+        routing={"docs": ("gpt-5.6-terra", "low")},
+        routing_credit_allowance=Decimal("0"),
+    )
+
+    assert exit_code == 0
+    assert spied["assessments"] == []
+    assert [entry["issue"] for entry in _bound_pickups(tmp_path)] == [43]
+    assert fake_client.create_calls[0]["model"] == "gpt-5.6-terra"
+    assert fake_client.create_calls[0]["reasoning_effort"] == "low"
 
 
 def test_concurrent_preparation_shares_one_live_evidence_read(
@@ -5921,12 +6090,26 @@ def test_concurrent_preparation_shares_one_live_evidence_read(
     than reusing what its own ``prepare`` read a moment earlier, because a
     binding's authority is that its evidence is current.
     """
+    assessed = asyncio.Event()
+    send = FakeCopilotSession.send_and_wait
+
+    def answer(request):
+        if "#45:" in request.issue:
+            assessed.set()
+        return _elects("claude-opus-5")(request)
+
+    async def work(session, prompt, **kwargs):
+        await asyncio.wait_for(assessed.wait(), timeout=1)
+        return await send(session, prompt, **kwargs)
+
+    monkeypatch.setattr(FakeCopilotSession, "send_and_wait", work)
     _fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
         tmp_path,
         monkeypatch,
         issues=[_make_issue(number) for number in (42, 43, 44, 45)],
         selector_concurrency=2,
         evidence_delay=0.01,
+        answer=answer,
         routing_credit_allowance=Decimal("10"),
     )
 
@@ -6375,6 +6558,28 @@ def test_the_initial_dynamic_pickup_may_already_spend_max(
     assert (call["model"], call["reasoning_effort"]) == ("claude-opus-5", "max")
     (record,) = _routing_records(tmp_path)
     assert (record["lifecycle_position"], record["effort"]) == ("fresh", "max")
+
+
+@pytest.mark.parametrize("authority", ["task_route", "run_override"])
+def test_static_authority_suppresses_dynamic_selection_across_attempts(
+    tmp_path, monkeypatch, authority
+) -> None:
+    fake_client, spied, exit_code = _dynamic_run(
+        tmp_path, monkeypatch, max_iterations=2, max_nmt_strikes=9,
+        issue_labels=["ready-for-agent", "task-type:docs"],
+        routing={"docs": ("gpt-5.6-terra", "high")} if authority == "task_route" else {},
+        routing_suppressed=authority == "run_override",
+    )
+
+    assert exit_code == 0
+    assert spied["assessments"] == []
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "gpt-5.6-terra", "gpt-5.6-terra"
+    ]
+    assert [bound["lifecycle_position"] for bound in _bound_pickups(tmp_path)] == [
+        "fresh", "retrying"
+    ]
+    assert _routing_records(tmp_path) == []
 
 
 # ---------------------------------------------------------------------------

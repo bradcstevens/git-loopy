@@ -207,6 +207,8 @@ pub struct RouteView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_tier: Option<String>,
     pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lifecycle_position: Option<String>,
 }
 
 impl RouteView {
@@ -216,6 +218,7 @@ impl RouteView {
             effort: route.effort.clone(),
             context_tier: route.context_tier.clone(),
             source: route.source.clone(),
+            lifecycle_position: route.lifecycle_position.clone(),
         }
     }
 }

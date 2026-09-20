@@ -8221,6 +8221,24 @@ def test_explicit_default_equal_rung_wins_after_a_dynamic_lane(
     ]
 
 
+def test_a_run_wide_override_remains_authoritative_after_a_lane_retry(
+    tmp_path, monkeypatch
+) -> None:
+    fake_client, spied, exit_code = _dynamic_retry_lane_run(
+        tmp_path, monkeypatch, routing_suppressed=True,
+    )
+
+    assert exit_code == 0
+    assert spied["assessments"] == []
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "gpt-5.6-terra", "gpt-5.6-terra"
+    ]
+    bound = [e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pickup.bound"]
+    assert [e["routing_source"] for e in bound] == [
+        "defaulted_explicit_override", "defaulted_explicit_override"
+    ]
+
+
 @pytest.mark.parametrize("refusal", ["invalid_output", "allowance", "eligibility"])
 def test_unavailable_dynamic_retry_after_a_lane_spends_no_attempt(
     tmp_path, monkeypatch, refusal

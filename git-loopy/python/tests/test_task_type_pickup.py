@@ -165,6 +165,16 @@ def test_an_already_labelled_issue_spends_nothing() -> None:
     assert labelled is item
 
 
+def test_a_current_label_overrules_the_preparations_remembered_classification() -> None:
+    calls: list[Any] = []
+    classifier = _classifier(propose=_proposer("<task-type>docs</task-type>", calls=calls))
+    asyncio.run(classifier.labelled(_item()))
+    current = _item(labels=("ready-for-agent", "task-type:implementation"))
+
+    assert asyncio.run(classifier.labelled(current)) is current
+    assert len(calls) == 1
+
+
 def test_no_classifier_pair_spends_nothing_and_changes_nothing() -> None:
     """No staircase and no configured pair leaves the classifier inert, not guessing."""
     calls: list[Any] = []

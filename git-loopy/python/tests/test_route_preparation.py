@@ -311,7 +311,9 @@ async def test_a_failed_preparation_leaves_the_candidate_to_its_own_pickup() -> 
     desk = RoutePreparation(prepare=prepare, concurrency=1, clock=lambda: _NOW)
     reached = await desk.prepare_ahead([_Candidate(11)])
 
-    assert reached == ()
+    assert len(reached) == 1
+    assert reached[0].outcome is PreparationOutcome.UNAVAILABLE
+    assert reached[0].reason is dynamic_route.RoutingUnavailableReason.SELECTOR_UNAVAILABLE
     assert desk.take(11) is None
     assert desk.halted is False
 
@@ -325,3 +327,79 @@ def test_preparation_refuses_a_concurrency_bound_it_cannot_honour() -> None:
     for invalid in (0, -1, True):
         with pytest.raises(ValueError):
             RoutePreparation(prepare=prepare, concurrency=invalid)
+
+
+@pytest.mark.asyncio
+async def test_pickup_keeps_its_proposal_and_cancels_unrelated_preparation() -> None:
+    tail_started = asyncio.Event()
+    outcomes: list[PreparedRoute] = []
+
+    async def prepare(candidate: _Candidate) -> PreparedRoute:
+        if candidate.ref == 12:
+            tail_started.set()
+            await asyncio.Event().wait()
+        return PreparedRoute(
+            ref=candidate.ref,
+            outcome=PreparationOutcome.PROPOSED,
+            proposal=_proposal(candidate.ref),
+        )
+
+    desk = RoutePreparation(
+        prepare=prepare, concurrency=1, clock=lambda: _NOW,
+        on_prepared=outcomes.append,
+    )
+    ahead = asyncio.create_task(desk.prepare_ahead([_Candidate(11), _Candidate(12)]))
+    await tail_started.wait()
+    await asyncio.wait_for(desk.prioritize(11), timeout=1)
+    await ahead
+
+    assert desk.take(11) is not None
+    assert desk.take(12) is None
+    assert outcomes[-1].ref == 12
+    assert outcomes[-1].outcome is PreparationOutcome.UNAVAILABLE
+    assert "cancelled" in outcomes[-1].detail
+
+
+@pytest.mark.asyncio
+async def test_concurrent_pickups_do_not_cancel_each_others_claimed_preparation() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def prepare(candidate: _Candidate) -> PreparedRoute:
+        if candidate.ref == 12:
+            started.set()
+            await release.wait()
+        return PreparedRoute(
+            ref=candidate.ref, outcome=PreparationOutcome.PROPOSED,
+            proposal=_proposal(candidate.ref),
+        )
+
+    desk = RoutePreparation(prepare=prepare, concurrency=2, clock=lambda: _NOW)
+    ahead = asyncio.create_task(desk.prepare_ahead([_Candidate(11), _Candidate(12)]))
+    await started.wait()
+    first = asyncio.create_task(desk.prioritize(12))
+    await asyncio.sleep(0)
+    await desk.prioritize(13)
+    release.set()
+    await first
+    await ahead
+    assert desk.take(12) is not None
+
+
+@pytest.mark.asyncio
+async def test_a_new_preparation_pass_waits_until_foreground_routing_finishes() -> None:
+    started = []
+
+    async def prepare(candidate: _Candidate) -> PreparedRoute:
+        started.append(candidate.ref)
+        return PreparedRoute(ref=candidate.ref, outcome=PreparationOutcome.STATIC)
+
+    desk = RoutePreparation(prepare=prepare, concurrency=1, clock=lambda: _NOW)
+    await desk.prioritize(99)
+    ahead = asyncio.create_task(desk.prepare_ahead([_Candidate(11)]))
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert started == []
+    await desk.finish_pickup(99)
+    await ahead
+    assert started == [11]

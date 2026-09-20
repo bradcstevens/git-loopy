@@ -825,7 +825,8 @@ fn a_routed_pickup_projects_its_context_tier() {
             "model": "gpt-5-mini",
             "effort": "medium",
             "context_tier": "long_context",
-            "routing_source": "routed"
+            "routing_source": "routed",
+            "lifecycle_position": "fresh"
         })],
         IssueRef::number(7),
     );
@@ -836,7 +837,8 @@ fn a_routed_pickup_projects_its_context_tier() {
             "model": "gpt-5-mini",
             "effort": "medium",
             "context_tier": "long_context",
-            "source": "routed"
+            "source": "routed",
+            "lifecycle_position": "fresh"
         })
     );
 }

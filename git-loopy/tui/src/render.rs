@@ -590,7 +590,7 @@ fn cost_placeholder<'a>(header: &Header, glyphs: &'a Glyphs) -> &'a str {
     }
 }
 
-/// One issue's **Routing resolution**, as a cell: its settings, never provenance.
+/// One issue's **Routing resolution**, as a cell: its settings and lifecycle position.
 ///
 /// `model @ effort` is the family's spelling of a pair; a non-default context tier
 /// uses a compact spelling so it remains readable in the fixed Route column. The pair is the
@@ -606,6 +606,10 @@ fn cost_placeholder<'a>(header: &Header, glyphs: &'a Glyphs) -> &'a str {
 /// tracker-delivery state renders as a suffix so publication can fail or lag
 /// without rewriting the pair itself.
 fn route(route: Option<&RouteView>, delivery: Option<&DeliveryView>, unknown: &str) -> String {
+    let lifecycle_suffix = route
+        .and_then(|route| route.lifecycle_position.as_deref())
+        .map(|position| format!(" ({})", position.replace('_', " ")))
+        .unwrap_or_default();
     let rendered = match route {
         Some(route) => match &route.context_tier {
             Some(context_tier) => format!(
@@ -622,18 +626,18 @@ fn route(route: Option<&RouteView>, delivery: Option<&DeliveryView>, unknown: &s
         },
         None => unknown.to_string(),
     };
-    match delivery {
-        Some(delivery) => {
-            let suffix = format!(" [{}]", delivery.status);
-            let route_width = usize::from(ROUTE_WIDTH);
-            let prefix_width = route_width.saturating_sub(suffix.len());
-            format!("{}{}", truncate_route(&rendered, prefix_width), suffix)
-        }
-        None => rendered,
+    let delivery_suffix = delivery
+        .map(|delivery| format!(" [{}]", delivery.status))
+        .unwrap_or_default();
+    let suffix = format!("{lifecycle_suffix}{delivery_suffix}");
+    if suffix.is_empty() {
+        return rendered;
     }
+    let prefix_width = usize::from(ROUTE_WIDTH).saturating_sub(suffix.len());
+    format!("{}{}", truncate_route(&rendered, prefix_width), suffix)
 }
 
-/// Reserve a fixed Route cell's final characters for an observable delivery state.
+/// Reserve a fixed Route cell's final characters for observable route metadata.
 fn truncate_route(route: &str, width: usize) -> String {
     if route.chars().count() <= width {
         return route.to_string();

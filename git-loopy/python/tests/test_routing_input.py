@@ -88,8 +88,8 @@ def test_the_repository_context_is_the_gates_the_work_must_pass() -> None:
     )
 
     assert request.repository_context == (
-        "feedback loop: Python suite",
-        "feedback loop: Rust core",
+        "feedback loop: Python suite; command: pytest -q",
+        "feedback loop: Rust core; command: cargo test",
     )
 
 
@@ -102,6 +102,17 @@ def test_a_placeholder_feedback_loop_is_not_context() -> None:
     )
 
     assert request.repository_context == ()
+
+
+def test_persisting_the_settled_task_type_does_not_change_assessment_inputs() -> None:
+    before = "=== Issue #43: Work [labels: ready-for-agent] ===\n" + _ISSUE
+    after = (
+        "=== Issue #43: Work [labels: ready-for-agent, task-type:implementation] ===\n"
+        + _ISSUE
+    )
+    assert build_routing_request(
+        rendered_block=before, task_type="implementation"
+    ) == build_routing_request(rendered_block=after, task_type="implementation")
 
 
 def _measured_entry() -> MeasuredEntry:

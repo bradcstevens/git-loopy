@@ -49,6 +49,7 @@ __all__ = [
     "AssessmentCandidate",
     "AssessmentRequest",
     "SelectorCallResult",
+    "RoutingCallCancelled",
     "RoutingUsage",
     "RoutingAdmissionLedger",
     "RoutingUnavailableReason",
@@ -1007,6 +1008,14 @@ class SelectorCallResult:
     routing_credits: Decimal
 
 
+class RoutingCallCancelled(asyncio.CancelledError):
+    """An interrupted routing call, carrying only credits already reported."""
+
+    def __init__(self, routing_credits: Decimal) -> None:
+        super().__init__("routing call cancelled")
+        self.routing_credits = _validate_routing_credits(routing_credits)
+
+
 @dataclass(frozen=True)
 class RoutingUsage:
     """Run-local classification and selector usage, including overshoot."""
@@ -1082,6 +1091,25 @@ class RoutingAdmissionLedger:
         self, call: Callable[[], Awaitable[SelectorCallResult]]
     ) -> tuple[SelectorCallResult | None, _AdmissionRefusal | None]:
         """Run one admitted call, bounded by concurrency, deadline and quota."""
+        return await self._run_call(call, classification=False)
+
+    async def run_classification(
+        self, call: Callable[[], Awaitable[SelectorCallResult]]
+    ) -> tuple[SelectorCallResult | None, _AdmissionRefusal | None]:
+        """Classification shares the selector's admission limits, not its count."""
+        return await self._run_call(call, classification=True)
+
+    async def _run_call(
+        self, call: Callable[[], Awaitable[SelectorCallResult]], *, classification: bool
+    ) -> tuple[SelectorCallResult | None, _AdmissionRefusal | None]:
+        async def metered_call() -> SelectorCallResult:
+            try:
+                return await call()
+            except RoutingCallCancelled as exc:
+                async with self._lock:
+                    self._complete_cost(exc.routing_credits)
+                raise
+
         remaining = self._deadline - self._monotonic()
         if remaining <= 0:
             return None, _AdmissionRefusal.DEADLINE
@@ -1095,12 +1123,15 @@ class RoutingAdmissionLedger:
                     return None, _AdmissionRefusal.DEADLINE
                 if self._credits >= self._allowance:
                     return None, _AdmissionRefusal.QUOTA
-                self._selector_attempts += 1
+                if classification:
+                    self._classification_attempts += 1
+                else:
+                    self._selector_attempts += 1
                 self._in_flight += 1
             try:
                 try:
                     result = await asyncio.wait_for(
-                        call(), timeout=max(0, self._deadline - self._monotonic())
+                        metered_call(), timeout=max(0, self._deadline - self._monotonic())
                     )
                 except TimeoutError:
                     refusal = (
@@ -1686,6 +1717,19 @@ class DynamicRouter:
         """
         await self._ledger.record_classification(routing_credits)
 
+    async def classify(
+        self, call: Callable[[], Awaitable[SelectorCallResult]]
+    ) -> SelectorCallResult | RoutingUnavailable:
+        """Admit a missing Task-type classification under the Run's limits."""
+        result, refusal = await self._ledger.run_classification(call)
+        if refusal is _AdmissionRefusal.QUOTA:
+            return self._unavailable(RoutingUnavailableReason.QUOTA_EXHAUSTED)
+        if refusal is _AdmissionRefusal.DEADLINE:
+            return self._unavailable(RoutingUnavailableReason.DEADLINE_EXHAUSTED)
+        if result is None:
+            return self._unavailable(RoutingUnavailableReason.SELECTOR_UNAVAILABLE)
+        return result
+
     def _discard_expired_proposals(self) -> None:
         now = self._aware_now()
         self._proposals = {
@@ -1868,6 +1912,17 @@ def _verified_reuse(
             assessed.reasoning_effort,
             assessed.context_tier,
         ) == reusable.route.triple:
+            output = {
+                "candidate_identity": assessed.stable_identity,
+                "summary": reusable.summary,
+            }
+            if reusable.repeat_justification is not None:
+                output[_REPEAT_JUSTIFICATION_KEY] = reusable.repeat_justification
+            if isinstance(
+                _parse_selector_output(output, (assessed,), request.prior_attempts),
+                RoutingUnavailableReason,
+            ):
+                return None
             return selector, assessed
     return None
 

@@ -1831,17 +1831,28 @@ validation and never a substitute for one.
   and buy another selection only within the remaining bounds. A proposal past
   its validity window MUST NOT be bound — the Pickup assesses again instead.
 - **Prioritise the next Pickup, and spend nothing on the ineligible.** The next
-  candidate to be worked is prepared first. Blocked, unreadable or otherwise
+  candidate to be worked is prepared first. Finishing an Iteration MUST NOT
+  wait for unrelated preparation. A Pickup MAY interrupt that preparation to
+  free routing capacity, but MUST NOT cancel another authoritative Pickup's
+  claimed assessment. Blocked, unreadable or otherwise
   ineligible candidates remain visibly pending and MUST cost no classifier or
   selector call for preparation. A missing **Task type** is classified at
   preparation *before* static applicability is checked; existing labels stay
   authoritative and a **Static route** MUST avoid the selector entirely.
+  The candidate MUST be re-read when its bounded preparation actually starts,
+  not merely when the pass was scheduled. Task-type classification and selector
+  calls share admission limits; reading an existing label is not a classification
+  attempt. Persisting the settled Task type MUST NOT itself invalidate a proposal.
 - **Only while a Run is running, and only within the operator's bounds.**
   Preparation MUST run on the Run's own event loop under the configured
   selector concurrency and routing-credit allowance, and MUST stop for the rest
   of the Run once either is spent. Discovering an issue while no Run is active
   MUST NOT start a background routing service, and no preparation loop may
   become unbounded or speculative.
+  Cancellation MUST leave an explicit `unavailable` preparation outcome and
+  MUST be joined before the Run closes its local Event log. An interrupted
+  assessment is not a reusable proposal. Already-routed Agents and eligible
+  Static work remain usable even when new Dynamic work is refused.
 - **Concurrent checks MAY share one in-flight read.** Two preparations asking
   the same live source the same question at the same instant MAY join a single
   request, and a provider-supported unchanged response (for example an
@@ -1853,6 +1864,10 @@ validation and never a substitute for one.
   or `unavailable`. CLI and Dashboard projections MUST present them as
   proposals — never as a final binding, an acquired Lease, or an empty Pool —
   and MUST NOT let a proposal populate the route a Pickup is responsible for.
+  The proposal's summary, selector settings, evidence identity, retrieval times,
+  and available measurement metadata accompany its record. Missing measurement
+  dates, versions, and conditions remain unknown; retrieval is not measurement.
+  Readers accept historical preparation records lacking this additional provenance.
 - **Preparation is clone-local and Run-scoped.** Proposals are held in memory
   for the life of the Run and are never shared between clones or Runs; a
   cross-Run saving is the **Reusable route** of §14.5's sibling rule, not this

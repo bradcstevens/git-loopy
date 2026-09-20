@@ -305,6 +305,11 @@ pub struct Pickup {
     /// binding.
     #[serde(default)]
     pub routing_source: Option<String>,
+    /// Where this Pickup sits in the issue's **Attempt lifecycle**. This is
+    /// independent of the route settings and source: an unchanged Dynamic
+    /// route can still be a retry.
+    #[serde(default)]
+    pub lifecycle_position: Option<String>,
 }
 
 /// How one issue's final **Routing resolution** was arrived at.

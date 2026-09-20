@@ -168,6 +168,7 @@ from git_loopy.dynamic_route import (
     FreshHarnessCapabilities,
     ReusableRoute,
     RoutingAdmissionLedger,
+    RoutingCallCancelled,
     RoutingPrerequisiteError,
     RoutingProposal,
     RoutingRequest,
@@ -250,7 +251,6 @@ from git_loopy.run_readback import run_start_payload
 from git_loopy.serial_pickup import (
     AdmissionRefusal,
     SerialPickup,
-    SerialSkip,
     pick_serial,
     reason_for,
 )
@@ -1388,29 +1388,10 @@ class _Loop:
         #
         # A `None` pair makes the whole object inert, so neither Pickup carries
         # a second copy of "does this Run classify?".
-        # AC10: a classification is routing usage. The classifier is the
-        # Pickup's own collaborator rather than something the admission ledger
-        # invokes, so its spend is metered here and handed to the ledger after
-        # the call -- chained, so the Run's own Consumption still sees it.
-        self._classification_meter = RoutingCostMeter(self._session_observer)
+        self._classification_denials: dict[int | str, RoutingUnavailable] = {}
         self._classifier = PickupClassifier(
             pair=classifier_pair,
-            propose=SessionTaskTypeProposer(
-                client=self._client,
-                config=self._config,
-                event_log=self._writers.event_log,
-                sinks=self._sinks,
-                run_id=self._writers.run_id,
-                # The repository root, in both modes. A Lane classifies *before*
-                # its worktree exists — the Task type is what decides the pair
-                # the Lane is then created for — so there is no Lane path to
-                # read, and reading the issue's own content needs none.
-                working_directory=None,
-                send_timeout_seconds=config.send_timeout_seconds,
-                skill_exposure=self._skill_exposure,
-                cost_meter=self._classification_meter,
-                warn=self._diag.warning,
-            ),
+            propose=self._propose_task_type,
             client=(
                 task_type_client
                 if task_type_client is not None
@@ -1513,7 +1494,7 @@ class _Loop:
                 on_prepared=self._emit_route_prepared,
             )
         )
-        #: The in-flight preparation pass, at most one per Iteration.
+        #: The Run's in-flight preparation pass, independent of Iteration endings.
         self._preparation_pass: asyncio.Task[None] | None = None
 
     @property
@@ -1985,12 +1966,7 @@ class _Loop:
                 pickup.position,
                 len(pool),
             )
-            # **Routing preparation** for the rest of the Pool, started here and
-            # settled at (6) below — so it runs for exactly as long as the Agent
-            # session does and not one step before it (#566, AC1). The Pickup
-            # above is already bound, which is the whole of "without delaying the
-            # next useful Pickup": nothing between this line and the session
-            # waits on it.
+            # Preparation may outlive this Iteration, but never the Run.
             self._start_preparation_pass(pool, beside=active.ref)
 
             # 3) Build prompt (last-5 commits + the bound issue's block +
@@ -2093,7 +2069,6 @@ class _Loop:
                     )
 
             # 6) Post-iteration accounting.
-            await self._settle_preparation_pass()
             try:
                 head = self._git.head_sha()
             except git_module.GitError as exc:
@@ -2374,6 +2349,34 @@ class _Loop:
         return escalated
 
     async def _classify_at_pickup(
+        self, item: AfkReadyItem, *, routed: RoutingResolution,
+        parallel_required: bool = False,
+    ) -> tuple[AfkReadyItem, RoutingResolution]:
+        try:
+            if self._preparation is not None:
+                await self._preparation.prioritize(item.ref)
+                current = await asyncio.to_thread(
+                    self._source.refresh_for_preparation, item
+                )
+                if current.outcome != PICKUP_VALIDATED:
+                    self._preparation.take(item.ref)
+                    raise DynamicRouteUnavailable(
+                        f"current candidate eligibility {current.outcome}"
+                    )
+                assert current.item is not None
+                item = current.item
+                if parallel_required and LABEL_PARALLEL_SAFE not in item.labels:
+                    raise DynamicRouteUnavailable("candidate is no longer parallel-safe")
+                try:
+                    routed = self._resolve_route(item, warn=self._diag.warning)
+                except TaskTypeError as exc:
+                    raise DynamicRouteUnavailable(f"current Task type refused: {exc}") from exc
+            return await self._classify_pickup(item, routed=routed)
+        finally:
+            if self._preparation is not None:
+                await self._preparation.finish_pickup(item.ref)
+
+    async def _classify_pickup(
         self, item: AfkReadyItem, *, routed: RoutingResolution
     ) -> tuple[AfkReadyItem, RoutingResolution]:
         """Read ``item``'s **Task type** off its own content, then re-route on it.
@@ -2419,8 +2422,9 @@ class _Loop:
                 time. Classification itself still never raises — a failure to
                 acquire a *label* costs the issue nothing.
         """
-        task_type_labelled = await self._classifier.labelled(item)
-        await self._note_classification_usage()
+        task_type_labelled = await self._labelled_for_routing(item)
+        if isinstance(task_type_labelled, RoutingUnavailable):
+            raise DynamicRouteUnavailable(task_type_labelled.reason.value)
         labelled = await self._bump_classifier.labelled(task_type_labelled)
         if task_type_labelled is item:
             return labelled, await self._bound_route(labelled, routed)
@@ -2468,25 +2472,47 @@ class _Loop:
         self._attempt_evidence.bound(item.ref, resolved)
         return resolved
 
-    async def _note_classification_usage(self) -> None:
-        """Charge the classification that just ran to this Run's routing usage.
+    async def _propose_task_type(
+        self, pair: ClassifierPair, item: AfkReadyItem
+    ) -> str | None:
+        """Admit and meter each actual classification, never a cached label read."""
+        meter = RoutingCostMeter(self._session_observer)
+        proposer = SessionTaskTypeProposer(
+            client=self._client,
+            config=self._config,
+            event_log=self._writers.event_log,
+            sinks=self._sinks,
+            run_id=self._writers.run_id,
+            working_directory=None,
+            send_timeout_seconds=self._config.send_timeout_seconds,
+            skill_exposure=self._skill_exposure,
+            cost_meter=meter,
+            warn=self._diag.warning,
+        )
 
-        AC10 counts classification attempts and their spend toward routing
-        usage and the Run's **Consumption**, and the second half is why the
-        credits are drained through :class:`RoutingCostMeter` rather than read
-        off the Run total: one call's figure, attributed to the issue that
-        bought it.
+        async def call() -> SelectorCallResult:
+            try:
+                output = await proposer(pair, item)
+            except asyncio.CancelledError:
+                raise RoutingCallCancelled(meter.drain()) from None
+            return SelectorCallResult(output=output, routing_credits=meter.drain())
 
-        Only under the **Dynamic route**, and only when the classifier is
-        actually paired. There is no ledger to charge otherwise, and an inert
-        classifier opens no session -- so a drain there would be recording an
-        attempt that never happened.
-        """
-        spent = self._classification_meter.drain()
         router = self._dynamic_router
-        if router is None or self._classifier.pair is None:
-            return
-        await router.record_classification(spent)
+        if router is None:
+            return await proposer(pair, item)
+        result = await router.classify(call)
+        if isinstance(result, RoutingUnavailable):
+            self._classification_denials[item.ref] = result
+            return None
+        assert result.output is None or isinstance(result.output, str)
+        return result.output
+
+    async def _labelled_for_routing(
+        self, item: AfkReadyItem
+    ) -> AfkReadyItem | RoutingUnavailable:
+        self._classification_denials.pop(item.ref, None)
+        labelled = await self._classifier.labelled(item)
+        return self._classification_denials.pop(item.ref, None) or labelled
 
     async def _routed_dynamically(
         self, item: AfkReadyItem, resolution: RoutingResolution
@@ -2621,16 +2647,8 @@ class _Loop:
             task_type=_assessed_task_type(resolution),
             lifecycle_position=resolution.lifecycle_position.value,
             prior_attempts=self._attempt_evidence.prior_attempts(item.ref),
-            feedback_loops=(
-                self._dynamic_routing.feedback_loops
-                if self._dynamic_routing is not None
-                else ()
-            ),
-            measured=(
-                self._dynamic_routing.measured
-                if self._dynamic_routing is not None
-                else None
-            ),
+            feedback_loops=_declared_feedback_loops(self._git.root),
+            measured=_declared_measured_routing(self._git.root),
         )
 
     def _start_preparation_pass(
@@ -2642,11 +2660,14 @@ class _Loop:
         caller has already bound its issue and is on its way to a session, and
         AC1 asks for the other eligible candidates to be prepared *within* the
         configured concurrency and allowance rather than before the work.
-        Settled by :meth:`_settle_preparation_pass` at the end of the same
-        Iteration, so the pass never outlives the Pool snapshot it was given.
+        Settled at Run shutdown, never by an Iteration waiting for the tail.
         """
         if self._preparation is None:
             return
+        if self._preparation_pass is not None:
+            if not self._preparation_pass.done():
+                return
+            self._preparation_pass.result()
         self._preparation_pass = asyncio.create_task(
             self.prepare_ahead(
                 [item for item in pool if item.ref != beside],
@@ -2655,22 +2676,15 @@ class _Loop:
         )
 
     async def _settle_preparation_pass(self) -> None:
-        """End the Iteration's preparation pass before its accounting.
-
-        Awaited rather than cancelled, so an assessment the Run has *already
-        paid for* is recorded rather than thrown away mid-flight — a cancelled
-        selector call bills the account and leaves nothing behind. The desk
-        itself bounds how long that can be: one attempt per candidate per Run,
-        within the configured concurrency, and latched shut the moment the
-        allowance or the deadline is exhausted.
-        """
+        """Cancel and join preparation before the Run closes its event log."""
         pass_task, self._preparation_pass = self._preparation_pass, None
         if pass_task is None:
             return
+        pass_task.cancel()
         try:
             await pass_task
         except asyncio.CancelledError:
-            raise
+            pass
         except Exception as exc:  # noqa: BLE001 - never worth an Iteration
             self._diag.warning("route preparation pass failed: %s", exc)
 
@@ -2744,8 +2758,28 @@ class _Loop:
         router = self._dynamic_router
         if router is None:  # pragma: no cover - the desk exists only with one
             return PreparedRoute(ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE)
-        labelled = await self._classifier.labelled(item)
-        await self._note_classification_usage()
+        current = await asyncio.to_thread(self._source.refresh_for_preparation, item)
+        if current.outcome != PICKUP_VALIDATED:
+            return PreparedRoute(
+                ref=item.ref,
+                outcome=PreparationOutcome.UNAVAILABLE,
+                detail=f"current candidate eligibility {current.outcome}; no routing call",
+            )
+        assert current.item is not None
+        item = current.item
+        if self._attempts.defeated_by(item.ref) is not None:
+            return PreparedRoute(
+                ref=item.ref, outcome=PreparationOutcome.UNAVAILABLE,
+                detail="Attempt lifecycle no longer admits this candidate",
+            )
+        labelled = await self._labelled_for_routing(item)
+        if isinstance(labelled, RoutingUnavailable):
+            return PreparedRoute(
+                ref=item.ref,
+                outcome=PreparationOutcome.UNAVAILABLE,
+                reason=labelled.reason,
+                detail=labelled.reason.value,
+            )
         try:
             resolution = self._resolve_route(labelled, warn=lambda _message: None)
         except TaskTypeError as exc:
@@ -2786,6 +2820,8 @@ class _Loop:
         prepared issues as a Pool of routed ones.
         """
         proposal = prepared.proposal
+        evidence = None if proposal is None else proposal.work_evidence
+        selector = None if proposal is None else proposal.selector
         self._emit(
             events_module.WRAPPER_ROUTING_PREPARED,
             iter_num=None,
@@ -2817,6 +2853,28 @@ class _Loop:
             selector_attempts=(
                 None if proposal is None else proposal.usage.selector_attempts
             ),
+            selector_model=None if selector is None else selector.model,
+            selector_effort=None if selector is None else selector.reasoning_effort,
+            selector_context_tier=None if selector is None else selector.context_tier,
+            evidence_source=None if evidence is None else evidence.source_identity,
+            source_model_identity=(
+                None if evidence is None else evidence.source_model_identity
+            ),
+            evidence_retrieved_at=(
+                None if proposal is None
+                else events_module.format_timestamp(proposal.evidence_retrieved_at)
+            ),
+            capabilities_retrieved_at=(
+                None if proposal is None
+                else events_module.format_timestamp(proposal.capabilities_retrieved_at)
+            ),
+            measurement_at=(
+                None if evidence is None or evidence.measurement_at is None
+                else events_module.format_timestamp(evidence.measurement_at)
+            ),
+            benchmark_version=None if evidence is None else evidence.benchmark_version,
+            conditions=None if evidence is None else evidence.conditions,
+            routing_overshot=None if proposal is None else proposal.usage.overshot,
         )
 
     def _reusable_routes_for(self, ref: int | str) -> tuple[ReusableRoute, ...]:
@@ -2922,8 +2980,11 @@ class _Loop:
         **Routed pair** it will never run on.
         """
         self._routes = {}
+        routing_refusals: dict[int | str, str] = {}
 
         def admit(item: AfkReadyItem) -> str | AdmissionRefusal | None:
+            if item.ref in routing_refusals:
+                return routing_refusals[item.ref]
             defeated = self._attempts.defeated_by(item.ref)
             if defeated is not None:
                 # The **Attempt lifecycle** filter (#412), asked before routing
@@ -2967,7 +3028,23 @@ class _Loop:
             self._routes[item.ref] = resolution
             return None
 
-        pickup = pick_serial(pool, admit=admit, pin=self._config.issue_pin)
+        while True:
+            pickup = pick_serial(pool, admit=admit, pin=self._config.issue_pin)
+            if pickup.item is None:
+                break
+            try:
+                bound, resolution = await self._classify_at_pickup(
+                    pickup.item, routed=self._routes[pickup.item.ref]
+                )
+            except DynamicRouteUnavailable as exc:
+                # Refuse this candidate once, not the useful Static work
+                # behind it. The ordered walk remains the only dispatcher.
+                routing_refusals[pickup.item.ref] = f"dynamic route unavailable: {exc}"
+                self._routes.pop(pickup.item.ref, None)
+                continue
+            self._routes[bound.ref] = resolution
+            pickup = dataclass_replace(pickup, item=bound)
+            break
         considered = len(pickup.considered)
         for skip in pickup.skipped:
             self._emit_pickup_skipped(
@@ -2986,51 +3063,6 @@ class _Loop:
             )
         if pickup.item is not None:
             assert pickup.position is not None and pickup.reason is not None
-            try:
-                bound, resolution = await self._classify_at_pickup(
-                    pickup.item, routed=self._routes[pickup.item.ref]
-                )
-            except DynamicRouteUnavailable as exc:
-                # An explicit unavailable decision, never a fallback (AC11).
-                # It arrives *after* the walk bound this candidate — the Task
-                # type it routes from does not exist until classification has
-                # run — so it cannot be a refusal inside ``admit`` and becomes
-                # the last skip of this walk instead. The Iteration then binds
-                # nothing, which is the outcome ADR-0032 already has a record
-                # and an exit for; taking the default pair instead would be the
-                # silent downgrade the criterion rules out.
-                reason = f"dynamic route unavailable: {exc}"
-                self._emit_pickup_skipped(
-                    iter_num=iter_num,
-                    issue=pickup.item.ref,
-                    reason=reason,
-                    position=pickup.position,
-                    considered=considered,
-                )
-                self._diag.warning(
-                    "serial Pickup skipped #%s at position %d of %d: %s",
-                    pickup.item.ref,
-                    pickup.position,
-                    considered,
-                    reason,
-                )
-                self._routes.pop(pickup.item.ref, None)
-                return dataclass_replace(
-                    pickup,
-                    item=None,
-                    position=None,
-                    reason=None,
-                    skipped=pickup.skipped
-                    + (
-                        SerialSkip(
-                            ref=pickup.item.ref,
-                            reason=reason,
-                            position=pickup.position,
-                        ),
-                    ),
-                )
-            self._routes[bound.ref] = resolution
-            pickup = dataclass_replace(pickup, item=bound)
             self._emit_pickup_bound(
                 iter_num=iter_num,
                 issue=bound.ref,
@@ -3508,6 +3540,7 @@ class _Loop:
                 )
                 raise
         finally:
+            await self._settle_preparation_pass()
             # Final wrapper.run.end always emits — even on early break or crash.
             try:
                 self._emit(
@@ -4034,20 +4067,18 @@ class _ParallelLoop:
         )
         if not wanted:
             return
-        items: list[AfkReadyItem] = []
-        for ref in wanted:
-            try:
-                validated = self._source.pickup(ref)
-            except Exception as exc:  # noqa: BLE001 - a read never fails a Run
-                self._diag.warning(
-                    "route preparation could not re-read issue #%s: %s", ref, exc
-                )
-                continue
-            if validated.outcome == PICKUP_VALIDATED:
-                assert validated.item is not None
-                items.append(validated.item)
-        if not items:
-            return
+        # Only identities enter the desk. Its bounded callback re-reads each
+        # issue off the event loop immediately before any routing spend.
+        items = [
+            AfkReadyItem(
+                ref=ref,
+                title=pool.candidate(ref).title,
+                rendered_block="",
+                labels=pool.candidate(ref).labels,
+                blocked_by=pool.candidate(ref).blocked_by,
+            )
+            for ref in wanted
+        ]
         self._preparation_pass = asyncio.create_task(
             self._serial.prepare_ahead(items),
             name="git-loopy-route-preparation-rolling",
@@ -4143,6 +4174,14 @@ class _ParallelLoop:
                 )
                 raise
         finally:
+            pass_task, self._preparation_pass = self._preparation_pass, None
+            if pass_task is not None:
+                pass_task.cancel()
+                try:
+                    await pass_task
+                except asyncio.CancelledError:
+                    pass
+            await self._serial._settle_preparation_pass()
             try:
                 self._serial._emit(
                     events_module.WRAPPER_RUN_END,
@@ -4856,7 +4895,7 @@ class _ParallelLoop:
         # decides is the pair this Lane is created for.
         try:
             item, resolution = await self._serial._classify_at_pickup(
-                item, routed=resolution
+                item, routed=resolution, parallel_required=True
             )
         except DynamicRouteUnavailable as exc:
             # The Lane half of AC11's explicit unavailable decision, and it

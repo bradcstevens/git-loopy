@@ -164,6 +164,8 @@ def _route(route: ResolvedRoute | None) -> dict[str, Any] | None:
     }
     if route.context_tier is not None:
         projected["context_tier"] = route.context_tier
+    if route.lifecycle_position is not None:
+        projected["lifecycle_position"] = route.lifecycle_position
     return projected
 
 

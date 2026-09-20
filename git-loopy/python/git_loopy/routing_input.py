@@ -140,10 +140,10 @@ def build_routing_request(
     """
     if not task_type.strip():
         raise ValueError("a routing request needs a settled task type")
-    issue = rendered_block[:MAX_ISSUE_CHARACTERS]
+    issue = _assessment_issue(rendered_block)[:MAX_ISSUE_CHARACTERS]
     criteria = parse_acceptance_criteria(rendered_block)
     context = tuple(
-        f"feedback loop: {loop.name}"
+        f"feedback loop: {loop.name[:200]}; command: {loop.command[:500]}"
         for loop in feedback_loops
         if loop.runnable
     )[:MAX_CRITERIA]
@@ -174,6 +174,21 @@ def build_routing_request(
         prior_attempts=history,
         prior_attempts_omitted=len(prior_attempts) - len(history),
     )
+
+
+def _assessment_issue(rendered_block: str) -> str:
+    """Represent Task type once, outside the tracker header it may have just gained."""
+    header, newline, body = rendered_block.partition("\n")
+    if not header.startswith(("=== Issue #", "=== PR #")):
+        return rendered_block
+    prefix, marker, suffix = header.rpartition("[labels: ")
+    labels, closing, tail = suffix.partition("]")
+    if not marker or not closing:
+        return rendered_block
+    retained = ", ".join(
+        label for label in labels.split(", ") if not label.startswith("task-type:")
+    )
+    return prefix + marker + retained + closing + tail + newline + body
 
 
 def _attempt_estimate(attempt: PriorAttempt) -> str:

@@ -946,7 +946,9 @@ running **Agent**, and is never evidence the Pool is empty. A prepared proposal 
 Pickup's own fresh validation — the Pickup re-reads both live sources, compares the relevant input
 identity, reassesses whatever moved, and refuses anything past its validity window — so what
 preparation saves is a **Route selector** call and nothing else. The next Pickup is prepared first
-and alone; everything behind it runs within the operator's configured selector concurrency and
+and alone; an Iteration never joins the unrelated tail before advancing. A Pickup joins only its
+own in-flight preparation and cancels unrelated assessments to free routing capacity; concurrent
+Pickups do not cancel each other's claimed preparation. Everything behind them runs within the operator's configured selector concurrency and
 **Routing credit** allowance, once per candidate per Run, and stops outright for the rest of the Run
 the moment either bound is spent. A missing **Task type** is classified before static applicability
 is checked, so an operator's **Static route** still costs no assessment; a **Reusable route** costs
