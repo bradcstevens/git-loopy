@@ -1065,7 +1065,8 @@ The block a **Run** prints at start and publishes on its own start Event, statin
 the kit parsed it: the **Default pair** and context tier, the **Escalation rung**, whether an
 explicit pin suppressed **Routing**, every `[routing]` entry with the `task-type` key spelled
 exactly as the table spelled it, the taxonomy keys no entry configures, and the spawned harness
-version beside the CLI version the model roster was captured against. It exists because no
+version beside the harness version used for the model roster's latest observed-capability
+refresh; retained compatibility entries do not imply current availability. It exists because no
 validator for the `[routing]` table can exist — its keys are the operator's vocabulary and its
 pairs are the vendor's — so an operator reading back what the kit understood is the only
 validation available anywhere. It therefore carries the **keys themselves and never a count of

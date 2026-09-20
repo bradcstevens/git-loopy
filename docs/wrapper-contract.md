@@ -1381,7 +1381,7 @@ run-wide default:
   start** and **unconditionally**, a labelled readback of the model settings it parsed: the
   run-wide **Default pair**'s model, effort and context tier; the **Escalation rung**; whether an
   explicit pin suppressed routing run-wide; every `[routing]` entry; and the CLI version it
-  spawns beside the CLI version its roster was captured against
+  spawns beside the CLI version used for its roster's latest observed-capability refresh
   ([ADR-0019](adr/0019-roster-derived-from-the-pinned-harness.md)). Three properties are
   load-bearing. It MUST echo the routing **keys themselves**, never a count of them: no validator
   for the table can exist — its keys are the operator's vocabulary and its pairs are the vendor's
@@ -1445,13 +1445,21 @@ port that implements routing acquires the rule above with it, and applies the re
 serial Iteration exactly as to a Lane. Cross-language routing is deferred, not discharged; this
 paragraph is the deferral.
 
-`model-roster.json` MUST carry a **`cli_version`** stamp naming the Copilot CLI its content was
-captured against. Reasoning-effort capability is not vendor data: `models.list` discards CAPI's
+`model-roster.json` MUST carry a **`cli_version`** stamp naming the Copilot CLI used to capture
+its refreshed, observed capability rows. Reasoning-effort capability is not vendor data:
+`models.list` discards CAPI's
 advertised array and substitutes a table hardcoded in the CLI bundle, so the roster is a function
 of **CLI version** ([ADR-0019](adr/0019-roster-derived-from-the-pinned-harness.md)) and an
 unstamped roster cannot distinguish a correction from a defect. The stamp is a statement about the
 fixture, not about the harness an Orchestrator spawns: where the two differ the divergence is
 reportable, and reconciling them is a pinned-harness bump plus a regeneration, made as one change.
+
+The SDK 1.0.14 migration records one explicit compatibility exception in ADR-0019:
+seven preexisting effort rows absent from the upgrade account's listing keep their previous
+values. They are identified in the Runner README and are not claims of verification against
+the stamped CLI or of account availability. The exception does not admit new, unobserved
+effort sets: Gemini 3.8 stays on the unknown-model warning-and-pass-through path. The stamp
+therefore identifies the observed refresh, not the provenance of those retained rows.
 
 The same stamp governs `context_tiers`, the **context tier** capability
 ([ADR-0017](adr/0017-context-tier-and-live-context-gauge.md)) that shares the roster rather than
