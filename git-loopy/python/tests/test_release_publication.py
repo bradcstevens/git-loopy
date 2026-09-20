@@ -672,6 +672,38 @@ def test_a_release_the_host_stored_differently_is_never_reported_published(
         )
 
 
+def test_a_public_tag_deleted_before_the_readback_is_never_reported_published(
+    proved: Proved, tmp_path: Path
+) -> None:
+    """The final confirmation is a proof obligation, not a formality.
+
+    A tag can stop being public between the push that made it public and the
+    readback that proves it — a mistaken `git push --delete` racing a Promotion
+    is enough. Publication has then created a Release over a tag nobody can
+    fetch, which is exactly the unprovable outcome it must refuse rather than
+    report, and it still may not retag to tidy up after itself.
+    """
+    remote, checkout = _remote_checkout(proved, tmp_path)
+
+    class DeletesTheTagOnCreate(FakeReleaseService):
+        def create(self, **published: object) -> None:
+            remote_git(remote, "update-ref", "-d", f"refs/tags/{TAG}")
+            super().create(**published)  # type: ignore[arg-type]
+
+    service = DeletesTheTagOnCreate()
+
+    with pytest.raises(ReleasePublicationError, match="no longer carries"):
+        publish_release(
+            proved.publication_input,
+            repository_root=checkout,
+            candidate_workspace=proved.workspace,
+            release_service=service,
+        )
+
+    assert len(service.create_calls) == 1
+    assert f"refs/tags/{TAG}" not in _remote_refs(remote)
+
+
 def test_a_publication_that_is_not_source_only_is_refused(
     proved: Proved, tmp_path: Path
 ) -> None:
@@ -1273,11 +1305,13 @@ def test_the_production_release_host_satisfies_the_publication_seam() -> None:
 class ScriptedGh:
     """A real `gh` on PATH whose answers are scripted per call.
 
-    The doubles above stop at the :class:`ReleaseService` Protocol, which leaves
-    the production adapter's own reading of `gh` — exit codes, stderr phrasing,
-    JSON shape — untested against a publication. This drives the whole of
-    ``publish_release`` through that adapter instead, so an external-service
-    failure lands where the real one would: as a process that exited badly.
+    :class:`GhPublicationHost` above covers far more *states*, but it reaches
+    them by replacing :func:`subprocess.run`, so the one thing it cannot check
+    is the process boundary itself: that the adapter really spawns `gh`, really
+    marshals those arguments, and really reads that exit code and stderr. This
+    leaves :func:`subprocess.run` alone and puts an executable on ``PATH``
+    instead, so a scripted external-service failure arrives the way the real one
+    does — as a process that exited badly.
     """
 
     directory: Path

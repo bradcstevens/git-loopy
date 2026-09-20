@@ -538,7 +538,13 @@ def _confirm_published_snapshot(
     different claims, and only the second one is worth reporting.
     """
     tag = publication_input.tag
-    _reconcile_remote_tag(repository_root, remote, publication_input)
+    if _reconcile_remote_tag(repository_root, remote, publication_input) is None:
+        raise ReleasePublicationError(
+            f"{remote} no longer carries the public tag {tag}, so nothing here "
+            "can prove it publishes the snapshot this input verified. The "
+            "Release is left as it is: retry this same publication input once "
+            f"{tag} is public again, and never retag around it"
+        )
 
     readback = f"{PUBLICATION_NAMESPACE}/readback/{tag}"
     _git_text(
