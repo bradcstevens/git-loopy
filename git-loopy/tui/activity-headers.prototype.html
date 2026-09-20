@@ -1,0 +1,88 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Throwaway: Activity facts at 80 columns</title>
+<style>
+body { margin: 3rem auto; max-width: 65rem; font: 16px system-ui; color: #182d38; background: #f5f4ee }
+button { padding: .6rem; margin: .3rem; cursor: pointer }
+pre { padding: 1rem; background: #182d38; color: #eef5f4; overflow: auto }
+.selected { border: 2px solid #17786b }
+</style>
+<h1>THROWAWAY: an Agent's facts survive Collapse</h1>
+<p>Question: can the full Routed pair, Task type, Context fill and Subagent count
+remain attributable at 80 columns without borrowing the Queue's space?
+Compare a single header with wrapping fact rows. Collapse keeps only the issue
+and its pair; a Lane refill must replace, not inherit, its predecessor's facts.</p>
+<div id="variants"></div>
+<div id="actions"></div>
+<pre id="screen"></pre>
+<h2>Current facts (not inferred)</h2><pre id="facts"></pre>
+<h2>Guided walkthroughs</h2><div id="walkthroughs"></div>
+<p id="explanation"></p>
+<script>
+const initial = () => ({
+  collapsed: false, variant: "wrapped", active: 605,
+  agents: [
+    {slot: "lane-1", issue: 605, type: "implementation", model: "claude-opus-4.8", effort: "max", context: "[#####-----] 50% long_context", subagents: "-"},
+    {slot: "lane-2", issue: 606, type: "docs", model: "gpt-5-mini", effort: "medium", context: "-", subagents: "-"}
+  ]
+});
+function reduce(state, action) {
+  if (action === "reset") return initial();
+  if (action === "collapse") return {...state, collapsed: !state.collapsed};
+  if (action === "refill") return {...state, active: 607, agents: [
+    {slot: "lane-1", issue: 607, type: "unlabelled", model: "gpt-5.6-sol", effort: "high", context: "-", subagents: "-"},
+    state.agents[1]
+  ]};
+  return {...state, variant: action};
+}
+function project(state) {
+  if (state.collapsed) {
+    const agent = state.agents.find(a => a.issue === state.active);
+    return [`Activity #${agent.issue} ${agent.model} @ ${agent.effort}`];
+  }
+  const lines = ["Activity"];
+  for (const a of state.agents) {
+    const segments = [`${a.slot} #${a.issue}`, a.type, `${a.model} @ ${a.effort}`, `ctx ${a.context}`, `sub ${a.subagents}`];
+    let line = "";
+    for (const segment of segments) {
+      if (state.variant === "wrapped" && line.length + segment.length + 3 > 78) {
+        lines.push(line); line = segment;
+      } else line += (line ? " | " : "") + segment;
+    }
+    lines.push(line, "  ...this Agent's own Log...");
+  }
+  return lines;
+}
+let state = initial();
+function render() {
+  const lines = project(state);
+  document.querySelector("#screen").textContent =
+    "1234567890".repeat(8) + "\n" + lines.map(l => l + (l.length > 80 ? " <-- overflow" : "")).join("\n");
+  document.querySelector("#facts").textContent = JSON.stringify(state, null, 2);
+}
+function button(label, action, target) {
+  const b = document.createElement("button"); b.textContent = label;
+  b.onclick = () => { state = reduce(state, action); render(); };
+  document.querySelector(target).append(b);
+}
+button("Single-line header", "single", "#variants");
+button("Wrap facts before sacrificing a value", "wrapped", "#variants");
+button("Collapse / restore", "collapse", "#actions");
+button("Refill Lane 1", "refill", "#actions");
+button("Reset", "reset", "#actions");
+for (const [name, actions, note] of [
+  ["80-column facts", ["reset", "single", "wrapped"], "The longest pair and non-default tier overflow one line. Wrapping keeps every fact."],
+  ["Collapse and refill", ["reset", "collapse", "refill", "collapse"], "The pair remains visible when Collapsed; refill resets context and preserves the sibling's facts."]
+]) {
+  const b = document.createElement("button"); b.textContent = name;
+  b.onclick = () => {
+    state = initial(); render();
+    document.querySelector("#explanation").textContent = note;
+    const steps = document.querySelector("#steps"); steps.replaceChildren();
+    actions.forEach((a, i) => button(`${i + 1}. ${a}`, a, "#steps"));
+  };
+  document.querySelector("#walkthroughs").append(b);
+}
+document.querySelector("#walkthroughs").append(Object.assign(document.createElement("div"), {id: "steps"}));
+render();
+</script>
