@@ -5783,6 +5783,8 @@ def test_a_delayed_preparation_cannot_hold_the_next_static_pickup(
             except TimeoutError:
                 timed_out = True
                 raise
+            except asyncio.CancelledError:
+                raise dynamic_route.RoutingCallCancelled(Decimal("0.30")) from None
         return _elects("claude-opus-5")(request)
 
     async def work(session, prompt, **kwargs):
@@ -5805,7 +5807,7 @@ def test_a_delayed_preparation_cannot_hold_the_next_static_pickup(
         close_after_send=42,
         max_iterations=2,
         routing={"docs": ("gpt-5.6-terra", "low")},
-        routing_credit_allowance=Decimal("5"),
+        routing_credit_allowance=Decimal("0.50"),
     )
 
     assert exit_code == 0
@@ -5814,6 +5816,10 @@ def test_a_delayed_preparation_cannot_hold_the_next_static_pickup(
     assert [call["model"] for call in fake_client.create_calls] == [
         "claude-opus-5", "gpt-5.6-terra"
     ]
+    interrupted = next(record for record in _prepared_records(tmp_path) if record["issue"] == 44)
+    assert interrupted["state"] == "unavailable"
+    assert interrupted["routing_credits"] == "0.55"
+    assert interrupted["routing_overshot"] is True
 
 
 def test_a_blocked_candidate_is_left_pending_without_being_assessed(
@@ -5871,7 +5877,7 @@ def test_queued_eligibility_is_reread_before_any_preparation_spend(
         item = tracker.issue_view(44)
         changes = {
             "blocked": {"blocked_by": BlockedByRead(
-                total_count=1, nodes=(BlockerNode(ref="x/y#99", state="OPEN"),)
+                total_count=1, nodes=(BlockerNode(ref="x/y#99", state="open"),)
             )},
             "unreadable": {"blocked_by": BlockedByRead.unprovable()},
             "closed": {"state": "CLOSED"},
@@ -5920,6 +5926,7 @@ def test_a_static_route_is_prepared_without_asking_the_selector(
             _make_issue(43, labels=["ready-for-agent", "task-type:docs"]),
         ],
         routing={"docs": ("gpt-5.6-terra", "low")},
+        wait_for_prepared=(43,),
         routing_credit_allowance=Decimal("5"),
     )
 
