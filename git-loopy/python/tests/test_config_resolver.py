@@ -839,14 +839,16 @@ def test_resolve_malformed_routing_raises_loudly() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("model", ["claude-opus-5", "gemini-3.6-flash"])
+@pytest.mark.parametrize(
+    "model", ["claude-opus-5", "gemini-3.6-flash", "gpt-6-astra", "gemini-3.8-flash"]
+)
 def test_resolve_live_catalog_models_are_on_the_roster(model: str) -> None:
     """Models live in the Copilot catalog must not trip the off-roster advisory.
 
     A hand-maintained mirror of an external catalog can only be pinned against
     hard-coded ids: an assertion derived from
     :data:`~git_loopy.config.SUPPORTED_MODELS` is self-referential and stays
-    green while the roster drifts. Both ids shipped in the Copilot catalog
+    green while the roster drifts. These ids shipped in the Copilot catalog
     *after* the roster was last synced, so a config naming them warned on every
     startup even though the run itself worked.
     """
@@ -861,6 +863,31 @@ def test_resolve_live_catalog_models_are_on_the_roster(model: str) -> None:
         warn=warnings.append,
     )
     assert not any(model in w for w in warnings)
+
+
+@pytest.mark.parametrize("scope", ["project", "global_"])
+def test_resolve_current_model_routing_without_startup_warnings(scope: str) -> None:
+    warnings: list[str] = []
+    run = _resolve(
+        **{
+            scope: {
+                "model": "gpt-6-astra",
+                "reasoning_effort": "high",
+                "routing": {
+                    "planning": {"model": "gpt-6-astra", "effort": "max"},
+                    "implementation": {"model": "gemini-3.8-flash", "effort": "high"},
+                },
+            }
+        },
+        warn=warnings.append,
+    ).run
+
+    assert (run.model, run.reasoning_effort) == ("gpt-6-astra", "high")
+    assert dict(run.routing) == {
+        "planning": ("gpt-6-astra", "max"),
+        "implementation": ("gemini-3.8-flash", "high"),
+    }
+    assert warnings == []
 
 
 

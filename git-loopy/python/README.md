@@ -87,6 +87,22 @@ a fallback. The other prerequisites (`gh` signed in, `git`, `copilot`) are liste
 The bootstrap is per-clone; subsequent invocations of `git-loopy` use
 the cached environment under `git-loopy/python/.venv/`.
 
+The Runner pins `github-copilot-sdk==1.0.14`, which downloads and runs Copilot
+CLI `1.0.85` by default. Updating the separate `copilot` command on `PATH`
+does not update that harness. The compatibility roster recognizes
+`gpt-6-astra` (including `max` reasoning) and retains `gemini-3.8-flash`
+(`low`, `medium`, `high`) and older entries. Roster membership does not
+guarantee account availability: the pinned-harness listing verified Astra,
+but did not offer Gemini 3.8 on the account used for this upgrade.
+Unknown model IDs still warn and pass through unchanged.
+
+SDK upgrades must move the pin, lockfile, and roster CLI-version stamp
+together. Offline tests check that stamp and the installed SDK's client,
+session, permission, event, and Skill-discovery interfaces. SDK-provided
+Skills normalize to the existing `custom` source kind; a pathless provider
+Skill still cannot enter a Run's isolated Skill exposure unless the
+installed catalog supplies a filesystem-backed winner of the same name.
+
 ---
 
 ## Install (run from anywhere)

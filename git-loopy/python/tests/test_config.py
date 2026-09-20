@@ -183,12 +183,14 @@ def test_supported_models_matrix_matches_current_copilot_catalog() -> None:
         "claude-opus-4.8": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-4.7": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
+        "gpt-6-astra": frozenset({"low", "medium", "high", "xhigh", "max"}),
         "gpt-5.5": frozenset({"none", "low", "medium", "high", "xhigh"}),
         "gpt-5.4": frozenset({"none", "low", "medium", "high", "xhigh"}),
         "gpt-5.3-codex": frozenset({"low", "medium", "high", "xhigh"}),
         "gpt-5.4-mini": frozenset({"none", "low", "medium", "high", "xhigh"}),
         "gpt-5-mini": frozenset({"low", "medium", "high"}),
         "gemini-3.1-pro-preview": frozenset({"low", "medium", "high"}),
+        "gemini-3.8-flash": frozenset({"low", "medium", "high"}),
         "gemini-3.6-flash": frozenset({"minimal", "low", "medium", "high"}),
         "gemini-3.5-flash": frozenset({"minimal", "low", "medium", "high"}),
         "gpt-5.6-luna": frozenset(
@@ -336,35 +338,43 @@ def _tracked_project_config() -> dict[str, object]:
     pytest.skip("tracked project Config not found (installed-wheel run)")
 
 
-def test_the_tracked_project_config_states_the_same_default_as_the_builtin() -> None:
-    """One run-wide default, not three (#401).
-
-    The pair lived at three different values — ``claude-opus-5 @ high`` here,
-    ``claude-opus-4.8 @ max`` in the built-in constant, and a third in the
-    Wrapper contract's statement of it. Divergence between a tracked Config and
-    the constant it overrides is silent by construction: the Config simply wins,
-    and nobody learns the kit disagrees.
-    """
+def test_the_tracked_project_config_preserves_its_default_override() -> None:
+    """Project choices override, rather than redefine, the kit's defaults."""
     from git_loopy import cli
 
-    tracked = _tracked_project_config()
-    assert tracked["model"] == cli._DEFAULT_MODEL
-    assert tracked["reasoning_effort"] == cli._DEFAULT_REASONING_EFFORT
+    warnings: list[str] = []
+    run = cli.resolve_config(
+        cli.build_parser().parse_args([]),
+        {},
+        project=_tracked_project_config(),
+        global_={},
+        warn=warnings.append,
+    ).run
+
+    assert (run.model, run.reasoning_effort) == ("gpt-6-astra", "high")
+    assert warnings == []
 
 
-def test_the_tracked_project_config_carries_the_locked_routing_table() -> None:
-    """The flagship consumer of routing routes (#401).
+def test_the_tracked_project_config_preserves_all_task_type_routes() -> None:
+    """The project's explicit routes survive resolution without roster warnings."""
+    from git_loopy import cli
 
-    With no ``[routing]`` table every issue in this repository resolves through
-    the early return in ``resolve_iteration_model``, which never inspects a
-    label — so the repository that owns the feature was the one repository
-    proving it inert.
-    """
-    from git_loopy.config import RECOMMENDED_ROUTING
+    warnings: list[str] = []
+    run = cli.resolve_config(
+        cli.build_parser().parse_args([]),
+        {},
+        project=_tracked_project_config(),
+        global_={},
+        warn=warnings.append,
+    ).run
 
-    tracked = _tracked_project_config()
-    routing = tracked["routing"]
-    assert isinstance(routing, dict)
-    assert {
-        key: (entry["model"], entry["effort"]) for key, entry in routing.items()
-    } == dict(RECOMMENDED_ROUTING)
+    assert dict(run.routing) == {
+        "planning": ("gpt-6-astra", "max"),
+        "review": ("claude-opus-5", "max"),
+        "implementation": ("gemini-3.8-flash", "high"),
+        "test": ("claude-sonnet-5", "high"),
+        "docs": ("gpt-5.6-luna", "low"),
+        "chore": ("gpt-5.6-luna", "low"),
+        "bugfix": ("claude-opus-5", "xhigh"),
+    }
+    assert warnings == []

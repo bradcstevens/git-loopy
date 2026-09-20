@@ -210,6 +210,30 @@ def test_main_recognises_gpt_5_6_sol_and_every_advertised_effort(
     assert "not in the kit's supported model set" not in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    ("model", "effort"),
+    [
+        ("gpt-6-astra", effort)
+        for effort in ("low", "medium", "high", "xhigh", "max")
+    ]
+    + [("gemini-3.8-flash", effort) for effort in ("low", "medium", "high")],
+)
+def test_main_recognises_current_models_and_preserves_effort(
+    model: str,
+    effort: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: list[RunConfig] = []
+    _install_fake_runner(monkeypatch, captured, tmp_path)
+
+    assert cli_module.main(["--model", model, "--reasoning-effort", effort]) == 0
+
+    assert (captured[0].model, captured[0].reasoning_effort) == (model, effort)
+    assert f"warning: model {model!r}" not in capsys.readouterr().err
+
+
 def test_main_unknown_model_passes_through_with_warning(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

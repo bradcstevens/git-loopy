@@ -98,12 +98,14 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
     "claude-opus-4.8": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-opus-4.7": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "claude-opus-4.6": frozenset({"low", "medium", "high", "max"}),
+    "gpt-6-astra": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "gpt-5.5": frozenset({"none", "low", "medium", "high", "xhigh"}),
     "gpt-5.4": frozenset({"none", "low", "medium", "high", "xhigh"}),
     "gpt-5.3-codex": frozenset({"low", "medium", "high", "xhigh"}),
     "gpt-5.4-mini": frozenset({"none", "low", "medium", "high", "xhigh"}),
     "gpt-5-mini": frozenset({"low", "medium", "high"}),
     "gemini-3.1-pro-preview": frozenset({"low", "medium", "high"}),
+    "gemini-3.8-flash": frozenset({"low", "medium", "high"}),
     "gemini-3.6-flash": frozenset({"minimal", "low", "medium", "high"}),
     "gemini-3.5-flash": frozenset({"minimal", "low", "medium", "high"}),
     "gpt-5.6-luna": frozenset(
@@ -130,7 +132,7 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
 #: differs from the CLI the SDK actually spawns, every gate verdict in the Run
 #: was reached against a description of some *other* binary, and the divergence
 #: is what the **Run readback** reports at Run start.
-MODEL_ROSTER_CLI_VERSION = "1.0.75"
+MODEL_ROSTER_CLI_VERSION = "1.0.85"
 
 #: The model ids the kit officially supports (the keys of
 #: :data:`MODEL_REASONING_EFFORTS`). :mod:`git_loopy.cli` uses this to

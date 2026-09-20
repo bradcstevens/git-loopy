@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from copilot.generated.rpc import Skill, SkillSource
 
 from git_loopy.skill_catalog import (
     SdkSkillSurfaceError,
@@ -116,6 +117,28 @@ def test_pinned_sdk_skill_surface_guard_rejects_source_enum_drift() -> None:
 
 def test_pinned_sdk_skill_surface_guard_accepts_locked_sdk() -> None:
     validate_sdk_skill_surface()
+
+
+def test_catalog_normalizes_pathless_sdk_skills_as_custom(tmp_path: Path) -> None:
+    catalog = build_skill_catalog(
+        [
+            Skill(
+                name="provider-skill",
+                description="Supplied by an SDK provider",
+                source=SkillSource.SDK,
+                enabled=True,
+                user_invocable=False,
+            )
+        ],
+        repo_root=tmp_path,
+        installed_skills_dir=tmp_path / "installed",
+    )
+
+    winner = catalog.winners["provider-skill"]
+    assert winner.source_kind == "custom"
+    assert winner.path is None
+    assert winner.copilot_enabled is True
+    assert winner.user_invocable is False
 
 
 def test_pinned_sdk_skill_surface_guard_rejects_missing_disabled_option() -> None:
