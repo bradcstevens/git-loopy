@@ -1864,13 +1864,18 @@ class LiveRunState:
             entry.ending = ending if isinstance(ending, str) else None
             if entry.status != STATUS_ADVANCED:
                 entry.commits = None
+            elif is_lane:
+                lane_commits = self._lane_commits.get(key)
+                entry.commits = lane_commits if lane_commits and lane_commits > 0 else None
             elif not is_lane:
                 summary = event.get("summary")
-                entry.commits = (
-                    _optional_nonnegative_int(summary.get("commits"))
-                    if isinstance(summary, Mapping)
-                    else None
-                )
+                if entry.commits is None and isinstance(summary, Mapping):
+                    summary_commits = _optional_nonnegative_int(summary.get("commits"))
+                    entry.commits = (
+                        summary_commits
+                        if summary_commits is not None and summary_commits > 0
+                        else None
+                    )
             entry.active_duration = max(
                 0.0,
                 _coerce_float(

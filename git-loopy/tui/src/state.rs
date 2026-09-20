@@ -1055,7 +1055,7 @@ impl DashboardState {
             entry.ending = row.ending.clone();
             if entry.status != STATUS_ADVANCED {
                 entry.commits = None;
-            } else if !is_lane {
+            } else if !is_lane && entry.commits.is_none() {
                 entry.commits = rollup
                     .summary
                     .as_ref()
