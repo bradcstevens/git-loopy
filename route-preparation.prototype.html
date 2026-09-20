@@ -1,0 +1,91 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Throwaway: Routing preparation and Pickup</title>
+<style>
+body {font: 17px system-ui; max-width: 850px; margin: 3rem auto; color: #233}
+button {padding: .6rem; margin: .3rem; cursor: pointer}
+article {border-left: 4px solid teal; padding: 1rem; margin: 1rem 0}
+</style>
+<h1>THROWAWAY: Preparation must not delay Pickup</h1>
+<p>Can a Run preserve a completed proposal and advance the next Pickup while an
+unrelated assessment is still waiting? Preparation takes no Lease. Pickup cancels
+unrelated in-flight preparation, joins only its own, and revalidates before binding.</p>
+<section id="state"></section>
+<h2>Free play</h2>
+<nav id="actions"></nav>
+<h2>Guided walkthroughs</h2>
+<nav id="tabs"></nav>
+<article id="scenario"></article>
+<script>
+const initial = () => ({active: 42, next: 43, inputsChanged: false,
+  proposals: {43: "pending", 44: "pending"}, final: {}, note: "Only #42 owns work."});
+function transition(state, action) {
+  const s = structuredClone(state);
+  if (action === "prepare") {
+    s.proposals[43] = "proposed"; s.proposals[44] = "assessing";
+    s.note = "#43 is prepared. #44 is slow. Neither owns work.";
+  }
+  if (action === "change") {s.inputsChanged = true; s.note = "#43 inputs changed.";}
+  if (action === "pickup") {
+    if (s.proposals[44] === "assessing") s.proposals[44] = "cancelled";
+    s.active = null;
+    s.proposals[43] = s.inputsChanged ? "needs new selection" : "needs fresh checks";
+    s.note = "Pickup does not wait for #44. No binding exists yet.";
+  }
+  if (action === "validate") {
+    s.note = s.inputsChanged ? "Selection required within remaining limits." :
+      "Fresh checks match. #43 binds without another selector call.";
+    if (!s.inputsChanged) {s.active = 43; s.final[43] = "verified route";}
+  }
+  if (action === "exhaust") {
+    s.active = null; s.proposals[43] = "unavailable";
+    s.note = "No new selection admitted. No stale route or empty-Pool claim.";
+  }
+  if (action === "stop") {
+    Object.keys(s.proposals).forEach(k => {
+      if (s.proposals[k] === "assessing") s.proposals[k] = "cancelled";
+    });
+    s.note = "Preparation stops before Run end. Running work is not rerouted.";
+  }
+  return s;
+}
+const actions = {prepare: "Prepare eligible Pool", change: "Change queued inputs",
+  pickup: "Next Pickup", validate: "Check current inputs", exhaust: "Exhaust allowance",
+  stop: "Stop Run"};
+const scenarios = [
+  ["Slow tail", ["prepare", "pickup", "validate"]],
+  ["Changed inputs", ["prepare", "change", "pickup", "validate", "exhaust"]],
+  ["Cancellation", ["prepare", "stop"]]
+];
+let state = initial();
+function draw() {
+  document.querySelector("#state").replaceChildren();
+  const fields = [["Active issue", state.active ?? "none"],
+    ["Final bindings", Object.keys(state.final).join(", ") || "none"],
+    ...Object.entries(state.proposals).map(([ref, value]) => ["Proposal #" + ref, value]),
+    ["What changed", state.note]];
+  for (const [label, value] of fields) {
+    const row = document.createElement("p"); row.textContent = label + ": " + value;
+    document.querySelector("#state").append(row);
+  }
+}
+function button(label, run, parent) {
+  const b = document.createElement("button"); b.textContent = label;
+  b.onclick = run; parent.append(b); return b;
+}
+for (const [action, label] of Object.entries(actions))
+  button(label, () => {state = transition(state, action); draw();}, document.querySelector("#actions"));
+for (const [name, steps] of scenarios)
+  button(name, () => {
+    state = initial(); draw();
+    const panel = document.querySelector("#scenario"); panel.replaceChildren();
+    let current = 0;
+    const buttons = steps.map((action, index) => button(actions[action], () => {
+      if (index !== current) return;
+      state = transition(state, action); draw(); current++;
+      buttons.forEach((b, i) => b.disabled = i !== current);
+    }, panel));
+    buttons.forEach((b, i) => b.disabled = i !== 0);
+  }, document.querySelector("#tabs"));
+draw();
+</script>
