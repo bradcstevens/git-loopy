@@ -87,7 +87,8 @@ TASK_TYPE_LABEL_PREFIX = "task-type:"
 #: table are treated as "unknown": the CLI warns and passes them through
 #: unchanged (the Copilot CLI is the final authority on model validity).
 #:
-#: Keep this in lockstep with the Copilot CLI's ``models.list`` output.
+#: Refresh observed rows from the SDK-pinned CLI's ``models.list`` output.
+#: Compatibility rows retained for saved Config are not account-availability claims.
 MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
     "auto": frozenset(),
     "claude-sonnet-5": frozenset({"low", "medium", "high", "xhigh", "max"}),
@@ -114,17 +115,24 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
     "gpt-5.6-sol": frozenset(
         {"none", "low", "medium", "high", "xhigh", "max"}
     ),
+    "gpt-5.6-sol-fast": frozenset(
+        {"none", "low", "medium", "high", "xhigh", "max"}
+    ),
     "gpt-5.6-terra": frozenset(
         {"none", "low", "medium", "high", "xhigh", "max"}
     ),
+    "grok-4.5": frozenset({"low", "medium", "high"}),
+    "grok-4.6": frozenset({"low", "medium", "high", "xhigh"}),
+    "mai-code-1.1-flash": frozenset({"low", "medium", "high"}),
     "mai-code-1-flash-picker": frozenset({"low", "medium", "high"}),
 }
 
-#: The Copilot CLI version :data:`MODEL_REASONING_EFFORTS` and
-#: :data:`MODEL_CONTEXT_TIERS` were captured against — the stamp
+#: The Copilot CLI version used to refresh the observed rows in
+#: :data:`MODEL_REASONING_EFFORTS` — the stamp
 #: ``conformance/model-roster.json`` already carries, restated in-language so a
 #: **Run** can read it without reaching for a fixture that is not packaged
-#: (#410). The Conformance suite holds the two in lockstep.
+#: (#410). The Conformance suite holds the two in lockstep. Account-unlisted
+#: compatibility rows retain their earlier values; context tiers remain unpopulated.
 #:
 #: The roster is a **function of CLI version** (ADR-0019): ``models.list``
 #: discards the vendor's advertised reasoning-effort array and substitutes a

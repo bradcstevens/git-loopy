@@ -1491,7 +1491,7 @@ packaged default). The seam lives in `git_loopy.loop._read_prompt`.
 ## Supported models
 
 `GIT_LOOPY_MODEL` accepts any id the Copilot CLI exposes, but the runner ships a
-capability matrix (`git-loopy/config.py` → `MODEL_REASONING_EFFORTS`)
+capability matrix (`git_loopy/config.py` → `MODEL_REASONING_EFFORTS`)
 that gates `GIT_LOOPY_REASONING_EFFORT` per model. A model not in this table is
 **warned** about once and passed through unchanged (the CLI is the final
 authority). A model with an empty effort set is sent **no** reasoning
@@ -1513,20 +1513,33 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `claude-opus-4.8`             | `low` `medium` `high` `xhigh` `max`      |
 | `claude-opus-4.7`             | `low` `medium` `high` `xhigh` `max`      |
 | `claude-opus-4.6`             | `low` `medium` `high` `max`              |
+| `gpt-6-astra`                 | `low` `medium` `high` `xhigh` `max`      |
 | `gpt-5.5`                     | `none` `low` `medium` `high` `xhigh`     |
 | `gpt-5.4`                     | `none` `low` `medium` `high` `xhigh`     |
 | `gpt-5.3-codex`               | `low` `medium` `high` `xhigh`            |
 | `gpt-5.4-mini`                | `none` `low` `medium` `high` `xhigh`     |
 | `gpt-5-mini`                  | `low` `medium` `high`                    |
 | `gemini-3.1-pro-preview`      | `low` `medium` `high`                    |
+| `gemini-3.8-flash`            | `low` `medium` `high`                    |
 | `gemini-3.6-flash`            | `minimal` `low` `medium` `high`          |
 | `gemini-3.5-flash`            | `minimal` `low` `medium` `high`          |
 | `gpt-5.6-luna`                | `none` `low` `medium` `high` `xhigh` `max` |
 | `gpt-5.6-sol`                 | `none` `low` `medium` `high` `xhigh` `max` |
+| `gpt-5.6-sol-fast`            | `none` `low` `medium` `high` `xhigh` `max` |
 | `gpt-5.6-terra`               | `none` `low` `medium` `high` `xhigh` `max` |
+| `grok-4.5`                    | `low` `medium` `high`                    |
+| `grok-4.6`                    | `low` `medium` `high` `xhigh`            |
+| `mai-code-1.1-flash`          | `low` `medium` `high`                    |
 | `mai-code-1-flash-picker`     | `low` `medium` `high`                    |
 
-This snapshot follows the current Copilot catalog. The retired
+This fallback covers all 19 models returned by the SDK-pinned CLI `1.0.85`
+on the upgrade account, plus eight retained compatibility entries:
+`claude-sonnet-4.6`, `claude-sonnet-4.5`, `claude-opus-4.6`, all four Gemini
+rows, and `mai-code-1-flash-picker`. Those eight were not offered by that
+account; their retained efforts are not a claim of current availability.
+Live Harness capabilities remain authoritative for the Run.
+
+The retired
 `claude-opus-4.5` id and the renamed `mai-code-1-flash-internal` id are not
 official choices; persisted legacy ids still use the unknown-model
 warn-and-pass-through path so the Copilot CLI remains the final authority.

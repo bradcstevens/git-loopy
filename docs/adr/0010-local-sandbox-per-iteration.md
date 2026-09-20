@@ -75,7 +75,7 @@ shell for the SDK's per-tool `sandboxed` flag plus *actual* write containment (t
 attempts a write to `$HOME`, which a working sandbox must block, while a write inside the
 working directory and outbound `curl` must succeed). It was run against **both** the
 originally-pinned stack (`github-copilot-sdk 1.0.2`, bundled CLI **1.0.68**) and the
-current pin (`github-copilot-sdk 1.0.5`, which auto-downloads CLI **1.0.67** to
+then-current pin (`github-copilot-sdk 1.0.5`, which auto-downloads CLI **1.0.67** to
 `~/Library/Caches/github-copilot-sdk/cli/`) — **identical result on both**. **Every
 available lever failed to sandbox the headless session:**
 
@@ -87,9 +87,12 @@ available lever failed to sandbox the headless session:**
 - All of the above combined ("kitchen sink") — `sandboxed` never `true`, the `$HOME`
   write succeeded, and no sandbox lifecycle events were emitted.
 
-Corroborating findings:
+These are historical results, not a sandbox claim about SDK 1.0.14 / CLI 1.0.85
+(upgraded in [#594](https://github.com/bradcstevens/git-loopy/issues/594)).
 
-- No Python SDK through the latest stable **1.0.5** (nor `1.0.6rc0`) exposes a native
+Corroborating findings at the time of the spike:
+
+- No Python SDK through the then-latest stable **1.0.5** (nor `1.0.6rc0`) exposes a native
   `sandbox` kwarg on `create_session`; the RPC types (`SandboxConfig`,
   `ToolExecutionCompleteData.sandboxed`) are forward-declared only.
 - CLI **1.0.67** (SDK-pinned) / **1.0.68** (latest published) expose **no** sandbox CLI

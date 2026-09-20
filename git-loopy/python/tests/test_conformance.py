@@ -2839,12 +2839,12 @@ def test_the_in_language_roster_stamp_tracks_the_fixture_it_restates() -> None:
     assert config_module.MODEL_ROSTER_CLI_VERSION == _MODEL_ROSTER["cli_version"]
 
 
-def test_the_roster_stamp_is_a_version_the_gemini_rows_actually_agree_with() -> None:
-    """The stamp is checkable against the fixture's own content, not decorative.
+def test_the_roster_preserves_compatibility_efforts_alongside_pinned_models() -> None:
+    """A pinned-harness refresh does not erase saved Config's compatibility rows.
 
     ADR-0019 recorded that CLI ``1.0.67`` lacked the later Gemini capabilities.
-    Keep the existing entries while recognizing the models used by current
-    Config: Astra's ceiling and Gemini 3.8's reasoning-capable pair.
+    CLI ``1.0.85`` verified Astra's ceiling. The upgrade account did not list
+    Gemini, so those rows are retained compatibility data, not a live capture.
     """
     roster = _MODEL_ROSTER["roster"]
     assert "minimal" in roster["gemini-3.5-flash"]

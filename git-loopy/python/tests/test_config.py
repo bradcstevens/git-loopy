@@ -165,8 +165,8 @@ def test_run_config_routing_copies_input_not_aliased() -> None:
     assert cfg.routing["planning"] == ("claude-opus-4.8", "max")
 
 
-def test_supported_models_matrix_matches_current_copilot_catalog() -> None:
-    """The static fallback exactly mirrors the current Copilot catalog."""
+def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -> None:
+    """Pin CLI 1.0.85's observed capabilities without dropping compatibility IDs."""
     from git_loopy.config import (
         MODEL_REASONING_EFFORTS,
         REASONING_EFFORTS,
@@ -199,9 +199,15 @@ def test_supported_models_matrix_matches_current_copilot_catalog() -> None:
         "gpt-5.6-sol": frozenset(
             {"none", "low", "medium", "high", "xhigh", "max"}
         ),
+        "gpt-5.6-sol-fast": frozenset(
+            {"none", "low", "medium", "high", "xhigh", "max"}
+        ),
         "gpt-5.6-terra": frozenset(
             {"none", "low", "medium", "high", "xhigh", "max"}
         ),
+        "grok-4.5": frozenset({"low", "medium", "high"}),
+        "grok-4.6": frozenset({"low", "medium", "high", "xhigh"}),
+        "mai-code-1.1-flash": frozenset({"low", "medium", "high"}),
         "mai-code-1-flash-picker": frozenset({"low", "medium", "high"}),
     }
 
