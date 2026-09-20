@@ -633,7 +633,11 @@ def _push_proved_tag(
     response is never what decides that: a failure is not proof the tag is
     absent, and an acknowledgement is not proof it is present. Both are claims
     made at this end of the wire about something only the remote knows, so the
-    remote is asked either way, before a Release is created against it.
+    remote is asked either way, before a Release is created against it — and
+    the answer, not the exit code, is what gets reported. A tag the remote
+    carries as *another* object is another publisher's, so this run did not
+    create it; one it carries as the object pushed here is this run's, however
+    the push's own response ended up.
     """
     _require_the_trunk_carries(
         repository_root, remote, trunk_ref, publication_input
@@ -655,7 +659,6 @@ def _push_proved_tag(
             f"{publication_input.tag}, but the publication input binds "
             f"{publication_input.tag_object}"
         )
-    push_succeeded = False
     try:
         pushed = _run_git(
             repository_root,
@@ -668,11 +671,11 @@ def _push_proved_tag(
     except ReleasePublicationError as exc:
         failure = str(exc)
     else:
-        push_succeeded = pushed.returncode == 0
         failure = pushed.stderr.strip() or "no diagnostic"
-    if _reconcile_remote_tag(repository_root, remote, publication_input) is None:
+    published = _reconcile_remote_tag(repository_root, remote, publication_input)
+    if published is None:
         raise ReleasePublicationError(
             f"after pushing {publication_input.tag}, the remote does not "
             f"carry it: {failure}. Retry this same publication input"
         )
-    return push_succeeded
+    return published.object_name == parked_object

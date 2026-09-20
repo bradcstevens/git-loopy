@@ -483,6 +483,9 @@ def test_a_timed_out_push_is_resolved_before_creating_the_release(
     if write_lands and readback_available:
         outcome = publish_release(proved.publication_input, **arguments)
         assert outcome.release_created
+        # The response was lost, not the write: the tag this run pushed is the
+        # public one, and a report that says otherwise is reading the exit code.
+        assert outcome.tag_created
     else:
         with pytest.raises(ReleasePublicationError):
             publish_release(proved.publication_input, **arguments)
@@ -523,6 +526,8 @@ def test_a_push_timeout_after_the_write_is_resolved_before_creating_the_release(
     )
 
     assert outcome.release_created
+    assert outcome.tag_created
+    assert not outcome.already_published
     assert len(pushes) == 1
     assert _remote_refs(remote)[f"refs/tags/{TAG}"] == proved.publication_input.tag_object
     assert len(service.create_calls) == 1
