@@ -6,6 +6,7 @@ from operator import itemgetter
 
 from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy.rollup import IterationRollupAccumulator
+from git_loopy.session_outcome import SessionOutcome
 
 
 class _Clock:
@@ -248,6 +249,54 @@ def test_repeated_issue_uses_fallback_baseline_and_cumulative_active_time() -> N
         "cache_read": None,
         "cache_write": None,
     }
+
+
+@pytest.mark.parametrize("ending", list(SessionOutcome))
+def test_rollup_carries_each_session_ending_on_its_own_issue(
+    ending: SessionOutcome,
+) -> None:
+    """An ending stays with the issue attempt that produced it."""
+    rollup = IterationRollupAccumulator(
+        denomination=BilledCreditsDenomination(), monotonic=_Clock()
+    )
+    rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
+    rollup.observe(
+        {
+            "type": "wrapper.issue.activated",
+            "issue": 42,
+            "activated_at": "2026-05-16T00:00:00.000Z",
+            "binding_source": "working_marker",
+        }
+    )
+
+    rollup.record_ending(42, ending)
+
+    issue = rollup.finish(iter_num=1, strikes=0)["issues"][0]
+    assert issue["status"] == "no-progress"
+    assert issue["ending"] == ending.value
+
+
+def test_rollup_omits_an_ending_when_an_issue_advanced() -> None:
+    """Progress has no Session outcome and must not fabricate one."""
+    rollup = IterationRollupAccumulator(
+        denomination=BilledCreditsDenomination(), monotonic=_Clock()
+    )
+    rollup.observe({"type": "wrapper.iteration.start", "iter": 1})
+    rollup.observe(
+        {
+            "type": "wrapper.issue.activated",
+            "issue": 42,
+            "activated_at": "2026-05-16T00:00:00.000Z",
+            "binding_source": "working_marker",
+        }
+    )
+    rollup.observe({"type": "wrapper.commit.recorded"})
+
+    rollup.record_ending(42, None)
+
+    issue = rollup.finish(iter_num=1, strikes=0)["issues"][0]
+    assert issue["status"] == "advanced"
+    assert "ending" not in issue
 
 
 def test_parallel_wave_produces_one_contribution_per_lane() -> None:

@@ -204,6 +204,40 @@ fn the_queue_band_lists_every_issue_in_the_locked_columns() {
 }
 
 #[test]
+fn the_queue_renders_session_endings_inline_with_status() {
+    let view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    let lines = render_lines(&view, 240, 40, TerminalCapabilities::default());
+    let queue = band(&lines, "Queue");
+    let status_by_issue: std::collections::BTreeMap<_, _> = queue[1..]
+        .iter()
+        .map(|row| {
+            let row = cells(row);
+            (row[0].clone(), row[1].clone())
+        })
+        .collect();
+
+    assert_eq!(
+        status_by_issue,
+        std::collections::BTreeMap::from([
+            ("#310".to_string(), "advanced · 1 commit".to_string()),
+            ("#311".to_string(), "no-progress · left nothing".to_string()),
+            ("#312".to_string(), "no-progress · timed out".to_string()),
+            ("#313".to_string(), "advanced · 1 commit".to_string()),
+            ("#314".to_string(), "closed".to_string()),
+            (
+                "#315".to_string(),
+                "no-progress · no work remains".to_string()
+            ),
+            (
+                "#316".to_string(),
+                "no-progress · content filtered".to_string()
+            ),
+            ("#317".to_string(), "no-progress · crashed".to_string()),
+        ])
+    );
+}
+
+#[test]
 fn the_queue_shows_an_explicit_long_context_route_in_full() {
     let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
     let pickup = Event::from_jsonl_line(

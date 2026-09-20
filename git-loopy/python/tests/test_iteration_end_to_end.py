@@ -1461,8 +1461,14 @@ def test_loop_aborts_after_max_nmt_strikes(tmp_path, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_loop_send_and_wait_exception_is_no_progress(tmp_path, monkeypatch) -> None:
-    """If ``send_and_wait`` raises, the iteration is treated as no-progress.
+@pytest.mark.parametrize(
+    ("failure", "ending"),
+    [(RuntimeError, "crash"), (asyncio.TimeoutError, "timeout")],
+)
+def test_loop_send_and_wait_failure_carries_its_ending(
+    tmp_path, monkeypatch, failure: type[Exception], ending: str
+) -> None:
+    """A failed wait still produces its specific ending beside no-progress.
 
     The post-iteration accounting (commits_between, auto-close backstop,
     strike tick, iteration.end emit, counters persist) still runs — the
@@ -1486,7 +1492,7 @@ def test_loop_send_and_wait_exception_is_no_progress(tmp_path, monkeypatch) -> N
 
     class RaisingSession(FakeCopilotSession):
         async def send_and_wait(self, prompt: str, *, timeout: float = 60.0, **_: Any) -> SessionEvent | None:
-            raise RuntimeError("simulated SDK exception")
+            raise failure("simulated SDK failure")
 
     class RaisingClient(FakeCopilotClient):
         async def create_session(self, **kwargs: Any) -> FakeCopilotSession:
@@ -1519,6 +1525,8 @@ def test_loop_send_and_wait_exception_is_no_progress(tmp_path, monkeypatch) -> N
     assert "wrapper.strike" not in types_seen
     iteration_end = next(e for e in events if e["type"] == "wrapper.iteration.end")
     assert iteration_end["summary"]["strikes"] == 0
+    assert iteration_end["issues"][0]["status"] == "no-progress"
+    assert iteration_end["issues"][0]["ending"] == ending
 
 
 def test_loop_auto_close_failure_does_not_abort_iteration(tmp_path, monkeypatch) -> None:
@@ -3117,6 +3125,12 @@ def test_a_refused_iteration_ends_content_filtered_not_merely_silent(
     ]
     assert usage and usage[0]["content_filtered"] is True
     assert usage[0]["finish_reason"] == "content_filter"
+    iteration_end = next(
+        json.loads(line)
+        for line in jsonl.read_text(encoding="utf-8").splitlines()
+        if json.loads(line)["type"] == events_module.WRAPPER_ITERATION_END
+    )
+    assert iteration_end["issues"][0]["ending"] == "content_filtered"
 
     diagnostics = next(iter(logs.glob("*.log"))).read_text(encoding="utf-8")
     assert "ended content_filtered" in diagnostics
@@ -3164,6 +3178,12 @@ def test_an_agent_that_declares_no_more_tasks_is_believed(
         iter((tmp_path / ".git-loopy" / "logs").glob("*.log"))
     ).read_text(encoding="utf-8")
     assert "ended no_more_tasks" in diagnostics
+    iteration_end = next(
+        json.loads(raw)
+        for raw in _log_lines(tmp_path)
+        if json.loads(raw)["type"] == events_module.WRAPPER_ITERATION_END
+    )
+    assert iteration_end["issues"][0]["ending"] == "no_more_tasks"
 
 
 def test_loop_records_the_session_ending_and_its_error_identity(
@@ -4086,6 +4106,12 @@ def test_a_no_progress_iteration_charges_no_strike(tmp_path, monkeypatch) -> Non
     assert [
         (e["issue"], e["lifecycle_position"]) for e in _bound_pickups(tmp_path)
     ] == [(7, "fresh")]
+    iteration_end = next(
+        json.loads(raw)
+        for raw in _log_lines(tmp_path)
+        if json.loads(raw)["type"] == events_module.WRAPPER_ITERATION_END
+    )
+    assert iteration_end["issues"][0]["ending"] == "no_progress"
 
 
 def test_one_strike_is_charged_per_issue_given_up_on(tmp_path, monkeypatch) -> None:

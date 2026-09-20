@@ -576,6 +576,12 @@ pub struct IterationIssue {
     /// Its lifecycle status at Iteration end.
     #[serde(default)]
     pub status: Option<String>,
+    /// Why this issue's most recent session ended, when observed.
+    #[serde(default)]
+    pub ending: Option<String>,
+    /// Agent-authored commits that advanced this issue in this attempt.
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub commits: Option<i64>,
     /// When it first became the Active issue in this Run.
     #[serde(default, deserialize_with = "lenient_timestamp")]
     pub first_started_at: Option<Timestamp>,

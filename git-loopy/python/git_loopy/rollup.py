@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Iterator, Mapping
 
 from git_loopy.denomination import CostDenomination
+from git_loopy.session_outcome import SessionOutcome
 from git_loopy.usage import BillingSample, UsageTally
 
 __all__ = [
@@ -63,6 +64,7 @@ class _IssueContribution:
     closed_at: str | None = None
     closed_monotonic: float | None = None
     advanced: bool = False
+    ending: SessionOutcome | None = None
     peak_context_window: dict[str, int | None] | None = None
 
 
@@ -298,6 +300,17 @@ class IterationRollupAccumulator:
         del self._open[lane_issue]
         return payload
 
+    def record_ending(
+        self, issue: int | str, ending: SessionOutcome | None
+    ) -> None:
+        """Attach one Session outcome to the issue attempt that produced it."""
+        current = self._open.get(issue) or self._open.get(None)
+        if current is None:
+            return
+        contribution = current.contributions.get(issue)
+        if contribution is not None:
+            contribution.ending = ending
+
     def _scope(self, event: Mapping[str, Any]) -> _Iteration | None:
         """Resolve the accounting scope one raw Event belongs to.
 
@@ -334,21 +347,22 @@ class IterationRollupAccumulator:
         cumulative += active_seconds
         self._cumulative_active[contribution.issue] = cumulative
         closed = contribution.closed_at is not None
-        return {
+        status = (
+            status_override
+            if status_override is not None and not closed
+            else "closed"
+            if closed
+            else "advanced"
+            if contribution.advanced
+            or (
+                contribution.commits > 0
+                and not contribution.is_lane_contribution
+            )
+            else "no-progress"
+        )
+        payload = {
             "issue": contribution.issue,
-            "status": (
-                status_override
-                if status_override is not None and not closed
-                else "closed"
-                if closed
-                else "advanced"
-                if contribution.advanced
-                or (
-                    contribution.commits > 0
-                    and not contribution.is_lane_contribution
-                )
-                else "no-progress"
-            ),
+            "status": status,
             "first_started_at": contribution.first_started_at,
             "closed_at": contribution.closed_at,
             "issue_elapsed_seconds": (
@@ -366,6 +380,11 @@ class IterationRollupAccumulator:
             },
             "peak_context_window": contribution.peak_context_window,
         }
+        if contribution.ending is not None:
+            payload["ending"] = contribution.ending.value
+        if status == "advanced":
+            payload["commits"] = contribution.commits
+        return payload
 
 
 def contribution_end_payload(

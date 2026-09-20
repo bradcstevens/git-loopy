@@ -2008,7 +2008,8 @@
                 "cache_read": 8267,
                 "cache_write": 5235
               },
-              "peak_context_window": null
+              "peak_context_window": null,
+              "commits": 1
             },
             {
               "issue": 311,
@@ -2023,7 +2024,8 @@
                 "tokens_in": null,
                 "tokens_out": null
               },
-              "peak_context_window": null
+              "peak_context_window": null,
+              "ending": "no_progress"
             }
           ]
         },
@@ -2094,7 +2096,8 @@
                 "tokens_in": null,
                 "tokens_out": null
               },
-              "peak_context_window": null
+              "peak_context_window": null,
+              "ending": "timeout"
             }
           ]
         },
@@ -2173,7 +2176,8 @@
                 "tokens_in": null,
                 "tokens_out": null
               },
-              "peak_context_window": null
+              "peak_context_window": null,
+              "commits": 1
             }
           ]
         },
@@ -2252,6 +2256,42 @@
                 "tokens_in": null,
                 "tokens_out": null
               },
+              "peak_context_window": null
+            },
+            {
+              "issue": 315,
+              "status": "no-progress",
+              "ending": "no_more_tasks",
+              "first_started_at": null,
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 0,
+              "cumulative_active_seconds": 0,
+              "consumption": {"model": null, "tokens_in": null, "tokens_out": null},
+              "peak_context_window": null
+            },
+            {
+              "issue": 316,
+              "status": "no-progress",
+              "ending": "content_filtered",
+              "first_started_at": null,
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 0,
+              "cumulative_active_seconds": 0,
+              "consumption": {"model": null, "tokens_in": null, "tokens_out": null},
+              "peak_context_window": null
+            },
+            {
+              "issue": 317,
+              "status": "no-progress",
+              "ending": "crash",
+              "first_started_at": null,
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 0,
+              "cumulative_active_seconds": 0,
+              "consumption": {"model": null, "tokens_in": null, "tokens_out": null},
               "peak_context_window": null
             }
           ]
@@ -2442,7 +2482,8 @@
                     "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
-                    "premium_requests": null
+                    "premium_requests": null,
+                    "commits": 1
                   },
                   {
                     "issue": 311,
@@ -2455,7 +2496,8 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null
+                    "premium_requests": null,
+                    "ending": "no_progress"
                   }
                 ]
               },
@@ -2605,7 +2647,8 @@
                     "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
-                    "premium_requests": null
+                    "premium_requests": null,
+                    "commits": 1
                   },
                   {
                     "issue": 311,
@@ -2618,7 +2661,8 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null
+                    "premium_requests": null,
+                    "ending": "no_progress"
                   },
                   {
                     "issue": 312,
@@ -2631,7 +2675,8 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null
+                    "premium_requests": null,
+                    "ending": "timeout"
                   }
                 ]
               },
@@ -2802,7 +2847,8 @@
                     "tokens_in": 13512,
                     "tokens_out": 240,
                     "credits": null,
-                    "premium_requests": null
+                    "premium_requests": null,
+                    "commits": 1
                   },
                   {
                     "issue": 311,
@@ -2815,7 +2861,8 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null
+                    "premium_requests": null,
+                    "ending": "no_progress"
                   },
                   {
                     "issue": 312,
@@ -2828,7 +2875,8 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null
+                    "premium_requests": null,
+                    "ending": "timeout"
                   },
                   {
                     "issue": 313,
@@ -2841,7 +2889,8 @@
                     "tokens_in": null,
                     "tokens_out": null,
                     "credits": null,
-                    "premium_requests": null
+                    "premium_requests": null,
+                    "commits": 1
                   },
                   {
                     "issue": 314,
@@ -2849,6 +2898,48 @@
                     "started_at": "2026-05-18T09:01:14-07:00",
                     "active_seconds": 3.0,
                     "closed_at": "2026-05-18T09:01:14-07:00",
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 315,
+                    "status": "no-progress",
+                    "ending": "no_more_tasks",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 316,
+                    "status": "no-progress",
+                    "ending": "content_filtered",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": null,
+                    "tokens_in": null,
+                    "tokens_out": null,
+                    "credits": null,
+                    "premium_requests": null
+                  },
+                  {
+                    "issue": 317,
+                    "status": "no-progress",
+                    "ending": "crash",
+                    "started_at": null,
+                    "active_seconds": 0.0,
+                    "closed_at": null,
                     "iteration_count": 1,
                     "route": null,
                     "tokens_in": null,

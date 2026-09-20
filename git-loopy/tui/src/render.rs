@@ -50,6 +50,7 @@ const UNAVAILABLE: &str = "n/a";
 /// narrow to carry every column: rank 0 is never dropped. It is a presentation
 /// decision only — the shared fixture lists `responsive_truncation` among its
 /// presentation exclusions — so no projected value changes with the width.
+#[derive(Clone, Copy)]
 struct Column {
     heading: &'static str,
     width: u16,
@@ -535,14 +536,21 @@ fn draw_queue(
     routing: &str,
     glyphs: &Glyphs,
 ) {
+    let mut columns = QUEUE_COLUMNS;
+    columns[1].width = rows
+        .iter()
+        .map(|row| status_cell(&row.status, row.ending.as_deref(), row.commits).len() as u16 + 2)
+        .max()
+        .unwrap_or(12)
+        .max(12);
     draw_table(
         frame,
         area,
-        &QUEUE_COLUMNS,
+        &columns,
         rows.iter().map(|row| {
             vec![
                 issue_label(&row.issue),
-                row.status.clone(),
+                status_cell(&row.status, row.ending.as_deref(), row.commits),
                 wall_clock(row.started_at.as_deref(), glyphs),
                 duration(row.active_seconds),
                 wall_clock(row.closed_at.as_deref(), glyphs),
@@ -562,6 +570,21 @@ fn draw_queue(
         " Queue ",
         glyphs,
     );
+}
+
+fn status_cell(status: &str, ending: Option<&str>, commits: Option<i64>) -> String {
+    match (status, ending, commits) {
+        (_, Some("no_progress"), _) => format!("{status} · left nothing"),
+        (_, Some("timeout"), _) => format!("{status} · timed out"),
+        (_, Some("crash"), _) => format!("{status} · crashed"),
+        (_, Some("no_more_tasks"), _) => format!("{status} · no work remains"),
+        (_, Some("content_filtered"), _) => format!("{status} · content filtered"),
+        ("advanced", None, Some(commits)) => {
+            let unit = if commits == 1 { "commit" } else { "commits" };
+            format!("advanced · {commits} {unit}")
+        }
+        _ => status.to_string(),
+    }
 }
 
 /// A token counter with thousands separators, or the unknown placeholder.
