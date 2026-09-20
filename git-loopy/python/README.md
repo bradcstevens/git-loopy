@@ -1091,20 +1091,31 @@ selector. Its model, effort, and tier are still verified against the live
 harness and either honoured exactly or refused, never silently corrected.
 A context-only override does not suppress Dynamic routing.
 
-`git-loopy doctor` and a Run now share routing **configuration preflight**:
+`git-loopy doctor` and a Run share routing **preflight**:
 missing authorization or limits, non-finite bounds, selector concurrency outside
 1–64, unverifiable execution placement, and invalid Static settings produce the
 same refusal. Doctor spends no routing credits and rewrites no routes, including
 under `--apply`. Doctor evaluates Config and environment, not flags on a
 separate future Run; to check a run-wide override, supply its
 `GIT_LOOPY_MODEL` / `GIT_LOOPY_REASONING_EFFORT` equivalent to doctor.
-Its successful prerequisite row is not a live Dynamic routing
-readiness guarantee: required evidence, the verified candidate intersection, and
-issue-specific fit are still checked at proposal and Pickup.
+They also read current Artificial Analysis evidence and authenticated Copilot
+capabilities through the same live-readiness module used by proposal and Pickup.
+Unavailable sources, an empty verified candidate intersection, or exhausted
+assessment bounds produce a refusal with a remedy, without a selector,
+classification, Calibration, or tracker write. These reads use the provider's
+request quota, but spend no routing AI Credits.
+
+A successful readiness row is **not a Pickup or an issue-fit guarantee**: no
+issue context has been assessed, and proposal and Pickup must check fresh inputs
+again. A failed Dynamic-readiness row makes doctor nonzero but does not prevent a
+Run from reaching eligible Static work or recovering on a later fresh check.
+Configuration refusals still stop the Run. The Run carries its deadline ledger
+from preflight into routing; it does not grant a new budget after live reads.
 
 **Activation status (#567): incomplete.** Guided authorization, explicit
-keep-or-migrate setup/upgrade, and the full shared live-readiness and composed
-activation matrix still need to land before the final default changes. Existing
+keep-or-migrate setup/upgrade (including use of this readiness seam), and the
+composed first-setup/migration activation matrix and Wrapper/Conformance obligations
+still need to land before the final default changes. Existing
 Config is not migrated by this preflight change. Python issue-owning serial and
 Lane sessions are the implementation scope; shell/PowerShell activation remains
 deferred, and this does not add Subagent or Integration routing.

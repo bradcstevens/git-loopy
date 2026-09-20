@@ -5389,6 +5389,12 @@ def test_a_dynamic_run_verifies_the_routing_entries_that_still_win(
     _write_runnable_feedback_loop(tmp_path)
     fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
     _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+    _wire_dynamic_ports(
+        monkeypatch,
+        rows=(),
+        answer=None,
+        listing=(_listed_model("gpt-5.6-terra", ["low", "high"]),),
+    )
     monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
 
     exit_code = asyncio.run(
@@ -5413,12 +5419,19 @@ def test_a_dynamic_run_does_not_refuse_a_default_the_selector_replaces(
     default on an account that does not carry it.
     """
     _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+    _wire_dynamic_ports(
+        monkeypatch,
+        rows=(_aa_row("aa-terra", 40.0, 200.0),),
+        answer=None,
+        listing=(_listed_model("gpt-5.6-terra", ["low", "high"]),),
+    )
 
     verdict = asyncio.run(
         resolve_run_routing_preflight(
             _dynamic_config(model="not-in-any-listing", reasoning_effort=None),
             {dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV: "aa-token"},
             capabilities_fetch=loop_module._refresh_harness_capabilities,
+            harness_evidence_fetch=loop_module._fetch_harness_evidence,
         )
     )
 
@@ -5525,7 +5538,7 @@ def _aa_row(identifier: str, index: float, speed: float) -> dict[str, Any]:
 def _wire_dynamic_ports(
     monkeypatch,
     *,
-    rows: tuple[dict[str, Any], ...],
+    rows: tuple[dict[str, Any], ...] | Callable[[], tuple[dict[str, Any], ...]],
     answer: Callable[[Any], Any] | None,
     listing: tuple[SimpleNamespace, ...],
     evidence_delay: float = 0.0,
@@ -5545,9 +5558,9 @@ def _wire_dynamic_ports(
             # which two concurrent reads *can* be shared. A port that answers
             # without ever yielding makes every caller look sequential.
             await asyncio.sleep(evidence_delay)
-        return _aa_payload(*rows)
+        return _aa_payload(*(rows() if callable(rows) else rows))
 
-    async def _capabilities() -> Any:
+    async def _capabilities(*, warn=None) -> Any:
         return dynamic_route.FreshHarnessCapabilities(
             retrieved_at=datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc),
             capabilities=static_route.HarnessCapabilities.from_listing(listing),
@@ -5576,9 +5589,11 @@ def _wire_dynamic_ports(
         loop_module._make_dynamic_router, "_real_factory", loop_module._make_dynamic_router
     )
 
-    def _factory(prerequisites, *, selector_assess, recorder):
+    def _factory(prerequisites, *, selector_assess, recorder, admission_ledger, warn):
         return real_factory(
-            prerequisites, selector_assess=_assess, recorder=recorder
+            prerequisites, selector_assess=_assess, recorder=recorder,
+            admission_ledger=admission_ledger,
+            warn=warn,
         )
 
     _factory._real_factory = real_factory  # type: ignore[attr-defined]
@@ -6206,9 +6221,15 @@ def test_preparation_cannot_buy_classification_after_routing_allowance_exhaustio
     assert _prepared_records(tmp_path)[0]["reason"] == "quota_exhausted"
 
 
+@pytest.mark.parametrize("failure", ["quota", "evidence"])
 def test_unavailable_dynamic_routing_leaves_the_next_static_pickup_useful(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, capsys, failure
 ) -> None:
+    def rows():
+        if failure == "evidence":
+            raise OSError("required source is unavailable")
+        return (_aa_row("aa-opus", 70.0, 90.0),)
+
     fake_client, _, spied, exit_code = _dynamic_pool_run(
         tmp_path,
         monkeypatch,
@@ -6217,7 +6238,8 @@ def test_unavailable_dynamic_routing_leaves_the_next_static_pickup_useful(
             _make_issue(43, labels=["ready-for-agent", "task-type:docs"]),
         ],
         routing={"docs": ("gpt-5.6-terra", "low")},
-        routing_credit_allowance=Decimal("0"),
+        routing_credit_allowance=Decimal("0" if failure == "quota" else "2.5"),
+        rows=rows,
     )
 
     assert exit_code == 0
@@ -6225,6 +6247,61 @@ def test_unavailable_dynamic_routing_leaves_the_next_static_pickup_useful(
     assert [entry["issue"] for entry in _bound_pickups(tmp_path)] == [43]
     assert fake_client.create_calls[0]["model"] == "gpt-5.6-terra"
     assert fake_client.create_calls[0]["reasoning_effort"] == "low"
+    assert (
+        "quota_exhausted" if failure == "quota" else "source_unavailable"
+    ) in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("ready_at_preflight", [False, True])
+def test_serial_pickup_rechecks_readiness_instead_of_inheriting_the_preflight(
+    tmp_path, monkeypatch, ready_at_preflight
+) -> None:
+    reads = 0
+    eligible = (_aa_row("aa-opus", 70.0, 90.0),)
+
+    def rows():
+        nonlocal reads
+        reads += 1
+        available = ready_at_preflight if reads == 1 else not ready_at_preflight
+        return eligible if available else ()
+
+    client, spied, code = _dynamic_run(tmp_path, monkeypatch, rows=rows)
+
+    assert reads >= 2
+    if ready_at_preflight:
+        assert code != 0
+        assert client.create_calls == []
+        assert spied["assessments"] == []
+        assert _bound_pickups(tmp_path) == []
+    else:
+        assert code == 0
+        assert len(spied["assessments"]) == 1
+        assert client.create_calls[0]["model"] == "claude-opus-5"
+        assert _bound_pickups(tmp_path)[0]["model"] == "claude-opus-5"
+
+
+def test_run_does_not_restart_the_routing_deadline_after_live_preflight(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    elapsed = 0.0
+    monkeypatch.setattr(
+        dynamic_route, "time", SimpleNamespace(monotonic=lambda: elapsed)
+    )
+
+    def rows():
+        nonlocal elapsed
+        elapsed += 31
+        return (_aa_row("aa-opus", 70.0, 90.0),)
+
+    client, spied, code = _dynamic_run(
+        tmp_path, monkeypatch, rows=rows, routing_deadline_seconds=30
+    )
+
+    assert code != 0
+    assert spied["evidence"] == 1
+    assert spied["assessments"] == []
+    assert client.create_calls == []
+    assert "deadline_exhausted" in capsys.readouterr().err
 
 
 def test_concurrent_preparation_shares_one_live_evidence_read(
@@ -6232,8 +6309,8 @@ def test_concurrent_preparation_shares_one_live_evidence_read(
 ) -> None:
     """AC5: concurrent checks may share an in-flight request.
 
-    Five live reads are *asked for* here — the **Pickup**'s ``prepare`` and its
-    ``bind``, then one per prepared candidate — and only four are bought,
+    Six live reads are *asked for* here — Run preflight, the **Pickup**'s
+    ``prepare`` and its ``bind``, then one per prepared candidate — and only five are bought,
     because the two preparations the configured concurrency lets overlap are
     asking the identical question of the identical source at the same instant.
     Answering it twice would spend a second round-trip against ADR-0057's
@@ -6268,8 +6345,8 @@ def test_concurrent_preparation_shares_one_live_evidence_read(
 
     assert exit_code == 0
     assert len(spied["assessments"]) == 4, spied["assessments"]
-    assert spied["evidence"] == 4, (
-        f"{spied['evidence']} evidence reads; 5 were asked for and the two "
+    assert spied["evidence"] == 5, (
+        f"{spied['evidence']} evidence reads; 6 were asked for and the two "
         "overlapping preparations should have shared one"
     )
 

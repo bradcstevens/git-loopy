@@ -418,7 +418,7 @@ exactly as it found it, so the fix is always yours to make deliberately.
 
 `git-loopy doctor` is the report half of Run-preflight recovery, following the
 same report-first shape as `git-loopy labels`. It resolves the exact
-environment, routing prerequisites, and Skill policy a Run preflight resolves, without starting a Run,
+environment, routing readiness, and Skill policy a Run preflight resolves, without starting a Run,
 opening a picker, spending AI Credits, changing Copilot settings, or installing
 anything. It never refreshes the **installed catalog** either; only
 `doctor --apply` does (see
@@ -447,10 +447,19 @@ Doctor evaluates Config and environment only; it cannot anticipate flags on a
 later Run. Supply `GIT_LOOPY_MODEL` / `GIT_LOOPY_REASONING_EFFORT` to doctor
 when diagnosing that Run's explicit model/effort override.
 
-This is configuration preflight, not the completed dynamic-default activation
-tracked in #567: doctor does not yet assess live benchmark availability or the
-verified candidate intersection. A successful prerequisite row promises neither
-an issue-specific route nor permission to skip fresh proposal/Pickup checks.
+For authorized Dynamic routing it reads current Artificial Analysis evidence and
+authenticated Copilot capabilities through the live-readiness module also used by
+proposal and Pickup. Missing evidence, no verified runnable candidates, or exhausted
+assessment bounds produce an actionable refusal. No selector or classifier is
+called, but the live data requests consume the provider's request quota.
+
+A successful readiness row promises neither issue-specific fit nor a route:
+proposal and Pickup must check fresh inputs again. A failed Dynamic-readiness row
+makes doctor nonzero while eligible Static work can still proceed in a Run;
+configuration refusals still stop that Run. The deadline starts at preflight and
+is not reset when the Run constructs its router. This remains partial #567 work:
+guided setup/migration, its composed activation matrix, and the final default are
+not delivered by this change.
 
 The Label row judges the presence of the names a Run reads and cannot create for
 itself — the triage roles, `parallel-safe`, `priority`, and `ready-for-agent`,

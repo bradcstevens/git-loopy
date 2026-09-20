@@ -7982,7 +7982,7 @@ def _dynamic_lane_ports(
             }
         ).encode("utf-8")
 
-    async def _capabilities():
+    async def _capabilities(*, warn=None):
         if not capabilities_available():
             return dynamic_route.FreshHarnessCapabilities(
                 retrieved_at=datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc),
@@ -8034,10 +8034,12 @@ def _dynamic_lane_ports(
         loop_module._make_dynamic_router, "_real_router", loop_module._make_dynamic_router
     )
 
-    def _router(prerequisites, *, selector_assess, recorder):
+    def _router(prerequisites, *, selector_assess, recorder, admission_ledger, warn):
         del selector_assess
         return real_router(
-            prerequisites, selector_assess=_assess, recorder=recorder
+            prerequisites, selector_assess=_assess, recorder=recorder,
+            admission_ledger=admission_ledger,
+            warn=warn,
         )
 
     _router._real_router = real_router  # type: ignore[attr-defined]
@@ -8201,6 +8203,41 @@ def _dynamic_retry_lane_run(tmp_path, monkeypatch, *, outcome="no_progress", **o
     )
     exit_code = asyncio.run(loop_module.run(_dynamic_parallel_config(**overrides)))
     return fake_client, spied, exit_code
+
+
+@pytest.mark.parametrize("ready_at_preflight", [False, True])
+def test_lane_pickup_rechecks_readiness_instead_of_inheriting_the_preflight(
+    tmp_path, monkeypatch, ready_at_preflight
+) -> None:
+    reads = 0
+
+    def available():
+        nonlocal reads
+        reads += 1
+        return ready_at_preflight if reads == 1 else not ready_at_preflight
+
+    client, spied, _code = _dynamic_retry_lane_run(
+        tmp_path,
+        monkeypatch,
+        capabilities_available=available,
+        max_iterations=1,
+    )
+
+    assert reads >= 2
+    resolved = [
+        row for row in _logged_events(tmp_path)
+        if row["type"] == "wrapper.routing.resolved"
+    ]
+    if ready_at_preflight:
+        assert client.create_calls == []
+        assert spied["assessments"] == []
+        assert resolved == []
+    else:
+        assert len(spied["assessments"]) == 1
+        assert len(client.create_calls) == 1
+        assert client.create_calls[0]["model"] == "claude-opus-5"
+        assert Path(client.create_calls[0]["working_directory"]).name == "issue-42"
+        assert resolved[0]["model"] == "claude-opus-5"
 
 
 @pytest.mark.parametrize(

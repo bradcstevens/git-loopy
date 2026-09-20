@@ -164,7 +164,10 @@ def run_doctor(
         )
     )
     if not routing_preflight.passed:
-        output_fn(f"Routing | failed | {routing_preflight.refusal}")
+        output_fn(
+            "Routing | failed | "
+            f"{routing_preflight.refusal or routing_preflight.dynamic_refusal}"
+        )
         output_fn(
             "Routing scope | doctor evaluates Config and environment, not a "
             "future Run's --model/--reasoning-effort flags. To check a run-wide "
@@ -173,8 +176,14 @@ def run_doctor(
         )
     elif config.route_policy is not RoutePolicy.UNSELECTED:
         output_fn(
-            "Routing prerequisites | passed | configuration prerequisites resolved; "
-            "issue-specific eligibility and evidence are checked at Pickup."
+            "Routing readiness | passed | "
+            + (
+                "live evidence and verified candidates are available for new "
+                "assessments; this is not a Pickup or an issue-fit guarantee. "
+                "Proposal and Pickup check fresh inputs again."
+                if routing_preflight.prerequisites is not None
+                else "configured Static routes verified; Pickup checks them again."
+            )
         )
 
     try:
@@ -234,8 +243,10 @@ def run_doctor(
         return 1
 
     if not resolution.blockers:
-        if not routing_preflight.passed:
+        if routing_preflight.refusal is not None:
             output_fn("Skill policy is healthy; routing still blocks this Run.")
+        elif routing_preflight.dynamic_refusal is not None:
+            output_fn("Skill policy is healthy; new Dynamic assessments are unavailable.")
         elif apply:
             output_fn("Skill policy is healthy; no changes to apply.")
         elif config.route_policy is RoutePolicy.UNSELECTED:

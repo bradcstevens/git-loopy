@@ -19,6 +19,7 @@ import pytest
 from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy import cli as cli_module
 from git_loopy import doctorcmd
+from git_loopy import dynamic_route
 from git_loopy.dynamic_route import ARTIFICIAL_ANALYSIS_API_KEY_ENV
 from git_loopy import labels
 from git_loopy import model_listing
@@ -189,6 +190,150 @@ def test_doctor_refuses_the_same_missing_routing_access_as_a_run(tmp_path: Path)
     assert not any("a Run would not be blocked" in line for line in output)
     assert any("Config and environment" in line for line in output)
     assert any("--model/--reasoning-effort" in line for line in output)
+
+
+def test_doctor_refuses_unavailable_live_routing_evidence_without_assessing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads: list[str] = []
+
+    async def unavailable(method, url, headers):
+        reads.append(url)
+        raise OSError("transport failed with operator-secret")
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", unavailable)
+    config = RunConfig(
+        route_policy=RoutePolicy.DYNAMIC,
+        routing_deadline_seconds=30,
+        routing_credit_allowance=Decimal("2.5"),
+        selector_concurrency=1,
+        route_associations={"aa-terra": "gpt-5.6-terra@high"},
+    )
+
+    code, output = _run(
+        tmp_path,
+        config=config,
+        catalog=_catalog(),
+        env=_pinned_scope(tmp_path, **{ARTIFICIAL_ANALYSIS_API_KEY_ENV: "operator-secret"}),
+    )
+
+    assert code == 1
+    assert reads == [dynamic_route.ARTIFICIAL_ANALYSIS_MODELS_URL]
+    assert any("source_unavailable" in line for line in output)
+    assert all("operator-secret" not in line for line in output)
+    assert not any("Routing readiness | passed" in line for line in output)
+
+
+@pytest.mark.parametrize(
+    ("case", "refusal"),
+    [
+        ("ready", None),
+        ("retained-static", None),
+        ("disabled", "no_runnable_candidate"),
+        ("effort", "no_runnable_candidate"),
+        ("capacity", "no_runnable_candidate"),
+        ("listing", "capabilities_unavailable"),
+        ("listing-error", "capabilities_unavailable"),
+        ("deadline", "deadline_exhausted"),
+    ],
+)
+def test_doctor_checks_the_live_verified_candidate_intersection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, refusal: str | None
+) -> None:
+    reads: list[str] = []
+    elapsed = 0.0
+    monkeypatch.setattr(
+        dynamic_route, "time", SimpleNamespace(monotonic=lambda: elapsed)
+    )
+
+    async def evidence(method, url, headers):
+        reads.append("evidence")
+        return {"prompt_options": {}, "data": [{
+            "id": "aa-terra",
+            "name": "Terra",
+            "slug": "terra",
+            "evaluations": {"artificial_analysis_intelligence_index": 60},
+        }]}
+
+    async def listing():
+        nonlocal elapsed
+        reads.append("capabilities")
+        if case == "listing":
+            return None
+        if case == "listing-error":
+            raise RuntimeError("authenticated harness transport unavailable")
+        if case == "deadline":
+            elapsed = 31.0
+        return [SimpleNamespace(
+            id="gpt-5.6-terra",
+            policy=SimpleNamespace(state="disabled" if case == "disabled" else "enabled"),
+            supported_reasoning_efforts=["low" if case == "effort" else "high"],
+            billing=SimpleNamespace(
+                token_prices=SimpleNamespace(
+                    max_prompt_tokens=None if case == "capacity" else 400_000
+                )
+            ),
+        )]
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", evidence)
+    monkeypatch.setattr(model_listing, "fetch_live_models", listing)
+    config = RunConfig(
+        route_policy=RoutePolicy.DYNAMIC,
+        routing_deadline_seconds=30,
+        routing_credit_allowance=Decimal("2.5"),
+        selector_concurrency=1,
+        route_associations={"aa-terra": "gpt-5.6-terra@high"},
+        routing=(
+            {"docs": ("gpt-5.6-terra", "high")} if case == "retained-static" else {}
+        ),
+    )
+
+    code, output = _run(
+        tmp_path,
+        config=config,
+        catalog=_catalog(),
+        env=_pinned_scope(tmp_path, **{ARTIFICIAL_ANALYSIS_API_KEY_ENV: "operator-secret"}),
+    )
+
+    assert sorted(reads) == ["capabilities", "evidence"]
+    assert code == (0 if refusal is None else 1)
+    if refusal is None:
+        assert any("live evidence and verified candidates" in line for line in output)
+        assert any("not a Pickup" in line for line in output)
+    else:
+        assert any(refusal in line for line in output)
+    if case == "listing-error":
+        assert any("authenticated harness transport unavailable" in line for line in output)
+
+
+def test_doctor_refuses_exhausted_routing_allowance_before_live_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads: list[str] = []
+
+    async def unavailable(method, url, headers):
+        reads.append(url)
+        raise OSError("should not buy a read with no assessment allowance")
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", unavailable)
+    config = RunConfig(
+        route_policy=RoutePolicy.DYNAMIC,
+        routing_deadline_seconds=30,
+        routing_credit_allowance=Decimal("0"),
+        selector_concurrency=1,
+        route_associations={"aa-terra": "gpt-5.6-terra@high"},
+    )
+
+    code, output = _run(
+        tmp_path,
+        config=config,
+        catalog=_catalog(),
+        env=_pinned_scope(tmp_path, **{ARTIFICIAL_ANALYSIS_API_KEY_ENV: "operator-secret"}),
+    )
+
+    assert code == 1
+    assert reads == []
+    assert any("quota_exhausted" in line for line in output)
 
 
 @pytest.mark.parametrize(

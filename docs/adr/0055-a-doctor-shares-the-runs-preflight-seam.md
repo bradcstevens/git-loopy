@@ -89,8 +89,17 @@ Dynamic authorization and finite limits, and live verification of configured
 Static routes. A run-wide model/effort override requires no Dynamic authorization,
 and a successful Skill-policy repair cannot clear a routing refusal.
 
-This is partial activation work, not the final Dynamic default. Guided
-setup/migration and shared live Dynamic readiness remain outstanding; the current
-configuration verdict does not claim to have read required benchmark evidence or
-proved the verified candidate intersection. Proposal and Pickup retain those
-fresh checks, and existing unselected-policy behavior is unchanged.
+Authorized Dynamic preflight now also uses `dynamic_route.RoutingLiveRead`, the
+same deadline-bounded evidence/capability read and candidate election used by
+proposal and Pickup. It checks the verified candidate intersection without issue
+input or a paid assessment. Doctor cannot promise issue fit, a successful future
+selector call, or a Pickup. Required-source failures and exhausted bounds are
+reported without calling a selector or classifier. The Run retains the admission
+ledger created at preflight, rather than restarting the assessment deadline.
+
+A configuration refusal blocks the Run. A live Dynamic-readiness refusal makes
+doctor nonzero, but leaves eligible Static work reachable in a Run and permits a
+later fresh check to recover. No readiness snapshot is authority for work:
+proposal and Pickup still read again. This is partial activation work, not the
+final Dynamic default; guided setup/migration and the composed activation matrix
+remain outstanding. Existing unselected-policy behavior is unchanged.

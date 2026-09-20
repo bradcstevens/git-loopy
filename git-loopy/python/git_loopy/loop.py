@@ -165,17 +165,15 @@ from git_loopy.dynamic_route import (
     DynamicRouteDecision,
     DynamicRoutePrerequisites,
     DynamicRouter,
-    FreshHarnessCapabilities,
     ReusableRoute,
     RoutingAdmissionLedger,
     RoutingCallCancelled,
     RoutingProposal,
     RoutingRequest,
-    RoutingSourceError,
     RoutingUnavailable,
     RoutingUnavailableReason,
     SelectorCallResult,
-    refresh_harness_evidence,
+    refresh_harness_evidence as _fetch_harness_evidence,
 )
 from git_loopy.emit import EventEmitter
 from git_loopy.live_read import SharedLiveRead
@@ -980,6 +978,7 @@ class _DynamicRoutingSetup:
     """
 
     prerequisites: DynamicRoutePrerequisites
+    admission_ledger: RoutingAdmissionLedger
     feedback_loops: tuple[FeedbackLoop, ...]
     measured: MeasuredRouting | None
 
@@ -1011,6 +1010,8 @@ def _make_dynamic_router(
     *,
     selector_assess: Callable[..., Awaitable[SelectorCallResult]],
     recorder: Callable[[DynamicRouteDecision], Awaitable[object]],
+    admission_ledger: RoutingAdmissionLedger,
+    warn: Callable[[str], None],
 ) -> DynamicRouter:
     """Assemble the Run's router, as a module seam tests substitute.
 
@@ -1035,32 +1036,13 @@ def _make_dynamic_router(
     )
     return DynamicRouter(
         evidence_fetch=SharedLiveRead(source.fetch),
-        capabilities_fetch=SharedLiveRead(_fetch_harness_evidence),
+        capabilities_fetch=SharedLiveRead(
+            lambda: _fetch_harness_evidence(warn=warn)
+        ),
         selector_assess=selector_assess,
         recorder=recorder,
-        admission_ledger=RoutingAdmissionLedger(
-            deadline_seconds=prerequisites.deadline_seconds,
-            routing_credit_allowance=prerequisites.routing_credit_allowance,
-            selector_concurrency=prerequisites.selector_concurrency,
-        ),
+        admission_ledger=admission_ledger,
     )
-
-
-async def _fetch_harness_evidence() -> FreshHarnessCapabilities:
-    """The router's eligibility-and-capacity read, as a module seam.
-
-    Raises rather than answering ``None``, because the router's port is typed
-    for a value and turns every exception into
-    ``capabilities_unavailable`` — the same verdict, reached through the
-    contract the router already has, instead of a second ``None``-means-unknown
-    convention for the same fact.
-    """
-    fresh = await refresh_harness_evidence()
-    if fresh is None:
-        raise RoutingSourceError(
-            "the authenticated harness listing could not be read"
-        )
-    return fresh
 
 
 #: The **Wind-down** ladder as a rung lookup, derived from the family's ordered
@@ -1295,6 +1277,8 @@ class _Loop:
                     warn=self._diag.warning,
                 ),
                 recorder=self._record_dynamic_route,
+                admission_ledger=dynamic_routing.admission_ledger,
+                warn=self._diag.warning,
             )
         )
         self._dynamic_routing = dynamic_routing
@@ -6667,8 +6651,9 @@ async def run(
                 "harness capability read failed: %s", message
             )
         ),
+        harness_evidence_fetch=lambda: _fetch_harness_evidence(warn=diag.warning),
     )
-    if not routing_preflight.passed:
+    if routing_preflight.refusal is not None:
         print(f"git-loopy: {routing_preflight.refusal}", file=sys.stderr)
         try:
             writers.run_summary.flush()
@@ -6677,14 +6662,16 @@ async def run(
         control.close()
         return exit_code_for("preflight_failed")
 
-    dynamic_routing = (
-        None
-        if routing_preflight.prerequisites is None
-        else _DynamicRoutingSetup(
+    if routing_preflight.dynamic_refusal is not None:
+        print(f"git-loopy: {routing_preflight.dynamic_refusal}", file=sys.stderr)
+    dynamic_routing = None
+    if routing_preflight.prerequisites is not None:
+        assert routing_preflight.admission_ledger is not None
+        dynamic_routing = _DynamicRoutingSetup(
             prerequisites=routing_preflight.prerequisites,
+            admission_ledger=routing_preflight.admission_ledger,
             feedback_loops=_declared_feedback_loops(repo_root),
             measured=_declared_measured_routing(repo_root),
-        )
     )
 
     try:
