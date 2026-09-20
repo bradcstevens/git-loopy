@@ -6,9 +6,12 @@ import asyncio
 import functools
 import hashlib
 import json
+from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from typing import Callable
 
 import pytest
@@ -16,7 +19,9 @@ import pytest
 from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy import cli as cli_module
 from git_loopy import doctorcmd
+from git_loopy.dynamic_route import ARTIFICIAL_ANALYSIS_API_KEY_ENV
 from git_loopy import labels
+from git_loopy import model_listing
 from git_loopy import skill_install
 from git_loopy.doctorcmd import run_doctor
 from git_loopy import settings
@@ -30,6 +35,7 @@ from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
 from git_loopy.skill_run_preflight import resolve_run_skill_policy_preflight
 from git_loopy.skill_install import refresh_installed_catalog
 from git_loopy.skill_source import LicensePin, SkillSourcePin, read_skill_source_pin
+from git_loopy.static_route import RoutePolicy
 from tests.fakes import FakeGitClient
 
 
@@ -171,6 +177,109 @@ def _run(
         ),
     )
     return code, output
+
+
+def test_doctor_refuses_the_same_missing_routing_access_as_a_run(tmp_path: Path) -> None:
+    config = RunConfig(route_policy=RoutePolicy.DYNAMIC)
+
+    code, output = _run(tmp_path, config=config, catalog=_catalog())
+
+    assert code == 1
+    assert any("GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY" in line for line in output)
+    assert not any("a Run would not be blocked" in line for line in output)
+    assert any("Config and environment" in line for line in output)
+    assert any("--model/--reasoning-effort" in line for line in output)
+
+
+@pytest.mark.parametrize(
+    ("setting", "value"),
+    [
+        ("routing_deadline_seconds", float("inf")),
+        ("routing_deadline_seconds", float("nan")),
+        ("routing_deadline_seconds", True),
+        ("routing_credit_allowance", Decimal("Infinity")),
+        ("selector_concurrency", 65),
+        ("selector_concurrency", 1.5),
+        ("selector_concurrency", True),
+    ],
+)
+def test_doctor_refuses_invalid_routing_limits_before_any_assessment(
+    tmp_path: Path, setting: str, value: object
+) -> None:
+    fields = {
+        "route_policy": RoutePolicy.DYNAMIC,
+        "routing_deadline_seconds": 30.0,
+        "routing_credit_allowance": Decimal("2.5"),
+        "selector_concurrency": 1,
+        "route_associations": {"aa-terra": "gpt-5.6-terra@high"},
+        setting: value,
+    }
+    code, output = _run(
+        tmp_path,
+        config=RunConfig(**fields),
+        catalog=_catalog(),
+        env=_pinned_scope(tmp_path, **{ARTIFICIAL_ANALYSIS_API_KEY_ENV: "operator-secret"}),
+    )
+
+    assert code == 1
+    assert any(setting in line for line in output)
+    assert all("operator-secret" not in line for line in output)
+
+
+@pytest.mark.parametrize("policy", [RoutePolicy.STATIC, RoutePolicy.DYNAMIC])
+@pytest.mark.parametrize("supported", [True, False])
+def test_doctor_verifies_static_settings_without_leaderboard_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: RoutePolicy, supported: bool
+) -> None:
+    reads: list[None] = []
+
+    async def listing():
+        reads.append(None)
+        return [
+            SimpleNamespace(
+                id="gpt-5-mini",
+                policy=SimpleNamespace(state="enabled"),
+                supported_reasoning_efforts=["max"] if supported else ["high"],
+            )
+        ]
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", listing)
+    config = RunConfig(
+        route_policy=policy,
+        routing_suppressed=policy is RoutePolicy.DYNAMIC,
+        model="gpt-5-mini",
+        reasoning_effort="max",
+    )
+    code, output = _run(tmp_path, config=config, catalog=_catalog())
+
+    assert code == (0 if supported else 1)
+    assert reads == [None]
+    assert all(ARTIFICIAL_ANALYSIS_API_KEY_ENV not in line for line in output)
+    if not supported:
+        assert any("does not accept reasoning effort 'max'" in line for line in output)
+        assert not any("a Run would not be blocked" in line for line in output)
+
+
+def test_a_skill_repair_does_not_clear_or_rewrite_a_routing_refusal(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    path = settings.project_config_path(repo)
+    settings.write_config_atomic(
+        path, {"route_policy": "dynamic", "enabled_skills": ["ghost"]}
+    )
+
+    code, output = _run(
+        tmp_path,
+        config=replace(_config("ghost"), route_policy=RoutePolicy.DYNAMIC),
+        catalog=_catalog(),
+        apply=True,
+    )
+
+    assert code == 1
+    assert any(ARTIFICIAL_ANALYSIS_API_KEY_ENV in line for line in output)
+    assert any("Saved repaired project Skill policy" in line for line in output)
+    assert settings.load_config_table(path) == {
+        "route_policy": "dynamic", "enabled_skills": [],
+    }
 
 
 class _FakeTracker:

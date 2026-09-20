@@ -1046,6 +1046,34 @@ class _AdmissionRefusal(Enum):
     SELECTOR = "selector"
 
 
+def _validate_routing_limits(
+    deadline_seconds: float,
+    routing_credit_allowance: Decimal,
+    selector_concurrency: int,
+) -> None:
+    if (
+        isinstance(deadline_seconds, bool)
+        or not isinstance(deadline_seconds, (int, float))
+        or not math.isfinite(deadline_seconds)
+        or deadline_seconds <= 0
+    ):
+        raise ValueError("routing_deadline_seconds must be finite and positive")
+    if (
+        not isinstance(routing_credit_allowance, Decimal)
+        or not routing_credit_allowance.is_finite()
+        or routing_credit_allowance < 0
+    ):
+        raise ValueError(
+            "routing_credit_allowance must be a non-negative finite Decimal"
+        )
+    if (
+        isinstance(selector_concurrency, bool)
+        or not isinstance(selector_concurrency, Integral)
+        or not 1 <= selector_concurrency <= 64
+    ):
+        raise ValueError("selector_concurrency must be an integer between 1 and 64")
+
+
 class RoutingAdmissionLedger:
     """Admit bounded selector calls and account post-paid routing usage."""
 
@@ -1057,27 +1085,9 @@ class RoutingAdmissionLedger:
         selector_concurrency: int,
         monotonic: Callable[[], float] | None = None,
     ) -> None:
-        if (
-            isinstance(deadline_seconds, bool)
-            or not isinstance(deadline_seconds, (int, float))
-            or not math.isfinite(deadline_seconds)
-            or deadline_seconds <= 0
-        ):
-            raise ValueError("deadline_seconds must be finite and positive")
-        if (
-            not isinstance(routing_credit_allowance, Decimal)
-            or not routing_credit_allowance.is_finite()
-            or routing_credit_allowance < 0
-        ):
-            raise ValueError(
-                "routing_credit_allowance must be a non-negative finite Decimal"
-            )
-        if (
-            isinstance(selector_concurrency, bool)
-            or not isinstance(selector_concurrency, Integral)
-            or not 1 <= selector_concurrency <= 64
-        ):
-            raise ValueError("selector_concurrency must be between 1 and 64")
+        _validate_routing_limits(
+            deadline_seconds, routing_credit_allowance, selector_concurrency
+        )
         self._allowance = routing_credit_allowance
         self._monotonic = monotonic or time.monotonic
         self._deadline = self._monotonic() + float(deadline_seconds)
@@ -1455,6 +1465,10 @@ def resolve_prerequisites(
             "(--selector-concurrency, GIT_LOOPY_SELECTOR_CONCURRENCY or Config) "
             "so parallel Pickups cannot each buy a Route selector call at once."
         )
+    try:
+        _validate_routing_limits(deadline, allowance, concurrency)
+    except ValueError as exc:
+        raise RoutingPrerequisiteError(f"Dynamic routing needs valid limits: {exc}") from exc
     associations = _parse_associations(getattr(config, "route_associations", {}) or {})
     if not associations:
         raise RoutingPrerequisiteError(

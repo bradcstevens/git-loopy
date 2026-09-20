@@ -169,7 +169,6 @@ from git_loopy.dynamic_route import (
     ReusableRoute,
     RoutingAdmissionLedger,
     RoutingCallCancelled,
-    RoutingPrerequisiteError,
     RoutingProposal,
     RoutingRequest,
     RoutingSourceError,
@@ -177,7 +176,6 @@ from git_loopy.dynamic_route import (
     RoutingUnavailableReason,
     SelectorCallResult,
     refresh_harness_evidence,
-    resolve_prerequisites,
 )
 from git_loopy.emit import EventEmitter
 from git_loopy.live_read import SharedLiveRead
@@ -188,6 +186,7 @@ from git_loopy.measured_routing import (
     measured_routing_path,
 )
 from git_loopy.routing_input import build_routing_request
+from git_loopy.run_routing_preflight import resolve_run_routing_preflight
 from git_loopy.route_publication import (
     RouteDeliveryStatus,
     RoutePublicationStore,
@@ -234,10 +233,7 @@ from git_loopy.run_environment_preflight import resolve_run_environment_prefligh
 from git_loopy.static_route import (
     HarnessCapabilities,
     RoutePolicy,
-    StaticRoute,
-    StaticRouteError,
     refresh_harness_capabilities,
-    validate_static_route,
 )
 from git_loopy.skill_install import (
     SkillInstallError,
@@ -932,16 +928,6 @@ async def _refresh_harness_capabilities(
     return await refresh_harness_capabilities(warn=warn)
 
 
-#: The one **Execution host** whose authenticated harness is the harness this
-#: capability read can actually reach. Every other placement opens its work
-#: sessions on a machine that authenticates as *itself* — the Actions host's
-#: built-in token, on a runner the operator never logged into — so the listing
-#: read here describes a different installation, which is precisely what
-#: ADR-0057 excludes as the authority for a Static route. Derived from the seam's
-#: own constant rather than spelled again, so "which placement is in-process"
-#: keeps one answer.
-_VERIFIABLE_EXECUTION_HOST = execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT
-
 #: The two refusals a **Routing preparation** proposal may draw at its own
 #: **Pickup** that say something about *the proposal* rather than about routing:
 #: it aged past its validity window while the Run worked something else, or the
@@ -955,128 +941,6 @@ _DISCARDABLE_PROPOSAL_REFUSALS: frozenset[RoutingUnavailableReason] = frozenset(
         RoutingUnavailableReason.INVALID_PROPOSAL,
     }
 )
-
-
-def _remote_placement_refusal(config: RunConfig) -> str | None:
-    """Say why this host's harness cannot answer for a remote placement, or ``None``.
-
-    Shared by both selected policies because both rest on the same authority:
-    ADR-0057 wants the verdict from *the authenticated harness the Run actually
-    uses*, and names "another CLI installation" as explicitly not it. A
-    ``github-actions`` contribution opens its work session on a GitHub-hosted
-    runner authenticating as itself, so the operator's own listing describes a
-    different installation — and under a **Dynamic route** it is worse than
-    wrong in the abstract: the selector would *elect* from that listing, so the
-    Run would not merely mis-verify a route, it would choose one the runner may
-    have no access to at all. Refused by name rather than downgraded, which is
-    the criterion's own "fail explicitly before work".
-    """
-    if config.execution_host == _VERIFIABLE_EXECUTION_HOST:
-        return None
-    return (
-        f"the {config.execution_host!r} Execution host opens its work "
-        "sessions on a machine that authenticates as itself, so this "
-        "machine's model listing is not the listing that would run them. "
-        "A selected route can only be verified for the "
-        f"{_VERIFIABLE_EXECUTION_HOST!r} placement — run there, or leave "
-        "route_policy unset for this one."
-    )
-
-
-def _configured_static_routes(
-    config: RunConfig,
-) -> tuple[tuple[str, StaticRoute], ...]:
-    """Every Static route this Run could resolve to, each with what to call it.
-
-    The run-wide default, every ``[routing]`` entry, and the **Escalation rung**
-    where the operator configured one — all under the run-level context tier,
-    which is the whole point of the tier being run-level rather than a
-    ``[routing]`` column. The classifier's own pair is deliberately absent:
-    ADR-0057 leaves Subagents and non-Iteration sessions on their existing
-    settings, and the **Task-type classifier** is not an issue-owning Agent.
-
-    Named rather than numbered, because the refusal an operator reads has to
-    say *which* entry to go and fix.
-
-    Under a **Dynamic route** the run-wide default is omitted unless an explicit
-    flag or environment pin suppressed routing (#561). It is not a route this
-    Run can resolve to: every Task type the ``[routing]`` table does not cover
-    goes to the **Route selector**, and a selector that is unavailable refuses
-    rather than falling back. Verifying it anyway would refuse the whole Run
-    over a default the operator never asked to use — most sharply for the
-    kit's *own* built-in default on an account that does not carry it.
-    """
-    routes: list[tuple[str, StaticRoute]] = []
-    default_can_run = (
-        config.route_policy is not RoutePolicy.DYNAMIC or config.routing_suppressed
-    )
-    if default_can_run:
-        routes.append(
-            (
-                "the run-wide default",
-                StaticRoute(
-                    config.model, config.reasoning_effort, config.context_tier
-                ),
-            )
-        )
-    for key in sorted(config.routing):
-        model, effort = config.routing[key]
-        routes.append(
-            (f"[routing] {key}", StaticRoute(model, effort, config.context_tier))
-        )
-    if config.escalation_rung is not None:
-        model, effort = config.escalation_rung
-        routes.append(
-            ("[escalation]", StaticRoute(model, effort, config.context_tier))
-        )
-    return tuple(routes)
-
-
-async def _static_route_preflight(
-    config: RunConfig, *, warn: Callable[[str], None]
-) -> str | None:
-    """Verify every configured Static route, or say why the Run cannot start.
-
-    Answers ``None`` when there is nothing to refuse — which is *always*, and
-    without a round trip, for a Run that selected no policy (#560, ADR-0057).
-
-    Whole-configuration rather than per-Pickup. "Fail explicitly before work"
-    is only true of a check that runs before the first session, and checking
-    only the route this Pickup resolved would leave a broken ``[routing]``
-    entry to be discovered by the Iteration that finally picks up an issue
-    carrying that Task type — after the Run has already spent work. It also
-    makes the refusal deterministic: the same Config refuses the same way
-    whatever the Pool happened to contain.
-
-    **The placement is checked before the routes are**, because it decides
-    whether this host's answer is the answer at all.
-
-    A **Dynamic route** comes through here too (#561): under it a configured
-    ``[routing]`` entry still wins over the selector (AC5), so an entry the
-    harness refuses is just as dead as it is under a Static route — and the
-    selector's own candidates need no check here, having been elected from that
-    same listing.
-
-    Args:
-        config: The Run's frozen configuration.
-        warn: Sink for the observed cause of an unreadable listing, which the
-            ``unverifiable`` refusal can only guess at.
-    """
-    if config.route_policy is RoutePolicy.UNSELECTED:
-        return None
-    placement_refusal = _remote_placement_refusal(config)
-    if placement_refusal is not None:
-        return placement_refusal
-    routes = _configured_static_routes(config)
-    if not routes:
-        return None
-    capabilities = await _refresh_harness_capabilities(warn=warn)
-    for name, route in routes:
-        try:
-            validate_static_route(route, capabilities)
-        except StaticRouteError as exc:
-            return f"{name}: {exc}"
-    return None
 
 
 class DynamicRouteUnavailable(RuntimeError):
@@ -1118,50 +982,6 @@ class _DynamicRoutingSetup:
     prerequisites: DynamicRoutePrerequisites
     feedback_loops: tuple[FeedbackLoop, ...]
     measured: MeasuredRouting | None
-
-
-def _dynamic_route_preflight(
-    config: RunConfig, env: Mapping[str, str], *, repo_root: Path | None = None
-) -> tuple[_DynamicRoutingSetup | None, str | None]:
-    """Resolve the Run's dynamic routing, or say why it cannot start.
-
-    Answers ``(None, None)`` for every Run that did not select the policy, so
-    the legacy and Static paths keep costing nothing.
-
-    Resolved once for the whole Run rather than per Pickup, for the reason
-    ADR-0057 gives: the deadline, the routing-credit allowance, the selector
-    concurrency and the operator's own Artificial Analysis authorization are
-    *bounds the operator agreed to*, not defaults the Runner may invent, so a
-    Run missing one has nothing to fall back to — and discovering that at the
-    first Pickup means a session was already opened under a route nobody could
-    have elected. "Missing prerequisites start no dynamic work" is only true of
-    a check that runs before the first session.
-
-    The repository's own two contributions — its declared **Feedback loops**
-    and its **Measured routing** artifact — are read here for a weaker but
-    real reason: both are properties of the checkout rather than of an issue,
-    so a per-Pickup read would spend I/O to answer the same question again.
-    Neither can refuse the Run: an unreadable ``AGENTS.md`` or a malformed
-    artifact leaves the selector with less context, which is a worse assessment
-    and not an unsafe one.
-    """
-    if config.route_policy is not RoutePolicy.DYNAMIC:
-        return None, None
-    placement_refusal = _remote_placement_refusal(config)
-    if placement_refusal is not None:
-        return None, placement_refusal
-    try:
-        prerequisites = resolve_prerequisites(config, env)
-    except RoutingPrerequisiteError as exc:
-        return None, str(exc)
-    return (
-        _DynamicRoutingSetup(
-            prerequisites=prerequisites,
-            feedback_loops=_declared_feedback_loops(repo_root),
-            measured=_declared_measured_routing(repo_root),
-        ),
-        None,
-    )
 
 
 def _declared_feedback_loops(repo_root: Path | None) -> tuple[FeedbackLoop, ...]:
@@ -2529,7 +2349,7 @@ class _Loop:
         type the operator routed, an explicit flag or environment pin, and a
         configured **Escalation rung** — :func:`static_route_applies` is where
         that list lives, so the rule reads the same here as it does on the
-        record. Those are the routes ``_static_route_preflight`` already
+        record. Those are the routes ``resolve_run_routing_preflight`` already
         verified against the harness, so the two halves cover the Run between
         them with no gap and no overlap.
 
@@ -6839,15 +6659,17 @@ async def run(
     # opened, so an unsupported or unverifiable selection costs no work at all
     # (#560, #561, ADR-0057). A Run that selected no policy never reaches the
     # network for it.
-    dynamic_routing, dynamic_refusal = _dynamic_route_preflight(
-        config, os.environ, repo_root=repo_root
+    routing_preflight = await resolve_run_routing_preflight(
+        config,
+        os.environ,
+        capabilities_fetch=lambda: _refresh_harness_capabilities(
+            warn=lambda message: diag.warning(
+                "harness capability read failed: %s", message
+            )
+        ),
     )
-    if dynamic_refusal is not None:
-        print(
-            f"git-loopy: the selected Dynamic route was refused — "
-            f"{dynamic_refusal}",
-            file=sys.stderr,
-        )
+    if not routing_preflight.passed:
+        print(f"git-loopy: {routing_preflight.refusal}", file=sys.stderr)
         try:
             writers.run_summary.flush()
         except Exception as flush_exc:
@@ -6855,24 +6677,15 @@ async def run(
         control.close()
         return exit_code_for("preflight_failed")
 
-    static_route_refusal = await _static_route_preflight(
-        config,
-        warn=lambda message: diag.warning(
-            "harness capability read failed: %s", message
-        ),
-    )
-    if static_route_refusal is not None:
-        print(
-            f"git-loopy: the selected Static route was refused — "
-            f"{static_route_refusal}",
-            file=sys.stderr,
+    dynamic_routing = (
+        None
+        if routing_preflight.prerequisites is None
+        else _DynamicRoutingSetup(
+            prerequisites=routing_preflight.prerequisites,
+            feedback_loops=_declared_feedback_loops(repo_root),
+            measured=_declared_measured_routing(repo_root),
         )
-        try:
-            writers.run_summary.flush()
-        except Exception as flush_exc:
-            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
-        control.close()
-        return exit_code_for("preflight_failed")
+    )
 
     try:
         prompt_text = _read_prompt(repo_root, os.environ)

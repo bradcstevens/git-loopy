@@ -87,6 +87,7 @@ from git_loopy.persist import WritersBundle, create_writers
 from git_loopy.readiness import BlockedByRead, BlockerNode
 from git_loopy.route_publication import RouteDeliveryError
 from git_loopy.run_control import is_run_alive
+from git_loopy.run_routing_preflight import resolve_run_routing_preflight
 from git_loopy.session import SKILL_TOOL_NAME
 from git_loopy.sinks import SinkFanout
 from git_loopy.skill_catalog import build_skill_catalog
@@ -5047,14 +5048,16 @@ def test_a_static_route_refuses_a_placement_whose_harness_is_not_this_one(
 
     monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", _refresh)
 
-    refusal = asyncio.run(
-        loop_module._static_route_preflight(
-            _static_config(execution_host="github-actions"), warn=lambda _message: None
+    verdict = asyncio.run(
+        resolve_run_routing_preflight(
+            _static_config(execution_host="github-actions"), {},
+            capabilities_fetch=_refresh,
         )
     )
 
-    assert refusal is not None, "a remote placement verified against the local harness"
-    assert "github-actions" in refusal
+    assert verdict.refusal is not None, "a remote placement verified against the local harness"
+    assert "github-actions" in verdict.refusal
+    assert "--execution-host local" in verdict.refusal
     assert asked == [], "the orchestrator's own harness was read for a remote placement"
 
 
@@ -5082,14 +5085,11 @@ def test_a_local_placement_is_the_one_a_static_route_can_verify(monkeypatch) -> 
 
     monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", _refresh)
 
-    assert (
-        asyncio.run(
-            loop_module._static_route_preflight(
-                _static_config(), warn=lambda _message: None
-            )
+    assert asyncio.run(
+        resolve_run_routing_preflight(
+            _static_config(), {}, capabilities_fetch=_refresh,
         )
-        is None
-    )
+    ).passed
 
 
 def test_every_configured_static_route_is_checked_not_just_the_default(
@@ -5353,21 +5353,27 @@ def test_dynamic_routing_refuses_a_placement_whose_harness_is_not_this_one(
     """
     monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
 
-    _prerequisites, refusal = loop_module._dynamic_route_preflight(
-        _dynamic_config(execution_host="github-actions"), os.environ
+    verdict = asyncio.run(
+        resolve_run_routing_preflight(
+            _dynamic_config(execution_host="github-actions"), os.environ
+        )
     )
 
-    assert refusal is not None, "a remote placement elected from the local listing"
-    assert "github-actions" in refusal
+    assert verdict.refusal is not None, "a remote placement elected from the local listing"
+    assert "github-actions" in verdict.refusal
 
 
 def test_an_unselected_policy_resolves_no_dynamic_prerequisites(monkeypatch) -> None:
     """The legacy Run pays nothing for a policy it did not select."""
     monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
 
-    assert loop_module._dynamic_route_preflight(
-        RunConfig(issue_source="github", max_iterations=1), os.environ
-    ) == (None, None)
+    verdict = asyncio.run(
+        resolve_run_routing_preflight(
+            RunConfig(issue_source="github", max_iterations=1), os.environ
+        )
+    )
+    assert verdict.passed
+    assert verdict.prerequisites is None
 
 
 def test_a_dynamic_run_verifies_the_routing_entries_that_still_win(
@@ -5408,26 +5414,96 @@ def test_a_dynamic_run_does_not_refuse_a_default_the_selector_replaces(
     """
     _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
 
-    named = {
-        name for name, _route in loop_module._configured_static_routes(
-            _dynamic_config(model="not-in-any-listing", reasoning_effort=None)
+    verdict = asyncio.run(
+        resolve_run_routing_preflight(
+            _dynamic_config(model="not-in-any-listing", reasoning_effort=None),
+            {dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV: "aa-token"},
+            capabilities_fetch=loop_module._refresh_harness_capabilities,
         )
-    }
+    )
 
-    assert named == set(), f"a dynamic Run gated a route it cannot take: {named}"
+    assert verdict.passed, f"a dynamic Run gated a route it cannot take: {verdict.refusal}"
 
 
 def test_an_explicit_pin_is_still_verified_under_a_dynamic_policy(
     monkeypatch,
 ) -> None:
     """A flag or env pin suppresses routing, so the default *is* the route."""
-    named = {
-        name for name, _route in loop_module._configured_static_routes(
-            _dynamic_config(routing_suppressed=True)
+    _harness(monkeypatch, ("another-model", ["high"], False))
+    verdict = asyncio.run(
+        resolve_run_routing_preflight(
+            _dynamic_config(routing_suppressed=True),
+            {dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV: "aa-token"},
+            capabilities_fetch=loop_module._refresh_harness_capabilities,
         )
-    }
+    )
 
-    assert named == {"the run-wide default"}
+    assert not verdict.passed
+    assert "the run-wide default" in verdict.refusal
+
+
+def test_a_dynamic_policy_run_wide_override_needs_no_routing_authorization(
+    tmp_path, monkeypatch
+) -> None:
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["high"], True))
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+
+    async def forbidden_evidence(*_args, **_kwargs):
+        pytest.fail("a run-wide override must not read the leaderboard")
+
+    def forbidden_router(*_args, **_kwargs):
+        pytest.fail("a run-wide override must not construct a Route selector")
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", forbidden_evidence)
+    monkeypatch.setattr(loop_module, "_make_dynamic_router", forbidden_router)
+    config = cli.resolve_config(
+        cli.build_parser().parse_args(
+            ["--model", "gpt-5.6-terra", "--reasoning-effort", "high",
+             "--context-tier", "long_context", "1"]
+        ),
+        {},
+        project={"route_policy": "dynamic"},
+        global_={},
+    ).run
+
+    assert asyncio.run(loop_module.run(config)) == 0
+    assert fake_client.create_calls
+    call = fake_client.create_calls[0]
+    assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+        "gpt-5.6-terra", "high", "long_context",
+    )
+    assert _bound_pickups(tmp_path)[0]["routing_source"] == "defaulted_explicit_override"
+
+
+@pytest.mark.parametrize("live_efforts", [["max"], ["high"]])
+def test_a_dynamic_policy_pin_is_honoured_or_refused_never_rescued(
+    tmp_path, monkeypatch, live_efforts
+) -> None:
+    _write_runnable_feedback_loop(tmp_path)
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    _harness(monkeypatch, ("gpt-5-mini", live_efforts, False))
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    config = cli.resolve_config(
+        cli.build_parser().parse_args(
+            ["--model", "gpt-5-mini", "--reasoning-effort", "max", "1"]
+        ),
+        {},
+        project={"route_policy": "dynamic"},
+        global_={},
+    ).run
+
+    code = asyncio.run(loop_module.run(config))
+
+    if live_efforts == ["max"]:
+        assert code == 0
+        assert fake_client.create_calls[0]["reasoning_effort"] == "max"
+        assert _bound_pickups(tmp_path)[0]["effort"] == "max"
+    else:
+        assert code == 1
+        assert fake_client.create_calls == []
+        assert list((tmp_path / ".git-loopy" / "logs").glob("*.jsonl")) == []
 
 
 def _aa_payload(*rows: dict[str, Any]) -> bytes:

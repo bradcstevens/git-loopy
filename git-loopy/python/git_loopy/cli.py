@@ -2343,11 +2343,11 @@ def _resolve_model_and_effort(
     #    default pairs gate identically. The gate owns the *policy*; this call
     #    site owns the *presentation* and its suppression rule.
     #
-    #    A Static route skips it for the reason `config._gate_pair` does (#560,
-    #    ADR-0057): this table is a hardcoded roster, and the selected pair must
+    #    A selected policy skips it for the reason `config._gate_pair` does:
+    #    this table is a hardcoded roster, and a selected Static pair must
     #    survive to be verified against the authenticated harness rather than be
-    #    rescued by a description of some other binary.
-    if route_policy is RoutePolicy.STATIC:
+    #    rescued, including a run-wide override under Dynamic routing.
+    if route_policy is not RoutePolicy.UNSELECTED:
         return base_model, effort
     gated = gate_reasoning_effort(base_model, effort)
     warning = gated.warning

@@ -418,7 +418,7 @@ exactly as it found it, so the fix is always yours to make deliberately.
 
 `git-loopy doctor` is the report half of Run-preflight recovery, following the
 same report-first shape as `git-loopy labels`. It resolves the exact
-environment and Skill policy a Run preflight resolves, without starting a Run,
+environment, routing prerequisites, and Skill policy a Run preflight resolves, without starting a Run,
 opening a picker, spending AI Credits, changing Copilot settings, or installing
 anything. It never refreshes the **installed catalog** either; only
 `doctor --apply` does (see
@@ -435,6 +435,22 @@ carry the Labels a Run **reads**; and `AGENTS.md` must declare at least one
 runnable feedback loop. Every one of them is evaluated in a single pass, so one
 failure never hides the next, and each failing row names the command or operator
 action that owns its remedy.
+
+For a selected Route policy, doctor also uses the Run's
+`resolve_run_routing_preflight` verdict. Static settings are checked against a
+fresh authenticated harness listing; unsuppressed Dynamic routing requires
+operator-owned access and explicit valid limits. An explicit run-wide model or
+effort override needs no leaderboard credential. Routing refusals remain failures
+even if `--apply` successfully repairs a Skill policy, and that repair does not
+alter routes or choose a migration policy.
+Doctor evaluates Config and environment only; it cannot anticipate flags on a
+later Run. Supply `GIT_LOOPY_MODEL` / `GIT_LOOPY_REASONING_EFFORT` to doctor
+when diagnosing that Run's explicit model/effort override.
+
+This is configuration preflight, not the completed dynamic-default activation
+tracked in #567: doctor does not yet assess live benchmark availability or the
+verified candidate intersection. A successful prerequisite row promises neither
+an issue-specific route nor permission to skip fresh proposal/Pickup checks.
 
 The Label row judges the presence of the names a Run reads and cannot create for
 itself — the triage roles, `parallel-safe`, `priority`, and `ready-for-agent`,

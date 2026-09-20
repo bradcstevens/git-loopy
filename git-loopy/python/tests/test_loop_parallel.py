@@ -7847,6 +7847,66 @@ def test_a_refused_static_route_opens_no_lane_at_all(tmp_path, monkeypatch) -> N
     assert fake_git.active_worktrees == []
 
 
+def test_a_dynamic_policy_override_reaches_lanes_without_routing_access(
+    tmp_path, monkeypatch
+) -> None:
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(
+                number, labels=["ready-for-agent", "parallel-safe", "task-type:docs"]
+            )
+            for number in (42, 43)
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(monkeypatch, ("gpt-5-mini", ["max"], True))
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+
+    def forbidden_router(*_args, **_kwargs):
+        pytest.fail("a run-wide Static override must construct no Route selector")
+
+    monkeypatch.setattr(loop_module, "_make_dynamic_router", forbidden_router)
+    config = cli_module.resolve_config(
+        cli_module.build_parser().parse_args(["--context-tier", "long_context", "2"]),
+        {"GIT_LOOPY_MODEL": "gpt-5-mini", "GIT_LOOPY_REASONING_EFFORT": "max"},
+        project={
+            "route_policy": "dynamic",
+            "routing": {"docs": {"model": "unavailable-static-model", "effort": "high"}},
+        },
+        global_={},
+    ).run
+
+    assert asyncio.run(loop_module.run(config)) == 0
+    work = {
+        Path(call["working_directory"]).name: call
+        for call in fake_client.create_calls
+        if call["working_directory"]
+    }
+    assert set(work) == {"issue-42", "issue-43"}
+    for call in work.values():
+        assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+            "gpt-5-mini", "max", "long_context",
+        )
+    bound = [
+        event for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.pickup.bound"
+    ]
+    assert len(bound) == 2
+    assert all(
+        (event["model"], event["effort"], event["context_tier"], event["routing_source"])
+        == ("gpt-5-mini", "max", "long_context", "defaulted_explicit_override")
+        for event in bound
+    )
+
+
 def _script_harness(monkeypatch, *models) -> None:
     """Answer the Run's capability refresh with a scripted harness listing.
 

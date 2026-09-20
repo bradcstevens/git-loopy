@@ -80,3 +80,17 @@ This division is what makes #517, #519, and ADR-0054 consistent with one another
 competing: #519 already requires that every fixable row "say what fixes it, deferring to the commands
 that already own those repairs rather than duplicating them," which is the same rule read from the
 reporting side.
+
+## Routing implementation status (#567)
+
+Run and doctor now call `run_routing_preflight.resolve_run_routing_preflight`
+for the same selected-policy configuration verdict: execution placement,
+Dynamic authorization and finite limits, and live verification of configured
+Static routes. A run-wide model/effort override requires no Dynamic authorization,
+and a successful Skill-policy repair cannot clear a routing refusal.
+
+This is partial activation work, not the final Dynamic default. Guided
+setup/migration and shared live Dynamic readiness remain outstanding; the current
+configuration verdict does not claim to have read required benchmark evidence or
+proved the verified candidate intersection. Proposal and Pickup retain those
+fresh checks, and existing unselected-policy behavior is unchanged.
