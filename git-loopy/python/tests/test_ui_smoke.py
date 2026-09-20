@@ -1589,6 +1589,12 @@ _ALLOWED_UI_IMPORTS: frozenset[str] = frozenset(
         # Deep and pure (stdlib only); summary.py folds its per-Iteration
         # Consumption onto it. Not a shell/CLI/persist coupling.
         "git_loopy.usage",
+        # git_loopy.viewer_zone — the one ambient-environment seam the UI is
+        # allowed (#597, ADR-0058). Showing a person a wall clock requires
+        # knowing whether this machine can state its own, which the UI cannot
+        # answer without reading `TZ`. Keeping that read behind one deep module
+        # is what stops `os` and the filesystem spreading through `ui/`.
+        "git_loopy.viewer_zone",
     }
 )
 
@@ -2702,13 +2708,18 @@ def _resolved_event(**payload: Any) -> dict[str, Any]:
     return event
 
 
-def test_a_freshly_validated_reuse_is_distinguishable_from_an_assessment() -> None:
+def test_a_freshly_validated_reuse_is_distinguishable_from_an_assessment(
+    denver_viewer: None,
+) -> None:
     """#565 AC8: the one fact the Pickup line cannot carry.
 
     The pair is already on the Pickup line; what an operator cannot see there
     is whether a selector call was bought for it. Reuse, a first assessment and
     a reassessment of a route that no longer validates are three different
     bills, so they have to read as three different lines.
+
+    The instant it names is read back in the viewing machine's zone (#597),
+    which is why this test pins that zone.
     """
     renderer, _summary, buf = _make_renderer()
 
@@ -2727,7 +2738,10 @@ def test_a_freshly_validated_reuse_is_distinguishable_from_an_assessment() -> No
     assert "01JD00000000000000000000OLD" in out, (
         "a reuse that does not name the decision it reused is not provenance"
     )
-    assert "2026-09-18T20:00:00.000Z" in out
+    assert "2026-09-18T14:00:00-06:00" in out, (
+        "the decided instant must read in the viewer's zone, not raw UTC"
+    )
+    assert "2026-09-18T20:00:00.000Z" not in out
 
 
 def test_a_first_assessment_says_it_had_nothing_to_reuse() -> None:
@@ -2809,7 +2823,9 @@ def test_a_prepared_route_never_reads_as_a_decision() -> None:
     assert "bound" not in out, "a proposal claimed a Lease"
 
 
-def test_a_prepared_route_reads_back_its_rationale_and_provenance() -> None:
+def test_a_prepared_route_reads_back_its_rationale_and_provenance(
+    denver_viewer: None,
+) -> None:
     renderer, _summary, buf = _make_renderer()
 
     renderer.render(
@@ -2833,20 +2849,30 @@ def test_a_prepared_route_reads_back_its_rationale_and_provenance() -> None:
         "strongest verified index for this work",
         "01JD00000000000000000000PRE",
         "9f2c1d6a4b8e",
-        "2026-09-19T09:00:00.000Z",
-        "2026-09-19T09:05:00.000Z",
+        "2026-09-19T03:00:00-06:00",
+        "2026-09-19T03:05:00-06:00",
         "gpt-5.6-terra",
         "long_context",
         "benchmark-index",
         "claude-opus-5@2026-09",
-        "2026-09-19T08:45:00.000Z",
-        "2026-09-19T08:46:00.000Z",
-        "2026-09-18T00:00:00.000Z",
+        "2026-09-19T02:45:00-06:00",
+        "2026-09-19T02:46:00-06:00",
+        "2026-09-17T18:00:00-06:00",
         "swe-bench-verified-2",
         "repository coding",
         "overshot",
     ):
         assert expected in out
+    for raw_utc in (
+        "2026-09-19T09:00:00.000Z",
+        "2026-09-19T09:05:00.000Z",
+        "2026-09-19T08:45:00.000Z",
+        "2026-09-19T08:46:00.000Z",
+        "2026-09-18T00:00:00.000Z",
+    ):
+        assert raw_utc not in out, (
+            f"{raw_utc} reached an operator as raw UTC instead of viewer-local"
+        )
 
 
 def test_a_null_prepared_effort_is_not_presented_as_configured() -> None:

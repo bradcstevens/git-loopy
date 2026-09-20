@@ -59,12 +59,19 @@ pub struct Diagnostics {
     pub unreadable_lines: usize,
     /// The most recent one, truncated.
     pub latest: Option<String>,
+    /// Whether every instant is being shown in UTC because the viewing
+    /// machine's zone could not be resolved (ADR-0058).
+    ///
+    /// A Dashboard that quietly showed UTC would be indistinguishable from one
+    /// showing local time to an operator in Greenwich and *wrong* to everyone
+    /// else, so the fallback is stated rather than assumed.
+    pub local_zone_unresolved: bool,
 }
 
 impl Diagnostics {
     /// Whether there is anything worth telling the operator.
     pub fn is_empty(&self) -> bool {
-        self.unreadable_lines == 0
+        self.unreadable_lines == 0 && !self.local_zone_unresolved
     }
 
     fn record(&mut self, line: &str) {
@@ -142,6 +149,10 @@ struct Grab {
 impl DashboardSession {
     /// Start a session for one Run.
     pub fn new(inputs: RunInputs, zone: Zone, drill_in: IssueRef) -> Self {
+        let diagnostics = Diagnostics {
+            local_zone_unresolved: zone.is_utc_fallback(),
+            ..Diagnostics::default()
+        };
         Self {
             state: DashboardState::new(inputs),
             zone,
@@ -154,7 +165,7 @@ impl DashboardSession {
             pinned_monotonic: None,
             last_instant: None,
             last_monotonic: None,
-            diagnostics: Diagnostics::default(),
+            diagnostics,
         }
     }
 
@@ -234,7 +245,7 @@ impl DashboardSession {
             } else {
                 self.last_monotonic
             },
-            zone: self.zone,
+            zone: self.zone.clone(),
             capabilities: self.capabilities,
         };
         project_run_view(&self.state, &context, self.cursor.selected())

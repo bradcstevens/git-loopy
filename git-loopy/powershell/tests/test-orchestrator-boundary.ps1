@@ -316,6 +316,11 @@ if ($args.Count -ge 1 -and $args[0] -ceq "--schema-version") {
     else { 0 })
 }
 [IO.File]::AppendAllText($env:FAKE_TUI_STARTED, $Label + [Environment]::NewLine)
+[IO.File]::AppendAllText($env:FAKE_TUI_ARGV, ($args -join " ") + "`n")
+$Zone = if ($null -ne $env:TZ -and $env:TZ -ne "") { $env:TZ } else { "<unset>" }
+[IO.File]::AppendAllText($env:FAKE_TUI_ZONE, $Zone + "`n")
+$ZoneDirectory = if ($env:TZDIR) { $env:TZDIR } else { "<unset>" }
+[IO.File]::AppendAllText($env:FAKE_TUI_ZONE_DIR, $ZoneDirectory + "`n")
 $Delivered = 0
 while ($null -ne ($Line = [Console]::In.ReadLine())) {
     $Delivered++
@@ -733,7 +738,7 @@ function Set-FakeTuiEnv {
         [string]$Prefix
     )
 
-    foreach ($Suffix in @("stdin", "started", "finished")) {
+    foreach ($Suffix in @("stdin", "started", "finished", "argv", "zone", "zone-directory")) {
         $Path = Join-Path $TempDir "$Prefix-tui.$Suffix"
         if ([IO.File]::Exists($Path)) {
             [IO.File]::Delete($Path)
@@ -742,6 +747,12 @@ function Set-FakeTuiEnv {
     $env:FAKE_TUI_STDIN = Join-Path $TempDir "$Prefix-tui.stdin"
     $env:FAKE_TUI_STARTED = Join-Path $TempDir "$Prefix-tui.started"
     $env:FAKE_TUI_FINISHED = Join-Path $TempDir "$Prefix-tui.finished"
+    # What the launch actually handed the helper. Both belong to #597: the
+    # helper resolves the *viewing* machine's zone, which only works while this
+    # Orchestrator states no offset of its own and passes its environment on.
+    $env:FAKE_TUI_ARGV = Join-Path $TempDir "$Prefix-tui.argv"
+    $env:FAKE_TUI_ZONE = Join-Path $TempDir "$Prefix-tui.zone"
+    $env:FAKE_TUI_ZONE_DIR = Join-Path $TempDir "$Prefix-tui.zone-directory"
     # A clone-local helper is an artefact of this distribution, so contract §16
     # requires exact Release-version equality; the default fake is a
     # well-installed one and a case that wants drift says so explicitly.
@@ -3607,6 +3618,54 @@ Start-Sleep -Seconds $Sleep
         $TuiReplay.Contains('"wrapper.run.end"', [StringComparison]::Ordinal)
     ) "the helper never received the final Run event"
 
+    # Human-facing time belongs to the viewer (#597, ADR-0058). The helper
+    # resolves the zone of the machine a person is actually looking at, which it
+    # can only do while this Orchestrator keeps out of the way: state no offset,
+    # and hand the child the environment the operator launched from. Both are
+    # observed at the process boundary, because an Orchestrator that quietly
+    # pinned a clock would leave every other assertion in this file green.
+    Assert-Equal "" (
+        [IO.File]::ReadAllText($env:FAKE_TUI_ARGV).Trim()
+    ) "the launch states no offset, so the helper resolves the viewer's zone"
+
+    $ZoneLabel = "viewer-zone"
+    $ZoneRepo = Join-Path $TempDir $ZoneLabel
+    $ZoneBin = Join-Path $TempDir "$ZoneLabel-bin"
+    New-TestRepo -Root $ZoneRepo
+    Write-FakeTools -BinDir $ZoneBin
+    New-FakeTuiHelper `
+        -Directory (Join-Path $ZoneRepo ".git-loopy/bin") `
+        -Label "clone-local" | Out-Null
+    Set-FakeTuiEnv -Prefix $ZoneLabel
+    Set-EmptyPoolEnv -Prefix $ZoneLabel
+
+    $OldZone = $env:TZ
+    $OldZoneDirectory = $env:TZDIR
+    $env:TZ = "America/Denver"
+    $env:TZDIR = Join-Path $TempDir "viewer-zoneinfo"
+    try {
+        $ZoneStatus = Invoke-Entrypoint `
+            -Repo $ZoneRepo `
+            -FakeBin $ZoneBin `
+            -StdoutPath (Join-Path $TempDir "$ZoneLabel.stdout") `
+            -StderrPath (Join-Path $TempDir "$ZoneLabel.stderr") `
+            -Arguments @("--interactive")
+    }
+    finally {
+        $env:TZ = $OldZone
+        $env:TZDIR = $OldZoneDirectory
+    }
+    Assert-Equal 0 $ZoneStatus "viewer-zone Run exit"
+    Assert-Equal "America/Denver" (
+        [IO.File]::ReadAllText($env:FAKE_TUI_ZONE).Trim()
+    ) "the helper inherits the viewing machine's zone from the launch"
+    Assert-Equal (Join-Path $TempDir "viewer-zoneinfo") (
+        [IO.File]::ReadAllText($env:FAKE_TUI_ZONE_DIR).Trim()
+    ) "the helper inherits the viewing machine's timezone database directory"
+    Assert-Equal "" (
+        [IO.File]::ReadAllText($env:FAKE_TUI_ARGV).Trim()
+    ) "the viewer-zone launch states no offset either"
+
     # Every other way a Run can meet — or fail to meet — the live interface,
     # observed at the same boundary. Each case says only what makes it different
     # from the delivery case above.
@@ -4958,6 +5017,9 @@ finally {
         "FAKE_TUI_STDIN",
         "FAKE_TUI_STARTED",
         "FAKE_TUI_FINISHED",
+        "FAKE_TUI_ARGV",
+        "FAKE_TUI_ZONE",
+        "FAKE_TUI_ZONE_DIR",
         "FAKE_TUI_VERSION",
         "FAKE_TUI_MIN_SCHEMA",
         "FAKE_TUI_MAX_SCHEMA",

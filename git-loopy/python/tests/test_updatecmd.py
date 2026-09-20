@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import tarfile
+from functools import partial
 from pathlib import Path
 from typing import Mapping
 
@@ -1018,15 +1019,43 @@ def _make_fake_tar_helper(
     return archive_bytes, checksum_bytes
 
 
+@pytest.fixture(
+    params=[("Darwin", "arm64", None), ("Linux", "x86_64", "gnu")],
+    ids=["macos", "linux"],
+)
+def helper_host(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> tuple[str, str, str | None]:
+    from git_loopy import tui_release
+
+    system, machine, libc = request.param
+    monkeypatch.setattr(tui_release.platform, "system", lambda: system)
+    monkeypatch.setattr(tui_release.platform, "machine", lambda: machine)
+    monkeypatch.setattr(
+        tui_release.platform, "libc_ver", lambda: ("glibc" if libc == "gnu" else "", "")
+    )
+    monkeypatch.setattr(
+        tui_release,
+        "refresh_machine_local_helper",
+        partial(
+            tui_release.refresh_machine_local_helper,
+            host_system=lambda: system,
+            host_machine=lambda: machine,
+            host_libc=lambda: libc,
+        ),
+    )
+    return system, machine, libc
+
+
 @pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
 def test_update_public_maintenance_exact_match(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, helper_host: tuple[str, str, str | None]
 ) -> None:
     from git_loopy import tui_release, updatecmd
 
     config_home = tmp_path / "config-home"
     env = {"XDG_CONFIG_HOME": str(config_home)}
-    artifact = tui_release._runtime_artifact_for_host("Darwin", "arm64", None)
+    artifact = tui_release._runtime_artifact_for_host(*helper_host)
     archive_bytes, checksum_bytes = _make_fake_tar_helper(
         tmp_path / "pkg-124", artifact, "1.2.4"
     )
@@ -1053,9 +1082,6 @@ def test_update_public_maintenance_exact_match(
         ): checksum_bytes,
     }
     monkeypatch.setattr(tui_release, "_download_release_file", downloads.__getitem__)
-    monkeypatch.setattr(tui_release.platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(tui_release.platform, "machine", lambda: "arm64")
-    monkeypatch.setattr(tui_release.platform, "libc_ver", lambda: ("", ""))
 
     output: list[str] = []
     result = updatecmd.run_update(
@@ -1083,13 +1109,13 @@ def test_update_public_maintenance_exact_match(
 
 @pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
 def test_update_public_maintenance_verified_older_fallback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, helper_host: tuple[str, str, str | None]
 ) -> None:
     from git_loopy import tui_release, updatecmd
 
     config_home = tmp_path / "config-home"
     env = {"XDG_CONFIG_HOME": str(config_home)}
-    artifact = tui_release._runtime_artifact_for_host("Darwin", "arm64", None)
+    artifact = tui_release._runtime_artifact_for_host(*helper_host)
     archive_bytes, checksum_bytes = _make_fake_tar_helper(
         tmp_path / "pkg-124", artifact, "1.2.4"
     )
@@ -1121,9 +1147,6 @@ def test_update_public_maintenance_verified_older_fallback(
         ): checksum_bytes,
     }
     monkeypatch.setattr(tui_release, "_download_release_file", downloads.__getitem__)
-    monkeypatch.setattr(tui_release.platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(tui_release.platform, "machine", lambda: "arm64")
-    monkeypatch.setattr(tui_release.platform, "libc_ver", lambda: ("", ""))
 
     output: list[str] = []
     result = updatecmd.run_update(
@@ -1238,13 +1261,13 @@ def test_update_public_maintenance_newer_only_history(
 
 @pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
 def test_update_public_maintenance_incompatible_helper(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, helper_host: tuple[str, str, str | None]
 ) -> None:
     from git_loopy import tui_release, updatecmd
 
     config_home = tmp_path / "config-home"
     env = {"XDG_CONFIG_HOME": str(config_home)}
-    artifact = tui_release._runtime_artifact_for_host("Darwin", "arm64", None)
+    artifact = tui_release._runtime_artifact_for_host(*helper_host)
     archive_bytes, checksum_bytes = _make_fake_tar_helper(
         tmp_path / "pkg-124", artifact, "1.2.4", schema_range=(99, 99)
     )
@@ -1271,9 +1294,6 @@ def test_update_public_maintenance_incompatible_helper(
         ): checksum_bytes,
     }
     monkeypatch.setattr(tui_release, "_download_release_file", downloads.__getitem__)
-    monkeypatch.setattr(tui_release.platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(tui_release.platform, "machine", lambda: "arm64")
-    monkeypatch.setattr(tui_release.platform, "libc_ver", lambda: ("", ""))
 
     output: list[str] = []
     result = updatecmd.run_update(
@@ -1296,13 +1316,13 @@ def test_update_public_maintenance_incompatible_helper(
 
 @pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
 def test_update_public_maintenance_damaged_assets(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, helper_host: tuple[str, str, str | None]
 ) -> None:
     from git_loopy import tui_release, updatecmd
 
     config_home = tmp_path / "config-home"
     env = {"XDG_CONFIG_HOME": str(config_home)}
-    artifact = tui_release._runtime_artifact_for_host("Darwin", "arm64", None)
+    artifact = tui_release._runtime_artifact_for_host(*helper_host)
     archive_bytes, checksum_bytes = _make_fake_tar_helper(
         tmp_path / "pkg-124", artifact, "1.2.4", tamper_digest=True
     )
@@ -1329,9 +1349,6 @@ def test_update_public_maintenance_damaged_assets(
         ): checksum_bytes,
     }
     monkeypatch.setattr(tui_release, "_download_release_file", downloads.__getitem__)
-    monkeypatch.setattr(tui_release.platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(tui_release.platform, "machine", lambda: "arm64")
-    monkeypatch.setattr(tui_release.platform, "libc_ver", lambda: ("", ""))
 
     output: list[str] = []
     result = updatecmd.run_update(

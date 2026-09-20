@@ -87,6 +87,7 @@ from git_loopy.events import (
 from git_loopy.usage import BillingSample
 
 from .console import STYLES
+from .local_time import viewer_local
 from .summary import RunSummary
 
 __all__ = ["Renderer"]
@@ -615,7 +616,9 @@ class Renderer:
                 text.append(f"  ({origin})", style=STYLES["meta"])
             validated = event.get("reused_validated_at")
             if isinstance(validated, str) and validated:
-                text.append(f"  decided {validated}", style=STYLES["meta"])
+                text.append(
+                    f"  decided {viewer_local(validated)}", style=STYLES["meta"]
+                )
         elif isinstance(superseded, str) and superseded:
             text.append("  reassessed — a recorded route no longer validates")
             text.append(f"  ({superseded})", style=STYLES["meta"])
@@ -656,7 +659,9 @@ class Renderer:
                 text.append(f" ({tier})", style=STYLES["meta"])
             valid_until = event.get("valid_until")
             if isinstance(valid_until, str) and valid_until:
-                text.append(f"  valid until {valid_until}", style=STYLES["meta"])
+                text.append(
+                    f"  valid until {viewer_local(valid_until)}", style=STYLES["meta"]
+                )
             for label, field in (
                 ("proposal", "proposal_id"),
                 ("rationale", "summary"),
@@ -672,6 +677,8 @@ class Renderer:
             ):
                 value = event.get(field)
                 if isinstance(value, str) and value:
+                    if field in _ROUTING_INSTANTS:
+                        value = viewer_local(value)
                     text.append(f"  {label} {value}", style=STYLES["meta"])
             selector_model = event.get("selector_model")
             selector_effort = event.get("selector_effort")
@@ -1050,6 +1057,22 @@ _DELIVERY_PHRASES: dict[str, str] = {
 #: projection owes nothing, so it prints without the warning colour.
 _UNDELIVERED_ROUTE_PROJECTIONS: frozenset[str] = frozenset(
     {"pending", "partial", "failed"}
+)
+
+#: The **Routing preparation** provenance fields that are *instants*, and so
+#: belong to whoever is reading them rather than to the Execution host that
+#: recorded them (ADR-0058).
+#:
+#: Named rather than sniffed: the same detail loop carries a proposal id, a
+#: model identity and a benchmark version, and a readback that guessed which
+#: of those looked like a date would eventually rewrite one that was not.
+_ROUTING_INSTANTS: frozenset[str] = frozenset(
+    {
+        "prepared_at",
+        "evidence_retrieved_at",
+        "capabilities_retrieved_at",
+        "measurement_at",
+    }
 )
 
 #: The sources whose phrase is completed by the keys the tracker actually

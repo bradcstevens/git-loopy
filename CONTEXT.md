@@ -462,6 +462,18 @@ _Avoid_: running/not running, status, health, heartbeat.
 
 ### The live interface
 
+**Viewing machine**:
+The machine presenting a **Run** to an operator. Its clock governs human-facing
+wall-clock timestamps, independently of the **Execution host** doing the work.
+Different viewers may therefore see different local times for the same recorded instant.
+_Avoid_: Run host, worker host, source machine.
+
+**Display zone**:
+The Viewing machine's timezone rules applied at each displayed instant, including
+historical and daylight-saving changes. It changes how an instant is shown, never
+the recorded instant, elapsed duration, or event order.
+_Avoid_: startup offset, stored timezone, execution timezone.
+
 **Attach**:
 Observing an existing **Run** through a client without starting or taking ownership
 of its work. Attach may be repeated or concurrent: navigation belongs to each client,
