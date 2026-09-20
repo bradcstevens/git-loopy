@@ -321,6 +321,7 @@
       ]
     },
     "optional_projection_fields": {
+      "route": ["context_tier", "lifecycle_position"],
       "queue_row": ["preparation"],
       "preparation": [
         "model",

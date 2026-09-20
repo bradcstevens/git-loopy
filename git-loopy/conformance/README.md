@@ -505,6 +505,14 @@ integral. The probe's depth is the rollup seam, so it proves a payload is
 producible rather than that today's native Run loop reaches every input the seam
 accepts.
 
+The route projection's required inventory is `model`, `effort`, and `source`.
+`context_tier` and `lifecycle_position` are additive fields declared in
+`optional_projection_fields.route`: Queue and Iteration-breakdown rows preserve
+them when the Pickup recorded them, and omit them for older records rather than
+inventing a tier or a first-attempt claim. A reassessed Dynamic retry may keep
+the same configuration; its lifecycle position must still distinguish it from
+the earlier contribution.
+
 The **Activity** band's sizing gestures — the drag, the click and `shift+↑` / `shift+↓`
 (ADR-0038) — are deliberately **not** in this fixture set, now that both renderers
 implement them. A drag is not an Event, so nothing about it reaches the Event schema, and
