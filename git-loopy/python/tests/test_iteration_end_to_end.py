@@ -5849,6 +5849,7 @@ def test_a_blocked_candidate_is_left_pending_without_being_assessed(
             blocked,
             _dated(44, "2026-01-03T00:00:00Z"),
         ],
+        wait_for_prepared=(44,),
         routing_credit_allowance=Decimal("5"),
     )
 
