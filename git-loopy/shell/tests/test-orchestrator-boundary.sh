@@ -19,6 +19,8 @@ bash_bin="$(command -v bash)"
 
 # shellcheck disable=SC1091
 source "$script_dir/sigpipe.sh"
+# shellcheck disable=SC1091
+source "$port_dir/lib/release-version.sh"
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -239,6 +241,13 @@ case "${1-} ${2-}" in
     fi
     count=$((count + 1))
     printf '%s\n' "$count" >"$FAKE_GH_LIST_COUNT"
+    # An opt-in refusal, recorded in the count like any other attempt: the
+    # Orchestrator has to tell "the host answered with nothing" from "the host
+    # did not answer", and only a read that really failed exercises that.
+    if [[ "${FAKE_GH_LIST_STATUS:-0}" != "0" ]]; then
+      printf 'GraphQL: Field blockedBy does not exist on type Issue\n' >&2
+      exit "$FAKE_GH_LIST_STATUS"
+    fi
     if [[ -n "${FAKE_GH_EMPTY_AFTER:-}" ]] && ((count > FAKE_GH_EMPTY_AFTER)); then
       printf '[]\n'
     else
@@ -960,8 +969,11 @@ assert_contains "$(<"$temp_dir/readiness-all-blocked.stderr")" \
   "waiting on blockers" \
   "the all-blocked ending tells the operator why work did not start"
 
-# A Pool that mixes a proven blocker with a read the Runner could not prove is
-# still all-skipped: "waiting" must not hide work an operator can repair.
+# A Pool that mixes a proven blocker with a read the Runner could not prove ends
+# under `preflight_failed` (#542): "waiting" must not hide work an operator can
+# repair, and neither must "skipped" — an unread candidate is unknown, not
+# refused, so the one refusal nobody could read outranks the one that proved a
+# blocker.
 repo="$temp_dir/readiness-mixed-skips"
 fake_bin="$temp_dir/readiness-mixed-skips-bin"
 make_real_repo "$repo"
@@ -989,17 +1001,70 @@ set -e
 assert_equal "1" "$status" "a mixed blocked Pool exits nonzero"
 [[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
   fail "a mixed blocked Pool started a session"
+assert_contains "$(<"$temp_dir/readiness-mixed-skips.stderr")" \
+  "unknown, not refused" \
+  "an unread refusal names itself rather than reporting the Pool as skipped"
 jq -se '
   ([.[] | select(.type == "wrapper.pickup.skipped") | .reason] ==
     ["blocked_by_open_dependency: example/repo#50", "readiness_unprovable"])
   and ([.[] | select(.type == "wrapper.pickup.bound")] | length == 0)
   and ([.[] | select(.type == "wrapper.strike")] | length == 0)
   and ([.[] | select(.type == "wrapper.iteration.end") | .outcome] ==
-    ["all_skipped"])
+    ["preflight_failed"])
   and (.[-1].type == "wrapper.run.end")
-  and (.[-1].outcome == "all_skipped")
+  and (.[-1].outcome != "all_skipped")
+  and (.[-1].outcome == "preflight_failed")
 ' "$temp_dir/readiness-mixed-skips.stdout" >/dev/null ||
-  fail "a mixed blocked Pool did not preserve the all-skipped ending"
+  fail "an unread refusal did not outrank the blocked one"
+
+# Wrapper contract §3.3.1 (#542): a Pool whose every candidate's readiness could
+# not be read has established nothing about the work in it. `all_skipped` means
+# "a labelling mistake an operator can fix" and names the blockers to fix; this
+# verdict carries none, so reporting it that way would hand an operator exit 1
+# and nothing to act on over a Pool that may be entirely ready.
+repo="$temp_dir/readiness-all-unprovable"
+fake_bin="$temp_dir/readiness-all-unprovable-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+jq '[.[] | .blockedBy = {totalCount: 1, nodes: []}]' \
+  "$temp_dir/readiness-pickup-list.json" \
+  >"$temp_dir/readiness-all-unprovable-list.json"
+mkdir -p "$temp_dir/readiness-all-unprovable-views"
+jq '.[0] | .blockedBy = {totalCount: 1, nodes: []} | . + {comments: []}' \
+  "$temp_dir/readiness-pickup-list.json" \
+  >"$temp_dir/readiness-all-unprovable-views/51.json"
+jq '.[1] | .blockedBy = {totalCount: 1, nodes: []} | . + {comments: []}' \
+  "$temp_dir/readiness-pickup-list.json" \
+  >"$temp_dir/readiness-all-unprovable-views/52.json"
+export FAKE_GH_LOG="$temp_dir/readiness-all-unprovable-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/readiness-all-unprovable-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/readiness-all-unprovable-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/readiness-all-unprovable-views"
+setup_copilot_env "readiness-all-unprovable"
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/readiness-all-unprovable.stdout" \
+  "$temp_dir/readiness-all-unprovable.stderr" 5
+status=$?
+set -e
+assert_equal "1" "$status" "an all-unreadable Pool exits nonzero"
+[[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
+  fail "an all-unreadable Pool started a session"
+assert_contains "$(<"$temp_dir/readiness-all-unprovable.stderr")" \
+  "#51, #52" \
+  "the unreadable-readiness ending names the candidates to act on"
+jq -se '
+  ([.[] | select(.type == "wrapper.pickup.skipped") | .reason] ==
+    ["readiness_unprovable", "readiness_unprovable"])
+  and ([.[] | select(.type == "wrapper.pickup.bound")] | length == 0)
+  and ([.[] | select(.type == "wrapper.iteration.end") | .outcome] ==
+    ["preflight_failed"])
+  and (.[-1].type == "wrapper.run.end")
+  and (.[-1].outcome != "all_skipped")
+  and (.[-1].outcome == "preflight_failed")
+  and (.[-1].iterations_run == 1)
+' "$temp_dir/readiness-all-unprovable.stdout" >/dev/null ||
+  fail "an all-unreadable Pool ended the Run as one it could take no work from"
 
 export FAKE_GH_LOG="$temp_dir/github-cap-gh.log"
 export FAKE_GH_LIST_COUNT="$temp_dir/github-cap-list.count"
@@ -1026,6 +1091,47 @@ jq -se '
   and .[-1].iterations_run == 2
 ' "$temp_dir/github-default.stdout" >/dev/null ||
   fail "unlimited turn Run did not terminate on an empty Pool"
+
+# Wrapper contract §2.2 (#541): a Pool read that *failed* produces the same zero
+# candidates a finished backlog does, and must not be reported as one. The
+# refusal here is the one an operator meets — a `gh` preflight cleared, against a
+# host that then rejects the query — so the Run gets past §3.3.1's capability
+# gate and only discovers the tracker is unreadable at its first collection.
+repo="$temp_dir/unread-pool"
+fake_bin="$temp_dir/unread-pool-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+cp "$temp_dir/github-list.json" "$temp_dir/unread-pool-list.json"
+export FAKE_GH_LOG="$temp_dir/unread-pool-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/unread-pool-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/unread-pool-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+setup_copilot_env "unread-pool"
+export FAKE_GH_LIST_STATUS=1
+set +e
+run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/unread-pool.stdout" \
+  "$temp_dir/unread-pool.stderr" 5
+status=$?
+set -e
+unset FAKE_GH_LIST_STATUS
+assert_equal "1" "$status" "an unread Pool exits nonzero"
+assert_equal "1" "$(<"$FAKE_GH_LIST_COUNT")" \
+  "an unread Pool is terminal on the spot rather than re-asked until the cap"
+[[ ! -e "$FAKE_COPILOT_CALLS" ]] ||
+  fail "an unread Pool started a session"
+assert_contains "$(<"$temp_dir/unread-pool.stderr")" \
+  "unknown, not empty" "the unread-Pool diagnostic names what it will not claim"
+jq -se '
+  ([.[] | select(.type == "wrapper.afk_ready.collected") | .issues] == [[]])
+  and ([.[] | select(.type == "wrapper.iteration.end") | .outcome] ==
+    ["preflight_failed"])
+  and (.[-1].type == "wrapper.run.end")
+  and (.[-1].outcome != "empty_pool")
+  and (.[-1].outcome == "preflight_failed")
+  and (.[-1].iterations_run == 1)
+' "$temp_dir/unread-pool.stdout" >/dev/null ||
+  fail "a failed Pool read did not end the Run as an unread Pool"
 
 # A turn that produces new commits records one commit event per commit, in
 # git's newest-first order, and only closes the Iteration afterwards.
@@ -1735,6 +1841,73 @@ for sha in $close_shas; do
 done
 assert_contains "$close_comment" "gh issue reopen 41" \
   "closure comment documents how to reopen"
+
+# A successful serial closure is this Orchestrator's post-publication seam. It
+# owns no **Lane** or **Integration** stage, so the equivalent must advance the
+# Release line only after `gh issue close` has accepted the issue -- never from
+# an agent's untrusted commit message.
+repo="$temp_dir/release-line"
+fake_bin="$temp_dir/release-line-bin"
+make_real_repo "$repo"
+for path in "${GIT_LOOPY_RELEASE_VERSION_PATHS[@]}"; do
+  mkdir -p "$repo/$(dirname "$path")"
+  cp "$(cd "$port_dir/../.." && pwd)/$path" "$repo/$path"
+done
+git_loopy_write_repository_release_version "$repo" "1.2.3"
+git -C "$repo" add -A
+git -C "$repo" commit -qm "seed Release metadata"
+write_turn_tools "$fake_bin"
+cat >"$temp_dir/release-line-list.json" <<'EOF'
+[
+  {
+    "number": 41,
+    "title": "Patch",
+    "body": "## What to build\nShip it.\n\n## Acceptance criteria\n- Done.",
+    "labels": [{"name": "ready-for-agent"}, {"name": "semver:patch"}],
+    "state": "OPEN",
+    "url": "https://example.invalid/issues/41"
+  }
+]
+EOF
+mkdir -p "$temp_dir/release-line-views"
+jq '.[0]' "$temp_dir/release-line-list.json" >"$temp_dir/release-line-views/41.json"
+export FAKE_GH_LOG="$temp_dir/release-line-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/release-line-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/release-line-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/release-line-views"
+export FAKE_GH_CLOSED="$temp_dir/release-line-closed.log"
+setup_copilot_env "release-line"
+export FAKE_COPILOT_PLAN_DIR="$temp_dir/release-line-plan"
+mkdir -p "$FAKE_COPILOT_PLAN_DIR/1"
+cat >"$FAKE_COPILOT_PLAN_DIR/1/1.msg" <<'EOF'
+fix: land the patch
+
+Closes #41
+EOF
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/release-line.stdout" \
+  "$temp_dir/release-line.stderr" 1; then
+  fail "release-line turn Run did not exit 0: $(<"$temp_dir/release-line.stderr")"
+fi
+unset FAKE_COPILOT_PLAN_DIR FAKE_GH_CLOSED
+assert_equal "1.2.4-dev.1" "$(git_loopy_read_release_version "$repo/VERSION")" \
+  "a closed patch issue advances every Release metadata copy: $(<"$temp_dir/release-line.stderr")"
+jq -se '
+  ([.[] | .type] | index("wrapper.auto_close"))
+  < ([.[] | .type] | index("wrapper.release.advanced"))
+  and ([.[] | select(.type == "wrapper.release.advanced")]
+    == [{
+      ts: ([.[] | select(.type == "wrapper.release.advanced")][0].ts),
+      run_id: ([.[] | select(.type == "wrapper.release.advanced")][0].run_id),
+      iter: 1,
+      type: "wrapper.release.advanced",
+      bump_class: "patch",
+      issue: 41,
+      release_target: "1.2.4",
+      release_version: "1.2.4-dev.1"
+    }])
+' "$temp_dir/release-line.stdout" >/dev/null ||
+  fail "the post-closure Release advance did not emit its pinned payload"
 
 # Progress resets the Strike counter: a no-progress Iteration records a Strike,
 # the next Iteration's agent commit clears it, and a following no-progress

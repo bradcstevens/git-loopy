@@ -825,6 +825,66 @@ git_loopy_exit_code_for() {
   esac
 }
 
+# Whether one read of the Pool may end a Run as an empty Pool (§2.2, #541).
+#
+# The family's single emptiness rule, stated here rather than at the branch that
+# consumes it so this member asks the same question the Python reference's
+# `sources.confirms_empty_pool` answers, over the same fixture cases
+# (`conformance/exit-codes.json` `pool_emptiness_cases`). Only a *complete* read
+# that found nothing establishes emptiness: a failed or truncated read that
+# found nothing produces byte-identical data and proves nothing, and reporting
+# it as the exit-`0` empty Pool ends an unattended Run with "there is no work"
+# over a backlog nobody managed to look at.
+#
+# Arguments: <complete: 1|0> <remaining count>
+# Returns 0 (shell true) only when this read is authority for an empty Pool.
+git_loopy_confirms_empty_pool() {
+  local complete="$1" remaining="$2"
+  [[ "$complete" == "1" ]] || return 1
+  [[ "$remaining" == "0" ]] || return 1
+  return 0
+}
+
+# Which terminal reason a Pool that bound nothing is entitled to (§3.3.1, §10,
+# #542).
+#
+# The refusal-side companion to `git_loopy_confirms_empty_pool`, and one rule
+# for the same reason: this member and the Python reference's
+# `sources.unbound_pool_outcome` answer it over the same fixture cases
+# (`conformance/exit-codes.json` `unbound_pool_cases`), so two restatements of
+# it cannot drift — both would report `all_skipped` and only one of them would
+# be entitled to.
+#
+# An *unresolved* candidate is not a refused one. `readiness_unprovable` reports
+# that no assertion could be read, so a walk holding one has not established
+# that its Pool cannot be worked; the candidate may be perfectly ready.
+# `all_skipped` claims "I could not take any of what there is" and `all_blocked`
+# claims "every candidate proves an open blocker" — both are claims about the
+# *work*, and a failed read is a claim about the *read*. So an unresolved
+# candidate outranks both and the Run ends under `preflight_failed`, the reason
+# §2.2 already spends on a precondition an operator can repair.
+#
+# Arguments: <candidates refused> <how many proved an open blocker>
+#            <how many only failed to read>
+# Prints the Run reason; fails on a walk that refused nothing, which is not
+# this rule's question.
+git_loopy_unbound_pool_outcome() {
+  local candidates="$1" waiting="$2" unresolved="$3"
+  if ((candidates <= 0)); then
+    printf 'a Pool that refused nothing has no unbound outcome\n' >&2
+    return 1
+  fi
+  if ((unresolved > 0)); then
+    printf 'preflight_failed\n'
+    return 0
+  fi
+  if ((waiting == candidates)); then
+    printf 'all_blocked\n'
+    return 0
+  fi
+  printf 'all_skipped\n'
+}
+
 # GitHub closing-keyword regex — kept byte-identical to the Conformance suite's
 # reference_regex and the Python reference CLOSE_KEYWORD_RE so the whole Runner
 # family shares one close-keyword oracle. jq (Oniguruma) honours the embedded
@@ -1535,7 +1595,7 @@ git_loopy_collect_github_pool() {
     if ((status == 2)); then
       printf 'git-loopy: gh issue list returned malformed JSON.\n' >&2
     else
-      printf 'git-loopy: gh issue list failed; treating this Pool as empty.\n' >&2
+      printf 'git-loopy: gh issue list failed; this Pool is unread and may not be treated as empty.\n' >&2
     fi
     GIT_LOOPY_POOL_JSON='[]'
     GIT_LOOPY_POOL_EXCLUSIONS_JSON='[]'
@@ -1941,19 +2001,31 @@ _GIT_LOOPY_PICKUP_AT=""
 # What `git_loopy_pick_serial` reports back, named once so its caller branches on
 # a word rather than on a bare integer. A completed walk distinguishes a Pool
 # waiting only on proved open blockers from one with a refusal an operator can
-# repair.
+# repair, and both from one whose candidates could not be read at all (#542).
 GIT_LOOPY_PICKUP_UNBOUND=1
 GIT_LOOPY_PICKUP_ALL_SKIPPED=2
 GIT_LOOPY_PICKUP_EMIT_FAILED=3
 GIT_LOOPY_PICKUP_ALL_BLOCKED=4
+GIT_LOOPY_PICKUP_POOL_UNRESOLVED=5
+
+# The Run reason a completed, unbound walk decided, and the candidates whose
+# **Readiness** it could not read. Set beside the status codes above so the
+# driver reports the rule's answer rather than re-deriving it, and so an
+# unresolved ending can name something an operator can act on — that verdict
+# carries no blockers, so the refs are all there is.
+GIT_LOOPY_PICKUP_OUTCOME=""
+GIT_LOOPY_PICKUP_UNRESOLVED_REFS=""
 
 git_loopy_pick_serial() {
   local iteration="$1"
   local head ref observed_at readiness reason blockers event_reason label
-  local considered=0 position=0 all_waiting_on_blockers=1
+  local considered=0 position=0 refused=0 waiting=0 unresolved=0
+  local unresolved_refs=""
   GIT_LOOPY_PICKUP_JSON='[]'
   _GIT_LOOPY_PICKUP_REF=""
   _GIT_LOOPY_PICKUP_AT=""
+  GIT_LOOPY_PICKUP_OUTCOME=""
+  GIT_LOOPY_PICKUP_UNRESOLVED_REFS=""
 
   considered="$(jq -r 'length' <<<"$GIT_LOOPY_POOL_JSON")" ||
     return "$GIT_LOOPY_PICKUP_UNBOUND"
@@ -1972,10 +2044,22 @@ git_loopy_pick_serial() {
     if ! jq -e '.admissible' <<<"$readiness" >/dev/null; then
       reason="$(jq -r '.skip_reason' <<<"$readiness")" ||
         return "$GIT_LOOPY_PICKUP_UNBOUND"
-      [[ "$reason" == "blocked_by_open_dependency" ]] ||
-        all_waiting_on_blockers=0
+      refused=$((refused + 1))
       label="$ref"
       [[ "$ref" =~ ^[0-9]+$ ]] && label="#$ref"
+      case "$reason" in
+        blocked_by_open_dependency)
+          waiting=$((waiting + 1))
+          ;;
+        readiness_unprovable)
+          # Not a refusal of this candidate: a read that did not happen
+          # (#542, ADR-0047). It still skips — no Pickup may bind a candidate
+          # whose blockers it never checked — but it is counted apart so the
+          # terminal rule cannot mistake it for the Pool refusing work.
+          unresolved=$((unresolved + 1))
+          unresolved_refs="${unresolved_refs:+$unresolved_refs, }$label"
+          ;;
+      esac
       blockers="$(jq -r '.blockers | join(", ")' <<<"$readiness")" ||
         return "$GIT_LOOPY_PICKUP_UNBOUND"
       event_reason="$reason"
@@ -2018,9 +2102,21 @@ git_loopy_pick_serial() {
     return 0
   done < <(jq -c '.[]' <<<"$GIT_LOOPY_POOL_JSON")
 
-  if ((all_waiting_on_blockers)); then
-    return "$GIT_LOOPY_PICKUP_ALL_BLOCKED"
+  if ((refused == 0)); then
+    return "$GIT_LOOPY_PICKUP_UNBOUND"
   fi
+  GIT_LOOPY_PICKUP_UNRESOLVED_REFS="$unresolved_refs"
+  GIT_LOOPY_PICKUP_OUTCOME="$(
+    git_loopy_unbound_pool_outcome "$refused" "$waiting" "$unresolved"
+  )" || return "$GIT_LOOPY_PICKUP_UNBOUND"
+  case "$GIT_LOOPY_PICKUP_OUTCOME" in
+    all_blocked)
+      return "$GIT_LOOPY_PICKUP_ALL_BLOCKED"
+      ;;
+    preflight_failed)
+      return "$GIT_LOOPY_PICKUP_POOL_UNRESOLVED"
+      ;;
+  esac
   return "$GIT_LOOPY_PICKUP_ALL_SKIPPED"
 }
 
@@ -2728,6 +2824,7 @@ git_loopy_close_one_issue() {
     "$payload" \
     "$closed_at" || return 1
   _GIT_LOOPY_AUTO_CLOSURES=$((_GIT_LOOPY_AUTO_CLOSURES + 1))
+  _GIT_LOOPY_LAST_CLOSED_REF="$issue"
 }
 
 git_loopy_pool_actionable_close_refs() {
@@ -2765,6 +2862,7 @@ git_loopy_auto_close_pool_issues() {
   local commits_json="$2"
   _GIT_LOOPY_AUTO_CLOSURES=0
   _GIT_LOOPY_FIRST_CLOSED_REF=""
+  _GIT_LOOPY_LAST_CLOSED_REF=""
   [[ "$GIT_LOOPY_ISSUE_SOURCE" == "github" ]] || return 0
 
   local actionable
@@ -2774,6 +2872,41 @@ git_loopy_auto_close_pool_issues() {
   while IFS= read -r ref; do
     [[ -n "$ref" ]] || continue
     git_loopy_close_one_issue "$iteration" "$ref" "$commits_json" || return 1
+    [[ "$_GIT_LOOPY_LAST_CLOSED_REF" == "$ref" ]] || continue
+
+    local labels release_line
+    labels="$(
+      jq -c --argjson issue "$ref" '
+        [
+          .[] | select(.number == $issue) | .labels[]?
+          | if type == "object" then .name else . end
+        ]
+      ' <<<"$GIT_LOOPY_POOL_JSON"
+    )" || return 1
+    if ! git_loopy_advance_repository_release_line \
+      "$GIT_LOOPY_REPO_ROOT" "$labels" >/dev/null; then
+      printf 'git-loopy: Release line did not advance after closing #%s.\n' \
+        "$ref" >&2
+      continue
+    fi
+    release_line="$GIT_LOOPY_RELEASE_ADVANCE_JSON"
+    [[ "$release_line" != "null" ]] || continue
+    local release_payload
+    release_payload="$(
+      jq -cn \
+        --argjson issue "$ref" \
+        --argjson release_line "$release_line" \
+        '{
+          issue: $issue,
+          bump_class: $release_line.bump_class,
+          release_target: $release_line.target,
+          release_version: $release_line.version
+        }'
+    )" || return 1
+    git_loopy_emit_event \
+      "${GIT_LOOPY_EVENT_TYPES[WRAPPER_RELEASE_ADVANCED]}" \
+      "$iteration" \
+      "$release_payload" || return 1
   done < <(jq -r '.[]' <<<"$actionable")
 }
 
@@ -3073,15 +3206,32 @@ git_loopy_run_discovery() {
     local pool_length
     pool_length="$(jq -r 'length' <<<"$GIT_LOOPY_POOL_JSON")" || return 1
     if [[ "$pool_length" == "0" ]]; then
+      local pool_outcome="empty_pool" pool_rollup_reason=""
+      if ! git_loopy_confirms_empty_pool \
+        "$GIT_LOOPY_POOL_COMPLETE" "$pool_length"; then
+        # Wrapper contract §2.2 (#541) — this read failed, or stopped short of
+        # the whole backlog, so it found nothing *and proved nothing*. An
+        # unreadable Pool is unknown, not empty, and may not leave under the
+        # exit `0` that tells an unattended caller the work is finished. It
+        # ends under `preflight_failed` for the same reason §3.3.1's `gh`
+        # capability gate does — a tracker this Run cannot read is a
+        # precondition an operator can repair — and it is terminal on the spot,
+        # because re-asking a source that just refused would spend the whole
+        # Iteration budget and then exit `0` under `iteration_cap` anyway.
+        pool_outcome="preflight_failed"
+        pool_rollup_reason="preflight_failed"
+        printf 'git-loopy: the Pool read completed no listing and returned no candidates; an unreadable Pool is unknown, not empty, so this Run will not report it as finished work. Check `gh auth status`, this host'"'"'s network path to the tracker, and whether the repository'"'"'s host supports issue dependencies, then re-run.\n' >&2
+      fi
       local iteration_end_payload
-      git_loopy_build_iteration_rollup 0 0 0 "$strikes" || return 1
+      git_loopy_build_iteration_rollup 0 0 0 "$strikes" "$pool_rollup_reason" ||
+        return 1
       iteration_end_payload="$GIT_LOOPY_ITERATION_ROLLUP_JSON"
       git_loopy_emit_event \
         "${GIT_LOOPY_EVENT_TYPES[WRAPPER_ITERATION_END]}" \
         "$iteration" \
         "$iteration_end_payload" || return 1
       iterations_run="$iteration"
-      outcome="empty_pool"
+      outcome="$pool_outcome"
       break
     fi
 
@@ -3091,7 +3241,8 @@ git_loopy_run_discovery() {
     local pickup_status=0
     git_loopy_pick_serial "$iteration" || pickup_status=$?
     if ((pickup_status == GIT_LOOPY_PICKUP_ALL_SKIPPED ||
-      pickup_status == GIT_LOOPY_PICKUP_ALL_BLOCKED)); then
+      pickup_status == GIT_LOOPY_PICKUP_ALL_BLOCKED ||
+      pickup_status == GIT_LOOPY_PICKUP_POOL_UNRESOLVED)); then
       # Wrapper contract §3.3/§10 — a non-empty Pool the Pickup could bind none
       # of is not the empty queue, and reporting it as one would end a Run
       # cleanly over a repository state nobody has finished with. It is terminal
@@ -3099,9 +3250,15 @@ git_loopy_run_discovery() {
       # and nothing inside the Run can change the next walk's answer, so
       # continuing would spend the whole Iteration budget reaching this same
       # ending. #443 owns what a Pool that is merely *waiting* should read as.
-      local terminal_outcome="all_skipped"
-      if ((pickup_status == GIT_LOOPY_PICKUP_ALL_BLOCKED)); then
-        terminal_outcome="all_blocked"
+      # Which of the three reasons it is was decided by the family rule inside
+      # the walk (`git_loopy_unbound_pool_outcome`), so this only reports it.
+      local terminal_outcome="$GIT_LOOPY_PICKUP_OUTCOME"
+      if ((pickup_status == GIT_LOOPY_PICKUP_POOL_UNRESOLVED)); then
+        # #542: an unread candidate is unknown, not refused. Its verdict carries
+        # no blockers, so the refs are the only thing an operator can act on.
+        printf 'git-loopy: serial Pickup bound nothing, and the readiness of some of the %s candidate(s) in the Pool could not be read (%s); an unread candidate is unknown, not refused, so this Run will not report the Pool as one it could take no work from. Check `gh auth status`, this host'"'"'s network path to the tracker, and whether those issues'"'"' blockers live in a repository this token can see, then re-run.\n' \
+          "$pool_length" "$GIT_LOOPY_PICKUP_UNRESOLVED_REFS" >&2
+      elif ((pickup_status == GIT_LOOPY_PICKUP_ALL_BLOCKED)); then
         printf 'git-loopy: serial Pickup bound nothing: all %s candidate(s) in the Pool wait on open blockers; this Run is waiting on blockers.\n' \
           "$pool_length" >&2
       else
@@ -3297,6 +3454,9 @@ git_loopy_run_discovery() {
       ;;
     all_skipped | all_blocked)
       exit_code="$(git_loopy_exit_code_for "$outcome")"
+      ;;
+    preflight_failed)
+      exit_code="$(git_loopy_exit_code_for "preflight_failed")"
       ;;
     stuck)
       exit_code="$(git_loopy_exit_code_for "stuck")"

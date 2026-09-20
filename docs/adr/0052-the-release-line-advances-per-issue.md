@@ -122,13 +122,13 @@ task-cheating on the reasoning that a safe agent "writes no files and has no met
 back for a human were all offered and all declined. It is recorded as chosen, not overlooked, so
 that a future reader finds a decision rather than an oversight.
 
-**Release notes stop being edited prose.** `source_release.py:159` demands "committed UTF-8
-**edited** release notes", and that requirement is today the only thing standing between a tag and
-publication — the de facto human gate. Agents now author `dev.N` notes and a stable draft; a human
-may override before promotion, and absence never blocks. Unattended publication requires this, and
-the cost is real: the `v0.9.0` notes open with a human explaining a problem in a human voice, and
-a fold of closed-issue titles will not be that. The `dev.N` fragments accumulate as raw material
-for the stable note so the essay starts from something rather than blank.
+**Release notes are authored rather than edited prose.** `source_release.py` requires committed
+UTF-8 authored release notes; it no longer requires a human to have edited them before
+publication. Agents author `dev.N` notes and a stable draft; a human may override before Promotion,
+and publication never waits for that prose. Unattended publication requires this, and the cost is
+real: the `v0.9.0` notes open with a human explaining a problem in a human voice, and a fold of
+closed-issue titles will not be that. The `dev.N` fragments accumulate as raw material for the
+stable note so the essay starts from something rather than blank.
 
 **Releasing joins the Wrapper contract.** Waiving it for the shell and PowerShell Orchestrators
 through #466's named-reason mechanism was offered and declined; a Run under any member of the

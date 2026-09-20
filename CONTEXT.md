@@ -151,7 +151,7 @@ _Avoid_: round, pass, tick; session as a separate accounting unit.
 **Label vocabulary**:
 The labels a repository's tracker must carry before a Run can do anything: the five
 canonical triage roles a human triages with, plus **Parallel-safe**, **Priority**, and
-the seven closed **Task type** labels. `git-loopy init`
+the seven closed **Task type** labels and four closed **Bump class** labels. `git-loopy init`
 ensures it exists, creating only what is absent and never altering a label that is
 already there. The five roles take whatever strings the repository's documented
 triage-label mapping gives them; the rest take the one string the runner
@@ -179,9 +179,14 @@ the agent together in a single prompt; the agent picks one. **Rolling dispatch**
 keeps a continuously refreshed cache of *shallow* Pool membership and re-reads one
 candidate authoritatively immediately before reserving its **Lane** — membership alone is
 never authority to start a **Lane contribution**. An incomplete or failed read leaves the
-Pool's emptiness unknown rather than empty. A **Parallel mode** Run's Pool has two halves
-— **Parallel-safe** candidates and **serial-required** work — and may be called empty
-only once both have been seen.
+Pool's emptiness unknown rather than empty, in every member and on the one rule they all
+ask (Wrapper contract §2.2; `sources.confirms_empty_pool` in the reference, pinned for
+the family by `conformance/exit-codes.json`): where that read is the Run's whole view of
+the Pool it ends the Run under `preflight_failed`, never on the exit `0` that says the
+work is finished, and where the Run has already *seen* work waiting it polls for a read
+that completes instead of abandoning what it can name. A **Parallel mode** Run's Pool has
+two halves — **Parallel-safe** candidates and **serial-required** work — and may be
+called empty only once both have been seen.
 _Avoid_: batch, backlog.
 
 **Pool exclusion**:
@@ -303,14 +308,26 @@ collection), **Pool exclusion**, **Pickup skip** (that is what the runner *does*
 unreadiness, not the fact itself).
 
 **Blocked**:
-A candidate carrying at least one open `blocked_by` dependency, or one whose
-dependencies could not be read. It is not admissible at **Pickup** and is refused
-**Lane** candidacy outright — never reserved and never released — stays in the
-**Pool** so the closure whitelist and the emptiness test still see it, and costs no
+A candidate carrying at least one open `blocked_by` dependency. It is not admissible at
+**Pickup** and is refused **Lane** candidacy outright — never reserved and never released —
+stays in the **Pool** so the closure whitelist and the emptiness test still see it, and costs no
 **Strike** — it was never attempted. A blocker in another repository blocks exactly as
 one in this repository does. An issue blocked by *itself* is blocked, like any other;
 a longer cycle is invisible at one hop and reads as an ordinary blocker.
-_Avoid_: ineligible, excluded, defeated, deferred.
+_Avoid_: ineligible, excluded, defeated, deferred; **Unresolved readiness** (a read that
+failed is not a blocker that was read).
+
+**Unresolved readiness**:
+A candidate whose `blockedBy` connection came back incomplete or with an unreadable node, so
+no assertion about its dependencies could be read at all. It skips at **Pickup** like a
+**Blocked** candidate — no Pickup may bind a candidate whose blockers it never checked — but it
+is *not* the same fact and may not stand in for one: a **Blocked** candidate proved an open
+blocker, while this one proved nothing and may be perfectly ready. A **Pool** that bound
+nothing and holds one of these is therefore neither an **All-skipped Run** nor an
+**All-blocked Run**; it ends the Run the way an unread **Pool** does, as a precondition an
+operator can repair, naming the candidates. One rule, asked by every Orchestrator.
+_Avoid_: blocked, skipped, empty (each of those is a claim about the *work*; this is a report
+about the *read*).
 
 **Lease**:
 A run's exclusive right to work one issue, taken at **Pickup**, held while its owner
@@ -427,6 +444,28 @@ signal. Release is idempotent, and the non-interactive path acquires no ownershi
 all.
 _Avoid_: terminal manager, screen guard, teardown hook (restoration is not the
 Dashboard's teardown).
+
+**Control domain**:
+The set of **Run**s a clone may name, observe, and act on — those of the invoking
+worktree and of every other worktree that clone registers. It is defined by the clone,
+never by the machine and never by the remote: an independent clone of the same
+repository is a *different* domain, and its Runs are not addressable from here at all.
+Nothing widens it. There is no machine-wide registry to consult, and no newest-Run
+default, because a gesture that names no Run must reach no Run rather than the one that
+happens to be on top of a listing (ADR-0058). `git-loopy runs` is the domain made
+visible, and the same resolution is what **Stop** and **Attach** target through, so the
+two can never disagree about which Runs exist.
+_Avoid_: session list, run registry, machine scope.
+
+**Run liveness**:
+What a host can *prove* about a discovered **Run**: live, dead, or unknown. The proof is
+the per-Run control artifact's advisory lock and nothing else — never a pid, a
+heartbeat, nor the presence of a leftover file, since a Run that ended normally leaves
+its artifacts behind on purpose. Every platform git-loopy claims owes a real answer
+rather than a permanent unknown dressed as parity. Unknown is reserved for a genuine
+inability to read the lock, and is not a softer dead: failing to prove a Run has
+finished is never permission to control or **Sweep** its work.
+_Avoid_: running/not running, status, health, heartbeat.
 
 ### The live interface
 
@@ -601,7 +640,7 @@ _Avoid_: release train, dev branch, version series.
 How much of the **Release version** one issue moves — `major`, `minor`, `patch`, or
 `none` — carried by a closed `semver:` label an agent infers at **Pickup** and writes
 back. A `none` advances nothing; an *absent* label is an unclassified issue, which is
-a fault rather than a fourth answer.
+a fault rather than a fifth answer.
 _Avoid_: version label, severity, impact, semver level.
 
 **Promotion**:
@@ -610,6 +649,53 @@ Cutting a stable **Release version** from a **Release line**. Triggered by the
 event rather than a judgement — except for a `major` **Bump class**, which is exempt
 and cuts on the label alone.
 _Avoid_: release cut, graduation, publish.
+
+**Rehearsal**:
+Constructing the complete proposed stable commit, its annotated **candidate tag** and
+its generated source archive in a throwaway clone with no remote, and proving *that*
+snapshot — every distribution version copy and the live release-version fixture, the
+committed notes, the version-bump commit rule, the archive's public identities, and
+every **feedback loop** — before any public tag for it exists. A **Promotion** changes
+the tree the gate has to judge, so a green development ancestor is not proof of the
+thing being published ([ADR-0059](docs/adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md)).
+_Avoid_: dry run, release preflight, dress rehearsal, smoke (the **release smoke** is
+the separate live check on a clean installation).
+
+**Publication input**:
+What a **Rehearsal** proved and the only thing a later publication may publish: the
+commit and its tree, the annotated tag object, the committed notes and their digest,
+the archive and its digest, the trunk commit the candidate was built from, and the
+explicit **distribution mode** the Release promises. Bound by content, so repairing a
+candidate produces a new one that has to be rehearsed again, and concurrent work on
+the trunk is *visible* rather than able to retarget a proof.
+_Avoid_: release plan, release manifest, publication payload.
+
+**Candidate tag**:
+The annotated `vX.Y.Z` tag a **Rehearsal** creates inside its own workspace. It is not
+public and cannot be pushed from there; only a proved candidate's tag is ever created
+on the trunk, and once a tag *is* public it never moves — changed content needs a new
+**Release version**.
+_Avoid_: draft tag, temporary tag, pre-tag.
+
+**Publication**:
+Making one **Publication input** public: pushing the *proved* annotated tag object
+itself and creating the GitHub Release that carries the committed notes. Reconciled
+against what the remote actually holds rather than assumed, so it is safely
+repeatable — matching state is a successful no-op, disagreeing state is a refusal
+that mutates nothing, and a write whose response was lost is resolved by reading the
+remote back rather than by retrying blindly
+([ADR-0059](docs/adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md)).
+_Avoid_: release, deploy, upload, push (the git operation).
+
+**Distribution mode**:
+The explicit promise one Release makes about what it carries. `source-only` publishes
+committed notes and source archives without launching helper-build, signing, attachment,
+or package-channel work. `artifact-bearing` promises the declared compiled TUI helper
+archives and their channel's trust evidence. The tagged `release-trust.json` is the
+repository authority; explicit publication inputs must agree with it, and credentials
+never choose the mode. A source-only **Rehearsal** and its publication seam cannot
+certify or attach helper artifacts.
+_Avoid_: release type, artifact mode, channel.
 
 **Autonomous loop**:
 The *technique* git-loopy orchestrates — an unattended, iterative execution loop that
@@ -630,7 +716,12 @@ _Avoid_: settings file, profile.
 **init**:
 First-run setup that installs the **installed catalog**, then writes **Config** — and
 optionally an editable prompt — into a chosen **scope**. Runs automatically the first
-time on an interactive terminal; also invocable as `git-loopy init`.
+time on an interactive terminal; also invocable as `git-loopy init`. Setup **precedes**
+a **Run** and does not own its lifetime: init saves and exits, so a saved setup that a
+later Run precondition refuses stays saved while the Run exits non-zero naming the
+blocker. Cancelling saves no Config, prompt, **Skill policy** or tracker label — a
+narrower claim than "writes nothing", because the catalog install is a machine-wide
+prerequisite that precedes the first question (ADR-0058).
 _Avoid_: setup, bootstrap; install (install is the separate act of putting the `git-loopy` command
 on PATH).
 
@@ -641,6 +732,12 @@ to a **scope**; `get` / `list` report the *effective merged* value(s) a run woul
 whole precedence chain (not one file); `path` prints the resolved location(s); `edit` opens the
 scope's file in `$EDITOR`. Scope selection mirrors **init**.
 _Avoid_: config command as a synonym for the persisted **Config** itself.
+
+**commands (subcommand)**:
+The schema-versioned, machine-readable inventory of the Python Runner's root management-command
+surface. It is consumed by shell completions; `help` and `--help` are the human-facing,
+category-grouped rendering of that same inventory.
+_Avoid_: command list, command reference; a second human-facing help surface.
 
 **Install channel**:
 The mechanism that put one git-loopy artifact on a machine and is therefore the only thing entitled
@@ -659,6 +756,14 @@ _Avoid_: upgrade, sync, refresh-all.
 Replacing the installed distribution with a different **Release version** through its **install
 channel**, then running **update**. Moves exactly one artifact: the one it is itself running from.
 _Avoid_: update, self-update, install.
+
+**uninstall (subcommand)**:
+Removing the machine-local state one installation owns — the executable through its proven
+**Install channel**, the global **scope**, the **installed catalog** and its record, and the TUI
+helper — after listing the whole plan and having it confirmed. Never edits a repository's contents:
+tracked **project scope** and the Run logs are reported and kept, and reached only by `--all`. A
+live **Lane** refuses the operation outright rather than collecting it (ADR-0054).
+_Avoid_: remove, clean, purge; sweep (that is reclaiming a *dead* Run's residue).
 
 **Edge install**:
 An installation sitting on an unreleased commit rather than a published **Release version**, where
@@ -747,6 +852,131 @@ rung rather than reserving it and unclassified work that stalls has nowhere stro
 independent constant: it resembles one seeded **Routed pair** by rationale, never by derivation.
 _Avoid_: global default (ambiguous — **Config** has global scope), fallback model.
 
+**Route policy**:
+Which rule this **Run** decides a **Routing resolution** by. Selected, never inherited: *unselected*
+is the absence of a decision and keeps every existing behaviour — the model roster's capability
+gate, the built-in **Escalation rung**, the historical Event stream — exactly as it was, and a
+**Run** that names nothing is never read as having chosen. *Static* selects the **Static route**;
+*dynamic* selects the **Dynamic route**.
+A name the kit does not implement is refused rather than absorbed, because a policy silently
+ignored runs the **Run** under one the operator did not ask for and believes is active. It is one
+**Config** key on the ordinary precedence spine, and it travels on the **Run**'s own start record
+so a reader never has to infer which rule produced the pairs beside it (ADR-0057).
+_Avoid_: routing mode, routing strategy, model policy.
+
+**Static route**:
+A complete, operator-selected `model` + reasoning effort + **Context tier**, verified against the
+**Harness capabilities** of the authenticated harness this **Run** actually spawns and then
+honoured exactly. Atomic: an existing model/effort pair — run-wide or a `[routing]` entry — is
+already one and inherits the run-level tier. It **refuses rather than rescues**: an ineligible or
+unlisted model, an effort outside the model's dial, an effort on a model with no dial, a tier the
+harness does not price, and a capability read that did not complete each end the **Run** before
+any work, because dropping an effort or downgrading a tier produces a different route than the one
+selected and reports it as success. It stays fixed for an **Agent** and across every permitted
+retry unless the operator configured an **Escalation rung** explicitly — a rung the kit ships by
+default is not consent. The verified triple is the **Routing resolution**, so the session, the
+**Pickup** Event, the CLI line and the **Dashboard** all read one record (ADR-0057).
+_Avoid_: pinned model, fixed pair, hardcoded route.
+
+**Dynamic route**:
+A route **elected for one issue from live public benchmark evidence** instead of written down in
+advance, under the *dynamic* **Route policy**. Opt-in and prerequisite-complete or it does not
+start: the operator's own authorized access to the evidence source, a finite assessment deadline, a
+per-**Run** routing-credit allowance, a bounded **Route selector** concurrency, and the verified
+associations between benchmark identities and harness configurations. The key is read from the
+environment and never stored, serialized or echoed, and no repository content goes to the source.
+The election is deterministic — the highest Intelligence Index among configurations that are both
+verified and runnable on the **Harness capabilities**, at its matched effort, in the smallest tier
+that fits — and a **Static route** still outranks it, because an operator's instruction is not
+something an inference may overrule. It **refuses rather than falls back**: an unreachable required
+source, an exhausted allowance or deadline, an empty verified intersection, an invalid selector
+answer, unreadable eligibility, or a provenance record that could not be written each end in an
+explicit *unavailable* decision, never in stale evidence, the run-wide default, or a cheaper
+selector. Its provenance lands **before** the work session opens. An attempt the **Attempt
+lifecycle** admits elects **again** rather than inheriting a fixed **Escalation rung**, and that
+election is handed the issue's **Attempt evidence** beside the freshly-read sources; the record
+keeps the attempt's lifecycle position separate from the configuration it elected, so a reassessed
+retry stays tellable from a first election that happened to agree (ADR-0057).
+_Avoid_: auto-routing, smart routing, model recommendation.
+
+**Route selector**:
+The bounded, read-only session that assesses **one** issue and proposes its **Dynamic route**. It
+sees the issue, its acceptance criteria, the settled **Task type**, the repository's declared
+**Feedback loops**, and admitted local measurements — never the tree, never a **Trial**, never the
+work itself. Its own configuration is elected by the same rule it is asked to apply, but never *by*
+itself and never downgraded to fit a limit. Its answer is a candidate it was handed plus a summary
+that keeps forecast and measurement apart; anything else is invalid output, not a route. Every call
+and retry it makes is **Consumption**.
+_Avoid_: router agent, routing model, meta-model.
+
+**Route projection**:
+The observational copy of a final **Routing resolution** on the issue that resolution belongs to:
+one idempotent, append-only comment carrying the exact model, reasoning effort and **Context tier**
+plus an issue-safe rationale and provenance references, and one owned **Route label** encoding the
+same triple compactly. Written *after* the canonical local record, never before — a resolution that
+could not be recorded locally starts no work and is published nowhere — and non-blocking once that
+record exists, so a permission failure, rate limit or half-delivered pair is retained as *pending*,
+*partial* or *failed* delivery and retried a bounded number of times rather than reported as
+published. It is strictly an output: a comment or label cannot pin, select or validate a route, the
+Runner keeps its own projection out of the issue block it reads back so publishing cannot invalidate
+the assessment that produced it, and a projection a newer resolution has overtaken is *stale* and is
+dropped rather than delivered late over the current label. Only a materially changed final
+assignment is projected — a proposal and an unchanged revalidation are not (ADR-0057).
+_Avoid_: route announcement, routing comment (the delivery state is part of it), route tag.
+
+**Reusable route**:
+A final **Routing resolution** an earlier **Run** of *this clone* recorded, read back out of the
+canonical local Event history and offered to a later **Run** as something to revalidate. Derived
+state, never authority: it is a projection of `wrapper.routing.resolved` rows, not a second store,
+not a committed table, and never a **Route projection** comment or **Route label**, which are
+output only. It reaches a work session only where a fresh read of the live sources finds every
+relevant input — the issue and its context, the **Route policy**, current **Harness capabilities**,
+the evidence, and the **Attempt evidence** — still identical to what the original election was made
+under; anything relevant that moved elects again inside the same routing limits, and a route that
+cannot be revalidated is refused rather than assumed. A reuse costs no **Route selector** call and
+records its own resolution naming the *original* decision, so the CLI and **Dashboard** tell
+freshly validated reuse from a new assessment and from a recorded route that stopped validating.
+Nothing routing itself writes may reach the compared inputs — an Orchestrator whose own output
+invalidates its next comparison reassesses every **Run** and has reused nothing (ADR-0057).
+_Avoid_: route cache, cached route, memoised routing (a cache is trusted; this is re-verified).
+
+**Routing preparation**:
+A running **Run** assessing the **Routing proposals** for candidates it has already established as
+eligible, ahead of the **Pickups** that would bind them — so a Pickup that reaches one finds the
+assessment already made instead of buying it on the critical path. It is *not* a dispatcher, a
+**Lease**, or authority to start work: it reorders no **Pool**, reserves no candidate, touches no
+running **Agent**, and is never evidence the Pool is empty. A prepared proposal is an *input* to a
+Pickup's own fresh validation — the Pickup re-reads both live sources, compares the relevant input
+identity, reassesses whatever moved, and refuses anything past its validity window — so what
+preparation saves is a **Route selector** call and nothing else. The next Pickup is prepared first
+and alone; an Iteration never joins the unrelated tail before advancing. A Pickup joins only its
+own in-flight preparation and cancels unrelated assessments to free routing capacity; concurrent
+Pickups do not cancel each other's claimed preparation. Everything behind them runs within the operator's configured selector concurrency and
+**Routing credit** allowance, once per candidate per Run, and stops outright for the rest of the Run
+the moment either bound is spent. A missing **Task type** is classified before static applicability
+is checked, so an operator's **Static route** still costs no assessment; a **Reusable route** costs
+none either and is left to its own Pickup. Blocked, unreadable and otherwise ineligible candidates
+stay visibly pending and are never spent on. It lives only inside a Run, on that Run's own event
+loop, holding its proposals in memory: discovering an issue while nothing is running starts no
+background routing service (ADR-0057).
+_Avoid_: prefetch, routing queue, speculative routing, pre-binding (nothing is bound).
+
+**Harness capabilities**:
+What the authenticated Copilot harness says about the models *this account* may use, read from its
+own model listing: eligibility, whether each model has a reasoning-effort dial and which values it
+takes, and which **Context tier**s it offers. It is read **fresh** for a **Static route**, in its
+own short-lived connect-list-stop, deliberately not from the **Run**'s memoised listing — that one
+is memoised so the **Rate card** cannot reprice mid-**Run**, which is the opposite property — and
+what it returns is capability only, so a capability read can never write back over billing
+provenance the **Run** already recorded. *Which* harness is the question: an **Execution host**
+that opens its sessions on a machine authenticating as itself has capabilities this machine cannot
+read, so that placement is refused under a **Static route** or a **Dynamic route** rather than
+judged by the wrong listing. A model with *no* effort dial is a different fact from one
+whose dial offers the value `none`: the first is sent no effort argument at all, the second is sent
+`none` as a value. A listing that could not be read — or could not be understood — is *unknown*,
+never *empty* and never permission.
+_Avoid_: model roster (the kit's own hardcoded table), model catalog, plan comparison.
+
 **Escalation rung**:
 The one model and reasoning effort a silently stalled unit of work is retried at. A **Session
 outcome** of silent no-progress — and only that one, because a timeout answered with a slower
@@ -781,6 +1011,23 @@ resolution**'s lifecycle position reports, which is how a same-pair crash retry 
 _Avoid_: retry count, attempt budget, issue status (that is **Status**, which is a run's
 *reporting* vocabulary and has no bearing on eligibility).
 
+**Attempt evidence**:
+What an issue's earlier attempts this **Run** ran on and what their endings are evidence *of*, read
+by the next **Dynamic route** election. It is the third dial one **Session outcome** turns, and a
+third one because the question is a third one: the **Escalation rung** asks whether the *pair*
+changes, the **Attempt lifecycle** asks whether the issue is worked again, and this asks what the
+next election is *told*. Its whole content is a classification, stated once and totally over the
+endings: only silent no-progress — the session that ran to the end, claimed no failure, and left
+nothing behind — is evidence about the configuration. A crash and a content-filtered turn are
+evidence about the harness, a timeout is its own verdict because neither neighbour would be honest,
+a no-more-tasks declaration is the **Agent** saying the work is absent, and an **Iteration** that
+advanced its issue reached no ending yet is still the most direct evidence there is that the
+configuration is working. Capability evidence **never blacklists**: every eligible configuration
+stays a candidate at every attempt, and re-electing one an earlier attempt failed to solve the task
+on costs a stated justification rather than a veto — an issue may simply be hard. Per **Run** and in
+memory like both its neighbours, because a bad night must not permanently demote a route (ADR-0057).
+_Avoid_: failure history, model blacklist, demotion (that is the **Calibration** term).
+
 **Skip**:
 The disposition an **Attempt lifecycle** reaches when an issue has spent every attempt this
 **Run** has to offer. A skipped issue is filtered out of the **Pickup** candidate list and never
@@ -800,20 +1047,22 @@ _Avoid_: blacklist, ban, exclusion (that is a **Pool exclusion**, decided at col
 **All-skipped Run**:
 How a **Run** ends when a **Pickup** finds the **Pool** non-empty and can bind none of it: exit
 `1` under its own reason, `all_skipped`, unless every refusal proves an open native blocker (an
-**All-blocked Run**). It is not an empty Pool — "there is nothing to do" and "I could not take
-any of what there is" are different facts about the repository, and only the first is a finished
-Run — and it is not a **Strike**, because that **Iteration** spends no session and gives up on
-nothing new. It is terminal on the spot rather than counted, since an Iteration that charges
-nothing and binds nothing would otherwise re-walk the same Pool and skip the same candidates for
-as long as the Run has **Iteration** budget.
-_Avoid_: all-blocked run, empty pool, stuck, no work.
+**All-blocked Run**) or any refusal is an **Unresolved readiness** one. It is not an empty Pool
+— "there is nothing to do" and "I could not take any of what there is" are different facts about
+the repository, and only the first is a finished Run — and it is not a **Strike**, because that
+**Iteration** spends no session and gives up on nothing new. It is terminal on the spot rather
+than counted, since an Iteration that charges nothing and binds nothing would otherwise re-walk
+the same Pool and skip the same candidates for as long as the Run has **Iteration** budget. It
+is a claim about the *work* in the Pool, so only refusals that read something may establish it.
+_Avoid_: all-blocked run, empty pool, stuck, no work, unreadable pool.
 
 **All-blocked Run**:
 How a **Run** ends when a non-empty **Pool** contains only candidates whose **Pickup skip** proves
 an open native blocker: exit `1` under `all_blocked`. It is terminal on the spot because no work
 inside the Run can close a blocker. It shares the non-zero exit status with an **All-skipped Run**
 because neither completed the available work; its distinct reason lets an operator or supervising
-process wait for dependency closure rather than repair the Pool.
+process wait for dependency closure rather than repair the Pool. Like an All-skipped Run it is a
+claim about the *work*, so a single **Unresolved readiness** refusal outranks it.
 _Avoid_: all-skipped run, empty pool, readiness-unprovable.
 
 **Run readback**:
@@ -821,7 +1070,8 @@ The block a **Run** prints at start and publishes on its own start Event, statin
 the kit parsed it: the **Default pair** and context tier, the **Escalation rung**, whether an
 explicit pin suppressed **Routing**, every `[routing]` entry with the `task-type` key spelled
 exactly as the table spelled it, the taxonomy keys no entry configures, and the spawned harness
-version beside the CLI version the model roster was captured against. It exists because no
+version beside the harness version used for the model roster's latest observed-capability
+refresh; retained compatibility entries do not imply current availability. It exists because no
 validator for the `[routing]` table can exist — its keys are the operator's vocabulary and its
 pairs are the vendor's — so an operator reading back what the kit understood is the only
 validation available anywhere. It therefore carries the **keys themselves and never a count of

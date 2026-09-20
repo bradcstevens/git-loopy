@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2.4",
+  "contract_version": "2.8",
   "event_schema_version": "1.2",
   "insight_capabilities": {
     "names": [
@@ -137,12 +137,13 @@
     "wrapper.run.start": {
       "required": ["release_version", "schema_version", "insight_capabilities", "parallel_capabilities"],
       "execution_host_optional": ["placement", "isolation_grade", "capacity", "starting_lane_limit"],
-      "readback_optional": ["model", "effort", "context_tier", "escalation_rung", "routes", "unconfigured_task_type_keys", "routing_suppressed", "harness_version", "roster_cli_version", "roster_diverged"],
+      "readback_optional": ["model", "effort", "context_tier", "escalation_rung", "routes", "unconfigured_task_type_keys", "routing_suppressed", "harness_version", "roster_cli_version", "roster_diverged", "route_policy"],
       "readback_pair_keys": ["model", "effort", "configured_effort", "gate_warnings"],
       "readback_route_keys": ["key", "model", "effort", "configured_effort", "gate_warnings"],
       "readback_note": "Contract 1.24. The Run readback section 14 obliges of an Orchestrator that routes, published on the Run's own start record rather than on an Event of its own. Every field is optional-when-present: a port that routes nothing emits Run start exactly as before and stays conforming, and a consumer reads their absence as 'this Runner does not route'. The PRODUCER is unconditional -- a Run that configured nothing publishes the readback describing exactly that, because the Run that puzzles an operator is the one where nothing they wrote appeared to take effect.",
       "readback_keys_not_a_count": "routes carries the keys THEMSELVES, never a count of them. No validator for the [routing] table can exist -- its keys are the operator's vocabulary and its pairs are the vendor's -- so reading back what the kit parsed is the only validation available anywhere, and a count reveals neither a misspelling nor a half-filled table. unconfigured_task_type_keys is the other half: the taxonomy members no entry names, which route to the Default pair and say so nowhere else until a Pickup has already happened.",
       "readback_two_efforts": "effort is the GATED effort -- what would actually be sent -- and configured_effort is what Config supplied. Both travel because a readback carrying only the gated value reports the outcome and loses the request, and the request is the half an operator can correct. gate_warnings is the verdict, drawn from the same vocabulary wrapper.pickup.bound's gate_warnings carries, and rides every configured pair including the escalation rung, which nothing else gates until an issue has already stalled.",
+      "readback_route_policy": "Contract 2.8. route_policy names the Route policy this Run selected (ADR-0057): `unselected` -- the default, and today's behaviour byte-for-byte -- or `static`, the operator-selected Static route. It travels because under `static` the hardcoded roster is not the authority and every pair above is published UNGATED, which is otherwise indistinguishable from a set of pairs that merely passed the gate. A consumer MUST NOT read an empty gate_warnings under `static` as `the roster approved this`; it means the roster was not asked. It also MUST NOT treat an unrecognised policy name as `unselected`: a Runner that names a policy this consumer does not know is describing a Run whose routing it cannot explain.",
       "readback_roster_divergence": "roster_diverged is THREE-valued: true, false, or null for an unreadable harness_version. Reasoning-effort capability is a table hardcoded in the Copilot CLI's own bundle, so the roster is a function of CLI version (ADR-0019) and a Run gating against one version while spawning another has been checking its pairs against a description of some other binary. null is 'nobody knows' and a consumer MUST NOT read it as agreement."
     },
     "wrapper.issue.activated": {
@@ -256,7 +257,8 @@
         "defaulted_unknown_task_type_key",
         "defaulted_conflicting_task_type_keys",
         "defaulted_explicit_override",
-        "escalated"
+        "escalated",
+        "dynamic"
       ],
       "lifecycle_position_values": ["fresh", "retrying"],
       "routing_note": "Contract 1.21. The Routing resolution section 14 reaches at this Pickup, carried on the Pickup rather than on an Event of its own: the pair resolves AT this instant, for THIS key, so a second record would be one Pickup described twice with the same cardinality. Every field is optional-when-present, so a Runner that resolves no Routed pair emits the binding exactly as before and stays conforming; a consumer reads their absence as 'this Runner does not route', never as a route it failed to report.",
@@ -266,6 +268,52 @@
       "position": "The bound candidate's 1-based place in the selection order it was chosen from; considered is the length of that order. Both are required together: position 1 alone cannot tell 'the runner took the oldest' from 'the runner took the only one left', which is the question this Event exists to answer.",
       "reason_note": "pin is declared here ahead of its producer. #396 owns git-loopy run --issue N and is the only thing that may emit it; a reader that learns the value only when a stream first carries it renders an operator's first pin as an unknown string.",
       "scope": "Run-scoped, not contribution-scoped. A Pickup precedes the work it binds, so a Lane's contribution_id has not been minted yet and there is nothing but the Run to attribute it to."
+    },
+    "wrapper.routing.resolved": {
+      "required_when_present": [
+        "issue",
+        "model",
+        "context_tier",
+        "summary",
+        "evidence_source",
+        "evidence_retrieved_at",
+        "capabilities_retrieved_at",
+        "routing_credits",
+        "selector_attempts",
+        "lifecycle_position",
+        "attempt",
+        "prior_attempts",
+        "proposal_id",
+        "validated_at",
+        "relevant_input_identity",
+        "routing_reuse"
+      ],
+      "emitted": "Once per issue whose route was elected from live evidence -- contract 14.4's Dynamic route -- immediately BEFORE the wrapper.pickup.bound that publishes it, and therefore before the work session opens. A Run under any other Route policy emits it never; a Static route under the dynamic policy emits it never either, because the operator's own instruction was not elected from evidence and has nothing to record. A permitted later attempt on the same issue elects again and records again, so an issue the Attempt lifecycle retried carries one of these per dynamic Pickup rather than one per Run.",
+      "ordering": "The one property worth pinning: provenance written after the session starts is provenance that is missing exactly when the Run died mid-decision. A consumer that sees wrapper.pickup.bound with routing_source dynamic and no preceding wrapper.routing.resolved is reading a broken Runner, not an optional record.",
+      "provenance_note": "Contract 14.4. This is the local decision record the Dynamic route owes, and it is a separate Event rather than more fields on the Pickup because it answers a different question with a different cardinality: the Pickup says which pair the session runs on, this says which evidence elected it, what that evidence cost, and when each live source was read. A Runner that does not implement the Dynamic route never emits it and stays conforming.",
+      "distinguish_forecast_from_measurement": "public_output_tokens_per_second is the leaderboard's published inference speed for the benchmarked model. It is NOT a measurement of how long this issue took under Copilot, and a consumer MUST NOT render it as one. A missing measurement travels as null, never as zero.",
+      "nullable": "effort, measurement_at, benchmark_version and conditions are nullable, and a null is an explicit unknown the source did not publish rather than a field the Runner forgot. repeat_justification is nullable on the same terms and means the election needed none. reused_proposal_id, reused_validated_at and superseded_proposal_id are nullable and mean, respectively, that nothing was reused and that nothing was superseded.",
+      "later_attempts": "Contract 14.4, ADR-0057. lifecycle_position and attempt name WHERE the issue sits and model/effort/context_tier name WHAT it will run on; a Runner MUST report them separately, because a reassessed retry that re-elects the same configuration is otherwise indistinguishable from a first election. attempt is this issue's session ordinal in this Run, including earlier Static and advancing sessions, and starts at 1. A routing refusal does not increment it. prior_attempts is the bounded evidence the election was told -- oldest first, carrying model, effort, context_tier, outcome, detail and capability_evidence -- and is an EMPTY LIST on a first attempt, never null and never omitted. Retain earlier capability failures before recent advances when bounding history; omitted rows still count toward the ordinal and input identity. A Runner MUST NOT derive lifecycle position from that ordinal or the list length: an attempt that advanced its issue without closing it reaches no ending and spends no lifecycle attempt.",
+      "reuse": "Contract 14.4, ADR-0057, issue #565. routing_reuse says HOW this route was arrived at, and is one of exactly two literals. `elected` means a Route selector was called and billed for it. `revalidated` means a decision this clone's own earlier Run already recorded was re-checked against freshly read evidence and eligibility and reused WITHOUT a selector call, so selector_attempts is 0 and routing_credits is \"0\". A revalidated record MUST carry reused_proposal_id and reused_validated_at naming the ORIGINAL decision -- the election a selector was actually paid for -- and never the intermediate revalidation it was read back from, so a chain of reuse stays one hop deep and survives the original's log ageing out. Both are null on an elected record; superseded_proposal_id instead names a recorded decision that stopped validating and was replaced by a fresh election. relevant_input_identity is the opaque digest of the issue/context, policy, capability, evidence and attempt-history inputs the decision was made under, and equality of that digest is what a later Run checks: a Runner MUST NOT let anything routing itself writes -- this record, its timestamps, a Route projection comment, an owned Route label -- reach that digest, or reuse invalidates itself every Run. Reuse is DERIVED state read back from canonical local event history, so a Runner MUST NOT treat a tracker comment or a Route label as reuse authority, MUST NOT let a reused record authorize work or take a Lease on its own, and MUST still let a Static or run-wide route take precedence over it. A record written before reuse existed carries none of these keys, and a consumer MUST replay it as an unknown rather than as an election.",
+      "scope": "Run-scoped, for the same reason wrapper.pickup.bound is: the route is elected before the work it routes, so no contribution identity exists yet."
+    },
+    "wrapper.routing.delivery": {
+      "required_when_present": ["issue", "identity", "label", "status"],
+      "status_values": ["published", "pending", "partial", "failed", "stale"],
+      "emitted": "After a final wrapper.pickup.bound has been durably recorded, once for each attempted observational tracker projection and retry. Delivery never selects, validates, or pins a Routed pair.",
+      "scope": "Run-scoped. A delivery is attributed to the final Pickup it projects and is not contribution-scoped because it precedes the Agent session."
+    },
+    "wrapper.routing.prepared": {
+      "required_when_present": ["issue", "state"],
+      "state_values": ["proposed", "static", "reusable", "unavailable"],
+      "optional_provenance_fields": ["selector_model", "selector_effort", "selector_context_tier", "evidence_source", "source_model_identity", "evidence_retrieved_at", "capabilities_retrieved_at", "measurement_at", "benchmark_version", "conditions", "classification_attempts", "routing_overshot"],
+      "provenance_note": "New proposals retain the selector configuration, source identity and model association, fresh retrieval timestamps and available measurement metadata. Historical records may omit these fields. A null measurement date, version or condition is unknown, never the retrieval date. Cancellation is an unavailable outcome with explicit detail and current routing usage, including any reported in-flight overshoot. All preparation tasks finish or are cancelled before wrapper.run.end. A Pickup never waits for unrelated tail preparation.",
+      "emitted": "Once per eligible Pool candidate a running Runner prepared a Routing proposal for, ahead of the Pickup that may later bind it -- contract 14.6's Routing preparation. A Run under any other Route policy emits it never, and a Runner that prepares nothing stays conforming by emitting nothing.",
+      "ordering": "Preparation records precede the wrapper.routing.resolved and wrapper.pickup.bound of the issue they describe, when that issue is picked up at all. Many are never followed by either: preparing an issue is not a claim that it will be worked.",
+      "not_a_binding": "Contract 14.6, ADR-0057, issue #566. This record is NONBINDING and a consumer MUST NOT render it as a Routing resolution. It does not bind a Routed pair, does not open or alter an Agent session, does not take a Lease, does not reserve or reorder a candidate, and does not establish that the issue is admissible. The route a session actually runs on is ALWAYS the one on wrapper.pickup.bound, which is resolved by a Pickup that re-reads the live sources for itself; where the two disagree the Pickup is right and the proposal was superseded. A consumer MUST NOT read the presence or absence of these records as evidence about whether the Pool is empty.",
+      "state": "state says what preparation reached and is one of exactly four literals. `proposed` means a Route selector was called and a nonbinding proposal is waiting for this issue's Pickup; model, effort and context_tier carry what it proposed and proposal_id names it. `static` means an operator's own Static route applies, so no selector call was bought. `reusable` means a decision an earlier Run recorded is available for the Pickup to revalidate; changed inputs may still require another selector call within the remaining limits. `unavailable` means routing could not propose, reason names why, and the Pickup still decides for itself -- an unavailable preparation is NOT a refusal of the issue. model, effort, context_tier, proposal_id, summary, prepared_at and valid_until are null on every state but `proposed`.",
+      "bounds": "A Runner MUST bound preparation by the operator's configured Route selector concurrency and per-Run routing-credit allowance, MUST prepare the next Pickup's candidate before any speculative one, and MUST NOT prepare a candidate that is Blocked, has unresolved Readiness, has been defeated by the Attempt lifecycle, or could not be read -- none of those may cost a classifier or selector call. Once the allowance or the assessment deadline is exhausted a Runner MUST stop preparing for the rest of the Run rather than re-refusing per candidate.",
+      "scope": "Run-scoped, for the same reason wrapper.routing.resolved is: preparation precedes the work it might route, so no contribution identity exists yet."
     },
     "wrapper.pickup.skipped": {
       "required_when_present": ["issue", "reason", "position", "considered"],
@@ -310,6 +358,16 @@
     },
     "wrapper.integration.published": {
       "required_when_present": ["contribution_id", "issue", "lane_id"]
+    },
+    "wrapper.release.advanced": {
+      "required_when_present": [
+        "bump_class",
+        "issue",
+        "release_target",
+        "release_version"
+      ],
+      "bump_class_values": ["major", "minor", "patch"],
+      "emitted": "After a successful Release-line commit for a closed Bump-class issue. semver:none and failed advances emit nothing."
     },
     "wrapper.contribution.end": {
       "required_when_present": [
@@ -452,6 +510,9 @@
       "wrapper.pool.excluded",
       "wrapper.pickup.bound",
       "wrapper.pickup.skipped",
+      "wrapper.routing.resolved",
+      "wrapper.routing.delivery",
+      "wrapper.routing.prepared",
       "wrapper.concurrency.changed",
       "wrapper.serial.requested",
       "wrapper.pipeline.quiescent",
@@ -520,6 +581,9 @@
     "WRAPPER_POOL_EXCLUDED": "wrapper.pool.excluded",
     "WRAPPER_PICKUP_BOUND": "wrapper.pickup.bound",
     "WRAPPER_PICKUP_SKIPPED": "wrapper.pickup.skipped",
+    "WRAPPER_ROUTING_RESOLVED": "wrapper.routing.resolved",
+    "WRAPPER_ROUTING_DELIVERY": "wrapper.routing.delivery",
+    "WRAPPER_ROUTING_PREPARED": "wrapper.routing.prepared",
     "WRAPPER_CHECKPOINT_RECORDED": "wrapper.checkpoint.recorded",
     "WRAPPER_COMMIT_RECORDED": "wrapper.commit.recorded",
     "WRAPPER_PUSH_RECORDED": "wrapper.push.recorded",
@@ -536,6 +600,7 @@
     "WRAPPER_INTEGRATION_BRANCH_OBSERVED": "wrapper.integration.branch_observed",
     "WRAPPER_INTEGRATION_RECOVERY_STARTED": "wrapper.integration.recovery_started",
     "WRAPPER_INTEGRATION_PUBLISHED": "wrapper.integration.published",
+    "WRAPPER_RELEASE_ADVANCED": "wrapper.release.advanced",
     "WRAPPER_CONTRIBUTION_END": "wrapper.contribution.end",
     "WRAPPER_CONCURRENCY_CHANGED": "wrapper.concurrency.changed",
     "WRAPPER_SERIAL_REQUESTED": "wrapper.serial.requested",
@@ -1314,7 +1379,7 @@
   "rolling_stream_cases": [
     {
       "id": "two-lanes-refill-park-recover-and-latch-serial",
-      "description": "One Run that fills two Lanes, refills Lane 1 the moment its first contribution is admitted, parks a third finisher against the full H=2 Integration backlog and narrows for it, recovers one contribution inside its private stage, latches Serial-required work, and passes over its last candidate with a Pickup skip that binds nothing.",
+      "description": "One Run that fills two Lanes, refills Lane 1 the moment its first contribution is admitted, parks a third finisher against the full H=2 Integration backlog and narrows for it, advances a patch Release line after closing its first Integration publication, recovers one contribution inside its private stage, latches Serial-required work, and passes over its last candidate with a Pickup skip that binds nothing.",
       "distributions": [
         "python",
         "shell",
@@ -1346,6 +1411,75 @@
           "host_state": "healthy"
         },
         {
+          "ts": "2026-05-16T00:00:02.100Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.routing.prepared",
+          "issue": 42,
+          "state": "proposed",
+          "proposal_id": "01HXR0000000000000000000R1",
+          "model": "claude-opus-5",
+          "effort": "high",
+          "context_tier": "default",
+          "summary": "highest verified Intelligence Index among the runnable configurations",
+          "reason": null,
+          "detail": null,
+          "prepared_at": "2026-05-16T00:00:02.050Z",
+          "valid_until": "2026-05-16T00:00:07.050Z",
+          "relevant_input_identity": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "routing_credits": "0.25",
+          "selector_attempts": 1,
+          "selector_model": "claude-opus-5",
+          "selector_effort": "high",
+          "selector_context_tier": "default",
+          "evidence_source": "https://artificialanalysis.ai/api/v2/data/llms/models",
+          "source_model_identity": "aa-opus",
+          "evidence_retrieved_at": "2026-05-16T00:00:02.000Z",
+          "capabilities_retrieved_at": "2026-05-16T00:00:02.010Z",
+          "measurement_at": null,
+          "benchmark_version": null,
+          "conditions": null,
+          "routing_overshot": false
+        },
+        {
+          "ts": "2026-05-16T00:00:02.200Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.routing.resolved",
+          "issue": 42,
+          "model": "claude-opus-5",
+          "effort": "high",
+          "context_tier": "default",
+          "summary": "highest verified Intelligence Index among the runnable configurations",
+          "evidence_source": "https://artificialanalysis.ai/api/v2/data/llms/models",
+          "evidence_retrieved_at": "2026-05-16T00:00:02.100Z",
+          "capabilities_retrieved_at": "2026-05-16T00:00:02.150Z",
+          "source_model_identity": "aa-opus",
+          "intelligence_index": "70.0",
+          "public_output_tokens_per_second": "90.0",
+          "measurement_at": null,
+          "benchmark_version": null,
+          "conditions": null,
+          "routing_credits": "0.25",
+          "selector_attempts": 1,
+          "lifecycle_position": "fresh",
+          "attempt": 1,
+          "prior_attempts": [],
+          "repeat_justification": null,
+          "proposal_id": "01HXR0000000000000000000R1",
+          "selector_model": "gpt-5.4-mini",
+          "selector_effort": "low",
+          "selector_context_tier": "default",
+          "validated_at": "2026-05-16T00:00:02.150Z",
+          "relevant_input_identity": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "routing_reuse": "elected",
+          "reused_proposal_id": null,
+          "reused_validated_at": null,
+          "revalidated": true,
+          "reassessed": false,
+          "superseded_proposal_id": null
+        },
+        {
           "ts": "2026-05-16T00:00:02.400Z",
           "run_id": "01HXR0000000000000000000DD",
           "iter": null,
@@ -1354,6 +1488,16 @@
           "reason": "order",
           "position": 1,
           "considered": 4
+        },
+        {
+          "ts": "2026-05-16T00:00:02.500Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.routing.delivery",
+          "issue": 42,
+          "identity": "c46130bb0f803d9b447c86458c7322d3f48e8fb36c8e0772ab285b856f0e6b7b",
+          "label": "git-loopy-route:claude-opus-5-high-d-bc4730b42709",
+          "status": "published"
         },
         {
           "ts": "2026-05-16T00:00:03.000Z",
@@ -1517,6 +1661,16 @@
           "lane_id": "lane-1",
           "issue_ref": 42,
           "outcome": "closed"
+        },
+        {
+          "ts": "2026-05-16T00:00:17.500Z",
+          "run_id": "01HXR0000000000000000000DD",
+          "iter": null,
+          "type": "wrapper.release.advanced",
+          "bump_class": "patch",
+          "issue": 42,
+          "release_target": "1.2.4",
+          "release_version": "1.2.4-dev.1"
         },
         {
           "ts": "2026-05-16T00:00:18.000Z",
@@ -1723,7 +1877,10 @@
       "jsonl": [
         "{\"ts\": \"2026-05-16T00:00:01.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pool.refreshed\", \"issues\": [42, 43, 44, 46]}\n",
         "{\"ts\": \"2026-05-16T00:00:02.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.concurrency.changed\", \"configured_lane_limit\": 3, \"credit_state\": null, \"effective_lane_limit\": 2, \"host_state\": \"healthy\", \"pressure\": null, \"rate_limit_state\": \"healthy\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:02.100Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.routing.prepared\", \"benchmark_version\": null, \"capabilities_retrieved_at\": \"2026-05-16T00:00:02.010Z\", \"conditions\": null, \"context_tier\": \"default\", \"detail\": null, \"effort\": \"high\", \"evidence_retrieved_at\": \"2026-05-16T00:00:02.000Z\", \"evidence_source\": \"https://artificialanalysis.ai/api/v2/data/llms/models\", \"issue\": 42, \"measurement_at\": null, \"model\": \"claude-opus-5\", \"prepared_at\": \"2026-05-16T00:00:02.050Z\", \"proposal_id\": \"01HXR0000000000000000000R1\", \"reason\": null, \"relevant_input_identity\": \"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\", \"routing_credits\": \"0.25\", \"routing_overshot\": false, \"selector_attempts\": 1, \"selector_context_tier\": \"default\", \"selector_effort\": \"high\", \"selector_model\": \"claude-opus-5\", \"source_model_identity\": \"aa-opus\", \"state\": \"proposed\", \"summary\": \"highest verified Intelligence Index among the runnable configurations\", \"valid_until\": \"2026-05-16T00:00:07.050Z\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:02.200Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.routing.resolved\", \"attempt\": 1, \"benchmark_version\": null, \"capabilities_retrieved_at\": \"2026-05-16T00:00:02.150Z\", \"conditions\": null, \"context_tier\": \"default\", \"effort\": \"high\", \"evidence_retrieved_at\": \"2026-05-16T00:00:02.100Z\", \"evidence_source\": \"https://artificialanalysis.ai/api/v2/data/llms/models\", \"intelligence_index\": \"70.0\", \"issue\": 42, \"lifecycle_position\": \"fresh\", \"measurement_at\": null, \"model\": \"claude-opus-5\", \"prior_attempts\": [], \"proposal_id\": \"01HXR0000000000000000000R1\", \"public_output_tokens_per_second\": \"90.0\", \"reassessed\": false, \"relevant_input_identity\": \"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\", \"repeat_justification\": null, \"reused_proposal_id\": null, \"reused_validated_at\": null, \"revalidated\": true, \"routing_credits\": \"0.25\", \"routing_reuse\": \"elected\", \"selector_attempts\": 1, \"selector_context_tier\": \"default\", \"selector_effort\": \"low\", \"selector_model\": \"gpt-5.4-mini\", \"source_model_identity\": \"aa-opus\", \"summary\": \"highest verified Intelligence Index among the runnable configurations\", \"superseded_proposal_id\": null, \"validated_at\": \"2026-05-16T00:00:02.150Z\"}\n",
         "{\"ts\": \"2026-05-16T00:00:02.400Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pickup.bound\", \"considered\": 4, \"issue\": 42, \"position\": 1, \"reason\": \"order\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:02.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.routing.delivery\", \"identity\": \"c46130bb0f803d9b447c86458c7322d3f48e8fb36c8e0772ab285b856f0e6b7b\", \"issue\": 42, \"label\": \"git-loopy-route:claude-opus-5-high-d-bc4730b42709\", \"status\": \"published\"}\n",
         "{\"ts\": \"2026-05-16T00:00:03.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.start\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:03.400Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.pickup.bound\", \"considered\": 3, \"issue\": 43, \"position\": 1, \"reason\": \"order\"}\n",
         "{\"ts\": \"2026-05-16T00:00:04.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.start\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
@@ -1741,6 +1898,7 @@
         "{\"ts\": \"2026-05-16T00:00:15.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.concurrency.changed\", \"configured_lane_limit\": 3, \"credit_state\": null, \"effective_lane_limit\": 1, \"host_state\": \"healthy\", \"pressure\": \"integration_backlog\", \"rate_limit_state\": \"healthy\"}\n",
         "{\"ts\": \"2026-05-16T00:00:16.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.published\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:17.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.auto_close\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"issue_ref\": 42, \"lane_id\": \"lane-1\", \"outcome\": \"closed\"}\n",
+        "{\"ts\": \"2026-05-16T00:00:17.500Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.release.advanced\", \"bump_class\": \"patch\", \"issue\": 42, \"release_target\": \"1.2.4\", \"release_version\": \"1.2.4-dev.1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:18.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.contribution.end\", \"contribution_id\": \"c-0001\", \"issue\": 42, \"lane_id\": \"lane-1\", \"published\": true, \"reason\": \"published\", \"summary\": {\"model\": \"claude-opus-4.8-max\", \"effort\": \"max\", \"tokens_in\": 1200, \"tokens_out\": 340, \"observed_tokens\": 1540, \"cost_usd\": 0.42, \"commits\": 1, \"closures\": 1, \"closure_outcome\": \"closed\", \"recovery_attempts\": 0, \"agent_seconds\": 61.5, \"lifecycle_seconds\": 94.25, \"peak_context_window\": 41000, \"strike_reaction\": \"reset\"}}\n",
         "{\"ts\": \"2026-05-16T00:00:19.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.admitted\", \"contribution_id\": \"c-0003\", \"issue\": 44, \"lane_id\": \"lane-1\"}\n",
         "{\"ts\": \"2026-05-16T00:00:20.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.integration.started\", \"contribution_id\": \"c-0002\", \"issue\": 43, \"lane_id\": \"lane-2\"}\n",
@@ -1817,6 +1975,20 @@
   ],
   "serialization_cases": [
     {
+      "id": "release-line-advance",
+      "event": {
+        "ts": "2026-05-16T00:00:00.000Z",
+        "run_id": "01HXR0000000000000000000RA",
+        "iter": 3,
+        "type": "wrapper.release.advanced",
+        "bump_class": "patch",
+        "issue": 42,
+        "release_target": "1.2.4",
+        "release_version": "1.2.4-dev.1"
+      },
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000RA\", \"iter\": 3, \"type\": \"wrapper.release.advanced\", \"bump_class\": \"patch\", \"issue\": 42, \"release_target\": \"1.2.4\", \"release_version\": \"1.2.4-dev.1\"}\n"
+    },
+    {
       "id": "envelope-before-sorted-payload",
       "event": {
         "zeta": "last",
@@ -1847,7 +2019,7 @@
         "run_id": "01HXR0000000000000000000CC",
         "iter": null,
         "type": "wrapper.run.start",
-        "release_version": "0.10.0-dev.1",
+        "release_version": "1.2.3",
         "schema_version": 1,
         "insight_capabilities": {
           "agent_output": false,
@@ -1867,7 +2039,7 @@
           "execution_hosts": []
         }
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": false, \"structured_agent_events\": false, \"token_usage\": false, \"context_window\": false, \"skill_consultation\": false, \"cost\": false, \"routing\": false}, \"parallel_capabilities\": {\"parallel_mode\": false, \"rolling_dispatch\": false, \"integration_backlog\": false, \"adaptive_lane_limit\": false, \"contribution_events\": false, \"execution_hosts\": []}, \"release_version\": \"0.10.0-dev.1\", \"schema_version\": 1}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000CC\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": false, \"structured_agent_events\": false, \"token_usage\": false, \"context_window\": false, \"skill_consultation\": false, \"cost\": false, \"routing\": false}, \"parallel_capabilities\": {\"parallel_mode\": false, \"rolling_dispatch\": false, \"integration_backlog\": false, \"adaptive_lane_limit\": false, \"contribution_events\": false, \"execution_hosts\": []}, \"release_version\": \"1.2.3\", \"schema_version\": 1}\n"
     },
     {
       "id": "run-start-resolved-rate-card",
@@ -1877,7 +2049,7 @@
         "run_id": "01HXR0000000000000000000DD",
         "iter": null,
         "type": "wrapper.run.start",
-        "release_version": "0.10.0-dev.1",
+        "release_version": "1.2.3",
         "schema_version": 1,
         "insight_capabilities": {
           "agent_output": true,
@@ -1921,7 +2093,7 @@
           }
         }
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"routing\": true, \"rate_card\": true}, \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": false, \"execution_hosts\": [\"local\"]}, \"rate_card\": {\"models\": {\"claude-haiku-4.5\": {\"multiplier\": 0.33, \"discount_percent\": null, \"prices\": {\"batch_size\": 1000000, \"input_price\": 0.1, \"output_price\": 0.4, \"cache_read_price\": 0.01, \"cache_write_price\": 0.125, \"max_prompt_tokens\": 128000, \"long_context\": {\"input_price\": 0.2, \"output_price\": 0.8, \"cache_read_price\": 0.02, \"cache_write_price\": 0.25, \"max_prompt_tokens\": 1000000}}}}}, \"release_version\": \"0.10.0-dev.1\", \"schema_version\": 1}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000DD\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"routing\": true, \"rate_card\": true}, \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": false, \"execution_hosts\": [\"local\"]}, \"rate_card\": {\"models\": {\"claude-haiku-4.5\": {\"multiplier\": 0.33, \"discount_percent\": null, \"prices\": {\"batch_size\": 1000000, \"input_price\": 0.1, \"output_price\": 0.4, \"cache_read_price\": 0.01, \"cache_write_price\": 0.125, \"max_prompt_tokens\": 128000, \"long_context\": {\"input_price\": 0.2, \"output_price\": 0.8, \"cache_read_price\": 0.02, \"cache_write_price\": 0.25, \"max_prompt_tokens\": 1000000}}}}}, \"release_version\": \"1.2.3\", \"schema_version\": 1}\n"
     },
     {
       "id": "run-start-absent-rate-card",
@@ -1931,7 +2103,7 @@
         "run_id": "01HXR0000000000000000000EE",
         "iter": null,
         "type": "wrapper.run.start",
-        "release_version": "0.10.0-dev.1",
+        "release_version": "1.2.3",
         "schema_version": 1,
         "insight_capabilities": {
           "agent_output": true,
@@ -1953,7 +2125,7 @@
         },
         "rate_card": null
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000EE\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"routing\": true, \"rate_card\": false}, \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": false, \"execution_hosts\": [\"local\"]}, \"rate_card\": null, \"release_version\": \"0.10.0-dev.1\", \"schema_version\": 1}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000EE\", \"iter\": null, \"type\": \"wrapper.run.start\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"routing\": true, \"rate_card\": false}, \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": false, \"execution_hosts\": [\"local\"]}, \"rate_card\": null, \"release_version\": \"1.2.3\", \"schema_version\": 1}\n"
     },
     {
       "id": "run-start-routing-readback",
@@ -1963,7 +2135,7 @@
         "run_id": "01HXR0000000000000000000FF",
         "iter": null,
         "type": "wrapper.run.start",
-        "release_version": "0.10.0-dev.1",
+        "release_version": "1.2.3",
         "schema_version": 1,
         "insight_capabilities": {
           "agent_output": true,
@@ -2019,9 +2191,10 @@
         "routing_suppressed": false,
         "harness_version": "1.0.67",
         "roster_cli_version": "1.0.75",
-        "roster_diverged": true
+        "roster_diverged": true,
+        "route_policy": "unselected"
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000FF\", \"iter\": null, \"type\": \"wrapper.run.start\", \"context_tier\": \"long_context\", \"effort\": \"max\", \"escalation_rung\": {\"model\": \"claude-opus-5\", \"effort\": \"max\", \"configured_effort\": \"max\", \"gate_warnings\": []}, \"harness_version\": \"1.0.67\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"routing\": true}, \"model\": \"claude-opus-4.8\", \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": true, \"execution_hosts\": [\"local\"]}, \"release_version\": \"0.10.0-dev.1\", \"roster_cli_version\": \"1.0.75\", \"roster_diverged\": true, \"routes\": [{\"key\": \"docs\", \"model\": \"gpt-5-mini\", \"effort\": \"medium\", \"configured_effort\": \"medium\", \"gate_warnings\": []}, {\"key\": \"chore\", \"model\": \"claude-haiku-4.5\", \"effort\": null, \"configured_effort\": \"high\", \"gate_warnings\": [\"incapable_model\"]}], \"routing_suppressed\": false, \"schema_version\": 1, \"unconfigured_task_type_keys\": [\"planning\", \"review\", \"implementation\", \"test\", \"bugfix\"]}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:00.000Z\", \"run_id\": \"01HXR0000000000000000000FF\", \"iter\": null, \"type\": \"wrapper.run.start\", \"context_tier\": \"long_context\", \"effort\": \"max\", \"escalation_rung\": {\"model\": \"claude-opus-5\", \"effort\": \"max\", \"configured_effort\": \"max\", \"gate_warnings\": []}, \"harness_version\": \"1.0.67\", \"insight_capabilities\": {\"agent_output\": true, \"structured_agent_events\": true, \"token_usage\": true, \"context_window\": true, \"skill_consultation\": true, \"cost\": true, \"routing\": true}, \"model\": \"claude-opus-4.8\", \"parallel_capabilities\": {\"parallel_mode\": true, \"rolling_dispatch\": true, \"integration_backlog\": true, \"adaptive_lane_limit\": true, \"contribution_events\": true, \"execution_hosts\": [\"local\"]}, \"release_version\": \"1.2.3\", \"roster_cli_version\": \"1.0.75\", \"roster_diverged\": true, \"route_policy\": \"unselected\", \"routes\": [{\"key\": \"docs\", \"model\": \"gpt-5-mini\", \"effort\": \"medium\", \"configured_effort\": \"medium\", \"gate_warnings\": []}, {\"key\": \"chore\", \"model\": \"claude-haiku-4.5\", \"effort\": null, \"configured_effort\": \"high\", \"gate_warnings\": [\"incapable_model\"]}], \"routing_suppressed\": false, \"schema_version\": 1, \"unconfigured_task_type_keys\": [\"planning\", \"review\", \"implementation\", \"test\", \"bugfix\"]}\n"
     },
     {
       "id": "authoritative-issue-activation",

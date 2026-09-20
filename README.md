@@ -112,9 +112,14 @@ git-loopy init
 git-loopy
 ```
 
-On a terminal, a Run detaches its worker and opens the live interface with the
-shared `git-loopy-tui` helper when available, falling back to the line printer.
-A non-terminal Run uses the line printer directly.
+The terminal interface is included in the base installation. An older install
+command that names the removed `[tui]` extra still succeeds, but your package
+manager warns that the extra does not exist; omit it.
+
+On a terminal, a Run detaches its worker and opens the Dashboard with the
+shared `git-loopy-tui` helper when available. To return to the line-printer
+view, use `--no-interactive` or set `GIT_LOOPY_INTERACTIVE=0`. A non-terminal
+Run uses the line printer directly.
 
 Useful variations:
 
@@ -154,6 +159,21 @@ do not treat its source `VERSION` output as proof of Release identity:
 ```bash
 uv tool install "git+https://github.com/bradcstevens/git-loopy@<unreleased-commit-sha>#subdirectory=git-loopy/python"
 ```
+
+Once installed, `git-loopy upgrade` moves between Releases for you: it resolves
+the newest published Release (or the one `--to` names, or the ref `--edge`
+names), hands the move to the **Install channel** that placed the artifact it is
+running from, and then runs `git-loopy update`. A channel it cannot prove, or
+cannot pin to one Release, changes nothing and prints the exact command instead
+— see
+[moving between Releases](git-loopy/python/README.md#moving-between-releases-git-loopy-upgrade).
+
+`git-loopy uninstall` takes the same installation back off the machine through
+the same proven channel, together with the global config-home, the installed
+Skill catalog and the TUI helper. It prints the whole plan and waits for you to
+confirm it. Your repositories are never edited: tracked project files and Run
+logs are reported and kept unless you ask for them with `--all` — see
+[removing an installation](git-loopy/python/README.md#removing-a-machine-local-installation-git-loopy-uninstall).
 
 ## The skills and their purpose
 
@@ -302,6 +322,7 @@ flowchart TD
 | [Concepts](docs/concepts.md) | The context model behind small issues and fresh Iterations |
 | [Wrapper contract](docs/wrapper-contract.md) | The behavior every Orchestrator must implement |
 | [Runner family](docs/runners.md) | The [Python](git-loopy/python/README.md), [shell](git-loopy/shell/README.md), and [PowerShell](git-loopy/powershell/README.md) Orchestrators |
+| [Installation lifecycle](git-loopy/python/README.md#installation-lifecycle) | Choosing Python Runner `update`, `upgrade`, or `uninstall` and their safeguards |
 | [Parallel mode](docs/parallel-mode.md) | Lanes, `parallel-safe`, and the Integration stage |
 | [Skill policy](docs/skill-policy.md) | The closed world of Skills a Run may load |
 | [Skills setup](docs/skills-setup.md) | Prerequisites and installing the skill catalog |

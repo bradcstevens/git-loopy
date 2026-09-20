@@ -238,6 +238,35 @@ def _escape_str(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _format_key(key: str) -> str:
+    """Render a TOML bare key when possible, otherwise a quoted basic key.
+
+    A persisted ``[routing]`` key is read literally, so a Config can carry the
+    retired ``task-type:docs`` spelling — and ``:`` is not a bare-key character.
+    Emitting it bare produced a ``config.toml`` no reader could parse, turning
+    every whole-file rewrite that preserved such a sibling (``config routing
+    unset``, the ``update`` repair) from a lockout into a corruption.
+    """
+    bare = key and all(
+        character.isascii() and (character.isalnum() or character in "_-")
+        for character in key
+    )
+    return key if bare else f'"{_escape_str(key)}"'
+
+
+#: The ``[section]`` blocks whose entries **must** be inline tables. Only
+#: ``[routing]`` is: it maps a task-type key to a ``{ model, effort }`` pair
+#: (#146), and :func:`table_routing` refuses to read any other entry shape, so
+#: accepting one here would write a file this module then cannot parse back.
+#: Every other section's entry shape is taken from the value, because a Config
+#: written by an older Release — the whole premise of the ``update`` repair
+#: (#527) — carries sections this build has no reader for, and refusing to
+#: re-emit one would leave the operator locked out of the file it was rewriting
+#: to unlock. ``[escalation]`` (#408) is the one such section shipped today: a
+#: rung's ``enabled`` / ``model`` / ``effort`` scalars.
+_INLINE_TABLE_SECTIONS = frozenset({"routing"})
+
+
 def _format_value(key: str, value: object) -> str:
     """Render one scalar / string-list value as its TOML literal.
 
@@ -321,17 +350,22 @@ def dump_config_toml(
     values: Mapping[str, object],
     *,
     header: Sequence[str] = (),
+    normalize_enabled_skills: bool = True,
 ) -> str:
     """Serialize a Config table to TOML text.
 
     Scalar / list values (``str`` / ``bool`` / ``int`` / ``float`` /
-    ``list[str]``) are emitted as flat ``key = value`` lines. A top-level
-    ``dict`` value is emitted as a ``[section]`` block of inline ``{ ... }``
-    tables (issue #146) — the one bounded table extension. Sections are emitted
-    **after** all flat keys so a bare ``key = value`` line is never captured into
-    a section, and the round-trip through :mod:`tomllib` is asserted in
-    ``tests/test_settings.py``. ``header`` lines are emitted as ``#``-prefixed
-    comments above the body.
+    ``list[str]``) are emitted as flat ``key = value`` lines. ``enabled_skills`` is sorted and deduplicated by
+    default for the Config authoring paths; a targeted migration can retain its
+    unrelated authored value by disabling that normalization. A top-level
+    ``dict`` value is emitted as a ``[section]`` block (issue #146) — the one
+    bounded table extension — whose entries take their shape from their values,
+    except in the sections :data:`_INLINE_TABLE_SECTIONS` holds to an inline
+    table. Sections are emitted **after** all flat keys so a bare
+    ``key = value`` line is never captured into a section, every key is emitted
+    through :func:`_format_key`, and the round-trip through :mod:`tomllib` is
+    asserted in ``tests/test_settings.py``. ``header`` lines are emitted as
+    ``#``-prefixed comments above the body.
     """
     lines = [f"# {line}" for line in header]
     if header:
@@ -339,7 +373,11 @@ def dump_config_toml(
     scalars: list[tuple[str, object]] = []
     sections: list[tuple[str, Mapping[str, object]]] = []
     for key, value in values.items():
-        if key == "enabled_skills" and isinstance(value, list):
+        if (
+            normalize_enabled_skills
+            and key == "enabled_skills"
+            and isinstance(value, list)
+        ):
             if any(not isinstance(item, str) for item in value):
                 raise SettingsError(
                     "cannot serialize 'enabled_skills': only lists of strings are supported"
@@ -350,13 +388,19 @@ def dump_config_toml(
         else:
             scalars.append((key, value))
     for key, value in scalars:
-        lines.append(f"{key} = {_format_value(key, value)}")
+        lines.append(f"{_format_key(key)} = {_format_value(key, value)}")
     for key, table in sections:
         if lines and lines[-1] != "":
             lines.append("")
-        lines.append(f"[{key}]")
+        lines.append(f"[{_format_key(key)}]")
+        strict = key in _INLINE_TABLE_SECTIONS
         for entry_key, entry in table.items():
-            lines.append(f"{entry_key} = {_format_inline_table(key, entry_key, entry)}")
+            rendered = (
+                _format_inline_table(key, entry_key, entry)
+                if strict or isinstance(entry, dict)
+                else _format_value(f"{key}.{entry_key}", entry)
+            )
+            lines.append(f"{_format_key(entry_key)} = {rendered}")
     return "\n".join(lines) + "\n"
 
 
@@ -381,9 +425,14 @@ def write_config_atomic(
     values: Mapping[str, object],
     *,
     header: Sequence[str] = CONFIG_HEADER,
+    normalize_enabled_skills: bool = True,
 ) -> None:
     """Atomically replace one Config after fully serializing it beside the target."""
-    content = dump_config_toml(values, header=header)
+    content = dump_config_toml(
+        values,
+        header=header,
+        normalize_enabled_skills=normalize_enabled_skills,
+    )
     target = path.resolve(strict=False) if path.is_symlink() else path
     target.parent.mkdir(parents=True, exist_ok=True)
     try:

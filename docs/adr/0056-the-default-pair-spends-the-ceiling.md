@@ -91,9 +91,13 @@ All three Orchestrators change together, for the reason ADR-0036 gives: the defa
 exists identically in all three and is stated in §11's precedence-spine table as a MUST. The
 constants are `git_loopy.cli._DEFAULT_REASONING_EFFORT`,
 `git_loopy_resolve_config` in `git-loopy/shell/lib/orchestrator.sh`, and
-`Resolve-GitLoopyConfig` in `git-loopy/powershell/GitLoopy.Orchestrator.psm1`. The tracked
-`git-loopy/config.toml` moves with them, because `tests/test_config.py` binds it to the built-in
-so the kit cannot silently disagree with itself.
+`Resolve-GitLoopyConfig` in `git-loopy/powershell/GitLoopy.Orchestrator.psm1`. At this change,
+the tracked `git-loopy/config.toml` moved with them and `tests/test_config.py` bound it to
+the built-in. The later maintainer-approved project overrides in
+[#594](https://github.com/bradcstevens/git-loopy/issues/594) are now checked as explicit
+Config choices, independently of the unchanged cross-Orchestrator built-in default.
+The project's review route already selects the escalation rung; that does not retune
+the recommended table or extend its no-`max` rule to operator-authored Config.
 
 ## Consequences
 

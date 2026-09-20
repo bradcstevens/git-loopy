@@ -125,19 +125,20 @@ def test_projection_rejects_links_outside_enabled_skill(
     assert not (tmp_path / "exposure" / "enabled").exists()
 
 
+@pytest.mark.parametrize("source_kind", ["plugin", "custom"])
 def test_projection_fails_closed_when_enabled_external_winner_has_no_path(
-    tmp_path: Path,
+    tmp_path: Path, source_kind: str,
 ) -> None:
     catalog = SkillCatalog(
         winners={
-            "plugin-skill": SkillCatalogWinner("plugin-skill", "plugin"),
+            "external-skill": SkillCatalogWinner("external-skill", source_kind),
         }
     )
     policy = EffectiveSkillPolicy(
-        enabled=("plugin-skill",),
+        enabled=("external-skill",),
         required=(),
         legacy_denied=(),
-        source_kinds={"plugin-skill": "plugin"},
+        source_kinds={"external-skill": source_kind},
         base_scope=SkillPolicyScope.PROJECT,
     )
 

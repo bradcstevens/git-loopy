@@ -61,7 +61,10 @@ from git_loopy.sources import (
     PICKUP_VALIDATED,
     PoolCandidate,
     RollingIssueSource,
+    confirms_empty_pool,
     has_proven_open_blocker,
+    has_unresolved_readiness,
+    unbound_pool_outcome,
 )
 
 __all__ = [
@@ -81,6 +84,10 @@ def is_parallel_safe(candidate: PoolCandidate) -> bool:
     required: a local-markdown path or a pull request is not Lane work.
     """
     return isinstance(candidate.ref, int) and LABEL_PARALLEL_SAFE in candidate.labels
+
+
+def _ignore_membership_read(_candidates: tuple[PoolCandidate, ...]) -> None:
+    """Default visibility seam for callers that do not publish Membership reads."""
 
 
 @dataclass(frozen=True)
@@ -167,6 +174,11 @@ class RollingPool:
             **Blocked** so the next refresh can promote them when their
             blockers close.
         backoff: The bounded exponential backoff policy.
+        on_membership_read: Receives the eligible cache membership in FIFO
+            order every time a read is worth publishing — the Run's first, one
+            that changed it, and the forced terminal confirmation. Whether a
+            read was worth publishing is this cache's decision and not the
+            consumer's, so the callable takes the membership and nothing else.
     """
 
     diag: logging.Logger
@@ -176,9 +188,13 @@ class RollingPool:
     eligible: Callable[[PoolCandidate], bool] = is_parallel_safe
     cacheable: Callable[[PoolCandidate], bool] = is_parallel_safe
     backoff: RefreshBackoff = field(default_factory=RefreshBackoff)
+    on_membership_read: Callable[[tuple[PoolCandidate, ...]], None] = (
+        _ignore_membership_read
+    )
 
     _entries: list[_CachedCandidate] = field(default_factory=list, init=False)
     _refreshing: bool = field(default=False, init=False)
+    _membership_read_seen: bool = field(default=False, init=False)
     _demand_unmet: bool = field(default=False, init=False)
     _interval: float = field(default=0.0, init=False)
     _next_refresh_at: float = field(default=0.0, init=False)
@@ -335,13 +351,31 @@ class RollingPool:
         """Classify a quiescent cache from one authoritative Membership read.
 
         A complete cache with no survivors is empty. A complete cache whose
-        survivors all prove an open native blocker is waiting on blockers. Any
-        unreadable or unprovable records make the Pool ``all_skipped``: they
-        are a refusal an operator can repair, not a reason to keep polling.
+        survivors all prove an open native blocker is waiting on blockers. A
+        survivor whose **Readiness** could not be read ends the Run under
+        ``preflight_failed`` instead of either (#542): that record reports a
+        failed *read*, so calling it ``all_skipped`` would assert the refusal
+        the read never established — and the Run's own diagnostic names the
+        candidates, because the verdict carries no blockers to name.
         Incomplete and quarantined reads remain non-terminal because the Run
         has no complete fact to report.
+
+        The three-way choice itself is
+        :func:`~git_loopy.sources.unbound_pool_outcome`, asked here and on the
+        serial path so the two dispatch modes cannot drift apart on what a Pool
+        nobody could bind work out of is entitled to report — the same
+        discipline :func:`~git_loopy.sources.confirms_empty_pool` keeps for
+        emptiness.
         """
         snapshot = self._refresh_now()
+        if confirms_empty_pool(
+            complete=snapshot.complete, remaining=len(self._entries)
+        ):
+            # The family rule, asked here and on the serial path (#541) so the
+            # two dispatch modes cannot drift apart on what "empty" means. A
+            # cache with no entries has no quarantined ones either, so the
+            # unresolved guard below is about survivors, not about this claim.
+            return "empty_pool"
         if not snapshot.complete:
             self.diag.warning(
                 "final Pool refresh was incomplete; not claiming an empty Pool"
@@ -355,23 +389,43 @@ class RollingPool:
                 ),
             )
             return None
-        if not self._entries:
-            return "empty_pool"
         if any(
             not entry.quarantined and self.eligible(entry.candidate)
             for entry in self._entries
         ):
             return None
-        if all(has_proven_open_blocker(entry.candidate) for entry in self._entries):
-            return "all_blocked"
-        return "all_skipped"
+        survivors = tuple(entry.candidate for entry in self._entries)
+        unreadable = tuple(
+            candidate.ref
+            for candidate in survivors
+            if has_unresolved_readiness(candidate)
+        )
+        if unreadable:
+            self.diag.error(
+                "the readiness of %d of the %d candidate(s) left in the Pool "
+                "could not be read (%s); an unread candidate is unknown, not "
+                "refused, so this Run will not report the Pool as one it could "
+                "take no work from. Check `gh auth status`, this host's network "
+                "path to the tracker, and whether those issues' blockers live "
+                "in a repository this token can see, then re-run.",
+                len(unreadable),
+                len(survivors),
+                ", ".join(f"#{ref}" for ref in unreadable),
+            )
+        return unbound_pool_outcome(
+            candidates=len(survivors),
+            waiting=sum(
+                1 for candidate in survivors if has_proven_open_blocker(candidate)
+            ),
+            unresolved=len(unreadable),
+        )
 
     def _refresh_now(self) -> MembershipSnapshot:
         """Force one refresh regardless of the backoff window."""
         self._next_refresh_at = self.clock()
-        return self._refresh()
+        return self._refresh(force_emit=True)
 
-    def _refresh(self) -> MembershipSnapshot:
+    def _refresh(self, *, force_emit: bool = False) -> MembershipSnapshot:
         """Read membership once, reconcile it, and re-arm the backoff window.
 
         Re-entrant calls are coalesced (#219 §2.3): while a read is in flight a
@@ -391,6 +445,9 @@ class RollingPool:
             before = self.candidate_refs
             self._reconcile(snapshot)
             changed = self.candidate_refs != before
+            if force_emit or not self._membership_read_seen or changed:
+                self._membership_read_seen = True
+                self.on_membership_read(self._eligible_membership())
         else:
             self.diag.warning(
                 "membership refresh incomplete; retaining last complete snapshot"
@@ -403,6 +460,24 @@ class RollingPool:
             self._jitter(self._interval) if self._interval > 0 else 0.0
         )
         return snapshot
+
+    def _eligible_membership(self) -> tuple[PoolCandidate, ...]:
+        """The membership one **Membership read** publishes, in cache order.
+
+        The eligible half of the cache. Cache order is the **Queue**'s order and
+        the Wrapper contract §3.2 selection order — see :meth:`_reconcile`,
+        which never re-sorts.
+
+        A **quarantined** candidate needs no exception here, because this runs
+        immediately after :meth:`_reconcile` and a survivor a complete read
+        still lists leaves quarantine there (§2.11). So a candidate a failed
+        **Pickup** quarantined is published again by the very read that makes
+        it worth retrying, and a Queue row is never lost to an unreachable
+        issue.
+        """
+        return tuple(
+            entry.candidate for entry in self._entries if self.eligible(entry.candidate)
+        )
 
     def _jitter(self, interval: float) -> float:
         assert self.jitter is not None  # set in __post_init__

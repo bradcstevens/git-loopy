@@ -197,6 +197,11 @@ class ModelPickerScreen(Screen["Selection | None"]):
         else:
             self.dismiss(None)
 
+    @property
+    def at_model_stage(self) -> bool:
+        """Whether Escape would leave this Screen rather than return to model rows."""
+        return self._chosen is None
+
     def action_cancel(self) -> None:
         """q / Ctrl+C: quit the picker; the orchestrator keeps the env/default."""
         self.dismiss(None)

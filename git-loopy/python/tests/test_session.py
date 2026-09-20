@@ -771,6 +771,68 @@ async def test_iteration_session_passes_reasoning_effort_through(
     assert fake_client.create_calls[0]["reasoning_effort"] == effort
 
 
+@pytest.mark.parametrize("tier", ["default", "long_context"])
+async def test_iteration_session_passes_context_tier_through(
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+    renderer_pair: tuple[Renderer, io.StringIO],
+    tier: str,
+) -> None:
+    """``context_tier`` is forwarded verbatim to ``create_session`` (#560).
+
+    Load-bearing, and the reason ADR-0017's tier was inert before this:
+    the resolver gated a tier, the pickup published it and the Dashboard
+    rendered it, but :meth:`IterationSession.__aenter__` never handed it
+    to the SDK. A session created without the kwarg is reported by the
+    harness with **no tier at all** rather than with the default one, so
+    a Run could not put a resolved tier in force and could not prove
+    which tier it ran on.
+    """
+    renderer, _ = renderer_pair
+    with event_log:
+        async with IterationSession(
+            fake_client,
+            config=_StubConfig(),
+            event_log=event_log,
+            sinks=SinkFanout([renderer]),
+            run_id=_FIXED_RUN_ID,
+            iter_num=1,
+            model="claude-opus-5",
+            reasoning_effort="high",
+            context_tier=tier,
+        ):
+            pass
+
+    assert fake_client.create_calls[0]["context_tier"] == tier
+
+
+async def test_iteration_session_omits_context_tier_by_default(
+    fake_client: FakeCopilotClient,
+    event_log: EventLogWriter,
+    renderer_pair: tuple[Renderer, io.StringIO],
+) -> None:
+    """Without an explicit tier the kwarg stays ``None`` (#560).
+
+    ``None`` tells the SDK not to send ``contextTier``, which leaves the
+    harness resolving no tier for the session. Pinned so the absence
+    stays a deliberate "let the backend decide" rather than drifting
+    into a silently-invented default.
+    """
+    renderer, _ = renderer_pair
+    with event_log:
+        async with IterationSession(
+            fake_client,
+            config=_StubConfig(),
+            event_log=event_log,
+            sinks=SinkFanout([renderer]),
+            run_id=_FIXED_RUN_ID,
+            iter_num=1,
+        ):
+            pass
+
+    assert fake_client.create_calls[0]["context_tier"] is None
+
+
 async def test_iteration_session_passes_working_directory_through(
     fake_client: FakeCopilotClient,
     event_log: EventLogWriter,

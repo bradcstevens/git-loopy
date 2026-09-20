@@ -294,6 +294,38 @@ while IFS= read -r case_json; do
   assert_equal "$expected" "$actual" "exit-code fixture: $case_id"
 done < <(jq -c '.cases[]' "$conformance_dir/exit-codes.json")
 
+# §2.2 (#541): which read may claim the exit-`0` empty Pool. Driven through the
+# production rule rather than re-derived here, so this member and the Python
+# reference answer the same four cases the same way — a family that disagreed
+# would have one Orchestrator exiting 0 where another exits 1 over identical
+# data.
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  complete="$(jq -r 'if .complete then 1 else 0 end' <<<"$case_json")"
+  remaining="$(jq -r '.remaining' <<<"$case_json")"
+  expected="$(jq -r '.confirms_empty' <<<"$case_json")"
+  if git_loopy_confirms_empty_pool "$complete" "$remaining"; then
+    actual="true"
+  else
+    actual="false"
+  fi
+  assert_equal "$expected" "$actual" "pool-emptiness fixture: $case_id"
+done < <(jq -c '.pool_emptiness_cases[]' "$conformance_dir/exit-codes.json")
+
+# §3.3.1/§10 (#542): which terminal reason a Pool that bound nothing is entitled
+# to. The refusal-side companion to the cases above, driven through the same
+# production rule, so a failed read cannot become a terminal Pool fact in one
+# member while it stays a failed precondition in another.
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  candidates="$(jq -r '.candidates' <<<"$case_json")"
+  waiting="$(jq -r '.waiting' <<<"$case_json")"
+  unresolved="$(jq -r '.unresolved' <<<"$case_json")"
+  expected="$(jq -r '.outcome' <<<"$case_json")"
+  actual="$(git_loopy_unbound_pool_outcome "$candidates" "$waiting" "$unresolved")"
+  assert_equal "$expected" "$actual" "unbound-pool fixture: $case_id"
+done < <(jq -c '.unbound_pool_cases[]' "$conformance_dir/exit-codes.json")
+
 assert_equal \
   "$(jq -r '.reference_regex' "$conformance_dir/close-references.json")" \
   "$GIT_LOOPY_CLOSE_KEYWORD_RE" \

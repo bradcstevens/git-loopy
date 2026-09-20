@@ -125,6 +125,65 @@ def test_report_says_how_to_apply_when_something_diverges(
     assert any("--apply" in line for line in out)
 
 
+def test_report_names_a_noncanonical_bump_class_label_as_manual_correction(
+    tmp_path: Path, sinks: tuple[list[str], list[str]]
+) -> None:
+    """A case-only Bump-class mismatch cannot be repaired by ``--apply``."""
+    out, err = sinks
+    client = _tracker_matching(tmp_path)
+    minor = next(
+        label for label in client.present if label.name == "semver:minor"
+    )
+    client.present[client.present.index(minor)] = labels_module.TrackerLabel(
+        "semver:Minor", minor.color, minor.description
+    )
+
+    rc = labelscmd.run_labels(
+        repo_root=tmp_path, client=client, output_fn=out.append, warn=err.append
+    )
+
+    assert rc == 0
+    assert "drifted semver:minor (name)" in out
+    assert "--apply" not in "\n".join(out)
+    assert out[-1] == (
+        "1 label requires manual correction because its tracker spelling is "
+        "noncanonical."
+    )
+
+
+def test_apply_retains_manual_guidance_alongside_a_write_failure(
+    tmp_path: Path, sinks: tuple[list[str], list[str]]
+) -> None:
+    """A retry can fix a missing label but not a recased Bump-class label."""
+
+    class _FailingWriteClient(_FakeClient):
+        def label_create(self, spec: labels_module.LabelSpec) -> None:
+            raise RuntimeError("gh: HTTP 403 Resource not accessible by integration")
+
+    out, err = sinks
+    client = _tracker_matching(tmp_path, without=LABEL_PRIORITY)
+    minor = next(
+        label for label in client.present if label.name == "semver:minor"
+    )
+    client.present[client.present.index(minor)] = labels_module.TrackerLabel(
+        "semver:Minor", minor.color, minor.description
+    )
+    failing = _FailingWriteClient(*client.present)
+
+    rc = labelscmd.run_labels(
+        repo_root=tmp_path,
+        apply=True,
+        client=failing,
+        output_fn=out.append,
+        warn=err.append,
+    )
+
+    assert rc == 1
+    assert "0 of 1 repairable difference" in err[0]
+    assert "Re-run `git-loopy labels --apply`" in err[0]
+    assert "1 label requires manual correction" in err[0]
+
+
 def test_every_vocabulary_label_gets_a_verdict(
     tmp_path: Path, sinks: tuple[list[str], list[str]]
 ) -> None:

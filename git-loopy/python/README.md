@@ -21,9 +21,51 @@ root [`README.md`](../../README.md) for positioning, and
 
 `git-loopy` is the canonical command for the Python member. Shell, PowerShell,
 and Rust Orchestrators are planned around the same contract
-([ADR-0013](../../docs/adr/0013-multi-language-runner-family.md)). Model and
-reasoning effort are set with per-Run `--model` / `--reasoning-effort` flags or
-persisted `config.toml` values.
+([ADR-0013](../../docs/adr/0013-multi-language-runner-family.md)). Model,
+reasoning effort, and context tier are set with per-Run `--model`,
+`--reasoning-effort`, and `--context-tier` flags or persisted `config.toml`
+values.
+
+---
+
+## Installation lifecycle
+
+These commands are **Python Runner only**. The shell and PowerShell
+Orchestrators do not yet have the management-command dispatcher or the
+machine-local asset model needed to manage Config, prompt provenance, the
+installed catalog, and the TUI helper. They remain Runner-family members under
+the shared Wrapper contract; this lifecycle is deliberately not a contract
+obligation.
+
+Choose the command by what changed:
+
+| Command | What it does | Does not do |
+| --- | --- | --- |
+| `git-loopy update` | Refreshes the machine-local state the installed Release owns: the installed catalog, TUI helper, global prompt override when **Scaffold provenance** proves it untouched, and a Release-retired Config route. | Does not replace the distribution, start a Run, or write to the tracker. |
+| `git-loopy upgrade` | Replaces the executing distribution through its proven **Install channel**, then runs `update`. | Does not guess an Install channel, update a clone it does not own, or replace a second `git-loopy` artifact on `PATH`. |
+| `git-loopy uninstall` | Removes the distribution through its proven Install channel and the machine-local state. | Does not edit repository contents by default or remove a live Lane's work. |
+
+An **Edge install** is an explicit `upgrade --edge <ref>` landing on unreleased
+source. Identify it by its ref, not the source `VERSION`, because only a
+published Release has a Release-version identity. **Scaffold provenance** is
+the Release and digest git-loopy recorded when it scaffolded an asset; it is the
+proof that allows a prompt replacement without overwriting operator prose.
+
+| Command | Flags | Exit behavior | Worked example |
+| --- | --- | --- | --- |
+| `update` | `--global` (default), `--project`, `--dry-run` | `0` when the chosen Config scope settles and every refreshed asset reaches the installed Release; `1` for an ambiguous or failed repair or asset refresh. | `git-loopy update --project` |
+| `upgrade` | `--to <version>`, `--edge` / `--ref <ref>`, `--allow-downgrade` | `0` when already on the requested Release, or when the channel move and chained `update` both succeed; `1` when the target, direction, or channel cannot be proven, handoff fails, or the chained refresh fails. | `git-loopy upgrade --to 0.10.0` |
+| `uninstall` | `--all`, `--yes` / `-y` | `0` only when every planned removal succeeds; `1` for an unconfirmed plan, an unsafe path, a live or unreadable Lane, a channel that cannot be proven, or any incomplete removal. | `git-loopy uninstall --yes` |
+
+The refusals are intentional safeguards, not partial upgrades: a customized or
+unrecorded prompt is reported rather than overwritten; an unprovable Install
+channel prints a command for the operator instead of guessing; and tracked
+project scope plus Run logs stay out of an uninstall unless `--all` explicitly
+names the repository. If an old routing key locks the **Config** out of ordinary
+commands or a Run, use `git-loopy update` for global scope, or
+`git-loopy update --project` for the repository Config.
+
+The sections below give the complete behavior and constraints for each command.
 
 ---
 
@@ -32,9 +74,6 @@ persisted `config.toml` values.
 ```bash
 # From the repo root: install the runner's dependencies.
 uv sync --project git-loopy/python
-
-# Optional: install the startup-pickers extra (Textual).
-uv sync --project git-loopy/python --extra tui
 
 # Optional: install the OpenTelemetry extra to enable opt-in tracing.
 uv sync --project git-loopy/python --extra otel
@@ -47,6 +86,22 @@ a fallback. The other prerequisites (`gh` signed in, `git`, `copilot`) are liste
 
 The bootstrap is per-clone; subsequent invocations of `git-loopy` use
 the cached environment under `git-loopy/python/.venv/`.
+
+The Runner pins `github-copilot-sdk==1.0.14`, which downloads and runs Copilot
+CLI `1.0.85` by default. Updating the separate `copilot` command on `PATH`
+does not update that harness. The refreshed roster recognizes
+`gpt-6-astra` (including `max` reasoning). The pinned-harness listing did not
+offer Gemini 3.8 on the account used for this upgrade, so no unverified effort
+set is added for it: configured `gemini-3.8-flash` selections and efforts stay
+unchanged, with the usual unknown-model warning and pass-through behavior.
+Roster membership does not guarantee account availability.
+
+SDK upgrades must move the pin, lockfile, and roster CLI-version stamp
+together. Offline tests check that stamp and the installed SDK's client,
+session, permission, event, and Skill-discovery interfaces. SDK-provided
+Skills normalize to the existing `custom` source kind; a pathless provider
+Skill still cannot enter a Run's isolated Skill exposure unless the
+installed catalog supplies a filesystem-backed winner of the same name.
 
 ---
 
@@ -97,22 +152,82 @@ for commands.
 
 ---
 
+## Finding commands
+
+`git-loopy help` is an alias for `git-loopy --help`. Both print the same
+category-grouped management-command surface; the bare `git-loopy` invocation
+continues to start a Run.
+
+Shell completions and other machine consumers can read that same surface with:
+
+```bash
+git-loopy commands --json
+```
+
+It emits this stable, ordered document:
+
+```json
+{
+  "schema_version": 1,
+  "commands": [
+    {
+      "name": "init",
+      "category": "Getting started",
+      "summary": "First-run setup wizard for Config and Skill policy."
+    }
+  ]
+}
+```
+
+`commands` contains every root management command exactly once, in the order
+shown by root help. Each command object always has the string `name`,
+`category`, and `summary` fields. `schema_version` changes only for an
+incompatible shape change. `git-loopy commands` without `--json` refuses rather
+than becoming a second human-facing listing.
+
+---
+
 ## Installation identity (`git-loopy info`)
 
 `git-loopy info` describes the Python Runner artifact currently executing: its
 executable path, **Install channel** (only when that ownership can be proven),
 **Release version**, resolved commit, whether that commit is a published Release,
-and **Edge install** status. It is read-only and always exits `0`; unavailable
-identity is reported as `unknown`, never treated as a health failure.
+and **Edge install** status. It also lists the Config-home assets git-loopy
+installs — the Config, the prompt override, the **installed catalog**, and the
+TUI helper — and what each one has drifted into. It is read-only and always
+exits `0`; unavailable identity is reported as `unknown`, never treated as a
+health failure, and no amount of drift changes the exit code.
 
 ```bash
 git-loopy info
 git-loopy info --json
 ```
 
+Each asset reports one classification, judged against its **Scaffold
+provenance**:
+
+| Classification | What it means |
+| --- | --- |
+| `untouched` | Scaffold provenance covers it and its content still matches what that **Release version** wrote, so a refresh can replace it. |
+| `customized` | Scaffold provenance covers it and cannot prove the content is git-loopy's — the content differs, no entry exists, or the record is unreadable. Treated as the operator's work, the fail-safe direction ADR-0054 asks for. |
+| `unrecorded` | Scaffold provenance records nothing about it: the **installed catalog** and the TUI helper, which are machine-managed and re-cut wholesale rather than authored, and anything that is not installed. |
+
+`present` is the separate fact of whether the asset is there at all, so "you have
+not installed this" stays distinguishable from "this is installed and nothing
+proves what it is". Plain text prints `not installed` for an absent asset.
+
+Every reported asset lives in the Config home, so the **TUI helper** row is the
+machine-local copy under `<config-home>/git-loopy/bin/` — the one ADR-0054 hands
+to `update` and `uninstall`. A clone-local helper in `.git-loopy/bin/`, or one a
+package manager put on `PATH`, is a different artifact through a different
+channel: a Run still attaches to it, and `info` deliberately does not report it
+as git-loopy's to refresh or remove.
+
 `--json` emits this stable schema. Fields with unknown facts are `null`; the
-`assets` array is intentionally empty until the installation inventory's
-Config-home asset half lands.
+`assets` array always lists the whole Config-home inventory, in a fixed order,
+whether or not each entry exists on disk. Each entry carries its stable display
+name, resolved path, presence, classification, and originating Release when
+Scaffold provenance proves one.
 
 ```json
 {
@@ -124,7 +239,36 @@ Config-home asset half lands.
   "resolved_commit": "0123456789abcdef0123456789abcdef01234567",
   "published": true,
   "edge_install": false,
-  "assets": []
+  "assets": [
+    {
+      "name": "config.toml",
+      "path": "/home/operator/.config/git-loopy/config.toml",
+      "present": true,
+      "classification": "untouched",
+      "release_version": "0.9.0"
+    },
+    {
+      "name": "PROMPT.md",
+      "path": "/home/operator/.config/git-loopy/PROMPT.md",
+      "present": true,
+      "classification": "customized",
+      "release_version": "0.8.0"
+    },
+    {
+      "name": "installed catalog",
+      "path": "/home/operator/.config/git-loopy/skills",
+      "present": true,
+      "classification": "unrecorded",
+      "release_version": null
+    },
+    {
+      "name": "TUI helper",
+      "path": "/home/operator/.config/git-loopy/bin/git-loopy-tui",
+      "present": false,
+      "classification": "unrecorded",
+      "release_version": null
+    }
+  ]
 }
 ```
 
@@ -133,6 +277,194 @@ Config-home asset half lands.
 can both place a `git-loopy` command in the same XDG bin directory, so inferring
 an owner without the shell installer's self-identifying shim could make a later
 mutating command operate on the wrong artifact.
+
+---
+
+## Refreshing machine-local assets (`git-loopy update`)
+
+`git-loopy update` refreshes the machine-local assets belonging to the installed
+**Release version** without changing that Release. It refreshes the **installed
+catalog**, resolves and downloads the newest compatible published TUI helper at
+or below the installed Release into `<config-home>/git-loopy/bin/` (recording its
+verified resolved identity in `git-loopy-tui.release`), and repairs
+Release-retired `[routing]` keys in the global Config. Only `--project` — which
+repairs a *tracked* file, and is the one exception to ADR-0054's machine-local
+scope — needs a repository.
+
+Source-only Releases carry no helper assets of their own; they can still consume
+an eligible older helper under the same checksum, identity, and schema checks.
+
+That helper is one a Run attaches to. The Python Runner resolves a helper in this
+order, first hit wins:
+
+| Rank | Source | Path |
+| --- | --- | --- |
+| 1 | clone-local | `<repo>/.git-loopy/bin/git-loopy-tui` — what the shell and PowerShell installers stage for that clone |
+| 2 | machine-local | `<config-home>/git-loopy/bin/git-loopy-tui` — what `update` installs |
+| 3 | `PATH` | the first `git-loopy-tui` on your `PATH` |
+
+Ranks 1 and 2 are components of a packaged distribution, so Wrapper contract
+[§15](../../docs/wrapper-contract.md#15-release-and-compatibility-identity-must)
+requires Release-version equality or a verified resolved fallback identity
+(ADR-0052, #492); unrecorded or tampered drift is **refused**, leaving the Run in
+plain text. A `PATH` helper is someone else's installation, so drift there is
+only a warning. A machine-local refusal names `git-loopy update` as its repair,
+because an `upgrade` that has outrun its `update` or unverified drift is the one
+thing that produces it.
+
+A maintenance refusal is attributed to **published identity**, never to the
+scratch directory a candidate was unpacked in — that directory is gone before
+the message reaches you. Three failures are distinguished, and each exits
+non-zero without disturbing an existing verified installation:
+
+| Refusal | What it means | Remedy |
+| --- | --- | --- |
+| `no published git-loopy-tui Release carrying <archive> is at or below <version>` | No Release at or below the installed one attaches *this host's* archive and checksum. The archive is named so a host the Release line defers is distinguishable from a helper nobody has published yet. | Wait for a Release that publishes this host's helper, or stage a clone-local helper at `<repo>/.git-loopy/bin/`. |
+| `... can serve this Runner; the newest candidate, Release <version>, was rejected: ...` | A helper *was* published, and the newest one at or below the installed Release cannot decode this Runner's Event schema. Sharing a version line is not proof of interoperability. | Upgrade to a Release whose published helper speaks this Event schema; the reason names the range the candidate answers with. |
+| `cannot read published helper Releases from <url>` / `cannot download release artifact <url>` | The Release index or an asset was unreachable or unreadable. | Retry once the host is reachable; nothing was activated. |
+
+For the global `PROMPT.md` override, **Scaffold provenance** is the safety
+boundary: an `untouched` override is replaced with this Release's packaged
+prompt and its provenance advances. A `customized` override stays byte-identical;
+the command summarizes the upstream prompt changes since the Release recorded in
+its provenance, and says so plainly when that Release is the installed one and
+there is nothing upstream to port. An `unrecorded` override is treated as
+customized and is never replaced.
+
+```bash
+# Repair the machine-global Config and refresh installed assets.
+git-loopy update
+
+# Repair a repository Config, or preview either repair without writing anything.
+git-loopy update --project
+git-loopy update --global --dry-run
+```
+
+The Config repair removes a key outside the closed taxonomy, and renames a
+legacy `task-type:<key>` spelling only when its bare current key is absent. A
+conflicting old and current key is **reported, never guessed at**: the file
+keeps both, the command exits non-zero, and the message names
+`git-loopy config routing unset '<key>' --<scope>` so the operator decides which
+route survives.
+
+Before the file is replaced, the original is copied beside itself as
+`config.toml.bak` (with a numeric suffix when one already exists) and that path
+is reported straight away — a write that then fails must not leave a backup
+nothing accounted for. The repair then rewrites the Config **in canonical
+form**, so any comments it carried survive only in that backup; the command says
+so whenever it writes. Each changed key is reported afterwards, in the tense the
+run earned: `Removed`/`Renamed` once the write lands, `Would remove`/`Would
+rename` under `--dry-run`.
+
+A scope with nothing retired says so and is not rewritten, and a scope with no
+Config at all is reported as not installed rather than as clean. `--dry-run`
+covers the Config alone and names the assets it left uninspected.
+
+The command reports each changed asset and any asset it left alone, and exits
+non-zero when an asset could not be brought to the installed Release — including
+an ambiguous Config repair or an **installed catalog** left behind its pinned
+revision because the source could not be reached, which is reported rather than
+passed off as a refresh. It never starts a Run or writes to the tracker;
+`git-loopy labels --apply` remains the only command that changes the **Label
+vocabulary** on GitHub.
+
+---
+
+## Moving between Releases (`git-loopy upgrade`)
+
+`git-loopy upgrade` replaces the git-loopy artifact it is **itself running from**
+with a published **Release version**, through the **Install channel** that placed
+it, and then runs `git-loopy update` from what the move installed — landing a new
+Release is precisely the event that invalidates the scaffolded assets. It needs
+no repository, and it moves nothing else: a clone-local helper, the shell
+Orchestrator's launcher, and anything else on your `PATH` are other channels'
+artifacts.
+
+```bash
+# Move to the newest published Release, then refresh machine-local assets.
+git-loopy upgrade
+
+# Pin a named published Release, or move deliberately backwards.
+git-loopy upgrade --to 0.9.0
+git-loopy upgrade --to 0.8.0 --allow-downgrade
+
+# Land unreleased code. Naming the ref is the opt-in.
+git-loopy upgrade --edge 0123456789abcdef0123456789abcdef01234567
+```
+
+| Flag | What it lands |
+| --- | --- |
+| *(none)* | The newest published Release — what GitHub calls the latest release, so never a draft and never a prerelease. |
+| `--to <version>` | That Release version, **verified published** first. A version nobody cut is refused here rather than becoming a failed install, or an **Edge install** you were never told about. |
+| `--edge <ref>` (alias `--ref`) | That commit or ref, reported as an **Edge install**: identify it by the ref, not by the `VERSION` its source reports. A ref spelled like a Release tag is refused and pointed at `--to`. |
+| `--allow-downgrade` | A move that is not provably forward of the installed Release. Required for an older Release, and for one whose direction cannot be established at all. |
+
+Already on the Release the move resolved? Nothing is re-installed: `upgrade` says
+so and names `git-loopy update` as the command that refreshes the assets.
+
+**The move is a process replacement, not a write.** The chain — the channel's
+install command, then `git-loopy update` — replaces the running `git-loopy`, so
+the executable Windows holds open is released with the process rather than
+written over while locked, and the chained `update` runs from the artifact the
+move installed.
+
+**A channel is used only when it can be proven and pinned.** Both questions have
+to answer yes, and each `no` changes nothing and prints the exact command
+instead:
+
+| Channel | What `upgrade` does |
+| --- | --- |
+| `uv-tool` | Performs the move: `uv tool install --force` against the pinned specifier. |
+| `homebrew` | Refuses: a formula installs whichever version it currently publishes, so performing it would report a Release identity `upgrade` did not place. Prints `brew upgrade git-loopy`. |
+| `installer-launcher` | Refuses: that launcher execs a clone you own, and moving it means updating that clone and re-running its installer — never something git-loopy does over your uncommitted work. |
+| `unproven` | Refuses: `uv tool install` and the shell installer can both place a `git-loopy` command in the same directory, so moving one of them would be a guess. Prints the `uv` command in case that is the one. |
+
+---
+
+## Removing a machine-local installation (`git-loopy uninstall`)
+
+`git-loopy uninstall` prints its complete removal plan and asks for confirmation
+before changing anything. By default it removes the executable through its proven
+**Install channel**, the global config-home, the **installed catalog** and its
+record, and the machine-local TUI helper.
+
+```bash
+# Inspect the plan and confirm it interactively.
+git-loopy uninstall
+
+# Accept the printed plan without a prompt.
+git-loopy uninstall --yes
+
+# Explicitly include this repository's tracked project scope and Run logs.
+git-loopy uninstall --all
+```
+
+When run in a repository, the default also reports the project `config.toml`,
+`PROMPT.md`, and `.git-loopy/` Run logs it deliberately keeps. `--all` is the
+explicit opt-in to remove those repository-owned paths and therefore requires a
+repository. A live **Lane** refuses the entire operation before confirmation and
+points at `git-loopy sweep`; uncommitted agent work is never treated as removal
+residue, and a Lane whose liveness cannot be read counts as live.
+
+`--all` widens the plan to those three named paths and no further. Whatever the
+flag, `uninstall` refuses outright rather than removing a machine-local path that
+encloses your repository or sits inside it — a config-home configured under a
+checkout does not make that checkout git-loopy's to delete — and refuses a project
+path that resolves outside the repository. A path that is itself a symbolic link
+to a directory is refused too: unlinking it would orphan the tree it stands for
+and following it would delete somewhere the plan never named. Anything that stops
+resolving where the printed plan said it did, between the plan and your answer,
+refuses as well.
+
+If the executable's Install channel cannot be proven, `uninstall` leaves that
+executable in place, prints the exact manual removal command, and still removes
+the machine-local state it can prove belongs to git-loopy. It exits non-zero so
+automation cannot mistake that partial result for a complete uninstall.
+
+The shell installer's launcher is a shim that `exec`s a clone you own, so removing
+it is reported as removing the launcher — not as a channel uninstall — and the
+clone it pointed at is reported as deliberately kept. The command never writes to
+the tracker.
 
 ---
 
@@ -166,7 +498,20 @@ The wizard:
   only **global** is available.
 - **Always writes `config.toml`** to that scope with your chosen `model` /
   `reasoning_effort`, seeded from the same live model list the `--select-model`
-  picker uses, rendered as a plain numbered list by the current setup flow.
+  picker uses.
+- **Uses one continuous keyboard wizard** for scope, model, effort, routing,
+  scaffold, and Skill policy. It needs an interactive terminal — **both** stdin
+  and stdout, since the fullscreen wizard paints the screen it reads answers
+  from; redirect either (`git-loopy init > log`) and it refuses up front rather
+  than drawing into a pipe. Use `--yes` for non-interactive setup.
+  `up`/`down` move, `space` toggles a Skill, `enter` advances, `esc` goes back a
+  step (and cancels on the first, where there is nowhere back to), `ctrl+c`
+  cancels outright, and `ctrl+s` jumps to the end. It composes the same model and
+  Skill pickers the rest of git-loopy uses, and ends on a review screen listing
+  scope, the config path it will write, model, effort, routing, scaffold, and how
+  many Skills are enabled, over `Save` / `Back` / `Cancel` — so collect-then-commit
+  is something you see rather than something you are promised. `Back` returns to
+  the step you picked, so correcting one answer does not restart setup.
 - **Installs the workflow Skill catalog first**, before collecting anything —
   because the **Skill policy** you are about to choose is a choice among the
   installed catalog. It clones
@@ -182,11 +527,25 @@ The wizard:
   `~/.config/git-loopy/PROMPT.md`. Nothing is written into `.copilot/skills/`,
   in this repository or any other: a project Skill tree is not a Skill source a
   Run reads. See [`docs/skills-setup.md`](../../docs/skills-setup.md).
-- **Cancelling** (`q`, `quit`, or EOF / Ctrl-C at any prompt) writes **no Config
-  and no prompt**, runs nothing, and exits non-zero. The Skill install above has
-  already happened by then — it is the wizard's first act, before anything is
-  collected — and is machine-wide rather than scoped, so cancelling leaves the
-  scope untouched but the catalog installed.
+- **Records scaffold provenance** in `scaffold-provenance.json` beside the
+  scope's editable assets. Each Config and prompt that this invocation writes
+  records its Release version and SHA-256 digest; a later init preserves an
+  entry for an existing prompt it leaves untouched.
+- **Cancelling** (`q`, `quit`, or EOF / Ctrl-C at any prompt) saves **no Config,
+  prompt override, Skill policy, or tracker label**, starts nothing, and exits
+  non-zero. That is the whole guarantee, and it is deliberately narrower than
+  "nothing was written": the Skill install above is the wizard's *first* act,
+  before a single answer is collected, and it is machine-wide rather than scoped.
+  When that install actually changed something, the cancellation names the
+  catalog root and revision it left behind instead of denying it — a
+  prerequisite you can inspect, not an operator choice you never confirmed
+  ([ADR-0058](https://github.com/bradcstevens/git-loopy/blob/9d33e78b8aba97ae16ee5a133aae1fca78905ed0/docs/adr/0058-init-precedes-the-run-and-clients-do-not-own-its-lifetime.md)).
+
+  ```text
+  git-loopy init cancelled; no Config, prompt override, Skill policy, or
+  tracker label was written. The prerequisite Skill catalog install is
+  machine-wide and remains at ~/.config/git-loopy/skills (revision 4f1c2a9e8b03).
+  ```
 
 ### Tracker labels the wizard ensures
 
@@ -275,14 +634,40 @@ The **very first** bare `git-loopy` — when no `config.toml` resolves in *eithe
 scope — sets itself up:
 
 - On an **interactive TTY** it auto-runs the wizard above, then **continues into
-  the loop** on the Config it just wrote. Cancelling aborts the whole command
-  (writes nothing, runs nothing, non-zero exit) — an aborted setup never starts
-  an unconfirmed loop.
+  the loop** on the Config it just wrote. The terminal test is the same one
+  explicit `git-loopy init` applies — stdin *and* stdout — so `git-loopy > log`
+  on a fresh clone takes the no-TTY path below rather than opening a fullscreen
+  wizard against a pipe.
+- Cancelling aborts the whole command: it saves no operator choice, starts no
+  worker, and exits non-zero — an aborted setup never starts an unconfirmed
+  loop. See the cancellation guarantee above for what the prerequisite catalog
+  install may legitimately leave behind.
 - With **no TTY** (CI, pipes) it **never prompts**: it falls back to the built-in
   defaults and goes straight to the loop, so automated runs can't hang on the
   wizard.
 - Once Config exists in either scope, a bare `git-loopy` skips the wizard entirely
   and goes straight to the loop.
+
+**Setup finishing is not the loop starting.** `init` saves and exits; the Run is
+a separate act with its own preconditions (a git repository, `copilot` on
+`PATH`, a usable model). When one of those refuses, your saved setup stays
+exactly as you confirmed it — nothing rolls it back — but no issue work starts
+and the command exits non-zero naming the blocker and its remedy:
+
+```text
+git-loopy: warning: the Run worker exited 1 before it recorded any activity;
+no issue work started. Its startup diagnostics follow
+(.git-loopy/logs/run-20260919-101500-diagnostics.log).
+  git-loopy: error: copilot is not on PATH. Install the GitHub Copilot CLI and
+  re-run git-loopy.
+```
+
+On a TTY the loop runs as a **detached worker** the terminal client watches, so
+the client reports that worker's exit status and echoes the tail of its startup
+diagnostics rather than showing an empty Dashboard and exiting `0`. The handoff
+uses ordinary scrollback — setup's wizard leaves the screen before the client
+takes it — so a blocked startup is readable after the fact instead of being
+erased by a screen restore.
 
 ---
 
@@ -345,6 +730,51 @@ Copilot, network access, or the TUI.
 
 ---
 
+## Listing this clone's Runs (`git-loopy runs`)
+
+```bash
+git-loopy runs
+```
+
+```
+RUN                         STATE    STARTED               SCOPE
+01K6Z9QWERTYUIOPASDFGHJKLZ  live     2026-09-19T11:04:02Z  /src/app
+01K6Z7H4TCXV0YQ9M2N8B3RJ5D  dead     2026-09-19T09:51:40Z  /src/app/.worktrees/lane-2
+01K6Z4B1GKAP7WS3E6D9F2TQXN  unknown  2026-09-18T22:17:09Z  /src/app
+```
+
+Every Run of **this clone** — the worktree you invoked it from plus every other
+worktree `git worktree list` registers — newest first. Run it from any of those
+worktrees and you get the same listing, including Runs that were started from a
+different one. `RUN` is the full Run identity, and `SCOPE` is the worktree the
+Run published its artefacts in; together they are what the forthcoming Attach
+and Stop commands target by.
+
+The domain is the clone, never the machine. An independent clone of the same
+repository has its own Runs and its own listing; nothing here scans for them,
+and there is no "newest Run" default that could let an unnamed gesture reach a
+Run you did not name.
+
+`STATE` is what *this host can prove*, read from the per-Run control artifact's
+advisory lock (`flock` on macOS and Linux, `LockFileEx` on native Windows) and
+from nothing else — never a pid, a heartbeat, or the presence of a leftover
+file, since a Run that ended normally leaves its artefacts behind on purpose:
+
+| State     | Means                                                                                     |
+| --------- | ----------------------------------------------------------------------------------------- |
+| `live`    | The lock is still held: a worker process is running this Run right now.                    |
+| `dead`    | The lock is free: the Run has ended. Its artefacts remain readable.                        |
+| `unknown` | The lock could not be read — no control artefact was ever published, or it is unreadable.  |
+
+`unknown` is not a softer `dead`. Being unable to prove a Run has finished is
+never treated as permission to control or reclaim its work, which is the same
+rule `git-loopy sweep` already follows.
+
+The listing is purely observational: it starts no agent work, sends no Stop,
+reclaims nothing, and never reaches your issue tracker. It needs only `git`.
+
+---
+
 ## Exit codes
 
 | Exit                  | Code | When                                                                                                                                                                                                                                                |
@@ -362,8 +792,10 @@ Copilot, network access, or the TUI.
 | --------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GIT_LOOPY_MODEL`                           | `claude-opus-5`                | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `GIT_LOOPY_REASONING_EFFORT` for backward compatibility. With ModelSelectionMode enabled (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`) this value is the startup picker's pre-selected cursor and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly. |
 | `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, case-insensitive (the `--reasoning-effort` flag overrides this). Explicit `none` requests no reasoning; an omitted value lets the backend choose when no configured/default effort applies. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A model without configurable reasoning (`auto`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
-| `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type classifier** runs on — the agent call that reads an *unlabelled* issue's own content and proposes its `task-type:` key so **Routing** has a label to read (ADR-0029). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
-| `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort the classifier runs at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
+| `GIT_LOOPY_CONTEXT_TIER`                    | `default`                       | Root-session tier: `default` or `long_context`. `--context-tier` wins, then this value, project Config, global Config, and the default. It constrains every **Routing resolution**, including a legacy `[routing]` model/effort pair, but does **not** suppress per-task-type routing. |
+| `GIT_LOOPY_ROUTE_POLICY`                    | unset (`unselected`)            | Which **Route policy** this Run uses. `unselected` — the default, and what you get by saying nothing — keeps every existing behaviour unchanged. `static` selects the **Static route** (ADR-0057): your `model` / `reasoning_effort` / `context_tier` are verified against the **authenticated harness this Run spawns** and then honoured exactly, rather than being passed through the built-in model roster's capability gate. `--route-policy` wins, then this value, project Config, global Config. A settings combination the harness does not support **fails before any work** instead of being quietly downgraded. `dynamic` selects the **Dynamic route** (ADR-0057): each issue's pair is elected from live Artificial Analysis evidence by a bounded **Route selector**, and needs `ARTIFICIAL_ANALYSIS_API_KEY` plus a deadline, a credit allowance, a selector concurrency and a verified `[route_associations]` table, or the Run refuses before any work. |
+| `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type** and **Bump-class classifiers** run on. Each reads an unlabelled issue's own content and writes a closed `task-type:` or `semver:` label back at **Pickup** (ADR-0029, ADR-0052). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
+| `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort both classifiers run at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
 | `GIT_LOOPY_MAX_NMT_STRIKES`                 | `3`                            | Consecutive no-progress iterations before aborting exit `1`. Integer ≥ 1.                                                                                                                                        |
 | `GIT_LOOPY_WORKTREE_SETUP`         | unset (auto-detect)            | A shell command run in each freshly created **Lane** worktree, before that Lane's agent session starts, to prepare its environment (install deps, create a venv, ...) so the feedback loops can run there. Runs once per Lane creation with `cwd` set to the worktree. When unset/blank, a best-effort auto-detect picks a common install command for the project type (`uv.lock`→`uv sync`, `package-lock.json`→`npm ci`, `package.json`→`npm install`, `requirements.txt`→`pip install -r requirements.txt`, `go.mod`→`go mod download`, ...). A non-zero setup exit is surfaced in the diagnostics log but does not abort the Lane. |
@@ -379,14 +811,19 @@ Copilot, network access, or the TUI.
 | `GIT_LOOPY_MODEL_SELECT`              | unset (picker off)             | Truthy (`1`, `true`, `yes`, `on`) opts the interactive run into **ModelSelectionMode** — the one-time startup model + reasoning-effort picker. Off by default, so an ordinary interactive run goes straight to the loop on the configured model/effort with no prompt. The `--select-model` / `--no-select-model` flag **wins** over this env var when the two disagree. When requested on a non-TTY run, the run warns and falls back to the configured model. |
 
 CLI flags (`--version`, `--model ID`, `--reasoning-effort EFFORT`,
+`--context-tier TIER`,
+`--route-policy POLICY`,
 `-v` / `-vv` / `-vvv`,
 `--no-reasoning`, `--enable-skill` / `--disable-skill`, `--deny-tool`,
 `--deny-skill` (deprecated), `--select-model` / `--no-select-model`,
 `--issue N`)
 are the runner's only non-positional flags. `--model` / `--reasoning-effort`
 are per-run overrides at the **top** of the precedence chain (they win over
-env, project / global config, and the built-in default). See `git-loopy --help`
-for the full list.
+env, project / global config, and the built-in default). `--context-tier`
+follows that precedence for the run-wide work-tier constraint without
+suppressing a static route. `--route-policy` selects the **Route policy**
+([below](#the-route-policy-and-the-static-route)). See `git-loopy --help` for the
+full list.
 
 `--issue N` **pins** one issue for one invocation (ADR-0032): the run works
 issue `N` instead of the head of the selection order, and every other issue
@@ -425,6 +862,8 @@ lower-cased):
 ```toml
 model = "gpt-5.6-sol"
 reasoning_effort = "max"
+context_tier = "long_context"
+route_policy = "static"    # opt in to the Static route; omit to keep today's behaviour
 classifier_model = "gpt-5.4-mini"
 classifier_effort = "low"
 issue_source = "github"
@@ -438,7 +877,8 @@ deny_tools = ["bash"]
 deny_skills = []   # deprecated final guard — prefer omitting from enabled_skills
 ```
 
-The **persisted** knobs are `model`, `reasoning_effort`, `classifier_model`,
+The **persisted** knobs are `model`, `reasoning_effort`, `context_tier`, `route_policy`,
+`classifier_model`,
 `classifier_effort`, `issue_source`,
 `include_prs`, `max_nmt_strikes`, `demotion_threshold`, `otel_enabled`,
 `send_timeout_seconds`, `enabled_skills`, and the two denylists. The
@@ -526,8 +966,10 @@ git-loopy config edit --global
 - **Routing takes effect in every mode.** A **Routed pair** is resolved *per
   issue* at **Pickup**, and every unit of work has a pickup: a serial Iteration
   binds one issue before its session starts exactly as a **Parallel mode**
-  **Lane** does, so the pair the Pickup resolved is the pair the session runs on
-  with one Lane (the serial fallback) and at any width. The whole chain, the
+  **Lane** does, so the model/effort pair and run-level context tier the Pickup
+  resolved are the settings the session runs on with one Lane (the serial
+  fallback) and at any width. A static `[routing]` pair inherits that tier;
+  dynamic routing is not activated by this configuration. The whole chain, the
   `measured` tier included, is live out of the box, so `get` / `list` report a
   winning tier with nothing to qualify it. Until ADR-0037 routing was scoped to
   Parallel mode and the serial loop discarded the pair it had just resolved —
@@ -556,19 +998,302 @@ git-loopy config edit --global
   set.
 
 The settable keys are exactly the [persisted knobs](#persistent-config-configtoml)
-above (`model`, `reasoning_effort`, `classifier_model`, `classifier_effort`,
+above (`model`, `reasoning_effort`, `context_tier`, `route_policy`,
+`classifier_model`, `classifier_effort`,
 `issue_source`, `max_nmt_strikes`, `demotion_threshold`,
 `include_prs`, `otel_enabled`, `send_timeout_seconds`,
 `deny_tools`, `deny_skills`). Per-run-only knobs are never persisted, so they are
 not `config` keys.
 
+### The Route policy and the Static route
+
+`route_policy` (flag: `--route-policy`, env: `GIT_LOOPY_ROUTE_POLICY`) chooses
+how this Run decides what each issue runs on. It has two values today:
+
+- **`unselected`** — the default. Everything works exactly as documented above:
+  the pair you configure is passed through the built-in **model roster**'s
+  capability gate, an effort the roster says the model cannot take is dropped to
+  "let the backend pick", a context tier the roster does not list for that model
+  is downgraded to `default`, and the run keeps going.
+- **`static`** — the **Static route**
+  ([ADR-0057](https://github.com/bradcstevens/git-loopy/blob/8023ddc78f6867319daba440184e59825d32e84b/docs/adr/0057-live-evidence-guides-per-issue-routing.md)).
+  Your
+  `model`, `reasoning_effort` and `context_tier` are one atomic choice, verified
+  against the **model listing of the authenticated Copilot harness this Run
+  actually spawns** — its eligibility for *your* account, its reasoning-effort
+  dial, and the context tiers it prices — and then used exactly as selected.
+
+Under `static` the run **refuses rather than rescues**. A model your account may
+not use, a model the harness never listed, an effort outside the model's dial,
+an effort on a model with no dial at all, a context tier the harness does not
+offer for that model, or a harness that could not be read — each ends the run
+with exit `1` **before any issue is picked up**, naming the setting and which
+entry it came from:
+
+```
+git-loopy: the selected Static route was refused — [routing] docs: 'gpt-5-mini'
+does not accept reasoning effort 'max'. It accepts: low, medium.
+```
+
+That check covers the whole config in one pass — the run-wide default, every
+`[routing]` entry, and an explicitly configured escalation rung — so a broken
+route in a table you rarely exercise is caught at the start of the run rather
+than six iterations in.
+
+Three details worth knowing:
+
+- **A model with no reasoning-effort dial is sent no effort argument at all.**
+  That is a different thing from the effort *value* `none`, which is sent as a
+  value to a model whose dial offers it.
+- **Your existing config is already a Static route.** A `model` /
+  `reasoning_effort` pair, or a `[routing]` entry, is a valid static choice and
+  inherits the run-level `context_tier`. Nothing is migrated for you: selecting
+  the policy is the only thing that changes behaviour.
+- **A static route does not escalate on its own.** git-loopy ships a default
+  **escalation rung** that retries a stalled issue on a stronger pair. Under
+  `static` that built-in rung does not apply, because a route that promotes
+  itself was never static. Write an explicit `[escalation]` block if you want
+  one — it is verified like any other route.
+
+One combination is refused outright: `route_policy = "static"` with a
+non-`local` `execution_host`. A `github-actions` contribution opens its session
+on a GitHub-hosted runner that authenticates as *itself*, so this machine's
+model listing is not the listing that would run it — approving a route against
+the wrong installation is exactly what the policy exists to prevent. Run
+locally, or leave `route_policy` unset for that placement.
+
+### `route_policy = "dynamic"` — elect each issue's route from live evidence
+
+`dynamic` routes **one issue at a time** from current public benchmark
+evidence instead of from a pair you wrote down. It is opt-in, off by default,
+and starts nothing at all unless every prerequisite is present:
+
+```toml
+route_policy = "dynamic"
+routing_deadline_seconds = 120          # or --routing-deadline-seconds
+routing_credit_allowance = "5.00"       # or --routing-credit-allowance
+selector_concurrency = 2                # or --selector-concurrency
+
+[route_associations]
+# benchmark identity -> the Copilot configuration you have verified it names
+"gpt-5.6-terra" = "gpt-5.6-terra@high"
+```
+
+and `ARTIFICIAL_ANALYSIS_API_KEY` in the environment. The key is read from the
+environment **only** — never written into Config, never serialized into a
+detached child, never echoed into diagnostics — and nothing from your
+repository is sent to the leaderboard service.
+
+What happens per issue:
+
+1. **Classification first.** An unlabelled issue gets its **Task type** before
+   anything routes, because the assessment is told what kind of work it is
+   looking at rather than left to guess.
+2. **A Static route still wins.** A `[routing]` entry, an explicit
+   `--model` / env pin, or a configured `[escalation]` rung is an instruction,
+   and git-loopy will not spend a selector call to contradict one. Those routes
+   are verified against the harness exactly as under `static`.
+3. **The Route selector elects itself deterministically** — the highest
+   Intelligence Index among configurations that are both verified by your
+   `[route_associations]` table *and* runnable on your authenticated harness, at
+   its matched effort, in the smallest context tier that fits the input.
+4. **A bounded, read-only assessment** sees the issue, its acceptance criteria,
+   the task type, your declared **Feedback loops**, and any *measured* rows from
+   `measured-routing.json`. It does not read your tree, run Trials, or do the
+   work.
+5. **Revalidation at Pickup.** Evidence and eligibility are re-read before the
+   work session opens. Unchanged inputs do not buy a second selector call; a
+   candidate that changed or became ineligible does not start on its old route.
+   A *later Run* revalidates the same way against the decision its own history
+   already records — see "Reusing a route a previous Run already elected" below.
+6. **Provenance before work.** A `wrapper.routing.resolved` Event records which
+   evidence elected the route, when each source was read, which selector
+   assessed it, and what it cost — and it is written *before* the session opens.
+   If that record cannot be written, the route is refused.
+7. **A permitted retry reassesses.** When the **Attempt lifecycle** grants an
+   issue another attempt, its next Pickup elects again — and this time the
+   assessment is also told what the earlier attempts ran on and how they ended.
+   There is no reserved escalation rung under `dynamic`; the first election may
+   already take the strongest configuration available.
+
+Two properties are worth knowing before you turn it on:
+
+- **It refuses; it never falls back.** An unreachable source, an exhausted
+  allowance or deadline, an empty verified intersection, an invalid selector
+  answer, or unreadable eligibility each produce an explicit *unavailable*
+  decision. git-loopy will not quietly run the issue on your run-wide default —
+  under this policy that default was never verified, precisely because the
+  selector was meant to replace it. In parallel mode the candidate is passed
+  over for the rest of the Run rather than immediately retried, so one issue
+  cannot spend the whole allowance.
+- **Routing costs credits.** Classification and selector calls count toward
+  `routing_credit_allowance` and toward the Run's **Consumption**. Billing
+  already in flight when a bound is reached is disclosed rather than hidden, and
+  no further routing call is admitted afterwards.
+
+### Reusing a route a previous Run already elected
+
+A selector call costs credits, and most of the time nothing that would change
+its answer has moved between one Run and the next. So a later Run reads its own
+`.git-loopy/logs/` history, finds the routing record this issue already got, and
+tries to **revalidate** it rather than buying the same answer twice.
+
+Revalidation is not a cache lookup. The Run still fetches the live evidence and
+re-reads your harness's current capabilities, exactly as a first election does —
+what it skips is only the selector session. It reuses the recorded route only
+when every relevant input still matches: the issue and its rendered context, the
+Route policy, the current eligibility of the model, the evidence, and the
+attempt history. If any of those moved — you edited the issue, re-labelled its
+task type, or the model left your plan — the Run elects again inside the same
+credit allowance, and says which recorded decision stopped validating.
+
+You can see which happened without recomputing anything:
+
+```text
+⇌ routing #42  revalidated — reused without a new assessment  (01JD…)  decided 2026-09-18T20:00:00.000Z
+⇌ routing #43  reassessed — a recorded route no longer validates  (01JD…)
+⇌ routing #44  assessed — no reusable route for this issue
+```
+
+The same three states appear in the Dashboard's Lane log, and the
+`wrapper.routing.resolved` record carries `routing_reuse`, `reused_proposal_id`
+and `reused_validated_at` for anything reading the trace later.
+
+Three boundaries are worth knowing:
+
+- **It is local to this clone.** The history it reads is this checkout's own Run
+  logs, so a second clone or a fresh CI runner elects once for itself before it
+  has anything to revalidate. There is no shared routing store — that would be a
+  second authority for a decision that is supposed to have one.
+- **A reused route is not a shortcut past anything else.** It cannot authorize
+  work on its own, cannot carry a model past your current harness capabilities,
+  does not create an attempt, and still loses to a `[routing]` entry, an
+  explicit `--model` pin or a configured escalation rung.
+- **The tracker is never the source.** Route comments and labels below are
+  output only; nothing reads them back to decide what to run.
+
+### Preparing routes ahead of the work
+
+A selector call sits on the critical path: the issue that is about to be worked
+has to wait for it. So while an agent session is running, git-loopy assesses the
+*other* issues it has already established as eligible, and a later Pickup that
+reaches one finds the assessment already made.
+
+What this is not, and it matters more than what it is:
+
+- **It does not decide what gets worked.** Nothing is reordered, reserved or
+  claimed. Your Pool order and the ordinary admission rules are untouched, and
+  an issue that was only prepared is exactly as pending as it was.
+- **It does not bind anything.** The Pickup is still authoritative. It re-reads
+  the live evidence and your harness's current capabilities, compares them
+  against what the proposal was made under, and reassesses whatever moved — so
+  editing an issue after it was prepared costs you a second selector call and
+  never a stale route. A proposal that aged out while the Run worked something
+  else is thrown away rather than bound.
+- **It does not run when your Run does not.** There is no daemon. Preparation
+  lives on the Run's own event loop, holds its proposals in memory, and stops
+  when the Run stops.
+- **A slow tail does not hold the next Pickup.** Preparation may continue
+  between Iterations. Pickup joins only its own in-flight assessment and
+  interrupts unrelated preparation to free routing capacity. Interrupted
+  assessments are recorded as unavailable, not as reusable proposals; their
+  eventual Pickup may reassess only within the remaining allowance. Cancellation
+  does not undo provider billing already incurred.
+
+It stays inside the bounds you already configured: `selector_concurrency` caps
+how many assessments overlap, `routing_credit_allowance` caps what they may
+spend, and preparation stops for the rest of the Run the moment either is gone —
+the work already routed carries on regardless. Candidates that are blocked,
+unreadable or otherwise not currently eligible are left alone and cost nothing.
+Each candidate is re-read when its preparation starts, not just when the Pool
+was collected. Classification shares the same admission limits and occurs
+before the Static-route check. An already-classified issue your `[routing]`
+table covers costs no classifier or selector call. A previous Run's decision
+is offered for fresh revalidation, not assumed to match.
+
+```text
+⇢ route prepared #43  proposal claude-opus-5 @ high (default)  valid until 2026-09-19T09:05:00.000Z
+⇢ route prepared #44  static route applies — no selector call bought
+⇢ route prepared #45  an earlier decision is available for Pickup revalidation
+⇢ route prepared #46  not prepared — its Pickup decides for itself  (quota_exhausted)
+```
+
+Those four states are also on the `wrapper.routing.prepared` Event and in the
+Dashboard's Lane log, always phrased as a proposal. If you are reading a trace
+later, that is the distinction to hold on to: `wrapper.routing.prepared` is what
+was assessed in advance, and `wrapper.routing.resolved` is what a session
+actually ran on.
+
+Proposal readback includes its rationale and evidence provenance while leaving
+the Queue's final route unset. Retrieval timestamps say when a source was read,
+not when its benchmark was measured. Pickup re-reads issue eligibility, current
+evidence and capabilities, and the repository's declared Feedback-loop commands
+and local measurements. Relevant changes require another selection; unchanged
+inputs reuse the proposal without another selector call. A refused Dynamic
+candidate does not prevent eligible Static work behind it from proceeding.
+
+### Route comments and labels
+
+After a final static or Dynamic Routing resolution is durably recorded,
+git-loopy projects a materially changed assignment onto its GitHub issue. The
+append-only comment carries an idempotency identity, exact model/effort/context
+values, a concise safe rationale, and a provenance reference. The issue also
+carries one `git-loopy-route:` label for the same triple; it is compact and
+collision-resistant, while the comment and local event retain the exact values.
+
+These tracker writes are observational. They never become Routing input, never
+change a Task type, and never override Config. A failed comment or label write
+does not stop the already-recorded work: its local delivery state remains
+pending or failed, is retried finitely on a later Run, and appears separately in
+the Dashboard. A failed local final-resolution record is different and starts no
+work.
+
+### What a later attempt is told
+
+Only the endings that say something about the *work* count against a
+configuration. A session that crashed, was refused by content policy, ran out of
+time, or reported there was nothing to do tells the next election about your
+harness, your clock or your backlog — not about the model. Exactly one ending is
+evidence about the configuration: the session that ran to the end, claimed no
+failure, and left nothing behind.
+
+Even that does not blacklist anything. Every eligible configuration stays a
+candidate at every attempt; what changes is that re-electing one an earlier
+attempt failed to solve the task on has to say why, and an answer that repeats it
+silently is rejected as invalid output rather than accepted as a route. An issue
+can simply be hard, and a Run that demoted a route for a network blink would
+spend the rest of its life avoiding whatever was running at the time.
+
+The record keeps the two axes apart. `wrapper.routing.resolved` carries
+`lifecycle_position` and `attempt` beside the elected `model` / `effort` /
+`context_tier`, plus the `prior_attempts` the election was handed and any
+`repeat_justification` it gave — so a reassessed retry that re-elects the same
+configuration is still tellable from a first election that happened to agree.
+Nothing changes inside a session that is already running: the route is fixed for
+that Agent, and reassessment happens at the next Pickup.
+
+Long-running advancing work keeps a bounded assessment history: earlier
+task-solving failures stay visible alongside recent advances, and omitted
+advances still count toward the session ordinal and invalidate reuse.
+Progress neither spends nor refunds lifecycle attempts. An explicitly configured
+Static escalation rung wins even when it equals the Run default.
+
+Rolling dispatch retains its existing one-Lane-per-issue collision guard. A
+permitted retry of Lane work is reassessed when a later serial Pickup admits
+it; dynamic routing does not create another Lane or guarantee a retry that the
+scheduler has not admitted.
+
+The same remote-placement refusal applies: `route_policy = "dynamic"` with a
+non-`local` `execution_host` is refused before any work, for the reason above.
+
 ### The Task-type classifier's pair
 
 `classifier_model` / `classifier_effort` (env: `GIT_LOOPY_CLASSIFIER_MODEL`,
 `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`) name the pair the **Task-type
-classifier** itself runs on — the agent call that reads an *unlabelled* issue's
-own content and proposes its task type, so routing has a `task-type:` label to
-read (ADR-0029).
+classifier** and **Bump-class classifier** run on. At **Pickup**, each reads an
+unlabelled issue's own content: the former writes a `task-type:` label for
+**Routing** to read, and the latter writes a `semver:` label for the **Release
+line** to read (ADR-0029, ADR-0052).
 
 Two properties are worth knowing before you set it:
 
@@ -577,19 +1302,16 @@ Two properties are worth knowing before you set it:
   unmeasured prior governing every routing decision, and one that would show up
   nowhere as a routing input. Leaving these keys unset does **not** fall back to
   `model`; it falls back to the **cheapest pair on the live roster**.
-- **The taxonomy is closed.** A proposal outside the seven `task-type:` keys is
-  refused, not warned about, and the issue keeps routing to the run-wide default.
-- **What it infers is written back to your tracker.** The proposed key is applied
-  to the issue as a `task-type:` label, unattended and with no review step — that
-  is what makes the corpus inspectable, correctable and reusable instead of
-  re-inferred on every run (ADR-0029). An issue that already carries a
-  `task-type:` label is never relabelled — the check is re-asked of the tracker
+- **The taxonomies are closed.** A proposal outside the seven `task-type:` keys
+  or four `semver:` keys is refused, never written. A Bump class the classifier
+  cannot determine is reported rather than defaulted.
+- **What they infer is written back to your tracker.** The proposed key is
+  applied to the issue as a `task-type:` or `semver:` label, unattended and with
+  no review step — that is what makes the corpus inspectable, correctable and
+  reusable instead of re-inferred on every run. An issue that already carries a
+  valid label is never relabelled; the check is re-asked of the tracker
   immediately before the write, so a label you apply while a run is classifying
-  the issue still wins — the write is idempotent, and a write the tracker refuses
-  is non-fatal: the run continues on the inferred type and the label is simply
-  absent. Every label the classifier applies — and every one it could not — is
-  named in the run's diagnostics, on stderr and in the run log, which is the only
-  audit trail there is once the label is on the issue.
+  the issue still wins. The write is idempotent and non-fatal.
 
 Classification spends **AI Credits** like any other session, and that spend is
 folded into the run's cost. It never ticks a **Strike** and is never counted as
@@ -814,7 +1536,7 @@ packaged default). The seam lives in `git_loopy.loop._read_prompt`.
 ## Supported models
 
 `GIT_LOOPY_MODEL` accepts any id the Copilot CLI exposes, but the runner ships a
-capability matrix (`git-loopy/config.py` → `MODEL_REASONING_EFFORTS`)
+capability matrix (`git_loopy/config.py` → `MODEL_REASONING_EFFORTS`)
 that gates `GIT_LOOPY_REASONING_EFFORT` per model. A model not in this table is
 **warned** about once and passed through unchanged (the CLI is the final
 authority). A model with an empty effort set is sent **no** reasoning
@@ -836,6 +1558,7 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `claude-opus-4.8`             | `low` `medium` `high` `xhigh` `max`      |
 | `claude-opus-4.7`             | `low` `medium` `high` `xhigh` `max`      |
 | `claude-opus-4.6`             | `low` `medium` `high` `max`              |
+| `gpt-6-astra`                 | `low` `medium` `high` `xhigh` `max`      |
 | `gpt-5.5`                     | `none` `low` `medium` `high` `xhigh`     |
 | `gpt-5.4`                     | `none` `low` `medium` `high` `xhigh`     |
 | `gpt-5.3-codex`               | `low` `medium` `high` `xhigh`            |
@@ -846,10 +1569,24 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `gemini-3.5-flash`            | `minimal` `low` `medium` `high`          |
 | `gpt-5.6-luna`                | `none` `low` `medium` `high` `xhigh` `max` |
 | `gpt-5.6-sol`                 | `none` `low` `medium` `high` `xhigh` `max` |
+| `gpt-5.6-sol-fast`            | `none` `low` `medium` `high` `xhigh` `max` |
 | `gpt-5.6-terra`               | `none` `low` `medium` `high` `xhigh` `max` |
+| `grok-4.5`                    | `low` `medium` `high`                    |
+| `grok-4.6`                    | `low` `medium` `high` `xhigh`            |
+| `mai-code-1.1-flash`          | `low` `medium` `high`                    |
 | `mai-code-1-flash-picker`     | `low` `medium` `high`                    |
 
-This snapshot follows the current Copilot catalog. The retired
+This fallback covers all 19 models returned by the SDK-pinned CLI `1.0.85`
+on the upgrade account, plus seven retained compatibility entries:
+`claude-sonnet-4.6`, `claude-sonnet-4.5`, `claude-opus-4.6`, all three Gemini
+rows, and `mai-code-1-flash-picker`. Those seven were not offered by that
+account; their retained efforts are not a claim of current availability.
+`gemini-3.8-flash` is not one of those existing entries and remains off-roster:
+its configured model and effort pass through with a warning rather than being
+gated against an unverified effort set. Live Harness capabilities remain
+authoritative for the Run.
+
+The retired
 `claude-opus-4.5` id and the renamed `mai-code-1-flash-internal` id are not
 official choices; persisted legacy ids still use the unknown-model
 warn-and-pass-through path so the Copilot CLI remains the final authority.

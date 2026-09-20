@@ -81,6 +81,19 @@ Capabilities move glyphs and nothing else: a terminal that cannot render Unicode
 gets `-`, `|`, `#` and ASCII borders in place of `—`, `•`, `█` and box drawing,
 and states the identical facts.
 
+The **Queue** is the Run's whole ledger rather than one Iteration's input, so a
+row outlives the Iteration that opened it and two Events open one for an issue
+nobody has worked yet. `wrapper.afk_ready.collected` carries the authoritative
+**Pool**, and it alone retires a still-queued row to `gone` — one authority, one
+sweep. `wrapper.pool.refreshed` carries a **Membership read** taken *during* a
+unit of work: add-only, authority over nothing, so a ref the core has not seen
+opens a `queued` row and every row it already holds is left exactly as it is,
+whatever status it carries
+([ADR-0042](../../docs/adr/0042-a-membership-read-keeps-the-queue-live.md)).
+That is what keeps a backlog deeper than the started **Lanes** visible. A read
+that could only partly be named is simply a smaller read — it adds the refs it
+did name rather than reporting nothing.
+
 ### Navigation
 
 `Screen`, `Key` and `DashboardSession::handle_key` are the whole model; `main.rs`
@@ -175,7 +188,7 @@ before committing a trace to it:
 ```json
 {
   "name": "git-loopy-tui",
-  "version": "0.10.0-dev.1",
+  "version": "0.11.0-dev.3",
   "min_event_schema_version": 1,
   "max_event_schema_version": 1,
   "wrapper_contract_version": "1.4"
@@ -201,7 +214,7 @@ other's oracle, so the two cannot drift toward each other:
 | --- | --- |
 | `tests/dashboard_conformance.rs` | Every fixture case × snapshot: band inventory and order, Queue columns and ordering, scopes, placeholders, unavailable measurements, Iteration history, drill-in |
 | `tests/injected_environment.rs` | Capabilities are inert; the zone moves only rendering; elapsed comes from the injected instant |
-| `tests/additive_compatibility.rs` | An unmodelled Event type and unknown fields still reduce to the same view |
+| `tests/additive_compatibility.rs` | An unmodelled Event type and unknown fields still reduce to the same view, including beside an add-only Membership read |
 | `tests/library_purity.rs` | The library reaches for nothing the caller did not supply |
 | `tests/binary_seam.rs` | The binary is a thin shell over the library, through the real process boundary, and malformed attach CLI usage still exits `2` |
 | `tests/dashboard_render.rs` | What each Dashboard band says, read back from the fixture; ASCII fallback; the end-of-input frame and single restoration; whole-frame layout snapshots |

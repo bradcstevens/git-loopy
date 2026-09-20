@@ -59,9 +59,10 @@ delivered in later phases, sequenced value-first
   a single archive is attached; an unsigned Windows archive reaches operators only
   through a clearly marked prerelease. Those rules live in
   [`release-trust.json`](../git-loopy/conformance/release-trust.json) and are
-  applied by `git_loopy.release_trust`.
-  The **package channels** now follow that publication: a stable Release
-  updates the Homebrew tap from the artifacts it just published — `brew tap
+  applied by `git_loopy.release_trust`. Under `source-only` distribution mode,
+  these helper builds and channel updates are not launched.
+  Under `artifact-bearing` mode, the **package channels** follow that publication:
+  a stable Release updates the Homebrew tap from the artifacts it just published — `brew tap
   bradcstevens/git-loopy && brew install git-loopy-tui` — rebuilding nothing and
   re-hashing nothing. What the formula is allowed to say is pinned in
   [`homebrew-tap.json`](../git-loopy/conformance/homebrew-tap.json) and enforced
@@ -69,7 +70,7 @@ delivered in later phases, sequenced value-first
   version, URL, host, digest, or coverage that is not this Release's. A
   `brew`-installed helper is a `PATH` helper, so it never displaces a clone-local
   one — see [the helper's README](../git-loopy/tui/README.md#homebrew).
-  The same Release now also updates the two Windows channels — `winget install
+  Under `artifact-bearing` mode, the same Release also updates the two Windows channels — `winget install
   bradcstevens.git-loopy-tui` and `scoop install git-loopy-tui` — from the one
   signed `x86_64-pc-windows-msvc` archive it published. Both are pinned in
   [`windows-channels.json`](../git-loopy/conformance/windows-channels.json) and
@@ -80,12 +81,14 @@ delivered in later phases, sequenced value-first
   the release runner actually observed. Both are `PATH` helpers too — see
   [the helper's README](../git-loopy/tui/README.md#winget-and-scoop). Until a
   helper is present or selected, the native ports stream plain text and run in
-  place from the clone. Both native installers now install both halves of their
-  distribution — a `git-loopy` launcher on your `PATH` and the clone's pinned,
-  checksum-verified `git-loopy-tui` staged into `.git-loopy/bin/` — the shell
-  port's `install.sh` with `--no-tui` / `--tui-archive` / `--tui-checksum`, and
+  place from the clone. When artifact assets are published, both native installers
+  install both halves of their distribution — a `git-loopy` launcher on your `PATH`
+  and the clone's pinned, checksum-verified `git-loopy-tui` staged into `.git-loopy/bin/` —
+  the shell port's `install.sh` with `--no-tui` / `--tui-archive` / `--tui-checksum`, and
   `install.ps1` with `-NoTui` / `-TuiArchive` / `-TuiChecksum` on Windows, Linux,
-  and macOS. A Run itself never downloads or updates software.
+  and macOS. For source-only releases where no compiled helpers are published,
+  passing `--no-tui` (or `-NoTui`) installs the launcher alone. A Run itself never
+  downloads or updates software.
 - **Phase 3 — config parity.** The `config.toml` precedence chain, the `init`
   wizard, the `config get/set/list/path/edit` subcommands, the model picker, and
   cost estimation reach the native ports (the Python member has these today; the

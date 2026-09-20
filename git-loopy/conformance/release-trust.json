@@ -1,5 +1,10 @@
 {
   "schema_version": 1,
+  "distribution_mode": "source-only",
+  "distribution_modes": [
+    "source-only",
+    "artifact-bearing"
+  ],
   "workflow": {
     "path": ".github/workflows/tui-release.yml",
     "credential_free_jobs": [

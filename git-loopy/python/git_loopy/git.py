@@ -83,6 +83,7 @@ Design notes:
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -380,6 +381,10 @@ class GitClient(Protocol):
         """Return the current ``HEAD`` commit SHA (full 40-char form)."""
         ...
 
+    def latest_release_version(self) -> str | None:
+        """Return the newest stable ``vX.Y.Z`` tag reachable from ``HEAD``."""
+        ...
+
     def is_dirty(self) -> bool:
         """Return ``True`` if the tree has uncommitted staged/unstaged changes."""
         ...
@@ -414,6 +419,10 @@ class GitClient(Protocol):
 
     def commit_paths(self, message: str, paths: "Sequence[Path | str]") -> str:
         """Stage and commit exactly ``paths``, and return the new ``HEAD`` SHA."""
+        ...
+
+    def unstage_paths(self, paths: "Sequence[Path | str]") -> None:
+        """Reset exactly ``paths`` in the index back to ``HEAD``."""
         ...
 
     def push(self) -> None:
@@ -642,6 +651,18 @@ class SubprocessGitClient:
         out = _run(["rev-parse", "HEAD"], cwd=self._root)
         return out.strip()
 
+    def latest_release_version(self) -> str | None:
+        """Return the newest stable Release tag that the current base contains."""
+        tags = _run(
+            ["tag", "--merged", "HEAD", "--list", "v*", "--sort=-version:refname"],
+            cwd=self._root,
+        ).splitlines()
+        for tag in tags:
+            match = re.fullmatch(r"v(\d+\.\d+\.\d+)", tag)
+            if match is not None:
+                return match.group(1)
+        return None
+
     def is_dirty(self) -> bool:
         """Return ``True`` if the working tree has uncommitted changes.
 
@@ -806,6 +827,33 @@ class SubprocessGitClient:
         _run(["add", "--", *pathspecs], cwd=self._root)
         _run(["commit", "-m", message, "--", *pathspecs], cwd=self._root)
         return self.head_sha()
+
+    def unstage_paths(self, paths: "Sequence[Path | str]") -> None:
+        """Reset exactly ``paths`` in the index back to ``HEAD``, keeping the tree.
+
+        :meth:`commit_paths` stages and commits as two commands, so a commit a
+        hook (or a signing failure) refuses leaves its ``git add`` behind: the
+        index holds content ``HEAD`` does not. That is not a cosmetic leftover —
+        ``git merge`` aborts outright while *any* index entry differs from
+        ``HEAD``, so one refused machine-authored commit would silently demote
+        every later merge in the same Run. This is the undo for that half.
+
+        Scoped by pathspec for :meth:`commit_paths`'s own reason: an operator's
+        unrelated staged work sits in the same index and is not ours to discard.
+        ``git reset`` rather than ``git restore --staged`` because a pathspec
+        matching nothing is tolerated rather than fatal, so a distribution
+        missing one version-bearing file still unwinds the rest.
+
+        Args:
+            paths: What to unstage, absolute or repo-root-relative.
+
+        Raises:
+            GitError: If ``git`` is not on PATH or the reset otherwise fails.
+        """
+        _run(
+            ["reset", "--quiet", "HEAD", "--", *(str(path) for path in paths)],
+            cwd=self._root,
+        )
 
     def push(self) -> None:
         """Push the current branch to its configured upstream via ``git push``.

@@ -50,6 +50,20 @@ blocking gate:
   caused. Its offline half — the immutable pin, the real fetch/checkout path over
   a `file://` remote, and every validation failure — is covered by
   `tests/test_skill_source.py` inside the Python suite row.
+- **`git-loopy doctor --apply`** refreshes that same catalog before it repairs a
+  Skill policy (#518), so it inherits the same exclusion for the same reason. Its
+  offline half — the pin comparison, the `absent`/`drifted`/`matching` verdicts,
+  the "refresh, do not prune" rule they impose on a missing-Skill row, and the
+  refresh itself over a `file://` remote — is covered by
+  `tests/test_skill_install.py` and `tests/test_doctorcmd.py` inside the Python
+  suite row.
+- **`python -m git_loopy.release_rehearsal`** (prove a promoted stable snapshot
+  before any public tag exists, ADR-0059) *runs this table* over its candidate,
+  so declaring it as a row would make Integration gate itself recursively. It is
+  release proof rather than a Lane gate: `release-promotion.yml` runs it per
+  candidate and creates no tag without it, and the boundary itself — both
+  triggers, every drift and refusal, the publication-input binding — is covered
+  offline by `tests/test_release_rehearsal.py` inside the Python suite row.
 
 Commands resolve their tools through `PATH` and are relative to the repository root,
 because Integration runs them in a throwaway private worktree on whatever host the
@@ -88,11 +102,11 @@ All five canonical triage roles use their default label strings (`needs-triage`,
 
 ### Release milestones
 
-A `vX.Y.Z` GitHub milestone is what marks an issue as owed to a Release. An issue
-with no milestone is backlog: real, but not committed to anything. Assign one only
-when the work is actually claimed by that Release, and never invent a milestone —
-`gh api repos/{owner}/{repo}/milestones --jq '.[].title'` lists the ones that exist.
-See `docs/releases/README.md#what-a-release-owes`.
+A `vX.Y.Z` GitHub milestone is solely the **Promotion** trigger: closing it
+promotes the current matching `dev.N` Release line to stable. The Release target
+is instead ratcheted from closed issues' **Bump class** labels. Never invent a
+milestone — `gh api repos/{owner}/{repo}/milestones --jq '.[].title'` lists the
+ones that exist. See `docs/releases/README.md#release-target-and-promotion`.
 
 ### Domain docs
 

@@ -238,7 +238,7 @@ phases and are not read by this port yet.
 ### The closed-world Skill policy fails closed here
 
 The Python Orchestrator implements the closed-world **Skill policy**
-([contract §17](../../docs/wrapper-contract.md#16-closed-world-skill-policy-skill-policy-rollout-must))
+([contract §17](../../docs/wrapper-contract.md#17-closed-world-skill-policy-skill-policy-rollout-must))
 first. This port has no `config.toml` tier yet, so it cannot honour one — and
 running an Iteration on a *wider* capability set than the operator configured is
 the outcome §17.6 exists to prevent. Every policy surface therefore **aborts

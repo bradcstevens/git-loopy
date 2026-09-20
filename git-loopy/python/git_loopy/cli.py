@@ -34,10 +34,13 @@ old bash launcher is retired):
 
 * ``--version`` — print the distribution Release version and exit before Run
   discovery, configuration, dependencies, or services.
-* ``info`` — describe the installation identity and exit successfully.
+* ``info`` — describe the installation identity, channel, and assets, then exit
+  successfully.
+* ``doctor`` — report every Run precondition without starting a Run.
 * Positional ``<max-iterations>`` — ``0`` (or omitted) means unlimited.
 * ``--model ID`` — per-run model override (top of the precedence chain).
 * ``--reasoning-effort EFFORT`` — per-run reasoning-effort override.
+* ``--context-tier TIER`` — run-wide context-tier constraint.
 * ``-v`` / ``-vv`` / ``-vvv`` — verbosity ladder owned by the renderer.
 * ``--no-reasoning`` — suppresses assistant reasoning output.
 * ``--deny-tool TOOL`` — repeatable; permission-handler denylist.
@@ -58,6 +61,8 @@ Env vars:
   ``claude-opus-4.7-xhigh`` → ``xhigh``), or — on a pure default invocation
   — from the kit default, then gates it against the model's supported set (a
   model that supports no reasoning-effort configuration is sent ``None``).
+* ``GIT_LOOPY_CONTEXT_TIER`` — Root-session context tier (``default`` or
+  ``long_context``), without suppressing per-task-type routing.
 * ``GIT_LOOPY_ISSUE_SOURCE`` — ``github`` (default, GitHub issues backend) or
   ``prds`` (legacy local-markdown ``prds/<feature>/NNN-*.md`` backend).
 * ``GIT_LOOPY_MAX_NMT_STRIKES`` — strike threshold (integer ≥ 1).
@@ -77,18 +82,22 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import math
 import os
 import subprocess
 import sys
 from datetime import datetime
+from decimal import Decimal
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Callable, Collection, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Collection, Literal, Mapping
 
 from git_loopy import settings
 from git_loopy.config import (
     DEFAULT_SEND_TIMEOUT_SECONDS,
+    CONTEXT_TIERS,
+    DEFAULT_CONTEXT_TIER,
     MODEL_REASONING_EFFORTS,
     TASK_TYPE_KEYS,
     REASONING_EFFORT_ORDER,
@@ -107,12 +116,16 @@ from git_loopy.model_listing import LiveModelListing
 from git_loopy.routing_scope import routing_in_force
 from git_loopy.rate_card import resolve_rate_card
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
+from git_loopy.static_route import RoutePolicy, RoutePolicyError
 from git_loopy.skill_policy import (
+    DENY_SKILLS_ENV,
+    ENABLED_SKILLS_ENV,
     SkillPolicyStartupState,
     classify_skill_policy_startup,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; keeps dispatch import-light
+    from git_loopy.installation import InstalledAsset
     from git_loopy.labels import LabelBootstrapClient
     from git_loopy.rate_card import RateCard
     from git_loopy.staircase import PriceStaircase
@@ -163,6 +176,117 @@ _DEFAULT_REASONING_EFFORT = "max"
 #: :mod:`git_loopy.escalation`, which imports the harness SDK transitively and so
 #: must stay off the subcommand-dispatch path this module is on.
 _DEFAULT_ESCALATION_RUNG: tuple[str, str] = (_DEFAULT_MODEL, "max")
+
+
+@dataclasses.dataclass(frozen=True)
+class _CommandSpec:
+    """One root management command's stable discovery metadata."""
+
+    name: str
+    category: str
+    summary: str
+
+
+_COMMAND_SPECS = (
+    _CommandSpec(
+        "init",
+        "Getting started",
+        "First-run setup wizard for Config and Skill policy.",
+    ),
+    _CommandSpec(
+        "config",
+        "Configuration",
+        "Manage persisted Config and per-task-type routing.",
+    ),
+    _CommandSpec(
+        "skills",
+        "Configuration",
+        "skills list, skills edit, and skills sync for the closed-world Skill policy.",
+    ),
+    _CommandSpec(
+        "runs",
+        "Run control",
+        "List this clone's Runs and whether each one is still running.",
+    ),
+    _CommandSpec(
+        "labels",
+        "Repository maintenance",
+        "Report or reconcile the tracker Label vocabulary.",
+    ),
+    _CommandSpec(
+        "doctor",
+        "Repository maintenance",
+        "Report Run-preflight blockers without starting a Run.",
+    ),
+    _CommandSpec(
+        "sweep",
+        "Repository maintenance",
+        "Reclaim dead-Run Lane workspaces and reserved branches.",
+    ),
+    _CommandSpec(
+        "calibrate",
+        "Repository maintenance",
+        "Measure or inspect Routed-pair Calibration.",
+    ),
+    _CommandSpec(
+        "info",
+        "Installation",
+        "Describe this installation's artifact, channel, identity, and assets.",
+    ),
+    _CommandSpec(
+        "update",
+        "Installation",
+        "Refresh machine-local assets to the installed Release.",
+    ),
+    _CommandSpec(
+        "upgrade",
+        "Installation",
+        "Move this installation to a published Release, then update.",
+    ),
+    _CommandSpec(
+        "uninstall",
+        "Installation",
+        "Remove this installation's machine-local state.",
+    ),
+    _CommandSpec(
+        "commands",
+        "Discovery",
+        "Emit the machine-readable command inventory for shell completions.",
+    ),
+)
+_COMMAND_BY_NAME = MappingProxyType({command.name: command for command in _COMMAND_SPECS})
+
+
+def _commands_by_category() -> dict[str, list[_CommandSpec]]:
+    """Group command metadata while preserving category and command order."""
+    categories: dict[str, list[_CommandSpec]] = {}
+    for command in _COMMAND_SPECS:
+        categories.setdefault(command.category, []).append(command)
+    return categories
+
+
+def _command_help() -> str:
+    """Render the management surface from the command inventory."""
+    lines = ["Commands by category:"]
+    categories = _commands_by_category()
+    for category, commands in categories.items():
+        lines.extend(("", f"{category}:"))
+        lines.extend(
+            f"  {command.name:<10} {command.summary}" for command in commands
+        )
+    return "\n".join(lines)
+
+
+def _command_inventory() -> dict[str, object]:
+    """Return the stable schema consumed by shell completion generators."""
+    return {
+        "schema_version": 1,
+        "commands": [
+            dataclasses.asdict(command)
+            for commands in _commands_by_category().values()
+            for command in commands
+        ],
+    }
 
 
 def resolve_repo_root(start: Path | None = None) -> Path:
@@ -263,39 +387,16 @@ def _parse_issue_pin(raw: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     """Construct the argparse parser for the ``git-loopy`` console script."""
+    # The root help is another view of the actual subcommand parser. Refuse a
+    # stale command inventory rather than advertising a command that cannot run.
+    build_subcommand_parser()
     parser = argparse.ArgumentParser(
         prog="git-loopy",
         description=(
             "Autonomous AFK loop on the GitHub Copilot Python SDK."
         ),
         epilog=(
-            "Subcommands:\n"
-            "  init                           First-run setup wizard: write "
-            "config.toml (+ optional\n"
-            "                                 PROMPT.md / skills) into a scope, "
-            "then exit.\n"
-            "                                 See `git-loopy init -h`.\n"
-            "  config                         Manage persisted settings: "
-            "set / get / list / edit / path.\n"
-            "                                 See `git-loopy config -h`.\n"
-            "  info                           Describe this installation's "
-            "identity and channel.\n"
-            "                                 See `git-loopy info -h`.\n"
-            "  skills list                    Inspect the closed-world Skill "
-            "policy.\n"
-            "  skills edit                    Edit a project or global Skill "
-            "policy.\n"
-            "  skills sync                    Re-copy Copilot's Skill baseline "
-            "after confirmation.\n"
-            "                                 See `git-loopy skills -h`.\n"
-            "  calibrate --status             What this repository's corpus "
-            "supports per Task type.\n"
-            "  calibrate --dry-run            What a Calibration would cost, "
-            "before it spends.\n"
-            "  calibrate [<task-type>]        Measure it. Spends AI Credits, "
-            "and asks first.\n"
-            "                                 See `git-loopy calibrate -h`.\n"
-            "\n"
+            f"{_command_help()}\n\n"
             "Environment variables:\n"
             "  GIT_LOOPY_MODEL              Copilot model id override "
             "(bare base id, e.g. claude-opus-4.8).\n"
@@ -305,6 +406,9 @@ def build_parser() -> argparse.ArgumentParser:
             "GIT_LOOPY_MODEL suffix\n"
             "                              (e.g. "
             "claude-opus-4.7-xhigh → xhigh) then gated per model.\n"
+            "  GIT_LOOPY_CONTEXT_TIER       Root-session context tier "
+            "(default|long_context). Does not\n"
+            "                              suppress per-task-type routing.\n"
             "  GIT_LOOPY_CLASSIFIER_MODEL   Model the Task-type classifier "
             "runs on. NOT\n"
             "                              GIT_LOOPY_MODEL: unset falls back "
@@ -393,6 +497,66 @@ def build_parser() -> argparse.ArgumentParser:
             "over GIT_LOOPY_REASONING_EFFORT, config, and the default. Still "
             "gated per model: a model that supports no reasoning effort drops "
             "it." % "|".join(REASONING_EFFORT_ORDER)
+        ),
+    )
+    parser.add_argument(
+        "--context-tier",
+        dest="context_tier",
+        default=None,
+        type=str.lower,
+        choices=sorted(CONTEXT_TIERS),
+        metavar="TIER",
+        help=(
+            "Run-wide context-tier override (default|long_context). Wins over "
+            "GIT_LOOPY_CONTEXT_TIER and Config without suppressing per-task-type "
+            "static routes."
+        ),
+    )
+    parser.add_argument(
+        "--route-policy",
+        dest="route_policy",
+        default=None,
+        type=str.lower,
+        metavar="POLICY",
+        help=(
+            "Select the Route policy (ADR-0057). 'static' verifies the selected "
+            "model/effort/context tier against the authenticated harness and "
+            "refuses an unsupported one instead of rescuing it. 'dynamic' lets "
+            "the Route selector choose an unpinned issue's route from live "
+            "Artificial Analysis evidence, and needs "
+            "GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY plus the three bounds below. "
+            "Unset keeps the current behaviour."
+        ),
+    )
+    parser.add_argument(
+        "--routing-deadline-seconds",
+        dest="routing_deadline_seconds",
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "Finite wall-clock budget one Run may spend on Dynamic routing. "
+            "Required by --route-policy dynamic; there is no default."
+        ),
+    )
+    parser.add_argument(
+        "--routing-credit-allowance",
+        dest="routing_credit_allowance",
+        default=None,
+        metavar="CREDITS",
+        help=(
+            "Per-Run allowance that classification and Route selector calls are "
+            "admitted against. An admission bound, not a prepaid ceiling: a call "
+            "already in flight still completes, bills, and is disclosed."
+        ),
+    )
+    parser.add_argument(
+        "--selector-concurrency",
+        dest="selector_concurrency",
+        default=None,
+        metavar="N",
+        help=(
+            "How many Route selector calls may be in flight at once. Required "
+            "by --route-policy dynamic so parallel Pickups cannot each buy one."
         ),
     )
     parser.add_argument(
@@ -539,7 +703,7 @@ def build_parser() -> argparse.ArgumentParser:
 #: They are kept out of :func:`build_parser` because argparse cannot host an
 #: optional positional (``<max-iterations>``) alongside ``add_subparsers`` in one
 #: parser without misreading ``git-loopy 5`` as an invalid subcommand choice.
-_SUBCOMMANDS = ("init", "config", "skills", "labels", "calibrate", "info", "sweep")
+_SUBCOMMANDS = tuple(command.name for command in _COMMAND_SPECS)
 
 
 def _add_scope_flags(
@@ -572,6 +736,16 @@ def _add_scope_flags(
     )
 
 
+def _add_command(
+    subcommands: argparse._SubParsersAction[argparse.ArgumentParser],
+    name: str,
+    **kwargs: object,
+) -> argparse.ArgumentParser:
+    """Register a command with the discovery metadata that describes it."""
+    command = _COMMAND_BY_NAME[name]
+    return subcommands.add_parser(command.name, help=command.summary, **kwargs)
+
+
 def build_subcommand_parser() -> argparse.ArgumentParser:
     """Construct the parser for management commands.
 
@@ -591,16 +765,11 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{init,config,skills,labels,calibrate,info,sweep}",
     )
 
-    init = sub.add_parser(
+    init = _add_command(
+        sub,
         "init",
-        help=(
-            "First-run setup: write config.toml (+ optionally an editable "
-            "PROMPT.md override and git-loopy's agent skills) into a scope, then "
-            "exit."
-        ),
         description=(
             "Interactive first-run setup wizard. Chooses a scope (global or "
             "project), seeds model / reasoning effort from the live model list, "
@@ -608,7 +777,11 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "searchable picker as `git-loopy skills edit`, writes config.toml, "
             "and — default yes — scaffolds an editable PROMPT.md override and "
             "git-loopy's agent skills. Writes config and exits; it never starts "
-            "the loop. Cancelling writes nothing and exits non-zero."
+            "the loop. Cancelling saves no Config, prompt override, Skill "
+            "policy, or tracker label and exits non-zero; the Skill catalog it "
+            "installs first is machine-wide and stays, which the cancellation "
+            "says. Needs an interactive terminal — the same requirement a bare "
+            "first run applies before it auto-runs this wizard."
         ),
     )
     _add_scope_flags(init)
@@ -626,9 +799,25 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    skills = sub.add_parser(
+    commands = _add_command(
+        sub,
+        "commands",
+        description=(
+            "Emit the stable command inventory consumed by shell completions. "
+            "This is deliberately not a second human-facing command listing; "
+            "use `git-loopy help` or `git-loopy --help` for that."
+        ),
+    )
+    commands.add_argument(
+        "--json",
+        action="store_true",
+        required=True,
+        help="Emit the stable command-inventory JSON document.",
+    )
+
+    skills = _add_command(
+        sub,
         "skills",
-        help="Inspect and manage git-loopy's closed-world Skill policy.",
         description=(
             "Inspect the normalized Skill catalog and git-loopy policy state. "
             "Catalog discovery is read-only and never changes Copilot settings."
@@ -669,9 +858,9 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     )
     _add_scope_flags(skills_sync)
 
-    labels_cmd = sub.add_parser(
+    labels_cmd = _add_command(
+        sub,
         "labels",
-        help="Report — and optionally fix — the tracker against the Label vocabulary.",
         description=(
             "Compare this repository's tracker with the Label vocabulary a Run "
             "reads: the five triage roles (under the strings "
@@ -694,14 +883,17 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    info = sub.add_parser(
+    info = _add_command(
+        sub,
         "info",
-        help="Describe this installation's artifact, channel, and identity.",
         description=(
             "Report the installed artifact, the Install channel when it can be "
-            "proven, Release version, resolved commit, and Edge-install status. "
-            "This command describes facts only and exits successfully even when "
-            "some identity facts are unavailable."
+            "proven, Release version, resolved commit, and Edge-install status, "
+            "then every Config-home asset git-loopy installs and whether it is "
+            "untouched, customized, or unrecorded against its Scaffold "
+            "provenance. This command describes facts only and exits "
+            "successfully even when some identity facts are unavailable and "
+            "however far the assets have drifted."
         ),
     )
     info.add_argument(
@@ -710,19 +902,166 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help="Emit the stable installation-inventory JSON document.",
     )
 
-    sweep = sub.add_parser(
-        "sweep",
-        help="Reclaim dead-Run Lane workspaces and resolved reserved branches.",
+    update = _add_command(
+        sub,
+        "update",
+        description=(
+            "Refresh the installed Skill catalog and TUI helper, replace the "
+            "global PROMPT.md override only when Scaffold provenance proves it "
+            "is untouched, and repair [routing] keys a Release retired. "
+            "Customized or unrecorded prompt prose is left unchanged and the "
+            "upstream changes are reported. This command never starts a Run or "
+            "writes to the tracker; only --project, which repairs a tracked "
+            "file, needs a repository."
+        ),
     )
+    update.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Report the Config routing repair without writing it, and refresh "
+            "no asset."
+        ),
+    )
+    update_scope = update.add_mutually_exclusive_group()
+    update_scope.add_argument(
+        "--project",
+        dest="config_scope",
+        action="store_const",
+        const="project",
+        help="Repair this repository's tracked Config routing instead.",
+    )
+    update_scope.add_argument(
+        "--global",
+        dest="config_scope",
+        action="store_const",
+        const="global",
+        help="Repair the machine-global Config routing (the default).",
+    )
+
+    upgrade = _add_command(
+        sub,
+        "upgrade",
+        description=(
+            "Replace the git-loopy artifact this command is running from with a "
+            "published Release, through the Install channel that placed it, and "
+            "then run `git-loopy update` from what the move installed. With no "
+            "flags it resolves the newest published Release. It moves exactly "
+            "that one artifact and needs no repository. An Install channel that "
+            "cannot be proven from the artifact's own location, or that cannot "
+            "be pinned to one Release, changes nothing and prints the exact "
+            "command to run instead."
+        ),
+    )
+    upgrade_target = upgrade.add_mutually_exclusive_group()
+    upgrade_target.add_argument(
+        "--to",
+        metavar="<version>",
+        help=(
+            "Move to this published Release version instead of the newest one. "
+            "Refused when no such Release is published."
+        ),
+    )
+    upgrade_target.add_argument(
+        "--edge",
+        "--ref",
+        dest="edge_ref",
+        metavar="<ref>",
+        help=(
+            "Move to this unreleased commit or ref. Naming it is the opt-in: "
+            "the result is an Edge install, identified by the ref rather than "
+            "by the Release version its source reports."
+        ),
+    )
+    upgrade.add_argument(
+        "--allow-downgrade",
+        action="store_true",
+        help=(
+            "Permit a move that is not provably forward of the installed "
+            "Release."
+        ),
+    )
+
+    uninstall = _add_command(
+        sub,
+        "uninstall",
+        description=(
+            "List and confirm removal of the executable through its proven Install "
+            "channel, the global config-home, installed Skill catalog and record, "
+            "and TUI helper. Project scope and Run logs are reported but preserved "
+            "by default; --all explicitly includes them. A live Lane refuses the "
+            "whole operation so expected agent work is never removed."
+        ),
+    )
+    uninstall.add_argument(
+        "--all",
+        dest="all_",
+        action="store_true",
+        help="Also remove this repository's project scope and Run logs.",
+    )
+    uninstall.add_argument(
+        "-y",
+        "--yes",
+        dest="assume_yes",
+        action="store_true",
+        help="Confirm the printed removal plan without being asked.",
+    )
+
+    doctor = _add_command(
+        sub,
+        "doctor",
+        description=(
+            "Resolve the same environment and Skill-policy preflight a Run "
+            "resolves and report every blocker in one pass, rather than stopping "
+            "at the first. A clean host exits 0; any failing precondition exits "
+            "non-zero. The installed Skill catalog is compared with the revision "
+            "this Release pins and reported as absent, drifted, or matching "
+            "before any Skill name is judged, so a stale install is never "
+            "mistaken for a Skill that does not exist. `--apply` first refreshes "
+            "the installed Skill catalog to the pinned revision and re-resolves, "
+            "then atomically repairs missing enabled names and disabled Required "
+            "Skills in the saved policy that carries them, and nothing else: "
+            "Environment preconditions are report-only, including under "
+            "`--apply` — follow each row's stated remedy. Doctor never starts a "
+            "Run, opens a picker, or changes Copilot settings."
+        ),
+    )
+    doctor.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "Refresh the pinned Skill catalog, then apply the printed repair to "
+            "the saved Skill policy when it is safe."
+        ),
+    )
+
+    sweep = _add_command(sub, "sweep")
     sweep.add_argument(
         "--dry-run",
         action="store_true",
         help="Report exactly what this sweep would remove without changing it.",
     )
 
-    config = sub.add_parser(
+    _add_command(
+        sub,
+        "runs",
+        description=(
+            "List the Runs belonging to this clone — the worktree you are in "
+            "and every worktree it has registered — newest first, with the Run "
+            "identity to target, the worktree the Run was started in, and "
+            "whether it is still running. Liveness is read from each Run's own "
+            "control artifact, so a Run that ended is reported as ended and a "
+            "liveness this host cannot read is reported as unknown rather than "
+            "guessed. Another clone of the same repository is a separate "
+            "control domain and is never listed. Listing observes only: it "
+            "starts no work, stops nothing, and reclaims nothing (see "
+            "`git-loopy sweep` for that)."
+        ),
+    )
+
+    config = _add_command(
+        sub,
         "config",
-        help="Manage persisted settings, including per-task-type routing.",
         description=(
             "Manage persisted Config without hand-finding the file, and inspect "
             "the effective settings a run will use. Hand-editing config.toml "
@@ -838,9 +1177,9 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     )
     _add_scope_flags(routing_recommended, suppress_default=True)
 
-    calibrate = sub.add_parser(
+    calibrate = _add_command(
+        sub,
         "calibrate",
-        help="Measure the Routed pair per Task type, or inspect what that would cost.",
         description=(
             "Measure the cheapest pair that clears the gate, per Task type, and "
             "write the winner into the committed measured-routing artifact. The "
@@ -904,6 +1243,14 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "the AI-Credit and wall-clock ceilings, and the maximum Trial count."
         ),
     )
+    registered = set(sub.choices)
+    declared = {command.name for command in _COMMAND_SPECS}
+    if registered != declared:
+        raise RuntimeError(
+            "command inventory and parser registration disagree: "
+            f"missing parsers {sorted(declared - registered)!r}; "
+            f"undeclared parsers {sorted(registered - declared)!r}"
+        )
     return parser
 
 
@@ -928,6 +1275,16 @@ def _run_init(args: argparse.Namespace) -> int:
     """
     from git_loopy import init as _init
 
+    if not args.assume_yes and not _wizard_terminal_available(
+        sys.stdin.isatty(), sys.stdout.isatty()
+    ):
+        print(
+            "git-loopy: error: init requires an interactive terminal; use --yes "
+            "for non-interactive setup.",
+            file=sys.stderr,
+        )
+        return 1
+
     try:
         repo_root: Path | None = resolve_repo_root()
     except RuntimeError:
@@ -942,6 +1299,14 @@ def _run_init(args: argparse.Namespace) -> int:
         # when setup is not running inside one.
         label_client=_make_label_client() if repo_root is not None else None,
     )
+
+
+def _run_commands(_args: argparse.Namespace) -> int:
+    """Emit the shell-completion command inventory."""
+    import json
+
+    print(json.dumps(_command_inventory(), sort_keys=True))
+    return 0
 
 
 def _run_labels(args: argparse.Namespace) -> int:
@@ -979,6 +1344,23 @@ def _run_sweep(args: argparse.Namespace) -> int:
         print(f"git-loopy: sweep requires a git repository: {exc}", file=sys.stderr)
         return 1
     return sweepcmd.run_sweep(repo_root=repo_root, dry_run=bool(args.dry_run))
+
+
+def _run_runs(_args: argparse.Namespace) -> int:
+    """Dispatch the clone-scoped Run listing.
+
+    Resolved from the invoking worktree, never from a machine-wide search, so a
+    command typed outside a clone has no domain to list and says so instead of
+    widening one (ADR-0058).
+    """
+    from git_loopy import runscmd
+
+    try:
+        repo_root = resolve_repo_root()
+    except RuntimeError as exc:
+        print(f"git-loopy: runs requires a git repository: {exc}", file=sys.stderr)
+        return 1
+    return runscmd.run_runs(repo_root=repo_root)
 
 
 def _run_info(
@@ -1021,7 +1403,110 @@ def _run_info(
         output_fn(f"Resolved commit: {_display_identity(inventory.resolved_commit)}")
         output_fn(f"Published Release: {_display_identity(inventory.published)}")
         output_fn(f"Edge install: {_display_identity(inventory.edge_install)}")
+        if inventory.assets:
+            output_fn("Assets:")
+            for asset in inventory.assets:
+                output_fn(f"  {asset.name}: {_display_asset(asset)}")
     return 0
+
+
+def _run_update(args: argparse.Namespace) -> int:
+    """Dispatch the machine-local installation refresh."""
+    from git_loopy import updatecmd
+
+    project_root: Path | None = None
+    if args.config_scope == "project":
+        try:
+            project_root = resolve_repo_root()
+        except RuntimeError as exc:
+            print(f"git-loopy: error: {exc}", file=sys.stderr)
+            return 1
+    return updatecmd.run_update(
+        dry_run=bool(args.dry_run),
+        project_root=project_root,
+    )
+
+
+def _run_upgrade(args: argparse.Namespace) -> int:
+    """Dispatch the distribution move, which is about the artifact, not a repo."""
+    from git_loopy import upgradecmd
+
+    return upgradecmd.run_upgrade(
+        to=args.to,
+        edge_ref=args.edge_ref,
+        allow_downgrade=bool(args.allow_downgrade),
+    )
+
+
+def _run_uninstall(args: argparse.Namespace) -> int:
+    """Dispatch the installation-owned removal without requiring a repository."""
+    from git_loopy import uninstallcmd
+
+    try:
+        repo_root: Path | None = resolve_repo_root()
+    except RuntimeError:
+        repo_root = None
+    if args.assume_yes:
+        confirm: Callable[[str], bool] | None = _confirm_yes
+    elif sys.stdin.isatty():
+        from git_loopy.calibration_run import interactive_confirm
+
+        confirm = interactive_confirm
+    else:
+        confirm = None
+    return uninstallcmd.run_uninstall(
+        repo_root=repo_root,
+        all_=bool(args.all_),
+        confirm=confirm,
+    )
+
+
+def _confirm_yes(_prompt: str) -> bool:
+    """Accept a plan the operator explicitly approved with ``--yes``."""
+    return True
+
+
+def _display_asset(asset: "InstalledAsset") -> str:
+    """Report drift only for an asset that is there to have drifted."""
+    if not asset.present:
+        return "not installed"
+    if asset.release_version is None:
+        return asset.classification
+    return f"{asset.classification} (Release {asset.release_version})"
+
+
+def _run_doctor(args: argparse.Namespace) -> int:
+    """Dispatch the Run-preflight report and the optional Skill-policy repair."""
+    from git_loopy import doctorcmd
+
+    try:
+        repo_root = resolve_repo_root()
+    except RuntimeError as exc:
+        print(f"git-loopy: doctor requires a git repository: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        tables = settings.load_configs(repo_root, os.environ)
+        config = resolve_config(
+            build_parser().parse_args([]),
+            os.environ,
+            project=tables.project,
+            global_=tables.global_,
+            measured=tables.measured,
+            measured_provisional=tables.measured_provisional,
+        ).run
+    except TaskTypeError as exc:
+        print(f"git-loopy: error: {task_type_refusal(exc)}", file=sys.stderr)
+        return 1
+    except settings.SettingsError as exc:
+        print(f"git-loopy: error: {exc}", file=sys.stderr)
+        return 1
+    return doctorcmd.run_doctor(
+        config=config,
+        repo_root=repo_root,
+        env=os.environ,
+        apply=args.apply,
+    )
 
 
 def _display_identity(value: object) -> str:
@@ -1619,6 +2104,8 @@ def _resolve_escalation(
     env: Mapping[str, str],
     project: Mapping[str, object],
     global_: Mapping[str, object],
+    *,
+    route_policy: RoutePolicy = RoutePolicy.UNSELECTED,
 ) -> tuple[str, str] | None:
     """Resolve the **Escalation rung** in force for this Run (#408).
 
@@ -1642,6 +2129,17 @@ def _resolve_escalation(
       a two-rung-cheaper ``implementation`` pair *on the strength of this
       backstop existing*; an opt-in backstop would leave that table leaning on
       mechanism that, for everyone who did not opt in, is not there.
+    * **Off by default under a selected Route policy (#560, #561, ADR-0057).**
+      Default-on is an argument about a pair *the runner chose*: the table leans
+      on the backstop because the table is the runner's. A route the operator
+      named is not the runner's to move, so an inherited built-in rung is not
+      authorization to move it — only an ``[escalation]`` block the operator
+      actually wrote is. The switch alone (``enabled = true``) counts: it is an
+      operator naming this mechanism, which is the consent the rung was missing.
+      Under ``dynamic`` the same exclusion holds for a second reason: ADR-0057
+      gives dynamic retries no fixed rung at all, so a built-in one firing would
+      substitute the legacy fixed escalation for the reselection that replaces
+      it — and report the result as Dynamic routing.
     * **Independent of ``[routing]``.** Escalating off a bare run-wide default
       is still meaningful, so an empty routing table is no reason to withhold a
       rung.
@@ -1657,6 +2155,11 @@ def _resolve_escalation(
         settings.table_escalation(global_, scope="global"),
     )
     if _explicit_model_or_effort_override(args, env):
+        return None
+    configured = any(
+        scope.enabled is not None or scope.pair is not None for scope in scopes
+    )
+    if route_policy is not RoutePolicy.UNSELECTED and not configured:
         return None
     enabled = next((s.enabled for s in scopes if s.enabled is not None), True)
     if not enabled:
@@ -1780,6 +2283,7 @@ def _resolve_model_and_effort(
     effort_env: str | None,
     *,
     warn: Callable[[str], None] = _warn,
+    route_policy: RoutePolicy = RoutePolicy.UNSELECTED,
 ) -> tuple[str, str | None]:
     """Resolve the ``(model_id, reasoning_effort)`` pair the loop sends.
 
@@ -1838,6 +2342,13 @@ def _resolve_model_and_effort(
     #    the init seed and the per-issue routing seam also use, so routed and
     #    default pairs gate identically. The gate owns the *policy*; this call
     #    site owns the *presentation* and its suppression rule.
+    #
+    #    A Static route skips it for the reason `config._gate_pair` does (#560,
+    #    ADR-0057): this table is a hardcoded roster, and the selected pair must
+    #    survive to be verified against the authenticated harness rather than be
+    #    rescued by a description of some other binary.
+    if route_policy is RoutePolicy.STATIC:
+        return base_model, effort
     gated = gate_reasoning_effort(base_model, effort)
     warning = gated.warning
     if warning is EffortGateWarning.UNKNOWN_MODEL:
@@ -1861,6 +2372,177 @@ def _resolve_model_and_effort(
             f"effort {effort!r} (the live CLI would reject session.create for it)."
         )
     return gated.model, gated.effort
+
+
+def _resolve_context_tier(
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> str:
+    """Resolve the run-wide context tier without changing route selection.
+
+    The tier is a constraint on every resulting **Routing resolution**, not a
+    model/effort override. It therefore follows the scalar precedence chain but
+    deliberately stays outside ``routing_suppressed_by``.
+    """
+    flag = getattr(args, "context_tier", None)
+    if flag is not None:
+        return _validate_context_tier(flag, source="--context-tier")
+    raw = env.get("GIT_LOOPY_CONTEXT_TIER")
+    if raw is not None and raw.strip():
+        return _validate_context_tier(raw.strip(), source="GIT_LOOPY_CONTEXT_TIER")
+    for scope, table in (("project", project), ("global", global_)):
+        value = settings.table_str(table, "context_tier", scope=scope)
+        if value is not None:
+            return _validate_context_tier(value.strip(), source=f"{scope} config context_tier")
+    return DEFAULT_CONTEXT_TIER
+
+
+def _validate_context_tier(value: str, *, source: str) -> str:
+    normalized = value.lower()
+    if normalized not in CONTEXT_TIERS:
+        raise SystemExit(
+            f"git-loopy: error: {source} must be one of "
+            f"{sorted(CONTEXT_TIERS)}, got {value!r}"
+        )
+    return normalized
+
+
+def _resolve_route_policy(
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> RoutePolicy:
+    """Resolve the **Route policy** in force for this Run (#560, ADR-0057).
+
+    An ordinary scalar on the precedence chain, with one deliberate difference
+    from ``--model`` / ``--reasoning-effort``: naming a *policy* is not naming a
+    *pair*, so it never enters ``routing_suppressed_by``. ``[routing]`` still
+    chooses the pair per **Task type**; the policy only decides what verifies it.
+
+    Absence is the answer that matters. ADR-0057 requires a keep-or-migrate
+    decision rather than a guess that a saved recommended value is disposable,
+    so an unset key resolves to
+    :attr:`~git_loopy.static_route.RoutePolicy.UNSELECTED` and every existing
+    Config keeps behaving exactly as it did.
+    """
+    sources: tuple[tuple[str | None, str], ...] = (
+        (getattr(args, "route_policy", None), "--route-policy"),
+        (env.get("GIT_LOOPY_ROUTE_POLICY"), "GIT_LOOPY_ROUTE_POLICY"),
+        (
+            settings.table_str(project, "route_policy", scope="project"),
+            "project config route_policy",
+        ),
+        (
+            settings.table_str(global_, "route_policy", scope="global"),
+            "global config route_policy",
+        ),
+    )
+    for raw, source in sources:
+        if raw is None or not raw.strip():
+            continue
+        try:
+            return RoutePolicy.parse(raw)
+        except RoutePolicyError as exc:
+            raise SystemExit(f"git-loopy: error: {source}: {exc}") from None
+    return RoutePolicy.UNSELECTED
+
+
+def _resolve_dynamic_bound(
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+    *,
+    key: str,
+    flag: str,
+    env_name: str,
+    coerce: Callable[[str], Any],
+) -> Any | None:
+    """Resolve one of Dynamic routing's three bounds, or ``None`` for unset.
+
+    ``None`` is the honest answer for an absent bound rather than a built-in
+    value, because ADR-0057 requires each of these to be an *explicit finite*
+    operator decision: a deadline this function invented would be a deadline
+    nobody agreed to, and an operator who believes they set one would never
+    find out. The refusal an unset bound earns belongs to preflight, which
+    knows whether the policy that needs it was even selected.
+    """
+    raw = getattr(args, key, None)
+    origin = flag
+    if raw is None:
+        raw = env.get(env_name)
+        origin = env_name
+    if raw is None or not str(raw).strip():
+        for scope, table in (("project", project), ("global", global_)):
+            value = table.get(key)
+            if value is not None:
+                raw = value
+                origin = f"{scope} config {key}"
+                break
+        else:
+            return None
+    try:
+        return coerce(str(raw).strip())
+    except (ArithmeticError, ValueError) as exc:
+        raise SystemExit(f"git-loopy: error: {origin}: {exc}") from None
+
+
+def _positive_seconds(raw: str) -> float:
+    value = float(raw)
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"must be a finite number of seconds > 0, got {raw!r}")
+    return value
+
+
+def _non_negative_credits(raw: str) -> Decimal:
+    try:
+        value = Decimal(raw)
+    except ArithmeticError:
+        raise ValueError(f"must be a decimal number of credits, got {raw!r}") from None
+    if not value.is_finite() or value < 0:
+        raise ValueError(f"must be a finite number of credits ≥ 0, got {raw!r}")
+    return value
+
+
+def _positive_concurrency(raw: str) -> int:
+    value = int(raw)
+    if value < 1:
+        raise ValueError(f"must be ≥ 1, got {raw!r}")
+    return value
+
+
+def _resolve_route_associations(
+    project: Mapping[str, object], global_: Mapping[str, object]
+) -> dict[str, str]:
+    """Merge the verified association table, project overriding global per row.
+
+    Config-file-only, and deliberately: an association is *authored evidence*
+    that one Artificial Analysis identity is one Copilot configuration, and
+    evidence that arrives as a flag or an environment variable is evidence
+    nobody reviewed. It merges per identity for the reason ``[routing]`` does —
+    correcting one row in a repository must not mean restating every other one.
+    """
+    merged: dict[str, str] = {}
+    for scope, table in (("global", global_), ("project", project)):
+        rows = table.get("route_associations")
+        if rows is None:
+            continue
+        if not isinstance(rows, Mapping):
+            raise SystemExit(
+                f"git-loopy: error: {scope} config route_associations must be a "
+                "table of `<artificial analysis model id> = \"<model>@<effort>\"`"
+            )
+        for identity, configuration in rows.items():
+            if not isinstance(configuration, str) or not configuration.strip():
+                raise SystemExit(
+                    f"git-loopy: error: {scope} config route_associations "
+                    f"[{identity!r}] must be a `<model>@<effort>` string"
+                )
+            merged[str(identity)] = configuration.strip()
+    return merged
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1936,7 +2618,7 @@ def resolve_config(
         args.deny_tools, "GIT_LOOPY_DENY_TOOLS", "deny_tools", env, project, global_
     )
     deny_skills = _resolve_denylist(
-        args.deny_skills, "GIT_LOOPY_DENY_SKILLS", "deny_skills", env, project, global_
+        args.deny_skills, DENY_SKILLS_ENV, "deny_skills", env, project, global_
     )
     project_enabled = settings.table_optional_str_list(
         project, "enabled_skills", scope="project"
@@ -1954,8 +2636,8 @@ def resolve_config(
             names=tuple(global_enabled or ()),
         ),
         environment=SkillPolicyInput(
-            present="GIT_LOOPY_ENABLED_SKILLS" in env,
-            names=tuple(_parse_csv_env(env.get("GIT_LOOPY_ENABLED_SKILLS"))),
+            present=ENABLED_SKILLS_ENV in env,
+            names=tuple(_parse_csv_env(env.get(ENABLED_SKILLS_ENV))),
         ),
         enable_skills=frozenset(args.enable_skills),
         disable_skills=frozenset(args.disable_skills),
@@ -1979,7 +2661,11 @@ def resolve_config(
     effort_flag = getattr(args, "reasoning_effort", None)
     if effort_flag is not None:
         effort_raw = effort_flag
-    model, reasoning_effort = _resolve_model_and_effort(model_raw, effort_raw, warn=warn)
+    route_policy = _resolve_route_policy(args, env, project, global_)
+    model, reasoning_effort = _resolve_model_and_effort(
+        model_raw, effort_raw, warn=warn, route_policy=route_policy
+    )
+    context_tier = _resolve_context_tier(args, env, project, global_)
     execution_host_flag = getattr(args, "execution_host", None)
     execution_host = (
         execution_host_flag
@@ -2026,12 +2712,47 @@ def resolve_config(
         execution_host=execution_host,
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
         routing=routing,
+        context_tier=context_tier,
+        route_policy=route_policy,
+        routing_deadline_seconds=_resolve_dynamic_bound(
+            args,
+            env,
+            project,
+            global_,
+            key="routing_deadline_seconds",
+            flag="--routing-deadline-seconds",
+            env_name="GIT_LOOPY_ROUTING_DEADLINE_SECONDS",
+            coerce=_positive_seconds,
+        ),
+        routing_credit_allowance=_resolve_dynamic_bound(
+            args,
+            env,
+            project,
+            global_,
+            key="routing_credit_allowance",
+            flag="--routing-credit-allowance",
+            env_name="GIT_LOOPY_ROUTING_CREDIT_ALLOWANCE",
+            coerce=_non_negative_credits,
+        ),
+        selector_concurrency=_resolve_dynamic_bound(
+            args,
+            env,
+            project,
+            global_,
+            key="selector_concurrency",
+            flag="--selector-concurrency",
+            env_name="GIT_LOOPY_SELECTOR_CONCURRENCY",
+            coerce=_positive_concurrency,
+        ),
+        route_associations=_resolve_route_associations(project, global_),
         routing_suppressed=suppressed_by is not None,
         skill_policy=skill_policy,
         classifier_model=classifier_model,
         classifier_effort=classifier_effort,
         issue_pin=_resolve_issue_pin(args),
-        escalation_rung=_resolve_escalation(args, env, project, global_),
+        escalation_rung=_resolve_escalation(
+            args, env, project, global_, route_policy=route_policy
+        ),
     )
     return ResolvedConfig(
         run=run,
@@ -2047,9 +2768,24 @@ def _should_run_interactive() -> bool:
     return dashboard_available(isatty=sys.stdout.isatty())
 
 
+def _wizard_terminal_available(stdin_isatty: bool, stdout_isatty: bool) -> bool:
+    """Whether this invocation can run the setup wizard at all (#583, ADR-0058).
+
+    One predicate for both entry points — explicit ``git-loopy init`` and the
+    bare first Run — so the two cannot drift into different ideas of what an
+    operator can confirm. The wizard is a single fullscreen Textual app: it
+    reads keys from stdin and draws on stdout, and a redirected half is enough
+    to make it unusable rather than merely plain. Textual does not refuse that
+    shape on its own; it runs, renders where nobody is reading, and returns
+    answers the operator never saw — so the gate is here, ahead of it.
+    """
+    return stdin_isatty and stdout_isatty
+
+
 def _should_auto_init(
     tables: settings.ConfigTables,
     stdin_isatty: bool,
+    stdout_isatty: bool,
 ) -> bool:
     """Decide whether a bare run auto-runs the first-run ``init`` wizard (#55).
 
@@ -2058,14 +2794,15 @@ def _should_auto_init(
     * **No Config resolves anywhere** — both the project and global
       ``config.toml`` tables are empty. Once either scope has Config, a bare run
       goes straight to the loop (this slice's "no wizard once configured" rule).
-    * **stdin is an interactive terminal** — the wizard prompts on stdin, so a
-      non-TTY (CI, a pipe) never prompts and the built-in defaults carry the run.
+    * **The invocation owns a terminal** — :func:`_wizard_terminal_available`,
+      the same test explicit ``init`` applies, so a non-TTY (CI, a pipe, a
+      redirected stdout) never prompts and the built-in defaults carry the run.
       This is what keeps automated runs from ever hanging on the wizard
       (ADR-0006 / ADR-0007 first-run / CI behavior).
     """
     if tables.project or tables.global_:
         return False
-    return stdin_isatty
+    return _wizard_terminal_available(stdin_isatty, stdout_isatty)
 
 
 def _should_migrate_skill_policy(
@@ -2188,6 +2925,10 @@ def main(argv: list[str] | None = None) -> int:
     """
     argv = list(sys.argv[1:] if argv is None else argv)
 
+    if argv == ["help"]:
+        build_parser().print_help()
+        return 0
+
     # Pre-dispatch on the first token: a reserved subcommand
     # routes to its own parser, so the bare run's optional positional
     # <max-iterations> can coexist with subcommands (argparse cannot host both
@@ -2197,6 +2938,8 @@ def main(argv: list[str] | None = None) -> int:
         sub_args = build_subcommand_parser().parse_args(argv)
         if sub_args.command == "init":
             return _run_init(sub_args)
+        if sub_args.command == "commands":
+            return _run_commands(sub_args)
         if sub_args.command == "skills":
             return _run_skills(sub_args)
         if sub_args.command == "labels":
@@ -2205,9 +2948,21 @@ def main(argv: list[str] | None = None) -> int:
             return _run_calibrate(sub_args)
         if sub_args.command == "info":
             return _run_info(sub_args)
+        if sub_args.command == "update":
+            return _run_update(sub_args)
+        if sub_args.command == "upgrade":
+            return _run_upgrade(sub_args)
+        if sub_args.command == "uninstall":
+            return _run_uninstall(sub_args)
+        if sub_args.command == "doctor":
+            return _run_doctor(sub_args)
         if sub_args.command == "sweep":
             return _run_sweep(sub_args)
-        return _run_config(sub_args)
+        if sub_args.command == "runs":
+            return _run_runs(sub_args)
+        if sub_args.command == "config":
+            return _run_config(sub_args)
+        raise AssertionError(f"undispatched command {sub_args.command!r}")
 
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -2281,7 +3036,7 @@ def main(argv: list[str] | None = None) -> int:
     # nothing, and exits non-zero (an aborted setup never starts an unconfirmed
     # loop). The wizard module is imported lazily so a configured bare run (the
     # common case) never pays its import.
-    if _should_auto_init(tables, sys.stdin.isatty()):
+    if _should_auto_init(tables, sys.stdin.isatty(), sys.stdout.isatty()):
         from git_loopy import init as _init
 
         init_rc = _init.run_init(
@@ -2529,6 +3284,9 @@ def _run_tty_sidecar(
         child=child,
         release_version=release_version,
         warn=_warn,
+        # The handoff keeps the worker's startup visible: a Run blocked before
+        # its first Event says so only here (#583, ADR-0058).
+        diagnostics_path=writers.diagnostics_path,
     )
 
 

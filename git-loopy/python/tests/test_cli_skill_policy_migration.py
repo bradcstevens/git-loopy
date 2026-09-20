@@ -19,6 +19,7 @@ the Config writer are all injected.
 
 from __future__ import annotations
 
+import sys
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -362,6 +363,25 @@ class _FakeStdin:
         return self._isatty
 
 
+class _FakeStdout(_FakeStdin):
+    """The other half of a terminal, still writing through to the captured stream.
+
+    A terminal is both streams (#583): setup paints the screen it reads answers
+    from, so ``isatty`` on stdin alone does not describe one. Substituting stdout
+    therefore has to keep it *printable*, or every message this module reads back
+    would vanish.
+    """
+
+    def __init__(self, *, isatty: bool, inner: Any) -> None:
+        super().__init__(isatty=isatty)
+        self._inner = inner
+
+    def write(self, text: str) -> int:
+        return self._inner.write(text)
+
+    def flush(self) -> None:
+        self._inner.flush()
+
 def _drive_main(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -388,6 +408,7 @@ def _drive_main(
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: interactive)
     monkeypatch.setattr("sys.stdin", _FakeStdin(isatty=isatty))
+    monkeypatch.setattr("sys.stdout", _FakeStdout(isatty=isatty, inner=sys.stdout))
 
     order: list[str] = []
     ran: list[RunConfig] = []

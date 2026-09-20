@@ -70,6 +70,11 @@ def test_registry_covers_exactly_the_persisted_schema() -> None:
     assert set(configcmd.SETTABLE_KEYS) == {
         "model",
         "reasoning_effort",
+        "context_tier",
+        "route_policy",
+        "routing_deadline_seconds",
+        "routing_credit_allowance",
+        "selector_concurrency",
         "classifier_model",
         "classifier_effort",
         "issue_source",
@@ -110,10 +115,36 @@ def test_coerce_enum_keys_validate_choices() -> None:
     assert configcmd.coerce_value("reasoning_effort", "MiNiMaL") == "minimal"
     assert configcmd.coerce_value("reasoning_effort", "NONE") == "none"
     assert configcmd.coerce_value("issue_source", "prds") == "prds"
+    assert configcmd.coerce_value("context_tier", "LONG_CONTEXT") == "long_context"
+    # The **Route policy** (#560, #561, ADR-0057) is a persisted key so an
+    # operator can opt a repository into the **Static route** or **Dynamic
+    # routing** once, rather than remembering a flag on every Run.
+    assert configcmd.coerce_value("route_policy", "STATIC") == "static"
+    assert configcmd.coerce_value("route_policy", "unselected") == "unselected"
+    assert configcmd.coerce_value("route_policy", "Dynamic") == "dynamic"
+    with pytest.raises(configcmd.ConfigCommandError):
+        configcmd.coerce_value("route_policy", "measured")
+    # Dynamic routing's bounds (#561): each is finite and explicit, and the
+    # allowance keeps the exact decimal it was written as rather than a float
+    # that would spend a different number of credits.
+    assert configcmd.coerce_value("routing_deadline_seconds", "90") == 90.0
+    assert configcmd.coerce_value("routing_credit_allowance", "1.50") == "1.50"
+    assert configcmd.coerce_value("selector_concurrency", "4") == 4
+    for key, bad in (
+        ("routing_deadline_seconds", "0"),
+        ("routing_deadline_seconds", "inf"),
+        ("routing_credit_allowance", "-1"),
+        ("routing_credit_allowance", "lots"),
+        ("selector_concurrency", "0"),
+    ):
+        with pytest.raises(configcmd.ConfigCommandError):
+            configcmd.coerce_value(key, bad)
     with pytest.raises(configcmd.ConfigCommandError):
         configcmd.coerce_value("reasoning_effort", "ultra")
     with pytest.raises(configcmd.ConfigCommandError):
         configcmd.coerce_value("issue_source", "gitlab")
+    with pytest.raises(configcmd.ConfigCommandError):
+        configcmd.coerce_value("context_tier", "largest")
 
 
 def test_coerce_csv_keys_split_into_string_lists() -> None:
@@ -1253,10 +1284,10 @@ def test_a_read_surface_refuses_a_persisted_task_type_it_cannot_route(
         assert key in err.text
 
 
-def test_the_refusal_names_the_command_that_clears_the_offending_key(
+def test_the_refusal_names_update_as_the_release_repair(
     tmp_path: Path,
 ) -> None:
-    """A refusal an operator cannot act on is a lockout, so it names the remedy."""
+    """A retired Config key names the Release repair that owns it."""
     _legacy_routing_config(tmp_path)
     err = _Sink()
 
@@ -1265,13 +1296,13 @@ def test_the_refusal_names_the_command_that_clears_the_offending_key(
     )
 
     assert rc == 1
-    assert "config routing unset custom" in err.text
+    assert "git-loopy update --project" in err.text
 
 
-def test_a_global_legacy_route_names_the_global_recovery_command(
+def test_a_global_legacy_route_names_the_global_update_repair(
     tmp_path: Path,
 ) -> None:
-    """A recovery command must target the scope that carries the legacy key."""
+    """The repair command must target the scope that carries the legacy key."""
     env = _env(tmp_path)
     settings.write_config(
         settings.global_config_path(env),
@@ -1284,7 +1315,7 @@ def test_a_global_legacy_route_names_the_global_recovery_command(
     )
 
     assert rc == 1
-    assert "config routing unset custom --global" in err.text
+    assert "git-loopy update --global" in err.text
 
 
 def test_routing_unset_clears_a_key_outside_the_taxonomy(tmp_path: Path) -> None:
@@ -1321,7 +1352,7 @@ def test_routing_unset_leaves_the_taxonomy_closed_to_writes(tmp_path: Path) -> N
     assert not settings.project_config_path(tmp_path).exists()
 
 
-def test_a_write_refused_by_a_persisted_key_names_that_key_and_the_remedy(
+def test_a_write_refused_by_a_persisted_key_names_that_key_and_update(
     tmp_path: Path,
 ) -> None:
     """Setting a *valid* route is refused by a legacy sibling, so the error says which.
@@ -1340,7 +1371,7 @@ def test_a_write_refused_by_a_persisted_key_names_that_key_and_the_remedy(
     )
 
     assert rc == 1
-    assert "config routing unset custom" in err.text
+    assert "git-loopy update --project" in err.text
     assert "custom" in path.read_text(encoding="utf-8")  # refused, not laundered
 
 

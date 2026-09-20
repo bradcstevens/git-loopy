@@ -1,0 +1,45 @@
+name: Remote host preflight
+
+# One Run-scoped green-base gate. It deliberately has no Lane contribution:
+# the Run dispatches it once before reserving any issue.
+on:
+  workflow_dispatch:
+    inputs:
+      base_revision:
+        description: The clean base revision whose declared loops must pass.
+        required: true
+        type: string
+      preflight_token:
+        description: The Run-scoped correlation token the orchestrator supplied.
+        required: true
+        type: string
+      gate_timeout_seconds:
+        description: The maximum duration of each declared feedback loop.
+        required: true
+        type: string
+
+run-name: ${{ inputs.preflight_token }}
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Green-base preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      GIT_LOOPY_GATE_TIMEOUT_SECONDS: ${{ inputs.gate_timeout_seconds }}
+    steps:
+      - name: Check out the clean base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base_revision }}
+          fetch-depth: 0
+
+      - name: Set up the contribution toolchain
+        uses: ./.github/actions/setup-lane-contribution
+
+      - name: Run declared feedback loops
+        shell: bash
+        run: uv run --project git-loopy/python --all-extras python -m git_loopy.gate

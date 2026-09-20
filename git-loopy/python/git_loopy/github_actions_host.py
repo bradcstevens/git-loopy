@@ -47,12 +47,14 @@ from dataclasses import dataclass
 from os import environ
 from typing import Any, Awaitable, Callable, Mapping, Protocol, TypeVar
 
+from git_loopy.gate import resolve_gate_timeout_seconds
 from git_loopy.execution_host import (
     REASON_CHECKPOINT_FAILED,
     ContributionFailure,
     ContributionOutcome,
     ContributionRequest,
     ContributionSuccess,
+    HostPreflight,
     IsolationGrade,
     Placement,
 )
@@ -73,6 +75,7 @@ __all__ = [
     "GITHUB_ACTIONS_ISOLATION_GRADE",
     "GITHUB_ACTIONS_PLACEMENT",
     "LANE_CONTRIBUTION_WORKFLOW",
+    "RUN_PREFLIGHT_WORKFLOW",
     "MONOTONIC_OBSERVATION_FIELD",
     "ActionsArtifact",
     "ActionsClient",
@@ -87,6 +90,7 @@ __all__ = [
     "SubprocessActionsClient",
     "artifact_name",
     "dispatch_token",
+    "preflight_token",
     "assert_workflow_installed",
     "workflow_ref",
     "ACTIONS_WORKFLOW_REF_ENV",
@@ -108,6 +112,7 @@ GITHUB_ACTIONS_ISOLATION_GRADE: IsolationGrade = "machine boundary"
 
 #: The workflow one contribution is dispatched into.
 LANE_CONTRIBUTION_WORKFLOW = "lane-contribution.yml"
+RUN_PREFLIGHT_WORKFLOW = "run-preflight.yml"
 
 _T = TypeVar("_T")
 
@@ -284,7 +289,7 @@ def workflow_ref(client: "SupportsDefaultBranch") -> str:
 
 
 def assert_workflow_installed(client: "SupportsWorkflowLookup") -> None:
-    """Refuse at preflight if the repository has no contribution workflow.
+    """Refuse at preflight if the repository lacks either required workflow.
 
     The host dispatches into the repository the Run is operating on, and that
     repository is not necessarily this one --- the workflow and its composite
@@ -295,12 +300,21 @@ def assert_workflow_installed(client: "SupportsWorkflowLookup") -> None:
     environment's. Asked once, before any Lane exists, it is a preflight
     refusal an operator can act on.
     """
-    if not client.workflow_installed(LANE_CONTRIBUTION_WORKFLOW):
+    missing = next(
+        (
+            workflow
+            for workflow in (RUN_PREFLIGHT_WORKFLOW, LANE_CONTRIBUTION_WORKFLOW)
+            if not client.workflow_installed(workflow)
+        ),
+        None,
+    )
+    if missing is not None:
         raise ActionsError(
-            f"the repository has no {LANE_CONTRIBUTION_WORKFLOW} workflow. The "
+            f"the repository has no {missing} workflow. The "
             "Actions Execution host dispatches into the repository the Run "
             "operates on, so that repository must carry "
-            f".github/workflows/{LANE_CONTRIBUTION_WORKFLOW} and the "
+            f".github/workflows/{RUN_PREFLIGHT_WORKFLOW}, "
+            f".github/workflows/{LANE_CONTRIBUTION_WORKFLOW}, and the "
             ".github/actions/setup-lane-contribution composite step it uses."
         )
 
@@ -320,6 +334,11 @@ class SupportsWorkflowLookup(Protocol):
 def dispatch_token(request: ContributionRequest) -> str:
     """Derive the correlation token for one contribution's workflow run."""
     return f"git-loopy {request.run_id} issue {request.issue_ref}"
+
+
+def preflight_token(run_id: str) -> str:
+    """Derive the correlation token for one Run's remote green-base gate."""
+    return f"git-loopy {run_id} preflight"
 
 
 def artifact_name(request: ContributionRequest) -> str:
@@ -594,6 +613,7 @@ class GitHubActionsExecutionHost:
         self._clock = clock
         self._sleep = sleep
         self._handles: dict[str, DispatchHandle] = {}
+        self._preflight_handles: dict[str, DispatchHandle] = {}
 
     @property
     def workflow_ref(self) -> str:
@@ -651,6 +671,51 @@ class GitHubActionsExecutionHost:
             return await self._supervise(request, token)
         finally:
             self._handles.pop(token, None)
+
+    async def run_preflight(
+        self, *, run_id: str, base_revision: str
+    ) -> HostPreflight:
+        """Run the target repository's declared loops before any Lane dispatches."""
+        token = preflight_token(run_id)
+        self._preflight_handles[token] = DispatchHandle(
+            token=token, workflow=RUN_PREFLIGHT_WORKFLOW, ref=self._workflow_ref
+        )
+        try:
+            try:
+                await self._call(
+                    self._client.dispatch,
+                    RUN_PREFLIGHT_WORKFLOW,
+                    self._workflow_ref,
+                    {
+                        "base_revision": base_revision,
+                        "gate_timeout_seconds": (
+                            f"{resolve_gate_timeout_seconds(environ):g}"
+                        ),
+                        "preflight_token": token,
+                    },
+                )
+                run = await self._await_completion(token, self._preflight_handles)
+            except ActionsError as exc:
+                return HostPreflight(passed=False, detail=str(exc))
+            if run is None:
+                return HostPreflight(
+                    passed=False,
+                    detail=(
+                        f"no Actions preflight carrying {token!r} became observable "
+                        f"within {self._timeout_seconds:.0f}s"
+                    ),
+                )
+            if run.status != "completed" or run.conclusion != "success":
+                return HostPreflight(
+                    passed=False,
+                    detail=(
+                        f"Actions preflight {run.database_id} concluded "
+                        f"{run.conclusion!r}: {liveness_summary(run)}"
+                    ),
+                )
+            return HostPreflight(passed=True)
+        finally:
+            self._preflight_handles.pop(token, None)
 
     async def _supervise(
         self, request: ContributionRequest, token: str
@@ -806,7 +871,9 @@ class GitHubActionsExecutionHost:
         """
         return await asyncio.to_thread(call, *args)
 
-    async def _await_completion(self, token: str) -> ActionsRun | None:
+    async def _await_completion(
+        self, token: str, handles: dict[str, DispatchHandle] | None = None
+    ) -> ActionsRun | None:
         """Poll coarse job and step status until the run completes or time runs out.
 
         Actions publishes no supported live log stream — its own CLI refuses to
@@ -815,9 +882,10 @@ class GitHubActionsExecutionHost:
         republished on the handle, so the orchestrator's view of an in-flight
         remote contribution is never staler than the last poll.
         """
+        handles = self._handles if handles is None else handles
         started = self._clock()
         while True:
-            handle = self._handles[token]
+            handle = handles[token]
             if handle.database_id is None:
                 sighted = await self._call(self._client.find_run, token)
                 observed = (
@@ -829,7 +897,7 @@ class GitHubActionsExecutionHost:
                 observed = await self._call(self._client.get_run, handle.database_id)
             if observed is not None:
                 handle = handle.observed_as(observed)
-                self._handles[token] = handle
+                handles[token] = handle
                 if observed.status == "completed":
                     return observed
             if self._clock() - started >= self._timeout_seconds:
@@ -1073,6 +1141,7 @@ def _request_json(request: ContributionRequest, send_timeout_seconds: float) -> 
             "base_revision": request.base_revision,
             "model": request.model,
             "reasoning_effort": request.reasoning_effort,
+            "context_tier": request.context_tier,
             "run_id": request.run_id,
             "disabled_skills": list(_disabled_skills(request.skill_policy)),
             "send_timeout_seconds": session_budget(send_timeout_seconds),

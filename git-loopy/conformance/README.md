@@ -13,21 +13,27 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `close-references.json` | Reference regex, line boundaries, deduplication, Pool whitelist, and issues-only closure |
 | `progress-strikes.json` | Agent commits, closures, Checkpoints, PR advances, and the abort ceiling — forked at fixture schema `2` (#413) by a per-case `distributions` selector, because a member *with* a **Pickup** charges one Strike per issue the Run gives up on (the step-level `issues_skipped` count) while a member without one keeps counting consecutive no-progress Iterations, which is the accounting it actually implements. A case naming no distribution is family-wide; an adapter runs the cases naming its own and no others |
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
-| `exit-codes.json` | Clean, aborted, and usage-error process exits — including the `all_skipped` abort (§10, #413) a Pickup owes when the Pool is non-empty and it could bind none of it |
+| `exit-codes.json` | Clean, aborted, and usage-error process exits — including the `all_skipped` abort (§10, #413) a Pickup owes when the Pool is non-empty and it could bind none of it — plus `pool_emptiness_cases`, the one rule every member asks before claiming the exit-`0` empty Pool (§2.2, #541): only a *complete* read that found nothing establishes emptiness, so a failed or truncated read that found nothing is unknown rather than empty. plus `unbound_pool_cases`, its refusal-side companion (§3.3.1, #542): a Pool that bound nothing and holds one refusal nobody could read ends under `preflight_failed`, because `all_skipped` and `all_blocked` are claims about the *work* and an unprovable readiness verdict is a report about the *read*. Both rules ride this fixture rather than ones of their own because they decide which of these exits a Run is entitled to |
 | `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, exact Run-start Release identity, per-Orchestrator Insight and **Parallel mode** capability manifests, production-seam normalized rollup cases, payload contracts, the rolling-dispatch **Lane contribution** identity and lifecycle vocabulary, whole ordered rolling Event streams every member serializes through its own seam, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
 | `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.2): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, per-band projection field inventory and per-column field mapping, Queue and Iteration-breakdown columns and scopes, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, the activation `binding_source` vocabulary, and expected semantic view models consumed by Python and the Rust Dashboard core |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
 | `skill-policy.json` | Closed-world **Skill policy** (§17): base-scope selection, explicit empty policy, exact environment replacement, Run overlays with disable-wins, deprecated legacy subtraction, Minimal fallback and its reason, the four validation failures, startup classification, and the redacted `wrapper.skill_policy.resolved` projection |
-| `model-roster.json` | Canonical `model → accepted reasoning-effort` sets; its keys are the supported-model set, stamped with the `cli_version` the content was captured against because effort capability is a function of Copilot CLI version (§14, ADR-0019), plus `context_tiers` — the tier half of the same roster (ADR-0017), which carries a row only for a model whose tiers were captured for that stamp and is empty until they are |
-| `routing-resolution.json` | The closed **Task type** taxonomy (`task_type_taxonomy`) and the refusals an unknown key meets — suppression does not excuse one, and matching is exact — the closed **Routing source** vocabulary (`routing_sources`), every member of which some case reaches, plus per-issue `task-type:` labels + `[routing]` config → the **Routing resolution** record and whether it warns, plus the **Measured routing** precedence cases — CLI flag > env > project > global > measured > built-in default — each declaring the synthetic roster it runs against, including a `provisional` measured entry (a pair in force that nobody measured) and the tier it is reported under (§14) |
+| `model-roster.json` | Canonical fallback `model → accepted reasoning-effort` sets; its keys are the supported-model set, stamped with the `cli_version` used for the latest observed-capability refresh because effort capability is a function of Copilot CLI version (§14, ADR-0019). ADR-0019 explicitly distinguishes seven unchanged compatibility rows not reverified at that stamp; it admits no new unobserved effort sets. Also carries `context_tiers` — the tier half of the same roster (ADR-0017), which carries a row only for a model whose tiers were captured for that stamp and is empty until they are |
+| `routing-resolution.json` | The closed **Task type** taxonomy (`task_type_taxonomy`) and the refusals an unknown key meets — suppression does not excuse one, and matching is exact — the closed **Routing source** vocabulary (`routing_sources`), every member of which some case reaches, plus per-issue `task-type:` labels + `[routing]` config → the **Routing resolution** record and whether it warns, plus the **Measured routing** precedence cases — CLI flag > env > project > global > measured > built-in default — each declaring the synthetic roster it runs against, including a `provisional` measured entry (a pair in force that nobody measured) and the tier it is reported under (§14), plus the **Static route** cases (`static_route_cases`) — one harness listing plus one selected triple → `accepted` or a closed-vocabulary refusal, every refusal in `static_route_refusals` reached by some case, with the two distinctions a port is likeliest to collapse pinned explicitly: a model with *no* effort dial versus one whose dial offers the value `none`, and a harness that answered "no" versus one that could not be asked at all (§14.3) |
+| `release-line.json` | The closed four-key **Bump class** taxonomy carried by `semver:` labels, including deliberate `none`, an unclassified missing label, exact-match unknown-key refusals, and conflicting-label refusals; the **Release target** ratchet, `dev.N` counter, and Integration-order-independent Release-line outcomes |
 | `effort-gate.json` | Model + requested reasoning effort → gated result and whether it warns (§14) |
 | `attempt-lifecycle.json` | The **Attempt lifecycle** (§14): the closed ordered `fresh`/`retrying`/`skipped` states, the total ending-to-disposition table over every **Session outcome** — and over the *absence* of one, which spends no attempt and refunds none — beside whether the same ending owes the **Escalation rung**, plus scripted walks pinning monotonicity across an advancing Iteration, the shared budget two retryable endings draw on, and a Run with escalation off still defeating an issue it cannot finish. The two dials one ending turns are pinned in one row on purpose: they are separate ledgers reading one record, and a fixture that pinned either alone would let them drift |
 | `calibration-search.json` | The **Calibration** search: its own synthetic roster and the five-of-five promotion rule declared rather than inferred, then the cheapest-first walk, unanimity, early rung abandonment, the equal-price tie-break, both the **AI Credit** and the wall-clock ceiling, an unreported Consumption latching credits to unknown, an interrupted and an exhausted walk, a Proving set too thin to promote anything, the newest-first Proving-task draw every rung measures, and — at a declared `concurrency` — the probe run alone, the remainder bought at the operator's width, and a wall-clock ceiling spent once by Trials that overlap rather than once each |
-| `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, stable/prerelease publication classification, invalid tag scenarios, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
+| `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, stable/prerelease publication classification, invalid tag scenarios including missing authored notes, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
 | `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners, cross container and package provisioning, and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, the download URL one Release publishes them at, and the host aliases and selection cases an installer resolves its own artifact with |
-| `release-trust.json` | The **platform-trust gate** a Release passes before publication: per-platform signing mechanism and the cargo-dist key that enables it, the credentials each mechanism reads, the protected and unprotected release environments and the credential-free jobs, evidence a platform *cannot* carry recorded by name and reason, the evidence each channel requires, and the stable/prerelease publication decisions including the marking the GitHub Release itself must carry |
+| `release-trust.json` | The **platform-trust gate** a Release passes before publication: the declared **distribution mode** (source-only or artifact-bearing), per-platform signing mechanism and the cargo-dist key that enables it, the credentials each mechanism reads, the protected and unprotected release environments and the credential-free jobs, evidence a platform *cannot* carry recorded by name and reason, the evidence each channel requires, and the stable/prerelease publication decisions including the marking the GitHub Release itself must carry |
 | `homebrew-tap.json` | The **Homebrew channel**: the tap and formula identity, the four platforms Homebrew runs on and the artifact each installs, the three published targets it excludes *by name*, the stable-only publication decisions including the marking the Release itself must carry, and the version, URL, host, digest, coverage, and version-probe drift a formula is refused for |
 | `windows-channels.json` | The **winget and Scoop channels**: the package identity and committed paths each writes, the one published target a Windows package manager runs and the six it excludes *by name*, the claims neither format can carry recorded *by name and reason*, the stable-only publication decisions, the trust-receipt defects that keep an unsigned or unattributable artifact out of both channels, and the version, identifier, URL, host, digest, publisher, and version-probe drift committed metadata is refused for |
+
+`fixture-claims.json` is the family-accounting register, not a fixture: it
+records each member's claimed or waived exercise of every fixture above. The
+Python Integration gate globs the directory and rejects a missing verdict, an
+unexplained waiver, or owed work without its tracking issue.
 
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent
@@ -51,7 +57,10 @@ disagree.
 `release_download_url_template` is there for the same reason the names are: the
 installers, the Homebrew tap, and the winget/Scoop manifests all download the
 same bytes, and a channel that resolves its own URL is a channel that can
-install a different Release. It is pinned against the helper manifest's
+install a different Release. The `release_index_url_template` lets the
+installers resolve the newest non-draft helper Release no newer than the
+declared Release; the helper is then identity-verified against that resolved
+version. Both URLs are pinned against the helper manifest's
 `repository`, so a fork or a rename cannot leave every channel downloading from
 the old repository's Releases. The shell adapter is
 [`shell/tests/test-tui-install.sh`](../shell/tests/test-tui-install.sh), which
@@ -496,6 +505,14 @@ integral. The probe's depth is the rollup seam, so it proves a payload is
 producible rather than that today's native Run loop reaches every input the seam
 accepts.
 
+The route projection's required inventory is `model`, `effort`, and `source`.
+`context_tier` and `lifecycle_position` are additive fields declared in
+`optional_projection_fields.route`: Queue and Iteration-breakdown rows preserve
+them when the Pickup recorded them, and omit them for older records rather than
+inventing a tier or a first-attempt claim. A reassessed Dynamic retry may keep
+the same configuration; its lifecycle position must still distinguish it from
+the earlier contribution.
+
 The **Activity** band's sizing gestures — the drag, the click and `shift+↑` / `shift+↓`
 (ADR-0038) — are deliberately **not** in this fixture set, now that both renderers
 implement them. A drag is not an Event, so nothing about it reaches the Event schema, and
@@ -588,7 +605,10 @@ decisions (Wrapper contract §14): it drives `routing-resolution.json` and
 `model-roster.json`. `routing-resolution.json`'s `precedence_cases` are driven
 through the production `resolve_config` instead, because tier precedence is a
 question about the merge and `resolve_iteration_model` receives one already-merged
-mapping. `attempt-lifecycle.json` joins them, driven through the production
+mapping. Its `static_route_cases` are driven through the
+production `validate_static_route`, the single seam every Static route decision
+passes through, so a fixture verdict and a Run's refusal are the same judgement
+rather than two that agree today. `attempt-lifecycle.json` joins them, driven through the production
 `AttemptLedger` and `EscalationLedger` together: one row of its table asks both
 ledgers about one ending, so the dial that decides whether the pair changes and
 the dial that decides whether the issue is worked again cannot drift apart.
@@ -626,7 +646,7 @@ non-UTF-8, or unavailable Release metadata.
 The source-release verifier
 [`python/git_loopy/source_release.py`](../python/git_loopy/source_release.py)
 uses the same fixture to reject lightweight or mismatched tags, missing explicit
-Release-version bumps, missing edited notes, metadata drift, and drift in any
+Release-version bumps, missing authored notes, metadata drift, and drift in any
 real Orchestrator `--version` output. It generates
 and verifies the tagged source archive before
 [`source-release.yml`](../../.github/workflows/source-release.yml) creates a

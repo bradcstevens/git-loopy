@@ -144,3 +144,27 @@ following the `git-loopy labels` house pattern, and divides the two by cause: a 
 a Release caused belongs to `update`; a repair for something broken independently of a Release
 belongs to `doctor --apply`. The **Config** repair described above stays with `update` under that
 rule, because a retired taxonomy key is Release-caused.
+
+## Amendment: the Config repair reaches project scope behind an explicit flag
+
+Accepted while implementing the repair (#527), on a case the decisions above did not separate.
+
+"`update` … is not repo-scoped" was written about the four assets `update` owns, three of which
+only exist in config-home. The fourth does not: `config.toml` has **two** scopes, and the lockout
+is a property of whichever one carries the retired key. A Run reads both (ADR-0006), so a project
+Config is exactly as able to refuse `config list`, `config get`, `config routing set` and the Run
+itself — and "not repo-scoped" read literally leaves that operator with the hand-edited TOML this
+ADR set out to retire.
+
+So the rule is the one already stated for `uninstall`, applied to the other repo-scoped asset:
+**project scope is never touched by default, and is reachable only when the operator names it.**
+`git-loopy update` repairs the global Config and requires no repository, exactly as decided above.
+`git-loopy update --project` repairs that repository's tracked Config, the same explicit opt-in
+`uninstall --all` already is, and is the only invocation of `update` that needs a repository.
+
+`task_type_refusal` names the scope it was refused by, so the operator is handed the flag rather
+than left to guess which of two files is blocking them.
+
+This changes nothing about the boundary: prose is still reported rather than merged, the Label
+vocabulary still belongs to `labels --apply`, and an unscoped `update` still never writes to a
+tracked file.

@@ -216,6 +216,31 @@ def test_emit_returns_the_pre_scrub_envelope() -> None:
     assert sink.events[0]["subject"] == REDACTED_SECRET
 
 
+def test_required_persistence_surfaces_a_route_recording_failure() -> None:
+    """A caller can refuse work when a final record never reached local storage."""
+    sink = _RecordingSink()
+    diag = _RecordingDiag()
+    emitter = EventEmitter(
+        run_id="RUN",
+        event_log=_RaisingLog(),
+        sinks=sink,
+        diag=diag,
+    )
+
+    with pytest.raises(RuntimeError, match="write boom"):
+        emitter.emit(
+            "wrapper.pickup.bound",
+            iter_num=1,
+            require_persistence=True,
+            issue=42,
+        )
+
+    assert sink.events == []
+    assert len(diag.warnings) == 1
+    assert diag.warnings[0][0] == "event log write failed: %s"
+    assert str(diag.warnings[0][1][0]) == "write boom"
+
+
 def test_emit_path_scrubs_before_render_as_the_loop_configures_it() -> None:
     """The loop's emit path fans the *scrubbed* envelope out to its sinks (#45).
 

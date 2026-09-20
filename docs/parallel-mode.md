@@ -59,6 +59,27 @@ GIT_LOOPY_WORKTREE_SETUP='npm ci' git-loopy
 When no issue is Lane-eligible, the serial **Iteration driver** reaches the
 same outcomes and emits the existing degraded or serial-fallback Event.
 
+## Remote-host safety
+
+When `GIT_LOOPY_EXECUTION_HOST=github-actions` selects the GitHub Actions
+**Execution host**, the Run dispatches one `run-preflight.yml` job before it
+reserves a Lane. That job checks out the selected clean base revision and runs
+the target repository's declared `AGENTS.md` feedback loops. A red loop or an
+unavailable toolchain ends the Run as an environment preflight failure; it
+creates no **Lane contribution**, **Strike**, or **Demotion**.
+
+The target repository must install `run-preflight.yml`,
+`lane-contribution.yml`, and the shared
+`.github/actions/setup-lane-contribution` action; the host refuses before
+dispatch when either workflow is absent.
+
+Each later Lane is its own `lane-contribution.yml` run. The host's concurrency
+group is keyed by issue and cancels any in-progress contribution for that same
+issue, so a restarted Run supersedes an orphan rather than racing it. A refused
+dispatch is also not a Strike: its issue stays eligible and repeated refusals
+raise the existing host/setup **Pressure signal**, which can contract the
+effective Lane limit.
+
 ## Eligibility is yours to assert: `parallel-safe`
 
 The runner **never infers** that two issues can be worked at the same time. An

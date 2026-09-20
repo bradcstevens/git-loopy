@@ -105,3 +105,105 @@ def test_the_rate_card_is_declared_beside_cost_and_never_costs_a_figure() -> Non
     )
     assert row["credits"] == 1.5
     assert row["premium_requests"] == 2.0
+
+
+def test_a_routed_pickup_projects_its_explicit_context_tier() -> None:
+    """The Dashboard reads the same non-default tier the Pickup bound."""
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
+
+    state = LiveRunState()
+    state.render(
+        {
+            "type": "wrapper.pickup.bound",
+            "iter": 1,
+            "issue": 42,
+            "reason": "order",
+            "model": "gpt-5-mini",
+            "effort": "medium",
+            "context_tier": "long_context",
+            "routing_source": "routed",
+            "lifecycle_position": "fresh",
+        }
+    )
+    row = project_run_view(state, None, issue=42)["dashboard"]["queue"]["rows"][0]
+    assert row["route"] == {
+        "model": "gpt-5-mini",
+        "effort": "medium",
+        "context_tier": "long_context",
+        "source": "routed",
+        "lifecycle_position": "fresh",
+    }
+
+
+def test_dynamic_retry_keeps_the_same_route_positions_distinct_in_history() -> None:
+    """The contribution readback keeps an unchanged configuration's retry fact."""
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
+
+    state = LiveRunState()
+    for iteration, position, outcome in (
+        (1, "fresh", "no-progress"),
+        (2, "retrying", "closed"),
+    ):
+        state.render({"type": "wrapper.iteration.start", "iter": iteration})
+        state.render(
+            {
+                "type": "wrapper.pickup.bound",
+                "iter": iteration,
+                "issue": 42,
+                "reason": "order",
+                "model": "gpt-5-mini",
+                "effort": "medium",
+                "routing_source": "dynamic",
+                "lifecycle_position": position,
+            }
+        )
+        state.render(
+            {"type": "wrapper.issue.activated", "iter": iteration, "issue": 42}
+        )
+        state.render(
+            {
+                "type": "wrapper.iteration.end",
+                "iter": iteration,
+                "outcome": outcome,
+                "duration_seconds": 1.0,
+                "issues": [{"issue": 42, "status": outcome}],
+            }
+        )
+
+    rows = project_run_view(state, None, issue=42)["drill_in"]["iteration_breakdown"][
+        "rows"
+    ]
+    assert [row["route"]["lifecycle_position"] for row in rows] == [
+        "fresh",
+        "retrying",
+    ]
+    assert [row["route"]["model"] for row in rows] == ["gpt-5-mini", "gpt-5-mini"]
+
+
+def test_legacy_route_without_lifecycle_position_remains_unchanged() -> None:
+    """An older Pickup record has no lifecycle claim to project."""
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
+
+    state = LiveRunState()
+    state.render(
+        {
+            "type": "wrapper.pickup.bound",
+            "iter": 1,
+            "issue": 42,
+            "model": "gpt-5-mini",
+            "effort": "medium",
+            "routing_source": "routed",
+        }
+    )
+
+    route = project_run_view(state, None, issue=42)["dashboard"]["queue"]["rows"][0][
+        "route"
+    ]
+    assert route == {
+        "model": "gpt-5-mini",
+        "effort": "medium",
+        "source": "routed",
+    }

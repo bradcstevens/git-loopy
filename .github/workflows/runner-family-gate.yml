@@ -113,6 +113,7 @@ jobs:
             git-loopy/shell/tests/test-event-conformance.sh
             git-loopy/shell/tests/test-orchestrator-conformance.sh
             git-loopy/shell/tests/test-orchestrator-boundary.sh
+            git-loopy/shell/tests/test-release-line-conformance.sh
             git-loopy/shell/tests/test-tui-install.sh
           )
           EXECUTED=0
@@ -197,4 +198,43 @@ jobs:
           Invoke-Suite git-loopy/powershell/tests/test-event-conformance.ps1
           Invoke-Suite git-loopy/powershell/tests/test-orchestrator-conformance.ps1
           Invoke-Suite git-loopy/powershell/tests/test-orchestrator-boundary.ps1
+          Invoke-Suite git-loopy/powershell/tests/test-release-line-conformance.ps1
           Invoke-Suite git-loopy/powershell/tests/test-tui-install.ps1
+
+  run-control:
+    # The Run control/liveness seam is the one part of the Python member whose
+    # answer is produced by the *operating system* rather than by Python: a Run
+    # is alive iff its control artifact's advisory lock is still held, which is
+    # `flock` on POSIX and `LockFileEx` on native Windows (#584, ADR-0058). The
+    # `python` job above runs on Linux alone, so until this job existed the
+    # Windows half of that claim was never executed anywhere. A member that
+    # claims a platform and proves it on another is claiming `unknown`.
+    name: Run control / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Run control and discovery suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --project git-loopy/python --all-extras \
+            python -m pytest -q \
+            git-loopy/python/tests/test_run_control.py \
+            git-loopy/python/tests/test_run_discovery.py 2>&1 | tee pytest.log
+          # A platform whose cases were all skipped asserted nothing about that
+          # platform, and pytest exits 0 on an all-skipped run. The census reads
+          # what pytest said it *passed*, so a silently skipped matrix leg is
+          # red here rather than green.
+          .github/scripts/assert-nonzero-census.sh "Run control" \
+            "$(.github/scripts/count-passed.sh pytest.log)"

@@ -73,6 +73,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Iterable, Mapping, Protocol, Sequence, runtime_checkable
@@ -88,6 +89,7 @@ __all__ = [
     "GATE_TIMEOUT_ENV_VAR",
     "parse_feedback_loops",
     "resolve_gate_timeout_seconds",
+    "main",
 ]
 
 _AGENTS_FILENAME: Final[str] = "AGENTS.md"
@@ -562,3 +564,27 @@ class AgentsMdGateRunner:
                     ),
                 )
         return GateResult.green(ran)
+
+
+def main() -> int:
+    """Run this checkout's declared feedback loops for a remote preflight."""
+    try:
+        result = AgentsMdGateRunner(
+            timeout_seconds=resolve_gate_timeout_seconds(os.environ)
+        ).run(Path.cwd())
+    except GateError as exc:
+        print(f"git-loopy: cannot run declared feedback loops: {exc}", file=sys.stderr)
+        return 2
+    if result.passed:
+        return 0
+    assert result.failure is not None
+    print(
+        f"git-loopy: declared feedback loop {result.failure.name!r} "
+        f"{result.failure.summary}",
+        file=sys.stderr,
+    )
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

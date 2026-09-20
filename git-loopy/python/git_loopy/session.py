@@ -592,6 +592,15 @@ class IterationSession:
             resolves and per-model-gates the value (a reasoning-incapable
             model such as ``claude-haiku-4.5`` is sent ``None`` because
             the CLI hard-rejects ``session.create`` otherwise).
+        context_tier: Optional root-session context tier (ADR-0017)
+            forwarded to the SDK as ``create_session(context_tier=...)``.
+            The **run-level** tier, already gated against ``model`` by
+            :func:`git_loopy.config.gate_context_tier`, which is why the
+            resolver hands this session a triple while ``[routing]`` stays
+            pairs. ``None`` means *do not send* the ``contextTier`` field;
+            the harness then reports no tier at all for the session rather
+            than resolving one, so a Run that wants a tier in force must
+            pass it here (#560).
         working_directory: Optional filesystem path the SDK session runs
             in, forwarded as ``create_session(working_directory=...)``.
             ``None`` (the serial default) runs in the process cwd. Parallel
@@ -631,6 +640,7 @@ class IterationSession:
         event_identity: Mapping[str, Any] | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        context_tier: str | None = None,
         working_directory: str | None = None,
         issue_ref: int | str | None = None,
         issue_binding: _IssueBinding | None = None,
@@ -646,6 +656,7 @@ class IterationSession:
         self._event_identity = dict(event_identity or {})
         self._model = model
         self._reasoning_effort = reasoning_effort
+        self._context_tier = context_tier
         self._working_directory = working_directory
         self._issue_ref = issue_ref
         self._issue_binding = issue_binding
@@ -721,6 +732,7 @@ class IterationSession:
             on_event=self._on_sdk_event,
             model=self._model,
             reasoning_effort=self._reasoning_effort,
+            context_tier=self._context_tier,
             working_directory=self._working_directory,
             # ADR-0015: load only the explicit Skill exposure without broad
             # config or plugin discovery.

@@ -165,6 +165,16 @@ def test_an_already_labelled_issue_spends_nothing() -> None:
     assert labelled is item
 
 
+def test_a_current_label_overrules_the_preparations_remembered_classification() -> None:
+    calls: list[Any] = []
+    classifier = _classifier(propose=_proposer("<task-type>docs</task-type>", calls=calls))
+    asyncio.run(classifier.labelled(_item()))
+    current = _item(labels=("ready-for-agent", "task-type:implementation"))
+
+    assert asyncio.run(classifier.labelled(current)) is current
+    assert len(calls) == 1
+
+
 def test_no_classifier_pair_spends_nothing_and_changes_nothing() -> None:
     """No staircase and no configured pair leaves the classifier inert, not guessing."""
     calls: list[Any] = []
@@ -335,3 +345,68 @@ def test_a_blank_configured_value_is_an_absence(effort: str) -> None:
     assert resolve_pickup_classifier_pair(config, _staircase()) == ClassifierPair(
         model="cheap-model", effort=None
     )
+
+
+def test_an_issue_is_classified_once_per_run_however_often_it_is_asked() -> None:
+    """One inference per issue per **Run**, wherever it is asked from (#566).
+
+    **Routing preparation** asks for an eligible candidate's **Task type**
+    ahead of its **Pickup**, and that Pickup asks again for the issue it bound.
+    Without a memory the Run would buy the same classification twice on every
+    prepared issue — once speculatively and once for real — and the tracker
+    write the first one made would only be visible to the second if the Pool
+    happened to be re-read in between.
+
+    The memory answers with the *classification*, exactly as the tracker write
+    does, so the two calls are indistinguishable in effect — which is the whole
+    of ADR-0029's position on an inferred label.
+    """
+    calls: list[Any] = []
+    client = _RecordingLabelClient()
+    classifier = PickupClassifier(
+        pair=ClassifierPair(model="cheap", effort="low"),
+        propose=_proposer("implementation", calls=calls),
+        client=client,
+    )
+
+    prepared = asyncio.run(classifier.labelled(_item(42)))
+    # The Pickup re-reads the Pool authoritatively and may see the tracker
+    # before the write landed — which is exactly the stale item handed back.
+    bound = asyncio.run(classifier.labelled(_item(42)))
+
+    assert len(calls) == 1
+    assert "task-type:implementation" in prepared.labels
+    assert "task-type:implementation" in bound.labels
+    assert len(client.applied) == 1
+
+
+def test_a_remembered_classification_is_not_appended_twice() -> None:
+    """An issue whose label the Pool now shows keeps exactly one of it."""
+    calls: list[Any] = []
+    classifier = PickupClassifier(
+        pair=ClassifierPair(model="cheap", effort="low"),
+        propose=_proposer("docs", calls=calls),
+        client=_RecordingLabelClient(),
+    )
+
+    asyncio.run(classifier.labelled(_item(42)))
+    refreshed = _item(42, labels=("ready-for-agent", "task-type:docs"))
+    bound = asyncio.run(classifier.labelled(refreshed))
+
+    assert len(calls) == 1
+    assert bound is refreshed
+
+
+def test_one_issue_s_classification_is_never_lent_to_another() -> None:
+    """The memory is keyed by issue, because a Task type is about one issue."""
+    calls: list[Any] = []
+    classifier = PickupClassifier(
+        pair=ClassifierPair(model="cheap", effort="low"),
+        propose=_proposer("review", calls=calls),
+        client=_RecordingLabelClient(),
+    )
+
+    asyncio.run(classifier.labelled(_item(42)))
+    asyncio.run(classifier.labelled(_item(43)))
+
+    assert [ref for _pair, ref in calls] == [42, 43]

@@ -23,6 +23,7 @@ from git_loopy.execution_host import (
     ContributionRequest,
     ContributionSuccess,
     ExecutionHost,
+    HostPreflight,
     IsolationGrade,
     LocalExecutionHost,
     LocalRunResult,
@@ -41,6 +42,7 @@ def _request(**overrides: object) -> ContributionRequest:
         base_revision="deadbeef",
         model="gpt-5",
         reasoning_effort="medium",
+        context_tier="default",
         skill_policy={"skills": ()},
         run_id="01ARZ3NDEKTSV4RRFFQ69G5FAV",
     )
@@ -359,6 +361,12 @@ class FakeExecutionHost:
         if self.outcome == "stall":
             await asyncio.Event().wait()  # never set: simulates a stalled host
         return self.outcome
+
+    async def run_preflight(
+        self, *, run_id: str, base_revision: str
+    ) -> HostPreflight:
+        del run_id, base_revision
+        return HostPreflight(passed=True)
 
 
 @pytest.mark.asyncio

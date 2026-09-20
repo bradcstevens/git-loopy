@@ -37,6 +37,10 @@ Design:
   keys routing accepts. This matters more than the other rows: the label-writing
   path *creates* a label before attaching it, so an invented key would become a
   real, permanent tracker label routing to the default forever (#375, ADR-0029).
+* **The Bump-class taxonomy is closed.** Its four labels come from
+  :data:`~git_loopy.release_version.BUMP_CLASS_KEYS`, the production decision
+  seam that reads them. Provisioning from those keys keeps the labels an agent
+  may infer aligned with the Release-version classes an Orchestrator accepts.
 * **Ensure, never reconcile — at ``init``.** :func:`bootstrap_labels` creates what
   is absent and leaves what exists exactly as it is — colour and description
   included. An operator who recoloured ``ready-for-agent`` keeps their colour, and
@@ -58,6 +62,7 @@ from typing import Protocol, Sequence, runtime_checkable
 
 from git_loopy.config import TASK_TYPE_KEYS, TASK_TYPE_LABEL_PREFIX
 from git_loopy.issue_order import LABEL_PRIORITY
+from git_loopy.release_version import BUMP_CLASS_KEYS, BUMP_CLASS_LABEL_PREFIX
 from git_loopy.sources import LABEL_PARALLEL_SAFE, LABEL_READY_FOR_AGENT
 
 __all__ = [
@@ -69,10 +74,12 @@ __all__ = [
     "LabelReconciliation",
     "TrackerLabel",
     "TRIAGE_ROLES",
+    "SEMVER_LABELS",
     "MAPPING_DOC_RELPATH",
     "MAX_DESCRIPTION_LENGTH",
     "bootstrap_labels",
     "read_tracker_vocabulary",
+    "read_run_required_vocabulary",
     "reconcile_labels",
 ]
 
@@ -193,6 +200,25 @@ TASK_TYPE_LABELS: tuple[LabelSpec, ...] = tuple(
     for key in TASK_TYPE_KEYS
 )
 
+#: The four ``semver:`` labels, one per key of the closed **Bump class** taxonomy.
+#:
+#: Derived from :data:`~git_loopy.release_version.BUMP_CLASS_KEYS`, the decision
+#: seam that resolves an issue's release impact. A second local key list could
+#: provision labels the Release line later refuses, or omit a label it accepts.
+SEMVER_LABELS: tuple[LabelSpec, ...] = tuple(
+    LabelSpec(
+        role=f"{BUMP_CLASS_LABEL_PREFIX}{key}",
+        name=f"{BUMP_CLASS_LABEL_PREFIX}{key}",
+        color="fbca04",
+        description=(
+            "Classifies an issue as not advancing the Release version."
+            if key == "none"
+            else f"Classifies an issue as a {key} Release-version bump."
+        ),
+    )
+    for key in BUMP_CLASS_KEYS
+)
+
 
 def read_tracker_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
     """Return the labels a Run needs, in the order ``init`` should ensure them.
@@ -200,7 +226,7 @@ def read_tracker_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
     The five triage roles are read from the repository's documented mapping so
     the vocabulary ``init`` writes is the vocabulary the skills actually apply.
     ``parallel-safe`` and ``priority`` are appended from the runner's own
-    constants, followed by the seven closed task-type labels.
+    constants, followed by the closed task-type and Bump-class labels.
 
     Args:
         repo_root: Repository root to look for the documented mapping under, or
@@ -218,7 +244,42 @@ def read_tracker_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
         )
         for spec in TRIAGE_ROLES
     )
-    return (*roles, PARALLEL_SAFE_ROLE, PRIORITY_ROLE, *TASK_TYPE_LABELS)
+    return (
+        *roles,
+        PARALLEL_SAFE_ROLE,
+        PRIORITY_ROLE,
+        *TASK_TYPE_LABELS,
+        *SEMVER_LABELS,
+    )
+
+
+def read_run_required_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
+    """Return the labels a Run needs the tracker to **already** carry.
+
+    The vocabulary minus the two closed classifier taxonomies, because those are
+    minted on the way in:
+    :meth:`~git_loopy.gh.SubprocessTaskTypeLabelClient.apply_issue_label` creates
+    the label before it attaches it, and both writers treat a failure as
+    non-fatal — no label is worth an **Iteration**. A Run therefore never needs a
+    ``task-type:`` or ``semver:`` label to pre-exist, and a preflight that
+    refused one would be judging something the Run does not (ADR-0055).
+
+    What is left is what a Run only ever *reads*: the triage roles, the
+    ``parallel-safe`` and ``priority`` assertions, and — load-bearingly —
+    ``ready-for-agent``, the label the **Pool** query filters on.
+
+    The exclusion is derived from the taxonomies themselves rather than spelled
+    out, so a new task type or **Bump class** cannot quietly become a Run
+    precondition.
+
+    Args:
+        repo_root: Repository root to read the documented triage mapping under,
+            or ``None`` when there is no repository.
+    """
+    minted = {spec.role for spec in (*TASK_TYPE_LABELS, *SEMVER_LABELS)}
+    return tuple(
+        spec for spec in read_tracker_vocabulary(repo_root) if spec.role not in minted
+    )
 
 
 #: One ``| `role` | `label` | meaning |`` row of the documented mapping table.
@@ -262,11 +323,15 @@ class LabelBootstrap:
         unavailable: Why the tracker could not be reached or written to, or
             ``None`` when the bootstrap ran. A bootstrap that reports a reason
             created nothing and is not a setup failure.
+        noncanonical_semver: Tracker and expected spellings for closed
+            Bump-class labels that differ by case. The tracker was reachable,
+            but exact Bump-class resolution refuses the carried label.
     """
 
     created: tuple[str, ...] = ()
     existing: tuple[str, ...] = ()
     unavailable: str | None = None
+    noncanonical_semver: tuple[tuple[str, str], ...] = ()
 
 
 @runtime_checkable
@@ -302,7 +367,9 @@ def bootstrap_labels(
     raises — both come back as :attr:`LabelBootstrap.unavailable`.
     """
     try:
-        present = {name.casefold() for name in client.label_list()}
+        present = {
+            name.casefold(): name for name in client.label_list()
+        }
     except Exception as exc:  # noqa: BLE001 - any backend failure is "unavailable"
         return LabelBootstrap(unavailable=_reason(exc))
 
@@ -311,6 +378,7 @@ def bootstrap_labels(
     # already carried look missing in the report.
     existing: list[str] = []
     absent: list[LabelSpec] = []
+    noncanonical_semver: list[tuple[str, str]] = []
     seen: set[str] = set()
     for spec in vocabulary:
         folded = spec.name.casefold()
@@ -318,7 +386,14 @@ def bootstrap_labels(
             continue
         seen.add(folded)
         if folded in present:
-            existing.append(spec.name)
+            actual = present[folded]
+            if (
+                spec.name.startswith(BUMP_CLASS_LABEL_PREFIX)
+                and actual != spec.name
+            ):
+                noncanonical_semver.append((actual, spec.name))
+            else:
+                existing.append(spec.name)
         else:
             absent.append(spec)
 
@@ -331,8 +406,15 @@ def bootstrap_labels(
                 created=tuple(created),
                 existing=tuple(existing),
                 unavailable=_reason(exc),
+                noncanonical_semver=tuple(noncanonical_semver),
             )
         created.append(spec.name)
+    if noncanonical_semver:
+        return LabelBootstrap(
+            created=tuple(created),
+            existing=tuple(existing),
+            noncanonical_semver=tuple(noncanonical_semver),
+        )
     return LabelBootstrap(created=tuple(created), existing=tuple(existing))
 
 
@@ -370,9 +452,10 @@ class LabelDifference:
         spec: The vocabulary entry, already resolved to *this* tracker's name.
         tracker: The label the tracker carries under that name, or ``None`` when
             it carries none — the entry is missing.
-        differs: The attribute names that disagree (``"color"``, ``"description"``),
-            in that order. Empty when the tracker matches, and always empty when
-            the entry is missing: an absent label does not also drift.
+        differs: The attribute names that disagree (``"name"``, ``"color"``,
+            ``"description"``), in that order. Empty when the tracker matches,
+            and always empty when the entry is missing: an absent label does not
+            also drift.
     """
 
     spec: LabelSpec
@@ -385,6 +468,11 @@ class LabelDifference:
         if self.tracker is None:
             return "missing"
         return "drifted" if self.differs else "matched"
+
+    @property
+    def can_apply(self) -> bool:
+        """Whether ``--apply`` can resolve this difference without a rename."""
+        return "name" not in self.differs
 
 
 @dataclass(frozen=True)
@@ -464,11 +552,11 @@ def reconcile_labels(
     vocabulary is not looked at, never reported, and never deleted: the
     vocabulary says what a repository *must* carry, never what it may not.
 
-    With ``apply`` the same pass writes the difference back, in vocabulary order
-    — creating what is missing, and overwriting the colour and description of
-    what drifted under the tracker's own spelling of the name, so a reconcile
-    never renames anything. Idempotent by construction: a second call finds
-    nothing divergent and writes nothing.
+    With ``apply`` the same pass writes fixable differences back, in vocabulary
+    order — creating what is missing, and overwriting the colour and description
+    of what drifted under the tracker's own spelling of the name, so a reconcile
+    never renames anything. A noncanonical Bump-class spelling is reported but
+    cannot be fixed without a rename, so it is not repeatedly rewritten.
 
     The default writes nothing at all. Reporting is what an operator can run
     against someone else's tracker without consequence, so it is the default
@@ -507,6 +595,8 @@ def reconcile_labels(
 
     applied: list[str] = []
     for difference in report.divergent:
+        if not difference.can_apply:
+            continue
         try:
             if difference.tracker is None:
                 client.label_create(difference.spec)
@@ -527,6 +617,11 @@ def _compare(spec: LabelSpec, tracker: TrackerLabel | None) -> LabelDifference:
     if tracker is None:
         return LabelDifference(spec=spec)
     differs: list[str] = []
+    if (
+        spec.name.startswith(BUMP_CLASS_LABEL_PREFIX)
+        and tracker.name != spec.name
+    ):
+        differs.append("name")
     if _normalise_color(tracker.color) != _normalise_color(spec.color):
         differs.append("color")
     if tracker.description.strip() != spec.description.strip():
