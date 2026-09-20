@@ -192,7 +192,8 @@ Human-facing wall-clock times are the *viewing* machine's, resolved per instant
 (ADR-0058). The binary reads the viewer's zone once at startup — `TZ` first,
 whether it names a zone (`America/Denver`, searched under `TZDIR` and the
 conventional `zoneinfo` directories) or is a POSIX specification
-(`MST7MDT,M3.2.0,M11.1.0`), then `/etc/localtime` — and hands the resulting
+(`MST7MDT,M3.2.0,M11.1.0`), then `/etc/localtime` on Unix or the native Windows
+timezone configuration and its recorded annual rules — and hands the resulting
 **rules** to the library. Because they are rules rather than one sampled
 offset, a Run that crosses a DST changeover shows each instant at the offset it
 happened under, not at the offset the Dashboard started under.
@@ -201,8 +202,12 @@ happened under, not at the offset the Dashboard started under.
 exactly as given, including `0`. It is what fixtures and the Conformance
 adapters pass, and it stays available to an operator who wants a pinned clock.
 
-Where no zone can be resolved — a host with no timezone database, which on
-Windows is the normal case — the binary says so on stderr, the Dashboard header
+Routing preparation, expiry, reuse, and evidence times follow these same rules
+in both the projected fields and Log text; dates and numeric offsets stay visible.
+Windows needs no IANA database for normal launch: its native historical rules
+are resolved at the executable boundary, not inside the pure core.
+
+Where no zone can be resolved, the binary says so on stderr, the Dashboard header
 carries `times in UTC — local zone unresolved`, and instants render in UTC. The
 one outcome that is refused is a UTC instant shown as though it were local.
 Setting `TZ` to a POSIX specification or passing `--utc-offset-minutes` gives

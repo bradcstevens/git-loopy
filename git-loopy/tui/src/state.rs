@@ -49,7 +49,7 @@ const SHORT_SHA_LENGTH: usize = 10;
 
 /// Bounded per-issue Log tail. The complete record stays in the JSONL replay
 /// Log on disk (ADR-0003), so a long Run cannot grow memory without limit.
-const LOG_TAIL_LINES: usize = 200;
+pub(crate) const LOG_TAIL_LINES: usize = 200;
 
 /// The Run-scoped inputs the Event stream does not carry.
 #[derive(Clone, Debug, Default)]
@@ -112,7 +112,14 @@ impl RunInputs {
 pub(crate) struct LogLine {
     pub(crate) at: Option<Timestamp>,
     pub(crate) kind: String,
-    pub(crate) text: String,
+    pub(crate) content: LogContent,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum LogContent {
+    Text(String),
+    Preparation(Box<RoutingPrepared>),
+    Resolution(Box<RoutingResolved>),
 }
 
 /// A running billed total that latches to *unknown* the moment a term is
@@ -826,8 +833,12 @@ impl DashboardState {
         // from the Pickup that bound it, and a provenance record that also
         // wrote the route would be a second authority for it. A record from
         // before reuse existed says nothing here rather than guessing.
-        if let Some(text) = routing_resolution_text(resolved) {
-            self.append_lane_log(&resolved.issue, LOG_EVENT, &text, now);
+        if routing_resolution_text(resolved).is_some() {
+            self.append_routing_log(
+                &resolved.issue,
+                LogContent::Resolution(Box::new(resolved.clone())),
+                now,
+            );
         }
     }
 
@@ -838,9 +849,26 @@ impl DashboardState {
                 entry.preparation = Some(preparation);
             }
         }
-        if let Some(text) = routing_preparation_text(prepared) {
-            self.append_lane_log(&prepared.issue, LOG_EVENT, &text, now);
+        if routing_preparation_text(prepared).is_some() {
+            self.append_routing_log(
+                &prepared.issue,
+                LogContent::Preparation(Box::new(prepared.clone())),
+                now,
+            );
         }
+    }
+
+    fn append_routing_log(&mut self, issue: &IssueRef, content: LogContent, at: Option<Timestamp>) {
+        self.insert_entry(issue.clone());
+        let entry = self.ledger.get_mut(issue).expect("entry inserted above");
+        push_bounded(
+            &mut entry.log,
+            LogLine {
+                at,
+                kind: LOG_EVENT.to_string(),
+                content,
+            },
+        );
     }
 
     fn clear_route_preparation(&mut self, issue: &IssueRef) {
@@ -1235,14 +1263,20 @@ fn pickup_issue_label(issue: &IssueRef) -> String {
     }
 }
 
-fn routing_resolution_text(resolved: &RoutingResolved) -> Option<String> {
+pub(crate) fn routing_resolution_text(resolved: &RoutingResolved) -> Option<String> {
     let origin = non_empty(resolved.reused_proposal_id.as_deref());
     let superseded = non_empty(resolved.superseded_proposal_id.as_deref());
     match resolved.routing_reuse.as_deref()? {
-        ROUTE_REVALIDATED => Some(match origin {
-            Some(origin) => format!("Route revalidated: reused {origin}, no new assessment"),
-            None => "Route revalidated: no new assessment".to_string(),
-        }),
+        ROUTE_REVALIDATED => {
+            let mut text = match origin {
+                Some(origin) => format!("Route revalidated: reused {origin}, no new assessment"),
+                None => "Route revalidated: no new assessment".to_string(),
+            };
+            if let Some(at) = non_empty(resolved.reused_validated_at.as_deref()) {
+                text.push_str(&format!("; decided: {at}"));
+            }
+            Some(text)
+        }
         ROUTE_ELECTED => Some(match superseded {
             Some(superseded) => format!("Route assessed: {superseded} no longer validates"),
             None => "Route assessed: no reusable route for this issue".to_string(),
@@ -1254,7 +1288,7 @@ fn routing_resolution_text(resolved: &RoutingResolved) -> Option<String> {
     }
 }
 
-fn routing_preparation_text(prepared: &RoutingPrepared) -> Option<String> {
+pub(crate) fn routing_preparation_text(prepared: &RoutingPrepared) -> Option<String> {
     match prepared.state.as_deref()? {
         ROUTE_PREPARATION_PROPOSED => {
             let model = non_empty(prepared.model.as_deref())?;
@@ -1359,7 +1393,7 @@ fn split_log_block(kind: &str, text: &str, at: Option<Timestamp>) -> Vec<LogLine
         .map(|line| LogLine {
             at,
             kind: kind.to_string(),
-            text: line.to_string(),
+            content: LogContent::Text(line.to_string()),
         })
         .collect()
 }

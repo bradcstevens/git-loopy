@@ -333,6 +333,8 @@ pub struct RoutingResolved {
     /// The original decision a revalidation reused, when there was one.
     #[serde(default)]
     pub reused_proposal_id: Option<String>,
+    #[serde(default)]
+    pub reused_validated_at: Option<String>,
     /// The recorded decision a reassessment replaced, when there was one.
     #[serde(default)]
     pub superseded_proposal_id: Option<String>,

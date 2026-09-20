@@ -6412,6 +6412,63 @@ def _routing_records(tmp_path: Path) -> list[dict[str, Any]]:
     ]
 
 
+def test_advancing_dynamic_work_preserves_history_without_refunding_attempts(
+    tmp_path, monkeypatch
+) -> None:
+    fake_client, fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    advances = iter((True, False, True, False))
+
+    def on_send() -> None:
+        if next(advances):
+            fake_git.simulate_agent_commit(subject="feat: advance without closing")
+
+    fake_client.on_send = on_send
+    _harness(monkeypatch, ("gpt-5.6-terra", ["low", "high"], True))
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _wire_dynamic_ports(
+        monkeypatch,
+        rows=(_aa_row("aa-opus", 70.0, 90.0),),
+        answer=_elects("claude-opus-5"),
+        listing=(_listed_model("claude-opus-5", ["high"]),),
+    )
+
+    exit_code = asyncio.run(
+        loop_module.run(
+            _dynamic_config(
+                max_iterations=5,
+                max_nmt_strikes=1,
+                route_associations={"aa-opus": "claude-opus-5@high"},
+            )
+        )
+    )
+
+    assert exit_code == 1
+    assert [call["model"] for call in fake_client.create_calls] == ["claude-opus-5"] * 4
+    assert len(_strikes(tmp_path)) == 1
+    records = _routing_records(tmp_path)
+    assert [(record["attempt"], record["lifecycle_position"]) for record in records] == [
+        (1, "fresh"),
+        (2, "fresh"),
+        (3, "retrying"),
+        (4, "retrying"),
+    ]
+    advanced = dynamic_route.PriorOutcome.ADVANCED
+    did_not_solve = dynamic_route.PriorOutcome.DID_NOT_SOLVE
+    assert [
+        [attempt.outcome for attempt in request.prior_attempts]
+        for _, request in spied["assessments"]
+    ] == [
+        [],
+        [advanced],
+        [advanced, did_not_solve],
+        [advanced, did_not_solve, advanced],
+    ]
+    assert [record["repeat_justification"] is not None for record in records] == [
+        False, False, True, True
+    ]
+    assert len({record["relevant_input_identity"] for record in records}) == 4
+
+
 @pytest.mark.parametrize("retry_model", ["claude-opus-5", "gpt-5.6-terra"])
 def test_a_permitted_retry_reassesses_with_the_previous_outcome(
     tmp_path, monkeypatch, retry_model

@@ -264,6 +264,57 @@ impl Zone {
         }
     }
 
+    /// Consecutive annual rules from a host database, with its first and last
+    /// rules extended beyond the recorded range.
+    pub fn from_year_rules(first_year: u16, rules: &[ZoneTailRule]) -> Option<Self> {
+        let first = *rules.first()?;
+        let last_year = usize::from(first_year).checked_add(rules.len() - 1)?;
+        if last_year > 9999 {
+            return None;
+        }
+        let mut transitions = Vec::new();
+        let mut previous = first;
+        for year in 0..=last_year {
+            let rule = rules[year.saturating_sub(usize::from(first_year))];
+            let midnight = days_from_civil(year as i64, 1, 1) * SECONDS_PER_DAY;
+            let previous_midnight = Timestamp::from_unix_seconds(
+                midnight - i64::from(previous.standard_offset_minutes) * 60,
+            )?;
+            let previous_offset = previous.offset_minutes_at(previous_midnight);
+            let current_midnight = Timestamp::from_unix_seconds(
+                midnight - i64::from(rule.standard_offset_minutes) * 60,
+            )?;
+            transitions.push(ZoneTransition {
+                at: Timestamp::from_unix_seconds(midnight - i64::from(previous_offset) * 60)?,
+                offset_minutes: rule.offset_minutes_at(current_midnight),
+            });
+            if let Some(daylight) = rule.daylight {
+                transitions.push(ZoneTransition {
+                    at: Timestamp::from_unix_seconds(
+                        daylight
+                            .start
+                            .instant_in(year as i64, rule.standard_offset_minutes),
+                    )?,
+                    offset_minutes: daylight.offset_minutes,
+                });
+                transitions.push(ZoneTransition {
+                    at: Timestamp::from_unix_seconds(
+                        daylight
+                            .end
+                            .instant_in(year as i64, daylight.offset_minutes),
+                    )?,
+                    offset_minutes: rule.standard_offset_minutes,
+                });
+            }
+            previous = rule;
+        }
+        Some(Self::from_rules(
+            first.standard_offset_minutes,
+            transitions,
+            Some(previous),
+        ))
+    }
+
     /// UTC itself.
     pub fn utc() -> Self {
         Self::from_offset_minutes(0)
@@ -331,7 +382,7 @@ impl Timestamp {
     /// a malformed instant is unusable telemetry, not a panic.
     pub fn parse_rfc3339(value: &str) -> Option<Self> {
         let bytes = value.as_bytes();
-        if bytes.len() < 19 {
+        if bytes.len() < 19 || !value.is_ascii() {
             return None;
         }
         let year: i64 = parse_int(&value[0..4])?;

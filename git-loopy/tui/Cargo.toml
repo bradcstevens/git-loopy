@@ -47,6 +47,9 @@ ratatui = { version = "0.30", default-features = false, features = ["crossterm",
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_System_Time"] }
+
 # The release toolchain, pinned (PRD #173, ADR-0016).
 #
 # `git-loopy-tui` is its own workspace root, so cargo-dist's configuration lives
