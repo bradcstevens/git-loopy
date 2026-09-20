@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Throwaway: routing authorization</title>
+<style>
+body { max-width: 850px; margin: 3rem auto; font: 17px/1.6 system-ui; color: #162d35; padding: 1rem; }
+button { font: inherit; padding: .4rem .8rem; margin: .3rem; cursor: pointer; }
+section { background: #edf5f4; padding: 1rem; margin: 1rem 0; }
+dt { font-weight: bold; } dd { margin-bottom: .5rem; }
+.selected { border: 2px solid #167367; }
+</style>
+<h1>Routing authorization - throwaway logic demo</h1>
+<p>Question: can setup and migration authorize Dynamic routing without discarding a
+deliberate Static route or inventing a spending limit? Assume Python issue-owning
+Agents only. A readiness verdict is not a proposal, Lease, or authority to skip
+fresh Pickup validation. No credentials or Config are persisted by this demo.</p>
+<section><h2>Current state</h2><dl id="state"></dl></section>
+<h2>Free play</h2><div id="actions"></div>
+<h2>Guided walkthroughs</h2><nav id="tabs"></nav>
+<p id="description"></p><div id="steps"></div>
+<script>
+const initial = () => ({
+  policy: "decision outstanding", routes: ["docs: deliberately selected pair"],
+  access: false, limits: false, evidence: true, pin: false, work: false, verdict: "Not assessed"
+});
+function readiness(s) {
+  if (s.policy === "decision outstanding" && !s.pin) return "Refused: explicitly keep or migrate";
+  if (s.policy === "static" || s.pin) return "Static: verify harness; no leaderboard or selector";
+  if (!s.access) return "Unavailable: operator-owned access missing";
+  if (!s.limits) return "Unavailable: finite deadline, allowance and concurrency required";
+  if (!s.evidence) return "Unavailable: current required evidence unreadable";
+  return "Dynamic: ready to prepare; retained Static routes still win";
+}
+function transition(s, action) {
+  if (action === "reset") return initial();
+  if (action === "new") return {...initial(), policy: "dynamic", routes: []};
+  if (action === "keep") return {...s, policy: "static", verdict: "Routes preserved; strict validation; no implicit escalation"};
+  if (action === "migrate") return {...s, policy: "dynamic", verdict: "Routes preserved; only uncovered work becomes dynamic"};
+  if (action === "access") return {...s, access: !s.access};
+  if (action === "limits") return {...s, limits: !s.limits};
+  if (action === "evidence") return {...s, evidence: !s.evidence};
+  if (action === "pin") return {...s, pin: !s.pin};
+  if (action === "inspect") return {...s, verdict: readiness(s)};
+  return s;
+}
+</script>
+<script>
+const names = {
+  reset: "Existing Config", new: "New setup", keep: "Keep Static policy",
+  migrate: "Migrate uncovered work", access: "Toggle operator access",
+  limits: "Toggle explicit limits", evidence: "Toggle evidence availability",
+  pin: "Toggle run-wide override", inspect: "Ask shared readiness"
+};
+const scenarios = [
+  ["New setup", "No seeded Static rows, no invented credits: authorization must come first.",
+    ["new", "inspect", "access", "inspect", "limits", "inspect"]],
+  ["Migration", "Matching an old recommendation is not permission to delete a route.",
+    ["reset", "inspect", "migrate", "access", "limits", "inspect"]],
+  ["Keep", "Strict Static validation requires no leaderboard access; built-in escalation is not consent.",
+    ["reset", "keep", "inspect"]],
+  ["Outage and override", "A missing evidence source must not prevent an explicit Static execution path.",
+    ["new", "access", "limits", "evidence", "inspect", "pin", "inspect"]]
+];
+let state = initial(), selected = 0, step = 0;
+function button(action, handler) {
+  const b = document.createElement("button");
+  b.textContent = names[action]; b.onclick = handler; return b;
+}
+function dispatch(action) { state = transition(state, action); render(); }
+function render() {
+  const fields = {
+    "Route policy": state.policy, "Retained Static routes": state.routes.join("; ") || "None",
+    "Operator-owned access": state.access ? "Supplied outside Config" : "Absent",
+    "Explicit finite limits": state.limits ? "Authorized" : "Absent",
+    "Fresh required evidence": state.evidence ? "Readable" : "Unavailable",
+    "Run-wide override": state.pin ? "Explicitly selected" : "None",
+    "Work sessions started": "None: readiness is not Pickup",
+    "Verdict": state.verdict
+  };
+  document.querySelector("#state").replaceChildren(...Object.entries(fields).flatMap(([k,v]) => {
+    const dt = document.createElement("dt"), dd = document.createElement("dd");
+    dt.textContent = k; dd.textContent = v; return [dt,dd];
+  }));
+  document.querySelector("#description").textContent = scenarios[selected][1];
+  document.querySelector("#steps").replaceChildren(...scenarios[selected][2].map((action, i) => {
+    const b = button(action, () => { step = i + 1; dispatch(action); });
+    b.disabled = i !== step; return b;
+  }));
+}
+document.querySelector("#actions").replaceChildren(...Object.keys(names).map(action => button(action, () => dispatch(action))));
+scenarios.forEach(([name], i) => {
+  const b = document.createElement("button"); b.textContent = name;
+  b.onclick = () => { selected = i; step = 0; state = initial(); render(); };
+  document.querySelector("#tabs").append(b);
+});
+render();
+</script>
+</html>
