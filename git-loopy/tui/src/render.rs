@@ -25,8 +25,8 @@ use crate::band::{ActivityBand, ACTIVITY_BAND_MIN_HEIGHT, QUEUE_MIN_HEIGHT};
 use crate::navigation::{LogPosition, Screen};
 use crate::session::{DashboardFrame, Diagnostics};
 use crate::view::{
-    Activity, ContextFill, ContributionRow, DeliveryView, DetailHeader, DrillIn, Header,
-    LogLineView, PeakContext, PreparationView, QueueRow, RouteView, SummaryRow,
+    Activity, ActivityWindow, ContextFill, ContributionRow, DeliveryView, DetailHeader, DrillIn,
+    Header, LogLineView, PeakContext, PreparationView, QueueRow, RouteView, SummaryRow,
     TerminalCapabilities,
 };
 
@@ -225,6 +225,7 @@ pub fn draw_dashboard(frame: &mut Frame, dashboard: &DashboardFrame) {
         bands.activity,
         &view.dashboard.activity,
         dashboard.activity_position,
+        &dashboard.activity_positions,
         &glyphs,
     );
     draw_summary(
@@ -877,28 +878,267 @@ fn consulted(skills: Option<&[String]>, glyphs: &Glyphs) -> String {
     }
 }
 
-/// The live tail for the Active issue.
-///
-/// The band follows the Active issue rather than the Queue cursor: it is an
-/// active-only glance, so it stays attributable when the active row has
-/// scrolled out of a long Queue. The Queue cursor's own issue is what the
-/// drill-in shows.
+/// The band's handle survives Collapse; Agent facts belong to the window,
+/// never to the Queue selection or the Run's default pair.
 fn draw_activity(
     frame: &mut Frame,
     area: Rect,
     activity: &Activity,
     position: LogPosition,
+    positions: &[LogPosition],
     glyphs: &Glyphs,
 ) {
-    let title = match &activity.issue {
-        Some(issue) => format!(" Activity {}{} ", glyphs.attribution, issue_label(issue)),
-        None => " Activity ".to_string(),
+    let agent = activity
+        .windows
+        .iter()
+        .find(|agent| agent.live)
+        .or_else(|| activity.windows.first());
+    let mut title = match agent {
+        Some(agent) => format!(
+            " Activity {}{} {} ",
+            glyphs.attribution,
+            issue_label(&agent.issue),
+            activity_pair(agent, glyphs)
+        ),
+        None => match &activity.issue {
+            Some(issue) => format!(" Activity {}{} ", glyphs.attribution, issue_label(issue)),
+            None => " Activity ".to_string(),
+        },
     };
-    let offset = position.offset(activity.lines.len(), log_height(area));
-    frame.render_widget(
-        Paragraph::new(log_lines(&activity.lines[offset..])).block(glyphs.block(title)),
-        area,
-    );
+    if area.height == 1 {
+        let pairs: Vec<_> = activity
+            .windows
+            .iter()
+            .filter(|agent| agent.live)
+            .map(|agent| {
+                format!(
+                    "{} {}",
+                    issue_label(&agent.issue),
+                    activity_pair(agent, glyphs)
+                )
+            })
+            .collect();
+        let mut kept = pairs.len();
+        while kept > 0 {
+            let more = if kept < pairs.len() {
+                format!(" | +{} more", pairs.len() - kept)
+            } else {
+                String::new()
+            };
+            title = format!(
+                " Activity {}{}{} ",
+                glyphs.attribution,
+                pairs[..kept].join(" | "),
+                more
+            );
+            if Line::raw(&title).width() <= usize::from(area.width.saturating_sub(2)) || kept == 1 {
+                break;
+            }
+            kept -= 1;
+        }
+    }
+    let block = glyphs.block(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if activity.windows.is_empty() {
+        let offset = position.offset(activity.lines.len(), inner.height);
+        frame.render_widget(Paragraph::new(log_lines(&activity.lines[offset..])), inner);
+        return;
+    }
+    let windows = activity_layout(inner, activity, glyphs);
+    for window in &windows {
+        let agent = &activity.windows[window.index];
+        let style = if agent.live {
+            Style::default()
+        } else {
+            Style::default().add_modifier(Modifier::DIM)
+        };
+        frame.render_widget(
+            Paragraph::new(
+                activity_header(agent, inner.width, glyphs)
+                    .into_iter()
+                    .map(Line::from)
+                    .collect::<Vec<_>>(),
+            )
+            .style(style.add_modifier(Modifier::BOLD)),
+            window.header,
+        );
+        let offset = positions
+            .get(window.index)
+            .copied()
+            .unwrap_or(position)
+            .offset(agent.lines.len(), window.tail.height);
+        frame.render_widget(
+            Paragraph::new(log_lines(&agent.lines[offset..])).style(style),
+            window.tail,
+        );
+    }
+    if windows.len() < activity.windows.len() && inner.height > 0 {
+        let remaining = activity.windows.len() - windows.len();
+        frame.render_widget(
+            Paragraph::new(format!("+{remaining} more Lanes")),
+            Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
+        );
+    }
+}
+
+pub(crate) struct ActivityWindowArea {
+    pub(crate) index: usize,
+    pub(crate) header: Rect,
+    pub(crate) tail: Rect,
+}
+
+pub(crate) fn activity_window_areas(
+    area: Rect,
+    activity: &Activity,
+    capabilities: &TerminalCapabilities,
+) -> Vec<ActivityWindowArea> {
+    let glyphs = Glyphs::for_terminal(capabilities);
+    activity_layout(glyphs.block("").inner(area), activity, &glyphs)
+}
+
+fn activity_layout(inner: Rect, activity: &Activity, glyphs: &Glyphs) -> Vec<ActivityWindowArea> {
+    let count = activity.windows.len();
+    if count == 0 || inner.height == 0 {
+        return Vec::new();
+    }
+    let heights: Vec<usize> = activity
+        .windows
+        .iter()
+        .map(|agent| activity_header(agent, inner.width, glyphs).len())
+        .collect();
+    let rows = usize::from(inner.height);
+    let compact = heights.iter().sum::<usize>() > rows;
+    let visible = if count > rows {
+        rows.saturating_sub(1)
+    } else {
+        count
+    };
+    let header_rows = if compact {
+        visible
+    } else {
+        heights.iter().sum()
+    };
+    let spare_rows = rows.saturating_sub(header_rows + usize::from(visible < count));
+    let tail_rows = if compact { 0 } else { spare_rows };
+    let mut extra_header_rows = if compact { spare_rows } else { 0 };
+    let mut y = inner.y;
+    (0..visible)
+        .map(|index| {
+            let header_height = if compact {
+                let extra = extra_header_rows.min(heights[index].saturating_sub(1));
+                extra_header_rows -= extra;
+                1 + extra
+            } else {
+                heights[index]
+            } as u16;
+            let tail_height =
+                (tail_rows / visible + usize::from(index < tail_rows % visible)) as u16;
+            let header = Rect::new(inner.x, y, inner.width, header_height);
+            y += header_height;
+            let tail = Rect::new(inner.x, y, inner.width, tail_height);
+            y += tail_height;
+            ActivityWindowArea {
+                index,
+                header,
+                tail,
+            }
+        })
+        .collect()
+}
+
+fn activity_pair(agent: &ActivityWindow, glyphs: &Glyphs) -> String {
+    agent.route.as_ref().map_or_else(
+        || glyphs.unknown.to_string(),
+        |route| {
+            format!(
+                "{} @ {}",
+                route.model.as_deref().unwrap_or("(backend)"),
+                route.effort.as_deref().unwrap_or("(backend)")
+            )
+        },
+    )
+}
+
+fn activity_header(agent: &ActivityWindow, width: u16, glyphs: &Glyphs) -> Vec<String> {
+    let task_type = match &agent.task_type {
+        None => glyphs.unknown.to_string(),
+        Some(keys) if keys.is_empty() => "unlabelled".to_string(),
+        Some(keys) => keys.join(", "),
+    };
+    let mut fill = match agent.context_fill.percentage {
+        Some(percentage) => {
+            let filled = ((percentage / 10.0) as i64).clamp(0, BAR_SEGMENTS);
+            format!(
+                "{}% [{}{}]",
+                percentage.round() as i64,
+                glyphs.bar_filled.repeat(filled as usize),
+                glyphs.bar_empty.repeat((BAR_SEGMENTS - filled) as usize)
+            )
+        }
+        None => context_fill(&agent.context_fill, glyphs),
+    };
+    if let Some(tier) = agent
+        .route
+        .as_ref()
+        .and_then(|route| route.context_tier.as_deref())
+    {
+        fill.push_str(&format!(" {tier}"));
+    }
+    let identity = match &agent.lane {
+        Some(lane) => format!("{} {}", lane_text(lane), issue_label(&agent.issue)),
+        None if agent.kind == "integration" => format!("Integration {}", issue_label(&agent.issue)),
+        None => issue_label(&agent.issue),
+    };
+    wrap_facts(
+        &[
+            identity,
+            task_type,
+            activity_pair(agent, glyphs),
+            format!("ctx {fill}"),
+            format!(
+                "sub {}",
+                agent
+                    .subagents
+                    .map_or_else(|| glyphs.unknown.to_string(), |count| count.to_string())
+            ),
+        ],
+        width,
+    )
+}
+
+fn lane_text(lane: &crate::event::IssueRef) -> String {
+    match lane {
+        crate::event::IssueRef::Number(number) => format!("Lane {number}"),
+        crate::event::IssueRef::Path(name) => name.clone(),
+    }
+}
+
+/// Keep whole facts together when possible, but never truncate a long model
+/// or local issue path merely to keep a header on one row.
+fn wrap_facts(segments: &[String], width: u16) -> Vec<String> {
+    let width = usize::from(width.max(1));
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for segment in segments {
+        if !line.is_empty() {
+            if Line::raw(format!("{line} | {segment}")).width() <= width {
+                line.push_str(" | ");
+            } else {
+                lines.push(std::mem::take(&mut line));
+            }
+        }
+        for ch in segment.chars() {
+            if !line.is_empty() && Line::raw(format!("{line}{ch}")).width() > width {
+                lines.push(std::mem::take(&mut line));
+            }
+            line.push(ch);
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 /// The locked Iteration-breakdown columns, in the locked order.

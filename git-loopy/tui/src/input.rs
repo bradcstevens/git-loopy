@@ -103,11 +103,11 @@ pub enum Admission {
 /// appending: a coalesced input takes the *newest* position in the buffer, so a
 /// pointer move overtaking the release that ended its drag would re-apply the
 /// drag after the gesture was over.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Delta {
     Resize,
     Clock,
-    ContextWindow,
+    ContextWindow(Option<crate::event::IssueRef>),
 }
 
 impl Delta {
@@ -116,7 +116,9 @@ impl Delta {
             Input::Resized(..) => Some(Delta::Resize),
             Input::Tick(_) => Some(Delta::Clock),
             Input::Trace(line) => match Event::from_jsonl_line(line) {
-                Some(event) if event.kind == "usage.context_window" => Some(Delta::ContextWindow),
+                Some(event) if event.kind == "usage.context_window" => {
+                    Some(Delta::ContextWindow(event.lane_issue))
+                }
                 _ => None,
             },
             Input::Key(_) | Input::Pointer(_) | Input::EndOfTrace | Input::Failed(_) => None,
@@ -184,15 +186,41 @@ impl InputQueue {
             if let Some(position) = self
                 .items
                 .iter()
-                .position(|queued| Delta::of(queued) == Some(class))
+                .rposition(|queued| Delta::of(queued).as_ref() == Some(&class))
             {
                 let overtakes_a_gesture = class == Delta::Resize
                     && self.items.iter().skip(position).any(depends_on_geometry);
-                if !overtakes_a_gesture {
+                let crosses_an_agent = matches!(class, Delta::ContextWindow(_))
+                    && self
+                        .items
+                        .iter()
+                        .skip(position + 1)
+                        .any(changes_activity_agent);
+                if !overtakes_a_gesture && !crosses_an_agent {
                     self.items.remove(position);
                     self.items.push_back(input);
                     self.coalesced += 1;
                     return Admission::Coalesced;
+                }
+
+                fn changes_activity_agent(input: &Input) -> bool {
+                    let Input::Trace(line) = input else {
+                        return false;
+                    };
+                    Event::from_jsonl_line(line).is_some_and(|event| {
+                        matches!(
+                            event.kind.as_str(),
+                            "wrapper.issue.activated"
+                                | "wrapper.iteration.start"
+                                | "wrapper.iteration.end"
+                                | "wrapper.contribution.start"
+                                | "wrapper.contribution.work_finished"
+                                | "wrapper.contribution.end"
+                                | "wrapper.integration.recovery_started"
+                                | "wrapper.integration.published"
+                                | "wrapper.run.end"
+                        )
+                    })
                 }
             }
         }

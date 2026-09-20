@@ -184,19 +184,19 @@ fn the_activity_tail_scrolls_independently_and_the_handle_still_owns_its_gesture
     session.ingest(r#"{"type":"wrapper.issue.activated","issue":42}"#);
     output(&mut session, 0, 60);
     let bands = dashboard_bands(Rect::new(0, 0, COLUMNS, ROWS), &session.activity_band()).unwrap();
-    let first_row = usize::from(bands.activity.y + 1);
-    assert!(lines(&session)[first_row].contains("entry-053"));
+    let first_row = usize::from(bands.activity.y + 2);
+    assert!(lines(&session)[first_row].contains("entry-054"));
     let before = serde_json::to_value(session.view()).unwrap();
     drive(
         &mut session,
         [pointer(PointerAction::WheelUp, 1, bands.activity.y + 1)],
     );
-    assert!(lines(&session)[first_row].contains("entry-052"));
+    assert!(lines(&session)[first_row].contains("entry-053"));
     assert_eq!(serde_json::to_value(session.view()).unwrap(), before);
     assert_eq!(session.frame().queue_offset, 0);
     assert!(session.frame().log_position.is_following());
     output(&mut session, 60, 61);
-    assert!(lines(&session)[first_row].contains("entry-052"));
+    assert!(lines(&session)[first_row].contains("entry-053"));
     drive(
         &mut session,
         [
@@ -205,7 +205,7 @@ fn the_activity_tail_scrolls_independently_and_the_handle_still_owns_its_gesture
         ],
     );
     output(&mut session, 61, 62);
-    assert!(lines(&session)[first_row].contains("entry-055"));
+    assert!(lines(&session)[first_row].contains("entry-056"));
     let band = session.activity_band();
     drive(
         &mut session,
@@ -302,8 +302,8 @@ fn paused_log_and_activity_keep_their_lines_when_the_bounded_tail_evicts_older_o
         &mut session,
         [pointer(PointerAction::WheelUp, 1, bands.activity.y + 1)],
     );
-    let activity_row = usize::from(bands.activity.y + 1);
-    assert!(lines(&session)[activity_row].contains("entry-202"));
+    let activity_row = usize::from(bands.activity.y + 2);
+    assert!(lines(&session)[activity_row].contains("entry-203"));
     drive(
         &mut session,
         [
@@ -318,7 +318,7 @@ fn paused_log_and_activity_keep_their_lines_when_the_bounded_tail_evicts_older_o
         "retention is not a scroll gesture"
     );
     drive(&mut session, [Input::Key(Key::Back)]);
-    assert!(lines(&session)[activity_row].contains("entry-202"));
+    assert!(lines(&session)[activity_row].contains("entry-203"));
 }
 
 #[test]

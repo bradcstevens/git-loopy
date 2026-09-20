@@ -104,6 +104,7 @@ fn render_scrolled_lines(
         queue_offset,
         log_position: Default::default(),
         activity_position: Default::default(),
+        activity_positions: Default::default(),
         activity_band: Default::default(),
         capabilities,
         diagnostics: Default::default(),
@@ -442,6 +443,7 @@ fn the_activity_band_shows_the_active_issue_and_its_tail() {
     assert_eq!(
         band(&lines, "Activity")
             .iter()
+            .skip(1)
             .map(|row| cells(row))
             .collect::<Vec<_>>(),
         vec![vec!["6:00:02 PM".to_string(), "Working on #42".to_string()]],
@@ -450,7 +452,7 @@ fn the_activity_band_shows_the_active_issue_and_its_tail() {
 }
 
 #[test]
-fn the_activity_band_is_titled_plainly_with_no_active_issue() {
+fn a_finished_activity_window_lingers_until_its_slot_refills() {
     let view = fixture_view("baseline-closed-iteration");
     let lines = render_lines(&view, 160, 40, TerminalCapabilities::default());
 
@@ -459,10 +461,10 @@ fn the_activity_band_is_titled_plainly_with_no_active_issue() {
         "the band stays visible between Iterations, in:\n{}",
         lines.join("\n")
     );
-    assert!(
-        band(&lines, " Activity ").is_empty(),
-        "an empty tail renders empty rather than stale"
-    );
+    assert!(band(&lines, " Activity ")
+        .iter()
+        .any(|line| line.contains("Working on #42")));
+    assert!(!view.dashboard.activity.windows[0].live);
 }
 
 #[test]

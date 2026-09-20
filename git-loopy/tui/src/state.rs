@@ -8,8 +8,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::activity::ActivityAgents;
 use crate::event::{
-    CommitRecorded, ContextWindowSample, Event, EventPayload, ExecutionHostDeclaration,
+    AutoClosed, CommitRecorded, ContextWindowSample, Event, EventPayload, ExecutionHostDeclaration,
     InsightCapabilities, IssueRef, IterationEnd, IterationIssue, IterationSummary, Pickup,
     ReleaseAdvanced, RoutingDelivery, RoutingDeliveryStatus, RoutingPrepared, RoutingResolved,
     StopRequested, ROUTE_ELECTED, ROUTE_PREPARATION_PROPOSED, ROUTE_PREPARATION_REUSABLE,
@@ -188,7 +189,7 @@ impl ResolvedRoute {
     /// Every routing field is optional-when-present (contract 1.21), so a
     /// Runner that routes nothing emits the binding exactly as it always did
     /// and must not be read as having routed to a null pair.
-    fn from_pickup(pickup: &Pickup) -> Option<Self> {
+    pub(crate) fn from_pickup(pickup: &Pickup) -> Option<Self> {
         if pickup.model.is_none()
             && pickup.effort.is_none()
             && pickup.context_tier.is_none()
@@ -387,6 +388,7 @@ pub(crate) struct IterationRow {
 /// The complete live Dashboard state for one Run.
 #[derive(Clone, Debug)]
 pub struct DashboardState {
+    pub(crate) agents: ActivityAgents,
     inputs: RunInputs,
     pub(crate) run_id: Option<String>,
     pub(crate) status: String,
@@ -447,6 +449,7 @@ impl DashboardState {
     /// A Run that has emitted no Event yet.
     pub fn new(inputs: RunInputs) -> Self {
         Self {
+            agents: ActivityAgents::default(),
             inputs,
             run_id: None,
             status: RUN_STARTING.to_string(),
@@ -527,6 +530,7 @@ impl DashboardState {
     /// An Event type this core does not model contributes only its Run
     /// identity, so an additive schema extension reduces cleanly.
     pub fn apply(&mut self, event: &Event) {
+        self.agents.apply(event);
         if self.run_id.is_none() {
             if let Some(run_id) = &event.run_id {
                 self.run_id = Some(run_id.clone());
@@ -628,12 +632,17 @@ impl DashboardState {
             EventPayload::UsageContextWindow(sample) => {
                 if sample.current_tokens.is_some_and(|tokens| tokens >= 0) {
                     self.capabilities.context_window = Some(true);
-                    self.context_window = Some(*sample);
+                    if event.lane_issue.is_none() {
+                        self.context_window = Some(*sample);
+                    }
                 }
             }
             EventPayload::UsageTokens(usage) => self.record_usage(usage),
             EventPayload::CommitRecorded(commit) => {
                 self.append_log_block(LOG_EVENT, &commit_log_text(commit), now)
+            }
+            EventPayload::AutoClosed(closure) => {
+                self.append_log_block(LOG_EVENT, &auto_close_log_text(closure), now)
             }
             EventPayload::Strike(strike) => {
                 if let Some(strikes) = strike.strikes {
@@ -669,7 +678,7 @@ impl DashboardState {
                 }
             }
             EventPayload::StopLifted(_) => {}
-            EventPayload::Other => {}
+            EventPayload::Other | EventPayload::SubagentLifecycle(_) => {}
         }
     }
 
@@ -740,6 +749,9 @@ impl DashboardState {
             }
             EventPayload::CommitRecorded(commit) => {
                 self.append_lane_log(lane, LOG_EVENT, &commit_log_text(commit), now)
+            }
+            EventPayload::AutoClosed(closure) => {
+                self.append_lane_log(lane, LOG_EVENT, &auto_close_log_text(closure), now)
             }
             EventPayload::UsageTokens(usage) => {
                 if let Some(entry) = self.ledger.get_mut(lane) {
@@ -1193,6 +1205,15 @@ fn commit_log_text(commit: &CommitRecorded) -> String {
     if let Some(subject) = commit.subject.as_deref().filter(|s| !s.is_empty()) {
         text.push_str("  ");
         text.push_str(subject.split('\n').next().unwrap_or(subject));
+    }
+    text
+}
+
+fn auto_close_log_text(closure: &AutoClosed) -> String {
+    let mut text = format!("✓ auto-closed {}", pickup_issue_label(&closure.issue));
+    if let Some(sha) = closure.sha.as_deref().filter(|sha| !sha.is_empty()) {
+        let short: String = sha.chars().take(SHORT_SHA_LENGTH).collect();
+        text.push_str(&format!("  ({short})"));
     }
     text
 }

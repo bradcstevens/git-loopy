@@ -84,6 +84,7 @@ pub struct Event {
     /// A stamped Event is attributed explicitly to its Lane instead of through
     /// the serial single-Active inference.
     pub lane_issue: Option<IssueRef>,
+    pub(crate) contribution: ContributionScope,
     /// The exact Event type literal.
     pub kind: String,
     /// The typed payload for the Event types the Dashboard reduces.
@@ -120,10 +121,14 @@ pub enum EventPayload {
     AgentOutput(AgentOutput),
     /// `usage.context_window`
     UsageContextWindow(ContextWindowSample),
+    /// Additive Subagent lifecycle observations (ADR-0022).
+    SubagentLifecycle(SubagentLifecycle),
     /// `usage.tokens`
     UsageTokens(UsageTokens),
     /// `wrapper.commit.recorded`
     CommitRecorded(CommitRecorded),
+    /// `wrapper.auto_close`, also retained in a finished Activity tail.
+    AutoClosed(AutoClosed),
     /// `wrapper.strike`
     Strike(Strike),
     /// `wrapper.iteration.end`
@@ -136,6 +141,19 @@ pub enum EventPayload {
     StopLifted(StopLifted),
     /// Any other Event type in the supported schema.
     Other,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ContributionScope {
+    pub(crate) issue: Option<IssueRef>,
+    pub(crate) lane: Option<IssueRef>,
+    pub(crate) id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct SubagentLifecycle {
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
 }
 
 /// The Run-start payload: Release identity and per-Orchestrator capabilities.
@@ -195,6 +213,8 @@ pub struct InsightCapabilities {
     /// Context fill.
     #[serde(default)]
     pub context_window: Option<bool>,
+    #[serde(default)]
+    pub subagents: Option<bool>,
     /// Consulted-Skill detection.
     #[serde(default)]
     pub skill_consultation: Option<bool>,
@@ -278,6 +298,9 @@ pub struct IssueActivated {
 pub struct Pickup {
     /// The issue this Pickup bound, or passed over.
     pub issue: IssueRef,
+    /// `None` is unread/unpublished; an observed empty list is unlabelled.
+    #[serde(default)]
+    pub task_type_keys: Option<Vec<String>>,
     /// Why it was taken (`order`, `priority`, `pin`), or why it was passed
     /// over. Open text on a skip: the reason originates in whatever admission
     /// the Orchestrator applied.
@@ -672,6 +695,14 @@ pub struct CommitRecorded {
     pub subject: Option<String>,
 }
 
+/// One issue closed from its completion commit.
+#[derive(Clone, Debug, Deserialize)]
+pub struct AutoClosed {
+    pub issue: IssueRef,
+    #[serde(default)]
+    pub sha: Option<String>,
+}
+
 /// One consecutive-no-measurable-progress Strike.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Strike {
@@ -736,6 +767,14 @@ impl Event {
                 .map(str::to_string),
             iter: object.get("iter").and_then(Value::as_i64),
             lane_issue: object.get("lane_issue").and_then(IssueRef::from_value),
+            contribution: ContributionScope {
+                issue: object.get("issue").and_then(IssueRef::from_value),
+                lane: object.get("lane_id").and_then(IssueRef::from_value),
+                id: object
+                    .get("contribution_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            },
             kind,
             payload,
         })
@@ -792,8 +831,15 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         },
         "agent.output" => EventPayload::AgentOutput(decode_or_default(value)),
         "usage.context_window" => EventPayload::UsageContextWindow(decode_or_default(value)),
+        "subagent.started" | "subagent.completed" | "subagent.failed" => {
+            EventPayload::SubagentLifecycle(decode_or_default(value))
+        }
         "usage.tokens" => EventPayload::UsageTokens(decode_or_default(value)),
         "wrapper.commit.recorded" => EventPayload::CommitRecorded(decode_or_default(value)),
+        "wrapper.auto_close" => match serde_json::from_value(value.clone()) {
+            Ok(closure) => EventPayload::AutoClosed(closure),
+            Err(_) => EventPayload::Other,
+        },
         "wrapper.strike" => EventPayload::Strike(decode_or_default(value)),
         "wrapper.iteration.end" => EventPayload::IterationEnd(Box::new(decode_or_default(value))),
         "wrapper.run.end" => EventPayload::RunEnd(decode_or_default(value)),

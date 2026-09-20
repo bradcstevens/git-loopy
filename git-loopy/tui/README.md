@@ -113,8 +113,9 @@ The cursor holds an **issue, not a row**. The Queue groups active before queued
 before history, so a row moves the moment an issue is activated, and a
 positional cursor would silently retarget under the operator's hands.
 
-A **single click** on a visible Queue row selects it and opens its Log; Back
-returns to the Dashboard. Headers, borders and empty space select nothing.
+A **single click** on a visible Queue row or an **Activity window** header
+selects that issue and opens its Log; Back returns to the Dashboard. Table
+headers, borders and empty space select nothing.
 No double-click timer or host clock is involved (ADR-0062).
 
 The wheel scrolls the **Queue**, **Log**, or **Activity** tail under the pointer
@@ -125,9 +126,27 @@ the bottom resumes it. `f` restores following without needing a mouse.
 when there is no issue Log to open. Existing
 arrow/Home/End bindings still select issues, including while a Log is open.
 
-The Activity header still owns drag-to-resize and click-to-collapse; wheel input
+The Activity band's header still owns drag-to-resize and click-to-collapse; wheel input
 never resizes it or steals a held handle. `a` and `Shift-Up`/`Shift-Down` keep the
 same controls available without mouse reporting.
+
+Each **Activity window** names its Agent's issue, **Task type**, **Routed pair**,
+**Context fill** (the ten-cell bar and any non-default context tier), and live
+**Subagent** count. These are observations from Pickup and that Agent's events,
+not the Run's configured defaults. An observed empty Task-type list says
+`unlabelled`; an unread or unpublished value says `—` (`-` in ASCII). In
+particular, a member that publishes no Subagent lifecycle reports `—`, not zero.
+The consumer accepts additive lifecycle observations without introducing a new
+producer.
+
+Lane windows stay in slot order and re-label on refill, resetting the new
+Agent's measurements and follow position without disturbing its siblings. A
+finished tail lingers dimmed; Integration recovery has a separate, last window
+and never borrows the Lane's Routed pair. Wheel scrolling is window-local, while
+`f` resumes every tail. Fact segments wrap at 80 columns before dropping a value;
+when the operator reduces the band's height, tails give way to headers, then to
+`+N more Lanes`. **Collapsed** keeps the Active issue and its pair in the band's
+one-row handle. None of this changes the Queue's columns or drop order.
 
 ### Narrow terminals
 

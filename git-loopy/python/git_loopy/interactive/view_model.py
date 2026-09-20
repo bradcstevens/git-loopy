@@ -78,6 +78,29 @@ def project_run_view(
             "activity": {
                 "issue": state.active_ref,
                 "lines": [_log_line(line) for line in state.log()],
+                "windows": [
+                    {
+                        "kind": window.kind,
+                        "lane": window.lane,
+                        "issue": window.issue,
+                        "task_type": window.task_type,
+                        "route": _route(window.route),
+                        "context_fill": _context_fill(
+                            window.context_window,
+                            available=state.context_window_available,
+                        ),
+                        "subagents": (
+                            len(window.subagent_ids)
+                            if window.subagents_observed
+                            else None
+                        ),
+                        "live": window.live,
+                        "lines": [
+                            _log_line(line) for line in state.log(window.issue)
+                        ],
+                    }
+                    for window in state.activity_windows()
+                ],
             },
             "summary": {
                 "rows": (

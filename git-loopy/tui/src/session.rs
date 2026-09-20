@@ -17,7 +17,8 @@ use crate::event::{Event, IssueRef};
 use crate::input::{Input, Pointer, PointerAction};
 use crate::navigation::{Cursor, Flow, Key, LogPosition, Screen};
 use crate::render::{
-    activity_ceiling, dashboard_bands, drill_in_bands, log_height, DashboardBands,
+    activity_ceiling, activity_window_areas, dashboard_bands, drill_in_bands, log_height,
+    DashboardBands,
 };
 use crate::state::{DashboardState, LogLine, RunInputs};
 use crate::timestamp::{Timestamp, Zone};
@@ -43,6 +44,8 @@ pub struct DashboardFrame {
     pub log_position: LogPosition,
     /// The visible Activity tail's position; never the Queue's selection.
     pub activity_position: LogPosition,
+    /// One independent follow/scroll position per projected Activity window.
+    pub activity_positions: Vec<LogPosition>,
     /// How tall the operator has asked the Activity band to be (ADR-0038).
     pub activity_band: ActivityBand,
     /// What the terminal drawing this frame can render.
@@ -109,6 +112,7 @@ pub struct DashboardSession {
     queue_offset: usize,
     log_position: LogPosition,
     activity_position: LogPosition,
+    activity_positions: Vec<LogPosition>,
     capabilities: TerminalCapabilities,
     /// The operator's Activity band: intent, and whether it is showing.
     band: ActivityBand,
@@ -160,6 +164,7 @@ impl DashboardSession {
             queue_offset: 0,
             log_position: LogPosition::default(),
             activity_position: LogPosition::default(),
+            activity_positions: Vec::new(),
             capabilities: TerminalCapabilities::default(),
             band: ActivityBand::default(),
             terminal: Rect::default(),
@@ -208,6 +213,11 @@ impl DashboardSession {
         let active = self.state.active_ref.clone();
         let log_head = first_ordinal(self.state.issue_log(self.cursor.selected()));
         let activity_head = first_ordinal(self.state.live_log());
+        let agents = self.state.agents.windows.clone();
+        let heads: Vec<_> = agents
+            .iter()
+            .map(|agent| first_ordinal(self.state.issue_log(&agent.issue)))
+            .collect();
         self.state.apply(&event);
         self.log_position.retain(
             log_head,
@@ -219,6 +229,34 @@ impl DashboardSession {
             self.activity_position
                 .retain(activity_head, first_ordinal(self.state.live_log()));
         }
+        self.activity_positions = self
+            .state
+            .agents
+            .windows
+            .iter()
+            .map(|agent| {
+                let previous = agents.iter().position(|old| {
+                    old.kind == agent.kind
+                        && old.lane == agent.lane
+                        && old.issue == agent.issue
+                        && old.contribution == agent.contribution
+                        && (old.live || !agent.live)
+                });
+                previous.map_or_else(LogPosition::default, |index| {
+                    let mut position = self
+                        .activity_positions
+                        .get(index)
+                        .copied()
+                        .unwrap_or_default();
+                    position.retain(
+                        heads[index],
+                        first_ordinal(self.state.issue_log(&agent.issue)),
+                    );
+                    position
+                })
+            })
+            .collect();
+        self.sync_activity_position();
     }
 
     /// Advance the projection's clock to `instant`.
@@ -276,6 +314,7 @@ impl DashboardSession {
             queue_offset: self.queue_offset,
             log_position: self.log_position,
             activity_position: self.activity_position,
+            activity_positions: self.activity_positions.clone(),
             activity_band: self.band,
             capabilities: self.capabilities,
             diagnostics: self.diagnostics.clone(),
@@ -335,19 +374,34 @@ impl DashboardSession {
         match key {
             Key::ActivityPageUp | Key::ActivityPageDown => {
                 if let Some(bands) = self.bands() {
-                    let height = log_height(bands.activity);
                     let direction = if key == Key::ActivityPageUp { -1 } else { 1 };
-                    self.activity_position.scroll(
-                        direction * height as isize,
-                        self.state.live_log().len(),
-                        height,
-                    );
+                    let activity = self.view().dashboard.activity;
+                    if activity.windows.is_empty() {
+                        let height = log_height(bands.activity);
+                        self.activity_position.scroll(
+                            direction * height as isize,
+                            self.state.live_log().len(),
+                            height,
+                        );
+                    } else {
+                        for window in
+                            activity_window_areas(bands.activity, &activity, &self.capabilities)
+                        {
+                            self.activity_positions[window.index].scroll(
+                                direction * window.tail.height as isize,
+                                activity.windows[window.index].lines.len(),
+                                window.tail.height,
+                            );
+                        }
+                        self.sync_activity_position();
+                    }
                 }
                 return Flow::Continue;
             }
             Key::Follow => {
                 self.log_position = LogPosition::default();
                 self.activity_position = LogPosition::default();
+                self.activity_positions.fill(LogPosition::default());
                 return Flow::Continue;
             }
             Key::PageUp | Key::PageDown => {
@@ -479,6 +533,23 @@ impl DashboardSession {
                         }
                         self.cursor.open(row.issue.clone());
                     }
+                } else if self.grab.is_none() {
+                    let activity = self.view().dashboard.activity;
+                    for window in
+                        activity_window_areas(bands.activity, &activity, &self.capabilities)
+                    {
+                        if window
+                            .header
+                            .contains(Position::new(pointer.column, pointer.row))
+                        {
+                            let issue = &activity.windows[window.index].issue;
+                            if self.cursor.selected() != issue {
+                                self.log_position = LogPosition::default();
+                            }
+                            self.cursor.open(issue.clone());
+                            break;
+                        }
+                    }
                 }
             }
             PointerAction::Drag => {
@@ -522,9 +593,28 @@ impl DashboardSession {
                     self.scroll_queue(delta, bands);
                 } else if bands.activity.contains(point) && !bands.activity_handle().contains(point)
                 {
-                    let count = self.view().dashboard.activity.lines.len();
-                    self.activity_position
-                        .scroll(delta, count, log_height(bands.activity));
+                    let activity = self.view().dashboard.activity;
+                    if activity.windows.is_empty() {
+                        self.activity_position.scroll(
+                            delta,
+                            activity.lines.len(),
+                            log_height(bands.activity),
+                        );
+                    } else {
+                        for window in
+                            activity_window_areas(bands.activity, &activity, &self.capabilities)
+                        {
+                            if window.header.contains(point) || window.tail.contains(point) {
+                                self.activity_positions[window.index].scroll(
+                                    delta,
+                                    activity.windows[window.index].lines.len(),
+                                    window.tail.height,
+                                );
+                                break;
+                            }
+                        }
+                        self.sync_activity_position();
+                    }
                 }
             }
             Screen::DrillIn => {
@@ -562,12 +652,27 @@ impl DashboardSession {
             );
         }
         if let Some(bands) = dashboard_bands(self.terminal, &self.band) {
-            self.activity_position.scroll(
-                0,
-                self.state.live_log().len(),
-                log_height(bands.activity),
-            );
+            let activity = self.view().dashboard.activity;
+            if activity.windows.is_empty() {
+                self.activity_position
+                    .scroll(0, activity.lines.len(), log_height(bands.activity));
+            } else {
+                for window in activity_window_areas(bands.activity, &activity, &self.capabilities) {
+                    self.activity_positions[window.index].scroll(
+                        0,
+                        activity.windows[window.index].lines.len(),
+                        window.tail.height,
+                    );
+                }
+                self.sync_activity_position();
+            }
             self.scroll_queue(0, bands);
+        }
+    }
+
+    fn sync_activity_position(&mut self) {
+        if let Some(position) = self.activity_positions.first() {
+            self.activity_position = *position;
         }
     }
 }

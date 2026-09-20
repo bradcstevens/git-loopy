@@ -11,6 +11,7 @@
 //! helper and the future in-process Rust Orchestrator embed the same core
 //! rather than forking its behaviour (ADR-0013).
 
+mod activity;
 mod band;
 mod event;
 mod input;
@@ -37,10 +38,10 @@ pub use session::{
 pub use state::{DashboardState, ExecutionHostProvenance, RunInputs};
 pub use timestamp::{Timestamp, Zone};
 pub use view::{
-    project_run_view, Activity, ConsumptionView, ContextFill, ContributionRow, Dashboard,
-    DeliveryView, DetailHeader, DrillIn, Header, IssueLog, IterationBreakdown, LogLineView,
-    PeakContext, Queue, QueueRow, RunView, Strikes, Summary, SummaryRow, TerminalCapabilities,
-    ViewContext,
+    project_run_view, Activity, ActivityWindow, ConsumptionView, ContextFill, ContributionRow,
+    Dashboard, DeliveryView, DetailHeader, DrillIn, Header, IssueLog, IterationBreakdown,
+    LogLineView, PeakContext, Queue, QueueRow, RunView, Strikes, Summary, SummaryRow,
+    TerminalCapabilities, ViewContext,
 };
 
 /// The Event-schema major version this core decodes.

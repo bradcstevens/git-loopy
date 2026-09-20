@@ -327,6 +327,20 @@ impl PreparationView {
 pub struct Activity {
     pub issue: Option<IssueRef>,
     pub lines: Vec<LogLineView>,
+    pub windows: Vec<ActivityWindow>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ActivityWindow {
+    pub kind: &'static str,
+    pub lane: Option<IssueRef>,
+    pub issue: IssueRef,
+    pub task_type: Option<Vec<String>>,
+    pub route: Option<RouteView>,
+    pub context_fill: ContextFill,
+    pub subagents: Option<usize>,
+    pub live: bool,
+    pub lines: Vec<LogLineView>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -437,6 +451,25 @@ pub fn project_run_view(
             activity: Activity {
                 issue: state.active_ref.clone(),
                 lines: log_lines(state.live_log(), context),
+                windows: state
+                    .agents
+                    .windows
+                    .iter()
+                    .map(|agent| ActivityWindow {
+                        kind: agent.kind,
+                        lane: agent.lane.clone(),
+                        issue: agent.issue.clone(),
+                        task_type: agent.task_type.clone(),
+                        route: agent.route.as_ref().map(RouteView::project),
+                        context_fill: agent_context_fill(
+                            agent.context,
+                            state.capabilities.context_window,
+                        ),
+                        subagents: agent.subagents,
+                        live: agent.live,
+                        lines: log_lines(state.issue_log(&agent.issue), context),
+                    })
+                    .collect(),
             },
             summary: Summary {
                 rows: state.completed_iterations.iter().map(summary_row).collect(),
@@ -486,11 +519,15 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
 }
 
 fn context_fill(state: &DashboardState) -> ContextFill {
-    let Some(sample) = state.context_window.and_then(normalize_sample) else {
+    agent_context_fill(state.context_window, state.capabilities.context_window)
+}
+
+fn agent_context_fill(sample: Option<ContextWindowSample>, available: Option<bool>) -> ContextFill {
+    let Some(sample) = sample.and_then(normalize_sample) else {
         // A capability declared false is "this Orchestrator cannot measure
         // it"; anything else is simply "not measured yet".
         return ContextFill {
-            availability: if state.capabilities.context_window == Some(false) {
+            availability: if available == Some(false) {
                 "unavailable"
             } else {
                 "not_observed"
