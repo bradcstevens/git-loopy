@@ -266,11 +266,7 @@ class RoutePreparation:
         async with self._priority:
             self._pickups.add(ref)
             self._priority.notify_all()
-        interrupted = tuple(
-            task for other, task in self._tasks.items() if other not in self._pickups
-        )
-        for task in interrupted:
-            task.cancel()
+        interrupted = self.interrupt_ahead()
         await asyncio.gather(
             *interrupted,
             return_exceptions=True,
@@ -278,6 +274,15 @@ class RoutePreparation:
         own = self._tasks.get(ref)
         if own is not None and not own.cancelled():
             await asyncio.shield(own)
+
+    def interrupt_ahead(self) -> tuple[asyncio.Task[PreparedRoute | None], ...]:
+        """Cancel speculation without interrupting any authoritative Pickup."""
+        interrupted = tuple(
+            task for ref, task in self._tasks.items() if ref not in self._pickups
+        )
+        for task in interrupted:
+            task.cancel()
+        return interrupted
 
     async def finish_pickup(self, ref: int | str) -> None:
         """Resume preparation after this authoritative route has settled."""

@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROTOTYPE — immutable public release promises</title>
+<style>
+  :root { color-scheme: light; --ink:#17212b; --muted:#617080; --paper:#f7f9fb; --line:#d9e1e8; --accent:#0b6e69; --good:#1d7a46; --bad:#ad3c35; --warn:#8a5a00; }
+  * { box-sizing:border-box } body { margin:0; background:var(--paper); color:var(--ink); font:15px/1.45 ui-sans-serif,system-ui,-apple-system,sans-serif; }
+  main { max-width:1200px; margin:auto; padding:32px 20px 64px; } h1 { margin:0 0 6px; font-size:29px; } h2 { font-size:18px; margin:0 0 12px; } h3 { margin:0 0 6px; font-size:15px; }
+  .eyebrow { color:var(--accent); font-weight:750; letter-spacing:.09em; font-size:12px; } .intro { max-width:920px; color:#354250; }
+  .notice { border-left:4px solid var(--accent); padding:12px 16px; background:#e9f5f3; margin:20px 0; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; } .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:17px; }
+  .wide { grid-column:1/-1; } button { border:1px solid #afbcc8; background:#fff; color:var(--ink); border-radius:6px; cursor:pointer; padding:8px 10px; font:inherit; }
+  button:hover { border-color:var(--accent); color:var(--accent); } button.primary { background:var(--accent); border-color:var(--accent); color:#fff; } button.danger { color:var(--bad); }
+  .buttons { display:flex; flex-wrap:wrap; gap:8px; } .tabs { display:flex; flex-wrap:wrap; gap:7px; margin-bottom:12px; } .tab.active { background:var(--ink); color:#fff; border-color:var(--ink); }
+  .status { display:inline-block; border-radius:999px; padding:3px 9px; font-weight:700; font-size:12px; } .complete { background:#dff4e7; color:var(--good); } .incomplete,.refused { background:#fce8e6; color:var(--bad); } .working { background:#fff2d8; color:var(--warn); }
+  dl { display:grid; grid-template-columns:190px 1fr; gap:7px 14px; margin:0; } dt { color:var(--muted); } dd { margin:0; font-weight:600; }
+  table { border-collapse:collapse; width:100%; font-size:13px; } th,td { border-bottom:1px solid var(--line); padding:8px 6px; text-align:left; } th { color:var(--muted); font-weight:700; }
+  .yes { color:var(--good); font-weight:700; } .no { color:var(--bad); font-weight:700; } .wait { color:var(--warn); font-weight:700; }
+  .log { max-height:182px; overflow:auto; margin:0; padding-left:22px; color:#41505e; } .step { margin-top:12px; padding:12px; border:1px dashed #b9c7d2; border-radius:7px; }
+  code { font:12px ui-monospace,SFMono-Regular,Menlo,monospace; background:#eef2f5; padding:2px 4px; border-radius:3px; }
+  @media (max-width:760px) { .grid { grid-template-columns:1fr; } .wide { grid-column:auto; } dl { grid-template-columns:1fr; gap:2px; } }
+</style>
+<main>
+  <div class="eyebrow">THROWAWAY LOGIC PROTOTYPE · ISSUE #592</div>
+  <h1>Can an explicit publication promise keep a public tag immutable?</h1>
+  <p class="intro">Drive this model to test whether a release can be completed only after its promised evidence is read back from the public remote. It separates a <b>source-only</b> promise (notes and source only) from an <b>artifact-bearing</b> promise, so neither a published tag nor its release contract can quietly change later.</p>
+  <div class="notice"><b>The seven canonical archives:</b> macOS arm64/x64, Linux arm64/x64, Windows arm64/x64, and universal source. Artifact-bearing prereleases require all seven archives, their checksums, and their release-channel trust receipts (not package channels) to be read back. Stable releases require those plus signature, notarization, publisher, and attestation evidence—there is no bypass.</div>
+
+  <section class="card wide">
+    <h2>Current publication state</h2>
+    <div id="summary"></div>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Free play</h2>
+      <p>All actions are available at all times. A refusal is deliberate evidence that the contract cannot be weakened after publication.</p>
+      <div class="buttons">
+        <button class="primary" data-action="SOURCE_PROMISE">Promise source-only</button>
+        <button class="primary" data-action="PRE_PROMISE">Promise prerelease artifacts</button>
+        <button class="primary" data-action="STABLE_PROMISE">Promise stable artifacts</button>
+        <button data-action="PUBLISH_SOURCE">Publish source + notes</button>
+        <button data-action="START_ALL">Start all seven builds</button>
+        <button data-action="MAKE_GOOD">Upload good artifacts</button>
+        <button data-action="READBACK_ALL">Read back all public evidence</button>
+        <button data-action="ADD_STABLE_EVIDENCE">Read back stable trust evidence</button>
+        <button data-action="MARK_COMPLETE">Mark publication complete</button>
+        <button class="danger" data-action="CANCEL_ONE">Cancel Linux arm64</button>
+        <button class="danger" data-action="BAD_CHECKSUM">Read bad checksum</button>
+        <button class="danger" data-action="WRONG_IDENTITY">Read wrong publisher</button>
+        <button class="danger" data-action="MOVE_TAG">Try to move public tag</button>
+        <button class="danger" data-action="CONVERT">Try to convert promise</button>
+        <button data-action="RESET">Reset draft</button>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Guided walkthroughs</h2>
+      <div class="tabs" id="tabs"></div>
+      <div id="walkthrough"></div>
+    </section>
+    <section class="card wide">
+      <h2>Seven-archive public readback ledger</h2>
+      <div id="ledger"></div>
+    </section>
+    <section class="card wide">
+      <h2>Decision log</h2>
+      <ol id="log" class="log"></ol>
+    </section>
+  </div>
+</main>
+
+<!-- This script is deliberately DOM-free. `node` can evaluate it by extracting this tag. -->
+<script id="logic-module">
+"use strict";
+globalThis.PublicationModel = (() => {
+  const TARGETS = [
+    "macos-arm64", "macos-x64", "linux-arm64", "linux-x64",
+    "windows-arm64", "windows-x64", "source-universal"
+  ];
+  const copy = value => JSON.parse(JSON.stringify(value));
+  const target = name => ({
+    name, declared: true, build: "waiting", validation: "waiting", upload: "absent",
+    remoteArchive: "absent", remoteChecksum: "absent", remoteChannelTrust: "absent",
+    identity: "unknown", stableTrust: { signature:"absent", notarization:"absent", publisher:"absent", attestation:"absent" }
+  });
+  const initial = () => ({
+    tag: "v2.4.0", commit: "9f3c…", promise: null, tagRemote: "absent",
+    notesRemote: "absent", sourceRemote: "absent", phase: "draft", verdict: "INCOMPLETE",
+    targets: Object.fromEntries(TARGETS.map(name => [name, target(name)])),
+    log: ["Draft: no public promise has been made."]
+  });
+  const event = (s, text, refused = false) => {
+    s.log.unshift(text);
+    if (refused) { s.phase = "incomplete"; s.verdict = "REFUSED"; }
+    return evaluate(s);
+  };
+  const eligible = s => {
+    if (!s.promise) return false;
+    if (s.promise.kind === "source-only") return s.tagRemote === "immutable" && s.notesRemote === "read-back" && s.sourceRemote === "read-back";
+    return TARGETS.every(name => {
+      const t = s.targets[name];
+      const base = t.declared && t.build === "passed" && t.validation.includes("passed") && t.upload === "published" &&
+        t.remoteArchive === "read-back" && t.remoteChecksum === "read-back" && t.remoteChannelTrust === "read-back" && t.identity === "expected";
+      const stable = s.promise.channel !== "stable" || Object.values(t.stableTrust).every(v => v === "read-back");
+      return base && stable;
+    });
+  };
+  const evaluate = s => {
+    if (s.verdict === "REFUSED") return s;
+    s.verdict = eligible(s) ? "READY FOR READ-BACK COMPLETION" : "INCOMPLETE";
+    s.phase = s.verdict.startsWith("READY") ? "evidence-read-back" : (s.promise ? "incomplete" : "draft");
+    return s;
+  };
+  const declare = (s, kind, channel) => {
+    if (s.promise) return event(s, `REFUSED: ${s.promise.kind} promise is immutable; it cannot become ${kind}.`, true);
+    s.promise = { kind, channel, immutable: true };
+    return event(s, `Promise locked before publication: ${kind}${channel ? ` (${channel})` : ""}.`);
+  };
+  const all = (s, fn) => { TARGETS.forEach(name => fn(s.targets[name])); };
+  const reduce = (state, action) => {
+    let s = copy(state);
+    switch (action.type) {
+      case "RESET": return initial();
+      case "SOURCE_PROMISE": return declare(s, "source-only");
+      case "PRE_PROMISE": return declare(s, "artifact-bearing", "prerelease");
+      case "STABLE_PROMISE": return declare(s, "artifact-bearing", "stable");
+      case "PUBLISH_SOURCE":
+        if (!s.promise || s.promise.kind !== "source-only") return event(s, "REFUSED: source + notes can only fulfill a source-only promise.", true);
+        s.tagRemote = "immutable"; s.notesRemote = "read-back"; s.sourceRemote = "read-back";
+        return event(s, "Public tag, notes, and source were read back. No helper jobs were created.");
+      case "START_ALL":
+        if (!s.promise || s.promise.kind !== "artifact-bearing") return event(s, "REFUSED: source-only releases never create helper builds.", true);
+        all(s, t => { t.build = "running"; });
+        return event(s, "All seven declared builds started.");
+      case "MAKE_GOOD":
+        if (!s.promise || s.promise.kind !== "artifact-bearing") return event(s, "REFUSED: no artifacts are promised for source-only.", true);
+        all(s, t => {
+          t.build = "passed";
+          t.validation = t.name === "source-universal" ? "metadata-passed" :
+            (t.name.endsWith("x64") ? "cross-metadata-passed" : "native-smoke-passed");
+          t.upload = "published";
+        });
+        s.tagRemote = "immutable";
+        return event(s, "Seven builds passed declared target validation and uploaded under an immutable public tag.");
+      case "READBACK_ALL":
+        if (!s.promise || s.promise.kind !== "artifact-bearing") return event(s, "REFUSED: source-only has no artifact readback.", true);
+        all(s, t => { t.remoteArchive = "read-back"; t.remoteChecksum = "read-back"; t.remoteChannelTrust = "read-back"; t.identity = "expected"; });
+        return event(s, "Remote readback found all archives, checksums, and channel-trust receipts.");
+      case "ADD_STABLE_EVIDENCE":
+        if (!s.promise || s.promise.channel !== "stable") return event(s, "REFUSED: stable-only evidence cannot be used to upgrade another promise.", true);
+        all(s, t => { t.stableTrust = { signature:"read-back", notarization:"read-back", publisher:"read-back", attestation:"read-back" }; });
+        return event(s, "Stable signature, notarization, publisher, and attestation receipts read back.");
+      case "CANCEL_ONE":
+        s.targets["linux-arm64"].build = "cancelled"; s.targets["linux-arm64"].validation = "missing";
+        return event(s, "Linux arm64 was cancelled: a declared canonical target is missing.", true);
+      case "BAD_CHECKSUM":
+        s.targets["windows-x64"].remoteChecksum = "mismatch";
+        return event(s, "Windows x64 checksum mismatched during public readback.", true);
+      case "WRONG_IDENTITY":
+        s.targets["macos-arm64"].identity = "wrong";
+        return event(s, "macOS arm64 publisher identity did not match the promised identity.", true);
+      case "MOVE_TAG":
+        if (s.tagRemote === "immutable") return event(s, "REFUSED: existing public tags are immutable and cannot move.", true);
+        return event(s, "REFUSED: a tag cannot be moved before a public immutable tag exists.", true);
+      case "CONVERT":
+        if (s.promise) return event(s, "REFUSED: an existing publication promise cannot be converted.", true);
+        return event(s, "REFUSED: choose a promise explicitly; conversion has no meaning in draft.", true);
+      case "MARK_COMPLETE":
+        if (s.verdict === "REFUSED") return event(s, "REFUSED: a refused publication cannot be marked complete later.", true);
+        if (!eligible(s)) return event(s, "REFUSED: completion marking cannot replace remote evidence.", true);
+        s.phase = "complete"; s.verdict = "COMPLETE";
+        s.log.unshift("COMPLETE: every required remote fact was read back.");
+        return s;
+      default: return event(s, `REFUSED: unknown action ${action.type}.`, true);
+    }
+  };
+  return { TARGETS, initial, reduce, eligible };
+})();
+</script>
+
+<script>
+(() => {
+  const M = globalThis.PublicationModel;
+  let state = M.initial(), active = "source";
+  const scenarios = {
+    source: {
+      title:"Source-only stays source-only",
+      text:"A source-only public promise publishes notes and source with no helper builds. Then try to convert it: the public tag remains immutable, and the attempted change is refused.",
+      steps:[["Start source-only promise","SOURCE_PROMISE"],["Publish notes + source","PUBLISH_SOURCE"],["Try artifact conversion","CONVERT"]]
+    },
+    prerelease: {
+      title:"Uploads are not completion",
+      text:"This demonstrates the key distinction: all seven uploads can exist under an immutable tag, yet the release remains incomplete until the public remote is read back.",
+      steps:[["Promise prerelease artifacts","PRE_PROMISE"],["Build and upload seven archives","START_AND_UPLOAD"],["Try completion before readback","MARK_COMPLETE"],["Read back public evidence","READBACK_ALL"],["Complete after readback","MARK_COMPLETE"]]
+    },
+    ambiguity: {
+      title:"Ambiguous upload failure",
+      text:"A client can lose its response after an upload. The model does not guess. It reads back the remote, then permits completion only if the remote shows all expected facts.",
+      steps:[["Promise prerelease artifacts","PRE_PROMISE"],["Build/upload; client response is ambiguous","START_AND_UPLOAD"],["Resolve ambiguity by remote readback","READBACK_ALL"],["Complete from remote facts","MARK_COMPLETE"]]
+    },
+    stable: {
+      title:"Stable cannot bypass trust",
+      text:"Stable releases need the normal seven archive readbacks plus signatures, notarization, publisher identity, and attestations. Completion before those receipts is refused.",
+      steps:[["Promise stable artifacts","STABLE_PROMISE"],["Build and upload seven archives","START_AND_UPLOAD"],["Read archive/checksum/channel evidence","READBACK_ALL"],["Try completion without stable receipts","MARK_COMPLETE"],["Read all stable trust receipts","ADD_STABLE_EVIDENCE"],["Complete stable release","MARK_COMPLETE"]]
+    },
+    bad: {
+      title:"Failure is never completion",
+      text:"Cancellation, a missing target, a bad checksum, or a wrong identity changes the verdict to refused. A manual completion mark cannot override it.",
+      steps:[["Promise prerelease artifacts","PRE_PROMISE"],["Build/upload seven archives","START_AND_UPLOAD"],["Read public evidence","READBACK_ALL"],["Inject a bad checksum","BAD_CHECKSUM"],["Try to mark complete","MARK_COMPLETE"]]
+    }
+  };
+  const actionFor = type => {
+    if (type === "START_AND_UPLOAD") { state = M.reduce(state, {type:"START_ALL"}); return M.reduce(state, {type:"MAKE_GOOD"}); }
+    return M.reduce(state, {type});
+  };
+  const value = x => x === "read-back" || x === "passed" || x === "published" || x === "expected" || x.includes("passed")
+    ? `<span class="yes">${x}</span>` : x === "waiting" || x === "running" || x === "absent" || x === "unknown"
+      ? `<span class="wait">${x}</span>` : `<span class="no">${x}</span>`;
+  function render() {
+    const p = state.promise ? `${state.promise.kind}${state.promise.channel ? ` / ${state.promise.channel}` : ""} (locked)` : "none";
+    const verdictClass = state.verdict === "COMPLETE" ? "complete" : state.verdict === "REFUSED" ? "refused" : "incomplete";
+    document.querySelector("#summary").innerHTML = `<dl>
+      <dt>Publication promise</dt><dd>${p}</dd><dt>Public tag</dt><dd><code>${state.tag}</code> at <code>${state.commit}</code> — ${value(state.tagRemote)}</dd>
+      <dt>Workflow phase</dt><dd>${state.phase}</dd><dt>Decision</dt><dd><span class="status ${verdictClass}">${state.verdict}</span></dd>
+      <dt>Notes / source readback</dt><dd>${value(state.notesRemote)} / ${value(state.sourceRemote)}</dd>
+      <dt>What this proves</dt><dd>${state.promise?.kind === "source-only" ? "No helpers or artifacts may be added to this published source-only promise." : "Uploads alone are not public proof; each remote fact must be read back."}</dd>
+    </dl>`;
+    document.querySelector("#ledger").innerHTML = `<table><thead><tr><th>Canonical archive</th><th>Build / declared-target validation</th><th>Upload</th><th>Remote archive</th><th>Checksum</th><th>Channel trust</th><th>Identity</th><th>Stable evidence</th></tr></thead><tbody>${
+      M.TARGETS.map(name => { const t=state.targets[name], stable=Object.values(t.stableTrust).join(", "); return `<tr><td><code>${name}</code></td><td>${value(t.build)} / ${value(t.validation)}</td><td>${value(t.upload)}</td><td>${value(t.remoteArchive)}</td><td>${value(t.remoteChecksum)}</td><td>${value(t.remoteChannelTrust)}</td><td>${value(t.identity)}</td><td>${value(stable)}</td></tr>`; }).join("")
+    }</tbody></table>`;
+    document.querySelector("#log").innerHTML = state.log.map(item => `<li>${item}</li>`).join("");
+    document.querySelector("#tabs").innerHTML = Object.entries(scenarios).map(([key,s]) => `<button class="tab ${key===active?"active":""}" data-tab="${key}">${s.title}</button>`).join("");
+    const s = scenarios[active];
+    document.querySelector("#walkthrough").innerHTML = `<h3>${s.title}</h3><p>${s.text}</p><button data-walk-reset="${active}">Start this walkthrough from draft</button><div class="step">${
+      s.steps.map(([label,type],i) => `<button data-step="${type}">${i+1}. ${label}</button>`).join(" ")
+    }</div>`;
+  }
+  document.addEventListener("click", e => {
+    const button = e.target.closest("button"); if (!button) return;
+    if (button.dataset.action) state = actionFor(button.dataset.action);
+    if (button.dataset.tab) active = button.dataset.tab;
+    if (button.dataset.walkReset) state = M.initial();
+    if (button.dataset.step) state = actionFor(button.dataset.step);
+    render();
+  });
+  render();
+})();
+</script>
+</html>

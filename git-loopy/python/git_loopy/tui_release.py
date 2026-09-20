@@ -6,9 +6,9 @@ and how an installer picks its own. Release automation and the shell and
 PowerShell installers all read that one file, so a target that is added, renamed,
 or dropped moves every consumer at once instead of leaving one of them guessing.
 
-This module is the production seam over that description. It never downloads
-anything: a Run never installs software (PRD #173), and even release automation
-hands artifacts to this module rather than the other way round.
+This module is the production seam over that description. Maintenance downloads
+verified helpers, and publication reads back their canonical public bytes. A Run
+only discovers and probes an already installed helper; it never installs one.
 """
 
 from __future__ import annotations
@@ -30,9 +30,11 @@ from dataclasses import dataclass
 from http.client import HTTPException
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Sequence
+from urllib.parse import quote, urlsplit
 from urllib.request import urlopen
 
 from .events import EVENT_SCHEMA_VERSION
+from .distribution_mode import DistributionModeError, resolve_distribution_mode
 from .release_version import ReleaseVersionError, is_prerelease, read_release_version
 from .settings import global_dir
 
@@ -856,6 +858,16 @@ def refresh_machine_local_helper(
     than from ``tui-artifacts.json``, because an installed Runner has no source
     checkout; reading that fixture relative to the working directory would let
     an unrelated tree redirect where ``update`` looks.
+
+    A refusal is attributed to published identity, never to where a candidate
+    was unpacked. Absence names the host archive it required, because "no
+    Release publishes a helper" and "no Release publishes *this host's* helper"
+    are different faults with different remedies and are otherwise
+    indistinguishable. An exhausted history names the *newest* rejected
+    candidate — the helper newest-at-or-below would have chosen — rather than
+    the oldest, and names it by its Release and artifact, because the scratch
+    directory each candidate is verified in is deleted before the refusal
+    reaches anybody.
     """
     artifact = artifact_resolver(host_system(), host_machine(), host_libc())
     destination = global_dir(env) / "bin" / artifact.executable_name
@@ -875,7 +887,7 @@ def refresh_machine_local_helper(
     remaining_versions = list(published_versions)
     selected_version: str | None = None
     extracted_helper: Path | None = None
-    last_probe_error: TuiReleaseError | None = None
+    newest_rejection: tuple[str, str] | None = None
 
     with tempfile.TemporaryDirectory(
         prefix=f".{HELPER_COMMAND_NAME}-", dir=destination.parent
@@ -925,7 +937,11 @@ def refresh_machine_local_helper(
                     extracted, event_schema_version=event_schema_version
                 )
             except TuiReleaseError as exc:
-                last_probe_error = exc
+                if newest_rejection is None:
+                    newest_rejection = (
+                        candidate_version,
+                        str(exc).replace(str(extracted), artifact.archive_name),
+                    )
                 remaining_versions = [
                     v for v in remaining_versions if v != candidate_version
                 ]
@@ -940,11 +956,18 @@ def refresh_machine_local_helper(
             break
 
         if selected_version is None or extracted_helper is None:
-            if last_probe_error is not None:
-                raise last_probe_error
+            if newest_rejection is not None:
+                rejected_version, reason = newest_rejection
+                raise TuiReleaseError(
+                    f"no published git-loopy-tui Release carrying "
+                    f"{artifact.archive_name} at or below declared Release version "
+                    f"{release_version!r} can serve this Runner; the newest "
+                    f"candidate, Release {rejected_version!r}, was rejected: "
+                    f"{reason}"
+                )
             raise TuiReleaseError(
-                "no published git-loopy-tui Release is at or below declared Release "
-                f"version {release_version!r}"
+                f"no published git-loopy-tui Release carrying {artifact.archive_name} "
+                f"is at or below declared Release version {release_version!r}"
             )
 
         backup_helper = scratch / "backup_helper"
@@ -1559,6 +1582,181 @@ def verify_release_set(
     return tuple(verified)
 
 
+def _public_release_evidence(document: Any) -> dict[str, Any]:
+    if not isinstance(document, dict) or not isinstance(document.get("assets"), list):
+        raise TuiReleaseError("public Release readback must declare its assets")
+    for field in ("draft", "prerelease"):
+        if type(document.get(field)) is not bool:
+            raise TuiReleaseError(f"public Release {field} must be a boolean")
+    assets: dict[str, Any] = {}
+    for asset in document["assets"]:
+        if not isinstance(asset, dict) or not isinstance(asset.get("name"), str):
+            raise TuiReleaseError("public Release readback contains an invalid asset")
+        name = asset["name"]
+        if name in assets:
+            raise TuiReleaseError(f"public Release readback duplicates {name}")
+        assets[name] = {
+            field: asset.get(field)
+            for field in ("id", "name", "browser_download_url", "state", "size", "digest")
+        }
+    # Download counts, last-downloaded timestamps, and other host bookkeeping
+    # can change because this very proof downloaded the files.
+    return {
+        "identity": {
+            field: document.get(field)
+            for field in ("id", "tag_name", "name", "html_url", "draft", "prerelease")
+        },
+        "assets": assets,
+    }
+
+
+def verify_published_release(
+    repository_root: Path,
+    artifact_directory: Path,
+    *,
+    tag_ref: str,
+    distribution_mode: str,
+    attestation: Path | None = None,
+    fetch: Callable[[str], bytes] | None = None,
+) -> tuple[PublishedArtifact, ...]:
+    """Prove public bytes match the complete, locally verified build outputs.
+
+    The tagged policy selects the promise. This does not create a Release or
+    repair an attachment: any absent or disagreeing evidence is a refusal.
+    Native execution remains the build runner's obligation; cross-target
+    readback proves bytes and trust, never claims to execute another platform.
+    """
+    from . import release_trust
+
+    version = helper_release_version(repository_root, tag_ref=tag_ref)
+    try:
+        mode = resolve_distribution_mode(repository_root, distribution_mode)
+    except DistributionModeError as exc:
+        raise TuiReleaseError(str(exc)) from exc
+    if mode != "artifact-bearing":
+        raise TuiReleaseError("source-only publication promises no helper artifacts")
+
+    metadata = load_artifact_metadata(repository_root)
+    policy = release_trust.load_trust_policy(repository_root)
+    artifacts = verify_release_set(repository_root, artifact_directory)
+    try:
+        release_trust.verify_release_trust(
+            repository_root, artifact_directory, version=version,
+            release_marked_prerelease=is_prerelease(version), attestation=attestation,
+        )
+    except release_trust.ReleaseTrustError as exc:
+        raise TuiReleaseError(str(exc)) from exc
+    tag = f"v{version}"
+    release_url = (
+        metadata.release_index_url_template.split("?", 1)[0]
+        + "/tags/" + quote(tag, safe="")
+    )
+    download = fetch or _download_release_file
+    try:
+        record = json.loads(download(release_url))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise TuiReleaseError(f"unreadable public Release readback: {exc}") from exc
+    if not isinstance(record, dict) or not isinstance(record.get("assets"), list):
+        raise TuiReleaseError("public Release readback must declare its assets")
+    release_page = metadata.release_download_url_template.split("/download/", 1)[0]
+    expected_identity = {
+        "tag_name": tag,
+        "name": f"git-loopy {version}",
+        "html_url": f"{release_page}/tag/{tag}",
+        "draft": False,
+        "prerelease": is_prerelease(version),
+    }
+    for field, expected in expected_identity.items():
+        actual = record.get(field)
+        if type(actual) is not type(expected) or actual != expected:
+            raise TuiReleaseError(
+                f"public Release {field} is {actual!r}, expected {expected!r}"
+            )
+    assets = {asset.get("name"): asset for asset in record["assets"]
+              if isinstance(asset, dict) and isinstance(asset.get("name"), str)}
+    names = [
+        name
+        for artifact in artifacts
+        for name in (
+            artifact.archive_name,
+            artifact.checksum_name,
+            policy.receipt_name_template.format(archive=artifact.archive_name),
+        )
+    ]
+    before = _public_release_evidence(record)
+    for name in assets:
+        if name.startswith(f"{metadata.command_name}-") and name not in names:
+            raise TuiReleaseError(f"public Release {tag} carries unpromised helper asset {name}")
+    for name in names:
+        if name not in assets:
+            raise TuiReleaseError(f"public Release {tag} is missing {name}")
+        expected_asset = {
+            "browser_download_url": release_artifact_url(
+                metadata, release_version=version, artifact=name,
+            ),
+            "state": "uploaded",
+            "size": (artifact_directory / name).stat().st_size,
+        }
+        for field, expected in expected_asset.items():
+            actual = assets[name].get(field)
+            if type(actual) is not type(expected) or actual != expected:
+                raise TuiReleaseError(
+                    f"public asset {name} {field} is {actual!r}, expected {expected!r}"
+                )
+    with tempfile.TemporaryDirectory(prefix="git-loopy-public-helpers-") as scratch:
+        downloaded = Path(scratch)
+        for name in names:
+            url = release_artifact_url(metadata, release_version=version, artifact=name)
+            path = downloaded / name
+            path.write_bytes(download(url))
+            if _digest(path) != _digest(artifact_directory / name):
+                raise TuiReleaseError(
+                    f"public artifact {name} differs from the verified build output"
+                )
+        verify_release_set(repository_root, downloaded)
+        for artifact in artifacts:
+            extract_helper(
+                downloaded / artifact.archive_name, artifact,
+                downloaded / "unpacked" / artifact.target.triple,
+            )
+        try:
+            release_trust.verify_release_trust(
+                repository_root, downloaded, version=version,
+                release_marked_prerelease=record["prerelease"],
+                attestation=attestation,
+            )
+        except release_trust.ReleaseTrustError as exc:
+            raise TuiReleaseError(str(exc)) from exc
+        if policy.channel_for(version) in policy.attestation_channels:
+            repository = urlsplit(release_page).path.removesuffix("/releases").strip("/")
+            for artifact in artifacts:
+                _verify_public_attestation(downloaded / artifact.archive_name, repository)
+    try:
+        after = json.loads(download(release_url))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise TuiReleaseError(f"unreadable final Release readback: {exc}") from exc
+    if _public_release_evidence(after) != before:
+        raise TuiReleaseError("public Release changed during canonical download verification")
+    return artifacts
+
+
+def _verify_public_attestation(archive: Path, repository: str) -> None:
+    try:
+        result = subprocess.run(
+            ["gh", "attestation", "verify", str(archive), "--repo", repository],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise TuiReleaseError(
+            f"cannot verify public attestation for {archive.name}: {exc}"
+        ) from exc
+    if result.returncode != 0:
+        raise TuiReleaseError(
+            f"public attestation for {archive.name} was not verified: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Verify git-loopy TUI helper release artifacts.",
@@ -1581,6 +1779,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="prove VERSION, the helper manifest, and the tag name one Release",
     )
     identity.add_argument("--tag-ref", help="the publication ref, when tagging")
+    identity.add_argument(
+        "--distribution-mode",
+        help="explicit publication distribution mode (e.g. 'source-only')",
+    )
     identity.add_argument(
         "--github-output",
         type=Path,
@@ -1624,6 +1826,15 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="fail unless every declared target is present and intact",
     )
+    published = commands.add_parser(
+        "verify-published",
+        parents=[common],
+        help="prove canonical public downloads match the verified build outputs",
+    )
+    published.add_argument("--artifact-dir", type=Path, required=True)
+    published.add_argument("--tag-ref", required=True)
+    published.add_argument("--distribution-mode", required=True)
+    published.add_argument("--attestation", type=Path)
     return parser
 
 
@@ -1636,6 +1847,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.repository_root,
                 tag_ref=args.tag_ref,
             )
+            try:
+                dist_mode = resolve_distribution_mode(
+                    args.repository_root,
+                    explicit_mode=args.distribution_mode,
+                )
+            except DistributionModeError as exc:
+                raise TuiReleaseError(str(exc)) from exc
+
             if args.github_output is not None:
                 with args.github_output.open("a", encoding="utf-8") as handle:
                     handle.write(f"version={version}\n")
@@ -1643,6 +1862,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     handle.write(
                         f"prerelease={'true' if is_prerelease(version) else 'false'}\n"
                     )
+                    handle.write(f"distribution_mode={dist_mode}\n")
             print(version)
         elif args.command == "verify-plan":
             for artifact in verify_release_plan(
@@ -1659,6 +1879,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 smoke_test_native=args.smoke_test,
             )
             print(artifact.archive_name)
+        elif args.command == "verify-published":
+            for artifact in verify_published_release(
+                args.repository_root,
+                args.artifact_dir,
+                tag_ref=args.tag_ref,
+                distribution_mode=args.distribution_mode,
+                attestation=args.attestation,
+            ):
+                print(artifact.archive_name)
         else:
             if not args.require_complete_set:
                 raise TuiReleaseError(

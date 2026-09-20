@@ -25,6 +25,56 @@ package channel. Only a stable Promotion can update those channels.
 The source-only path relies on GitHub's automatic source archives. It does not
 publish package-channel metadata, signed platform artifacts, or a TUI helper.
 
+## Distribution modes
+
+Releases operate under an explicit **distribution mode**,
+with the repository policy in [`release-trust.json`](../../git-loopy/conformance/release-trust.json)
+as the single authority:
+
+- **`source-only`** (default): The publication promise is complete with GitHub
+  source archives and committed release notes. The release flow does not launch
+  helper-build, signing, attachment, or channel jobs. It requires no signing secrets,
+  binary signing identities, or channel credentials to complete.
+- **`artifact-bearing`**: The publication promise includes the seven compiled
+  TUI helper archives, checksums, receipts, and the trust evidence required by
+  the Release's channel. Stable Releases additionally require attestations and
+  update package channels (Homebrew, winget, Scoop); prereleases update none.
+  It dispatches all helper builds; artifact trust gates refuse publication
+  rather than silently downgrading to source-only.
+
+The contract is strictly enforced:
+- **Single authority**: Neither secret presence nor runner presence alters the contract.
+  A source-only release in an environment with signing secrets never builds or
+  publishes helper artifacts; an artifact-bearing release whose trust gate fails
+  refuses rather than silently downgrading to source-only.
+- **Fail-closed validation**: Unknown or inconsistent distribution mode declarations
+  (e.g., mismatch between requested publication mode and repository policy) fail closed
+  before any publication step runs.
+
+### Consuming an older helper from a source-only Runner Release
+
+Source-only describes publication, not Dashboard compatibility. Python maintenance
+(`git-loopy update`) resolves the newest published helper at or below the installed
+Runner's Release version. It verifies the checksum, the helper's resolved Release
+identity, and its Event-schema compatibility before activation. A newer helper is
+not substituted, and an incompatible older one is not made compatible merely by
+being downloadable (ADR-0052; #591).
+
+The shell and PowerShell installers still request the exact declared helper
+Release. Their `--no-tui` / `-NoTui` options skip that download; they do not install
+a Dashboard. The built-in **line-printer** remains a diagnostic/plain-output path,
+not a replacement for the Python Runner's required terminal interface (ADR-0053).
+
+Until a compatible helper is actually published, build from the matching source
+checkout rather than treating a source-only Release as a binary download:
+
+```sh
+cargo build --release --manifest-path git-loopy/tui/Cargo.toml
+```
+
+and ensure the compiled `git-loopy-tui` binary is available on `PATH` or placed in
+`.git-loopy/bin/`.
+
 ## Release target and Promotion
 
 A closed issue's **Bump class** label advances the Release line after
@@ -220,8 +270,8 @@ missing artifact, signature, notary verdict, publisher, checksum, or attestation
 refuses the whole publication rather than shipping a partial set.
 
 The version string decides which of those a Release *needs*; the prerelease flag
-on the GitHub Release is what tells an operator — and every package channel that
-resolves "the stable Release" — which channel they are installing from. Those
+on the GitHub Release is what tells an operator -- and every package channel that
+resolves "the stable Release" -- which channel they are installing from. Those
 are two answers to one question, and the unsigned Windows allowance rests
 entirely on the second, so publication reads the marking back off the Release it
 is about to attach to and refuses to upload when the two disagree. `--prerelease`
@@ -231,10 +281,62 @@ than inheriting it.
 
 Signing runs inside `dist build`, which is the only place it can: cargo-dist
 writes each `.sha256` afterwards, so a published checksum is a checksum of the
-signed artifact. A ticket cannot be stapled into a bare Mach-O — stapling needs
-a bundle, `.dmg`, or `.pkg` — so Gatekeeper resolves the helper's notarization
+signed artifact. A ticket cannot be stapled into a bare Mach-O -- stapling needs
+a bundle, `.dmg`, or `.pkg` -- so Gatekeeper resolves the helper's notarization
 online, and `release-trust.json` records that by name rather than leaving it to
 look like an oversight.
+
+### Downloadable baseline and completion proof
+
+**No verified downloadable helper baseline is named yet.** On 2026-09-20,
+public Release readback still showed no attached helper assets, including for
+`v0.11.0-dev.4`. #592 remains open until an explicitly artifact-bearing
+prerelease delivers the full set. A successful build or source Release is not
+that baseline, and existing public tags and source-only promises must not be
+rewritten to create one.
+
+The supported set comes from
+[`tui-artifacts.json`](../../git-loopy/conformance/tui-artifacts.json):
+
+| Platform | Architectures | Archive |
+| --- | --- | --- |
+| macOS | arm64, x64 | `.tar.xz` |
+| Windows | x64 | `.zip` |
+| Linux glibc | arm64, x64 | `.tar.xz` |
+| Linux musl | arm64, x64 | `.tar.xz` |
+
+Every archive has its declared `.sha256` and `.trust.json` sidecars. Native
+build runners execute their own helper to prove Release identity, Event-schema
+compatibility, and a minimal Run. Cross-target verification proves archive
+shape and metadata; it does not claim native execution.
+
+The helper publication job now ends with `git_loopy.tui_release verify-published`.
+It requires the tagged `artifact-bearing` policy and complete locally verified
+build outputs, reads the public Release identity and prerelease marking, and
+downloads all 21 promised files from the canonical URLs. Every downloaded byte
+must match those build outputs, pass the existing checksum and trust gates,
+and each archive must contain the declared helper. Stable readback also verifies
+each archive's public attestation against the explicit repository. Unpromised
+helper assets are refused. A final Release readback
+rejects identity or asset changes during verification; download counters are
+not identity.
+
+Missing assets, failed downloads, changed bytes, or unavailable trust evidence
+fail the publication job, keeping downstream package-channel jobs blocked.
+Cancellation is incomplete publication, not permission to switch modes.
+The readback command is read-only: it never moves a tag or repairs an asset.
+
+Run it from the exact tagged checkout with the verified build outputs:
+
+```sh
+PYTHONPATH=git-loopy/python python -m git_loopy.tui_release verify-published \
+  --repository-root . --artifact-dir release-artifacts \
+  --tag-ref "v<version>" --distribution-mode artifact-bearing
+```
+
+Stable verification additionally needs `--attestation <build-bundle>` and
+authenticated `gh attestation verify` access. It does not waive signing,
+notarization, publisher identity, or any pre-publication proof.
 
 ### Credentials
 

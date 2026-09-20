@@ -2355,13 +2355,14 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     to gain, lose, or reorder a field that no column names, so a second
     implementation could disagree about the payload while agreeing about the
     headings. The inventory is asserted from the fixture's own
-    ``projection_fields`` against every snapshot of every case, and each
+    ``projection_fields`` and declared additive fields against every snapshot, and each
     rendered column is required to resolve onto that inventory -- so a new
     column cannot be added without a field to carry it, and a field cannot be
     renamed without the column following.
     """
     contract = _DASHBOARD_INSIGHTS["semantic_contract"]
     fields = contract["projection_fields"]
+    optional_fields = contract["optional_projection_fields"]
 
     checked_queue_rows = 0
     checked_breakdown_rows = 0
@@ -2392,22 +2393,25 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
             for row in expected["dashboard"]["queue"]["rows"]:
                 assert list(row) == fields["queue_row"], where
                 checked_queue_rows += 1
-                # A route is nullable where a consumption is not: the record's
-                # absence is what "nothing has priced this issue yet" looks
-                # like, so its keys are only asserted where one was resolved.
-                if row["route"] is not None:
-                    assert list(row["route"]) == fields["route"], where
-                    checked_routes += 1
             for row in expected["dashboard"]["summary"]["rows"]:
                 assert list(row) == fields["summary_row"], where
                 checked_summary_rows += 1
             for row in expected["drill_in"]["iteration_breakdown"]["rows"]:
                 assert list(row) == fields["iteration_breakdown_row"], where
                 assert list(row["consumption"]) == fields["consumption"], where
-                if row["route"] is not None:
-                    assert list(row["route"]) == fields["route"], where
-                    checked_routes += 1
                 checked_breakdown_rows += 1
+            for row in (
+                expected["dashboard"]["queue"]["rows"]
+                + expected["drill_in"]["iteration_breakdown"]["rows"]
+            ):
+                route = row["route"]
+                if route is not None:
+                    assert list(route) == fields["route"] + [
+                        field
+                        for field in optional_fields["route"]
+                        if field in route
+                    ], where
+                    checked_routes += 1
             for line in (
                 expected["dashboard"]["activity"]["lines"]
                 + expected["drill_in"]["log"]["lines"]

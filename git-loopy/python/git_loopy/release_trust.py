@@ -31,14 +31,16 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from git_loopy import tui_release
+from git_loopy.distribution_mode import (
+    TRUST_POLICY_PATH,
+    DistributionModeError,
+    read_trust_policy,
+)
 from git_loopy.release_version import (
     ReleaseVersionError,
     is_prerelease,
     read_release_version,
 )
-
-
-TRUST_POLICY_PATH = Path("git-loopy/conformance/release-trust.json")
 
 
 class ReleaseTrustError(ValueError):
@@ -112,6 +114,8 @@ class TrustPolicy:
     evidence_kinds: tuple[str, ...]
     mechanisms: tuple[SigningMechanism, ...]
     channel_credentials: tuple[ChannelCredential, ...]
+    distribution_mode: str
+    distribution_modes: tuple[str, ...]
 
     def mechanism_for(self, platform: str) -> SigningMechanism | None:
         """The mechanism that signs ``platform``, or ``None`` if undeclared."""
@@ -144,26 +148,14 @@ class TrustPolicy:
         return tuple(names)
 
 
-def _read_policy_document(repository_root: Path) -> dict[str, Any]:
-    path = repository_root / TRUST_POLICY_PATH
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        raise ReleaseTrustError(f"cannot read trust policy {path}: {exc}") from exc
-    try:
-        document = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ReleaseTrustError(
-            f"trust policy {path} is not valid JSON: {exc}"
-        ) from exc
-    if not isinstance(document, dict):
-        raise ReleaseTrustError(f"trust policy {path} must be a JSON object")
-    return document
-
-
 def load_trust_policy(repository_root: Path) -> TrustPolicy:
     """Read the declared platform-trust policy for this distribution."""
-    document = _read_policy_document(repository_root)
+    policy_path = repository_root / TRUST_POLICY_PATH
+    try:
+        document = read_trust_policy(policy_path)
+    except DistributionModeError as exc:
+        raise ReleaseTrustError(str(exc)) from exc
+
     mechanisms = tuple(
         SigningMechanism(
             platform=entry["platform"],
@@ -216,6 +208,10 @@ def load_trust_policy(repository_root: Path) -> TrustPolicy:
         },
         evidence_kinds=tuple(document["evidence_kinds"]),
         mechanisms=mechanisms,
+        distribution_mode=str(document["distribution_mode"]),
+        distribution_modes=tuple(
+            str(item) for item in document["distribution_modes"]
+        ),
     )
 
 
@@ -634,6 +630,7 @@ def observe_artifact(
         raise ReleaseTrustError(
             f"cannot observe {artifact.archive_name}: it is not in {artifact_directory}"
         )
+
     with tempfile.TemporaryDirectory() as scratch:
         binary = tui_release.extract_helper(archive, artifact, Path(scratch))
         return collect_evidence(

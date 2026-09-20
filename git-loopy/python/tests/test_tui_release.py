@@ -1083,6 +1083,118 @@ def test_refresh_machine_local_helper_preserves_previous_installation_on_failure
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_refresh_machine_local_helper_refuses_a_newer_only_published_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A helper newer than the installed Runner is never selected.
+
+    Falling *forward* would attach a Run to a helper built against a later
+    Event schema than the Runner emits, which is the drift the resolved-identity
+    record exists to prevent rather than to excuse.
+    """
+    config_home = tmp_path / "config-home"
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+    helper_path = tui_release.machine_local_helper_paths(env)[0]
+    existing = _write_fake_helper(helper_path, version="1.2.0")
+    record = tui_release.helper_release_record_path(helper_path)
+    record.write_text("1.2.0\n", encoding="utf-8")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    artifact = tui_release.artifact_for(
+        metadata,
+        tui_release.select_target(metadata, system="Darwin", machine="arm64"),
+    )
+    release_index = [
+        {
+            "tag_name": tag,
+            "draft": False,
+            "assets": [
+                {"name": artifact.archive_name},
+                {"name": artifact.checksum_name},
+            ],
+        }
+        for tag in ("v2.0.0", "v1.3.0")
+    ]
+
+    with pytest.raises(tui_release.TuiReleaseError) as raised:
+        tui_release.refresh_machine_local_helper(
+            "1.2.4",
+            env,
+            host_system=lambda: "Darwin",
+            host_machine=lambda: "arm64",
+            host_libc=lambda: None,
+            artifact_resolver=lambda _system, _machine, _libc: artifact,
+            download=lambda _url: json.dumps(release_index).encode("utf-8"),
+        )
+
+    assert "no published git-loopy-tui Release carrying" in str(raised.value)
+    assert existing.is_file()
+    assert record.read_text(encoding="utf-8").strip() == "1.2.0"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_refresh_machine_local_helper_refuses_a_damaged_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A published archive whose checksum does not hold is refused, not installed.
+
+    A damaged or tampered artifact is not a reason to fall further back: that
+    would let anyone who can corrupt one Release silently downgrade the helper.
+    The previous verified installation stays usable instead.
+    """
+    config_home = tmp_path / "config-home"
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+    helper_path = tui_release.machine_local_helper_paths(env)[0]
+    existing = _write_fake_helper(helper_path, version="1.2.0")
+    record = tui_release.helper_release_record_path(helper_path)
+    record.write_text("1.2.0\n", encoding="utf-8")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    artifact = tui_release.artifact_for(
+        metadata,
+        tui_release.select_target(metadata, system="Darwin", machine="arm64"),
+    )
+    release_index = [
+        {
+            "tag_name": "v1.2.4",
+            "draft": False,
+            "assets": [
+                {"name": artifact.archive_name},
+                {"name": artifact.checksum_name},
+            ],
+        }
+    ]
+    checksum_body = (
+        f"{hashlib.sha256(b'the artifact this Release promised').hexdigest()}  "
+        f"{artifact.archive_name}\n"
+    )
+
+    def _download(url: str) -> bytes:
+        if "releases?per_page" in url:
+            return json.dumps(release_index).encode("utf-8")
+        if url.endswith(".sha256"):
+            return checksum_body.encode("utf-8")
+        return b"the artifact an attacker substituted"
+
+    with pytest.raises(tui_release.TuiReleaseError):
+        tui_release.refresh_machine_local_helper(
+            "1.2.4",
+            env,
+            host_system=lambda: "Darwin",
+            host_machine=lambda: "arm64",
+            host_libc=lambda: None,
+            artifact_resolver=lambda _system, _machine, _libc: artifact,
+            download=_download,
+        )
+
+    assert existing.is_file()
+    assert tui_release.probe_runtime_helper(existing).reported_version == "1.2.0"
+    assert record.read_text(encoding="utf-8").strip() == "1.2.0"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
 def test_refresh_machine_local_helper_rollback_on_activation_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1262,6 +1374,84 @@ def test_refresh_machine_local_helper_skips_incompatible_helper_for_older_compat
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_an_all_incompatible_history_refuses_by_naming_its_newest_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Name the published Release that was rejected, not where it was unpacked.
+
+    Resolution is newest-at-or-below, so the newest rejected candidate is the
+    helper the operator expected to receive and the one whose incompatibility
+    explains the refusal. The scratch directory each candidate is verified in is
+    deleted before the refusal reaches anybody, so a message that names it sends
+    the operator to a path that no longer exists.
+    """
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    artifact = tui_release.artifact_for(
+        metadata,
+        tui_release.select_target(metadata, system="Darwin", machine="arm64"),
+    )
+    downloads: dict[str, bytes] = {}
+    release_index = []
+    for version, schema in (("1.2.4", (99, 99)), ("1.0.0", (50, 50))):
+        helper = _write_fake_helper(
+            tmp_path / version / artifact.executable_name,
+            version=version,
+            event_schema_range=schema,
+        )
+        archive = tmp_path / version / artifact.archive_name
+        with tarfile.open(archive, "w:xz") as bundle:
+            bundle.add(helper, arcname=artifact.executable_name)
+        checksum = tmp_path / version / artifact.checksum_name
+        checksum.write_text(
+            f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
+            encoding="utf-8",
+        )
+        release_index.append(
+            {
+                "tag_name": f"v{version}",
+                "draft": False,
+                "assets": [
+                    {"name": artifact.archive_name},
+                    {"name": artifact.checksum_name},
+                ],
+            }
+        )
+        downloads[
+            tui_release.release_artifact_url(
+                metadata, release_version=version, artifact=artifact.archive_name
+            )
+        ] = archive.read_bytes()
+        downloads[
+            tui_release.release_artifact_url(
+                metadata, release_version=version, artifact=artifact.checksum_name
+            )
+        ] = checksum.read_bytes()
+    downloads[tui_release._RUNTIME_RELEASE_INDEX_URL.format(page=1)] = json.dumps(
+        release_index
+    ).encode("utf-8")
+
+    config_home = tmp_path / "config-home"
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+
+    with pytest.raises(tui_release.TuiReleaseError) as raised:
+        tui_release.refresh_machine_local_helper(
+            "1.3.0",
+            env,
+            host_system=lambda: "Darwin",
+            host_machine=lambda: "arm64",
+            host_libc=lambda: None,
+            artifact_resolver=lambda _system, _machine, _libc: artifact,
+            download=downloads.__getitem__,
+        )
+
+    message = str(raised.value)
+    assert "1.2.4" in message
+    assert artifact.archive_name in message
+    assert str(config_home) not in message
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
 def test_refresh_machine_local_helper_distinguishes_index_failure_and_absence(
     tmp_path: Path,
 ) -> None:
@@ -1292,7 +1482,40 @@ def test_refresh_machine_local_helper_distinguishes_index_failure_and_absence(
             artifact_resolver=lambda _s, _m, _l: artifact,
             download=lambda _url: json.dumps(empty_index).encode("utf-8"),
         )
-    assert "no published git-loopy-tui Release is at or below" in str(exc.value)
+    assert "no published git-loopy-tui Release carrying" in str(exc.value)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_an_absent_helper_refusal_names_the_host_artifact_it_required(
+    tmp_path: Path,
+) -> None:
+    """Absence is only actionable once the operator knows what was looked for.
+
+    Every published Release carrying no asset at all and every published Release
+    carrying every host's asset but this one produce the same outcome, and an
+    operator cannot tell a deferred platform from an unpublished helper unless
+    the refusal names the archive it required.
+    """
+    config_home = tmp_path / "config-home"
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+    metadata = tui_release.load_artifact_metadata(REPOSITORY_ROOT)
+    artifact = tui_release.artifact_for(
+        metadata,
+        tui_release.select_target(metadata, system="Darwin", machine="arm64"),
+    )
+    index = [{"tag_name": "v1.2.4", "draft": False, "assets": []}]
+
+    with pytest.raises(tui_release.TuiReleaseError) as exc:
+        tui_release.refresh_machine_local_helper(
+            "1.2.4",
+            env,
+            artifact_resolver=lambda _s, _m, _l: artifact,
+            download=lambda _url: json.dumps(index).encode("utf-8"),
+        )
+
+    message = str(exc.value)
+    assert artifact.archive_name in message
+    assert "1.2.4" in message
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")

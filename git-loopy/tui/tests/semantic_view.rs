@@ -844,6 +844,66 @@ fn a_routed_pickup_projects_its_context_tier() {
 }
 
 #[test]
+fn a_same_configuration_dynamic_retry_preserves_each_contributions_position() {
+    let mut events = Vec::new();
+    for (iteration, position, outcome) in [(1, "fresh", "no-progress"), (2, "retrying", "closed")] {
+        events.extend([
+            serde_json::json!({
+                "type": "wrapper.iteration.start", "iter": iteration
+            }),
+            serde_json::json!({
+                "type": "wrapper.pickup.bound", "iter": iteration, "issue": 42,
+                "reason": "order", "model": "gpt-5-mini", "effort": "medium",
+                "context_tier": "long_context", "routing_source": "dynamic",
+                "lifecycle_position": position
+            }),
+            serde_json::json!({
+                "type": "wrapper.issue.activated", "iter": iteration, "issue": 42
+            }),
+            serde_json::json!({
+                "type": "wrapper.iteration.end", "iter": iteration,
+                "outcome": outcome, "duration_seconds": 1.0,
+                "issues": [{"issue": 42, "status": outcome}]
+            }),
+        ]);
+    }
+
+    let projected = reduce(&events, IssueRef::number(42));
+    let rows = projected["drill_in"]["iteration_breakdown"]["rows"]
+        .as_array()
+        .expect("contribution rows");
+    assert_eq!(rows.len(), 2);
+    for (row, position) in rows.iter().zip(["fresh", "retrying"]) {
+        assert_eq!(
+            row["route"],
+            serde_json::json!({
+                "model": "gpt-5-mini", "effort": "medium",
+                "context_tier": "long_context", "source": "dynamic",
+                "lifecycle_position": position
+            })
+        );
+    }
+    assert_eq!(queue_row(&projected, 42)["route"], rows[1]["route"]);
+}
+
+#[test]
+fn a_legacy_pickup_projects_no_unobserved_lifecycle_position_or_tier() {
+    let projected = reduce_jsonl(
+        &[
+            r#"{"type":"wrapper.pickup.bound","iter":1,"issue":42,"model":"gpt-5-mini","effort":"medium","routing_source":"routed"}"#,
+        ],
+        IssueRef::number(42),
+    );
+
+    assert_eq!(
+        queue_row(&projected, 42)["route"],
+        serde_json::json!({
+            "model": "gpt-5-mini", "effort": "medium", "source": "routed"
+        })
+    );
+}
+
+#[test]
 fn a_route_delivery_projects_separately_from_the_route() {
     let projected = reduce(
         &[

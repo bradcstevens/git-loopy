@@ -26,7 +26,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `calibration-search.json` | The **Calibration** search: its own synthetic roster and the five-of-five promotion rule declared rather than inferred, then the cheapest-first walk, unanimity, early rung abandonment, the equal-price tie-break, both the **AI Credit** and the wall-clock ceiling, an unreported Consumption latching credits to unknown, an interrupted and an exhausted walk, a Proving set too thin to promote anything, the newest-first Proving-task draw every rung measures, and — at a declared `concurrency` — the probe run alone, the remainder bought at the operator's width, and a wall-clock ceiling spent once by Trials that overlap rather than once each |
 | `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, stable/prerelease publication classification, invalid tag scenarios including missing authored notes, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
 | `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners, cross container and package provisioning, and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, the download URL one Release publishes them at, and the host aliases and selection cases an installer resolves its own artifact with |
-| `release-trust.json` | The **platform-trust gate** a Release passes before publication: per-platform signing mechanism and the cargo-dist key that enables it, the credentials each mechanism reads, the protected and unprotected release environments and the credential-free jobs, evidence a platform *cannot* carry recorded by name and reason, the evidence each channel requires, and the stable/prerelease publication decisions including the marking the GitHub Release itself must carry |
+| `release-trust.json` | The **platform-trust gate** a Release passes before publication: the declared **distribution mode** (source-only or artifact-bearing), per-platform signing mechanism and the cargo-dist key that enables it, the credentials each mechanism reads, the protected and unprotected release environments and the credential-free jobs, evidence a platform *cannot* carry recorded by name and reason, the evidence each channel requires, and the stable/prerelease publication decisions including the marking the GitHub Release itself must carry |
 | `homebrew-tap.json` | The **Homebrew channel**: the tap and formula identity, the four platforms Homebrew runs on and the artifact each installs, the three published targets it excludes *by name*, the stable-only publication decisions including the marking the Release itself must carry, and the version, URL, host, digest, coverage, and version-probe drift a formula is refused for |
 | `windows-channels.json` | The **winget and Scoop channels**: the package identity and committed paths each writes, the one published target a Windows package manager runs and the six it excludes *by name*, the claims neither format can carry recorded *by name and reason*, the stable-only publication decisions, the trust-receipt defects that keep an unsigned or unattributable artifact out of both channels, and the version, identifier, URL, host, digest, publisher, and version-probe drift committed metadata is refused for |
 
@@ -504,6 +504,14 @@ not pin a fractional `duration_seconds`, because shell rollup arithmetic is
 integral. The probe's depth is the rollup seam, so it proves a payload is
 producible rather than that today's native Run loop reaches every input the seam
 accepts.
+
+The route projection's required inventory is `model`, `effort`, and `source`.
+`context_tier` and `lifecycle_position` are additive fields declared in
+`optional_projection_fields.route`: Queue and Iteration-breakdown rows preserve
+them when the Pickup recorded them, and omit them for older records rather than
+inventing a tier or a first-attempt claim. A reassessed Dynamic retry may keep
+the same configuration; its lifecycle position must still distinguish it from
+the earlier contribution.
 
 The **Activity** band's sizing gestures — the drag, the click and `shift+↑` / `shift+↓`
 (ADR-0038) — are deliberately **not** in this fixture set, now that both renderers

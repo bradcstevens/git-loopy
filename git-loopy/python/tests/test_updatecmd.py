@@ -1179,7 +1179,7 @@ def test_update_public_maintenance_all_source_only_history(
         output_fn=output.append,
     )
     assert result == 1
-    assert any("no published git-loopy-tui Release is at or below" in line for line in output)
+    assert any("no published git-loopy-tui Release carrying" in line for line in output)
     attached = tui_release.resolve_runtime_helper(
         tmp_path / "repo",
         release_version="1.2.4",
@@ -1226,7 +1226,7 @@ def test_update_public_maintenance_newer_only_history(
         output_fn=output.append,
     )
     assert result == 1
-    assert any("no published git-loopy-tui Release is at or below" in line for line in output)
+    assert any("no published git-loopy-tui Release carrying" in line for line in output)
     attached = tui_release.resolve_runtime_helper(
         tmp_path / "repo",
         release_version="1.2.3",
