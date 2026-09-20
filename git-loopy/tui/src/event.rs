@@ -115,7 +115,7 @@ pub enum EventPayload {
     RoutingResolved(RoutingResolved),
     RoutingDelivery(RoutingDelivery),
     /// `wrapper.routing.prepared`
-    RoutingPrepared(RoutingPrepared),
+    RoutingPrepared(Box<RoutingPrepared>),
     /// `agent.output`
     AgentOutput(AgentOutput),
     /// `usage.context_window`
@@ -774,7 +774,7 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         // Delivery is only attributable when it names an issue and a known
         // delivery status. Otherwise it is unusable telemetry, not route truth.
         "wrapper.routing.prepared" => match serde_json::from_value(value.clone()) {
-            Ok(prepared) => EventPayload::RoutingPrepared(prepared),
+            Ok(prepared) => EventPayload::RoutingPrepared(Box::new(prepared)),
             Err(_) => EventPayload::Other,
         },
         "wrapper.routing.delivery" => match serde_json::from_value(value.clone()) {

@@ -656,9 +656,11 @@ fn route(
     let delivery_suffix = delivery
         .map(|delivery| format!(" [{}]", delivery.status))
         .unwrap_or_default();
-    let preparation_suffix = (route.is_none() && preparation.is_some())
-        .then_some(" [not binding]")
-        .unwrap_or_default();
+    let preparation_suffix = if route.is_none() && preparation.is_some() {
+        " [not binding]"
+    } else {
+        ""
+    };
     let suffix = format!("{lifecycle_suffix}{delivery_suffix}{preparation_suffix}");
     if suffix.is_empty() {
         return rendered;

@@ -320,6 +320,38 @@
         "source"
       ]
     },
+    "optional_projection_fields": {
+      "queue_row": ["preparation"],
+      "preparation": [
+        "model",
+        "effort",
+        "context_tier",
+        "summary",
+        "proposal_id",
+        "prepared_at",
+        "valid_until",
+        "relevant_input_identity",
+        "selector_model",
+        "selector_effort",
+        "selector_context_tier",
+        "evidence_source",
+        "source_model_identity",
+        "evidence_retrieved_at",
+        "capabilities_retrieved_at",
+        "measurement_at",
+        "benchmark_version",
+        "conditions",
+        "routing_overshot",
+        "detail",
+        "reason"
+      ]
+    },
+    "preparation_projection": {
+      "required_fields": ["state"],
+      "states": ["proposed", "static", "reusable", "unavailable"],
+      "nonbinding": "Queue preparation describes a pending Routing proposal, never a final route, Lease, reservation, or Pool-emptiness signal. It leaves status unchanged and disappears at the authoritative Pickup.",
+      "historical": "Historical rows omit preparation. Sparse preparation records retain only the fields they actually supplied; missing provenance and measurement metadata stay unknown."
+    },
     "binding_sources": {
       "marker": [
         "working_marker"

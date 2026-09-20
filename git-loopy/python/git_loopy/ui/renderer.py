@@ -661,6 +661,7 @@ class Renderer:
                 ("proposal", "proposal_id"),
                 ("rationale", "summary"),
                 ("identity", "relevant_input_identity"),
+                ("prepared", "prepared_at"),
                 ("evidence source", "evidence_source"),
                 ("source model", "source_model_identity"),
                 ("evidence retrieved", "evidence_retrieved_at"),
@@ -694,6 +695,8 @@ class Renderer:
             detail = event.get("detail") or event.get("reason")
             if isinstance(detail, str) and detail:
                 text.append(f"  ({detail})", style=STYLES["meta"])
+            if event.get("routing_overshot") is True:
+                text.append("  overshot", style=STYLES["warning"])
         else:
             return
         self.console.print(text)

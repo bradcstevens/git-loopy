@@ -8632,6 +8632,65 @@ def test_rolling_pickup_uses_current_inputs_without_waiting_for_the_tail(
     assert "cancelled" in cancelled[-1]["detail"]
 
 
+@pytest.mark.parametrize("unreadable", [False, True])
+def test_rolling_preparation_rereads_queued_readiness_without_spending(
+    tmp_path, monkeypatch, unreadable
+) -> None:
+    tracker_ready = asyncio.Event()
+    tracker = None
+
+    async def answer(request):
+        if "#44:" in request.issue:
+            await tracker_ready.wait()
+            assert tracker is not None
+            readiness = (
+                BlockedByRead.unprovable() if unreadable else BlockedByRead(
+                    total_count=1,
+                    nodes=(BlockerNode(ref="x/y#99", state="open"),),
+                )
+            )
+            tracker.seed_issue(dataclass_replace(
+                tracker.issue_view(45), blocked_by=readiness
+            ))
+        return _elects_lane_model("claude-opus-5")(request)
+
+    async def work(_session, current_tracker):
+        nonlocal tracker
+        tracker = current_tracker
+        tracker_ready.set()
+
+        async def prepared():
+            while not any(
+                event["type"] == "wrapper.routing.prepared" and event["issue"] == 45
+                for event in _logged_events(tmp_path)
+            ):
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(prepared(), timeout=2)
+
+    client, spied, exit_code = _rolling_dynamic_run(
+        tmp_path, monkeypatch,
+        issues=[
+            _make_issue(ref, labels=["ready-for-agent", "parallel-safe"])
+            for ref in (42, 43, 44, 45)
+        ],
+        answer=answer, on_work=work, max_iterations=2,
+    )
+    assert exit_code == 0
+    assert len(client.create_calls) == 2
+    assert all(call["model"] == "claude-opus-5" for call in client.create_calls)
+    assert not any("#45:" in request.issue for _, request in spied["assessments"])
+    (pending,) = [
+        event for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.routing.prepared" and event["issue"] == 45
+    ]
+    assert pending["state"] == "unavailable"
+    assert not any(
+        event["type"] == "wrapper.pickup.bound" and event["issue"] == 45
+        for event in _logged_events(tmp_path)
+    )
+
+
 def test_a_rolling_run_prepares_the_candidates_no_lane_has_taken(
     tmp_path, monkeypatch
 ) -> None:

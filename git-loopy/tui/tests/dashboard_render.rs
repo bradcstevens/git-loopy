@@ -233,6 +233,35 @@ fn the_queue_shows_an_explicit_long_context_route_in_full() {
 }
 
 #[test]
+fn the_queue_marks_a_prepared_proposal_as_not_binding() {
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    let prepared = Event::from_jsonl_line(
+        r#"{"type":"wrapper.routing.prepared","issue":42,"state":"proposed","model":"gpt-5-mini","effort":"medium"}"#,
+    )
+    .expect("preparation decodes");
+    state.apply(&prepared);
+    let view = project_run_view(
+        &state,
+        &ViewContext {
+            now: Timestamp::parse_rfc3339("2026-05-16T00:00:00.000Z").expect("timestamp parses"),
+            now_monotonic: None,
+            zone: Zone::from_offset_minutes(0),
+            capabilities: TerminalCapabilities::default(),
+        },
+        &IssueRef::number(42),
+    );
+
+    let lines = render_lines(&view, 200, 44, TerminalCapabilities::default());
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("proposed") && line.contains("[not binding]")),
+        "a preparation has not yet bound a final Route"
+    );
+}
+
+#[test]
 fn the_queue_marks_delivery_without_rewriting_the_route_cell() {
     let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
     let pickup = Event::from_jsonl_line(

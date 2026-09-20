@@ -5908,8 +5908,9 @@ def test_queued_eligibility_is_reread_before_any_preparation_spend(
     assert _prepared_records(tmp_path)[-1]["state"] == "unavailable"
 
 
+@pytest.mark.parametrize("already_labelled", [False, True])
 def test_a_static_route_is_prepared_without_asking_the_selector(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, already_labelled
 ) -> None:
     """AC3: classification first, then static applicability, then the selector.
 
@@ -5919,15 +5920,32 @@ def test_a_static_route_is_prepared_without_asking_the_selector(
     than silence — is what keeps an operator from reading an unprepared issue
     as an unreachable one.
     """
-    _fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
+    classified = []
+
+    async def classify(_proposer, _pair, item):
+        classified.append(item.ref)
+        return "<task-type>docs</task-type>"
+
+    monkeypatch.setattr(loop_module.SessionTaskTypeProposer, "__call__", classify)
+    monkeypatch.setattr(
+        loop_module, "_make_task_type_label_client", _RecordingTaskTypeLabelClient
+    )
+    labels = ["ready-for-agent", "semver:none"]
+    if already_labelled:
+        labels.append("task-type:docs")
+    fake_client, _fake_gh, spied, exit_code = _dynamic_pool_run(
         tmp_path,
         monkeypatch,
         issues=[
-            _make_issue(42),
-            _make_issue(43, labels=["ready-for-agent", "task-type:docs"]),
+            _make_issue(42, labels=["ready-for-agent", "task-type:implementation", "semver:none"]),
+            _make_issue(43, labels=labels),
         ],
         routing={"docs": ("gpt-5.6-terra", "low")},
+        classifier_model="gpt-5.6-terra",
+        classifier_effort="high",
         wait_for_prepared=(43,),
+        close_after_send=42,
+        max_iterations=2,
         routing_credit_allowance=Decimal("5"),
     )
 
@@ -5936,6 +5954,9 @@ def test_a_static_route_is_prepared_without_asking_the_selector(
     assert record["issue"] == 43
     assert record["state"] == "static", record
     assert record["proposal_id"] is None, "a static route minted a proposal"
+    assert classified == ([] if already_labelled else [43])
+    assert fake_client.create_calls[-1]["model"] == "gpt-5.6-terra"
+    assert fake_client.create_calls[-1]["reasoning_effort"] == "low"
     # The Pickup's own call, and no second one for the statically routed issue.
     assert len(spied["assessments"]) == 1, spied["assessments"]
 

@@ -1024,10 +1024,18 @@ fn a_prepared_route_is_a_proposal_and_never_a_binding() {
             "effort": "medium",
             "context_tier": "default",
             "summary": "best verified match",
+            "prepared_at": "2026-05-15T23:59:00.000Z",
             "selector_model": "gpt-5.6-terra",
             "selector_effort": "high",
+            "selector_context_tier": "long_context",
             "evidence_source": "benchmark-index",
+            "source_model_identity": "claude-opus-5@2026-05",
             "evidence_retrieved_at": "2026-05-16T00:00:00.000Z",
+            "capabilities_retrieved_at": "2026-05-16T00:00:00.500Z",
+            "measurement_at": "2026-05-15T00:00:00.000Z",
+            "benchmark_version": "swe-bench-verified-2",
+            "conditions": "repository coding",
+            "routing_overshot": true,
             "valid_until": "2026-05-16T00:05:01.000Z"
         })],
         IssueRef::number(7),
@@ -1036,10 +1044,28 @@ fn a_prepared_route_is_a_proposal_and_never_a_binding() {
     assert_eq!(
         log_texts(&projected),
         [
-            "Route proposed: gpt-5-mini@medium (not bound); proposal: proposal-1; rationale: best verified match; evidence source: benchmark-index; evidence retrieved: 2026-05-16T00:00:00.000Z; selector: gpt-5.6-terra@high"
+            "Route proposed: gpt-5-mini@medium (not bound); proposal: proposal-1; rationale: best verified match; prepared: 2026-05-15T23:59:00.000Z; valid until: 2026-05-16T00:05:01.000Z; evidence source: benchmark-index; source model: claude-opus-5@2026-05; evidence retrieved: 2026-05-16T00:00:00.000Z; capabilities retrieved: 2026-05-16T00:00:00.500Z; measured: 2026-05-15T00:00:00.000Z; benchmark: swe-bench-verified-2; conditions: repository coding; selector: gpt-5.6-terra@high/long_context; overshot"
         ]
     );
     assert_eq!(queue_row(&projected, 7)["route"], serde_json::Value::Null);
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../conformance/dashboard-insights.json"))
+            .expect("shared Dashboard contract decodes");
+    let contract = &fixture["semantic_contract"];
+    let required = contract["preparation_projection"]["required_fields"]
+        .as_array()
+        .expect("required preparation fields");
+    let optional = contract["optional_projection_fields"]["preparation"]
+        .as_array()
+        .expect("optional preparation fields");
+    let preparation = &queue_row(&projected, 7)["preparation"];
+    for field in keys(preparation) {
+        let declared = Value::String(field);
+        assert!(required.contains(&declared) || optional.contains(&declared));
+    }
+    for field in required {
+        assert!(preparation.get(field.as_str().expect("field name")).is_some());
+    }
     assert_eq!(
         queue_row(&projected, 7)["preparation"],
         serde_json::json!({
@@ -1049,10 +1075,18 @@ fn a_prepared_route_is_a_proposal_and_never_a_binding() {
             "context_tier": "default",
             "summary": "best verified match",
             "proposal_id": "proposal-1",
+            "prepared_at": "2026-05-15T23:59:00.000Z",
             "selector_model": "gpt-5.6-terra",
             "selector_effort": "high",
+            "selector_context_tier": "long_context",
             "evidence_source": "benchmark-index",
+            "source_model_identity": "claude-opus-5@2026-05",
             "evidence_retrieved_at": "2026-05-16T00:00:00.000Z",
+            "capabilities_retrieved_at": "2026-05-16T00:00:00.500Z",
+            "measurement_at": "2026-05-15T00:00:00.000Z",
+            "benchmark_version": "swe-bench-verified-2",
+            "conditions": "repository coding",
+            "routing_overshot": true,
             "valid_until": "2026-05-16T00:05:01.000Z"
         })
     );
@@ -1089,7 +1123,8 @@ fn a_candidate_not_prepared_says_which_of_the_three_reasons_it_was() {
                 "type": "wrapper.routing.prepared",
                 "issue": 7,
                 "state": "unavailable",
-                "detail": "preparation cancelled; Pickup must validate its own route"
+                "detail": "preparation cancelled; Pickup must validate its own route",
+                "routing_overshot": true
             }),
         ],
         IssueRef::number(7),
@@ -1100,7 +1135,7 @@ fn a_candidate_not_prepared_says_which_of_the_three_reasons_it_was() {
         [
             "Route preparation: static route applies, no selector call",
             "Route preparation: an earlier decision is available for Pickup revalidation",
-            "Route not prepared: preparation cancelled; Pickup must validate its own route; available for Pickup revalidation"
+            "Route not prepared: preparation cancelled; Pickup must validate its own route; available for Pickup revalidation; overshot"
         ]
     );
 }
@@ -1209,6 +1244,31 @@ fn a_prepared_record_without_a_state_says_nothing() {
     );
 
     assert_eq!(log_texts(&projected), Vec::<String>::new());
+}
+
+#[test]
+fn a_sparse_historical_preparation_keeps_only_its_recorded_fields() {
+    let projected = reduce(
+        &[serde_json::json!({
+            "ts": "2026-05-16T00:00:01.000Z",
+            "run_id": "r1",
+            "iter": null,
+            "type": "wrapper.routing.prepared",
+            "issue": 7,
+            "state": "proposed",
+            "model": "gpt-5-mini"
+        })],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(
+        queue_row(&projected, 7)["preparation"],
+        serde_json::json!({"state": "proposed", "model": "gpt-5-mini"})
+    );
+    assert_eq!(
+        log_texts(&projected),
+        ["Route proposed: gpt-5-mini@default (not bound)"]
+    );
 }
 
 #[test]

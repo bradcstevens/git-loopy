@@ -2833,6 +2833,8 @@ def test_a_prepared_route_reads_back_its_rationale_and_provenance() -> None:
         "strongest verified index for this work",
         "01JD00000000000000000000PRE",
         "9f2c1d6a4b8e",
+        "2026-09-19T09:00:00.000Z",
+        "2026-09-19T09:05:00.000Z",
         "gpt-5.6-terra",
         "long_context",
         "benchmark-index",
@@ -2920,6 +2922,7 @@ def test_an_unpreparable_candidate_does_not_blame_its_pickup() -> None:
             summary=None,
             reason=None,
             detail="preparation cancelled; Pickup must validate its own route",
+            routing_overshot=True,
         )
     )
 
@@ -2927,6 +2930,7 @@ def test_an_unpreparable_candidate_does_not_blame_its_pickup() -> None:
     assert "#7" in out
     assert "not prepared" in out
     assert "preparation cancelled; Pickup must validate its own route" in out
+    assert "overshot" in out
 
 
 def test_a_prepared_record_from_a_runner_that_predates_the_state_is_ignored() -> None:

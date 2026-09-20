@@ -832,12 +832,6 @@ impl DashboardState {
     }
 
     fn record_route_preparation(&mut self, prepared: &RoutingPrepared, now: Option<Timestamp>) {
-        // A Lane log line and nothing else (#566, AC4). A proposal is not a
-        // binding, not a Lease and not evidence the Pool emptied, so it may
-        // touch neither the Queue row's route nor its status: an issue this Run
-        // only prepared is still waiting, exactly as it was. `insert_entry`
-        // would be the same mistake in miniature -- a proposal for an issue the
-        // Dashboard has not seen collected is not a reason to list it.
         if let Some(preparation) = RoutePreparation::from_event(prepared) {
             self.insert_entry(prepared.issue.clone());
             if let Some(entry) = self.ledger.get_mut(&prepared.issue) {
@@ -1278,6 +1272,8 @@ fn routing_preparation_text(prepared: &RoutingPrepared) -> Option<String> {
                     "identity",
                     non_empty(prepared.relevant_input_identity.as_deref()),
                 ),
+                ("prepared", non_empty(prepared.prepared_at.as_deref())),
+                ("valid until", non_empty(prepared.valid_until.as_deref())),
                 (
                     "evidence source",
                     non_empty(prepared.evidence_source.as_deref()),
@@ -1325,16 +1321,21 @@ fn routing_preparation_text(prepared: &RoutingPrepared) -> Option<String> {
             "Route preparation: an earlier decision is available for Pickup revalidation"
                 .to_string(),
         ),
-        ROUTE_PREPARATION_UNAVAILABLE => Some(
-            match non_empty(prepared.detail.as_deref())
+        ROUTE_PREPARATION_UNAVAILABLE => {
+            let text = match non_empty(prepared.detail.as_deref())
                 .or_else(|| non_empty(prepared.reason.as_deref()))
             {
                 Some(why) => {
                     format!("Route not prepared: {why}; available for Pickup revalidation")
                 }
                 None => "Route not prepared; available for Pickup revalidation".to_string(),
-            },
-        ),
+            };
+            Some(if prepared.routing_overshot == Some(true) {
+                format!("{text}; overshot")
+            } else {
+                text
+            })
+        }
         // A spelling this Dashboard does not know is reported as it arrived
         // rather than translated into one it does.
         other => Some(format!("Route preparation: {other}")),
