@@ -521,6 +521,20 @@ jobs:
         shell: bash
         run: gh release upload "$RELEASE_TAG" release-artifacts/* --clobber
 
+      - name: Prove every promised helper is publicly downloadable
+        id: public-readback
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: >-
+          uv run --project git-loopy/python --all-extras
+          python -m git_loopy.tui_release verify-published
+          --repository-root .
+          --artifact-dir release-artifacts
+          --tag-ref "${{ needs.identity.outputs.tag }}"
+          --distribution-mode artifact-bearing
+          --attestation "${{ steps.attest.outputs.bundle-path }}"
+
   # The Homebrew channel. It publishes no bytes of its own: the tap points at
   # the archives `publish` just verified, attested, and attached, and at the
   # `.sha256` files that Release published beside them.
