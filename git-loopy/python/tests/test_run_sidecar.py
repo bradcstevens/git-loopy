@@ -539,6 +539,9 @@ def test_the_python_launch_leaves_the_viewing_machines_clock_to_the_helper(
     control_path = run_sidecar.control_path_for_trace(trace_path)
     argv_path = tmp_path / "helper.argv"
     zone_path = tmp_path / "helper.zone"
+    zone_directory_path = tmp_path / "helper.zone-directory"
+    zone_directory = tmp_path / "zoneinfo"
+    monkeypatch.setenv("TZDIR", str(zone_directory))
 
     helper = tmp_path / "recording-dashboard.py"
     helper.write_text(
@@ -546,6 +549,7 @@ def test_the_python_launch_leaves_the_viewing_machines_clock_to_the_helper(
         "import json, os, sys\n"
         f"open({str(argv_path)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
         f"open({str(zone_path)!r}, 'w').write(os.environ.get('TZ', '<unset>'))\n"
+        f"open({str(zone_directory_path)!r}, 'w').write(os.environ.get('TZDIR', '<unset>'))\n"
         "raise SystemExit(0)\n",
         encoding="utf-8",
     )
@@ -594,3 +598,4 @@ def test_the_python_launch_leaves_the_viewing_machines_clock_to_the_helper(
         "the helper was handed a scrubbed environment, so it cannot resolve "
         "the zone of the machine an operator is actually looking at"
     )
+    assert zone_directory_path.read_text(encoding="utf-8") == str(zone_directory)
