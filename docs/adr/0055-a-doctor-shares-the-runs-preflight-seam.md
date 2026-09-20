@@ -101,5 +101,9 @@ A configuration refusal blocks the Run. A live Dynamic-readiness refusal makes
 doctor nonzero, but leaves eligible Static work reachable in a Run and permits a
 later fresh check to recover. No readiness snapshot is authority for work:
 proposal and Pickup still read again. This is partial activation work, not the
-final Dynamic default; guided setup/migration and the composed activation matrix
-remain outstanding. Existing unselected-policy behavior is unchanged.
+final Dynamic default. Explicit `update --routing` now consumes this same verdict
+over the candidate saved scope before committing a keep-or-migrate choice.
+Temporary Run overrides cannot mask an invalid saved route or missing Dynamic
+authorization during that migration. Guided first setup, automatic upgrade/Run
+migration enforcement and the remaining composed activation matrix are still
+outstanding. Existing unselected-policy behavior is unchanged.

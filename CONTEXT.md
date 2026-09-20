@@ -1084,15 +1084,17 @@ readback saying so.
 _Avoid_: config dump, banner, routing validation (nothing is refused here — the readback reports).
 
 **Measured routing**:
-The **Calibration**-authored precedence tier — one rung between global **Config** and the
-built-in default, so it supplies a **Routed pair** only where the operator is silent and a
-hand-written `[routing]` entry beats it forever, with no override flag and no special case. It
+The **Calibration**-authored artifact. Under an unselected or Static **Route policy** it is
+one precedence rung between global **Config** and the built-in default, supplying a
+**Routed pair** only where the operator is silent; a hand-written `[routing]` entry always
+beats it. Under **Dynamic routing** it supplies supporting evidence, never a Static pin
+or authority to bypass the **Route selector** (ADR-0057). It
 is a single committed artifact, `routing.measured.toml` beside the project `config.toml`,
 carrying the table and its evidence in the same file and no free-text key for an opinion to
 occupy. Only current state is stored, because git is the ledger: a change arrives as a
 reviewable pull-request diff rather than a cache refresh, `git blame` names the **Calibration**
 that set a **Task type**'s pair, and deleting the file is the entire opt-out. It is a committed tier rather than a
-cache for that reason (ADR-0028), and like all **Routing** it takes effect in every mode, a
+cache for that reason (ADR-0028). Its policy-dependent role holds in every mode, a
 serial **Iteration** as much as a **Lane** (ADR-0037) — it was reported as inert at
 `parallel == 1` until the pair a **Pickup** resolves became the pair its session runs on.
 _Avoid_: auto-routing, learned routing, routing cache.

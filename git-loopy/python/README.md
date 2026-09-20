@@ -53,7 +53,7 @@ proof that allows a prompt replacement without overwriting operator prose.
 
 | Command | Flags | Exit behavior | Worked example |
 | --- | --- | --- | --- |
-| `update` | `--global` (default), `--project`, `--dry-run` | `0` when the chosen Config scope settles and every refreshed asset reaches the installed Release; `1` for an ambiguous or failed repair or asset refresh. | `git-loopy update --project` |
+| `update` | `--global` (default), `--project`, `--dry-run`, `--routing [keep\|migrate\|ask]` | `0` when the chosen Config scope settles and every refreshed asset reaches the installed Release; `1` for an undecided/refused migration, ambiguous or failed repair, or asset refresh failure. | `git-loopy update --project` |
 | `upgrade` | `--to <version>`, `--edge` / `--ref <ref>`, `--allow-downgrade` | `0` when already on the requested Release, or when the channel move and chained `update` both succeed; `1` when the target, direction, or channel cannot be proven, handoff fails, or the chained refresh fails. | `git-loopy upgrade --to 0.10.0` |
 | `uninstall` | `--all`, `--yes` / `-y` | `0` only when every planned removal succeeds; `1` for an unconfirmed plan, an unsafe path, a live or unreadable Lane, a channel that cannot be proven, or any incomplete removal. | `git-loopy uninstall --yes` |
 
@@ -367,6 +367,66 @@ revision because the source could not be reached, which is reported rather than
 passed off as a refresh. It never starts a Run or writes to the tracker;
 `git-loopy labels --apply` remains the only command that changes the **Label
 vocabulary** on GitHub.
+
+### Explicit routing migration (opt-in)
+
+```bash
+# Collect a keep-or-migrate choice; blank input, q, EOF or Ctrl-C cancels.
+git-loopy update --project --routing
+
+# Supply the decision without prompting, or preview it offline.
+git-loopy update --global --routing keep
+git-loopy update --project --routing migrate --dry-run
+```
+
+**Keep** records `route_policy = "static"`: saved routes and the run-wide default
+remain authoritative, and the Measured routing tier remains effective.
+**Migrate** records `route_policy = "dynamic"`: every authored `[routing]` row
+is retained, including rows identical to an old recommendation; only work
+uncovered by those rows becomes Dynamic. Calibration artifacts remain unchanged
+as supporting evidence, not Static pins under Dynamic policy. Remove a row you
+no longer want explicitly with `config routing unset <task-type> --<scope>`.
+Both choices disclose and enable strict live validation rather than silent
+effort/tier correction. Legacy pairs retain their inherited run-level tier, and
+only an explicitly configured `[escalation]` authorizes Static escalation.
+
+Migration needs your own `GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY` outside Config
+and an already verified `[route_associations]` table; no key or model association
+is invented. It collects missing `routing_deadline_seconds`,
+`routing_credit_allowance`, and `selector_concurrency` on an interactive terminal,
+with **no defaults**. Existing scope/inherited values may supply them; inherited
+values remain inherited rather than being copied into the project.
+Explicit `GIT_LOOPY_ROUTING_DEADLINE_SECONDS`,
+`GIT_LOOPY_ROUTING_CREDIT_ALLOWANCE`, and `GIT_LOOPY_SELECTOR_CONCURRENCY` values
+override those saved values for this migration and are persisted in the chosen
+scope. The credential is never saved. Classification and selector retries count
+toward Run Consumption; post-paid in-flight billing can overshoot the allowance.
+Exhaustion admits no further calls and never substitutes a cheaper selector.
+
+The candidate Config crosses the same routing readiness seam as doctor and a
+Run **before** any write. It verifies the chosen scope (plus global inheritance
+and the Measured routing tier for a project), without temporary Run overrides
+masking a missing prerequisite or invalid saved route. A global migration does
+not judge any repository's overrides. Readiness calls no selector, classifier,
+Calibration, or tracker write; its model-data requests use provider request quota.
+Every later Run, proposal and Pickup checks afresh.
+
+Without a terminal, `--routing` must find a recorded `route_policy` in the chosen
+scope, inherit an explicit global choice, or receive `keep`/`migrate` explicitly.
+An inherited choice remains inherited rather than creating a project override.
+An outstanding decision, cancelled
+question, invalid authorization, or failed readiness exits nonzero without
+writing Config or refreshing assets. Operator edits detected during readiness
+are not overwritten. Successful changes use an atomic write and the ordinary
+numbered Config backup; unchanged recorded choices are not rewritten.
+If a subsequent asset refresh fails, the successful Config migration stays saved.
+`--dry-run` neither prompts nor reads live readiness and explicitly says readiness
+was not checked. It requires a supplied or recorded choice.
+
+This option migrates policy, not retired routing keys: repair those separately
+with `update --project` or `update --global` first. Bare `update`, the `update`
+chained by `upgrade`, and existing unselected-policy Runs **do not yet require or
+choose a migration**. This is partial #567 work, not final default activation.
 
 ---
 
@@ -1112,11 +1172,13 @@ Run from reaching eligible Static work or recovering on a later fresh check.
 Configuration refusals still stop the Run. The Run carries its deadline ledger
 from preflight into routing; it does not grant a new budget after live reads.
 
-**Activation status (#567): incomplete.** Guided authorization, explicit
-keep-or-migrate setup/upgrade (including use of this readiness seam), and the
-composed first-setup/migration activation matrix and Wrapper/Conformance obligations
-still need to land before the final default changes. Existing
-Config is not migrated by this preflight change. Python issue-owning serial and
+**Activation status (#567): incomplete.** `update --routing` now offers explicit
+keep-or-migrate authorization and this shared readiness verdict, with saved-choice
+serial/Lane cases observing actual session settings and canonical records.
+Guided first setup, automatic upgrade/Run migration enforcement, the remaining
+composed activation matrix, and Wrapper/Conformance obligations still need to
+land before the final default changes. Existing Config is not migrated implicitly.
+Python issue-owning serial and
 Lane sessions are the implementation scope; shell/PowerShell activation remains
 deferred, and this does not add Subagent or Integration routing.
 

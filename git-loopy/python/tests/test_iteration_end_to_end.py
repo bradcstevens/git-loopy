@@ -6371,6 +6371,82 @@ def test_a_dynamic_route_reaches_the_serial_work_sessions_own_arguments(
     assert spied["assessments"], "the Route selector was never asked"
 
 
+@pytest.mark.parametrize(
+    ("choice", "saved_route", "expected_model", "expected_source"),
+    [
+        ("keep", False, "gpt-5.6-terra", "routed"),
+        ("migrate", False, "claude-opus-5", "dynamic"),
+        ("migrate", True, "gpt-5.6-terra", "routed"),
+    ],
+)
+def test_a_migration_choice_reaches_the_serial_session_and_canonical_pickup(
+    tmp_path, monkeypatch, choice, saved_route, expected_model, expected_source
+) -> None:
+    from git_loopy import settings
+    from tests.test_config_cmd import _write_measured
+    from tests.test_routing_migration import _listing, _update
+
+    client, _ = _wire_single_issue_github(
+        tmp_path, monkeypatch, labels=["ready-for-agent", "task-type:implementation"]
+    )
+    _harness(monkeypatch, ("gpt-5.6-terra", ["high"], True))
+    _listing(monkeypatch)
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _wire_dynamic_ports(
+        monkeypatch,
+        rows=(_aa_row("aa-opus", 70, 90), _aa_row("aa-terra", 40, 200)),
+        answer=_elects("claude-opus-5"),
+        listing=(
+            _listed_model("claude-opus-5", ["high"]),
+            _listed_model("gpt-5.6-terra", ["high"]),
+        ),
+    )
+    values = {
+        "model": "gpt-5.6-terra",
+        "reasoning_effort": "high",
+        "routing_deadline_seconds": 30,
+        "routing_credit_allowance": "2.5",
+        "selector_concurrency": 1,
+        "route_associations": {
+            "aa-opus": "claude-opus-5@high", "aa-terra": "gpt-5.6-terra@high",
+        },
+    }
+    if saved_route:
+        values["routing"] = {
+            "implementation": {"model": "gpt-5.6-terra", "effort": "high"}
+        }
+    path = settings.project_config_path(tmp_path)
+    settings.write_config_atomic(path, values)
+    _write_measured(tmp_path, implementation=("gpt-5.6-terra", "high"))
+    artifact = path.with_name("routing.measured.toml")
+    measured_before = artifact.read_bytes()
+    assert _update(tmp_path, routing_choice=choice) == 0
+    assert client.create_calls == [] and spied["assessments"] == []
+    assert artifact.read_bytes() == measured_before
+
+    tables = settings.load_configs(tmp_path, os.environ)
+    config = cli.resolve_config(
+        cli.build_parser().parse_args(["1"]),
+        {},
+        project=tables.project,
+        global_=tables.global_,
+        measured=tables.measured,
+    ).run
+    assert asyncio.run(loop_module.run(config)) == 0
+
+    call = client.create_calls[0]
+    assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+        expected_model, "high", "default",
+    )
+    (bound,) = _bound_pickups(tmp_path)
+    assert (bound["model"], bound["effort"], bound["context_tier"]) == (
+        expected_model, "high", "default",
+    )
+    assert bound["routing_source"] == expected_source
+    assert len(spied["assessments"]) == (1 if expected_source == "dynamic" else 0)
+    assert config.escalation_rung is None
+
+
 def test_the_dashboard_reads_the_dynamic_route_from_the_pickup_it_bound(
     tmp_path, monkeypatch
 ) -> None:

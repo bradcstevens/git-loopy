@@ -1,0 +1,148 @@
+"""Collect an explicit Route policy choice before update writes any Config."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Callable, Mapping
+
+from . import settings
+from .config import TaskTypeError, task_type_refusal
+from .configcmd import ConfigCommandError, coerce_value
+from .dynamic_route import ARTIFICIAL_ANALYSIS_API_KEY_ENV
+from .run_routing_preflight import resolve_run_routing_preflight
+
+_POLICIES = {"keep": "static", "migrate": "dynamic"}
+_LIMITS = (
+    ("routing_deadline_seconds", "GIT_LOOPY_ROUTING_DEADLINE_SECONDS"),
+    ("routing_credit_allowance", "GIT_LOOPY_ROUTING_CREDIT_ALLOWANCE"),
+    ("selector_concurrency", "GIT_LOOPY_SELECTOR_CONCURRENCY"),
+)
+
+
+def _answer(input_fn: Callable[[str], str], prompt: str) -> str:
+    try:
+        answer = input_fn(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        raise settings.SettingsError("Routing migration cancelled; Config unchanged.") from None
+    if answer.lower() in {"", "q", "quit", "cancel"}:
+        raise settings.SettingsError("Routing migration cancelled; Config unchanged.")
+    return answer
+
+
+def prepare_migration(
+    choice: str,
+    *,
+    scope: str,
+    table: Mapping[str, object],
+    inherited: Mapping[str, object],
+    measured: Mapping[str, tuple[str, str]],
+    env: Mapping[str, str],
+    output_fn: Callable[[str], None],
+    input_fn: Callable[[str], str] | None = None,
+    dry_run: bool = False,
+) -> dict[str, object]:
+    """Collect and verify a choice, or describe an offline dry-run candidate."""
+    from .cli import build_parser, resolve_config
+
+    output_fn(
+        "Saved Static routes are preserved, including values matching an old "
+        "recommendation. Legacy pairs keep their inherited run-level context "
+        "tier. Both choices enable strict live route validation: unsupported "
+        "settings are refused, not corrected. No implicit built-in escalation "
+        "is authorized; an explicitly configured [escalation] remains effective."
+    )
+    output_fn(
+        "Keep: Static routes and the saved run-wide default remain authoritative. "
+        "Migrate: retained Static routes still win; only uncovered work becomes "
+        "Dynamic. Calibration remains evidence under Dynamic policy, not a "
+        "Static pin; keep retains the Measured routing tier. Remove an unwanted "
+        "Static row explicitly with "
+        "`git-loopy config routing unset <task-type> --project/--global`."
+    )
+    keep_inherited = False
+    if choice == "ask":
+        recorded = settings.table_str(table, "route_policy", scope=scope)
+        local_choice = recorded is not None and bool(recorded.strip())
+        if not local_choice:
+            recorded = settings.table_str(inherited, "route_policy", scope="global")
+        if recorded is not None and recorded.strip():
+            try:
+                recorded = coerce_value("route_policy", recorded)
+            except ConfigCommandError as exc:
+                raise settings.SettingsError(str(exc)) from exc
+        if recorded in _POLICIES.values():
+            choice = next(key for key, value in _POLICIES.items() if value == recorded)
+            keep_inherited = not local_choice
+            origin = "inherited global" if keep_inherited else scope
+            output_fn(f"Using the recorded {recorded} Route policy from {origin} Config.")
+        elif input_fn is not None and not dry_run:
+            choice = _answer(input_fn, "Routing choice (keep/migrate; no default): ")
+    if choice not in _POLICIES:
+        raise settings.SettingsError(
+            "Routing migration needs an explicit keep-or-migrate decision. "
+            "Run `git-loopy update --routing keep` or "
+            "`git-loopy update --routing migrate` in the chosen scope "
+            "(--project or --global); Config unchanged."
+        )
+    candidate = dict(table)
+    if not keep_inherited:
+        candidate["route_policy"] = _POLICIES[choice]
+    if dry_run:
+        output_fn("Dry run: authorization and live readiness not checked.")
+        return candidate
+    if choice == "migrate":
+        output_fn(
+            f"Dynamic access must be operator-owned, supplied via "
+            f"{ARTIFICIAL_ANALYSIS_API_KEY_ENV} outside Config "
+            "(https://artificialanalysis.ai/api-reference). "
+            "Verified [route_associations] must already be configured; names "
+            "are not inferred. No Calibration is started."
+        )
+        output_fn(
+            "Authorize finite assessment time, per-Run routing AI Credits "
+            "(classification and selector retries included), and selector "
+            "concurrency. In-flight post-paid billing can overshoot the allowance; "
+            "exhaustion admits no new calls and never a cheaper selector."
+        )
+        for key, env_name in _LIMITS:
+            supplied = env.get(env_name)
+            persist = supplied is not None and bool(supplied.strip())
+            raw = supplied if persist else candidate.get(key, inherited.get(key))
+            if raw is None and input_fn is not None:
+                raw = _answer(input_fn, f"{key} (explicit value; no default): ")
+                persist = True
+            if raw is None:
+                raise settings.SettingsError(
+                    f"Supply {key} in Config or {env_name}, or use "
+                    "`git-loopy update --routing migrate` on an interactive "
+                    "terminal. No allowance is invented; Config unchanged."
+                )
+            try:
+                value = coerce_value(key, str(raw))
+            except ConfigCommandError as exc:
+                raise settings.SettingsError(str(exc)) from exc
+            if persist:
+                candidate[key] = value
+            output_fn(f"Authorized {key} = {value}.")
+    try:
+        config = resolve_config(
+            build_parser().parse_args([]),
+            {},
+            project=candidate if scope == "project" else {},
+            global_=inherited if scope == "project" else candidate,
+            measured=measured,
+            warn=output_fn,
+        ).run
+    except TaskTypeError as exc:
+        raise settings.SettingsError(task_type_refusal(exc)) from exc
+    except (ValueError, SystemExit) as exc:
+        raise settings.SettingsError(str(exc)) from exc
+    verdict = asyncio.run(resolve_run_routing_preflight(config, env, warn=output_fn))
+    if (refusal := verdict.refusal or verdict.dynamic_refusal) is not None:
+        raise settings.SettingsError(refusal)
+    output_fn(
+        "Saved-scope routing readiness passed; temporary Run overrides were not "
+        "used. No Route selector or classifier was called. This is not Pickup "
+        "authority: every Run validates afresh."
+    )
+    return candidate

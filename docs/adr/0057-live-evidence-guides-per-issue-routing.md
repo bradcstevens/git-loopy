@@ -195,3 +195,25 @@ The map remains open for [#293](https://github.com/bradcstevens/git-loopy/issues
 (blast-radius guards) and [#295](https://github.com/bradcstevens/git-loopy/issues/295)
 (intra-session Subagent routing). Excluding them from this delivery does not answer
 their separate questions.
+
+## Partial activation status (#567)
+
+Python's opt-in `update --routing` now collects or reuses an explicit keep-or-migrate
+choice, retains every authored Static row, requires operator-owned Dynamic access
+outside Config and explicit finite limits, and uses the shared Run/doctor readiness
+verdict before saving. Unattended use of this option with no recorded or supplied
+choice refuses without prompting. It does not make bare update, upgrade or a legacy
+Run demand that choice yet. Both choices disclose strict validation, inherited-tier
+semantics and the end of implicit Static escalation.
+
+Under Dynamic policy, Calibration remains evidence rather than an implicit Static
+pin. Its artifact is preserved; legacy/unselected and Static policies retain the
+Measured routing tier. Config readback reports uncovered Dynamic work as pending
+Pickup rather than inventing a final pair.
+
+The saved migration choices are composed through actual serial and Lane sessions
+and canonical Pickup records, including fresh source outages after migration.
+Guided first setup, automatic upgrade/Run migration enforcement, the remaining
+composed acceptance and Wrapper/Conformance obligations still precede final default
+activation. Dynamic routing remains opt-in; shell/PowerShell activation is deferred,
+and no Subagent or Integration routing support is implied.

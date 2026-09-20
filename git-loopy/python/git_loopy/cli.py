@@ -923,6 +923,20 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "no asset."
         ),
     )
+    update.add_argument(
+        "--routing",
+        dest="routing_choice",
+        nargs="?",
+        const="ask",
+        choices=("keep", "migrate", "ask"),
+        help=(
+            "Opt into the keep-or-migrate Route policy decision. Keep records "
+            "strict Static routing; migrate makes uncovered work Dynamic. Both "
+            "preserve saved Static entries. Omit the value to use a recorded "
+            "choice or ask on an interactive terminal. Dynamic authorization "
+            "and live readiness must pass before Config is written."
+        ),
+    )
     update_scope = update.add_mutually_exclusive_group()
     update_scope.add_argument(
         "--project",
@@ -1424,6 +1438,12 @@ def _run_update(args: argparse.Namespace) -> int:
     return updatecmd.run_update(
         dry_run=bool(args.dry_run),
         project_root=project_root,
+        routing_choice=args.routing_choice,
+        input_fn=(
+            input
+            if _wizard_terminal_available(sys.stdin.isatty(), sys.stdout.isatty())
+            else None
+        ),
     )
 
 
@@ -2027,6 +2047,8 @@ def merge_routing_tiers(
     global_: Mapping[str, object],
     measured: Mapping[str, tuple[str, str]],
     measured_provisional: Collection[str] = (),
+    *,
+    route_policy: RoutePolicy = RoutePolicy.UNSELECTED,
 ) -> dict[str, tuple[RoutingTier, tuple[str, str]]]:
     """Walk the routing tiers lowest-first, keeping each key's *last* writer.
 
@@ -2036,6 +2058,9 @@ def merge_routing_tiers(
     (#364). Later-wins per task-type key is the whole precedence rule: a tier
     replaces the entire ``(model, effort)`` pair for a key it names, and keys
     only a lower tier names survive untouched.
+
+    Dynamic policy admits Calibration as evidence, not as a Static pin. Its
+    precedence walk therefore contains only the operator-owned Config tiers.
 
     ``measured_provisional`` names the subset of ``measured`` keys whose record is
     :attr:`~git_loopy.measured_routing.MeasuredStatus.PROVISIONAL` — in force and
@@ -2047,7 +2072,10 @@ def merge_routing_tiers(
     provisional = frozenset(measured_provisional)
     merged: dict[str, tuple[RoutingTier, tuple[str, str]]] = {}
     for tier, table in (
-        (RoutingTier.MEASURED, dict(measured)),
+        (
+            RoutingTier.MEASURED,
+            {} if route_policy is RoutePolicy.DYNAMIC else dict(measured),
+        ),
         (RoutingTier.GLOBAL, settings.table_routing(global_, scope="global")),
         (RoutingTier.PROJECT, settings.table_routing(project, scope="project")),
     ):
@@ -2178,6 +2206,7 @@ def _resolve_routing(
     measured_provisional: Collection[str] = (),
     *,
     warn: Callable[[str], None],
+    route_policy: RoutePolicy = RoutePolicy.UNSELECTED,
 ) -> tuple[dict[str, tuple[str, str]], dict[str, RoutingTier]]:
     """Resolve the effective per-issue routing map (issue #146, #361).
 
@@ -2193,7 +2222,9 @@ def _resolve_routing(
     it forever, with no override flag and no special case, because that is the
     precedence chain that already shipped. A task type nobody configured in
     either scope takes the measured value; one nobody measured either falls
-    through to the run-wide default at resolution time.
+    through to the run-wide default at resolution time. Under Dynamic policy,
+    only authored Config entries participate: Calibration is supporting evidence
+    and uncovered work is assessed at Pickup rather than defaulted.
 
     Returns ``({}, {})`` (routing off, run-wide) when an explicit model/effort
     override is present (:func:`_explicit_model_or_effort_override`) — the
@@ -2211,7 +2242,9 @@ def _resolve_routing(
         _validate_config_routing_keys(global_, scope="global")
         _validate_config_routing_keys(project, scope="project")
         return {}, {}
-    walked = merge_routing_tiers(project, global_, measured, measured_provisional)
+    walked = merge_routing_tiers(
+        project, global_, measured, measured_provisional, route_policy=route_policy
+    )
     merged = {key: pair for key, (_tier, pair) in walked.items()}
     provenance = {key: tier for key, (tier, _pair) in walked.items()}
     off_roster = sorted(
@@ -2609,6 +2642,10 @@ def resolve_config(
     without having been measured (#376) — a reporting distinction, not a
     precedence one.
 
+    Under Dynamic policy, the measured tier supplies evidence to the assessment,
+    not Static routing entries. Only operator-owned Config rows can suppress
+    Dynamic selection per Task type.
+
     The model/effort policy (:func:`_resolve_model_and_effort`: suffix-peel +
     per-model capability gate) sits at the *bottom* of the chain, fed the raw
     model/effort resolved across the tiers. A ``model`` / ``reasoning_effort``
@@ -2692,7 +2729,8 @@ def resolve_config(
     )
 
     routing, routing_provenance = _resolve_routing(
-        args, env, project, global_, measured, measured_provisional, warn=warn
+        args, env, project, global_, measured, measured_provisional,
+        warn=warn, route_policy=route_policy,
     )
     suppressed_by = routing_suppressed_by(args, env)
 

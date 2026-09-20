@@ -232,7 +232,9 @@ def test_main_update_runs_outside_a_git_repository(
     )
 
     assert cli_module.main(["update"]) == 0
-    assert captured == [{"dry_run": False, "project_root": None}]
+    assert captured == [{
+        "dry_run": False, "project_root": None, "routing_choice": None, "input_fn": None,
+    }]
 
 
 def test_main_update_targets_project_config_only_when_requested(
@@ -248,7 +250,9 @@ def test_main_update_targets_project_config_only_when_requested(
     )
 
     assert cli_module.main(["update", "--project", "--dry-run"]) == 0
-    assert captured == [{"dry_run": True, "project_root": tmp_path}]
+    assert captured == [{
+        "dry_run": True, "project_root": tmp_path, "routing_choice": None, "input_fn": None,
+    }]
 
 
 def test_main_update_project_refuses_outside_a_repository(

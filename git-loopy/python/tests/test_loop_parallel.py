@@ -8116,6 +8116,100 @@ def test_a_dynamic_route_reaches_each_lanes_own_work_session(
     assert len(spied["assessments"]) == 2
 
 
+@pytest.mark.parametrize(
+    ("choice", "saved_route", "outage", "expected_model", "expected_source"),
+    [
+        ("keep", False, False, "gpt-5.6-terra", "routed"),
+        ("migrate", False, False, "claude-opus-5", "dynamic"),
+        ("migrate", True, False, "gpt-5.6-terra", "routed"),
+        ("migrate", False, True, None, None),
+        ("migrate", True, True, "gpt-5.6-terra", "routed"),
+    ],
+)
+def test_a_saved_migration_choice_reaches_lanes_only_after_fresh_readiness(
+    tmp_path, monkeypatch, choice, saved_route, outage, expected_model, expected_source
+) -> None:
+    import os
+
+    from git_loopy import cli, settings
+    from tests.test_config_cmd import _write_measured
+    from tests.test_routing_migration import _authorized_values, _listing, _update
+
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    tracker = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(ref, labels=[
+                "ready-for-agent", "parallel-safe", "task-type:implementation",
+            ])
+            for ref in (42, 43)
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: tracker)
+    client = _ParallelFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _script_harness(
+        monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
+    )
+    _listing(monkeypatch)
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    spied = _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+    values = _authorized_values()
+    values["route_associations"] = {
+        "aa-opus": "claude-opus-5@high", "aa-terra": "gpt-5.6-terra@high",
+    }
+    if saved_route:
+        values["routing"] = {
+            "implementation": {"model": "gpt-5.6-terra", "effort": "high"}
+        }
+    path = settings.project_config_path(tmp_path)
+    settings.write_config_atomic(path, values)
+    _write_measured(tmp_path, implementation=("gpt-5.6-terra", "high"))
+    assert _update(tmp_path, routing_choice=choice) == 0
+    assert client.create_calls == [] and spied["assessments"] == []
+    saved = path.read_bytes()
+    if outage:
+        async def unavailable(*_args):
+            raise OSError("source unavailable after migration")
+        monkeypatch.setattr(dynamic_route, "_stdlib_fetch", unavailable)
+    tables = settings.load_configs(tmp_path, os.environ)
+    config = cli.resolve_config(
+        cli.build_parser().parse_args(["2"]),
+        {},
+        project=tables.project,
+        global_=tables.global_,
+        measured=tables.measured,
+    ).run
+
+    code = asyncio.run(loop_module.run(config))
+
+    assert path.read_bytes() == saved
+    bound = [e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pickup.bound"]
+    if expected_model is None:
+        assert code != 0
+        assert client.create_calls == [] and bound == [] and spied["assessments"] == []
+        return
+    assert code == 0
+    assert len(client.create_calls) == len(bound) == 2
+    assert {Path(call["working_directory"]).name for call in client.create_calls} == {
+        "issue-42", "issue-43",
+    }
+    assert {
+        (call["model"], call["reasoning_effort"], call["context_tier"])
+        for call in client.create_calls
+    } == {(expected_model, "high", "default")}
+    assert {
+        (e["model"], e["effort"], e["context_tier"], e["routing_source"])
+        for e in bound
+    } == {(expected_model, "high", "default", expected_source)}
+    assert len(spied["assessments"]) == (2 if expected_source == "dynamic" else 0)
+    assert config.escalation_rung is None
+
+
 def test_a_lane_whose_dynamic_route_is_unavailable_opens_no_session(
     tmp_path, monkeypatch
 ) -> None:

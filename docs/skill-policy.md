@@ -457,9 +457,13 @@ A successful readiness row promises neither issue-specific fit nor a route:
 proposal and Pickup must check fresh inputs again. A failed Dynamic-readiness row
 makes doctor nonzero while eligible Static work can still proceed in a Run;
 configuration refusals still stop that Run. The deadline starts at preflight and
-is not reset when the Run constructs its router. This remains partial #567 work:
-guided setup/migration, its composed activation matrix, and the final default are
-not delivered by this change.
+is not reset when the Run constructs its router. The explicit
+`git-loopy update --routing [keep|migrate]` path now calls this same readiness seam
+before writing a migration choice. It preserves authored Static routes and requires
+operator-owned Dynamic access and finite limits; doctor never makes that choice.
+This remains partial #567 work: guided first setup, automatic upgrade/Run migration
+enforcement, the remaining composed activation matrix, and final defaults are not
+delivered. Bare update and unselected-policy Runs retain their existing behavior.
 
 The Label row judges the presence of the names a Run reads and cannot create for
 itself — the triage roles, `parallel-safe`, `priority`, and `ready-for-agent`,
