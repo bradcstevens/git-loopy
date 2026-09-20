@@ -4094,10 +4094,8 @@ def test_dynamic_retry_fixture(case: dict[str, Any]) -> None:
     """
     ledger = AttemptEvidenceLedger()
     ledger.bound(7, _RESOLUTION_FOR_RETRY_CASES)
-    ledger.observe(
-        7,
-        None if case["outcome"] is None else SessionOutcome(case["outcome"]),
-    )
+    outcome = None if case["outcome"] is None else SessionOutcome(case["outcome"])
+    ledger.observe(7, outcome)
 
     (recorded,) = ledger.prior_attempts(7)
     assert recorded.outcome.value == case["prior_outcome"]
@@ -4107,6 +4105,15 @@ def test_dynamic_retry_fixture(case: dict[str, Any]) -> None:
         _RESOLUTION_FOR_RETRY_CASES.reasoning_effort,
         _RESOLUTION_FOR_RETRY_CASES.context_tier,
     )
+    for initial, expected in (
+        (AttemptState.FRESH, case["after_fresh"]),
+        (AttemptState.RETRYING, case["after_retrying"]),
+    ):
+        lifecycle = AttemptLedger()
+        if initial is AttemptState.RETRYING:
+            lifecycle.observe(7, SessionOutcome.NO_PROGRESS)
+        assert lifecycle.observe(7, outcome).value == expected
+        assert lifecycle.skipped(7) is (expected == "skipped")
 
 
 def test_the_dynamic_retry_fixture_classifies_every_ending_there_is() -> None:

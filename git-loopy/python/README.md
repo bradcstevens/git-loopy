@@ -1238,6 +1238,17 @@ configuration is still tellable from a first election that happened to agree.
 Nothing changes inside a session that is already running: the route is fixed for
 that Agent, and reassessment happens at the next Pickup.
 
+Long-running advancing work keeps a bounded assessment history: earlier
+task-solving failures stay visible alongside recent advances, and omitted
+advances still count toward the session ordinal and invalidate reuse.
+Progress neither spends nor refunds lifecycle attempts. An explicitly configured
+Static escalation rung wins even when it equals the Run default.
+
+Rolling dispatch retains its existing one-Lane-per-issue collision guard. A
+permitted retry of Lane work is reassessed when a later serial Pickup admits
+it; dynamic routing does not create another Lane or guarantee a retry that the
+scheduler has not admitted.
+
 The same remote-placement refusal applies: `route_policy = "dynamic"` with a
 non-`local` `execution_host` is refused before any work, for the reason above.
 

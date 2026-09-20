@@ -857,10 +857,8 @@ class PriorAttempt:
         return (self.model, self.reasoning_effort, self.context_tier)
 
 
-#: How many earlier attempts one request may carry. An issue's **Attempt
-#: lifecycle** allows two before it is skipped, so this is not a working bound
-#: on a well-behaved Run — it is the same bound every other request collection
-#: takes, so no path can grow the assessment input without passing a validator.
+#: Advancing work spends no lifecycle attempt, so its history can grow beyond
+#: this bound even though only two failures are admitted.
 _MAX_PRIOR_ATTEMPTS = 64
 
 
@@ -908,6 +906,9 @@ class RoutingRequest:
     order a selector reads them in is the order they happened.
     """
 
+    prior_attempts_omitted: int = 0
+    """Older advances omitted from bounded history, not refunded attempts."""
+
     def __post_init__(self) -> None:
         if not all(
             isinstance(group, tuple)
@@ -953,6 +954,12 @@ class RoutingRequest:
             )
         if len(self.prior_attempts) > _MAX_PRIOR_ATTEMPTS:
             raise ValueError("routing request collections exceed their bounded size")
+        if (
+            isinstance(self.prior_attempts_omitted, bool)
+            or not isinstance(self.prior_attempts_omitted, int)
+            or self.prior_attempts_omitted < 0
+        ):
+            raise ValueError("omitted prior attempts must be a nonnegative integer")
         _validate_bounded_input(self.bounded_input_tokens)
 
 
@@ -1205,6 +1212,7 @@ class RoutingProposal:
     usage: RoutingUsage
     lifecycle_position: str | None = None
     prior_attempts: tuple[PriorAttempt, ...] = ()
+    prior_attempts_omitted: int = 0
     repeat_justification: str | None = None
     nonbinding: bool = True
 
@@ -1244,6 +1252,7 @@ class DynamicRouteDecision:
     usage: RoutingUsage
     lifecycle_position: str | None = None
     prior_attempts: tuple[PriorAttempt, ...] = ()
+    prior_attempts_omitted: int = 0
     repeat_justification: str | None = None
 
     reused_proposal_id: str | None = None
@@ -1604,6 +1613,7 @@ class DynamicRouter:
                     usage=self._ledger.snapshot(),
                     lifecycle_position=request.lifecycle_position,
                     prior_attempts=request.prior_attempts,
+                    prior_attempts_omitted=request.prior_attempts_omitted,
                     repeat_justification=candidate.repeat_justification,
                     reused_proposal_id=candidate.proposal_id,
                     reused_validated_at=candidate.validated_at,
@@ -1651,6 +1661,7 @@ class DynamicRouter:
             usage=self._ledger.snapshot(),
             lifecycle_position=active.lifecycle_position,
             prior_attempts=active.prior_attempts,
+            prior_attempts_omitted=active.prior_attempts_omitted,
             repeat_justification=active.repeat_justification,
         )
 
@@ -1797,6 +1808,7 @@ class DynamicRouter:
             usage=self._ledger.snapshot(),
             lifecycle_position=request.lifecycle_position,
             prior_attempts=request.prior_attempts,
+            prior_attempts_omitted=request.prior_attempts_omitted,
             repeat_justification=justification,
         )
         self._proposals[proposal.proposal_id] = proposal
@@ -2060,7 +2072,7 @@ def routing_provenance_payload(decision: DynamicRouteDecision) -> dict[str, Any]
       **Consumption** is reconciled against the credits recorded here.
     - **The configuration and the lifecycle position are separate axes** (#562,
       AC6). ``lifecycle_position`` is the issue's **Attempt lifecycle** state
-      and ``attempt`` counts the evidence rows before this one; neither is
+      and ``attempt`` counts every earlier session, including omitted history; neither is
       derivable from the other, because an **Iteration** that advanced its issue
       without closing it is a prior attempt the ledger charged nothing for.
     - **Absent prior evidence is an empty list, not a missing key.** A consumer
@@ -2082,7 +2094,7 @@ def routing_provenance_payload(decision: DynamicRouteDecision) -> dict[str, Any]
         "context_tier": decision.route.context_tier,
         "summary": decision.summary,
         "lifecycle_position": decision.lifecycle_position,
-        "attempt": len(decision.prior_attempts) + 1,
+        "attempt": len(decision.prior_attempts) + decision.prior_attempts_omitted + 1,
         "prior_attempts": [
             {
                 "model": attempt.model,

@@ -112,9 +112,9 @@ def build_routing_request(
         prior_attempts: What earlier attempts on this issue ran on and how they
             ended, oldest first, already classified by
             :class:`~git_loopy.attempt_evidence.AttemptEvidenceLedger`.
-            Truncated to the most recent :data:`MAX_CRITERIA` for the reason the
-            criteria are: an over-long history is an assessable issue rather
-            than an unroutable one, and the *recent* end is the relevant one.
+            Bounded to :data:`MAX_CRITERIA`, retaining capability failures
+            before recent advances so progress cannot erase an earlier failure.
+            Omitted rows still count toward the attempt number and input identity.
         feedback_loops: The repository's declared **Feedback loops**. This is
             the whole of the "relevant repository context": the gates this
             issue's work will actually have to pass, which is the one thing
@@ -148,7 +148,11 @@ def build_routing_request(
         if loop.runnable
     )[:MAX_CRITERIA]
     measurements = _local_measurements(measured, task_type)
-    history = tuple(prior_attempts)[-MAX_CRITERIA:]
+    retained = sorted(
+        enumerate(prior_attempts),
+        key=lambda row: (row[1].capability_evidence, row[0]),
+    )[-MAX_CRITERIA:]
+    history = tuple(attempt for _, attempt in sorted(retained))
     return RoutingRequest(
         issue=issue,
         acceptance_criteria=criteria,
@@ -168,6 +172,7 @@ def build_routing_request(
         issue_ref=issue_ref,
         lifecycle_position=lifecycle_position,
         prior_attempts=history,
+        prior_attempts_omitted=len(prior_attempts) - len(history),
     )
 
 

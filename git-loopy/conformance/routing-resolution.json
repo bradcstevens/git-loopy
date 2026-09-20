@@ -486,6 +486,8 @@
       "note": "The one ending that is. The session ran to the end, claimed no failure, and left nothing behind -- the shape a configuration too weak for the work fails in.",
       "outcome": "no_progress",
       "prior_outcome": "did_not_solve",
+      "after_fresh": "retrying",
+      "after_retrying": "skipped",
       "capability_evidence": true
     },
     {
@@ -493,6 +495,8 @@
       "note": "ADR-0057's headline distinction. A Runner that demoted the route here would spend the rest of its life avoiding whatever was running when the network blinked.",
       "outcome": "crash",
       "prior_outcome": "infrastructure_failure",
+      "after_fresh": "retrying",
+      "after_retrying": "skipped",
       "capability_evidence": false
     },
     {
@@ -500,6 +504,8 @@
       "note": "A turn refused by policy says nothing about capability; the same work on the same model may pass on the next attempt.",
       "outcome": "content_filtered",
       "prior_outcome": "infrastructure_failure",
+      "after_fresh": "skipped",
+      "after_retrying": "skipped",
       "capability_evidence": false
     },
     {
@@ -507,6 +513,8 @@
       "note": "Neither neighbour would be honest: a session that never reached an end did not demonstrate it could not solve the task, and the wait running out is not the harness failing.",
       "outcome": "timeout",
       "prior_outcome": "ran_out_of_time",
+      "after_fresh": "skipped",
+      "after_retrying": "skipped",
       "capability_evidence": false
     },
     {
@@ -514,6 +522,8 @@
       "note": "Reading this as a failure of the configuration is exactly the blind blacklisting of a capable configuration the decision forbids.",
       "outcome": "no_more_tasks",
       "prior_outcome": "nothing_to_do",
+      "after_fresh": "skipped",
+      "after_retrying": "skipped",
       "capability_evidence": false
     },
     {
@@ -521,6 +531,8 @@
       "note": "`null` is the absence of an ending, not a sixth one. It spends no attempt and is the strongest evidence there is that the configuration is working.",
       "outcome": null,
       "prior_outcome": "advanced",
+      "after_fresh": "fresh",
+      "after_retrying": "retrying",
       "capability_evidence": false
     }
   ]

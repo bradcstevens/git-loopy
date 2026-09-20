@@ -1841,11 +1841,12 @@ def test_repeating_a_configuration_that_did_not_solve_the_task_needs_a_reason() 
     in the prompt.
     """
     unsolved = _retry_request(dynamic_route.PriorOutcome.DID_NOT_SOLVE)
+    identity = _elected_decision().work_evidence.stable_identity
     assessments: list[dynamic_route.AssessmentRequest] = []
     router = _repeat_router(
         [
             {
-                "candidate_identity": "PLACEHOLDER",
+                "candidate_identity": identity,
                 "summary": "Highest published index among eligible configurations.",
             }
         ],
@@ -1861,7 +1862,6 @@ def test_repeating_a_configuration_that_did_not_solve_the_task_needs_a_reason() 
         "work-model"
     ]
 
-    identity = assessments[0].candidates[0].stable_identity
     assessments.clear()
     justified = _repeat_router(
         [
@@ -2083,6 +2083,36 @@ def _reusable_from(
         selector_context_tier=decision.selector.context_tier,
         relevant_input_identity=decision.relevant_input_identity,
         validated_at=decision.validated_at,
+    )
+
+
+@pytest.mark.parametrize("change", ["outcome", "omitted_history"])
+def test_changed_attempt_evidence_invalidates_cross_run_reuse(change) -> None:
+    request = _retry_request(dynamic_route.PriorOutcome.INFRASTRUCTURE_FAILURE)
+    first = _elected_decision(request)
+    changed = (
+        replace(request, prior_attempts_omitted=1)
+        if change == "omitted_history"
+        else _retry_request(dynamic_route.PriorOutcome.ADVANCED)
+    )
+    assessments: list[dynamic_route.AssessmentRequest] = []
+    router = _repeat_router(
+        [{
+            "candidate_identity": first.work_evidence.stable_identity,
+            "summary": "Forecast reconsidered using the changed attempt evidence.",
+        }],
+        assessments,
+    )
+
+    decision = asyncio.run(router.rebind([_reusable_from(first)], changed))
+
+    assert isinstance(decision, dynamic_route.DynamicRouteDecision)
+    assert decision.reused is False
+    assert decision.reassessed is True
+    assert len(assessments) == 1
+    assert decision.relevant_input_identity != first.relevant_input_identity
+    assert dynamic_route.routing_provenance_payload(decision)["attempt"] == (
+        3 if change == "omitted_history" else 2
     )
 
 

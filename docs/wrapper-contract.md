@@ -1702,6 +1702,8 @@ election an answer an operator can audit rather than a plausible-looking guess.
   creates no attempt: it MUST NOT reset or bypass a per-issue attempt or **Strike** limit, and a
   later route that cannot be elected blocks the affected work under the rule above rather than
   becoming an attempt that never ran.
+  An explicitly configured Static escalation rung still wins, even when it equals the
+  run-wide default that a dynamic election would otherwise replace.
 - **An infrastructure failure is not evidence about a configuration.** A crash, a policy-refused
   turn, an exhausted wait and an explicit no-more-tasks each say something other than *this
   configuration could not do this work*, and an Orchestrator MUST NOT read them as capability
@@ -1717,6 +1719,9 @@ election an answer an operator can audit rather than a plausible-looking guess.
   from a first election, and the position MUST NOT be derived from how many earlier attempts there
   were: an **Iteration** that advanced its issue reaches no ending and spends no attempt, yet is a
   real earlier attempt the next election is told about.
+  Bounded history MUST retain earlier capability failures before recent advances. Omitted
+  advances still count toward the recorded session ordinal and the relevant input identity;
+  truncation MUST NOT reset numbering or make changed attempt history reusable.
 
 - **A later Run may revalidate a decision, and may never replay one.** An Orchestrator MAY reuse a
   routing result its own earlier Run recorded instead of electing again, but only after it has read

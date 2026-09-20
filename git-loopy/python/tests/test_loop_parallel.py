@@ -101,6 +101,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -7878,7 +7879,9 @@ def _script_harness(monkeypatch, *models) -> None:
     monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", _refresh)
 
 
-def _dynamic_lane_ports(monkeypatch, *, answer) -> dict[str, list[Any]]:
+def _dynamic_lane_ports(
+    monkeypatch, *, answer, capabilities_available=lambda: True
+) -> dict[str, list[Any]]:
     """Substitute only the two ports a **Dynamic route** takes to the network.
 
     A real :class:`~git_loopy.dynamic_route.DynamicRouter` over scripted inputs
@@ -7919,6 +7922,12 @@ def _dynamic_lane_ports(monkeypatch, *, answer) -> dict[str, list[Any]]:
         ).encode("utf-8")
 
     async def _capabilities():
+        if not capabilities_available():
+            return dynamic_route.FreshHarnessCapabilities(
+                retrieved_at=datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc),
+                capabilities=static_route.HarnessCapabilities.from_listing([]),
+                tier_capacities={},
+            )
         return dynamic_route.FreshHarnessCapabilities(
             retrieved_at=datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc),
             capabilities=static_route.HarnessCapabilities.from_listing(
@@ -8087,24 +8096,8 @@ def test_a_lane_whose_dynamic_route_is_unavailable_opens_no_session(
     assert fake_git.active_worktrees == []
 
 
-def test_a_lane_that_stalled_reassesses_at_its_next_dynamic_pickup(
-    tmp_path, monkeypatch
-) -> None:
-    """AC9's second mode: outcome evidence crosses the dispatch boundary (#562).
-
-    The same shape as the **Escalation rung**'s per-issue rule
-    (:func:`test_a_lane_that_stalled_escalates_at_its_next_pickup`), and for the
-    same reason: a silently stalled **Lane** is never auto-resolved and its
-    issue is only ever re-taken by a later serial round, so evidence recorded
-    per mode would be recorded on the side of the boundary that cannot act on
-    it. The Lane learns the elected configuration solved nothing and the Pickup
-    that reassesses never hears.
-
-    Under a **Dynamic route** there is no rung to inherit, so the second
-    election *is* the mechanism. It is told what the Lane ran on and that the
-    ending was evidence about the work rather than about the harness, and the
-    record separates that position from the configuration.
-    """
+def _dynamic_retry_lane_run(tmp_path, monkeypatch, *, outcome="no_progress", **overrides):
+    """A Lane and a later serial Pickup, sharing the real Run's ledgers."""
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
     fake_gh = FakeGitHubClient(
@@ -8115,21 +8108,56 @@ def test_a_lane_that_stalled_reassesses_at_its_next_dynamic_pickup(
         ],
     )
     monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
-    monkeypatch.setattr(
-        loop_module,
-        "_make_client",
-        lambda: _NoProgressFakeClient(
-            fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
-        ),
+    class OutcomeSession(_NoProgressFakeSession):
+        async def send_and_wait(self, prompt, *, timeout=60.0, **extra):
+            if outcome == "crash":
+                raise ConnectionError("offline harness transport failed")
+            if outcome == "advanced":
+                target = (
+                    fake_git.worktree_client(Path(self._working_directory))
+                    if self._working_directory else fake_git
+                )
+                target.simulate_agent_commit(subject="feat: advance without closing")
+            return await super().send_and_wait(prompt, timeout=timeout, **extra)
+
+    fake_client = _NoProgressFakeClient(
+        fake_git=fake_git, scripted_events=[_usage_event("gpt-5-mini")]
     )
+    fake_client._session_cls = OutcomeSession
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
     monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
     _script_harness(
         monkeypatch, ("claude-opus-5", ["high"], True), ("gpt-5.6-terra", ["high"], True)
     )
     monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
-    spied = _dynamic_lane_ports(monkeypatch, answer=_elects_lane_model("claude-opus-5"))
+    spied = _dynamic_lane_ports(
+        monkeypatch,
+        answer=overrides.pop("answer", _elects_lane_model("claude-opus-5")),
+        capabilities_available=overrides.pop("capabilities_available", lambda: True),
+    )
+    exit_code = asyncio.run(loop_module.run(_dynamic_parallel_config(**overrides)))
+    return fake_client, spied, exit_code
 
-    asyncio.run(loop_module.run(_dynamic_parallel_config(max_nmt_strikes=9)))
+
+@pytest.mark.parametrize(
+    ("outcome", "prior_outcome", "position"),
+    [
+        ("no_progress", dynamic_route.PriorOutcome.DID_NOT_SOLVE, "retrying"),
+        ("crash", dynamic_route.PriorOutcome.INFRASTRUCTURE_FAILURE, "retrying"),
+        ("advanced", dynamic_route.PriorOutcome.ADVANCED, "fresh"),
+    ],
+)
+@pytest.mark.parametrize("retry_model", ["claude-opus-5", "gpt-5.6-terra"])
+def test_a_lane_outcome_reaches_its_next_dynamic_pickup(
+    tmp_path, monkeypatch, outcome, prior_outcome, position, retry_model
+) -> None:
+    """Both dispatch paths read one history without manufacturing Attempts."""
+    fake_client, spied, _exit_code = _dynamic_retry_lane_run(
+        tmp_path, monkeypatch, outcome=outcome, max_nmt_strikes=9,
+        answer=lambda request: _elects_lane_model(
+            retry_model if request.prior_attempts else "claude-opus-5"
+        )(request),
+    )
 
     lane, retry = (
         request
@@ -8139,16 +8167,98 @@ def test_a_lane_that_stalled_reassesses_at_its_next_dynamic_pickup(
     assert lane.prior_attempts == ()
     (evidence,) = retry.prior_attempts
     assert evidence.model == "claude-opus-5"
-    assert evidence.outcome is dynamic_route.PriorOutcome.DID_NOT_SOLVE
-    assert evidence.capability_evidence is True
+    assert evidence.outcome is prior_outcome
+    assert evidence.capability_evidence is (outcome == "no_progress")
 
     resolved = [
         e for e in _logged_events(tmp_path) if e["type"] == "wrapper.routing.resolved"
     ]
     assert [(e["issue"], e["attempt"], e["lifecycle_position"]) for e in resolved] == [
         (42, 1, "fresh"),
-        (42, 2, "retrying"),
+        (42, 2, position),
     ]
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "claude-opus-5", retry_model
+    ]
+    assert [event["model"] for event in resolved] == ["claude-opus-5", retry_model]
+
+
+@pytest.mark.parametrize("outcome", ["no_progress", "crash"])
+def test_dynamic_lane_retry_exhaustion_starts_no_third_attempt(
+    tmp_path, monkeypatch, outcome
+) -> None:
+    fake_client, spied, exit_code = _dynamic_retry_lane_run(
+        tmp_path, monkeypatch, outcome=outcome, max_iterations=5, max_nmt_strikes=1
+    )
+
+    assert exit_code == 1
+    assert len(fake_client.create_calls) == 2
+    assert len([
+        request for _, request in spied["assessments"] if "Test issue 42" in request.issue
+    ]) == 2
+    events = _logged_events(tmp_path)
+    assert len([e for e in events if e["type"] == "wrapper.strike"]) == 1
+    assert [e["outcome"] for e in events if e["type"] == "wrapper.run.end"] == ["stuck"]
+
+
+def test_explicit_default_equal_rung_wins_after_a_dynamic_lane(
+    tmp_path, monkeypatch
+) -> None:
+    fake_client, spied, exit_code = _dynamic_retry_lane_run(
+        tmp_path, monkeypatch, escalation_rung=("gpt-5.6-terra", "high")
+    )
+
+    assert exit_code == 0
+    assert len([
+        request for _, request in spied["assessments"] if "Test issue 42" in request.issue
+    ]) == 1
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "claude-opus-5", "gpt-5.6-terra"
+    ]
+    bound = [e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pickup.bound"]
+    assert [(e["routing_source"], e["lifecycle_position"]) for e in bound] == [
+        ("dynamic", "fresh"), ("escalated", "retrying")
+    ]
+
+
+@pytest.mark.parametrize("refusal", ["invalid_output", "allowance", "eligibility"])
+def test_unavailable_dynamic_retry_after_a_lane_spends_no_attempt(
+    tmp_path, monkeypatch, refusal
+) -> None:
+    eligible = True
+
+    def answer(request):
+        if request.prior_attempts:
+            return None
+        return _elects_lane_model("claude-opus-5")(request)
+
+    # Withdraw eligibility after the first session, not while binding its route.
+    if refusal == "eligibility":
+        original_send = _NoProgressFakeSession.send_and_wait
+
+        async def send_then_withdraw(session, *args, **kwargs):
+            nonlocal eligible
+            result = await original_send(session, *args, **kwargs)
+            eligible = False
+            return result
+
+        monkeypatch.setattr(_NoProgressFakeSession, "send_and_wait", send_then_withdraw)
+
+    config = {"routing_credit_allowance": Decimal("0.25")} if refusal == "allowance" else {}
+    fake_client, spied, exit_code = _dynamic_retry_lane_run(
+        tmp_path, monkeypatch, answer=answer,
+        capabilities_available=lambda: eligible, **config
+    )
+
+    assert exit_code == 1
+    assert len(fake_client.create_calls) == 1
+    events = _logged_events(tmp_path)
+    assert not [e for e in events if e["type"] == "wrapper.strike"]
+    assert len([e for e in events if e["type"] == "wrapper.routing.resolved"]) == 1
+    refused = [e for e in events if e["type"] == "wrapper.pickup.skipped"]
+    assert any(e["issue"] == 42 and "dynamic route unavailable" in e["reason"] for e in refused)
+    if refusal != "invalid_output":
+        assert len(spied["assessments"]) == 1
 
 
 def _dynamic_parallel_config(**overrides) -> RunConfig:

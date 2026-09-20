@@ -5586,10 +5586,10 @@ def _dynamic_run(tmp_path, monkeypatch, **overrides):
         ),
     )
     config = _dynamic_config(
-        route_associations={
+        route_associations=overrides.pop("route_associations", {
             "aa-opus": "claude-opus-5@high",
             "aa-terra": "gpt-5.6-terra@high",
-        },
+        }),
         **overrides,
     )
     return fake_client, spied, asyncio.run(loop_module.run(config))
@@ -6152,8 +6152,9 @@ def _routing_records(tmp_path: Path) -> list[dict[str, Any]]:
     ]
 
 
+@pytest.mark.parametrize("retry_model", ["claude-opus-5", "gpt-5.6-terra"])
 def test_a_permitted_retry_reassesses_with_the_previous_outcome(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, retry_model
 ) -> None:
     """The whole ticket, through the record an operator reads (AC1, AC3, AC6).
 
@@ -6168,8 +6169,11 @@ def test_a_permitted_retry_reassesses_with_the_previous_outcome(
     name where the issue sits. A record carrying only the first could not tell a
     reassessed retry from a first election that happened to agree.
     """
-    _fake_client, spied, exit_code = _dynamic_run(
-        tmp_path, monkeypatch, max_iterations=2, max_nmt_strikes=9
+    fake_client, spied, exit_code = _dynamic_run(
+        tmp_path, monkeypatch, max_iterations=2, max_nmt_strikes=9,
+        answer=lambda request: _elects(
+            retry_model if request.prior_attempts else "claude-opus-5"
+        )(request),
     )
 
     assert exit_code == 0
@@ -6196,15 +6200,21 @@ def test_a_permitted_retry_reassesses_with_the_previous_outcome(
             "capability_evidence": True,
         }
     ]
-    assert retry["repeat_justification"] is not None
+    assert (retry["repeat_justification"] is not None) is (
+        retry_model == "claude-opus-5"
+    )
 
     assert [
         (e["issue"], e["model"], e["routing_source"], e["lifecycle_position"])
         for e in _bound_pickups(tmp_path)
     ] == [
         (42, "claude-opus-5", "dynamic", "fresh"),
-        (42, "claude-opus-5", "dynamic", "retrying"),
+        (42, retry_model, "dynamic", "retrying"),
     ]
+    assert [call["model"] for call in fake_client.create_calls] == [
+        "claude-opus-5", retry_model
+    ]
+    assert [call["reasoning_effort"] for call in fake_client.create_calls] == ["high", "high"]
 
 
 def test_a_crashed_attempt_is_reassessed_without_becoming_capability_evidence(
@@ -6279,8 +6289,9 @@ def test_an_explicitly_configured_rung_still_outranks_the_selector(
     assert len(_routing_records(tmp_path)) == 1
 
 
+@pytest.mark.parametrize("refusal", ["invalid_output", "allowance", "eligibility"])
 def test_an_unavailable_later_route_blocks_the_retry_without_spending_it(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, refusal
 ) -> None:
     """AC4/AC8: a routing refusal is not an attempt, and not a **Strike**.
 
@@ -6301,12 +6312,25 @@ def test_an_unavailable_later_route_blocks_the_retry_without_spending_it(
         chosen = next(answers)
         return None if chosen is None else chosen(request)
 
+    listing = (
+        _listed_model("claude-opus-5", ["high"]),
+        _listed_model("gpt-5.6-terra", ["high"]),
+    )
+
+    def after_send() -> None:
+        if refusal == "eligibility":
+            for model in listing:
+                model.policy.state = "disabled"
+
     fake_client, _spied, exit_code = _dynamic_run(
         tmp_path,
         monkeypatch,
         max_iterations=2,
         max_nmt_strikes=9,
         answer=_answer,
+        listing=listing,
+        on_send=after_send,
+        routing_credit_allowance=Decimal("0.25") if refusal == "allowance" else Decimal("5"),
     )
 
     assert exit_code != 0
@@ -6319,6 +6343,38 @@ def test_an_unavailable_later_route_blocks_the_retry_without_spending_it(
         if event["type"] == "wrapper.pickup.skipped"
     ]
     assert skipped and "dynamic route unavailable" in skipped[-1]["reason"]
+
+
+@pytest.mark.parametrize("ending", ["no_progress", "crash"])
+def test_dynamic_attempt_exhaustion_admits_no_further_assessment(
+    tmp_path, monkeypatch, ending
+) -> None:
+    fake_client, spied, exit_code = _dynamic_run(
+        tmp_path, monkeypatch, max_iterations=5, max_nmt_strikes=1,
+        on_send=_raise_a_transport_failure if ending == "crash" else None,
+    )
+
+    assert exit_code == 1
+    assert len(fake_client.create_calls) == 2
+    assert len(spied["assessments"]) == 2
+    assert len(_strikes(tmp_path)) == 1
+    assert [record["attempt"] for record in _routing_records(tmp_path)] == [1, 2]
+
+
+def test_the_initial_dynamic_pickup_may_already_spend_max(
+    tmp_path, monkeypatch
+) -> None:
+    fake_client, _spied, exit_code = _dynamic_run(
+        tmp_path, monkeypatch,
+        listing=(_listed_model("claude-opus-5", ["high", "max"]),),
+        route_associations={"aa-opus": "claude-opus-5@max"},
+    )
+
+    assert exit_code == 0
+    (call,) = fake_client.create_calls
+    assert (call["model"], call["reasoning_effort"]) == ("claude-opus-5", "max")
+    (record,) = _routing_records(tmp_path)
+    assert (record["lifecycle_position"], record["effort"]) == ("fresh", "max")
 
 
 # ---------------------------------------------------------------------------

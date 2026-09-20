@@ -2333,6 +2333,9 @@ class _Loop:
         to, and source and position are separate axes precisely so that a
         same-pair retry stays tellable from an escalated one.
 
+        Under the Dynamic policy, an unpinned default is only a placeholder.
+        An explicit rung equal to that placeholder still suppresses selection.
+
         **The position comes from the Attempt lifecycle, not from the rung**
         (#412). Both ledgers read the same ending, but only the lifecycle sees
         every ending — a crash retries the issue on the pair it already had, and
@@ -2353,7 +2356,11 @@ class _Loop:
             lifecycle_position=position,
             escalated_pair=rung,
         )
-        if (escalated.model, escalated.reasoning_effort) == (
+        dynamic_placeholder = (
+            self._config.route_policy is RoutePolicy.DYNAMIC
+            and not static_route_applies(routed)
+        )
+        if not dynamic_placeholder and (escalated.model, escalated.reasoning_effort) == (
             routed.model,
             routed.reasoning_effort,
         ):
