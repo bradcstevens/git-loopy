@@ -26,11 +26,14 @@ by that pinned harness on the upgrade account, with their reported effort sets.
 The 1.0.67/1.0.71/1.0.75 comparisons below remain historical evidence, not current pins.
 
 **Migration exception:** to preserve existing saved Config behavior, the upgrade retains
-eight account-unlisted compatibility entries rather than deleting them: the two older
-Sonnet rows, Opus 4.6, the four Gemini rows, and `mai-code-1-flash-picker`.
+seven account-unlisted compatibility entries rather than deleting them: the two older
+Sonnet rows, Opus 4.6, the three existing Gemini rows, and `mai-code-1-flash-picker`.
 Their efforts were not reverified; the CLI stamp identifies the harness used to refresh
 the observed rows, not a claim that the account offered every compatibility entry.
 The Runner README lists both sets. The live listing remains the Run's authority.
+Gemini 3.8 was not an existing roster entry and was not returned by that listing.
+It remains off-roster, preserving configured selections and efforts through the
+warning-and-pass-through path rather than introducing an unverified capability gate.
 
 ## The premise that was wrong
 

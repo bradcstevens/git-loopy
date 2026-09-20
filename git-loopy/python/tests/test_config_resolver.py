@@ -840,7 +840,7 @@ def test_resolve_malformed_routing_raises_loudly() -> None:
 
 
 @pytest.mark.parametrize(
-    "model", ["claude-opus-5", "gemini-3.6-flash", "gpt-6-astra", "gemini-3.8-flash"]
+    "model", ["claude-opus-5", "gemini-3.6-flash", "gpt-6-astra"]
 )
 def test_resolve_live_catalog_models_are_on_the_roster(model: str) -> None:
     """Models live in the Copilot catalog must not trip the off-roster advisory.
@@ -866,7 +866,10 @@ def test_resolve_live_catalog_models_are_on_the_roster(model: str) -> None:
 
 
 @pytest.mark.parametrize("scope", ["project", "global_"])
-def test_resolve_current_model_routing_without_startup_warnings(scope: str) -> None:
+@pytest.mark.parametrize("effort", ["minimal", "high", "xhigh", "max"])
+def test_resolve_unverified_model_routing_preserves_effort_with_warning(
+    scope: str, effort: str,
+) -> None:
     warnings: list[str] = []
     run = _resolve(
         **{
@@ -875,7 +878,7 @@ def test_resolve_current_model_routing_without_startup_warnings(scope: str) -> N
                 "reasoning_effort": "high",
                 "routing": {
                     "planning": {"model": "gpt-6-astra", "effort": "max"},
-                    "implementation": {"model": "gemini-3.8-flash", "effort": "high"},
+                    "implementation": {"model": "gemini-3.8-flash", "effort": effort},
                 },
             }
         },
@@ -885,9 +888,10 @@ def test_resolve_current_model_routing_without_startup_warnings(scope: str) -> N
     assert (run.model, run.reasoning_effort) == ("gpt-6-astra", "high")
     assert dict(run.routing) == {
         "planning": ("gpt-6-astra", "max"),
-        "implementation": ("gemini-3.8-flash", "high"),
+        "implementation": ("gemini-3.8-flash", effort),
     }
-    assert warnings == []
+    assert len(warnings) == 1
+    assert "['gemini-3.8-flash']" in warnings[0]
 
 
 

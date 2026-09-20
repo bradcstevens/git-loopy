@@ -2850,7 +2850,7 @@ def test_the_roster_preserves_compatibility_efforts_alongside_pinned_models() ->
     assert "minimal" in roster["gemini-3.5-flash"]
     assert "minimal" in roster["gemini-3.6-flash"]
     assert "max" in roster["gpt-6-astra"]
-    assert "high" in roster["gemini-3.8-flash"]
+    assert "gemini-3.8-flash" not in roster
 
 
 def test_the_roster_fixture_pins_the_context_tier_half_of_the_roster() -> None:

@@ -89,12 +89,12 @@ the cached environment under `git-loopy/python/.venv/`.
 
 The Runner pins `github-copilot-sdk==1.0.14`, which downloads and runs Copilot
 CLI `1.0.85` by default. Updating the separate `copilot` command on `PATH`
-does not update that harness. The compatibility roster recognizes
-`gpt-6-astra` (including `max` reasoning) and retains `gemini-3.8-flash`
-(`low`, `medium`, `high`) and older entries. Roster membership does not
-guarantee account availability: the pinned-harness listing verified Astra,
-but did not offer Gemini 3.8 on the account used for this upgrade.
-Unknown model IDs still warn and pass through unchanged.
+does not update that harness. The refreshed roster recognizes
+`gpt-6-astra` (including `max` reasoning). The pinned-harness listing did not
+offer Gemini 3.8 on the account used for this upgrade, so no unverified effort
+set is added for it: configured `gemini-3.8-flash` selections and efforts stay
+unchanged, with the usual unknown-model warning and pass-through behavior.
+Roster membership does not guarantee account availability.
 
 SDK upgrades must move the pin, lockfile, and roster CLI-version stamp
 together. Offline tests check that stamp and the installed SDK's client,
@@ -1520,7 +1520,6 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `gpt-5.4-mini`                | `none` `low` `medium` `high` `xhigh`     |
 | `gpt-5-mini`                  | `low` `medium` `high`                    |
 | `gemini-3.1-pro-preview`      | `low` `medium` `high`                    |
-| `gemini-3.8-flash`            | `low` `medium` `high`                    |
 | `gemini-3.6-flash`            | `minimal` `low` `medium` `high`          |
 | `gemini-3.5-flash`            | `minimal` `low` `medium` `high`          |
 | `gpt-5.6-luna`                | `none` `low` `medium` `high` `xhigh` `max` |
@@ -1533,11 +1532,14 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `mai-code-1-flash-picker`     | `low` `medium` `high`                    |
 
 This fallback covers all 19 models returned by the SDK-pinned CLI `1.0.85`
-on the upgrade account, plus eight retained compatibility entries:
-`claude-sonnet-4.6`, `claude-sonnet-4.5`, `claude-opus-4.6`, all four Gemini
-rows, and `mai-code-1-flash-picker`. Those eight were not offered by that
+on the upgrade account, plus seven retained compatibility entries:
+`claude-sonnet-4.6`, `claude-sonnet-4.5`, `claude-opus-4.6`, all three Gemini
+rows, and `mai-code-1-flash-picker`. Those seven were not offered by that
 account; their retained efforts are not a claim of current availability.
-Live Harness capabilities remain authoritative for the Run.
+`gemini-3.8-flash` is not one of those existing entries and remains off-roster:
+its configured model and effort pass through with a warning rather than being
+gated against an unverified effort set. Live Harness capabilities remain
+authoritative for the Run.
 
 The retired
 `claude-opus-4.5` id and the renamed `mai-code-1-flash-internal` id are not

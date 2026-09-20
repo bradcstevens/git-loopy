@@ -190,7 +190,6 @@ def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -
         "gpt-5.4-mini": frozenset({"none", "low", "medium", "high", "xhigh"}),
         "gpt-5-mini": frozenset({"low", "medium", "high"}),
         "gemini-3.1-pro-preview": frozenset({"low", "medium", "high"}),
-        "gemini-3.8-flash": frozenset({"low", "medium", "high"}),
         "gemini-3.6-flash": frozenset({"minimal", "low", "medium", "high"}),
         "gemini-3.5-flash": frozenset({"minimal", "low", "medium", "high"}),
         "gpt-5.6-luna": frozenset(
@@ -358,11 +357,12 @@ def test_the_tracked_project_config_preserves_its_default_override() -> None:
     ).run
 
     assert (run.model, run.reasoning_effort) == ("gpt-6-astra", "high")
-    assert warnings == []
+    assert len(warnings) == 1
+    assert "['gemini-3.8-flash']" in warnings[0]
 
 
 def test_the_tracked_project_config_preserves_all_task_type_routes() -> None:
-    """The project's explicit routes survive resolution without roster warnings."""
+    """Routes survive resolution, with a warning for the unverified Gemini model."""
     from git_loopy import cli
 
     warnings: list[str] = []
@@ -383,4 +383,5 @@ def test_the_tracked_project_config_preserves_all_task_type_routes() -> None:
         "chore": ("gpt-5.6-luna", "low"),
         "bugfix": ("claude-opus-5", "xhigh"),
     }
-    assert warnings == []
+    assert len(warnings) == 1
+    assert "['gemini-3.8-flash']" in warnings[0]

@@ -215,8 +215,7 @@ def test_main_recognises_gpt_5_6_sol_and_every_advertised_effort(
     [
         ("gpt-6-astra", effort)
         for effort in ("low", "medium", "high", "xhigh", "max")
-    ]
-    + [("gemini-3.8-flash", effort) for effort in ("low", "medium", "high")],
+    ],
 )
 def test_main_recognises_current_models_and_preserves_effort(
     model: str,
@@ -254,6 +253,28 @@ def test_main_unknown_model_passes_through_with_warning(
     assert captured[0].model == "some-future-model-9"
     err = capsys.readouterr().err
     assert "not in the kit's supported model set" in err
+
+
+@pytest.mark.parametrize("effort", ["minimal", "high", "xhigh", "max"])
+def test_main_unverified_gemini_model_keeps_requested_effort(
+    effort: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: list[RunConfig] = []
+    _install_fake_runner(monkeypatch, captured, tmp_path)
+
+    assert cli_module.main(
+        ["--model", "gemini-3.8-flash", "--reasoning-effort", effort]
+    ) == 0
+
+    assert (captured[0].model, captured[0].reasoning_effort) == (
+        "gemini-3.8-flash",
+        effort,
+    )
+    err = capsys.readouterr().err
+    assert "model 'gemini-3.8-flash' is not in the kit's supported model set" in err
 
 
 def test_main_leaves_reasoning_effort_unset_for_non_pinned_model(

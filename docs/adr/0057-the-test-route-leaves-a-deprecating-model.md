@@ -65,8 +65,8 @@ was **off-roster** at this decision, as were `gpt-6-astra`, `gemini-3.7-flash` a
 entries. Choosing one of those would then have made a routing retune into a contract change.
 
 The subsequent SDK 1.0.14 / CLI 1.0.85 upgrade
-([#594](https://github.com/bradcstevens/git-loopy/issues/594)) added Astra, both Grok entries,
-and a retained Gemini 3.8 compatibility row; Gemini 3.7 remains off-roster. That refresh does
+([#594](https://github.com/bradcstevens/git-loopy/issues/594)) added Astra and both Grok
+entries; Gemini 3.8 and Gemini 3.7 remain off-roster. That refresh does
 not change this decision's recommended `test` route. See ADR-0019's upgrade record for the
 distinction between observed capabilities and account-unlisted compatibility entries.
 
