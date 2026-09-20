@@ -1462,11 +1462,11 @@ def test_loop_aborts_after_max_nmt_strikes(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.parametrize(
-    ("failure", "ending"),
-    [(RuntimeError, "crash"), (asyncio.TimeoutError, "timeout")],
+    ("failure", "ending", "strikes"),
+    [(RuntimeError, "crash", 0), (asyncio.TimeoutError, "timeout", 1)],
 )
 def test_loop_send_and_wait_failure_carries_its_ending(
-    tmp_path, monkeypatch, failure: type[Exception], ending: str
+    tmp_path, monkeypatch, failure: type[Exception], ending: str, strikes: int
 ) -> None:
     """A failed wait still produces its specific ending beside no-progress.
 
@@ -1520,11 +1520,11 @@ def test_loop_send_and_wait_failure_carries_its_ending(
     types_seen = {event["type"] for event in events}
     assert "wrapper.iteration.end" in types_seen
     assert "wrapper.run.end" in types_seen
-    # ...and the crash spent the issue's first attempt without defeating it,
-    # so nothing was given up on and no Strike was charged.
-    assert "wrapper.strike" not in types_seen
+    # A crash preserves the first attempt for a retry, while a timeout exhausts
+    # this issue's attempt and charges its unchanged Attempt lifecycle Strike.
+    assert ("wrapper.strike" in types_seen) is (strikes > 0)
     iteration_end = next(e for e in events if e["type"] == "wrapper.iteration.end")
-    assert iteration_end["summary"]["strikes"] == 0
+    assert iteration_end["summary"]["strikes"] == strikes
     assert iteration_end["issues"][0]["status"] == "no-progress"
     assert iteration_end["issues"][0]["ending"] == ending
 

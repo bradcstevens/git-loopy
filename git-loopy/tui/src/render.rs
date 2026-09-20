@@ -540,7 +540,7 @@ fn draw_queue(
     columns[1].width = rows
         .iter()
         .map(|row| {
-            status_cell(&row.status, row.ending.as_deref(), row.commits)
+            status_cell(&row.status, row.ending.as_deref(), row.commits, glyphs)
                 .chars()
                 .count() as u16
                 + 2
@@ -555,7 +555,7 @@ fn draw_queue(
         rows.iter().map(|row| {
             vec![
                 issue_label(&row.issue),
-                status_cell(&row.status, row.ending.as_deref(), row.commits),
+                status_cell(&row.status, row.ending.as_deref(), row.commits, glyphs),
                 wall_clock(row.started_at.as_deref(), glyphs),
                 duration(row.active_seconds),
                 wall_clock(row.closed_at.as_deref(), glyphs),
@@ -577,19 +577,33 @@ fn draw_queue(
     );
 }
 
-fn status_cell(status: &str, ending: Option<&str>, commits: Option<i64>) -> String {
-    match (status, ending, commits) {
-        (_, Some("no_progress"), _) => format!("{status} · left nothing"),
-        (_, Some("timeout"), _) => format!("{status} · timed out"),
-        (_, Some("crash"), _) => format!("{status} · crashed"),
-        (_, Some("no_more_tasks"), _) => format!("{status} · no work remains"),
-        (_, Some("content_filtered"), _) => format!("{status} · content filtered"),
-        ("advanced", None, Some(commits)) if commits > 0 => {
-            let unit = if commits == 1 { "commit" } else { "commits" };
-            format!("advanced · {commits} {unit}")
-        }
-        _ => status.to_string(),
+fn status_cell(
+    status: &str,
+    ending: Option<&str>,
+    commits: Option<i64>,
+    glyphs: &Glyphs,
+) -> String {
+    if status == "advanced" {
+        return match commits {
+            Some(commits) if commits > 0 => {
+                let unit = if commits == 1 { "commit" } else { "commits" };
+                format!("advanced {}{commits} {unit}", glyphs.attribution)
+            }
+            _ => status.to_string(),
+        };
     }
+    let explanation = match ending {
+        Some("no_progress") => Some("left nothing"),
+        Some("timeout") => Some("timed out"),
+        Some("crash") => Some("crashed"),
+        Some("no_more_tasks") => Some("no work remains"),
+        Some("content_filtered") => Some("content filtered"),
+        _ => None,
+    };
+    explanation.map_or_else(
+        || status.to_string(),
+        |explanation| format!("{status} {}{explanation}", glyphs.attribution),
+    )
 }
 
 /// A token counter with thousands separators, or the unknown placeholder.

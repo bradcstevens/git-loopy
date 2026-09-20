@@ -238,6 +238,30 @@ fn the_queue_renders_session_endings_inline_with_status() {
 }
 
 #[test]
+fn the_queue_uses_ascii_attribution_for_session_endings() {
+    let view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    let lines = render_lines(
+        &view,
+        240,
+        40,
+        TerminalCapabilities {
+            unicode: false,
+            color: false,
+            columns: None,
+            rows: None,
+        },
+    );
+    let queue = band(&lines, "Queue");
+    let timeout_row = queue
+        .iter()
+        .map(|row| cells(row))
+        .find(|row| row[0] == "#312")
+        .expect("the timeout row renders");
+
+    assert_eq!(timeout_row[1], "no-progress - timed out");
+}
+
+#[test]
 fn the_queue_shows_an_explicit_long_context_route_in_full() {
     let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
     let pickup = Event::from_jsonl_line(

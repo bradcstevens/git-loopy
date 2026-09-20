@@ -2216,6 +2216,8 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
     assert live["expected"]["dashboard"]["queue"]["rows"][0] == {
         "issue": 42,
         "status": "active",
+        "ending": None,
+        "commits": None,
         "started_at": "2026-05-15T18:00:01-06:00",
         "active_seconds": 2.0,
         "closed_at": None,

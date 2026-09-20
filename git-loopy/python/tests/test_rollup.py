@@ -277,7 +277,7 @@ def test_rollup_carries_each_session_ending_on_its_own_issue(
 
 
 def test_rollup_omits_an_ending_when_an_issue_advanced() -> None:
-    """Progress has no Session outcome and must not fabricate one."""
+    """Progress wins the wire even when the Session terminates unsuccessfully."""
     rollup = IterationRollupAccumulator(
         denomination=BilledCreditsDenomination(), monotonic=_Clock()
     )
@@ -292,10 +292,11 @@ def test_rollup_omits_an_ending_when_an_issue_advanced() -> None:
     )
     rollup.observe({"type": "wrapper.commit.recorded"})
 
-    rollup.record_ending(42, None)
+    rollup.record_ending(42, SessionOutcome.TIMEOUT)
 
     issue = rollup.finish(iter_num=1, strikes=0)["issues"][0]
     assert issue["status"] == "advanced"
+    assert issue["commits"] == 1
     assert "ending" not in issue
 
 

@@ -28,8 +28,6 @@ __all__ = ["project_run_view"]
 _QUEUE_COLUMNS = [
     "issue",
     "status",
-    "ending",
-    "commits",
     "started_at",
     "active_seconds",
     "closed_at",
