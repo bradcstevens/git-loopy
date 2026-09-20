@@ -258,6 +258,37 @@ def test_download_counters_are_not_release_identity(tmp_path: Path) -> None:
     )) == 7
 
 
+def test_an_asset_added_during_readback_changes_the_release(tmp_path: Path) -> None:
+    host = PublicRelease(tmp_path)
+
+    def fetch(url: str) -> bytes:
+        if url == RELEASE_URL and host.requests:
+            host.record["assets"].append({
+                "name": "unexpected.txt", "state": "uploaded", "size": 4,
+                "browser_download_url": DOWNLOAD_URL + "unexpected.txt",
+            })
+        return host.fetch(url)
+
+    with pytest.raises(tui_release.TuiReleaseError, match="changed during"):
+        tui_release.verify_published_release(
+            host.root, host.built, tag_ref=TAG,
+            distribution_mode="artifact-bearing", fetch=fetch,
+        )
+
+
+def test_an_undeclared_helper_target_is_not_part_of_the_verified_release(tmp_path: Path) -> None:
+    host = PublicRelease(tmp_path)
+    name = "git-loopy-tui-aarch64-pc-windows-msvc.zip"
+    host.record["assets"].append({
+        "name": name, "state": "uploaded", "size": 4,
+        "browser_download_url": DOWNLOAD_URL + name,
+    })
+
+    with pytest.raises(tui_release.TuiReleaseError, match="unpromised helper asset"):
+        host.verify()
+    assert host.requests == [RELEASE_URL]
+
+
 @pytest.mark.parametrize("defect", ["duplicate", "receipt-identity", "missing-local-receipt"])
 def test_missing_or_ambiguous_proof_cannot_complete(tmp_path: Path, defect: str) -> None:
     host = PublicRelease(tmp_path)

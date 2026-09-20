@@ -269,6 +269,23 @@ A stable Release additionally requires a build-provenance attestation. Any
 missing artifact, signature, notary verdict, publisher, checksum, or attestation
 refuses the whole publication rather than shipping a partial set.
 
+The version string decides which of those a Release *needs*; the prerelease flag
+on the GitHub Release is what tells an operator -- and every package channel that
+resolves "the stable Release" -- which channel they are installing from. Those
+are two answers to one question, and the unsigned Windows allowance rests
+entirely on the second, so publication reads the marking back off the Release it
+is about to attach to and refuses to upload when the two disagree. `--prerelease`
+is applied by `source-release.yml`, deliberately a separate workflow, and the
+flag stays editable afterwards; the helper pipeline therefore proves it rather
+than inheriting it.
+
+Signing runs inside `dist build`, which is the only place it can: cargo-dist
+writes each `.sha256` afterwards, so a published checksum is a checksum of the
+signed artifact. A ticket cannot be stapled into a bare Mach-O -- stapling needs
+a bundle, `.dmg`, or `.pkg` -- so Gatekeeper resolves the helper's notarization
+online, and `release-trust.json` records that by name rather than leaving it to
+look like an oversight.
+
 ### Downloadable baseline and completion proof
 
 **No verified downloadable helper baseline is named yet.** On 2026-09-20,
@@ -298,8 +315,9 @@ It requires the tagged `artifact-bearing` policy and complete locally verified
 build outputs, reads the public Release identity and prerelease marking, and
 downloads all 21 promised files from the canonical URLs. Every downloaded byte
 must match those build outputs, pass the existing checksum and trust gates,
-and each archive must contain the declared helper. Stable readback also verifies each archive's
-public attestation against the explicit repository. A final Release readback
+and each archive must contain the declared helper. Stable readback also verifies
+each archive's public attestation against the explicit repository. Unpromised
+helper assets are refused. A final Release readback
 rejects identity or asset changes during verification; download counters are
 not identity.
 
@@ -319,23 +337,6 @@ PYTHONPATH=git-loopy/python python -m git_loopy.tui_release verify-published \
 Stable verification additionally needs `--attestation <build-bundle>` and
 authenticated `gh attestation verify` access. It does not waive signing,
 notarization, publisher identity, or any pre-publication proof.
-
-The version string decides which of those a Release *needs*; the prerelease flag
-on the GitHub Release is what tells an operator — and every package channel that
-resolves "the stable Release" — which channel they are installing from. Those
-are two answers to one question, and the unsigned Windows allowance rests
-entirely on the second, so publication reads the marking back off the Release it
-is about to attach to and refuses to upload when the two disagree. `--prerelease`
-is applied by `source-release.yml`, deliberately a separate workflow, and the
-flag stays editable afterwards; the helper pipeline therefore proves it rather
-than inheriting it.
-
-Signing runs inside `dist build`, which is the only place it can: cargo-dist
-writes each `.sha256` afterwards, so a published checksum is a checksum of the
-signed artifact. A ticket cannot be stapled into a bare Mach-O — stapling needs
-a bundle, `.dmg`, or `.pkg` — so Gatekeeper resolves the helper's notarization
-online, and `release-trust.json` records that by name rather than leaving it to
-look like an oversight.
 
 ### Credentials
 

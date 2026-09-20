@@ -1582,7 +1582,7 @@ def verify_release_set(
     return tuple(verified)
 
 
-def _public_release_evidence(document: Any, names: Sequence[str]) -> dict[str, Any]:
+def _public_release_evidence(document: Any) -> dict[str, Any]:
     if not isinstance(document, dict) or not isinstance(document.get("assets"), list):
         raise TuiReleaseError("public Release readback must declare its assets")
     for field in ("draft", "prerelease"):
@@ -1606,7 +1606,7 @@ def _public_release_evidence(document: Any, names: Sequence[str]) -> dict[str, A
             field: document.get(field)
             for field in ("id", "tag_name", "name", "html_url", "draft", "prerelease")
         },
-        "assets": {name: assets.get(name) for name in names},
+        "assets": assets,
     }
 
 
@@ -1683,7 +1683,10 @@ def verify_published_release(
             policy.receipt_name_template.format(archive=artifact.archive_name),
         )
     ]
-    before = _public_release_evidence(record, names)
+    before = _public_release_evidence(record)
+    for name in assets:
+        if name.startswith(f"{metadata.command_name}-") and name not in names:
+            raise TuiReleaseError(f"public Release {tag} carries unpromised helper asset {name}")
     for name in names:
         if name not in assets:
             raise TuiReleaseError(f"public Release {tag} is missing {name}")
@@ -1732,7 +1735,7 @@ def verify_published_release(
         after = json.loads(download(release_url))
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise TuiReleaseError(f"unreadable final Release readback: {exc}") from exc
-    if _public_release_evidence(after, names) != before:
+    if _public_release_evidence(after) != before:
         raise TuiReleaseError("public Release changed during canonical download verification")
     return artifacts
 
