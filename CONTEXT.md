@@ -213,19 +213,28 @@ _Avoid_: poll, refresh, shallow pool, live pool.
 
 **Strike**:
 One issue this **Run** has given up on. The count is the **Attempt lifecycle**'s terminal
-position made billable: an issue charges exactly one Strike at the ending that **Skip**s it, and
-a fixed number of them ends the run. Nothing else charges — an **Iteration** that made no
-progress and a **Lane contribution** that terminated unpublished each spend an attempt without
-necessarily defeating anything, and an Iteration is not a thing a Run can give up on. Progress
-resets nothing, because the lifecycle it counts is monotonic: an issue an advance rescued was
-never given up on, and one that was is not un-given-up-on by another issue's advance. So
-`--max-nmt-strikes` reads as *how many issues this Run may abandon before it stops*. Both modes
-tick one shared count, so in **Parallel mode** reaching the limit stops refill and grants no
-further serial Iteration, then ends the run once started work has drained. A **Runner** with no
-**Pickup** has no lifecycle to charge from and keeps the original accounting — a Strike per
-no-progress Iteration, consecutive, reset by progress — which is the line
-`conformance/progress-strikes.json` forks along.
-_Avoid_: failure, miss, no-progress count.
+position made billable: an issue charges exactly one Strike at the ending that **Skip**s it.
+Nothing else charges — an **Iteration** that made no progress and a **Lane contribution** that
+terminated unpublished each spend an attempt without necessarily defeating anything, and an
+Iteration is not a thing a Run can give up on. It is accounting and nothing else: no
+accumulation of Strikes ends a Run, which is the **Abandonment guard**'s separate job
+([ADR-0061](docs/adr/0061-the-strike-belongs-to-the-issue.md)). Progress resets nothing, because
+the lifecycle it counts is monotonic: an issue an advance rescued was never given up on, and one
+that was is not un-given-up-on by another issue's advance. A **Runner** with no **Pickup** has no
+lifecycle to charge from and keeps the original accounting — a Strike per no-progress Iteration,
+consecutive, reset by progress — which is the line `conformance/progress-strikes.json` forks
+along.
+_Avoid_: failure, miss, no-progress count, strike limit (that is the **Abandonment guard**).
+
+**Abandonment guard**:
+The **Run**-scoped backstop that stops a Run failing systematically, and deliberately not a
+**Strike** ceiling. It counts issues abandoned *consecutively* and resets the moment any issue
+reaches **Closed** or **advanced**, so a Run still finishing work never trips it however many
+issues it gave up on along the way. It exists because the **Iteration** cap is unbounded by
+default, which would otherwise leave an unattended Run on a broken repository no stop short of
+attempting every issue in the **Pool**
+([ADR-0061](docs/adr/0061-the-strike-belongs-to-the-issue.md)).
+_Avoid_: strike limit, max strikes, failure ceiling.
 
 **Session outcome**:
 How one **Agent**'s session ended, as data the loop keeps rather than a sentence it
@@ -236,7 +245,10 @@ work, because a commit refutes each. A timeout and a crash are facts about a ses
 Orchestrator lost, which progress does not launder. Distinct from a **Strike**,
 which is the Run's *accounting* of a result: several endings tick the same strike, and
 the ending is what says which. Distinct too from an Iteration's outcome in the Run
-summary, which reports what the work produced rather than how the session finished.
+summary, which reports what the work produced rather than how the session finished. It is
+carried beside the issue's **Status** wherever that Status is shown, per issue and per
+attempt, because a Status that cannot say which ending produced it explains nothing
+([ADR-0060](docs/adr/0060-a-status-says-what-happened-its-ending-says-why.md)).
 _Avoid_: exit code, session status, failure reason.
 
 **Session error**:
@@ -370,7 +382,12 @@ An issue's lifecycle within a run: **queued** (seen, not yet worked), **active**
 (finished and closed via a commit close-keyword), **advanced** (progressed but not
 closed), **no-progress** (worked without meaningful change), **gone** (left the Run's view
 without resolution — it was seen in a pool or a **Membership read**, and a later
-authoritative pool no longer lists it).
+authoritative pool no longer lists it). A Status says *where* an issue ended up and never
+*why*: the **Session outcome** that explains it travels beside it rather than inside it,
+because five different endings all reach **no-progress**, and an issue that was attempted
+twice has one Status and two endings
+([ADR-0060](docs/adr/0060-a-status-says-what-happened-its-ending-says-why.md)).
+_Avoid_: outcome (that is the **Session outcome**), result, state.
 
 **Closed**:
 The successful terminal **Status** in which the source issue has actually been
@@ -516,7 +533,10 @@ where `shift+up` reopens it at that floor rather than the remembered height, bec
 sizing gestures state fresh intent. The controls degrade in the order **drag → click →
 keys**, so a terminal that reports less than motion still has one. It
 survives a terminal resize and a drill-in to a **Log**, and is in-session only — no
-**Config** or **Run** state records it.
+**Config** or **Run** state records it. The **Active issue**'s **Routed pair** stays visible
+while the band is collapsed: a band collapsed to see more **Queue** must not take the Run's
+current configuration away with it
+([ADR-0062](docs/adr/0062-the-dashboard-is-pointer-navigable.md)).
 _Avoid_: hidden, closed, minimised, off.
 
 **Activity window**:
