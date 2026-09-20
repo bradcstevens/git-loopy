@@ -243,3 +243,24 @@ def denver_viewer(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     finally:
         monkeypatch.undo()
         time.tzset()
+
+
+@pytest.fixture
+def zoneless_viewer(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Pin the viewing machine to a zone it cannot resolve, for one test.
+
+    The counterpart to :func:`denver_viewer` (#597, ADR-0058). A viewing
+    machine whose zone does not resolve still has to render a readback, and the
+    one thing it may not do is print UTC as though it were the operator's own
+    wall clock. Pinning the failure through ``TZ`` reaches that path the way a
+    real host does, rather than by stubbing the conversion so it raises.
+    """
+    if not hasattr(time, "tzset"):  # pragma: no cover - POSIX hosts have it
+        pytest.skip("this host cannot pin a local timezone")
+    monkeypatch.setenv("TZ", "Not/AZone")
+    time.tzset()
+    try:
+        yield
+    finally:
+        monkeypatch.undo()
+        time.tzset()

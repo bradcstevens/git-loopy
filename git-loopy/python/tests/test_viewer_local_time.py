@@ -15,6 +15,7 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -153,6 +154,78 @@ def test_an_unresolvable_zone_is_labelled_rather_than_guessed(
             return super().astimezone(tz)
 
     monkeypatch.setattr(local_time, "datetime", _NoZoneDatabase)
+
+    projected = viewer_local("2026-05-16T14:00:00.000Z")
+
+    assert projected == "2026-05-16T14:00:00+00:00 UTC (local zone unresolved)"
+
+
+def test_a_zone_this_host_cannot_resolve_is_labelled_not_silently_utc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC9, driven by the viewing machine rather than by a stubbed clock.
+
+    The sibling test above reaches the fallback by making
+    :meth:`datetime.astimezone` raise. Nothing on a real host does that:
+    ``astimezone()`` resolves the zone through the platform, and a
+    specification the platform cannot parse is answered with UTC and no error
+    at all. So the label was provable only against a path that could not fire,
+    while the case an operator actually hits — a viewing machine whose zone
+    does not resolve — printed a bare ``+00:00``.
+
+    That bare rendering is indistinguishable from a viewer who genuinely is in
+    UTC, which is the one outcome ADR-0058 refuses. This test therefore names
+    an unresolvable zone the way every other test here names a real one.
+    """
+    _viewing_from(monkeypatch, "Not/AZone")
+
+    projected = viewer_local("2026-05-16T14:00:00.000Z")
+
+    assert projected == "2026-05-16T14:00:00+00:00 UTC (local zone unresolved)"
+
+
+def test_a_posix_rule_specification_resolves_rather_than_falling_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guard on AC9's fix: a POSIX ``TZ`` rule is a resolved zone.
+
+    ``MST7MDT,M3.2.0,M11.1.0`` is not an IANA name and is not a fixed offset —
+    it carries its own daylight-saving rules. A resolution check that only
+    understood IANA names would report it unresolved and label a working
+    viewer's clock as broken, so both offsets are pinned here.
+    """
+    _viewing_from(monkeypatch, "MST7MDT,M3.2.0,M11.1.0")
+
+    assert viewer_local("2026-05-16T14:00:00.000Z") == "2026-05-16T08:00:00-06:00"
+    assert viewer_local("2026-01-16T14:00:00.000Z") == "2026-01-16T07:00:00-07:00"
+
+
+def test_a_zone_named_by_tzfile_path_is_resolved_rather_than_labelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resolution check must not be narrower than the platform's own.
+
+    POSIX lets ``TZ`` name a tzfile by path, with or without a leading colon,
+    and the viewing machine resolves it. A check that only accepted database
+    names would label this working viewer's clock unresolved — trading the
+    silent-UTC defect for a false alarm, which is no better a readback.
+    """
+    tzfile = Path("/usr/share/zoneinfo/Asia/Kathmandu")
+    if not tzfile.exists():  # pragma: no cover - host without a tz database
+        pytest.skip("this host has no tzfile to name by path")
+    _viewing_from(monkeypatch, str(tzfile))
+
+    projected = viewer_local("2026-05-16T14:00:00.000Z")
+
+    assert projected == "2026-05-16T19:45:00+05:45"
+    assert "unresolved" not in projected
+
+
+def test_a_path_naming_no_tzfile_is_labelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the path form: a path to nothing resolves to nothing."""
+    _viewing_from(monkeypatch, "/nonexistent/zone")
 
     projected = viewer_local("2026-05-16T14:00:00.000Z")
 

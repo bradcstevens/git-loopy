@@ -1570,6 +1570,18 @@ _ALLOWED_UI_IMPORTS: frozenset[str] = frozenset(
         "decimal",
         "io",
         "typing",
+        # os / re / zoneinfo — resolving the *viewer's* zone (#597, ADR-0058).
+        # This package is where a record is spoken to a person, which is the
+        # boundary the ADR assigns timezone resolution to; the Rust core stays
+        # pure by pushing the same read out to its binary target. The read has
+        # to be explicit because `datetime.astimezone` already consults `TZ`
+        # implicitly and answers UTC either way — for a viewer who really is in
+        # UTC and for one whose zone does not resolve at all. Telling those two
+        # apart is the whole point, and it cannot be done after the conversion.
+        # None of the three couples the UI to a shell, a network or a store.
+        "os",
+        "re",
+        "zoneinfo",
         # Rich (the renderer's whole reason to exist)
         "rich",
         "rich.console",
@@ -2867,6 +2879,28 @@ def test_a_prepared_route_reads_back_its_rationale_and_provenance(
         assert raw_utc not in out, (
             f"{raw_utc} reached an operator as raw UTC instead of viewer-local"
         )
+
+
+def test_an_unresolvable_viewer_zone_labels_the_readback_instead_of_faking_local(
+    zoneless_viewer: None,
+) -> None:
+    """#597 AC9 at the seam an operator actually reads.
+
+    A viewing machine whose zone does not resolve still gets a usable readback.
+    What it must not get is a bare ``+00:00``, because that is exactly what a
+    viewer genuinely in UTC is shown — so an operator six hours out would read
+    a correct-looking wall clock that is six hours wrong, with nothing on the
+    line to say so.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_prepared_event(evidence_retrieved_at="2026-09-19T08:45:00.000Z"))
+
+    out = " ".join(buf.getvalue().split())
+    assert "2026-09-19T08:45:00+00:00 UTC (local zone unresolved)" in out, (
+        "an unresolved zone must say so on the line it renders"
+    )
+    assert "2026-09-19T08:45:00.000Z" not in out
 
 
 def test_a_null_prepared_effort_is_not_presented_as_configured() -> None:
