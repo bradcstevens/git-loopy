@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from git_loopy.viewer_zone import viewing_zone_resolves
+
 __all__ = ["viewer_local"]
 
 #: Appended when the viewing machine's zone could not be applied at all.
@@ -57,6 +59,8 @@ def viewer_local(instant: object) -> str:
         # one, and reading it as local time would shift a real instant.
         parsed = parsed.replace(tzinfo=timezone.utc)
     try:
+        if not viewing_zone_resolves():
+            return parsed.astimezone(timezone.utc).isoformat() + _UTC_FALLBACK
         return parsed.astimezone().isoformat()
     except (OSError, OverflowError, ValueError):
         return parsed.astimezone(timezone.utc).isoformat() + _UTC_FALLBACK

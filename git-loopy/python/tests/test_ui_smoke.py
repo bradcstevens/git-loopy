@@ -1589,6 +1589,12 @@ _ALLOWED_UI_IMPORTS: frozenset[str] = frozenset(
         # Deep and pure (stdlib only); summary.py folds its per-Iteration
         # Consumption onto it. Not a shell/CLI/persist coupling.
         "git_loopy.usage",
+        # git_loopy.viewer_zone — the one ambient-environment seam the UI is
+        # allowed (#597, ADR-0058). Showing a person a wall clock requires
+        # knowing whether this machine can state its own, which the UI cannot
+        # answer without reading `TZ`. Keeping that read behind one deep module
+        # is what stops `os` and the filesystem spreading through `ui/`.
+        "git_loopy.viewer_zone",
     }
 )
 

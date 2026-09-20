@@ -14,6 +14,7 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use git_loopy_tui::{
     draw_dashboard, project_run_view, zone_from_posix_tz, zone_from_tz_data, DashboardFrame,
@@ -475,10 +476,16 @@ fn started_at(stdout: &str) -> String {
 }
 
 /// A tz database directory holding one zone, for the helper to resolve.
+///
+/// The directory is unique per call, not per zone name: libtest runs these
+/// tests concurrently and each one removes its own root, so two tests naming
+/// the same zone would otherwise delete the fixture out from under each other.
 fn database_with(name: &str, data: &[u8]) -> PathBuf {
+    static UNIQUE: AtomicUsize = AtomicUsize::new(0);
     let root = std::env::temp_dir().join(format!(
-        "git-loopy-tui-zoneinfo-{}-{}",
+        "git-loopy-tui-zoneinfo-{}-{}-{}",
         std::process::id(),
+        UNIQUE.fetch_add(1, Ordering::Relaxed),
         name.replace('/', "-")
     ));
     let path = root.join(name);
@@ -622,5 +629,83 @@ fn attach_mode_resolves_the_viewing_machines_zone_before_it_takes_a_terminal() {
         unresolved.contains("times are shown in UTC"),
         "and announces the fallback on the same path: {unresolved}"
     );
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn an_out_of_range_posix_offset_is_refused_rather_than_wrapped() {
+    // A `TZ` value and a TZif footer are input this program did not write.
+    // POSIX bounds the hour field; an unbounded one overflows the seconds
+    // arithmetic, which aborts a checked build and — far worse — wraps a
+    // release build into a wrong offset that renders as though it were real.
+    for hostile in [
+        "ABC596524",
+        "ABC25",
+        "ABC1:60",
+        "ABC1:00:60",
+        "ABC1DEF,M3.2.0/168,M11.1.0",
+    ] {
+        let (code, stdout, stderr) = helper(&[], &[("TZ", hostile)], &trace(SUMMER_UTC));
+        assert_eq!(code, 0, "the viewer stays usable under TZ={hostile}");
+        assert!(
+            stderr.contains("times are shown in UTC"),
+            "TZ={hostile} is refused out loud, not wrapped: {stderr}"
+        );
+        assert_eq!(
+            started_at(&stdout),
+            "2026-05-16T14:00:00+00:00",
+            "and the announced fallback is plain UTC"
+        );
+    }
+}
+
+#[test]
+fn a_posix_offset_at_the_edge_of_the_range_is_still_accepted() {
+    // The bound is POSIX's, not a guess: 24 hours and 59 minutes are legal and
+    // must keep working, or a real zone would be refused as hostile input.
+    let (code, stdout, stderr) = helper(&[], &[("TZ", "ABC-13:45")], &trace(SUMMER_UTC));
+
+    assert_eq!(code, 0);
+    assert!(
+        !stderr.contains("times are shown in UTC"),
+        "a legal offset resolves: {stderr}"
+    );
+    assert_eq!(started_at(&stdout), "2026-05-17T03:45:00+13:45");
+}
+
+#[test]
+fn a_tzif_transition_beyond_the_microsecond_axis_is_refused() {
+    // The transition times are 64-bit file bytes. One beyond the axis this
+    // family measures on cannot be honoured, and a reader that wrapped it
+    // would report the wrong offset for every instant that row governed.
+    let mut data = mountain_tz_data();
+    let marker = b"TZif2";
+    let second_header = data
+        .windows(marker.len())
+        .skip(1)
+        .position(|window| window == marker)
+        .expect("the v2 block is present")
+        + 1;
+    let first_time = second_header + 44;
+    data[first_time..first_time + 8].copy_from_slice(&i64::MAX.to_be_bytes());
+    // A name the host's own database cannot also answer, so the refusal is
+    // observed rather than papered over by a real zone of the same name.
+    let root = database_with("Fixture/Overflow", &data);
+
+    let (code, stdout, stderr) = helper(
+        &[],
+        &[
+            ("TZDIR", root.to_str().expect("a UTF-8 path")),
+            ("TZ", "Fixture/Overflow"),
+        ],
+        &trace(SUMMER_UTC),
+    );
+
+    assert_eq!(code, 0, "the viewer stays usable");
+    assert!(
+        stderr.contains("times are shown in UTC"),
+        "the unreadable database is announced: {stderr}"
+    );
+    assert_eq!(started_at(&stdout), "2026-05-16T14:00:00+00:00");
     fs::remove_dir_all(&root).ok();
 }

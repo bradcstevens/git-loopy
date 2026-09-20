@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from git_loopy import viewer_zone
 from git_loopy.ui import local_time
 from git_loopy.ui.local_time import viewer_local
 
@@ -32,8 +33,10 @@ def _viewing_from(monkeypatch: pytest.MonkeyPatch, zone: str) -> None:
 
 @pytest.fixture(autouse=True)
 def _restore_host_zone() -> Iterator[None]:
-    """Leave the process's zone exactly as the suite found it."""
+    """Leave the process's zone, and the module's memo of it, as found."""
+    viewer_zone.forget_resolved_specifications()
     yield
+    viewer_zone.forget_resolved_specifications()
     if hasattr(time, "tzset"):  # pragma: no branch - POSIX hosts have it
         time.tzset()
 
@@ -142,9 +145,26 @@ def test_an_unresolvable_zone_is_labelled_rather_than_guessed(
 ) -> None:
     """AC9: the interface stays usable and says what it is showing.
 
-    A host with no timezone database still has to render a readback. What it
-    may not do is print a UTC instant that looks local.
+    This is driven by the *real* condition rather than a mock, because the
+    real condition does not raise: handed an unknown zone the C library
+    quietly resolves to UTC and hands back a clean ``+00:00``. A viewer would
+    then be shown a UTC instant as though it were their own wall clock, which
+    is precisely what ADR-0058 refuses.
     """
+    for unresolvable in ("Not/AZone", "Bogus", "../../etc/passwd"):
+        _viewing_from(monkeypatch, unresolvable)
+
+        projected = viewer_local("2026-05-16T14:00:00.000Z")
+
+        assert projected == (
+            "2026-05-16T14:00:00+00:00 UTC (local zone unresolved)"
+        ), f"TZ={unresolvable} was shown as though it were local time"
+
+
+def test_a_host_that_raises_instead_of_resolving_is_labelled_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other shape of the same failure: a host with no zone data at all."""
 
     class _NoZoneDatabase(datetime):
         def astimezone(self, tz: timezone | None = None) -> datetime:
@@ -152,11 +172,45 @@ def test_an_unresolvable_zone_is_labelled_rather_than_guessed(
                 raise OSError("no timezone database on this host")
             return super().astimezone(tz)
 
+    _viewing_from(monkeypatch, "America/Denver")
     monkeypatch.setattr(local_time, "datetime", _NoZoneDatabase)
 
     projected = viewer_local("2026-05-16T14:00:00.000Z")
 
     assert projected == "2026-05-16T14:00:00+00:00 UTC (local zone unresolved)"
+
+
+def test_a_posix_specification_needs_no_zone_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A host with no tz database still has a correct clock if ``TZ`` says so.
+
+    Labelling this as unresolved would be its own silent lie — the viewer's
+    clock is right, and telling them it is not would send them looking for a
+    fault that is not there.
+    """
+    _viewing_from(monkeypatch, "MST7MDT,M3.2.0,M11.1.0")
+
+    projected = viewer_local("2026-05-16T14:00:00.000Z")
+
+    assert projected == "2026-05-16T08:00:00-06:00"
+    assert "unresolved" not in projected
+
+
+def test_a_machine_with_no_tz_set_reads_its_own_configured_zone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No ``TZ`` is the ordinary case, and it is not a failure."""
+    if not hasattr(time, "tzset"):  # pragma: no cover - POSIX hosts have it
+        pytest.skip("this host cannot pin a local timezone")
+    monkeypatch.delenv("TZ", raising=False)
+    time.tzset()
+
+    projected = viewer_local("2026-05-16T14:00:00.000Z")
+
+    assert "unresolved" not in projected, (
+        "a normally configured machine must not be told its zone is broken"
+    )
 
 
 def test_a_field_that_is_not_an_instant_is_handed_back_untouched(
