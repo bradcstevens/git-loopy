@@ -115,3 +115,38 @@ async def test_one_cancelled_caller_leaves_the_shared_read_alone(cancel_owner) -
     release.set()
 
     assert await remaining == "snapshot"
+
+
+@pytest.mark.asyncio
+async def test_a_new_caller_does_not_join_a_read_being_cancelled() -> None:
+    started = asyncio.Event()
+    cleaning = asyncio.Event()
+    finish_cleanup = asyncio.Event()
+    reads = 0
+
+    async def read() -> str:
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleaning.set()
+                await finish_cleanup.wait()
+        return "fresh snapshot"
+
+    shared = SharedLiveRead(read)
+    interrupted = asyncio.create_task(shared())
+    await started.wait()
+    interrupted.cancel()
+    await cleaning.wait()
+    current = asyncio.create_task(shared())
+    await asyncio.sleep(0)
+    finish_cleanup.set()
+    try:
+        assert await current == "fresh snapshot"
+        assert reads == 2
+        assert shared.shared_reads == 0
+    finally:
+        await asyncio.gather(interrupted, current, return_exceptions=True)

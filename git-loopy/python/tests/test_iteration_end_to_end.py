@@ -6092,8 +6092,10 @@ def test_an_exhausted_allowance_stops_preparing_without_stopping_work(
     assert len(spied["assessments"]) == 1, spied["assessments"]
     states = [record["state"] for record in _prepared_records(tmp_path)]
     assert states and set(states) == {"unavailable"}, states
-    # Latched, not retried per candidate: one refusal, then silence.
-    assert len(states) == 1, "an exhausted desk kept asking"
+    # Latched, not retried per candidate; shutdown may cancel an unstarted tail.
+    assert sum(
+        record["reason"] == "quota_exhausted" for record in _prepared_records(tmp_path)
+    ) == 1, "an exhausted desk kept asking"
 
 
 def test_preparation_cannot_buy_classification_after_routing_allowance_exhaustion(

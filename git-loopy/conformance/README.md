@@ -57,7 +57,10 @@ disagree.
 `release_download_url_template` is there for the same reason the names are: the
 installers, the Homebrew tap, and the winget/Scoop manifests all download the
 same bytes, and a channel that resolves its own URL is a channel that can
-install a different Release. It is pinned against the helper manifest's
+install a different Release. The `release_index_url_template` lets the
+installers resolve the newest non-draft helper Release no newer than the
+declared Release; the helper is then identity-verified against that resolved
+version. Both URLs are pinned against the helper manifest's
 `repository`, so a fork or a rename cannot leave every channel downloading from
 the old repository's Releases. The shell adapter is
 [`shell/tests/test-tui-install.sh`](../shell/tests/test-tui-install.sh), which

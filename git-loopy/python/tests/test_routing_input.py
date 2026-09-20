@@ -104,6 +104,32 @@ def test_a_placeholder_feedback_loop_is_not_context() -> None:
     assert request.repository_context == ()
 
 
+@pytest.mark.parametrize("changed", ["issue_tail", "command_tail", "extra_loop"])
+def test_relevant_inputs_outside_the_prompt_bound_still_invalidate(changed) -> None:
+    issue = _ISSUE + "x" * MAX_ISSUE_CHARACTERS
+    loops = [FeedbackLoop(name="Python", command="echo " + "x" * 600 + "old")]
+    before = build_routing_request(
+        rendered_block=issue, task_type="implementation", feedback_loops=loops
+    )
+    if changed == "issue_tail":
+        issue += "\nChanged work after the prompt bound."
+    elif changed == "command_tail":
+        loops = [FeedbackLoop(name="Python", command=loops[0].command[:-3] + "new")]
+    else:
+        loops *= MAX_CRITERIA
+        before = build_routing_request(
+            rendered_block=issue, task_type="implementation", feedback_loops=loops
+        )
+        loops.append(FeedbackLoop(name="New gate", command="new-check"))
+    after = build_routing_request(
+        rendered_block=issue, task_type="implementation", feedback_loops=loops
+    )
+    assert before.issue == after.issue
+    assert before.repository_context == after.repository_context
+    assert before.bounded_input_tokens == after.bounded_input_tokens
+    assert before != after
+
+
 def test_persisting_the_settled_task_type_does_not_change_assessment_inputs() -> None:
     before = "=== Issue #43: Work [labels: ready-for-agent] ===\n" + _ISSUE
     after = (

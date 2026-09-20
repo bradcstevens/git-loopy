@@ -10,6 +10,7 @@ widening it is a visible edit to one file.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Iterable, Sequence
 
 from git_loopy.dynamic_route import PriorAttempt, RoutingRequest
@@ -140,7 +141,8 @@ def build_routing_request(
     """
     if not task_type.strip():
         raise ValueError("a routing request needs a settled task type")
-    issue = _assessment_issue(rendered_block)[:MAX_ISSUE_CHARACTERS]
+    source_issue = _assessment_issue(rendered_block)
+    issue = source_issue[:MAX_ISSUE_CHARACTERS]
     criteria = parse_acceptance_criteria(rendered_block)
     context = tuple(
         f"feedback loop: {loop.name[:200]}; command: {loop.command[:500]}"
@@ -148,6 +150,11 @@ def build_routing_request(
         if loop.runnable
     )[:MAX_CRITERIA]
     measurements = _local_measurements(measured, task_type)
+    source_input_identity = hashlib.sha256(repr((
+        source_issue,
+        tuple((loop.name, loop.command) for loop in feedback_loops if loop.runnable),
+        measured.entries.get(task_type) if measured is not None and measurements else None,
+    )).encode()).hexdigest()
     retained = sorted(
         enumerate(prior_attempts),
         key=lambda row: (row[1].capability_evidence, row[0]),
@@ -173,6 +180,7 @@ def build_routing_request(
         lifecycle_position=lifecycle_position,
         prior_attempts=history,
         prior_attempts_omitted=len(prior_attempts) - len(history),
+        source_input_identity=source_input_identity,
     )
 
 

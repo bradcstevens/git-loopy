@@ -2653,12 +2653,12 @@ class _Loop:
         )
 
     def _start_preparation_pass(
-        self, pool: Sequence[AfkReadyItem], *, beside: int | str
+        self, pool: Sequence[AfkReadyItem], *, beside: int | str | None
     ) -> None:
         """Begin preparing the rest of the Pool beside the bound **Pickup**.
 
         Fire-and-remember rather than awaited, which is the entire point: the
-        caller has already bound its issue and is on its way to a session, and
+        caller has already bound work or is draining Lanes for serial work, and
         AC1 asks for the other eligible candidates to be prepared *within* the
         configured concurrency and allowance rather than before the work.
         Settled at Run shutdown, never by an Iteration waiting for the tail.
@@ -2692,10 +2692,9 @@ class _Loop:
     async def prepare_ahead(self, candidates: Sequence[AfkReadyItem]) -> None:
         """Prepare proposals for eligible candidates behind the next **Pickup**.
 
-        The producer half of #566, called by both dispatch modes from a point
-        where the next Pickup has already been bound — which is what "without
-        delaying the next useful Pickup" means operationally: the work this
-        starts runs *beside* an Agent session, never in front of one.
+        The producer half of #566, called beside already-bound work or while
+        Lanes drain for serial-required work. Preparation runs beside useful
+        work, never as a prerequisite for starting an unrelated session.
 
         ``candidates`` arrives in the **Pool**'s own order and is filtered, not
         reordered — and it arrives already without whatever the caller is
@@ -4049,8 +4048,8 @@ class _ParallelLoop:
         ``take`` removes a reserved candidate from the cache outright, and
         ``eligible`` is the scheduler's own composed guard, so what is left is
         exactly the set a Lane could still be given. What survives that is
-        re-read authoritatively through ``pickup`` — the *same* read a
-        reservation makes, refusing a candidate that is no longer open, no
+        re-read authoritatively when its bounded preparation starts, without
+        a reservation, refusing a candidate that is no longer open, no
         longer labelled, or no longer **Ready** — because AC2 also forbids
         acting on shallow membership, and the cached record carries neither the
         issue's prose nor a current eligibility verdict. The desk is asked
@@ -4063,6 +4062,8 @@ class _ParallelLoop:
         desk = self._serial._preparation
         pool = self._pool
         if desk is None or pool is None or desk.halted:
+            return
+        if self._scheduler is not None and self._scheduler.serial_latched:
             return
         if self._preparation_pass is not None and not self._preparation_pass.done():
             return
@@ -4728,6 +4729,15 @@ class _ParallelLoop:
                 reason=rolling_scheduler.SERIAL_LATCH_NOT_PARALLEL_SAFE,
                 serial_required=len(serial_required),
             )
+            if (
+                self._lane_work
+                and self._scheduler.remaining_units != 0
+                and not self._scheduler.abort_latched
+                and not self._scheduler.stop_latched
+            ):
+                if self._preparation_pass is not None:
+                    self._preparation_pass.cancel()
+                self._serial._start_preparation_pass(serial_required, beside=None)
         return collection.complete
 
     def _report_serial_latch(

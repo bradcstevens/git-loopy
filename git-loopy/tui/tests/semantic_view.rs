@@ -1064,7 +1064,9 @@ fn a_prepared_route_is_a_proposal_and_never_a_binding() {
         assert!(required.contains(&declared) || optional.contains(&declared));
     }
     for field in required {
-        assert!(preparation.get(field.as_str().expect("field name")).is_some());
+        assert!(preparation
+            .get(field.as_str().expect("field name"))
+            .is_some());
     }
     assert_eq!(
         queue_row(&projected, 7)["preparation"],

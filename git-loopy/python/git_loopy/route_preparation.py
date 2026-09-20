@@ -231,9 +231,6 @@ class RoutePreparation:
             except asyncio.CancelledError:
                 self._cancelled(candidate.ref)
                 raise
-            finally:
-                if head:
-                    head_done.set()
 
         tasks: dict[int | str, asyncio.Task[PreparedRoute | None]] = {}
         for candidate in pending:
@@ -241,6 +238,9 @@ class RoutePreparation:
                 continue
             self._in_progress.add(candidate.ref)
             task = asyncio.create_task(bounded(candidate, head=not tasks))
+            if not tasks:
+                # A task cancelled before its first step runs no coroutine cleanup.
+                task.add_done_callback(lambda _task: head_done.set())
             tasks[candidate.ref] = task
             self._tasks[candidate.ref] = task
         try:

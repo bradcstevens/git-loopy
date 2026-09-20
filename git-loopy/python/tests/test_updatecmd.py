@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import tarfile
 from pathlib import Path
 from typing import Mapping
 
@@ -972,3 +976,452 @@ def test_update_leaves_a_clean_config_without_a_backup(tmp_path: Path) -> None:
         "No retired routing keys in the global Config" in line and str(config) in line
         for line in output
     )
+
+
+def _make_fake_tar_helper(
+    dest_dir: Path,
+    artifact: object,
+    version: str,
+    *,
+    schema_range: tuple[int, int] = (1, 1),
+    tamper_digest: bool = False,
+) -> tuple[bytes, bytes]:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    executable_name = getattr(artifact, "executable_name")
+    archive_name = getattr(artifact, "archive_name")
+    executable = dest_dir / executable_name
+    min_schema, max_schema = schema_range
+    executable.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        f"  --version) printf 'git-loopy-tui {version}\\n'; exit 0 ;;\n"
+        "  --schema-version)\n"
+        f'    printf \'{{"name": "git-loopy-tui", "version": "{version}", '
+        f'"min_event_schema_version": {min_schema}, "max_event_schema_version": {max_schema}, '
+        f'"wrapper_contract_version": "1.0"}}\\n\' ;\n'
+        "    exit 0 ;;\n"
+        "esac\n"
+        "cat >/dev/null\n"
+        "printf '{\"queue\": []}\\n'\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    archive = dest_dir / archive_name
+    with tarfile.open(archive, "w:xz") as bundle:
+        bundle.add(executable, arcname=executable_name)
+    archive_bytes = archive.read_bytes()
+    digest = hashlib.sha256(archive_bytes).hexdigest()
+    if tamper_digest:
+        digest = "0" * 64
+    checksum_bytes = f"{digest}  {archive_name}\n".encode("utf-8")
+    return archive_bytes, checksum_bytes
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_update_public_maintenance_exact_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from git_loopy import tui_release, updatecmd
+
+    config_home = tmp_path / "config-home"
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+    artifact = tui_release._runtime_artifact_for_host("Darwin", "arm64", None)
+    archive_bytes, checksum_bytes = _make_fake_tar_helper(
+        tmp_path / "pkg-124", artifact, "1.2.4"
+    )
+
+    release_index = [
+        {
+            "tag_name": "v1.2.4",
+            "draft": False,
+            "assets": [
+                {"name": artifact.archive_name},
+                {"name": artifact.checksum_name},
+            ],
+        }
+    ]
+    downloads = {
+        tui_release._RUNTIME_RELEASE_INDEX_URL.format(page=1): json.dumps(
+            release_index
+        ).encode("utf-8"),
+        tui_release._runtime_release_artifact_url(
+            "1.2.4", artifact.archive_name
+        ): archive_bytes,
+        tui_release._runtime_release_artifact_url(
+            "1.2.4", artifact.checksum_name
+        ): checksum_bytes,
+    }
+    monkeypatch.setattr(tui_release, "_download_release_file", downloads.__getitem__)
+    monkeypatch.setattr(tui_release.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(tui_release.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(tui_release.platform, "libc_ver", lambda: ("", ""))
+
+    output: list[str] = []
+    result = updatecmd.run_update(
+        env=env,
+        release_version_reader=lambda: "1.2.4",
+        packaged_prompt=tmp_path / "absent-PROMPT.md",
+        catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
+        output_fn=output.append,
+    )
+    assert result == 0
+    installed_helper = config_home / "git-loopy" / "bin" / artifact.executable_name
+    assert installed_helper.is_file()
+    record = config_home / "git-loopy" / "bin" / f"{artifact.executable_name}.release"
+    assert record.read_text(encoding="utf-8").strip() == "1.2.4"
+
+    # Runtime discovery attaches to the exact helper
+    attached = tui_release.resolve_runtime_helper(
+        tmp_path / "repo",
+        release_version="1.2.4",
+        warn=lambda message: pytest.fail(message),
+        env=env,
+    )
+    assert attached == installed_helper
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_update_public_maintenance_verified_older_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from git_loopy import tui_release, updatecmd
+
+    config_home = tmp_path / "config-home"
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+    artifact = tui_release._runtime_artifact_for_host("Darwin", "arm64", None)
+    archive_bytes, checksum_bytes = _make_fake_tar_helper(
+        tmp_path / "pkg-124", artifact, "1.2.4"
+    )
+
+    release_index = [
+        {
+            "tag_name": "v1.2.5-dev.1",
+            "draft": False,
+            "assets": [],  # source-only exact release
+        },
+        {
+            "tag_name": "v1.2.4",
+            "draft": False,
+            "assets": [
+                {"name": artifact.archive_name},
+                {"name": artifact.checksum_name},
+            ],
+        },
+    ]
+    downloads = {
+        tui_release._RUNTIME_RELEASE_INDEX_URL.format(page=1): json.dumps(
+            release_index
+        ).encode("utf-8"),
+        tui_release._runtime_release_artifact_url(
+            "1.2.4", artifact.archive_name
+        ): archive_bytes,
+        tui_release._runtime_release_artifact_url(
+            "1.2.4", artifact.checksum_name
+        ): checksum_bytes,
+    }
+    monkeypatch.setattr(tui_release, "_download_release_file", downloads.__getitem__)
+    monkeypatch.setattr(tui_release.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(tui_release.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(tui_release.platform, "libc_ver", lambda: ("", ""))
+
+    output: list[str] = []
+    result = updatecmd.run_update(
+        env=env,
+        release_version_reader=lambda: "1.2.5-dev.1",
+        packaged_prompt=tmp_path / "absent-PROMPT.md",
+        catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
+        output_fn=output.append,
+    )
+    assert result == 0
+    installed_helper = config_home / "git-loopy" / "bin" / artifact.executable_name
+    assert installed_helper.is_file()
+    record = config_home / "git-loopy" / "bin" / f"{artifact.executable_name}.release"
+    assert record.read_text(encoding="utf-8").strip() == "1.2.4"
+
+    # Runtime discovery attaches to the fallback helper without rejecting it
+    attached = tui_release.resolve_runtime_helper(
+        tmp_path / "repo",
+        release_version="1.2.5-dev.1",
+        warn=lambda message: pytest.fail(message),
+        env=env,
+    )
+    assert attached == installed_helper
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_update_public_maintenance_all_source_only_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from git_loopy import tui_release, updatecmd
+
+    config_home = tmp_path / "config-home"
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+    release_index = [
+        {"tag_name": "v1.2.4", "draft": False, "assets": []},
+        {"tag_name": "v1.2.3", "draft": False, "assets": []},
+    ]
+    monkeypatch.setattr(
+        tui_release,
+        "_download_release_file",
+        lambda _url: json.dumps(release_index).encode("utf-8"),
+    )
+    monkeypatch.setattr(tui_release.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(tui_release.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(tui_release.platform, "libc_ver", lambda: ("", ""))
+
+    output: list[str] = []
+    result = updatecmd.run_update(
+        env=env,
+        release_version_reader=lambda: "1.2.4",
+        packaged_prompt=tmp_path / "absent-PROMPT.md",
+        catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
+        output_fn=output.append,
+    )
+    assert result == 1
+    assert any("no published git-loopy-tui Release is at or below" in line for line in output)
+    attached = tui_release.resolve_runtime_helper(
+        tmp_path / "repo",
+        release_version="1.2.4",
+        warn=lambda _m: None,
+        env=env,
+    )
+    assert attached is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_update_public_maintenance_newer_only_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from git_loopy import tui_release, updatecmd
+
+    config_home = tmp_path / "config-home"
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+    artifact = tui_release._runtime_artifact_for_host("Darwin", "arm64", None)
+    release_index = [
+        {
+            "tag_name": "v2.0.0",
+            "draft": False,
+            "assets": [
+                {"name": artifact.archive_name},
+                {"name": artifact.checksum_name},
+            ],
+        }
+    ]
+    monkeypatch.setattr(
+        tui_release,
+        "_download_release_file",
+        lambda _url: json.dumps(release_index).encode("utf-8"),
+    )
+    monkeypatch.setattr(tui_release.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(tui_release.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(tui_release.platform, "libc_ver", lambda: ("", ""))
+
+    output: list[str] = []
+    result = updatecmd.run_update(
+        env=env,
+        release_version_reader=lambda: "1.2.3",
+        packaged_prompt=tmp_path / "absent-PROMPT.md",
+        catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
+        output_fn=output.append,
+    )
+    assert result == 1
+    assert any("no published git-loopy-tui Release is at or below" in line for line in output)
+    attached = tui_release.resolve_runtime_helper(
+        tmp_path / "repo",
+        release_version="1.2.3",
+        warn=lambda _m: None,
+        env=env,
+    )
+    assert attached is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_update_public_maintenance_incompatible_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from git_loopy import tui_release, updatecmd
+
+    config_home = tmp_path / "config-home"
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+    artifact = tui_release._runtime_artifact_for_host("Darwin", "arm64", None)
+    archive_bytes, checksum_bytes = _make_fake_tar_helper(
+        tmp_path / "pkg-124", artifact, "1.2.4", schema_range=(99, 99)
+    )
+
+    release_index = [
+        {
+            "tag_name": "v1.2.4",
+            "draft": False,
+            "assets": [
+                {"name": artifact.archive_name},
+                {"name": artifact.checksum_name},
+            ],
+        }
+    ]
+    downloads = {
+        tui_release._RUNTIME_RELEASE_INDEX_URL.format(page=1): json.dumps(
+            release_index
+        ).encode("utf-8"),
+        tui_release._runtime_release_artifact_url(
+            "1.2.4", artifact.archive_name
+        ): archive_bytes,
+        tui_release._runtime_release_artifact_url(
+            "1.2.4", artifact.checksum_name
+        ): checksum_bytes,
+    }
+    monkeypatch.setattr(tui_release, "_download_release_file", downloads.__getitem__)
+    monkeypatch.setattr(tui_release.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(tui_release.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(tui_release.platform, "libc_ver", lambda: ("", ""))
+
+    output: list[str] = []
+    result = updatecmd.run_update(
+        env=env,
+        release_version_reader=lambda: "1.2.4",
+        packaged_prompt=tmp_path / "absent-PROMPT.md",
+        catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
+        output_fn=output.append,
+    )
+    assert result == 1
+    assert any("decodes Event schemas" in line for line in output)
+    attached = tui_release.resolve_runtime_helper(
+        tmp_path / "repo",
+        release_version="1.2.4",
+        warn=lambda _m: None,
+        env=env,
+    )
+    assert attached is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_update_public_maintenance_damaged_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from git_loopy import tui_release, updatecmd
+
+    config_home = tmp_path / "config-home"
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+    artifact = tui_release._runtime_artifact_for_host("Darwin", "arm64", None)
+    archive_bytes, checksum_bytes = _make_fake_tar_helper(
+        tmp_path / "pkg-124", artifact, "1.2.4", tamper_digest=True
+    )
+
+    release_index = [
+        {
+            "tag_name": "v1.2.4",
+            "draft": False,
+            "assets": [
+                {"name": artifact.archive_name},
+                {"name": artifact.checksum_name},
+            ],
+        }
+    ]
+    downloads = {
+        tui_release._RUNTIME_RELEASE_INDEX_URL.format(page=1): json.dumps(
+            release_index
+        ).encode("utf-8"),
+        tui_release._runtime_release_artifact_url(
+            "1.2.4", artifact.archive_name
+        ): archive_bytes,
+        tui_release._runtime_release_artifact_url(
+            "1.2.4", artifact.checksum_name
+        ): checksum_bytes,
+    }
+    monkeypatch.setattr(tui_release, "_download_release_file", downloads.__getitem__)
+    monkeypatch.setattr(tui_release.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(tui_release.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(tui_release.platform, "libc_ver", lambda: ("", ""))
+
+    output: list[str] = []
+    result = updatecmd.run_update(
+        env=env,
+        release_version_reader=lambda: "1.2.4",
+        packaged_prompt=tmp_path / "absent-PROMPT.md",
+        catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
+        output_fn=output.append,
+    )
+    assert result == 1
+    assert any("failed its SHA-256 checksum" in line for line in output)
+    attached = tui_release.resolve_runtime_helper(
+        tmp_path / "repo",
+        release_version="1.2.4",
+        warn=lambda _m: None,
+        env=env,
+    )
+    assert attached is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_update_public_maintenance_failure_preserves_previous_helper_and_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from git_loopy import tui_release, updatecmd
+
+    config_home = tmp_path / "config-home"
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+    artifact = tui_release._runtime_artifact_for_host("Darwin", "arm64", None)
+
+    # Pre-existing installation: helper 1.2.0 and its record
+    helper_path = config_home / "git-loopy" / "bin" / artifact.executable_name
+    _make_fake_tar_helper(tmp_path / "seed", artifact, "1.2.0")
+    helper_path.parent.mkdir(parents=True, exist_ok=True)
+    # copy executable from seed
+    helper_path.write_bytes((tmp_path / "seed" / artifact.executable_name).read_bytes())
+    helper_path.chmod(0o755)
+    record = helper_path.parent / f"{artifact.executable_name}.release"
+    record.write_text("1.2.0\n", encoding="utf-8")
+
+    # Verify pre-existing attaches
+    assert (
+        tui_release.resolve_runtime_helper(
+            tmp_path / "repo",
+            release_version="1.2.3",
+            warn=lambda message: pytest.fail(message),
+            env=env,
+        )
+        == helper_path
+    )
+
+    # Now attempt an update to 1.2.4 where archive download fails
+    release_index = [
+        {
+            "tag_name": "v1.2.4",
+            "draft": False,
+            "assets": [
+                {"name": artifact.archive_name},
+                {"name": artifact.checksum_name},
+            ],
+        }
+    ]
+    def _download(url: str) -> bytes:
+        if "releases?per_page" in url:
+            return json.dumps(release_index).encode("utf-8")
+        raise OSError("failed to connect to github.com")
+
+    monkeypatch.setattr(tui_release, "_download_release_file", _download)
+    monkeypatch.setattr(tui_release.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(tui_release.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(tui_release.platform, "libc_ver", lambda: ("", ""))
+
+    output: list[str] = []
+    result = updatecmd.run_update(
+        env=env,
+        release_version_reader=lambda: "1.2.4",
+        packaged_prompt=tmp_path / "absent-PROMPT.md",
+        catalog_refresh=lambda _env: _refreshed_catalog(tmp_path),
+        output_fn=output.append,
+    )
+    assert result == 1
+    assert any("Could not refresh the TUI helper" in line for line in output)
+
+    # Previous helper and record remain intact
+    assert helper_path.is_file()
+    assert record.read_text(encoding="utf-8").strip() == "1.2.0"
+    attached = tui_release.resolve_runtime_helper(
+        tmp_path / "repo",
+        release_version="1.2.3",
+        warn=lambda message: pytest.fail(message),
+        env=env,
+    )
+    assert attached == helper_path

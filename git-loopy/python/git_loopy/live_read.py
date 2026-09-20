@@ -73,6 +73,8 @@ class SharedLiveRead(Generic[T]):
             if read.waiters == 0 and not read.task.done():
                 # Nobody needs the request now. Do not leave a source call
                 # running beyond cancellation or the Run's deadline.
+                if self._in_flight is read:
+                    self._in_flight = None
                 read.task.cancel()
                 await asyncio.gather(read.task, return_exceptions=True)
 

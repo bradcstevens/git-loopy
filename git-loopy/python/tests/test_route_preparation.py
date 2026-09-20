@@ -122,6 +122,40 @@ async def test_the_next_pickup_is_prepared_before_anything_else_starts() -> None
 
 
 @pytest.mark.asyncio
+async def test_pickup_can_interrupt_a_head_that_has_not_started() -> None:
+    started = []
+    observed = []
+
+    async def prepare(candidate: _Candidate) -> PreparedRoute:
+        started.append(candidate.ref)
+        return PreparedRoute(
+            ref=candidate.ref,
+            outcome=PreparationOutcome.PROPOSED,
+            proposal=_proposal(candidate.ref),
+        )
+
+    desk = RoutePreparation(
+        prepare=prepare, concurrency=1, clock=lambda: _NOW,
+        on_prepared=observed.append,
+    )
+    ahead = asyncio.create_task(desk.prepare_ahead([_Candidate(11), _Candidate(12)]))
+    await asyncio.sleep(0)
+    try:
+        async with asyncio.timeout(0.2):
+            await desk.prioritize(12)
+        await ahead
+        assert started == [12]
+        assert desk.take(12) is not None
+        assert next(entry for entry in observed if entry.ref == 11).outcome is (
+            PreparationOutcome.UNAVAILABLE
+        )
+    finally:
+        await desk.finish_pickup(12)
+        ahead.cancel()
+        await asyncio.gather(ahead, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_preparation_never_exceeds_the_configured_selector_concurrency() -> None:
     """Speculative work stays inside the bound the operator authorized (AC1)."""
     live = 0

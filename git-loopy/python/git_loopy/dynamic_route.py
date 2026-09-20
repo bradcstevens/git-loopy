@@ -910,7 +910,16 @@ class RoutingRequest:
     prior_attempts_omitted: int = 0
     """Older advances omitted from bounded history, not refunded attempts."""
 
+    source_input_identity: str | None = None
+    """Digest of relevant source inputs before bounding the selector's prompt."""
+
     def __post_init__(self) -> None:
+        if self.source_input_identity is not None and (
+            not isinstance(self.source_input_identity, str)
+            or len(self.source_input_identity) != 64
+            or any(char not in "0123456789abcdef" for char in self.source_input_identity)
+        ):
+            raise ValueError("source input identity must be a SHA-256 digest")
         if not all(
             isinstance(group, tuple)
             for group in (

@@ -8691,6 +8691,43 @@ def test_rolling_preparation_rereads_queued_readiness_without_spending(
     )
 
 
+def test_serial_required_work_is_prepared_while_existing_lanes_drain(
+    tmp_path, monkeypatch
+) -> None:
+    discovered = False
+    observed_during_work = []
+
+    async def work(session, tracker):
+        nonlocal discovered
+        if session._working_directory is None:
+            return
+        if not discovered:
+            tracker.seed_issue(_make_issue(44, labels=["ready-for-agent"]))
+            discovered = True
+            return
+
+        async def prepared():
+            while not any(
+                event["type"] == "wrapper.routing.prepared" and event["issue"] == 44
+                for event in _logged_events(tmp_path)
+            ):
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(prepared(), timeout=2)
+        observed_during_work.append(Path(session._working_directory).name)
+
+    client, spied, exit_code = _rolling_dynamic_run(
+        tmp_path, monkeypatch, on_work=work, max_iterations=3,
+    )
+    assert exit_code == 0
+    assert [call["working_directory"] is None for call in client.create_calls] == [
+        False, False, True
+    ]
+    assert client.create_calls[-1]["model"] == "claude-opus-5"
+    assert sum("#44:" in request.issue for _, request in spied["assessments"]) == 1
+    assert observed_during_work == ["issue-43"]
+
+
 def test_a_rolling_run_prepares_the_candidates_no_lane_has_taken(
     tmp_path, monkeypatch
 ) -> None:
