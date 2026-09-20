@@ -13,8 +13,7 @@ import json
 import os
 import shutil
 import subprocess
-import subprocess
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from inspect import signature
 from pathlib import Path
 
@@ -554,6 +553,54 @@ def test_a_successful_push_response_is_not_proof_that_the_tag_exists(
     assert service.create_calls == []
 
 
+@pytest.mark.parametrize(
+    "listing",
+    [
+        "unreadable response",
+        f"{'a' * 40}\trefs/tags/{TAG}^{{}}",
+        f"not-an-object\trefs/tags/{TAG}",
+        f"{'a' * 40}\trefs/tags/another-tag",
+        f"{'a' * 40}\trefs/tags/{TAG}\n{'b' * 40}\trefs/tags/{TAG}",
+    ],
+)
+@pytest.mark.parametrize("after_push", [False, True])
+def test_unreadable_remote_refs_are_unknown_not_absent(
+    proved: Proved,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    listing: str,
+    after_push: bool,
+) -> None:
+    remote, checkout = _remote_checkout(proved, tmp_path)
+    service = FakeReleaseService()
+    real_run = subprocess.run
+    reads = 0
+
+    def transport(args, **kwargs):
+        nonlocal reads
+        if args[:2] == ["git", "ls-remote"]:
+            reads += 1
+            if reads == (2 if after_push else 1):
+                return subprocess.CompletedProcess(args, 0, listing, "")
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", transport)
+    before = _remote_refs(remote)
+
+    with pytest.raises(ReleasePublicationError, match="unreadable"):
+        publish_release(
+            proved.publication_input,
+            repository_root=checkout,
+            candidate_workspace=proved.workspace,
+            release_service=service,
+        )
+
+    if after_push:
+        before[f"refs/tags/{TAG}"] = proved.publication_input.tag_object
+    assert _remote_refs(remote) == before
+    assert service.create_calls == []
+
+
 def test_a_race_that_published_another_commit_is_refused_and_never_forced(
     proved: Proved, tmp_path: Path
 ) -> None:
@@ -789,6 +836,203 @@ def _stub_gh(
     return argv
 
 
+@dataclass
+class GhPublicationHost:
+    """The external command transport; the production Release adapter stays real."""
+
+    release: dict[str, object] | None = None
+    calls: list[list[str]] = field(default_factory=list)
+    pushes: list[list[str]] = field(default_factory=list)
+    write_lands: bool = True
+    write_response: str = "success"
+    readback: str = "available"
+    wrote: bool = False
+    stored_changes: dict[str, object] = field(default_factory=dict)
+
+    def run(self, args: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+        self.calls.append(args)
+        if args[1:3] == ["release", "view"]:
+            if self.wrote and self.readback == "timeout":
+                raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+            if self.wrote and self.readback == "malformed":
+                return subprocess.CompletedProcess(args, 0, '{"tagName":', "")
+            if self.release is None:
+                return subprocess.CompletedProcess(args, 1, "", "release not found")
+            return subprocess.CompletedProcess(args, 0, json.dumps(self.release), "")
+
+        # No edits, uploads, deletions or workflow dispatch can hide in a retry.
+        assert args[1:3] == ["release", "create"], args
+        assert args[4:] == [
+            "--verify-tag", "--title", release_title(VERSION),
+            "--notes-file", args[8], "--latest",
+        ]
+        self.wrote = True
+        if self.write_lands:
+            assert self.release is None, "a retry attempted duplicate creation"
+            self.release = {
+                "tagName": args[3],
+                "name": args[6],
+                "body": Path(args[8]).read_text(encoding="utf-8"),
+                "isDraft": False,
+                "isPrerelease": False,
+                "assets": [],
+            } | self.stored_changes
+        if self.write_response == "timeout":
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        if self.write_response == "error":
+            return subprocess.CompletedProcess(args, 1, "", "HTTP 502")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    @property
+    def creates(self) -> list[list[str]]:
+        return [args for args in self.calls if args[1:3] == ["release", "create"]]
+
+
+@pytest.fixture
+def gh_host(monkeypatch: pytest.MonkeyPatch) -> GhPublicationHost:
+    host = GhPublicationHost()
+    real_run = subprocess.run
+
+    def transport(args, **kwargs):
+        if args[0] == "gh":
+            return host.run(args, **kwargs)
+        if args[:2] == ["git", "push"]:
+            host.pushes.append(args)
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", transport)
+    return host
+
+
+def test_production_readback_refuses_changed_note_whitespace_without_mutation(
+    proved: Proved, tmp_path: Path, gh_host: GhPublicationHost
+) -> None:
+    remote, checkout = _remote_checkout(proved, tmp_path)
+    gh_host.release = {
+        "tagName": TAG,
+        "name": release_title(VERSION),
+        "body": "    " + _notes_text(proved),
+        "isDraft": False,
+        "isPrerelease": False,
+        "assets": [],
+    }
+    before = _remote_refs(remote)
+
+    with pytest.raises(ReleasePublicationError, match="committed release notes"):
+        publish_release(
+            proved.publication_input,
+            repository_root=checkout,
+            candidate_workspace=proved.workspace,
+            release_service=SubprocessReleaseService(checkout),
+        )
+
+    assert _remote_refs(remote) == before
+    assert gh_host.creates == []
+
+
+@pytest.mark.parametrize("write_lands", [False, True])
+@pytest.mark.parametrize("write_response", ["success", "error", "timeout"])
+@pytest.mark.parametrize("readback", ["available", "timeout", "malformed"])
+def test_production_publication_reconciles_every_write_and_resumes_only_missing_steps(
+    proved: Proved,
+    tmp_path: Path,
+    gh_host: GhPublicationHost,
+    write_lands: bool,
+    write_response: str,
+    readback: str,
+) -> None:
+    remote, checkout = _remote_checkout(proved, tmp_path)
+    gh_host.pushes.clear()
+    gh_host.write_lands = write_lands
+    gh_host.write_response = write_response
+    gh_host.readback = readback
+    arguments = dict(
+        repository_root=checkout,
+        candidate_workspace=proved.workspace,
+        release_service=SubprocessReleaseService(checkout),
+    )
+
+    if write_lands and readback == "available":
+        outcome = publish_release(proved.publication_input, **arguments)
+        assert outcome.release_created
+    else:
+        with pytest.raises(ReleasePublicationError):
+            publish_release(proved.publication_input, **arguments)
+
+    assert len(gh_host.pushes) == 1
+    assert len(gh_host.creates) == 1
+    assert (gh_host.release is not None) is write_lands
+    before = _remote_refs(remote)
+    assert before[f"refs/tags/{TAG}"] == proved.publication_input.tag_object
+
+    gh_host.pushes.clear()
+    gh_host.calls.clear()
+    gh_host.readback = "available"
+    gh_host.write_response = "success"
+    gh_host.write_lands = True
+    outcome = publish_release(proved.publication_input, **arguments)
+
+    assert outcome.already_published is write_lands
+    assert outcome.release_created is not write_lands
+    assert not outcome.tag_created
+    assert gh_host.pushes == []
+    assert len(gh_host.creates) == (0 if write_lands else 1)
+    assert _remote_refs(remote) == before
+    assert gh_host.release == {
+        "tagName": TAG,
+        "name": release_title(VERSION),
+        "body": _notes_text(proved) + "\n",
+        "isDraft": False,
+        "isPrerelease": False,
+        "assets": [],
+    }
+
+
+@pytest.mark.parametrize("write_response", ["success", "error", "timeout"])
+@pytest.mark.parametrize(
+    "difference",
+    [
+        {"tagName": "v0.12.0"},
+        {"name": "git-loopy 0.12.0"},
+        {"isDraft": True},
+        {"isPrerelease": True},
+        {"body": "Uncommitted notes"},
+        {"assets": [{"name": "helper.zip"}]},
+        {"isDraft": None},
+    ],
+)
+def test_production_publication_never_repairs_mismatched_or_unknown_release_state(
+    proved: Proved,
+    tmp_path: Path,
+    gh_host: GhPublicationHost,
+    difference: dict[str, object],
+    write_response: str,
+) -> None:
+    remote, checkout = _remote_checkout(proved, tmp_path)
+    gh_host.stored_changes = difference
+    gh_host.write_response = write_response
+    arguments = dict(
+        repository_root=checkout,
+        candidate_workspace=proved.workspace,
+        release_service=SubprocessReleaseService(checkout),
+    )
+
+    with pytest.raises(ReleasePublicationError):
+        publish_release(proved.publication_input, **arguments)
+    before = _remote_refs(remote)
+    stored = dict(gh_host.release)
+    gh_host.pushes.clear()
+    gh_host.calls.clear()
+
+    with pytest.raises(ReleasePublicationError):
+        publish_release(proved.publication_input, **arguments)
+
+    assert gh_host.creates == []
+    assert gh_host.pushes == []
+    assert gh_host.release == stored
+    assert _remote_refs(remote) == before
+
+
 def test_the_production_release_host_reads_a_published_release_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -940,8 +1184,322 @@ def test_the_production_release_host_reports_a_refused_write_as_a_service_failur
         )
 
 
+def test_the_production_release_host_reports_a_404_as_an_absence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The host's other way of saying "there is no such Release"."""
+    _stub_gh(tmp_path, monkeypatch, stderr="gh: HTTP 404: Not Found", status=1)
+    service = SubprocessReleaseService(repository_root=tmp_path)
+
+    assert service.view(TAG) is None
+
+
+@pytest.mark.parametrize("subcommand", ["view", "create"])
+def test_the_production_release_host_reports_an_absent_binary_as_a_service_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, subcommand: str
+) -> None:
+    """No `gh` at all is a broken conversation, never a verdict about a Release."""
+    empty = tmp_path / "no-tools"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    notes = tmp_path / "notes.md"
+    notes.write_text("notes\n", encoding="utf-8")
+    service = SubprocessReleaseService(repository_root=tmp_path)
+
+    with pytest.raises(ReleaseServiceError, match="gh release"):
+        if subcommand == "view":
+            service.view(TAG)
+        else:
+            service.create(
+                tag=TAG, name="git-loopy", notes_path=notes, prerelease=False
+            )
+
+
+@pytest.mark.parametrize("subcommand", ["view", "create"])
+def test_the_production_release_host_reports_a_timeout_as_a_service_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, subcommand: str
+) -> None:
+    """A host that never answers is the one case that must not resolve to anything.
+
+    A timed-out ``view`` that returned ``None`` would report an absence nobody
+    observed, and a timed-out ``create`` that returned normally would report a
+    write nobody confirmed. Both have to surface as a failed conversation so
+    publication resolves them by reading the remote back.
+    """
+    directory = tmp_path / "slow-bin"
+    directory.mkdir()
+    script = directory / "gh"
+    script.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ['PATH']}")
+    notes = tmp_path / "notes.md"
+    notes.write_text("notes\n", encoding="utf-8")
+    service = SubprocessReleaseService(repository_root=tmp_path, timeout_seconds=0.5)
+
+    with pytest.raises(ReleaseServiceError, match="gh release"):
+        if subcommand == "view":
+            service.view(TAG)
+        else:
+            service.create(
+                tag=TAG, name="git-loopy", notes_path=notes, prerelease=False
+            )
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param("not json at all", id="unparseable"),
+        pytest.param("[]", id="list"),
+        pytest.param('"v0.11.0"', id="string"),
+        pytest.param("null", id="null"),
+    ],
+)
+def test_the_production_release_host_never_reads_an_unparseable_answer_as_a_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer: str
+) -> None:
+    """A success exit code over output nobody can read is still an unknown state."""
+    _stub_gh(tmp_path, monkeypatch, stdout=answer)
+    service = SubprocessReleaseService(repository_root=tmp_path)
+
+    with pytest.raises(ReleaseServiceError, match=TAG):
+        service.view(TAG)
+
+
 def test_the_production_release_host_satisfies_the_publication_seam() -> None:
     assert isinstance(SubprocessReleaseService(repository_root=Path.cwd()), ReleaseService)
+
+
+@dataclass
+class ScriptedGh:
+    """A real `gh` on PATH whose answers are scripted per call.
+
+    The doubles above stop at the :class:`ReleaseService` Protocol, which leaves
+    the production adapter's own reading of `gh` — exit codes, stderr phrasing,
+    JSON shape — untested against a publication. This drives the whole of
+    ``publish_release`` through that adapter instead, so an external-service
+    failure lands where the real one would: as a process that exited badly.
+    """
+
+    directory: Path
+
+    def answer(
+        self,
+        subcommand: str,
+        call: int | str,
+        *,
+        stdout: str = "",
+        stderr: str = "",
+        status: int = 0,
+    ) -> None:
+        """Answer the ``call``-th ``subcommand`` (or ``"default"``) this way."""
+        (self.directory / f"{subcommand}.{call}.stdout").write_text(
+            stdout, encoding="utf-8"
+        )
+        (self.directory / f"{subcommand}.{call}.stderr").write_text(
+            stderr, encoding="utf-8"
+        )
+        (self.directory / f"{subcommand}.{call}.status").write_text(
+            str(status), encoding="utf-8"
+        )
+
+    def absent(self, call: int | str) -> None:
+        """Say, the way `gh` says it, that there is no such Release."""
+        self.answer("view", call, stderr="release not found", status=1)
+
+    def calls(self, subcommand: str) -> int:
+        counter = self.directory / f"{subcommand}.count"
+        return int(counter.read_text(encoding="utf-8")) if counter.exists() else 0
+
+    @property
+    def argv(self) -> list[list[str]]:
+        log = self.directory / "argv"
+        if not log.exists():
+            return []
+        return [
+            line.split("\x1f")
+            for line in log.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+
+
+def _scripted_gh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ScriptedGh:
+    directory = tmp_path / "scripted-gh"
+    directory.mkdir(parents=True, exist_ok=True)
+    binaries = tmp_path / "scripted-bin"
+    binaries.mkdir(parents=True, exist_ok=True)
+    script = binaries / "gh"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'd="{directory}"\n'
+        'sub="$2"\n'
+        'line=""; for arg in "$@"; do line="$line$arg\x1f"; done\n'
+        'printf "%s\\n" "$line" >> "$d/argv"\n'
+        'n=$(cat "$d/$sub.count" 2>/dev/null || echo 0); n=$((n+1))\n'
+        'printf "%s" "$n" > "$d/$sub.count"\n'
+        'f="$d/$sub.$n"\n'
+        '[ -f "$f.status" ] || f="$d/$sub.default"\n'
+        '[ -f "$f.status" ] || { echo "unscripted: $sub #$n" >&2; exit 111; }\n'
+        '[ -f "$f.stdout" ] && cat "$f.stdout"\n'
+        '[ -f "$f.stderr" ] && cat "$f.stderr" >&2\n'
+        'exit "$(cat "$f.status")"\n',
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binaries}{os.pathsep}{os.environ['PATH']}")
+    return ScriptedGh(directory)
+
+
+def _published_payload(proved: Proved, **difference: object) -> str:
+    return json.dumps(
+        {
+            "tagName": TAG,
+            "name": release_title(VERSION),
+            "body": _notes_text(proved),
+            "isDraft": False,
+            "isPrerelease": False,
+            "assets": [],
+        }
+        | difference
+    )
+
+
+def test_a_publication_over_the_production_release_host_publishes_the_proved_snapshot(
+    proved: Proved, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    remote, checkout = _remote_checkout(proved, tmp_path)
+    gh = _scripted_gh(tmp_path, monkeypatch)
+    gh.absent(1)
+    gh.answer("create", 1)
+    gh.answer("view", 2, stdout=_published_payload(proved))
+
+    outcome = publish_release(
+        proved.publication_input,
+        repository_root=checkout,
+        candidate_workspace=proved.workspace,
+        release_service=SubprocessReleaseService(checkout),
+    )
+
+    assert outcome.tag_created and outcome.release_created
+    assert _remote_refs(remote)[f"refs/tags/{TAG}"] == proved.publication_input.tag_object
+    created = [call for call in gh.argv if call[:2] == ["release", "create"]]
+    assert len(created) == 1
+    assert "--verify-tag" in created[0]
+
+
+def test_a_production_release_write_whose_response_was_lost_is_resolved_by_readback(
+    proved: Proved, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`gh` exited badly, but the Release is there: the host decides, not the exit code."""
+    remote, checkout = _remote_checkout(proved, tmp_path)
+    gh = _scripted_gh(tmp_path, monkeypatch)
+    gh.absent(1)
+    gh.answer("create", 1, stderr="connection reset by peer", status=1)
+    gh.answer("view", "default", stdout=_published_payload(proved))
+
+    outcome = publish_release(
+        proved.publication_input,
+        repository_root=checkout,
+        candidate_workspace=proved.workspace,
+        release_service=SubprocessReleaseService(checkout),
+    )
+
+    assert outcome.release_created
+    assert gh.calls("create") == 1
+    assert _remote_refs(remote)[f"refs/tags/{TAG}"] == proved.publication_input.tag_object
+
+
+def test_a_production_release_write_that_never_landed_refuses_without_retagging(
+    proved: Proved, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    remote, checkout = _remote_checkout(proved, tmp_path)
+    gh = _scripted_gh(tmp_path, monkeypatch)
+    gh.absent("default")
+    gh.answer("create", 1, stderr="HTTP 502", status=1)
+
+    with pytest.raises(ReleasePublicationError, match="Retry this same publication"):
+        publish_release(
+            proved.publication_input,
+            repository_root=checkout,
+            candidate_workspace=proved.workspace,
+            release_service=SubprocessReleaseService(checkout),
+        )
+
+    # The tag is public and correct, so recovery is the same input again — and
+    # exactly one write was attempted against a host that refused it.
+    assert gh.calls("create") == 1
+    assert _remote_refs(remote)[f"refs/tags/{TAG}"] == proved.publication_input.tag_object
+
+
+def test_a_production_host_that_will_not_say_either_way_is_never_a_publication(
+    proved: Proved, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    remote, checkout = _remote_checkout(proved, tmp_path)
+    gh = _scripted_gh(tmp_path, monkeypatch)
+    gh.absent(1)
+    gh.answer("create", 1, stderr="HTTP 502", status=1)
+    gh.answer(
+        "view", 2, stderr="error connecting to api.github.com", status=1
+    )
+
+    with pytest.raises(ReleasePublicationError, match="once the host answers"):
+        publish_release(
+            proved.publication_input,
+            repository_root=checkout,
+            candidate_workspace=proved.workspace,
+            release_service=SubprocessReleaseService(checkout),
+        )
+
+    assert gh.calls("create") == 1
+    assert _remote_refs(remote)[f"refs/tags/{TAG}"] == proved.publication_input.tag_object
+
+
+def test_a_production_release_that_disagrees_is_refused_before_the_tag_is_pushed(
+    proved: Proved, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed Release the host really has, that is not this input."""
+    remote, checkout = _remote_checkout(proved, tmp_path)
+    gh = _scripted_gh(tmp_path, monkeypatch)
+    gh.answer("view", "default", stdout=_published_payload(proved, isPrerelease=True))
+    before = _remote_refs(remote)
+
+    with pytest.raises(ReleasePublicationError, match="prerelease"):
+        publish_release(
+            proved.publication_input,
+            repository_root=checkout,
+            candidate_workspace=proved.workspace,
+            release_service=SubprocessReleaseService(checkout),
+        )
+
+    assert _remote_refs(remote) == before
+    assert gh.calls("create") == 0
+
+
+def test_a_retry_over_the_production_host_finding_matching_state_writes_nothing(
+    proved: Proved, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same input, over a host that already carries it: a successful no-op."""
+    remote, checkout = _remote_checkout(proved, tmp_path)
+    git(
+        proved.workspace,
+        "push",
+        "-q",
+        str(remote),
+        f"refs/tags/{TAG}:refs/tags/{TAG}",
+    )
+    published = _remote_refs(remote)
+    gh = _scripted_gh(tmp_path, monkeypatch)
+    gh.answer("view", "default", stdout=_published_payload(proved))
+
+    outcome = publish_release(
+        proved.publication_input,
+        repository_root=checkout,
+        candidate_workspace=proved.workspace,
+        release_service=SubprocessReleaseService(checkout),
+    )
+
+    assert outcome.already_published
+    assert gh.calls("create") == 0
+    assert _remote_refs(remote) == published
 
 
 def test_this_boundary_is_not_yet_a_way_to_publish_without_the_full_proof() -> None:

@@ -2809,6 +2809,54 @@ def test_a_prepared_route_never_reads_as_a_decision() -> None:
     assert "bound" not in out, "a proposal claimed a Lease"
 
 
+def test_a_prepared_route_reads_back_its_rationale_and_provenance() -> None:
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(
+        _prepared_event(
+            selector_model="gpt-5.6-terra",
+            selector_effort="high",
+            selector_context_tier="long_context",
+            evidence_source="benchmark-index",
+            source_model_identity="claude-opus-5@2026-09",
+            evidence_retrieved_at="2026-09-19T08:45:00.000Z",
+            capabilities_retrieved_at="2026-09-19T08:46:00.000Z",
+            measurement_at="2026-09-18T00:00:00.000Z",
+            benchmark_version="swe-bench-verified-2",
+            conditions="repository coding",
+            routing_overshot=True,
+        )
+    )
+
+    out = " ".join(buf.getvalue().split())
+    for expected in (
+        "strongest verified index for this work",
+        "01JD00000000000000000000PRE",
+        "9f2c1d6a4b8e",
+        "gpt-5.6-terra",
+        "long_context",
+        "benchmark-index",
+        "claude-opus-5@2026-09",
+        "2026-09-19T08:45:00.000Z",
+        "2026-09-19T08:46:00.000Z",
+        "2026-09-18T00:00:00.000Z",
+        "swe-bench-verified-2",
+        "repository coding",
+        "overshot",
+    ):
+        assert expected in out
+
+
+def test_a_null_prepared_effort_is_not_presented_as_configured() -> None:
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_prepared_event(effort=None))
+
+    out = buf.getvalue()
+    assert "backend default" in out
+    assert "None" not in out
+
+
 def test_a_statically_routed_candidate_says_the_selector_was_not_asked() -> None:
     """#566 AC3: "no proposal" has causes an operator is owed.
 
@@ -2835,7 +2883,7 @@ def test_a_statically_routed_candidate_says_the_selector_was_not_asked() -> None
     assert "no selector call" in out
 
 
-def test_a_revalidatable_candidate_reads_as_free_rather_than_skipped() -> None:
+def test_a_revalidatable_candidate_is_available_for_pickup_revalidation() -> None:
     """A **Reusable route** is why preparation did nothing, not a failure."""
     renderer, _summary, buf = _make_renderer()
 
@@ -2849,7 +2897,7 @@ def test_a_revalidatable_candidate_reads_as_free_rather_than_skipped() -> None:
     )
 
     out = buf.getvalue()
-    assert "revalidat" in out
+    assert "available for Pickup revalidation" in out
     assert "unavailable" not in out
 
 
@@ -2870,16 +2918,15 @@ def test_an_unpreparable_candidate_does_not_blame_its_pickup() -> None:
             effort=None,
             context_tier=None,
             summary=None,
-            reason="quota_exhausted",
-            detail="quota_exhausted",
+            reason=None,
+            detail="preparation cancelled; Pickup must validate its own route",
         )
     )
 
-    out = buf.getvalue()
+    out = " ".join(buf.getvalue().split())
     assert "#7" in out
     assert "not prepared" in out
-    assert "quota_exhausted" in out
-    assert "its Pickup decides" in out
+    assert "preparation cancelled; Pickup must validate its own route" in out
 
 
 def test_a_prepared_record_from_a_runner_that_predates_the_state_is_ignored() -> None:

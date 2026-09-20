@@ -368,6 +368,40 @@ pub struct RoutingPrepared {
     /// The proposed reasoning effort, present only for `proposed`.
     #[serde(default)]
     pub effort: Option<String>,
+    #[serde(default)]
+    pub context_tier: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub proposal_id: Option<String>,
+    #[serde(default)]
+    pub prepared_at: Option<String>,
+    #[serde(default)]
+    pub valid_until: Option<String>,
+    #[serde(default)]
+    pub relevant_input_identity: Option<String>,
+    #[serde(default)]
+    pub selector_model: Option<String>,
+    #[serde(default)]
+    pub selector_effort: Option<String>,
+    #[serde(default)]
+    pub selector_context_tier: Option<String>,
+    #[serde(default)]
+    pub evidence_source: Option<String>,
+    #[serde(default)]
+    pub source_model_identity: Option<String>,
+    #[serde(default)]
+    pub evidence_retrieved_at: Option<String>,
+    #[serde(default)]
+    pub capabilities_retrieved_at: Option<String>,
+    #[serde(default)]
+    pub measurement_at: Option<String>,
+    #[serde(default)]
+    pub benchmark_version: Option<String>,
+    #[serde(default)]
+    pub conditions: Option<String>,
+    #[serde(default)]
+    pub routing_overshot: Option<bool>,
     /// Why routing could not propose, for `unavailable`.
     #[serde(default)]
     pub detail: Option<String>,

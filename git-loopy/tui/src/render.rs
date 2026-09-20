@@ -26,7 +26,8 @@ use crate::navigation::Screen;
 use crate::session::{DashboardFrame, Diagnostics};
 use crate::view::{
     Activity, ContextFill, ContributionRow, DeliveryView, DetailHeader, DrillIn, Header,
-    LogLineView, PeakContext, QueueRow, RouteView, SummaryRow, TerminalCapabilities,
+    LogLineView, PeakContext, PreparationView, QueueRow, RouteView, SummaryRow,
+    TerminalCapabilities,
 };
 
 /// The placeholder for a value the Run has not measured.
@@ -546,7 +547,12 @@ fn draw_queue(
                 duration(row.active_seconds),
                 wall_clock(row.closed_at.as_deref(), glyphs),
                 row.iteration_count.to_string(),
-                route(row.route.as_ref(), row.delivery.as_ref(), routing),
+                route(
+                    row.route.as_ref(),
+                    row.delivery.as_ref(),
+                    row.preparation.as_ref(),
+                    routing,
+                ),
                 tokens(row.tokens_in, glyphs),
                 tokens(row.tokens_out, glyphs),
                 credits(row.credits, cost),
@@ -605,7 +611,12 @@ fn cost_placeholder<'a>(header: &Header, glyphs: &'a Glyphs) -> &'a str {
 /// it renders as `(backend)` rather than as the unknown placeholder. Any
 /// tracker-delivery state renders as a suffix so publication can fail or lag
 /// without rewriting the pair itself.
-fn route(route: Option<&RouteView>, delivery: Option<&DeliveryView>, unknown: &str) -> String {
+fn route(
+    route: Option<&RouteView>,
+    delivery: Option<&DeliveryView>,
+    preparation: Option<&PreparationView>,
+    unknown: &str,
+) -> String {
     let lifecycle_suffix = route
         .and_then(|route| route.lifecycle_position.as_deref())
         .map(|position| format!(" ({})", position.replace('_', " ")))
@@ -624,12 +635,31 @@ fn route(route: Option<&RouteView>, delivery: Option<&DeliveryView>, unknown: &s
                 route.effort.clone().unwrap_or_else(|| "(backend)".into()),
             ),
         },
-        None => unknown.to_string(),
+        None => preparation.map_or_else(
+            || unknown.to_string(),
+            |preparation| match preparation.state.as_str() {
+                "proposed" => format!(
+                    "proposed {} @ {}",
+                    preparation
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| "(backend)".into()),
+                    preparation
+                        .effort
+                        .clone()
+                        .unwrap_or_else(|| "(backend)".into()),
+                ),
+                state => format!("preparation: {state}"),
+            },
+        ),
     };
     let delivery_suffix = delivery
         .map(|delivery| format!(" [{}]", delivery.status))
         .unwrap_or_default();
-    let suffix = format!("{lifecycle_suffix}{delivery_suffix}");
+    let preparation_suffix = (route.is_none() && preparation.is_some())
+        .then_some(" [not binding]")
+        .unwrap_or_default();
+    let suffix = format!("{lifecycle_suffix}{delivery_suffix}{preparation_suffix}");
     if suffix.is_empty() {
         return rendered;
     }
@@ -953,7 +983,7 @@ fn draw_breakdown(
                     .map_or_else(|| glyphs.unknown.to_string(), duration),
                 row.status.clone(),
                 duration(row.active_seconds),
-                route(row.route.as_ref(), None, routing),
+                route(row.route.as_ref(), None, None, routing),
                 tokens(row.consumption.tokens_in, glyphs),
                 tokens(row.consumption.tokens_out, glyphs),
                 tokens(row.consumption.cache_read, glyphs),

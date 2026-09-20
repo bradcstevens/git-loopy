@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -267,16 +268,31 @@ def _remote_tag(root: Path, remote: str, tag: str) -> _RemoteTag | None:
     listing = _git_text(
         root, "ls-remote", "--", remote, f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"
     )
+    tag_ref = f"refs/tags/{tag}"
+    peeled_ref = f"{tag_ref}^{{}}"
     objects: dict[str, str] = {}
     for line in listing.splitlines():
-        name, _, reference = line.partition("\t")
-        if reference.strip():
-            objects[reference.strip()] = name.strip()
-    if f"refs/tags/{tag}" not in objects:
+        name, separator, reference = line.partition("\t")
+        if (
+            not separator
+            or reference not in (tag_ref, peeled_ref)
+            or reference in objects
+            or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", name) is None
+        ):
+            raise ReleasePublicationError(
+                f"the remote returned unreadable refs for {tag}; its state is unknown"
+            )
+        objects[reference] = name
+    if not objects:
         return None
+    if tag_ref not in objects:
+        raise ReleasePublicationError(
+            f"the remote returned unreadable refs for {tag}: a peeled commit "
+            "without its tag; its state is unknown"
+        )
     return _RemoteTag(
-        object_name=objects[f"refs/tags/{tag}"],
-        commit=objects.get(f"refs/tags/{tag}^{{}}"),
+        object_name=objects[tag_ref],
+        commit=objects.get(peeled_ref),
     )
 
 
@@ -390,11 +406,11 @@ def _normalized_notes(text: str) -> str:
     """Release notes as text, with the one difference a round trip may add.
 
     A Release body travels through a service that is entitled to normalise line
-    endings, so a digest over raw bytes would eventually refuse a Release that
-    carries exactly the notes that were committed. Nothing else is forgiven:
-    every other difference in the body is a refusal.
+    endings and terminal newlines, so a digest over raw bytes would eventually
+    refuse a Release that carries exactly the notes that were committed.
+    Indentation and spaces remain significant Markdown content.
     """
-    return text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    return text.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
 
 
 def _read_release(
@@ -607,9 +623,11 @@ def _push_proved_tag(
 ) -> bool:
     """Fetch the exact proved tag object out of the rehearsal, and push it.
 
-    Returns whether *this* push is what made the tag public. A push that failed
-    is never taken as proof that the tag is absent — the remote is asked, and a
-    tag that is already correct is reconciled rather than pushed over.
+    Returns whether *this* push is what made the tag public. The push's own
+    response is never what decides that: a failure is not proof the tag is
+    absent, and an acknowledgement is not proof it is present. Both are claims
+    made at this end of the wire about something only the remote knows, so the
+    remote is asked either way, before a Release is created against it.
     """
     _require_the_trunk_carries(
         repository_root, remote, trunk_ref, publication_input
@@ -631,6 +649,7 @@ def _push_proved_tag(
             f"{publication_input.tag}, but the publication input binds "
             f"{publication_input.tag_object}"
         )
+    push_succeeded = False
     try:
         pushed = _run_git(
             repository_root,
@@ -643,12 +662,11 @@ def _push_proved_tag(
     except ReleasePublicationError as exc:
         failure = str(exc)
     else:
-        if pushed.returncode == 0:
-            return True
+        push_succeeded = pushed.returncode == 0
         failure = pushed.stderr.strip() or "no diagnostic"
     if _reconcile_remote_tag(repository_root, remote, publication_input) is None:
         raise ReleasePublicationError(
-            f"pushing {publication_input.tag} failed and the remote does not "
+            f"after pushing {publication_input.tag}, the remote does not "
             f"carry it: {failure}. Retry this same publication input"
         )
-    return False
+    return push_succeeded

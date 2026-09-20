@@ -1023,6 +1023,11 @@ fn a_prepared_route_is_a_proposal_and_never_a_binding() {
             "model": "gpt-5-mini",
             "effort": "medium",
             "context_tier": "default",
+            "summary": "best verified match",
+            "selector_model": "gpt-5.6-terra",
+            "selector_effort": "high",
+            "evidence_source": "benchmark-index",
+            "evidence_retrieved_at": "2026-05-16T00:00:00.000Z",
             "valid_until": "2026-05-16T00:05:01.000Z"
         })],
         IssueRef::number(7),
@@ -1030,9 +1035,27 @@ fn a_prepared_route_is_a_proposal_and_never_a_binding() {
 
     assert_eq!(
         log_texts(&projected),
-        ["Route proposed: gpt-5-mini@medium (not bound)"]
+        [
+            "Route proposed: gpt-5-mini@medium (not bound); proposal: proposal-1; rationale: best verified match; evidence source: benchmark-index; evidence retrieved: 2026-05-16T00:00:00.000Z; selector: gpt-5.6-terra@high"
+        ]
     );
     assert_eq!(queue_row(&projected, 7)["route"], serde_json::Value::Null);
+    assert_eq!(
+        queue_row(&projected, 7)["preparation"],
+        serde_json::json!({
+            "state": "proposed",
+            "model": "gpt-5-mini",
+            "effort": "medium",
+            "context_tier": "default",
+            "summary": "best verified match",
+            "proposal_id": "proposal-1",
+            "selector_model": "gpt-5.6-terra",
+            "selector_effort": "high",
+            "evidence_source": "benchmark-index",
+            "evidence_retrieved_at": "2026-05-16T00:00:00.000Z",
+            "valid_until": "2026-05-16T00:05:01.000Z"
+        })
+    );
 }
 
 #[test]
@@ -1066,7 +1089,7 @@ fn a_candidate_not_prepared_says_which_of_the_three_reasons_it_was() {
                 "type": "wrapper.routing.prepared",
                 "issue": 7,
                 "state": "unavailable",
-                "detail": "quota_exhausted"
+                "detail": "preparation cancelled; Pickup must validate its own route"
             }),
         ],
         IssueRef::number(7),
@@ -1076,8 +1099,8 @@ fn a_candidate_not_prepared_says_which_of_the_three_reasons_it_was() {
         log_texts(&projected),
         [
             "Route preparation: static route applies, no selector call",
-            "Route preparation: an earlier decision revalidates",
-            "Route not prepared: quota_exhausted; its Pickup decides"
+            "Route preparation: an earlier decision is available for Pickup revalidation",
+            "Route not prepared: preparation cancelled; Pickup must validate its own route; available for Pickup revalidation"
         ]
     );
 }
@@ -1112,6 +1135,62 @@ fn a_prepared_route_leaves_an_unpicked_issue_queued() {
     );
 
     assert_eq!(queue_row(&projected, 8)["status"], "queued");
+}
+
+#[test]
+fn a_pickup_clears_its_superseded_preparation_without_rewriting_history() {
+    let projected = reduce(
+        &[
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:01.000Z",
+                "run_id": "r1",
+                "iter": 1,
+                "type": "wrapper.afk_ready.collected",
+                "issues": [7]
+            }),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:02.000Z",
+                "run_id": "r1",
+                "iter": null,
+                "type": "wrapper.routing.prepared",
+                "issue": 7,
+                "state": "proposed",
+                "model": "gpt-5-mini",
+                "effort": "medium"
+            }),
+            serde_json::json!({
+                "ts": "2026-05-16T00:00:03.000Z",
+                "run_id": "r1",
+                "iter": 1,
+                "type": "wrapper.pickup.bound",
+                "issue": 7,
+                "model": "claude-opus-5",
+                "effort": "high",
+                "routing_source": "routed"
+            }),
+        ],
+        IssueRef::number(7),
+    );
+
+    assert_eq!(
+        queue_row(&projected, 7)["preparation"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        queue_row(&projected, 7)["route"],
+        serde_json::json!({
+            "model": "claude-opus-5",
+            "effort": "high",
+            "source": "routed"
+        })
+    );
+    assert_eq!(
+        log_texts(&projected),
+        [
+            "Route proposed: gpt-5-mini@medium (not bound)",
+            "Pickup: bound #7"
+        ]
+    );
 }
 
 #[test]

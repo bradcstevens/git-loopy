@@ -228,6 +228,61 @@ impl RouteDelivery {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RoutePreparation {
+    pub(crate) state: String,
+    pub(crate) model: Option<String>,
+    pub(crate) effort: Option<String>,
+    pub(crate) context_tier: Option<String>,
+    pub(crate) summary: Option<String>,
+    pub(crate) proposal_id: Option<String>,
+    pub(crate) prepared_at: Option<String>,
+    pub(crate) valid_until: Option<String>,
+    pub(crate) relevant_input_identity: Option<String>,
+    pub(crate) selector_model: Option<String>,
+    pub(crate) selector_effort: Option<String>,
+    pub(crate) selector_context_tier: Option<String>,
+    pub(crate) evidence_source: Option<String>,
+    pub(crate) source_model_identity: Option<String>,
+    pub(crate) evidence_retrieved_at: Option<String>,
+    pub(crate) capabilities_retrieved_at: Option<String>,
+    pub(crate) measurement_at: Option<String>,
+    pub(crate) benchmark_version: Option<String>,
+    pub(crate) conditions: Option<String>,
+    pub(crate) routing_overshot: Option<bool>,
+    pub(crate) detail: Option<String>,
+    pub(crate) reason: Option<String>,
+}
+
+impl RoutePreparation {
+    fn from_event(prepared: &RoutingPrepared) -> Option<Self> {
+        Some(Self {
+            state: non_empty(prepared.state.as_deref())?,
+            model: non_empty(prepared.model.as_deref()),
+            effort: non_empty(prepared.effort.as_deref()),
+            context_tier: non_empty(prepared.context_tier.as_deref()),
+            summary: non_empty(prepared.summary.as_deref()),
+            proposal_id: non_empty(prepared.proposal_id.as_deref()),
+            prepared_at: non_empty(prepared.prepared_at.as_deref()),
+            valid_until: non_empty(prepared.valid_until.as_deref()),
+            relevant_input_identity: non_empty(prepared.relevant_input_identity.as_deref()),
+            selector_model: non_empty(prepared.selector_model.as_deref()),
+            selector_effort: non_empty(prepared.selector_effort.as_deref()),
+            selector_context_tier: non_empty(prepared.selector_context_tier.as_deref()),
+            evidence_source: non_empty(prepared.evidence_source.as_deref()),
+            source_model_identity: non_empty(prepared.source_model_identity.as_deref()),
+            evidence_retrieved_at: non_empty(prepared.evidence_retrieved_at.as_deref()),
+            capabilities_retrieved_at: non_empty(prepared.capabilities_retrieved_at.as_deref()),
+            measurement_at: non_empty(prepared.measurement_at.as_deref()),
+            benchmark_version: non_empty(prepared.benchmark_version.as_deref()),
+            conditions: non_empty(prepared.conditions.as_deref()),
+            routing_overshot: prepared.routing_overshot,
+            detail: non_empty(prepared.detail.as_deref()),
+            reason: non_empty(prepared.reason.as_deref()),
+        })
+    }
+}
+
 /// One finalized Iteration or Lane contribution for an issue.
 #[derive(Clone, Debug)]
 pub(crate) struct IssueContribution {
@@ -278,6 +333,7 @@ pub(crate) struct IssueLedgerEntry {
     pub(crate) route: Option<ResolvedRoute>,
     /// The most recent tracker-delivery observation for that final route.
     pub(crate) delivery: Option<RouteDelivery>,
+    pub(crate) preparation: Option<RoutePreparation>,
     pub(crate) log: Vec<LogLine>,
 }
 
@@ -298,6 +354,7 @@ impl IssueLedgerEntry {
             premium_requests: BilledTotal::default(),
             route: None,
             delivery: None,
+            preparation: None,
             log: Vec::new(),
         }
     }
@@ -548,6 +605,7 @@ impl DashboardState {
             }
             EventPayload::PickupBound(pickup) => {
                 self.append_lane_log(&pickup.issue, LOG_EVENT, &pickup_bound_text(pickup), now);
+                self.clear_route_preparation(&pickup.issue);
                 self.record_route(&pickup.issue, ResolvedRoute::from_pickup(pickup));
             }
             EventPayload::PickupSkipped(pickup) => {
@@ -780,8 +838,21 @@ impl DashboardState {
         // only prepared is still waiting, exactly as it was. `insert_entry`
         // would be the same mistake in miniature -- a proposal for an issue the
         // Dashboard has not seen collected is not a reason to list it.
+        if let Some(preparation) = RoutePreparation::from_event(prepared) {
+            self.insert_entry(prepared.issue.clone());
+            if let Some(entry) = self.ledger.get_mut(&prepared.issue) {
+                entry.preparation = Some(preparation);
+            }
+        }
         if let Some(text) = routing_preparation_text(prepared) {
             self.append_lane_log(&prepared.issue, LOG_EVENT, &text, now);
+        }
+    }
+
+    fn clear_route_preparation(&mut self, issue: &IssueRef) {
+        self.insert_entry(issue.clone());
+        if let Some(entry) = self.ledger.get_mut(issue) {
+            entry.preparation = None;
         }
     }
 
@@ -1199,20 +1270,69 @@ fn routing_preparation_text(prepared: &RoutingPrepared) -> Option<String> {
             // reader: this is the one Dashboard phrase that could be mistaken
             // for a Pickup, and the Queue row it must not have written is the
             // only other place an operator would check.
-            Some(format!("Route proposed: {model}@{effort} (not bound)"))
+            let mut text = format!("Route proposed: {model}@{effort} (not bound)");
+            for (label, value) in [
+                ("proposal", non_empty(prepared.proposal_id.as_deref())),
+                ("rationale", non_empty(prepared.summary.as_deref())),
+                (
+                    "identity",
+                    non_empty(prepared.relevant_input_identity.as_deref()),
+                ),
+                (
+                    "evidence source",
+                    non_empty(prepared.evidence_source.as_deref()),
+                ),
+                (
+                    "source model",
+                    non_empty(prepared.source_model_identity.as_deref()),
+                ),
+                (
+                    "evidence retrieved",
+                    non_empty(prepared.evidence_retrieved_at.as_deref()),
+                ),
+                (
+                    "capabilities retrieved",
+                    non_empty(prepared.capabilities_retrieved_at.as_deref()),
+                ),
+                ("measured", non_empty(prepared.measurement_at.as_deref())),
+                (
+                    "benchmark",
+                    non_empty(prepared.benchmark_version.as_deref()),
+                ),
+                ("conditions", non_empty(prepared.conditions.as_deref())),
+            ] {
+                if let Some(value) = value {
+                    text.push_str(&format!("; {label}: {value}"));
+                }
+            }
+            if let Some(model) = non_empty(prepared.selector_model.as_deref()) {
+                let effort = non_empty(prepared.selector_effort.as_deref())
+                    .unwrap_or_else(|| "backend default".to_string());
+                text.push_str(&format!("; selector: {model}@{effort}"));
+                if let Some(tier) = non_empty(prepared.selector_context_tier.as_deref()) {
+                    text.push_str(&format!("/{tier}"));
+                }
+            }
+            if prepared.routing_overshot == Some(true) {
+                text.push_str("; overshot");
+            }
+            Some(text)
         }
         ROUTE_PREPARATION_STATIC => {
             Some("Route preparation: static route applies, no selector call".to_string())
         }
-        ROUTE_PREPARATION_REUSABLE => {
-            Some("Route preparation: an earlier decision revalidates".to_string())
-        }
+        ROUTE_PREPARATION_REUSABLE => Some(
+            "Route preparation: an earlier decision is available for Pickup revalidation"
+                .to_string(),
+        ),
         ROUTE_PREPARATION_UNAVAILABLE => Some(
             match non_empty(prepared.detail.as_deref())
                 .or_else(|| non_empty(prepared.reason.as_deref()))
             {
-                Some(why) => format!("Route not prepared: {why}; its Pickup decides"),
-                None => "Route not prepared; its Pickup decides".to_string(),
+                Some(why) => {
+                    format!("Route not prepared: {why}; available for Pickup revalidation")
+                }
+                None => "Route not prepared; available for Pickup revalidation".to_string(),
             },
         ),
         // A spelling this Dashboard does not know is reported as it arrived

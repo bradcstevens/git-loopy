@@ -647,18 +647,50 @@ class Renderer:
             effort = event.get("effort")
             tier = event.get("context_tier")
             text.append("  proposal ")
-            text.append(f"{model} @ {effort}")
+            text.append(
+                f"{model if isinstance(model, str) and model else 'backend default'}"
+                " @ "
+                f"{effort if isinstance(effort, str) and effort else 'backend default'}"
+            )
             if isinstance(tier, str) and tier:
                 text.append(f" ({tier})", style=STYLES["meta"])
             valid_until = event.get("valid_until")
             if isinstance(valid_until, str) and valid_until:
                 text.append(f"  valid until {valid_until}", style=STYLES["meta"])
+            for label, field in (
+                ("proposal", "proposal_id"),
+                ("rationale", "summary"),
+                ("identity", "relevant_input_identity"),
+                ("evidence source", "evidence_source"),
+                ("source model", "source_model_identity"),
+                ("evidence retrieved", "evidence_retrieved_at"),
+                ("capabilities retrieved", "capabilities_retrieved_at"),
+                ("measured", "measurement_at"),
+                ("benchmark", "benchmark_version"),
+                ("conditions", "conditions"),
+            ):
+                value = event.get(field)
+                if isinstance(value, str) and value:
+                    text.append(f"  {label} {value}", style=STYLES["meta"])
+            selector_model = event.get("selector_model")
+            selector_effort = event.get("selector_effort")
+            selector_tier = event.get("selector_context_tier")
+            if isinstance(selector_model, str) and selector_model:
+                selector = (
+                    f"  selector {selector_model} @ "
+                    f"{selector_effort if isinstance(selector_effort, str) and selector_effort else 'backend default'}"
+                )
+                if isinstance(selector_tier, str) and selector_tier:
+                    selector += f" ({selector_tier})"
+                text.append(selector, style=STYLES["meta"])
+            if event.get("routing_overshot") is True:
+                text.append("  overshot", style=STYLES["warning"])
         elif state == ROUTE_PREPARATION_STATIC:
             text.append("  static route applies — no selector call bought")
         elif state == ROUTE_PREPARATION_REUSABLE:
-            text.append("  an earlier decision revalidates — nothing to assess")
+            text.append("  an earlier decision is available for Pickup revalidation")
         elif state == ROUTE_PREPARATION_UNAVAILABLE:
-            text.append("  not prepared — its Pickup decides for itself")
+            text.append("  not prepared — available for Pickup revalidation")
             detail = event.get("detail") or event.get("reason")
             if isinstance(detail, str) and detail:
                 text.append(f"  ({detail})", style=STYLES["meta"])
