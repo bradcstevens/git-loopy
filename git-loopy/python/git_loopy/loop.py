@@ -1492,6 +1492,7 @@ class _Loop:
                 prepare=self._prepare_route,
                 concurrency=dynamic_routing.prerequisites.selector_concurrency,
                 on_prepared=self._emit_route_prepared,
+                diag=self._diag,
             )
         )
         #: The Run's in-flight preparation pass, independent of Iteration endings.
@@ -2822,6 +2823,11 @@ class _Loop:
         proposal = prepared.proposal
         evidence = None if proposal is None else proposal.work_evidence
         selector = None if proposal is None else proposal.selector
+        usage = (
+            proposal.usage if proposal is not None
+            else self._dynamic_router.usage if self._dynamic_router is not None
+            else None
+        )
         self._emit(
             events_module.WRAPPER_ROUTING_PREPARED,
             iter_num=None,
@@ -2848,11 +2854,12 @@ class _Loop:
                 None if proposal is None else proposal.relevant_input_identity
             ),
             routing_credits=(
-                None if proposal is None else str(proposal.usage.routing_credits)
+                None if usage is None else str(usage.routing_credits)
             ),
             selector_attempts=(
-                None if proposal is None else proposal.usage.selector_attempts
+                None if usage is None else usage.selector_attempts
             ),
+            classification_attempts=None if usage is None else usage.classification_attempts,
             selector_model=None if selector is None else selector.model,
             selector_effort=None if selector is None else selector.reasoning_effort,
             selector_context_tier=None if selector is None else selector.context_tier,
@@ -2874,7 +2881,7 @@ class _Loop:
             ),
             benchmark_version=None if evidence is None else evidence.benchmark_version,
             conditions=None if evidence is None else evidence.conditions,
-            routing_overshot=None if proposal is None else proposal.usage.overshot,
+            routing_overshot=None if usage is None else usage.overshot,
         )
 
     def _reusable_routes_for(self, ref: int | str) -> tuple[ReusableRoute, ...]:

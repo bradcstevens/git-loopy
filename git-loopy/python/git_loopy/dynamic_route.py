@@ -1523,6 +1523,11 @@ class DynamicRouter:
         self._proposal_ttl = float(proposal_ttl_seconds)
         self._proposals: dict[str, RoutingProposal] = {}
 
+    @property
+    def usage(self) -> RoutingUsage:
+        """Current Run-wide routing usage, including interrupted assessments."""
+        return self._ledger.snapshot()
+
     async def prepare(
         self, request: RoutingRequest
     ) -> RoutingProposal | RoutingUnavailable:
