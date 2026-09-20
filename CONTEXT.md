@@ -419,29 +419,22 @@ _Avoid_: shutdown, teardown, quiescing, stopping (**Stop** is the gesture; this 
 state it latches).
 
 **Detach**:
-Leaving the live interface while the run keeps going unattended, falling back to the
-line-by-line scrollback output. It has two forms: the **voluntary** one the operator
-asks for, and the **involuntary** one a **Dashboard fault** produces. Both produce the
-same continuation — the loop runs on, the sinks swap to the parked line printer — and
-are labelled differently, because one of them is a bug the operator wants to see
-(ADR-0024).
-_Avoid_: background, minimize, exit.
+Disconnecting one client from a **Run** and returning its terminal to the shell,
+without stopping the work or affecting other clients. Observing the Run through a
+line-printer fallback is still attachment, not Detach (ADR-0058).
+_Avoid_: background, minimize, Stop, line-printer fallback.
 
 **Dashboard fault**:
-A **Dashboard** that raises — at startup or mid-**Run** — which the Run survives. It
-is an involuntary **Detach**: the operator loses the live view, not the work, and the
-Run continues on the parked line printer (ADR-0024). It is recorded distinguishably
-from a voluntary Detach, reported at the point of the swap, and carries its own exit
-code, so a supervising script is never told everything was fine.
+A failure of the **Dashboard** view that leaves the **Run** and its outcome unchanged.
+The affected client reports the fault, restores the terminal, and remains attached
+through the line printer; this is not **Detach** (ADR-0058).
 _Avoid_: TUI crash, renderer error, dashboard failure (as the name).
 
 **Terminal owner**:
-The single component responsible for the terminal's mode state for the whole process
-(ADR-0024). It captures the terminal's entry state before the **Dashboard** starts and
-restores that captured state — not an assumed one — on every ordinary exit path,
-including a **Stop**, a **Detach**, a **Dashboard fault**, an unhandled exception and a
-signal. Release is idempotent, and the non-interactive path acquires no ownership at
-all.
+The sole owner of a terminal's mode state for the client process (ADR-0024, amended
+by ADR-0058). It restores the captured entry state when releasing that terminal,
+including a handoff or client failure; the **Run**'s lifetime does not depend on
+terminal ownership.
 _Avoid_: terminal manager, screen guard, teardown hook (restoration is not the
 Dashboard's teardown).
 
@@ -468,6 +461,12 @@ finished is never permission to control or **Sweep** its work.
 _Avoid_: running/not running, status, health, heartbeat.
 
 ### The live interface
+
+**Attach**:
+Observing an existing **Run** through a client without starting or taking ownership
+of its work. Attach may be repeated or concurrent: navigation belongs to each client,
+while only an explicit **Stop** request crosses into the Run's lifecycle (ADR-0058).
+_Avoid_: reconnect (as a separate operation), resume (the Run did not stop).
 
 **Dashboard**:
 The single top-level screen of the live interface (no tabs): the header band, the
@@ -679,13 +678,16 @@ _Avoid_: draft tag, temporary tag, pre-tag.
 
 **Publication**:
 Making one **Publication input** public: pushing the *proved* annotated tag object
-itself and creating the GitHub Release that carries the committed notes. Reconciled
-against what the remote actually holds rather than assumed, so it is safely
+itself under an immutable public tag, with matching release notes and the distribution
+it promises. **Promotion** changes the Release line to stable; Publication makes that
+distribution available by creating the GitHub Release that carries the committed
+notes. Reconciled against what the remote actually holds rather than assumed, so it is safely
 repeatable — matching state is a successful no-op, disagreeing state is a refusal
 that mutates nothing, and a write whose response was lost is resolved by reading the
 remote back rather than by retrying blindly
 ([ADR-0059](docs/adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md)).
-_Avoid_: release, deploy, upload, push (the git operation).
+_Avoid_: Promotion, tagging alone (a tag does not prove a complete publication),
+release, deploy, upload, push (the git operation).
 
 **Distribution mode**:
 The explicit promise one Release makes about what it carries. `source-only` publishes
