@@ -131,6 +131,10 @@ permission to spend another task attempt.
 
 ## One record, several projections
 
+The single combined Route label described below is superseded by
+[ADR-0060](0060-route-labels-expose-exact-observational-dimensions.md).
+Its observational authority and durable publication guarantees are unchanged.
+
 The existing Routing resolution remains the final record. Canonical local Run
 events retain proposal, validation, supersession, and binding provenance: chosen
 settings, selector settings, relevant input identity, eligible candidates, evidence
@@ -402,6 +406,17 @@ The saved-setup matrix also exposed late assessment results being accepted
 after the authorized deadline. Shared settlement now retains Consumption but
 refuses the result before it can publish a Task-type label or become a Routing
 proposal. Already-bound Agents still finish on their frozen settings.
+Those valid-bill scenarios now consume the shared routing fixture's
+`in_flight_consumption` matrix through recorded init/update authorization and
+the real unattended CLI: eight cases across two allowances and serial/Lane
+execution. They observe refusal while the billed assessment is still open,
+the configured concurrency ceiling, unchanged strongest selector and literal
+Run-only Consumption through completion, cancellation, cleanup billing and
+deadline refusal. Actual frozen work settings agree with canonical records,
+separate CLI Pickup lines, Dashboard readback and final tracker publication.
+Pending candidates remain open without final publication; Config and Strike
+semantics are unchanged. This replaces the adapter's private parameter matrix
+with shared Conformance, not a new routing mechanism or final activation.
 
 The shared routing fixture's `pool_revalidation` matrix now carries recorded
 migration into a proposal prepared beside running Agents, then through actual
@@ -419,9 +434,9 @@ historical Events or the final-default and Runner-member deferrals.
 The companion `pool_priority` matrix closes the multiple-pending-candidate
 coverage gap through the same recorded-migration and real CLI seam. Three
 cases in serial and Lane modes preserve oldest-first order and explicit
-Priority, prepare the next candidate before speculative selectors, and bound
+Priority, prepare the next candidate before assessing other candidates, and bound
 those selectors at one or two with excess candidates left unassessed under
-either bound. Running Agents stay open until speculation is in
+either bound. Running Agents stay open until those other assessments are in
 flight, then the next Pickup advances without waiting for unrelated assessments.
 Cancelled selectors retain their SDK-observed Run-only Consumption and explicit
 unavailable records before Run end; pending issues remain open, unleased and

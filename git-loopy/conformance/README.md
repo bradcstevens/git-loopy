@@ -139,16 +139,32 @@ historical streams, defaults or member deferrals.
 
 The same adapter drives `pool_priority` through three cases in both modes:
 oldest pending first, Priority ahead of older candidates, and Priority with two
-concurrent speculative selectors. Four eligible issues remain behind running
-Agents. The next proposal is recorded before speculative selection starts;
+concurrent selectors for other candidates. Four eligible issues remain behind running
+Agents. The next proposal is recorded before assessment of other candidates starts;
 running Agents then finish while unrelated selectors remain open, and the next
-Pickup advances without joining them. Both bounds leave excess speculative
+Pickup advances without joining them. Both bounds leave excess eligible
 candidates unassessed. Cancelled selections retain their bills
 and explicit unavailable preparation records. The adapter compares actual
 sessions, canonical Pickup, CLI/Dashboard readback and tracker publication,
 while pending candidates remain open, unleased and unpublished with unchanged
 labels. Saved Config and the existing ordering/Lease rules remain unchanged.
 This extends section 14.6 Conformance, not final-default activation.
+
+The `in_flight_consumption` matrix is adapted by
+`python/tests/test_saved_routing_consumption.py`. Eight classifier/selector
+completion, cancellation, cleanup-billing and late-result cases run with two
+allowances, recorded init/update authorization and real CLI serial/Lane execution:
+64 combinations. The next candidate is refused while the billed assessment is
+still open. The adapter observes the concurrency ceiling, keeps the strongest
+selector, and compares literal Run-only billing and overshoot with canonical
+records and CLI/Dashboard totals. Already-bound Agents finish on their frozen
+settings; actual sessions, canonical Pickup, each CLI Pickup line, Dashboard
+route readback and final tracker comments/labels agree. Pending candidates
+remain open without final publication, late classification writes no Task-type
+label, and cancellation cleanup retains additional billing exactly once. Config
+stays unchanged and no unstarted work incurs a Strike. Existing helper-level
+malformed-billing cases remain separate; this matrix does not claim them or
+activate final defaults, native members, non-local, Subagent or Integration routing.
 
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent

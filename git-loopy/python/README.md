@@ -1347,6 +1347,14 @@ reported during cancellation cleanup. Malformed cleanup billing cannot swallow
 cancellation or undo valid charges already observed. An assessment returned after the authorized
 deadline is refused without publishing its classification or proposal; its
 Consumption remains visible, and already-bound work may finish.
+The shared `in_flight_consumption` Conformance matrix now drives these valid-bill
+cases through recorded init/update authorization and the real unattended CLI:
+eight cases across exact exhaustion/overshoot and serial/Lane execution.
+It observes refusal while the assessment is still open, the concurrency ceiling,
+unchanged strongest selector, actual frozen work settings, canonical Pickup,
+CLI/Dashboard Consumption and final tracker publication. Pending candidates
+remain open without final assignments; saved Config stays unchanged. This
+extends the shared proof of opt-in behavior, not the activation defaults.
 Upgrade requires consent before handoff, including when the target is already
 installed. Its saved global choice reaches actual serial/Lane sessions, with
 retained Static routes and fresh post-setup outages covered.
@@ -1384,7 +1392,7 @@ Run-only selector Consumption and final tracker publication. Config and existing
 Pickup-time Lease acquisition/release remain unchanged.
 Shared `pool_priority` cases extend that seam to several eligible pending
 candidates: oldest-first order and explicit Priority determine the next proposal,
-not whichever speculative assessment finishes first. Selector concurrency stays
+not whichever other assessment finishes first. Selector concurrency stays
 within the saved bound of one or two. The next serial Pickup or Lane refill does
 not wait for unrelated open selectors; cancelled assessments keep their Run-only
 Consumption and visible unavailable preparation records. Pending issues remain

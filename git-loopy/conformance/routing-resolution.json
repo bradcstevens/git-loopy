@@ -937,8 +937,8 @@
     ]
   },
   "pool_priority": {
-    "note": "Recorded migration and the real local Python CLI carry several eligible pending Dynamic candidates through preparation into serial Pickup or actual Lane refill. Preparation must follow existing Pool order, complete the next candidate before speculative selectors start, and obey selector concurrency. Running Agents are held until the declared speculative selectors are open; the next Pickup must not wait for those unrelated assessments. This pins existing section 14.6 behavior, not final defaults or native-member, remote-host, Subagent or Integration routing.",
-    "inputs": "Reuse migration_recovery's saved_config, harness and evidence, overriding selector_concurrency per case. Reuse pool_revalidation's running_issues per mode. Seed running issues plus pending issues 44, 45, 46 and 47 in reverse numeric order with the declared created_at values; all are classified implementation work and all are Parallel-safe in Lane mode. priority_issues receive the priority label. The strongest selector chooses synthetic-fancy-9 for running issues and synthetic-cheap-1 for expected.next_issue, all at high/default. Hold that next selector until every running Agent has started. Each speculative selector asserts that the next proposal is already durably recorded, bills 0.25 Run-only credits, and stays open until cancelled. Release running Agents only after selector_concurrency speculative sessions are open. There are more speculative candidates than available selector slots in every case; issue 47 must buy no assessment even with concurrency two. Permit exactly one more work session. Pending issues retain their labels and have no Lease, final route or tracker publication; cancelled assessments retain their bills and explicit unavailable preparation records before Run end. Expected credit totals include all running, next and interrupted selector calls.",
+    "note": "Recorded migration and the real local Python CLI carry several eligible pending Dynamic candidates through Routing preparation into serial Pickup or actual Lane refill. Preparation must follow existing Pool order, complete the next candidate before selectors assess other candidates, and obey selector concurrency. Running Agents are held until the declared other assessments are open; the next Pickup must not wait for those unrelated assessments. This pins existing section 14.6 behavior, not final defaults or native-member, remote-host, Subagent or Integration routing.",
+    "inputs": "Reuse migration_recovery's saved_config, harness and evidence, overriding selector_concurrency per case. Reuse pool_revalidation's running_issues per mode. Seed running issues plus pending issues 44, 45, 46 and 47 in reverse numeric order with the declared created_at values; all are classified implementation work and all are Parallel-safe in Lane mode. priority_issues receive the priority label. The strongest selector chooses synthetic-fancy-9 for running issues and synthetic-cheap-1 for expected.next_issue, all at high/default. Hold that next selector until every running Agent has started. Each selector for another pending candidate asserts that the next proposal is already durably recorded, bills 0.25 Run-only credits, and stays open until cancelled. Release running Agents only after selector_concurrency other assessments are open. There are more remaining candidates than available selector slots in every case; issue 47 must buy no assessment even with concurrency two. Permit exactly one more work session. Pending issues retain their labels and have no Lease, final route or tracker publication; cancelled assessments retain their bills and explicit unavailable preparation records before Run end. Expected credit totals include all running, next and interrupted selector calls.",
     "modes": ["serial", "lane"],
     "created_at": {
       "42": "2026-01-01T00:00:00Z",
@@ -950,11 +950,11 @@
     },
     "cases": [
       {
-        "id": "oldest-pending-before-speculation",
+        "id": "oldest-pending-before-other-candidates",
         "selector_concurrency": 1,
         "priority_issues": [],
         "expected": {
-          "next_issue": 45, "speculative_issues": [44],
+          "next_issue": 45, "other_assessed_issues": [44],
           "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default",
           "routing_credits": {"serial": "0.75", "lane": "1.00"}
         }
@@ -964,7 +964,7 @@
         "selector_concurrency": 1,
         "priority_issues": [42, 43, 46],
         "expected": {
-          "next_issue": 46, "speculative_issues": [45],
+          "next_issue": 46, "other_assessed_issues": [45],
           "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default",
           "routing_credits": {"serial": "0.75", "lane": "1.00"}
         }
@@ -974,9 +974,158 @@
         "selector_concurrency": 2,
         "priority_issues": [42, 43, 46],
         "expected": {
-          "next_issue": 46, "speculative_issues": [44, 45],
+          "next_issue": 46, "other_assessed_issues": [44, 45],
           "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default",
           "routing_credits": {"serial": "1.00", "lane": "1.25"}
+        }
+      }
+    ]
+  },
+  "in_flight_consumption": {
+    "note": "Recorded init/update Dynamic authorization flows through the real unattended CLI into serial or local Lane work. An already-open classifier or selector reports a bill that exhausts the allowance before returning. No further assessment may start; already-bound work finishes on its frozen settings. Completion, cancellation, cancellation-time billing and a late result retain every observed bill exactly once in Run-only Consumption. Proposals never receive final tracker publication. This pins existing behavior, not final defaults or shell/PowerShell, non-local, Subagent or Integration activation.",
+    "inputs_note": "Use the declared harness/evidence and operator-owned access outside Config. Record Dynamic setup with no Static rows, associations aa-opus=claude-opus-5@high and aa-terra=gpt-5.6-terra@high, the given deadline/concurrency and each allowance. These identifiers are test configurations, not a recommended recipe. Each assessment reports initial_bill with 100 input and 20 output tokens. All selector replies choose work_model. All issues are eligible and semver:none; only held_issue lacks a Task type when pending_role is classifier. Keep work open until refused_issue has its unavailable preparation record. Hold held_issue until partner_issue starts, then report in_flight_bill with the same token counts while both assessments remain open. partner_issue may finish; held_issue must still be open when the next assessment is refused. complete releases its result; cancel ends the Run with it still pending; cancel_billed additionally reports cleanup_bill during disconnect; deadline advances the injected clock past deadline_seconds before releasing the result. Work sessions each report work_bill with the same token counts. The allowance booleans are the expected overshoot at admission refusal, before any cleanup bill. Case overshot values describe final settlement.",
+    "entrypoints": ["init", "update"],
+    "modes": {
+      "serial": {"max_iterations": 1, "work_issues": [42]},
+      "lane": {"max_iterations": 2, "work_issues": [42, 43]}
+    },
+    "allowances": {"0.60": true, "0.80": false},
+    "inputs": {
+      "issues": [42, 43, 44, 45, 46, 47],
+      "held_issue": 45,
+      "partner_issue": 46,
+      "refused_issue": 47,
+      "deadline_seconds": 30,
+      "late_result_seconds": 31,
+      "selector_concurrency": 2,
+      "initial_bill": "0.10",
+      "in_flight_bill": "0.30",
+      "cleanup_bill": "0.20",
+      "work_bill": "0.10",
+      "work_model": "gpt-5.6-terra",
+      "classifier_model": "gpt-5.6-terra",
+      "effort": "high",
+      "harness": [
+        {"model": "claude-opus-5", "efforts": ["high"]},
+        {"model": "gpt-5.6-terra", "efforts": ["high"]}
+      ],
+      "evidence": [
+        {"id": "aa-opus", "intelligence_index": 70, "output_tokens_per_second": 90},
+        {"id": "aa-terra", "intelligence_index": 40, "output_tokens_per_second": 200}
+      ]
+    },
+    "expected_assessed": [42, 43, 44, 45, 46],
+    "expected_refusal": {
+      "state": "unavailable", "reason": "quota_exhausted", "routing_credits": "0.80"
+    },
+    "expected_sessions": {
+      "work": {"model": "gpt-5.6-terra", "effort": "high", "context_tier": "default"},
+      "selector": {"model": "claude-opus-5", "effort": "high", "context_tier": "default"},
+      "classifier": {"model": "gpt-5.6-terra", "effort": "high", "context_tier": null}
+    },
+    "cases": [
+      {
+        "id": "classifier-completes-after-exhausting-allowance",
+        "pending_role": "classifier", "ending": "complete",
+        "expected": {
+          "state": "unavailable", "reason": "quota_exhausted",
+          "cancelled": [], "classification_attempts": 1, "selector_attempts": 4,
+          "task_labels": [[45, "task-type:implementation"]],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "classifier-cancelled-after-exhausting-allowance",
+        "pending_role": "classifier", "ending": "cancel",
+        "expected": {
+          "state": "unavailable", "reason": null,
+          "cancelled": [45], "classification_attempts": 1, "selector_attempts": 4,
+          "task_labels": [],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "classifier-cancellation-cleanup-adds-visible-billing",
+        "pending_role": "classifier", "ending": "cancel_billed",
+        "expected": {
+          "state": "unavailable", "reason": null,
+          "cancelled": [45], "classification_attempts": 1, "selector_attempts": 4,
+          "task_labels": [],
+          "routing_credits": "1.00", "overshot": {"0.60": true, "0.80": true},
+          "usage_samples": 7,
+          "run_consumption": {"tokens_in": 700, "tokens_out": 140, "credits": 1.0, "premium_requests": null},
+          "total_credits": {"serial": "1.10", "lane": "1.20"}
+        }
+      },
+      {
+        "id": "late-classification-keeps-billing-without-publishing-task-type",
+        "pending_role": "classifier", "ending": "deadline",
+        "expected": {
+          "state": "unavailable", "reason": "deadline_exhausted",
+          "cancelled": [], "classification_attempts": 1, "selector_attempts": 4,
+          "task_labels": [],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "selector-completes-an-already-admitted-proposal",
+        "pending_role": "selector", "ending": "complete",
+        "expected": {
+          "state": "proposed", "reason": null,
+          "cancelled": [], "classification_attempts": 0, "selector_attempts": 5,
+          "task_labels": [],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "selector-cancelled-after-exhausting-allowance",
+        "pending_role": "selector", "ending": "cancel",
+        "expected": {
+          "state": "unavailable", "reason": null,
+          "cancelled": [45], "classification_attempts": 0, "selector_attempts": 5,
+          "task_labels": [],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "selector-cancellation-cleanup-adds-visible-billing",
+        "pending_role": "selector", "ending": "cancel_billed",
+        "expected": {
+          "state": "unavailable", "reason": null,
+          "cancelled": [45], "classification_attempts": 0, "selector_attempts": 5,
+          "task_labels": [],
+          "routing_credits": "1.00", "overshot": {"0.60": true, "0.80": true},
+          "usage_samples": 7,
+          "run_consumption": {"tokens_in": 700, "tokens_out": 140, "credits": 1.0, "premium_requests": null},
+          "total_credits": {"serial": "1.10", "lane": "1.20"}
+        }
+      },
+      {
+        "id": "late-selector-keeps-billing-without-producing-a-proposal",
+        "pending_role": "selector", "ending": "deadline",
+        "expected": {
+          "state": "unavailable", "reason": "deadline_exhausted",
+          "cancelled": [], "classification_attempts": 0, "selector_attempts": 5,
+          "task_labels": [],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
         }
       }
     ]

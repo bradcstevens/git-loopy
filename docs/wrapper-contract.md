@@ -1795,6 +1795,11 @@ and leaves fixture cases and historical streams' interpretation unchanged.
   of the work that happens to be open. Their billing remains visible in Run
   totals/readback even when no work is admitted. Historical records without an explicit scope retain their
   existing interpretation; no new Event field is needed.
+  An observed bill consumes admission allowance while its assessment remains open,
+  not only when the assessment finishes. Completion or cancellation MUST retain
+  that charge exactly once, including any additional bill reported during
+  cancellation cleanup. A result returned after the deadline MUST NOT become a
+  Task-type label or Routing proposal; its observed Consumption remains recorded.
 - **Refuse, never fall back.** A required-source failure, quota exhaustion, an empty verified
   intersection, invalid selector output, unavailable eligibility, or a failed local recording each
   yield an explicit *unavailable* decision. An Orchestrator MUST NOT substitute stale evidence, the
@@ -1874,6 +1879,17 @@ escalation. A refused retry spends no task attempt or Strike, while later
 eligible Static work still runs. Saved Config remains unchanged. The existing
 one-Lane-per-issue rule is preserved; this matrix does not grant a second Lane,
 activate final defaults or extend routing to another Runner member or placement.
+
+The `in_flight_consumption` matrix carries recorded init/update authorization
+through the real unattended CLI in serial and local Lane modes. Its eight cases,
+each at exact allowance exhaustion and with overshoot, keep an assessment open
+while the next candidate is refused. They observe configured concurrency,
+the unchanged strongest selector, completion/cancellation/late-result settlement,
+actual frozen work settings, canonical records, separate CLI Pickup lines,
+Dashboard Run-only Consumption and final tracker publication. Pending candidates
+remain open without a final assignment or Route projection; no unstarted work
+charges a Strike and Config remains unchanged. These are shared obligations for
+the existing opt-in Python flow, not final-default or native-member activation.
 
 **The Dynamic route is Python-only today**, for the same reason §14.3 is: the shell and PowerShell
 Orchestrators implement no per-issue routing and read no harness listing, so they have no route to
@@ -2050,10 +2066,10 @@ deferred; no non-local, Subagent or Integration routing is claimed.
 
 The companion `pool_priority` matrix carries recorded migration through four
 eligible pending candidates. It preserves oldest-first order and explicit
-**Priority**, prepares the next candidate before speculative selectors start,
-and exercises selector concurrency of one and two with more speculative
+**Priority**, prepares the next candidate before selectors assess other candidates,
+and exercises selector concurrency of one and two with more eligible
 candidates than available slots in either case. Running Agents remain open
-until speculative selectors are in flight; the next actual serial Pickup or
+until those other assessments are in flight; the next actual serial Pickup or
 Lane refill advances without waiting for those unrelated assessments.
 Interrupted selectors retain their SDK-observed Run-only Consumption and an
 explicit unavailable preparation record before Run end. Pending issues keep
