@@ -402,6 +402,17 @@ The saved-setup matrix also exposed late assessment results being accepted
 after the authorized deadline. Shared settlement now retains Consumption but
 refuses the result before it can publish a Task-type label or become a Routing
 proposal. Already-bound Agents still finish on their frozen settings.
+Those valid-bill scenarios now consume the shared routing fixture's
+`in_flight_consumption` matrix through recorded init/update authorization and
+the real unattended CLI: eight cases across two allowances and serial/Lane
+execution. They observe refusal while the billed assessment is still open,
+the configured concurrency ceiling, unchanged strongest selector and literal
+Run-only Consumption through completion, cancellation, cleanup billing and
+deadline refusal. Actual frozen work settings agree with canonical records,
+separate CLI Pickup lines, Dashboard readback and final tracker publication.
+Pending candidates remain open without final publication; Config and Strike
+semantics are unchanged. This replaces the adapter's private parameter matrix
+with shared Conformance, not a new routing mechanism or final activation.
 
 The shared routing fixture's `pool_revalidation` matrix now carries recorded
 migration into a proposal prepared beside running Agents, then through actual
