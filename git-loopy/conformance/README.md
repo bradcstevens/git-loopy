@@ -128,6 +128,22 @@ can precede reservation and therefore does not fabricate a Pickup-skip Event.
 These cases pin existing section 14.6 behavior without changing Event fields,
 historical streams, defaults or member deferrals.
 
+The `in_flight_consumption` matrix is adapted by
+`python/tests/test_saved_routing_consumption.py`. Eight classifier/selector
+completion, cancellation, cleanup-billing and late-result cases run with two
+allowances, recorded init/update authorization and real CLI serial/Lane execution:
+64 combinations. The next candidate is refused while the billed assessment is
+still open. The adapter observes the concurrency ceiling, keeps the strongest
+selector, and compares literal Run-only billing and overshoot with canonical
+records and CLI/Dashboard totals. Already-bound Agents finish on their frozen
+settings; actual sessions, canonical Pickup, each CLI Pickup line, Dashboard
+route readback and final tracker comments/labels agree. Pending candidates
+remain open without final publication, late classification writes no Task-type
+label, and cancellation cleanup retains additional billing exactly once. Config
+stays unchanged and no unstarted work incurs a Strike. Existing helper-level
+malformed-billing cases remain separate; this matrix does not claim them or
+activate final defaults, native members, non-local, Subagent or Integration routing.
+
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent
 from every port's vocabulary, not just the shared fixture and Python reference.
