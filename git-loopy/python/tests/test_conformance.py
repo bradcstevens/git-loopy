@@ -4067,6 +4067,19 @@ def test_the_static_route_fixture_names_the_policies_the_kit_can_parse() -> None
     }
 
 
+def test_first_setup_exercises_its_declared_dynamic_readiness_refusals() -> None:
+    from git_loopy.dynamic_route import RoutingUnavailableReason
+
+    fixture = _ROUTING_RESOLUTION["first_setup"]
+    reached = {
+        case["expected_refusal"]["routing_reason"]
+        for case in fixture["cases"]
+        if "routing_reason" in case.get("expected_refusal", {})
+    }
+    assert reached == set(fixture["routing_refusals"])
+    assert reached <= {reason.value for reason in RoutingUnavailableReason}
+
+
 _DYNAMIC_RETRY = _ROUTING_RESOLUTION["dynamic_retry_cases"]
 
 #: The one configuration every retry case is bound with. Held still on purpose:

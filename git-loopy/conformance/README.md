@@ -48,6 +48,24 @@ Pickup. Shell/PowerShell activation is explicitly deferred; the Rust Dashboard
 does not execute migration or create work sessions. Historical fixtures and
 streams retain their interpretation, and Dynamic defaults remain off.
 
+The sibling `first_setup` matrix starts without either Config scope and crosses
+the real `init --routing` CLI and headless Textual keyboard walk, with terminal
+authorization answers and external transports scripted, into a subsequent
+unattended Run. The actual wizard's default Static-route choice is accepted,
+not replaced with a prebuilt answer. Nine cases run for project/global
+setup and serial/Lane work: explicit Dynamic and Static setup, plus refusal and
+recovery for missing access, invalid deadline, exhausted allowance, invalid
+concurrency, no verified candidates, required-evidence outage and unavailable
+authenticated capabilities. Refusal saves no operator choices or tracker labels;
+recovery observes exact session settings, canonical Pickup, Dashboard readback
+and final tracker effects. Static setup buys no assessment or leaderboard read.
+The refusal vocabulary reuses the Dynamic reasons, distinguishing Config input
+coercion from live readiness; a closure assertion pins its declared reasons.
+The Python adapter is
+`test_first_setup_readiness_recovers_into_the_actual_routed_session` in that
+same suite. This does not cover bare init/auto-setup activation or grant other
+Runner members setup support.
+
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent
 from every port's vocabulary, not just the shared fixture and Python reference.
@@ -627,7 +645,11 @@ the real CLI into serial and Lane work in
 refuses without writes or assessment, then supplied or recorded authority
 reaches the actual session and canonical Pickup. Synthetic harness/evidence
 inputs pin the settings, Routing source, selector calls and authority lifetime,
-including Static recovery without leaderboard access. Its `preflight_deadline`
+including Static recovery without leaderboard access. The sibling `first_setup`
+cases drive explicit guided setup from absent project/global Config through
+readiness refusal and recovery into the same actual-session/readback seam.
+Their input answers are collected, not seeded Config; readiness must pass
+before any operator choice or tracker label is saved. Its `preflight_deadline`
 cases use the same synthetic inputs to consume the routing deadline during
 retained Static validation. No classifier or selector starts afterwards, while
 already-classified Static work still runs on its retained settings; Config and
