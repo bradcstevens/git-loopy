@@ -294,7 +294,7 @@ pub struct Pickup {
     #[serde(default, deserialize_with = "reported")]
     pub model: Option<Option<String>>,
     /// The reasoning effort of that pair. Dynamic `Some(None)` means no dial;
-    /// Static and historical nulls retain backend-default semantics. `None`
+    /// Static and historical nulls retain backend wording without declaring dial support. `None`
     /// means the record did not report an effort.
     #[serde(default, deserialize_with = "reported")]
     pub effort: Option<Option<String>>,

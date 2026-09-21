@@ -491,11 +491,15 @@ earlier wording, and sparse historical Pickups do not acquire a no-dial claim.
 The shared Dashboard fixture's `effort_readback` matrix covers this display
 boundary, including serial and Lane-stamped contribution replay. It does not
 prove actual work-session settings or activate Dynamic defaults. The separately
-published Python effort-matching and local-durability deliveries still require
+published Python effort-matching, CLI no-dial readback and local-durability deliveries still require
 integration, and executing-host capability authority and remaining composed
 activation obligations remain outstanding. Shell/PowerShell activation and
 Subagent/Integration routing remain deferred.
 The Event-schema declarations distinguish Dynamic/proposed null efforts from
-legacy backend-choice semantics and from non-proposed preparation's nulls (no
+historical backend placeholders and from non-proposed preparation's nulls (no
 proposal). Static, reusable and unavailable preparations keep those null effort
 keys out of the Dashboard projection rather than acquiring a no-dial claim.
+Static no-dial-specific display remains indistinguishable from deliberate Static
+omission in the recorded Pickup; preserving its historical backend placeholder
+is not a claim that the model has a dial. A future display distinction needs a
+recorded capability fact, not a model-name inference.

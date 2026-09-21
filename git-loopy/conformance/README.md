@@ -649,7 +649,9 @@ six Pickup cases run through both serial and Lane-stamped contribution replay
 and nine preparation cases run through projection and actual rendered Queue and
 drill-in screens. Explicit Dynamic null effort reads as **not configurable**;
 the advertised value `none`, deliberate Static omission and historical sparse
-records stay distinct. Preparation retains explicit nulls without inventing
+records keep their respective readbacks. The Static backend placeholder does
+not distinguish a Static no-dial model from deliberate omission: the Pickup has
+no dial-presence fact to support that inference. Preparation retains explicit nulls without inventing
 missing fields or becoming a final Route, and its full work/selector wording
 survives in the issue Log. Nulls in Static, reusable and unavailable preparation
 mean no proposal, not no dial, and retain their historical omitted projection.

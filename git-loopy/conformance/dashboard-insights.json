@@ -393,7 +393,7 @@
     ]
   },
   "effort_readback": {
-    "note": "Rust Event-replay/display obligations. These cases do not claim work-session routing or native Orchestrator activation. Explicit Dynamic null effort is not configurable, the value none is distinct, and Static and historical missing-field wording is preserved. Preparation stays nonbinding; ordinary Route-column clipping still applies.",
+    "note": "Rust Event-replay/display obligations. These cases do not claim work-session routing or native Orchestrator activation. Explicit Dynamic null effort is not configurable, the value none is distinct, and Static and historical missing-field wording is preserved. The Static backend placeholder is not a dial-capability claim: Static Pickups do not distinguish no dial from deliberate omission. Preparation stays nonbinding; ordinary Route-column clipping still applies.",
     "routes": [
       {
         "id": "dynamic-no-dial",

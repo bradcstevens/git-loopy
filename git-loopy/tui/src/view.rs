@@ -204,7 +204,7 @@ pub struct QueueRow {
 /// One issue's **Routing resolution** and the **Routing source** that chose it.
 ///
 /// A reported null Dynamic effort means no dial; Static and historical nulls
-/// retain backend-default semantics. Unreported effort still serializes as
+/// retain the backend placeholder without declaring dial support. Unreported effort serializes as
 /// null for compatibility, but rendering must not infer a dial from its absence.
 #[derive(Clone, Debug, Serialize)]
 pub struct RouteView {
