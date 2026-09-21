@@ -1263,6 +1263,11 @@ def _routing_status_phrase(event: dict[str, Any]) -> str:
     """
     if event.get("routing_suppressed") is True:
         return "suppressed run-wide by an explicit model pin"
+    if event.get("route_policy") == "dynamic":
+        phrase = "Static routes in force" if _routes(event) else "no table configured"
+        if _string_list(event.get("unconfigured_task_type_keys")):
+            phrase += "; uncovered work awaits Dynamic Pickup"
+        return phrase
     if not _string_list([route.get("key") for route in _routes(event)]):
         return "no table configured — every issue runs on the default pair"
     return "in force"
@@ -1285,9 +1290,11 @@ def _run_readback_lines(event: dict[str, Any]) -> list[tuple[str, str, str]]:
     """
     warning_style = STYLES["warning"]
     plain = STYLES["meta"]
+    policy = event.get("route_policy")
+    dynamic = policy == "dynamic" and event.get("routing_suppressed") is not True
     lines: list[tuple[str, str, str]] = [
         (
-            "default pair",
+            "configured pair" if dynamic else "default pair",
             _readback_pair_phrase(
                 {
                     "model": event.get("model"),
@@ -1311,7 +1318,13 @@ def _run_readback_lines(event: dict[str, Any]) -> list[tuple[str, str, str]]:
             )
         )
     else:
-        lines.append(("escalation rung", "off — a stalled issue is not retried", plain))
+        if dynamic:
+            retry = "none; permitted retries retain Static routes or reselect Dynamic work"
+        elif policy in {"static", "dynamic"}:
+            retry = "off; permitted Static retries retain their selected route"
+        else:
+            retry = "off — a stalled issue is not retried"
+        lines.append(("escalation rung", retry, plain))
     lines.append(("routing", _routing_status_phrase(event), plain))
     for route in _routes(event):
         key = route.get("key")
@@ -1327,7 +1340,9 @@ def _run_readback_lines(event: dict[str, Any]) -> list[tuple[str, str, str]]:
         )
     unconfigured = _string_list(event.get("unconfigured_task_type_keys"))
     if unconfigured:
-        lines.append(("unrouted", ", ".join(unconfigured), plain))
+        lines.append((
+            "dynamic pending" if dynamic else "unrouted", ", ".join(unconfigured), plain,
+        ))
     lines.append(("harness", _roster_phrase(event), plain))
     return lines
 

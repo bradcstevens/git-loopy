@@ -7952,10 +7952,10 @@ def _dynamic_lane_ports(
     from types import SimpleNamespace
     from decimal import Decimal
 
-    spied: dict[str, list[Any]] = {"assessments": []}
+    spied: dict[str, list[Any]] = {"assessments": [], "evidence": [], "capabilities": []}
 
     async def _fetch(method, url, headers):
-        del method, url, headers
+        spied["evidence"].append(url)
         return json.dumps(
             {
                 "data": [
@@ -7983,6 +7983,7 @@ def _dynamic_lane_ports(
         ).encode("utf-8")
 
     async def _capabilities(*, warn=None):
+        spied["capabilities"].append("listing")
         if not capabilities_available():
             return dynamic_route.FreshHarnessCapabilities(
                 retrieved_at=datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc),
@@ -8267,7 +8268,9 @@ def test_a_lane_whose_dynamic_route_is_unavailable_opens_no_session(
     assert fake_git.active_worktrees == []
 
 
-def _dynamic_retry_lane_run(tmp_path, monkeypatch, *, outcome="no_progress", **overrides):
+def _dynamic_retry_lane_run(
+    tmp_path, monkeypatch, *, outcome="no_progress", setup_entrypoint=None, **overrides
+):
     """A Lane and a later serial Pickup, sharing the real Run's ledgers."""
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -8306,7 +8309,22 @@ def _dynamic_retry_lane_run(tmp_path, monkeypatch, *, outcome="no_progress", **o
         answer=overrides.pop("answer", _elects_lane_model("claude-opus-5")),
         capabilities_available=overrides.pop("capabilities_available", lambda: True),
     )
-    exit_code = asyncio.run(loop_module.run(_dynamic_parallel_config(**overrides)))
+    if setup_entrypoint is None:
+        config = _dynamic_parallel_config(**overrides)
+    else:
+        from git_loopy import settings
+        from tests.test_routing_migration import _saved_routing_config
+
+        config = _saved_routing_config(
+            tmp_path, monkeypatch, entrypoint=setup_entrypoint,
+            **{"max_iterations": 2, **overrides},
+        )
+        assert fake_client.create_calls == [] and spied["assessments"] == []
+        path = settings.project_config_path(tmp_path)
+        saved = path.read_bytes()
+    exit_code = asyncio.run(loop_module.run(config))
+    if setup_entrypoint is not None:
+        assert path.read_bytes() == saved
     return fake_client, spied, exit_code
 
 
@@ -8354,8 +8372,9 @@ def test_lane_pickup_rechecks_readiness_instead_of_inheriting_the_preflight(
     ],
 )
 @pytest.mark.parametrize("retry_model", ["claude-opus-5", "gpt-5.6-terra"])
+@pytest.mark.parametrize("entrypoint", [None, "init", "update"])
 def test_a_lane_outcome_reaches_its_next_dynamic_pickup(
-    tmp_path, monkeypatch, outcome, prior_outcome, position, retry_model
+    tmp_path, monkeypatch, outcome, prior_outcome, position, retry_model, entrypoint
 ) -> None:
     """Both dispatch paths read one history without manufacturing Attempts."""
     fake_client, spied, _exit_code = _dynamic_retry_lane_run(
@@ -8363,6 +8382,7 @@ def test_a_lane_outcome_reaches_its_next_dynamic_pickup(
         answer=lambda request: _elects_lane_model(
             retry_model if request.prior_attempts else "claude-opus-5"
         )(request),
+        setup_entrypoint=entrypoint,
     )
 
     lane, retry = (
@@ -8390,11 +8410,13 @@ def test_a_lane_outcome_reaches_its_next_dynamic_pickup(
 
 
 @pytest.mark.parametrize("outcome", ["no_progress", "crash"])
+@pytest.mark.parametrize("entrypoint", [None, "init", "update"])
 def test_dynamic_lane_retry_exhaustion_starts_no_third_attempt(
-    tmp_path, monkeypatch, outcome
+    tmp_path, monkeypatch, outcome, entrypoint
 ) -> None:
     fake_client, spied, exit_code = _dynamic_retry_lane_run(
-        tmp_path, monkeypatch, outcome=outcome, max_iterations=5, max_nmt_strikes=1
+        tmp_path, monkeypatch, outcome=outcome, max_iterations=5, max_nmt_strikes=1,
+        setup_entrypoint=entrypoint,
     )
 
     assert exit_code == 1
@@ -8405,6 +8427,19 @@ def test_dynamic_lane_retry_exhaustion_starts_no_third_attempt(
     events = _logged_events(tmp_path)
     assert len([e for e in events if e["type"] == "wrapper.strike"]) == 1
     assert [e["outcome"] for e in events if e["type"] == "wrapper.run.end"] == ["stuck"]
+    assert [
+        (call["model"], call["reasoning_effort"], call["context_tier"])
+        for call in fake_client.create_calls
+    ] == [("claude-opus-5", "high", "default")] * 2
+    assert Path(fake_client.create_calls[0]["working_directory"]).name == "issue-42"
+    first, retry = [
+        request for _, request in spied["assessments"] if "Test issue 42" in request.issue
+    ]
+    assert first.prior_attempts == ()
+    assert retry.prior_attempts[0].outcome is (
+        dynamic_route.PriorOutcome.INFRASTRUCTURE_FAILURE
+        if outcome == "crash" else dynamic_route.PriorOutcome.DID_NOT_SOLVE
+    )
 
 
 def test_explicit_default_equal_rung_wins_after_a_dynamic_lane(
@@ -8446,8 +8481,9 @@ def test_a_run_wide_override_remains_authoritative_after_a_lane_retry(
 
 
 @pytest.mark.parametrize("refusal", ["invalid_output", "allowance", "eligibility"])
+@pytest.mark.parametrize("entrypoint", [None, "init", "update"])
 def test_unavailable_dynamic_retry_after_a_lane_spends_no_attempt(
-    tmp_path, monkeypatch, refusal
+    tmp_path, monkeypatch, refusal, entrypoint
 ) -> None:
     eligible = True
 
@@ -8471,7 +8507,7 @@ def test_unavailable_dynamic_retry_after_a_lane_spends_no_attempt(
     config = {"routing_credit_allowance": Decimal("0.25")} if refusal == "allowance" else {}
     fake_client, spied, exit_code = _dynamic_retry_lane_run(
         tmp_path, monkeypatch, answer=answer,
-        capabilities_available=lambda: eligible, **config
+        capabilities_available=lambda: eligible, setup_entrypoint=entrypoint, **config
     )
 
     expected_sessions = 2 if refusal == "invalid_output" else 1
@@ -8486,6 +8522,11 @@ def test_unavailable_dynamic_retry_after_a_lane_spends_no_attempt(
     assert any(e["issue"] == 42 and "dynamic route unavailable" in e["reason"] for e in refused)
     if refusal != "invalid_output":
         assert len(spied["assessments"]) == 1
+    assert fake_client.create_calls[0]["model"] == "claude-opus-5"
+    assert Path(fake_client.create_calls[0]["working_directory"]).name == "issue-42"
+    if refusal == "allowance":
+        assert any("quota_exhausted" in event["reason"] for event in refused)
+        assert resolutions[0]["routing_credits"] == "0.25"
 
 
 def _dynamic_parallel_config(**overrides) -> RunConfig:
@@ -8664,11 +8705,13 @@ def test_a_lane_whose_binding_cannot_be_recorded_opens_no_session(
 # --- Dynamic routing: reuse across Runs (#565, ADR-0057) --------------------
 
 
-def _rolling_dynamic_run(tmp_path, monkeypatch, **overrides):
+def _rolling_dynamic_run(
+    tmp_path, monkeypatch, *, setup_entrypoint=None, tracker=None, **overrides
+):
     """A two-Lane rolling dynamic Run, repeatable inside one test."""
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
-    fake_gh = FakeGitHubClient(
+    fake_gh = tracker if tracker is not None else FakeGitHubClient(
         repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
         issues=overrides.pop("issues", [
             _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
@@ -8700,7 +8743,22 @@ def _rolling_dynamic_run(tmp_path, monkeypatch, **overrides):
         monkeypatch,
         answer=overrides.pop("answer", _elects_lane_model("claude-opus-5")),
     )
-    exit_code = asyncio.run(loop_module.run(_dynamic_parallel_config(**overrides)))
+    if setup_entrypoint is None:
+        config = _dynamic_parallel_config(**overrides)
+    else:
+        from git_loopy import settings
+        from tests.test_routing_migration import _saved_routing_config
+
+        config = _saved_routing_config(
+            tmp_path, monkeypatch, entrypoint=setup_entrypoint,
+            **{"max_iterations": 2, **overrides},
+        )
+        assert fake_client.create_calls == [] and spied["assessments"] == []
+        path = settings.project_config_path(tmp_path)
+        saved = path.read_bytes()
+    exit_code = asyncio.run(loop_module.run(config))
+    if setup_entrypoint is not None:
+        assert path.read_bytes() == saved
     return fake_client, spied, exit_code
 
 
@@ -8755,6 +8813,84 @@ def test_each_lane_revalidates_its_own_issues_recorded_route(
             f"Lane #{issue} revalidated against another issue's decision"
         )
         assert record["selector_attempts"] == 0
+
+
+@pytest.mark.parametrize("entrypoint", ["init", "update"])
+def test_saved_dynamic_policy_replays_each_lane_and_recovers_only_pending_publication(
+    tmp_path, monkeypatch, entrypoint
+) -> None:
+    from git_loopy import settings
+    from tests.test_iteration_end_to_end import _delivery_events
+
+    tracker = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(ref, labels=[
+                "ready-for-agent", "parallel-safe", "task-type:implementation",
+            ])
+            for ref in (42, 43)
+        ],
+        route_comment_errors={43: RouteDeliveryError("HTTP 429")},
+    )
+    first_client, first, code = _rolling_dynamic_run(
+        tmp_path, monkeypatch, setup_entrypoint=entrypoint, tracker=tracker,
+    )
+    assert code == 0
+    assert len(first["assessments"]) == len(first_client.create_calls) == 2
+    assert {
+        event["issue"]: event["status"] for event in _delivery_events(tmp_path)
+    } == {42: "published", 43: "pending"}
+    saved = settings.project_config_path(tmp_path).read_bytes()
+
+    tracker._route_comment_errors.clear()
+    for _ in range(2):
+        for ref in (42, 43):
+            tracker.seed_issue(dataclass_replace(tracker.issue_view(ref), state="OPEN"))
+        client, replay, code = _rolling_dynamic_run(
+            tmp_path, monkeypatch, setup_entrypoint="recorded", tracker=tracker,
+        )
+        assert code == 0
+        assert replay["assessments"] == []
+        assert len(replay["evidence"]) >= 2 and len(replay["capabilities"]) >= 2
+        assert {
+            (
+                Path(call["working_directory"]).name,
+                call["model"], call["reasoning_effort"], call["context_tier"],
+            )
+            for call in client.create_calls
+        } == {
+            ("issue-42", "claude-opus-5", "high", "default"),
+            ("issue-43", "claude-opus-5", "high", "default"),
+        }
+        assert len(client.create_calls) == 2
+        assert settings.project_config_path(tmp_path).read_bytes() == saved
+
+    records = _lane_routing_records(tmp_path)
+    for ref in (42, 43):
+        initial, *replayed = [record for record in records if record["issue"] == ref]
+        assert initial["routing_reuse"] == "elected"
+        assert len(replayed) == 2
+        assert all(
+            record["routing_reuse"] == "revalidated"
+            and record["reused_proposal_id"] == initial["proposal_id"]
+            and record["selector_attempts"] == 0
+            and record["routing_credits"] == "0"
+            for record in replayed
+        )
+        assert len([
+            label for label in tracker.issue_labels(ref)
+            if label.startswith("git-loopy-route:")
+        ]) == 1
+        assert {"ready-for-agent", "parallel-safe", "task-type:implementation"} <= set(
+            tracker.issue_labels(ref)
+        )
+    assert sorted(ref for ref, _ in tracker.route_comment_calls) == [42, 43]
+    assert all(
+        all(value in comment for value in ("claude-opus-5", "high", "default"))
+        for _, comment in tracker.route_comment_calls
+    )
+    recovered = _delivery_events(tmp_path)[2:]
+    assert recovered and all(event["status"] == "published" for event in recovered)
 
 
 def _hold_lanes_for_preparation(client, tmp_path, ref):

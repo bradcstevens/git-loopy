@@ -1095,10 +1095,13 @@ refresh; retained compatibility entries do not imply current availability. It ex
 validator for the `[routing]` table can exist — its keys are the operator's vocabulary and its
 pairs are the vendor's — so an operator reading back what the kit understood is the only
 validation available anywhere. It therefore carries the **keys themselves and never a count of
-them**, and gate-checks every configured pair **non-fatally**, so a route this Run never
-exercises still has its model id and effort checked and a dropped effort warns before it costs
-an **Iteration** rather than after. Unconditional: a Run that configured nothing prints the
-readback saying so.
+them**. Under an unselected **Route policy**, it gate-checks configured pairs
+**non-fatally**, warning about legacy effort drops before an **Iteration**. Under
+either selected policy, it echoes retained **Static routes** and explicit escalation
+unchanged: live preflight and Pickup validate them, not the offline roster. Under
+unsuppressed **Dynamic routing**, uncovered work awaits Pickup rather than the
+Default pair, and permitted retries may reselect without a fixed Escalation rung.
+Unconditional: a Run that configured nothing prints the readback saying so.
 _Avoid_: config dump, banner, routing validation (nothing is refused here — the readback reports).
 
 **Measured routing**:

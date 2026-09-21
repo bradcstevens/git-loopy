@@ -219,14 +219,13 @@ def _gate_pair(
     the model — because a routed pair meets both and a readback that checked one
     of them would clear a pair the Run would still downgrade.
 
-    Under the **Static route** (#560, ADR-0057) neither gate runs, for the same
-    reason :func:`git_loopy.config._gate_pair` skips them: the hardcoded roster
-    is no longer the authority, the authenticated harness is, and the Run
-    *refuses* a pair that harness will not take rather than downgrading it. A
-    readback that still consulted the roster here would print a route the Run
-    was never going to open.
+    Under either selected **Route policy** neither gate runs: retained Static
+    routes and explicit escalation use the authenticated harness, not the
+    hardcoded roster. The Run refuses a pair that harness will not take rather
+    than downgrading it. A readback that still consulted the roster here would
+    print a route the Run was never going to open.
     """
-    if route_policy is RoutePolicy.STATIC:
+    if route_policy is not RoutePolicy.UNSELECTED:
         return PairReadback(
             model=model,
             effort=effort,

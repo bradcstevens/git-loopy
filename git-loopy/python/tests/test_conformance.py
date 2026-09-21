@@ -1139,7 +1139,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "harness_version",
                 "roster_cli_version",
                 "roster_diverged",
-                # #560, ADR-0057: the **Route policy** in force. Under `static`
+                # ADR-0057: under either selected **Route policy**
                 # every pair above is published ungated, which a reader cannot
                 # tell from a set of pairs that passed the gate unless the
                 # policy that ungated them travels beside them.
@@ -1178,31 +1178,36 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "validation available anywhere, and a count reveals neither a "
                 "misspelling nor a half-filled table. "
                 "unconfigured_task_type_keys is the other half: the taxonomy "
-                "members no entry names, which route to the Default pair and "
-                "say so nowhere else until a Pickup has already happened."
+                "members no entry names. Under unsuppressed `dynamic` they await "
+                "Dynamic Pickup, not the Default pair; an explicit run-wide "
+                "model/effort override remains authoritative. Under `unselected` "
+                "or `static` they use the Default pair."
             ),
             "readback_two_efforts": (
-                "effort is the GATED effort -- what would actually be sent -- "
+                "Under `unselected`, effort is the GATED effort -- what would actually be sent -- "
                 "and configured_effort is what Config supplied. Both travel "
                 "because a readback carrying only the gated value reports the "
                 "outcome and loses the request, and the request is the half "
-                "an operator can correct. gate_warnings is the verdict, drawn "
+                "an operator can correct. gate_warnings is the legacy verdict, drawn "
                 "from the same vocabulary wrapper.pickup.bound's "
-                "gate_warnings carries, and rides every configured pair "
-                "including the escalation rung, which nothing else gates "
-                "until an issue has already stalled."
+                "gate_warnings carries, including for the escalation rung. "
+                "Under `static` or `dynamic`, retained Static routes and explicit "
+                "escalation are echoed unchanged; live preflight and Pickup "
+                "validate them instead of the offline roster."
             ),
             "readback_route_policy": (
                 "Contract 2.8. route_policy names the Route policy this Run "
-                "selected (ADR-0057): `unselected` -- the default, and today's "
-                "behaviour byte-for-byte -- or `static`, the operator-selected "
-                "Static route. It travels because under `static` the hardcoded "
-                "roster is not the authority and every pair above is published "
+                "selected (ADR-0057): `unselected` -- the default, preserving "
+                "historical behaviour -- `static`, or opt-in `dynamic`. It "
+                "travels because under either selected policy the hardcoded "
+                "roster is not the authority and every configured pair above is published "
                 "UNGATED, which is otherwise indistinguishable from a set of "
                 "pairs that merely passed the gate. A consumer MUST NOT read "
-                "an empty gate_warnings under `static` as `the roster approved "
-                "this`; it means the roster was not asked. It also MUST NOT "
-                "treat an unrecognised policy name as `unselected`: a Runner "
+                "an empty gate_warnings under `static` or `dynamic` as `the roster approved "
+                "this`; it means the roster was not asked. An absent fixed "
+                "escalation rung under `dynamic` does not forbid permitted "
+                "outcome-aware reselection. A consumer MUST NOT treat an "
+                "unrecognised policy name as `unselected`: a Runner "
                 "that names a policy this consumer does not know is describing "
                 "a Run whose routing it cannot explain."
             ),

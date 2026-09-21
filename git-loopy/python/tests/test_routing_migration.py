@@ -51,6 +51,51 @@ def _listing(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return calls
 
 
+def _saved_routing_config(
+    tmp_path,
+    monkeypatch,
+    *,
+    entrypoint,
+    max_iterations=1,
+    max_nmt_strikes=3,
+    routing_credit_allowance="2.5",
+):
+    """Resolve a Run from real saved authorization, not a constructed RunConfig."""
+    from git_loopy import cli
+    from tests.test_init_routing import _first_setup_for_run
+
+    _listing(monkeypatch)
+    path = settings.project_config_path(tmp_path)
+    if entrypoint == "init":
+        assert not path.exists()
+        assert _first_setup_for_run(
+            tmp_path, monkeypatch, choice="migrate", saved_route=False,
+            routing_credit_allowance=routing_credit_allowance,
+        ) == 0
+    elif entrypoint == "update":
+        settings.write_config_atomic(path, {
+            **_authorized_values(),
+            "routing_credit_allowance": str(routing_credit_allowance),
+            "route_associations": {
+                "aa-opus": "claude-opus-5@high", "aa-terra": "gpt-5.6-terra@high",
+            },
+        })
+        assert _update(tmp_path, routing_choice="migrate") == 0
+    else:
+        assert entrypoint == "recorded"
+        assert path.exists()
+    assert settings.load_config_table(path)["route_policy"] == "dynamic"
+    assert "routing" not in settings.load_config_table(path)
+    tables = settings.load_configs(tmp_path, os.environ)
+    return cli.resolve_config(
+        cli.build_parser().parse_args([str(max_iterations)]),
+        {"GIT_LOOPY_MAX_NMT_STRIKES": str(max_nmt_strikes)},
+        project=tables.project,
+        global_=tables.global_,
+        measured=tables.measured,
+    ).run
+
+
 def test_keep_preserves_authored_routes_and_records_strict_static_policy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -222,7 +222,14 @@ inputs abort before scope writes. The operator-owned key stays outside Config.
 
 The saved first-setup and migration choices are composed through actual serial
 and Lane sessions and canonical Pickup records, including fresh source outages
-after setup. Bare init and auto-setup retain their existing behavior.
+after setup. The composed matrix also carries both saved entrypoints through
+outcome-aware permitted retries, attempt and allowance exhaustion, fresh
+cross-Run reuse, and pending publication recovery with unchanged Config and
+idempotent tracker effects. Startup readback now distinguishes uncovered Dynamic
+work and permitted reselection from a Static default or fixed escalation rung.
+Retained Static routes and explicit escalation are echoed without legacy roster
+downgrades under either selected policy; historical readbacks are preserved.
+Bare init and auto-setup retain their existing behavior.
 Automatic upgrade/Run migration enforcement, the remaining
 composed acceptance and Wrapper/Conformance obligations still precede final default
 activation. Dynamic routing remains opt-in; shell/PowerShell activation is deferred,

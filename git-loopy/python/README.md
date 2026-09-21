@@ -1223,12 +1223,22 @@ from preflight into routing; it does not grant a new budget after live reads.
 now offer explicit keep-or-migrate authorization and this shared readiness
 verdict. Composed first-setup and saved-migration serial/Lane cases observe actual
 session settings and canonical records, including fresh outages after setup.
+They also carry saved choices through outcome-aware retries, attempt/allowance
+exhaustion, fresh cross-Run reuse, and pending issue-publication recovery without
+rewriting Config or duplicating tracker comments.
 Automatic upgrade/Run migration enforcement, the remaining
 composed activation matrix, and Wrapper/Conformance obligations still need to
 land before the final default changes. Existing Config is not migrated implicitly.
 Python issue-owning serial and
 Lane sessions are the implementation scope; shell/PowerShell activation remains
 deferred, and this does not add Subagent or Integration routing.
+
+The Run's startup readback distinguishes uncovered Dynamic work awaiting Pickup
+from a configured default pair. No fixed escalation rung does not disable
+permitted Dynamic retries; they reselect from outcome evidence. Retained Static
+routes and explicit escalation are shown exactly as configured under either
+selected policy, without applying legacy offline-roster effort downgrades.
+Historical unselected-policy readbacks remain unchanged.
 
 What happens per issue:
 

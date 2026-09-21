@@ -748,6 +748,9 @@ force, and each entry of `routes` is that object plus the `key` it was configure
 exactly as Config spelled it. Two efforts travel on every pair: `effort` is the **gated** value,
 what would actually be sent, and `configured_effort` is what Config supplied, because a readback
 carrying only the gated one reports the outcome and loses the request an operator can correct.
+That gating describes an unselected Route policy. Under either selected policy
+(§14.3/§14.4), configured Static routes and explicit escalation are echoed unchanged;
+the authenticated harness validates them, not the offline roster.
 `roster_diverged` is three-valued — `true`, `false`, or `null` for an unreadable
 `harness_version` — and a consumer MUST NOT read `null` as agreement. All ten are
 optional-when-present: an Orchestrator that routes nothing emits Run start byte-identically and
@@ -1406,7 +1409,8 @@ run-wide default:
   for the table can exist — its keys are the operator's vocabulary and its pairs are the vendor's
   — so the operator reading back what the kit parsed is the only validation available anywhere,
   and a count can reveal neither a half-filled table nor a key spelled differently from the label
-  it was meant to match. It MUST gate-check **each configured pair**, non-fatally, because a route
+  it was meant to match. Under an unselected Route policy it MUST gate-check
+  **each configured pair**, non-fatally, because a route
   no issue exercises is otherwise never resolved and its model id and effort never checked at all,
   and because a rung is otherwise first gated at a stalled issue's *next* pickup — the one moment
   the Run is already going badly. And the block MUST print on a Run that configured **nothing**,
@@ -1632,7 +1636,8 @@ the default, and the absence of a decision — `static` (this section), and `dyn
   configures the session, rides `wrapper.pickup.bound`, and reaches the CLI and the **Dashboard**.
   An Orchestrator MUST NOT re-derive it, and MUST NOT publish a gated readback beside an ungated
   session. `wrapper.run.start`'s readback MAY carry `route_policy`; a consumer MUST NOT read an
-  empty `gate_warnings` under `static` as roster approval — it means the roster was not asked.
+  empty `gate_warnings` under `static` or `dynamic` as roster approval — it means the roster was
+  not asked. This includes retained Static routes and explicit escalation under Dynamic policy.
 
 The policy is pinned by [`routing-resolution.json`](../git-loopy/conformance/routing-resolution.json)'s
 `static_route_cases` (one harness listing plus one route → `accepted` or a closed-vocabulary
@@ -1777,6 +1782,15 @@ elect. They declare it unsupported in
 [`fixture-claims.json`](../git-loopy/conformance/fixture-claims.json) rather than by implication.
 The Dashboard needs no policy-aware branch — it renders the elected triple off
 `wrapper.pickup.bound` exactly as it renders any other.
+
+The **Run readback** MUST distinguish an absent Static table from retained Static
+routes. Under unsuppressed `dynamic`, `unconfigured_task_type_keys` names work awaiting
+Dynamic Pickup, not a promise to use the Default pair. A fully covered table MUST
+NOT be described as having uncovered Task types. An absent fixed Escalation rung
+does not disable permitted outcome-aware Dynamic retries. A run-wide model/effort
+override still suppresses Dynamic work, and historical unselected-policy records
+retain their existing meaning. These clarifications change no Event fields or
+compatibility-schema version.
 
 **Dynamic routing is off by default and stays off until an operator selects it.** An Orchestrator
 MUST NOT enable it by inference from the presence of a key, an association table, or any other

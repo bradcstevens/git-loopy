@@ -5656,12 +5656,16 @@ def _listed_model(identifier: str, efforts: list[str] | None) -> SimpleNamespace
     )
 
 
-def _dynamic_run(tmp_path, monkeypatch, **overrides):
+def _dynamic_run(
+    tmp_path, monkeypatch, *, setup_entrypoint=None, tracker=None, **overrides
+):
     """A one-issue dynamic Run with both external ports scripted."""
     _write_runnable_feedback_loop(tmp_path)
     fake_client, _fake_git = _wire_single_issue_github(
         tmp_path, monkeypatch, labels=overrides.pop("issue_labels", None)
     )
+    if tracker is not None:
+        monkeypatch.setattr(loop_module, "_make_github_client", lambda: tracker)
     on_send = overrides.pop("on_send", None)
     if on_send is not None:
         fake_client.on_send = on_send
@@ -5682,14 +5686,27 @@ def _dynamic_run(tmp_path, monkeypatch, **overrides):
             ),
         ),
     )
-    config = _dynamic_config(
-        route_associations=overrides.pop("route_associations", {
-            "aa-opus": "claude-opus-5@high",
-            "aa-terra": "gpt-5.6-terra@high",
-        }),
-        **overrides,
-    )
-    return fake_client, spied, asyncio.run(loop_module.run(config))
+    if setup_entrypoint is None:
+        config = _dynamic_config(
+            route_associations=overrides.pop("route_associations", {
+                "aa-opus": "claude-opus-5@high",
+                "aa-terra": "gpt-5.6-terra@high",
+            }),
+            **overrides,
+        )
+    else:
+        from tests.test_routing_migration import _saved_routing_config
+
+        config = _saved_routing_config(
+            tmp_path, monkeypatch, entrypoint=setup_entrypoint, **overrides,
+        )
+        assert fake_client.create_calls == [] and spied["assessments"] == []
+    path = settings.project_config_path(tmp_path)
+    saved = path.read_bytes() if path.exists() else None
+    code = asyncio.run(loop_module.run(config))
+    if saved is not None:
+        assert path.read_bytes() == saved
+    return fake_client, spied, code
 
 
 def _dynamic_pool_run(tmp_path, monkeypatch, *, issues, **overrides):
@@ -6381,7 +6398,8 @@ def test_a_dynamic_route_reaches_the_serial_work_sessions_own_arguments(
     ],
 )
 def test_a_saved_routing_choice_reaches_the_serial_session_and_canonical_pickup(
-    tmp_path, monkeypatch, entrypoint, choice, saved_route, expected_model, expected_source
+    tmp_path, monkeypatch, capsys, entrypoint, choice, saved_route,
+    expected_model, expected_source
 ) -> None:
     from git_loopy import settings
     from tests.test_config_cmd import _write_measured
@@ -6455,6 +6473,11 @@ def test_a_saved_routing_choice_reaches_the_serial_session_and_canonical_pickup(
     assert bound["routing_source"] == expected_source
     assert len(spied["assessments"]) == (1 if expected_source == "dynamic" else 0)
     assert config.escalation_rung is None
+    if choice == "migrate":
+        output = capsys.readouterr().out
+        assert "every issue runs on the default pair" not in output
+        assert "a stalled issue is not retried" not in output
+        assert "uncovered work awaits Dynamic Pickup" in output
 
 
 def test_the_dashboard_reads_the_dynamic_route_from_the_pickup_it_bound(
@@ -6709,8 +6732,9 @@ def test_advancing_dynamic_work_preserves_history_without_refunding_attempts(
 
 
 @pytest.mark.parametrize("retry_model", ["claude-opus-5", "gpt-5.6-terra"])
+@pytest.mark.parametrize("entrypoint", [None, "init", "update"])
 def test_a_permitted_retry_reassesses_with_the_previous_outcome(
-    tmp_path, monkeypatch, retry_model
+    tmp_path, monkeypatch, retry_model, entrypoint
 ) -> None:
     """The whole ticket, through the record an operator reads (AC1, AC3, AC6).
 
@@ -6730,6 +6754,7 @@ def test_a_permitted_retry_reassesses_with_the_previous_outcome(
         answer=lambda request: _elects(
             retry_model if request.prior_attempts else "claude-opus-5"
         )(request),
+        setup_entrypoint=entrypoint,
     )
 
     assert exit_code == 0
@@ -6846,8 +6871,9 @@ def test_an_explicitly_configured_rung_still_outranks_the_selector(
 
 
 @pytest.mark.parametrize("refusal", ["invalid_output", "allowance", "eligibility"])
+@pytest.mark.parametrize("entrypoint", [None, "init", "update"])
 def test_an_unavailable_later_route_blocks_the_retry_without_spending_it(
-    tmp_path, monkeypatch, refusal
+    tmp_path, monkeypatch, refusal, entrypoint
 ) -> None:
     """AC4/AC8: a routing refusal is not an attempt, and not a **Strike**.
 
@@ -6878,7 +6904,7 @@ def test_an_unavailable_later_route_blocks_the_retry_without_spending_it(
             for model in listing:
                 model.policy.state = "disabled"
 
-    fake_client, _spied, exit_code = _dynamic_run(
+    fake_client, spied, exit_code = _dynamic_run(
         tmp_path,
         monkeypatch,
         max_iterations=2,
@@ -6887,6 +6913,7 @@ def test_an_unavailable_later_route_blocks_the_retry_without_spending_it(
         listing=listing,
         on_send=after_send,
         routing_credit_allowance=Decimal("0.25") if refusal == "allowance" else Decimal("5"),
+        setup_entrypoint=entrypoint,
     )
 
     assert exit_code != 0
@@ -6899,15 +6926,23 @@ def test_an_unavailable_later_route_blocks_the_retry_without_spending_it(
         if event["type"] == "wrapper.pickup.skipped"
     ]
     assert skipped and "dynamic route unavailable" in skipped[-1]["reason"]
+    assert fake_client.create_calls[0]["model"] == "claude-opus-5"
+    if refusal != "invalid_output":
+        assert len(spied["assessments"]) == 1
+    if refusal == "allowance":
+        assert "quota_exhausted" in skipped[-1]["reason"]
+        assert _routing_records(tmp_path)[0]["routing_credits"] == "0.25"
 
 
 @pytest.mark.parametrize("ending", ["no_progress", "crash"])
+@pytest.mark.parametrize("entrypoint", [None, "init", "update"])
 def test_dynamic_attempt_exhaustion_admits_no_further_assessment(
-    tmp_path, monkeypatch, ending
+    tmp_path, monkeypatch, ending, entrypoint
 ) -> None:
     fake_client, spied, exit_code = _dynamic_run(
         tmp_path, monkeypatch, max_iterations=5, max_nmt_strikes=1,
         on_send=_raise_a_transport_failure if ending == "crash" else None,
+        setup_entrypoint=entrypoint,
     )
 
     assert exit_code == 1
@@ -6915,6 +6950,16 @@ def test_dynamic_attempt_exhaustion_admits_no_further_assessment(
     assert len(spied["assessments"]) == 2
     assert len(_strikes(tmp_path)) == 1
     assert [record["attempt"] for record in _routing_records(tmp_path)] == [1, 2]
+    assert [
+        (call["model"], call["reasoning_effort"], call["context_tier"])
+        for call in fake_client.create_calls
+    ] == [("claude-opus-5", "high", "default")] * 2
+    first, retry = [request for _, request in spied["assessments"]]
+    assert first.prior_attempts == ()
+    assert retry.prior_attempts[0].outcome is (
+        dynamic_route.PriorOutcome.INFRASTRUCTURE_FAILURE
+        if ending == "crash" else dynamic_route.PriorOutcome.DID_NOT_SOLVE
+    )
 
 
 def test_the_initial_dynamic_pickup_may_already_spend_max(
@@ -7165,6 +7210,59 @@ def test_a_later_run_revalidates_the_route_its_own_history_already_records(
     assert revalidated["routing_credits"] == "0"
     assert revalidated["model"] == "claude-opus-5"
     assert revalidated["relevant_input_identity"] == elected["relevant_input_identity"]
+
+
+@pytest.mark.parametrize("entrypoint", ["init", "update"])
+def test_saved_dynamic_policy_replays_while_pending_publication_recovers(
+    tmp_path, monkeypatch, entrypoint
+) -> None:
+    tracker = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "task-type:implementation"])],
+        route_comment_errors={42: RouteDeliveryError("HTTP 429")},
+    )
+    first_client, first, code = _dynamic_run(
+        tmp_path, monkeypatch, setup_entrypoint=entrypoint, tracker=tracker,
+    )
+    assert code == 0
+    assert len(first["assessments"]) == 1
+    assert [event["status"] for event in _delivery_events(tmp_path)] == ["pending"]
+    saved = settings.project_config_path(tmp_path).read_bytes()
+
+    tracker._route_comment_errors.clear()
+    for _ in range(2):
+        client, replay, code = _dynamic_run(
+            tmp_path, monkeypatch, setup_entrypoint="recorded", tracker=tracker,
+        )
+        assert code == 0
+        assert replay["assessments"] == []
+        assert replay["evidence"] >= 2
+        assert [
+            (call["model"], call["reasoning_effort"], call["context_tier"])
+            for call in client.create_calls
+        ] == [("claude-opus-5", "high", "default")]
+        assert settings.project_config_path(tmp_path).read_bytes() == saved
+
+    assert first_client.create_calls[0]["model"] == "claude-opus-5"
+    records = _routing_records(tmp_path)
+    assert [record["routing_reuse"] for record in records] == [
+        "elected", "revalidated", "revalidated",
+    ]
+    assert all(
+        record["reused_proposal_id"] == records[0]["proposal_id"]
+        and record["selector_attempts"] == 0
+        and record["routing_credits"] == "0"
+        for record in records[1:]
+    )
+    assert len(tracker.route_comment_calls) == 1
+    _, comment = tracker.route_comment_calls[0]
+    assert all(value in comment for value in ("claude-opus-5", "high", "default"))
+    assert len([
+        label for label in tracker.issue_labels(42) if label.startswith("git-loopy-route:")
+    ]) == 1
+    assert {"ready-for-agent", "task-type:implementation"} <= set(tracker.issue_labels(42))
+    recovered = _delivery_events(tmp_path)[1:]
+    assert recovered and all(event["status"] == "published" for event in recovered)
 
 
 def test_routing_never_feeds_its_own_inputs_so_reuse_does_not_decay(

@@ -3038,6 +3038,61 @@ def test_run_start_prints_the_readback_block_for_a_run_that_configured_nothing()
     assert "claude-opus-5 @ max" in out
 
 
+@pytest.mark.parametrize(
+    ("policy", "suppressed", "routing", "retry"),
+    [
+        (None, False, "every issue runs on the default pair", "a stalled issue is not retried"),
+        ("static", False, "every issue runs on the default pair", "Static retries retain"),
+        ("dynamic", False, "uncovered work awaits Dynamic Pickup", "reselect Dynamic work"),
+        ("dynamic", True, "suppressed run-wide", "Static retries retain"),
+    ],
+)
+def test_run_readback_distinguishes_dynamic_work_from_static_and_historical_runs(
+    policy, suppressed, routing, retry
+) -> None:
+    renderer, _, buf = _make_renderer()
+    event = _readback_event(
+        route_policy=policy,
+        routing_suppressed=suppressed,
+        escalation_rung=None,
+        unconfigured_task_type_keys=["docs"],
+    )
+    if policy is None:
+        event.pop("route_policy")
+
+    renderer.render(event)
+
+    output = buf.getvalue()
+    assert routing in output and retry in output
+    dynamic = policy == "dynamic" and not suppressed
+    assert ("dynamic pending" in output) is dynamic
+    assert ("configured pair" in output) is dynamic
+    assert ("default pair" in output) is not dynamic
+    if dynamic:
+        assert "no table configured" in output
+        assert "Static routes retained" not in output
+
+
+def test_fully_covered_dynamic_readback_does_not_invent_pending_task_types() -> None:
+    from git_loopy.config import RunConfig, TASK_TYPE_KEYS
+    from git_loopy.run_readback import build_run_readback
+    from git_loopy.static_route import RoutePolicy
+
+    renderer, _, buf = _make_renderer()
+    payload = build_run_readback(RunConfig(
+        route_policy=RoutePolicy.DYNAMIC,
+        routing={key: ("gpt-5.6-terra", "high") for key in TASK_TYPE_KEYS},
+    )).as_run_start_payload()
+
+    renderer.render(_readback_event(**payload))
+
+    output = buf.getvalue()
+    assert "Static routes in force" in output
+    assert "uncovered work awaits" not in output
+    assert "dynamic pending" not in output
+    assert "no table configured" not in output
+
+
 def test_the_block_echoes_the_routing_keys_and_never_a_count_of_them() -> None:
     """A count cannot reveal that a seven-key taxonomy has a two-key table."""
     renderer, _summary, buf = _make_renderer()
