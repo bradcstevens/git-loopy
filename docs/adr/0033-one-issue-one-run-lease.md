@@ -185,16 +185,67 @@ lock each out of the other's work, and fencing on it would refuse a PR
 Iteration's writes over a Lease that was never its to hold — and drop every PR
 from the completion Pool, hiding the head advances progress detection is
 counting and earning Strikes for an Iteration that was working. Asking the
-fence at all is likewise opt-in per caller: Parallel-mode Integration's Lane
-Pool takes no Lease in this slice, so consulting it there could only deny
-every ref and quietly close nothing. Deny-by-default is right for the fence
-and wrong for whether to ask it.
+fence at all is likewise opt-in per caller: a Pool whose items were never
+Lease-governed would have every ref denied at "this Run holds no Lease on it"
+and close nothing at all. Deny-by-default is right for the fence and wrong for
+whether to ask it.
 
-Release runs in a `finally` around the whole Iteration, so a Lease
-outlives neither a return, a raise, nor a Wind-down cancellation. The TTL is
-overridable through `GIT_LOOPY_LEASE_TTL_SECONDS`, which refuses a value below
-one renewal interval: a Lease that expires between beats manufactures the very
-false steal §4 exists to bound.
+A **Lane** takes its own Lease and answers the same fence. Pickup's last step
+is the same step — after routing has admitted the candidate and *before*
+classification, and before the worktree is cut, so a lost race costs one round
+trip — and the Lane's three side effects are fenced individually: its
+publication
+onto base, the issue close that follows, and the breadcrumb comment a terminal
+auto-resolution leaves. Publication is fenced even though base is local,
+because it is the moment a Lane's commits become the Run's trunk and the next
+serial Iteration's auto-push sends them to the remote under a *different*
+issue's fence; landing them unfenced would launder a lost Lease's work past a
+fence that never asked about it.
+
+Taking the Lease *before* classification is load-bearing, not incidental
+ordering. `_classify_at_pickup` is not a read: it applies `task-type:` and
+`semver:` labels to the issue and buys a classifier session to decide them. A
+Lane that classified first would write twice onto an issue a rival Run holds a
+live Lease on — the fence's own list of side effects names a label write — and
+pay for an agent session it is about to be refused. Serial `admit` has always
+leased first for the same reason; the Lane path now matches it.
+
+Three rules follow from Parallel mode rather than from the Lease itself. A
+contended Lane candidate is refused *candidacy* for the rest of the Run, not
+merely this reservation: a released reservation consumes no `max_iterations`
+unit, so the scheduler would refill from the same ordered pool and spin on a
+remote round trip per turn, where the serial ordered walk moves on by
+construction.
+
+That bound must not then misreport itself, which is the second rule. A
+candidate a rival *answered* for and one whose Lease probe merely *failed* are
+both passed over, but only the first is a fact about the work. The unread ones
+are carried into the Pool's terminal classification through its `read_refused`
+seam, so a Run whose Lease remote was down ends `preflight_failed` — what the
+serial path already returns for the identical fault — rather than claiming
+`all_skipped`, a refusal no read established. Keeping the two dispatch modes
+from drifting apart on that question is the whole reason `unbound_pool_outcome`
+is asked from both.
+
+And a Lane and a serial Iteration of one Run share a single lifecycle object,
+because a Run must not contend with itself — one object knows every issue this
+Run holds, whichever path took it.
+
+Release runs in a `finally` around the whole Iteration. A Lane's release is
+*not* in that `finally` alone, because a Lane task returning is not the end of
+the issue's work: a contribution that finishes against a full Integration
+backlog parks, its task returns, and it is integrated later from inside
+whichever other contribution drains the FIFO. Releasing there would free the
+issue for a rival while this Run still meant to publish and close it, and
+would then trip this Run's *own* fence so the parked contribution could never
+land. So a Lane gives its Lease back where the contribution finishes — the one
+seam every contribution reaches whatever its disposition — and the `finally`
+is only the net for a Lane that ended before it ever became a contribution.
+Per Lane rather than per Run, which is the point in Parallel mode: a Lane that
+crashes frees its own issue and nobody else's. The
+TTL is overridable through `GIT_LOOPY_LEASE_TTL_SECONDS`, which refuses a
+value below one renewal interval: a Lease that expires between beats
+manufactures the very false steal §4 exists to bound.
 
 With no Lease in force — the PRDs backend, or a clone with no resolvable GitHub
 repository — every one of these paths answers exactly as it did before this
@@ -226,7 +277,7 @@ and the Run continues unguarded with exclusivity reported OFF. A Lease this
 clone cannot take protects nothing, so refusing the work buys nothing.
 
 Live cross-Run exclusivity is now active for a GitHub-backed Python Run's
-**serial** Iterations. A Lane takes no Lease: `parallel-safe` issues worked in
-Parallel mode remain unguarded, as §8 of #390 still records. Lane Leases,
-shell/PowerShell transport and retry, independent native renewal, the human
-mirror, and Events/Dashboard all remain pending in #390.
+**serial** Iterations and its **Lanes** alike, so an issue labelled
+`parallel-safe` is guarded on the path that actually works it. shell/PowerShell
+transport and retry, independent native renewal, the human mirror, and
+Events/Dashboard all remain pending in #390.

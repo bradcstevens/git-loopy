@@ -745,6 +745,17 @@ _AUTO_RESOLUTION_FALLBACK_COMMENT = (
 )
 """The single automated breadcrumb left on an issue that fell back to serial."""
 
+_LEASE_HELD_ELSEWHERE = "held by another Run's live Lease"
+"""**Pickup** skip reason: a rival Run answered, and its answer was no."""
+
+_LEASE_UNREADABLE = "Lease could not be taken (remote unreadable)"
+"""**Pickup** skip reason: the Lease probe failed, so nobody answered at all.
+
+Distinguished from :data:`_LEASE_HELD_ELSEWHERE` because only one of them is
+a fact about the work. Conflating them would let a Run report a Pool it never
+finished reading as one it was refused (#390, ADR-0033 §8.3).
+"""
+
 
 def _integration_worktree_path(
     common_git_dir: Path, run_id: str, issue_number: int | str
@@ -3300,10 +3311,11 @@ class _Loop:
         two loudest writes it makes, and a Run whose Lease was stolen must
         make neither: the Run that took the issue over is the one entitled to
         say it is done. Off by default, because a caller whose pool was never
-        Lease-governed — Parallel-mode Integration, whose Lanes take no Lease
-        in this slice — would have every ref denied at ``hold is None`` and
-        close nothing at all. Deny-by-default is right for the fence and wrong
-        for whether to ask it.
+        Lease-governed — the PRDs backend, or any pool assembled from items no
+        **Pickup** took a Lease for — would have every ref denied at ``hold is
+        None`` and close nothing at all. Deny-by-default is right for the
+        fence and wrong for whether to ask it. A **Lane**'s completion pool
+        *is* Lease-governed and passes ``True``.
 
         It is fenced by narrowing the pool rather than by refusing the call,
         because the pool *is* the whitelist ``_handle_issue_closures`` filters
@@ -3858,6 +3870,19 @@ class _ParallelLoop:
         # exception. Keep the candidate cached but ineligible for this Run so
         # the terminal classifier can honestly report all_skipped.
         self._rolling_refused: set[int | str] = set()
+        # The subset of :attr:`_rolling_refused` a **Lease** *read* refused
+        # rather than a rival's answer. Kept apart because the two are not the
+        # same fact: a rival holding the issue is the mechanism working, while
+        # a probe that failed established nothing at all — so only this set
+        # may make the Run's terminal outcome `preflight_failed` rather than
+        # the `all_skipped` that would assert a refusal nobody read.
+        self._lease_unreadable: set[int | str] = set()
+        #: This Run's **Lease**s — the *same* lifecycle the embedded serial
+        #: driver holds, deliberately, because a Run must not contend with
+        #: itself: one object knows every issue this Run holds, whichever path
+        #: took it, so a Lane and a serial **Iteration** can never both be
+        #: granted one issue. ``None`` when Leases are not in force.
+        self._lease = lease
         # Bounded adaptive Lane concurrency (#219 §6, #309). The bound
         # **Execution host** declares the safety ceiling. Under sustained
         # **Integration** backpressure, 429s, AI-credit or host/setup pressure,
@@ -3883,6 +3908,7 @@ class _ParallelLoop:
                 eligible=self._lane_candidate_eligible,
                 cacheable=self._lane_candidate_cacheable,
                 on_membership_read=self._emit_membership_read,
+                read_refused=self._lane_lease_unreadable,
             )
             self._scheduler = rolling_scheduler.RollingScheduler(
                 diag=diag,
@@ -3903,6 +3929,12 @@ class _ParallelLoop:
         # reclamation needs this alongside the workspace to close interrupted
         # accounting after salvaging the branch.
         self._open_lane_contributions: dict[str, rolling_scheduler.Contribution] = {}
+        # The issues a **Lane** holds a **Lease** on. Recorded at the take and
+        # consulted at every release, so a release authorises itself on this
+        # Run having actually taken *that* Lane Lease rather than on the bare
+        # ref: a Lease the serial path took, or a ref that never carried one,
+        # is never deleted from here (ADR-0033 §5.4).
+        self._lane_leases: set[int] = set()
         # The contributions Run-exit reclamation closed out rather than the
         # work boundary doing it (#452).  Kept so **Demotion** can tell an
         # interrupted contribution from a failed one — see
@@ -4874,6 +4906,136 @@ class _ParallelLoop:
     async def _run_lane_lifecycle(
         self, reservation: rolling_scheduler.Reservation
     ) -> None:
+        """Drive one reservation's lifecycle, releasing a **Lease** it still owes.
+
+        A Lane task returning is *not* the end of the issue's work, which is
+        the trap here. §3.9 frees a Lane the instant its contribution is
+        admitted, and a contribution that finishes against a full
+        **Integration backlog** parks: this task returns while the
+        contribution is integrated later, from inside whichever other
+        contribution's ``finalize()`` drains the FIFO. Releasing here would
+        free the issue for a rival Run while this Run still intends to publish
+        and close it — and would then trip this Run's *own* fence, so the
+        parked contribution could never land.
+
+        So the Lease is given back where the contribution finishes
+        (:meth:`_finalize_contribution`, the single such seam), and this
+        ``finally`` is only the net for a Lane that ended *before* it ever
+        became a contribution — a failed worktree, a raise, a **Wind-down**
+        cancellation. Without that net such a Lease would strand the issue for
+        a whole TTL while this Run, still alive, moved on (ADR-0033 §5.3).
+
+        Per Lane rather than per Run, which is the whole point in Parallel
+        mode: every other Lane's Lease is untouched, so a Lane that crashes
+        frees its own issue and nobody else's.
+        """
+        try:
+            await self._drive_lane_lifecycle(reservation)
+        finally:
+            ref = reservation.item.ref
+            still_owed = any(
+                contribution.ref == ref
+                for contribution in self._open_lane_contributions.values()
+            )
+            if not still_owed:
+                self._release_lane_lease(ref)
+
+    def _take_lane_lease(self, item: AfkReadyItem) -> str | None:
+        """Take ``item``'s **Lease** — Lane **Pickup**'s last step — or say why not.
+
+        Returns ``None`` when this Lane may work the item, and otherwise the
+        **Pickup skip** reason that passes the candidate over.
+
+        Placed where the serial path places it (§2.4): the last step of
+        **Pickup**, after routing has admitted the candidate and *before*
+        classification, which is where serial `admit` takes it too. So a
+        candidate this Lane would have refused anyway never costs a round trip
+        or a Lease; a lost race costs that round trip and nothing else,
+        because no worktree exists yet (§2.3); and the classifier's label
+        writes — an irreversible tracker side effect — never land on an issue
+        a rival Run holds.
+
+        Only issues are Lease-governed, discriminated by ``kind`` and never by
+        ref type — a pull request's ``ref`` is an ``int`` exactly like an
+        issue's, so leasing on the number alone would put PR #412 and issue
+        #412 on one ref (ADR-0033). Today's membership read yields only
+        issues; this keeps that a stated precondition rather than a silent one.
+        """
+        ref = item.ref
+        if (
+            self._lease is None
+            or item.kind != "issue"
+            or not isinstance(ref, int)
+        ):
+            return None
+        take = self._lease.take(ref)
+        if take.granted:
+            self._lane_leases.add(ref)
+            return None
+        if self._lease.disabled():
+            # This clone may never write a Lease ref, so a Lease here protects
+            # nothing and refusing the work buys nothing. Same answer as no
+            # lifecycle at all — the warning has already been issued once.
+            return None
+        if take.verdict == "refused":
+            return _LEASE_HELD_ELSEWHERE
+        return _LEASE_UNREADABLE
+
+    def _lane_lease_unreadable(self, candidate: PoolCandidate) -> bool:
+        """Was ``candidate`` passed over by a **Lease** read that did not happen?
+
+        The :class:`~git_loopy.rolling_pool.RollingPool`'s ``read_refused``
+        seam. A candidate here is unknown rather than refused, so it ends the
+        Run under ``preflight_failed`` — what the serial path already returns
+        for the identical fault — instead of the ``all_skipped`` that would
+        claim this Run could take no work from a Pool it never finished
+        reading.
+        """
+        return candidate.ref in self._lease_unreadable
+
+    def _release_lane_lease(self, ref: int | str) -> None:
+        """Give back one Lane's **Lease**, if *this Lane* took it.
+
+        Gated on :attr:`_lane_leases` rather than on the ref alone, which is
+        the ``kind`` discrimination in its release-side form. A pull request's
+        ``ref`` is an ``int`` exactly like an issue's, so a bare-ref release
+        would let a PR #412 contribution finishing delete issue #412's live
+        Lease — freeing an issue this Run is still working, which is the
+        collision the design exists to prevent. Only a ref a Lane actually
+        took a Lease on is in the set, so nothing else can be released
+        through here, including a Lease the serial path holds.
+
+        Idempotent and never raising: it runs on every path out of a Lane,
+        including the ones that ended before a Lease was ever taken.
+        """
+        if self._lease is None or not isinstance(ref, int):
+            return
+        if ref not in self._lane_leases:
+            return
+        self._lane_leases.discard(ref)
+        self._lease.release(ref)
+
+    def _leased(self, item: AfkReadyItem, action: str) -> bool:
+        """**The fence**, on the Lane path — may this Lane still write ``action``?
+
+        The same seam a serial **Iteration** asks (:meth:`AfkLoop._leased`),
+        deliberately, so one implementation answers for both modes and a Lane
+        cannot drift into a weaker reading of ownership than a serial
+        Iteration has — including its ``kind`` discrimination, which is why
+        this takes the item rather than the bare ref.
+
+        Asked immediately before each individual side effect and never once
+        for a batch (ADR-0033 §4.4). A Lane's are its publication onto base,
+        the issue close that follows it, and the breadcrumb comment a terminal
+        auto-resolution leaves — each separated from the last by a gate, an
+        **Agent** session or a merge, so an answer taken at the start of
+        Integration is not an answer at the end of it.
+        """
+        return self._serial._leased(item.ref, action, kind=item.kind)
+
+    async def _drive_lane_lifecycle(
+        self, reservation: rolling_scheduler.Reservation
+    ) -> None:
         """One reservation's full lifecycle: setup, session, finish, Integration.
 
         The concurrent unit of Rolling dispatch (#219, ADR-0020): worktree
@@ -4952,6 +5114,41 @@ class _ParallelLoop:
             scheduler.release(reservation)
             return
 
+        # **Taking the Lease is the last step of Pickup** (ADR-0033 §2.4), and
+        # on the Lane path that is here — *before* classification, exactly
+        # where serial `admit` takes it (:meth:`AfkLoop._take_lease_at_pickup`
+        # runs last inside `admit`, and `_classify_at_pickup` then runs on the
+        # candidate that already won). Routing has admitted the candidate, so
+        # one this Lane would have refused anyway never costs a round trip or
+        # a Lease; and no worktree exists yet, so a lost race costs that round
+        # trip and nothing else (§2.3).
+        #
+        # Ordering it after classification would break the fence's whole
+        # point. `_classify_at_pickup` is not a read: it applies `task-type:`
+        # and `semver:` labels to the issue, and spends a classifier session
+        # doing it. A Lane that classified first would write twice onto an
+        # issue a rival Run holds a live Lease on, and buy an AI session for
+        # work it is about to be refused.
+        refusal = self._take_lane_lease(item)
+        if refusal is not None:
+            # Refused *candidacy* for the rest of this Run, not merely this
+            # reservation. A bare release would hand the candidate straight
+            # back to the scheduler, which refills from the same ordered pool
+            # — a hot loop spending a remote round trip per turn for as long
+            # as the rival holds it, exactly as the dynamic-route refusal
+            # below describes. The serial ordered walk moves on by
+            # construction (§8.2); the Lane path has to be told to.
+            self._diag.info("lane #%s passed over: %s", ref, refusal)
+            passed_over(refusal)
+            self._rolling_refused.add(ref)
+            if refusal != _LEASE_HELD_ELSEWHERE:
+                # A probe that failed refused nothing; it only failed to ask.
+                # Bounding the candidate is still right — see above — but the
+                # Run must not then report it as work it was *refused*.
+                self._lease_unreadable.add(ref)
+            scheduler.release(reservation)
+            return
+
         # The **Task-type classifier**'s second call site (#409, ADR-0029),
         # through the same shared seam. Deliberately *after* the refusal above:
         # a candidate whose human labelling is already broken is passed over,
@@ -4976,7 +5173,10 @@ class _ParallelLoop:
             # Releasing the reservation is still what "preserve already-running
             # work where possible" means here: every other Lane keeps its route
             # and its session, and the freed slot goes to a candidate that can
-            # be routed rather than being held by one that cannot.
+            # be routed rather than being held by one that cannot. The Lease
+            # this Lane now holds goes back through
+            # :meth:`_run_lane_lifecycle`'s ``finally``, which covers every
+            # exit before a contribution exists.
             self._diag.warning("lane #%s dynamic route unavailable: %s", ref, exc)
             passed_over(f"dynamic route unavailable: {exc}")
             self._rolling_refused.add(ref)
@@ -5963,6 +6163,11 @@ class _ParallelLoop:
         if not published:
             self._apply_strike_reaction(contribution)
         self._open_lane_contributions.pop(contribution.contribution_id, None)
+        # The contribution is done with the issue, so give back its **Lease**
+        # here rather than where its Lane task returned: a parked contribution
+        # outlives that task, and this is the one seam every contribution
+        # reaches whatever its disposition was (ADR-0033 §5.1).
+        self._release_lane_lease(contribution.ref)
         lane_work = self._lane_work.get(contribution.contribution_id)
         if lane_work is not None and lane_work.reclaimed:
             self._lane_work.pop(contribution.contribution_id, None)
@@ -6151,6 +6356,25 @@ class _ParallelLoop:
         was cut and this merge is the verified result exactly.
         """
         ref = contribution.ref
+        if not self._leased(lane_work.item, "publication onto base"):
+            # **The fence** (ADR-0033 §4.4), immediately before the write and
+            # not once at the start of Integration: a gate, a merge and any
+            # bounded auto-resolution sit between those two moments, so an
+            # answer taken then is not an answer now.
+            #
+            # Publication is a Lane's loudest write even though base is local:
+            # it is the moment these commits become the Run's trunk, and the
+            # next serial **Iteration**'s auto-push sends them to the remote
+            # under a *different* issue's fence. Landing them here would
+            # launder a lost Lease's work past a fence that never asked about
+            # it. The contribution finishes unpublished and its Lane branch
+            # stays as the breadcrumb it always was on an unpublished path.
+            self._diag.warning(
+                "integration #%s: this Run no longer holds the Lease; "
+                "abandoning the issue unpublished",
+                ref,
+            )
+            return False
         try:
             pre_base = self._git.head_sha()
         except git_module.GitError as exc:
@@ -6441,7 +6665,7 @@ class _ParallelLoop:
             )
             landed = []
         for completion in self._serial._handle_completions_safely(
-            [item], landed
+            [item], landed, leased_pool=True
         ):
             self._serial._emit(
                 events_module.WRAPPER_AUTO_CLOSE,
@@ -6625,7 +6849,15 @@ class _ParallelLoop:
         on this exact fallback) re-collects the issue and works it. The
         failed Lane branch is intentionally **kept** (never deleted) as a
         breadcrumb.
+
+        The comment is fenced individually (ADR-0033 §4.4): it is a write on
+        an issue, and a Run whose Lease was stolen must not make it. The Run
+        that took the issue over owns what is said on it, and a breadcrumb
+        promising a serial **Iteration** that this Run will no longer take is
+        worse than silence.
         """
+        if not self._leased(lane_work.item, "auto-resolution fallback comment"):
+            return
         self._source.comment(lane_work.item.ref, _AUTO_RESOLUTION_FALLBACK_COMMENT)
 
     def _resolve_base_ref(self) -> str:
@@ -7162,11 +7394,10 @@ async def run(
     task_type_client = _make_task_type_label_client()
     # Activation of the **Lease** (#390, ADR-0033). Resolved here, once per
     # Run, so every Lease this Run holds is held by one lifecycle under one
-    # `run_id`. It reaches the serial driver only: a Lane takes no Lease in
-    # this slice (ADR-0033's remaining work), so `parallel-safe` issues worked
-    # in a Lane are still unguarded. `None` — the PRDs backend, or a clone
-    # whose `origin` names no repository — restores exactly the pre-ADR-0033
-    # behaviour of one Run, unguarded, everywhere.
+    # `run_id` — which is also what stops a Run contending with itself, since
+    # the serial driver and every Lane consult the same object. `None` — the
+    # PRDs backend, or a clone whose `origin` names no repository — restores
+    # exactly the pre-ADR-0033 behaviour of one Run, unguarded, everywhere.
     lease = _make_lease_lifecycle(config, git, run_id=writers.run_id, diag=diag)
     loop: _ParallelLoop
     try:

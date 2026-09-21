@@ -235,7 +235,7 @@ run that was merely slow therefore costs duplicated *effort*, never corrupted st
 ### When Leases are off
 
 A run resolves the repository it contends on from its `origin` URL — a local config
-read, not a network call — and holds no Lease at all when it cannot. Five cases,
+read, not a network call — and holds no Lease at all when it cannot. Four cases,
 each announced in the run's diagnostics, because a run that has quietly stopped
 guarding its issues looks exactly like one that is guarding them:
 
@@ -248,9 +248,7 @@ guarding its issues looks exactly like one that is guarding them:
   forbids creating refs under `refs/heads/**`, or an expired SSO authorization all land
   here. The run says so loudly and then does its work unguarded — a Lease it is not
   allowed to take would protect nothing, and refusing the work to protect nothing is
-  worse. Grant the token push access to `refs/heads/git-loopy/leases/*` to restore it;
-- the issue is worked **in a Lane** in Parallel mode (an issue labelled `parallel-safe`).
-  Lane Leases are not implemented yet, so only **serial** iterations are guarded today.
+  worse. Grant the token push access to `refs/heads/git-loopy/leases/*` to restore it.
 
 Every URL spelling of one repository resolves to one name, so a clone that fetched
 over SSH and a clone that fetched over HTTPS contend on the same Lease:
@@ -263,11 +261,17 @@ git remote get-url origin
 An unleased run is not broken — it behaves exactly as every run did before ADR-0033.
 It simply offers no protection against a second run working the same issue.
 
-So: running two runs against one tracker is safe for **serial** iterations on a clone
-whose `origin` names a repository it can push Lease refs to. It is not yet safe for
-issues labelled `parallel-safe`, which are worked in Lanes and take no Lease. Check
-`git remote get-url origin`, then watch the run's first diagnostics for a line saying
-exclusivity is off.
+There is one refusal you may see against a *working* Lease setup, and it is the
+mechanism succeeding rather than failing. When another live run holds an issue,
+this run passes that issue over and moves to the next one — and in Parallel mode it
+passes it over for the rest of the run rather than retrying it, because a lane
+reservation costs no iteration and retrying would spin on a remote round trip per
+turn. Start another run later and it will pick the issue up normally.
+
+So: running two runs against one tracker is safe for **serial** iterations and for
+`parallel-safe` issues worked in **Lanes**, on a clone whose `origin` names a
+repository it can push Lease refs to. Check `git remote get-url origin`, then watch
+the run's first diagnostics for a line saying exclusivity is off.
 
 ---
 
