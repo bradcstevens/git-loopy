@@ -6880,13 +6880,14 @@ class _BilledRoutingClient:
 
     def __init__(
         self, work_client, *, selector_credits="0.30", classifier_credits="0.20",
-        on_routing=None, on_work=None,
+        on_routing=None, on_work=None, on_disconnect=None,
     ):
         self.work_client = work_client
         self.selector_credits = selector_credits
         self.classifier_credits = classifier_credits
         self.on_routing = on_routing
         self.on_work = on_work
+        self.on_disconnect = on_disconnect
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
     async def start(self):
@@ -6901,11 +6902,16 @@ class _BilledRoutingClient:
 
         class Session:
             session_id = work_session.session_id
+            role = None
+            prompt = None
 
             async def disconnect(self):
+                if owner.on_disconnect is not None:
+                    await owner.on_disconnect(self.role, self.prompt, kwargs)
                 await work_session.disconnect()
 
             async def send_and_wait(self, prompt, **options):
+                self.prompt = prompt
                 if prompt.startswith("Classify the task type"):
                     role = "classifier"
                     output = "<task-type>implementation</task-type>"
@@ -6922,10 +6928,12 @@ class _BilledRoutingClient:
                     })
                     credits = owner.selector_credits
                 else:
+                    self.role = "work"
                     owner.calls.append(("work", kwargs))
                     if owner.on_work is not None:
                         await owner.on_work(prompt, kwargs)
                     return await work_session.send_and_wait(prompt, **options)
+                self.role = role
                 owner.calls.append((role, kwargs))
                 kwargs["on_event"](_billed_routing_usage(kwargs["model"], credits))
                 if owner.on_routing is not None:

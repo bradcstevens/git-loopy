@@ -565,6 +565,9 @@ Under **Dynamic routing**, each observed routing bill immediately consumes the
 Run's allowance, even while its session remains open. Completion and cancellation
 retain that bill without counting it twice. Already admitted calls may overshoot;
 that is not authorization for another call or a cheaper **Route selector**.
+Billing reported during cancellation cleanup is still Run Consumption. An
+assessment returned after the authorized deadline retains its bill but supplies
+neither a Task-type classification nor a Routing proposal.
 _Avoid_: usage, spend (for the token measure); billing.
 
 **Cost denomination**:

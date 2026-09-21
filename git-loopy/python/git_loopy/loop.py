@@ -117,7 +117,6 @@ import sys
 import time
 from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timezone
-from decimal import Decimal
 from importlib.resources import files
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -2305,14 +2304,16 @@ class _Loop:
             try:
                 output = await proposer(pair, item)
             except asyncio.CancelledError:
+                reported = meter.reported_routing_credits
                 credits = meter.drain()
                 raise RoutingCallCancelled(
-                    credits, credits if on_credits else Decimal(0),
+                    credits, reported,
                 ) from None
+            reported = meter.reported_routing_credits
             credits = meter.drain()
             return SelectorCallResult(
                 output=output, routing_credits=credits,
-                reported_routing_credits=credits if on_credits else Decimal(0),
+                reported_routing_credits=reported,
             )
 
         router = self._dynamic_router

@@ -1247,9 +1247,11 @@ changed evidence or eligibility cannot carry an obsolete proposal into work.
 Saved-setup Consumption cases also compose concurrent classifier/selector billing,
 allowance exhaustion and post-paid overshoot with actual work in both modes.
 An open routing session's observed bill closes admission immediately; completion
-and cancellation preserve the charge exactly once.
-Automatic upgrade/Run migration enforcement, the remaining
-composed activation matrix, and
+and cancellation preserve the charge exactly once, including additional billing
+reported during cancellation cleanup. An assessment returned after the authorized
+deadline is refused without publishing its classification or proposal; its
+Consumption remains visible, and already-bound work may finish.
+Automatic upgrade/Run migration enforcement, the remaining composed activation matrix, and
 Wrapper/Conformance activation obligations still need to
 land before the final default changes. Existing Config is not migrated implicitly.
 Python issue-owning serial and

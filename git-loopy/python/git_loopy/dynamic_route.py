@@ -1193,6 +1193,9 @@ class RoutingAdmissionLedger:
                 return None, _AdmissionRefusal.SELECTOR
             async with self._lock:
                 self._complete_cost(remainder)
+            # A transport can finish after the deadline despite wait_for's cancellation.
+            if self.remaining_seconds() <= 0:
+                return None, _AdmissionRefusal.DEADLINE
             return result, None
         finally:
             self._semaphore.release()

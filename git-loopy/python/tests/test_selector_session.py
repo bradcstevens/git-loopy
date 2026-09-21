@@ -180,6 +180,34 @@ def test_cancelled_preparation_reports_billing_through_session_cleanup() -> None
     assert cancelled.value.routing_credits == Decimal("0.50")
 
 
+@pytest.mark.parametrize("invalid", ["-0.10", "NaN", "Infinity"])
+def test_invalid_streamed_billing_is_refused_without_interrupting_sdk_delivery(invalid):
+    from git_loopy.dynamic_route import RoutingAdmissionLedger
+
+    ledger = RoutingAdmissionLedger(
+        deadline_seconds=30, routing_credit_allowance=Decimal("1"),
+        selector_concurrency=1,
+    )
+    answer = '{"candidate_identity": "one", "summary": "forecast"}'
+    selector = _selector(
+        answer,
+        (_usage_event(Decimal(invalid)), _usage_event(Decimal("0.25"))),
+        on_routing_credits=ledger.observe_credits,
+    )
+    delivered = []
+
+    async def call():
+        result = await selector(_settings(), _request())
+        delivered.append(result.output)
+        return result
+
+    result, refusal = asyncio.run(ledger.run_selector(call))
+
+    assert delivered == [answer]
+    assert result is None and refusal is not None
+    assert ledger.snapshot().routing_credits == Decimal("0.25")
+
+
 def test_the_assessment_carries_the_issue_and_nothing_the_router_withheld() -> None:
     """AC6's inputs, exactly: no repository beyond the bounded context it was given.
 

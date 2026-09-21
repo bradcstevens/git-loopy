@@ -259,8 +259,14 @@ preparation records, CLI totals and Dashboard Run-only Consumption retain the
 same bill exactly once. Both modes keep already admitted work running with its
 bound settings, preserve Config, and refuse further assessment without a Strike
 or a cheaper selector.
-Automatic upgrade/Run migration enforcement, the remaining
-composed acceptance and
-Wrapper/Conformance activation obligations still precede final default
-activation. Dynamic routing remains opt-in; shell/PowerShell activation is deferred,
-and no Subagent or Integration routing support is implied.
+Cancellation cleanup can report additional billing, including a new overshoot;
+it remains visible exactly once before the cancelled preparation is recorded.
+The saved-setup matrix also exposed late assessment results being accepted
+after the authorized deadline. Shared settlement now retains Consumption but
+refuses the result before it can publish a Task-type label or become a Routing
+proposal. Already-bound Agents still finish on their frozen settings.
+
+Automatic upgrade/Run migration enforcement, the remaining composed acceptance
+and Wrapper/Conformance activation obligations still precede final default
+activation. Dynamic routing remains opt-in; shell/PowerShell activation is
+deferred, and no Subagent or Integration routing support is implied.

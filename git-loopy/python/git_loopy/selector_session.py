@@ -218,6 +218,7 @@ class RoutingCostMeter:
         self._cost_meter = cost_meter
         self._on_routing_credits = on_routing_credits
         self._credits = Decimal(0)
+        self._reported_credits = Decimal(0)
 
     def observe(self, event: Mapping[str, Any]) -> None:
         if self._cost_meter is not None:
@@ -228,12 +229,25 @@ class RoutingCostMeter:
         sample = BillingSample.from_event(event)
         if sample.credits is not None:
             self._credits += sample.credits
-            if self._on_routing_credits is not None:
+            # Invalid billing stays in the aggregate for settlement to refuse,
+            # but must not interrupt the SDK's delivery of subsequent events.
+            if (
+                self._on_routing_credits is not None
+                and sample.credits.is_finite()
+                and sample.credits >= 0
+            ):
                 self._on_routing_credits(sample.credits)
+                self._reported_credits += sample.credits
+
+    @property
+    def reported_routing_credits(self) -> Decimal:
+        """The credits this call has already delivered to its admission ledger."""
+        return self._reported_credits
 
     def drain(self) -> Decimal:
         """Total this call's routing credits and start the next one at zero."""
         spent, self._credits = self._credits, Decimal(0)
+        self._reported_credits = Decimal(0)
         return spent
 
 
@@ -354,14 +368,12 @@ class SessionRouteSelector:
         except asyncio.CancelledError:
             raise RoutingCallCancelled(
                 collector.routing_credits,
-                collector.routing_credits if self._on_routing_credits else Decimal(0),
+                collector.reported_routing_credits,
             ) from None
         return SelectorCallResult(
             output=collector.answer,
             routing_credits=collector.routing_credits,
-            reported_routing_credits=(
-                collector.routing_credits if self._on_routing_credits else Decimal(0)
-            ),
+            reported_routing_credits=collector.reported_routing_credits,
         )
 
     def _report(self, message: str) -> None:
