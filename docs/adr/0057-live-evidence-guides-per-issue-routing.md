@@ -227,6 +227,14 @@ retain their legacy path; selected policies still refuse rather than substitutin
 local eligibility. `--route-policy unselected` can explicitly retain that remote
 legacy path even when local Config records a policy, without rewriting Config.
 This compatibility boundary is not completed migration or remote routing support.
+Wrapper contract 14.3 and the Conformance routing-resolution notes now state this
+Python-local guard and explicitly defer shell/PowerShell enforcement. Existing
+one-route cases and historical streams are unchanged. The fixture's
+`migration_recovery` matrix drives temporary flag/environment and saved
+project/inherited-global choices through the real CLI into serial and Lane
+sessions, checking actual settings, canonical Pickup, selector usage, unchanged
+Config and authority lifetime against synthetic configurations. This reconciles
+the staged guard's contract with its existing implementation, not final activation.
 
 Upgrade now requires a supplied or recorded machine-global choice before
 distribution handoff, prompting only on an interactive terminal. It shares the
@@ -273,6 +281,15 @@ unchanged Config, and no leaderboard or selector call. Mixed-Pool cases preserve
 the non-empty-work refusal and charge no Strike for unstarted Dynamic work.
 Missing prerequisites require a new Run after repair; a live-source outage with
 authorized prerequisites retains its existing fresh-Pickup recovery path.
+Wrapper contract 14.4 now states this affected-work refusal instead of incorrectly
+requiring every missing Dynamic prerequisite to stop eligible Static work.
+The routing deadline begins before the first live routing read, including a
+listing shared with retained Static validation. The fixture's `preflight_deadline`
+cases drive the real CLI into serial and Lane work with a validation that consumes
+the whole deadline: no classifier or selector starts, no unstarted work charges
+a Strike, and already-classified Static work retains its exact session settings.
+The missing-access case proves classification cannot receive a fresh deadline
+merely because the Route selector is unavailable.
 
 The saved first-setup and migration choices are composed through actual serial
 and Lane sessions and canonical Pickup records, including fresh source outages

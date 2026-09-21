@@ -466,6 +466,29 @@
       }
     ]
   },
+  "preflight_deadline": {
+    "note": "Python-local activation cases reuse migration_recovery's synthetic saved_config and harness, record Dynamic consent, and retain a Static implementation route on synthetic-cheap-1/high/default. The first live Static validation consumes 31 seconds of the authorized 30-second routing deadline. No later classifier or Route selector may start. Issue 42 cannot start or incur a Strike; optional already-classified Static issue 43 still runs on its exact retained settings. No Run rewrites Config. The deadline belongs to the Run, not to the point after Static validation finishes.",
+    "modes": ["serial", "lane"],
+    "static_work": [false, true],
+    "expected_static_route": {
+      "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default",
+      "routing_source": "routed"
+    },
+    "cases": [
+      {
+        "id": "selector-deadline-includes-static-validation",
+        "leaderboard_access": true,
+        "task_type_labels": ["task-type:docs"],
+        "expected_skip_reason": "deadline_exhausted"
+      },
+      {
+        "id": "classifier-deadline-includes-static-validation-without-access",
+        "leaderboard_access": false,
+        "task_type_labels": [],
+        "expected_skip_reason": "deadline_exhausted"
+      }
+    ]
+  },
   "static_route_cases": [
     {
       "id": "a-complete-verified-route-is-honoured",

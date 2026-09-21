@@ -1593,9 +1593,10 @@ An operator MAY select one. The policy is a single Config key, `route_policy`, r
 family precedence spine (§11) like any other. Three values are in the vocabulary: `unselected` —
 the default, and the absence of a decision — `static` (this section), and `dynamic` (§14.4).
 
-- **Selected, never inherited.** An Orchestrator MUST NOT read the absence of a policy as a choice
+- **Selected, never inferred.** An Orchestrator MUST NOT read the absence of a policy as a choice
   of one, and MUST NOT reinterpret an existing Config as though `static` had always been in force.
-  A Run that names no policy keeps every rule in §14 exactly, gate warnings and all. An
+  Subject to the Python-local migration guard below, a Run that names no policy keeps every rule
+  in §14 exactly, gate warnings and all. An
   Orchestrator MUST refuse a policy name it does not implement rather than falling back to
   `unselected`: a name it silently ignored would run the Run under a policy the operator did not
   ask for and believes is active.
@@ -1651,6 +1652,23 @@ model listing, so they have no route to verify. They declare it unsupported in
 The Dashboard needs no policy-aware branch — it renders the verified triple off
 `wrapper.pickup.bound` exactly as it renders any other.
 
+**Staged Python-local migration guard (#567).** A local Python Run with nonempty project or
+global Config MUST supply or inherit an explicit `static`/`dynamic` Route policy before Agent
+work. Absence remains absence, not implicit Static consent: the Runner refuses with an actionable
+`update --routing keep`/`migrate` or temporary `--route-policy`/`GIT_LOOPY_ROUTE_POLICY` remedy,
+without prompting or rewriting Config. A model/effort override alone is not this decision.
+CLI startup checks before Skill migration, listing or detachment, rechecks after a Config reload,
+and carries saved-Config presence through detached startup. Doctor and Run preflight use the
+same authority verdict; live readiness and Pickup validation still apply after authority exists.
+Historical records retain their interpretation. Empty Config scopes and unselected non-local
+Runs retain the legacy path during staged activation; a selected policy still MUST NOT validate
+a remote placement using local eligibility. Shell and PowerShell migration enforcement is
+explicitly deferred and their unchanged behavior remains conforming. This paragraph is the
+member deferral, not final Dynamic-default activation, remote capability support, or Subagent/
+Integration routing support. The scope is also recorded in `routing-resolution.json`'s
+`static_route_notes.migration_activation`; its `migration_recovery` cases cross the CLI into
+actual serial and Lane work sessions rather than substituting the one-route validator.
+
 ### 14.4 The Dynamic route (contract 2.8)
 
 Under `dynamic` the route for one issue is **elected from live public benchmark evidence** rather
@@ -1660,9 +1678,17 @@ election an answer an operator can audit rather than a plausible-looking guess.
 - **Opt-in, with its own prerequisites, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run
   routing-credit allowance, a bounded selector concurrency, and the verified associations between
-  benchmark identities and harness configurations. An Orchestrator MUST refuse a Run whose
-  prerequisites are incomplete **before any work**, under `preflight_failed` (exit `1`), and MUST
-  NOT start dynamic work it can only half perform. §14.3's remote-placement rule applies unchanged
+  benchmark identities and harness configurations. Incomplete Dynamic prerequisites MUST refuse
+  affected Dynamic work, never an otherwise authorized and freshly validated Static route.
+  Missing Task types may still be classified to discover Static applicability without leaderboard
+  access, but only within explicit valid routing limits and the same Run Consumption ledger.
+  Missing, invalid or exhausted limits MUST admit neither a classifier nor a Route selector.
+  Uncovered work MUST NOT reach a fallback work session or buy Bump-class classification after
+  its Dynamic refusal. If nothing can advance, the Run MUST stop nonzero with the actual reason,
+  not claim an empty Pool or spend an attempt or Strike on work that never started. Setup and
+  doctor report that same incomplete readiness as a failure; setup MUST NOT save an unready
+  Dynamic choice. Authority and Static validation refusals still stop the Run before work.
+  §14.3's remote-placement rule applies unchanged
   and for the same reason: an **Execution host** that authenticates as itself is another
   installation, and a route verified against this machine's listing is not a verdict about that
   one.
@@ -1719,6 +1745,9 @@ election an answer an operator can audit rather than a plausible-looking guess.
   their retries count toward routing usage and the Run's **Consumption**. An Orchestrator MUST
   enforce the deadline and the admission allowance, bound selector concurrency, disclose billing
   overshoot already in flight, and admit no further routing calls once either bound is exhausted.
+  The routing deadline starts before live routing preflight, including a listing shared with
+  retained Static validation; completing that validation MUST NOT start or reset the clock.
+  Deadline exhaustion blocks assessment, not eligible already-classified Static work.
   Python's **Task-type classifier** and **Route selector** `usage.tokens` records
   are **Run**-only (`iter: null`, no **Lane contribution**), not **Consumption**
   of the work that happens to be open. Their billing remains visible in Run

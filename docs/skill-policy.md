@@ -445,8 +445,12 @@ runnable feedback loop. Every one of them is evaluated in a single pass, so one
 failure never hides the next, and each failing row names the command or operator
 action that owns its remedy.
 
-For a selected Route policy, doctor also uses the Run's
-`resolve_run_routing_preflight` verdict. Static settings are checked against a
+Doctor also uses the Run's `resolve_run_routing_preflight` verdict. A local Run
+with saved Config but no explicit Static/Dynamic choice reports the same
+keep-or-migrate refusal as startup, with `update --routing` and temporary
+`GIT_LOOPY_ROUTE_POLICY` remedies. No policy is invented; empty Config scopes
+and unselected non-local Runs retain their staged legacy path.
+For a selected policy, Static settings are checked against a
 fresh authenticated harness listing; unsuppressed Dynamic routing requires
 operator-owned access and explicit valid limits. An explicit run-wide model or
 effort override needs no leaderboard credential. Routing refusals remain failures
@@ -464,8 +468,11 @@ called, but the live data requests consume the provider's request quota.
 
 A successful readiness row promises neither issue-specific fit nor a route:
 proposal and Pickup must check fresh inputs again. A failed Dynamic-readiness row
-makes doctor nonzero while eligible Static work can still proceed in a Run;
-configuration refusals still stop that Run. The deadline starts at preflight and
+makes doctor nonzero while eligible Static work can still proceed in a Run,
+including when Dynamic access or limits are missing. Authority or invalid Static
+settings still stop that Run. Classification needs explicit valid limits even
+when it might discover a Static route without leaderboard access. The deadline
+starts before live routing preflight, including retained Static validation, and
 is not reset when the Run constructs its router. The explicit
 `git-loopy update --routing [keep|migrate]` and `init --routing [keep|migrate]` paths
 call this same readiness seam before saving. Opt-in init collects missing limits

@@ -104,11 +104,13 @@ EXPECTED_RELEASE_VERSION = json.loads(
     ).read_text(encoding="utf-8")
 )["expected_release_version"]
 
-_MIGRATION_RECOVERY = json.loads(
+_ROUTING_CONFORMANCE = json.loads(
     (
         Path(__file__).parents[2] / "conformance" / "routing-resolution.json"
     ).read_text(encoding="utf-8")
-)["migration_recovery"]
+)
+_MIGRATION_RECOVERY = _ROUTING_CONFORMANCE["migration_recovery"]
+_PREFLIGHT_DEADLINE = _ROUTING_CONFORMANCE["preflight_deadline"]
 
 
 # ---------------------------------------------------------------------------
@@ -6819,6 +6821,116 @@ def test_saved_dynamic_work_without_access_starts_no_classifier_or_fallback(
     assert dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("mode", _PREFLIGHT_DEADLINE["modes"])
+@pytest.mark.parametrize("static_work", _PREFLIGHT_DEADLINE["static_work"])
+@pytest.mark.parametrize("case", _PREFLIGHT_DEADLINE["cases"], ids=lambda case: case["id"])
+def test_saved_routing_deadline_includes_retained_static_validation(
+    tmp_path, monkeypatch, mode, static_work, case
+) -> None:
+    from git_loopy import model_listing
+    from tests.fakes import FakeGateRunner
+    from tests.test_loop_parallel import _ParallelFakeClient
+
+    client, git = _wire_single_issue_github(tmp_path, monkeypatch)
+    lane_labels = ["parallel-safe"] if mode == "lane" else []
+    issues = [_make_issue(42, labels=[
+        "ready-for-agent", "semver:none", *case["task_type_labels"], *lane_labels,
+    ])]
+    if static_work:
+        issues.append(_make_issue(43, labels=[
+            "ready-for-agent", "semver:none", "task-type:implementation", *lane_labels,
+        ]))
+    tracker = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"), issues=issues,
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: tracker)
+    if mode == "lane":
+        client = _ParallelFakeClient(fake_git=git, scripted_events=[])
+        monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("unattended Run prompted")
+    )
+    for name in ("GIT_LOOPY_ROUTE_POLICY", "GIT_LOOPY_MODEL", "GIT_LOOPY_REASONING_EFFORT"):
+        monkeypatch.delenv(name, raising=False)
+    if case["leaderboard_access"]:
+        monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    else:
+        monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    expected = _PREFLIGHT_DEADLINE["expected_static_route"]
+    path = settings.project_config_path(tmp_path)
+    settings.write_config_atomic(path, {
+        **_MIGRATION_RECOVERY["saved_config"],
+        "route_policy": "dynamic",
+        "classifier_model": "synthetic-cheap-1",
+        "classifier_reasoning_effort": "high",
+        "routing": {"implementation": {
+            "model": "synthetic-cheap-1", "effort": "high",
+        }},
+    })
+    saved = path.read_bytes()
+    elapsed = 0.0
+    monkeypatch.setattr(
+        dynamic_route, "time", SimpleNamespace(monotonic=lambda: elapsed)
+    )
+
+    def listing():
+        return tuple(
+            _listed_model(row["model"], row["efforts"])
+            for row in _MIGRATION_RECOVERY["harness"]
+        )
+
+    def routing_listing():
+        nonlocal elapsed
+        elapsed = 31.0
+        return listing()
+
+    async def fetch_listing():
+        return list(listing())
+
+    async def static_listing(**_kwargs):
+        return static_route.HarnessCapabilities.from_listing(routing_listing())
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", fetch_listing)
+    monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", static_listing)
+    spied = _wire_dynamic_ports(
+        monkeypatch, rows=(), answer=None, listing=routing_listing, session_selector=True,
+    )
+
+    assert cli.main(["1"]) == (0 if static_work else 1)
+
+    assert path.read_bytes() == saved
+    assert spied["evidence"] == 0
+    assert len(client.create_calls) == (1 if static_work else 0)
+    events = _read_events(tmp_path)
+    assert not any(e["type"] in {
+        "wrapper.routing.resolved", "wrapper.strike", "usage.tokens",
+    } for e in events)
+    assert any(
+        e["type"] == "wrapper.pickup.skipped" and e["issue"] == 42
+        and case["expected_skip_reason"] in e["reason"]
+        for e in events
+    )
+    assert not any(ref == 42 for ref, _comment in tracker.route_comment_calls)
+    bound = _bound_pickups(tmp_path)
+    assert [e["issue"] for e in bound] == ([43] if static_work else [])
+    if static_work:
+        (call,) = client.create_calls
+        assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+            expected["model"], expected["effort"], expected["context_tier"],
+        )
+        (pickup,) = bound
+        assert {key: pickup[key] for key in expected} == expected
+        types = {e["type"] for e in events}
+        assert ("wrapper.contribution.start" in types) == (mode == "lane")
+        assert ("wrapper.iteration.start" in types) == (mode == "serial")
+    else:
+        assert events[-1]["outcome"] == "all_skipped"
+
+
 @pytest.mark.parametrize("detached", [False, True])
 @pytest.mark.parametrize("mode", ["serial", "lane"])
 def test_saved_legacy_config_refuses_work_until_a_routing_choice(
@@ -6898,6 +7010,9 @@ def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
     monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("unattended recovery prompted")
+    )
     monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
     for name in ("GIT_LOOPY_MODEL", "GIT_LOOPY_REASONING_EFFORT"):
         monkeypatch.delenv(name, raising=False)
@@ -6909,8 +7024,10 @@ def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
         monkeypatch,
         *((row["model"], row["efforts"], True) for row in _MIGRATION_RECOVERY["harness"]),
     )
+    listings: list[str] = []
 
     async def fetch_listing():
+        listings.append("listing")
         return list(listing)
 
     monkeypatch.setattr(model_listing, "fetch_live_models", fetch_listing)
@@ -6933,6 +7050,7 @@ def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
     assert cli.main(["1"]) == 1
     assert path.read_bytes() == original and client.create_calls == []
     assert spied["assessments"] == [] and spied["evidence"] == 0
+    assert listings == []
 
     args = ["1"]
     if authority == "flag":
@@ -6943,8 +7061,10 @@ def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
         assert _update(
             tmp_path, routing_choice="keep" if policy == "static" else "migrate",
         ) == 0
-    else:
+    elif authority == "global":
         assert cli.main(["config", "set", "route_policy", policy, "--global"]) == 0
+    else:
+        pytest.fail(f"unsupported migration authority: {authority}")
     saved = path.read_bytes()
     global_path = settings.global_config_path(os.environ)
     global_saved = global_path.read_bytes() if global_path.exists() else None
@@ -6962,6 +7082,9 @@ def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
     )
     assert pickup["routing_source"] == expected["routing_source"]
     assert len(spied["assessments"]) == expected["selector_calls"]
+    types = [json.loads(raw)["type"] for raw in _log_lines(tmp_path)]
+    assert ("wrapper.contribution.start" in types) == (mode == "lane")
+    assert ("wrapper.iteration.start" in types) == (mode == "serial")
     if policy == "static":
         assert spied["evidence"] == 0
     assert path.read_bytes() == saved

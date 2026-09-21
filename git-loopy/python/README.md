@@ -1302,8 +1302,11 @@ new Dynamic Run; unlike a transient source outage, a Run with no authorized
 routing setup cannot recover by inventing it later. Setup and migration still
 refuse to save an unready Dynamic choice, and doctor remains nonzero.
 Outstanding migration authority, unsupported placement, and invalid Static
-settings still stop the Run. The Run carries its deadline ledger from preflight
-into routing; it does not grant a new budget after live reads.
+settings still stop the Run. The routing deadline starts before live preflight,
+including a listing shared with retained Static validation. The Run carries that
+ledger into routing; neither completed validation nor missing leaderboard access
+grants a new assessment budget. Expiration still permits already-classified
+Static work on freshly validated settings.
 
 **Activation status (#567): incomplete.** `init --routing`, `update --routing`,
 and the update chained by `upgrade` offer explicit keep-or-migrate authorization and this shared readiness

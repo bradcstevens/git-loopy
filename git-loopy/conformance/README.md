@@ -609,7 +609,21 @@ question about the merge and `resolve_iteration_model` receives one already-merg
 mapping. Its `static_route_cases` are driven through the
 production `validate_static_route`, the single seam every Static route decision
 passes through, so a fixture verdict and a Run's refusal are the same judgement
-rather than two that agree today. `attempt-lifecycle.json` joins them, driven through the production
+rather than two that agree today. Its `migration_recovery` cases instead drive
+the real CLI into serial and Lane work in
+`python/tests/test_iteration_end_to_end.py`: an unselected saved Config first
+refuses without writes or assessment, then supplied or recorded authority
+reaches the actual session and canonical Pickup. Synthetic harness/evidence
+inputs pin the settings, Routing source, selector calls and authority lifetime,
+including Static recovery without leaderboard access. Its `preflight_deadline`
+cases use the same synthetic inputs to consume the routing deadline during
+retained Static validation. No classifier or selector starts afterwards, while
+already-classified Static work still runs on its retained settings; Config and
+Strike accounting remain unchanged. This is the staged Python-local guard,
+not final Dynamic-default activation. Shell/PowerShell migration enforcement
+remains explicitly deferred; historical cases and Event streams keep their
+original interpretation.
+`attempt-lifecycle.json` joins them, driven through the production
 `AttemptLedger` and `EscalationLedger` together: one row of its table asks both
 ledgers about one ending, so the dial that decides whether the pair changes and
 the dial that decides whether the issue is worked again cannot drift apart.
