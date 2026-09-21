@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import http.client
+import io
 import json
+import ssl
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -105,24 +107,41 @@ class SWEbenchVerifiedSource:
 
 
 async def _stdlib_fetch(method: str, url: str, headers: dict[str, str]) -> object:
-    def request() -> bytes:
-        if method != "GET" or url != SWE_BENCH_VERIFIED_URL or headers:
-            raise ValueError("SWE-bench request target is invalid")
-        target = urlsplit(SWE_BENCH_VERIFIED_URL)
-        connection = http.client.HTTPSConnection(target.netloc, timeout=30)
+    if method != "GET" or url != SWE_BENCH_VERIFIED_URL or headers:
+        raise ValueError("SWE-bench request target is invalid")
+    target = urlsplit(SWE_BENCH_VERIFIED_URL)
+    payload = bytearray()
+    async with asyncio.timeout(30):
+        reader, writer = await asyncio.open_connection(
+            target.hostname, 443, ssl=ssl.create_default_context(),
+        )
         try:
-            connection.request("GET", target.path or "/")
-            response = connection.getresponse()
-            if not 200 <= response.status < 300:
-                raise ValueError("SWE-bench returned an unsuccessful response")
-            body = response.read(10_000_001)
+            writer.write(
+                f"GET {target.path or '/'} HTTP/1.1\r\nHost: {target.netloc}\r\n"
+                "Accept-Encoding: identity\r\nConnection: close\r\n\r\n".encode("ascii")
+            )
+            await writer.drain()
+            while chunk := await reader.read(65_536):
+                payload.extend(chunk)
+                if len(payload) > 10_000_000:
+                    raise ValueError("SWE-bench response is too large")
         finally:
-            connection.close()
-        if len(body) > 10_000_000:
-            raise ValueError("SWE-bench response is too large")
-        return body
+            writer.transport.abort()
+    with http.client.HTTPResponse(_ResponseBuffer(bytes(payload))) as response:
+        response.begin()
+        if not 200 <= response.status < 300:
+            raise ValueError("SWE-bench returned an unsuccessful response")
+        return response.read()
 
-    return await asyncio.to_thread(request)
+
+class _ResponseBuffer:
+    """Let the stdlib decode HTTP framing after cancellable network I/O."""
+
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def makefile(self, _mode: str) -> io.BytesIO:
+        return io.BytesIO(self._payload)
 
 
 def _parse_associations(associations: Mapping[str, str]) -> dict[str, tuple[str, str | None]]:

@@ -1485,6 +1485,8 @@ Properties worth knowing before you turn it on:
   retain their blocking behavior. Each optional read is bounded to the smaller
   of five seconds or one quarter of the remaining authorized routing deadline,
   leaving time for required checks and selection; it does not reset that deadline.
+  Network reads use cancellable TLS streams, not a blocking body-read worker
+  that could outlive that bound and delay Run shutdown.
   A public resolved rate is benchmark evidence,
   not a probability of this issue succeeding. Missing or contradictory published
   effort cannot support an explicitly mapped effort; warned submissions and

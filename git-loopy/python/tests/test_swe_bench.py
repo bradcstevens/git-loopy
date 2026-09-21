@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Event, Thread
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -146,6 +149,101 @@ def test_optional_decoder_recursion_is_a_source_failure(monkeypatch):
         asyncio.run(swe_bench.SWEbenchVerifiedSource(
             associations={"Exact model": "work-model@high"}, fetch=fetch,
         ).fetch())
+
+
+def test_optional_transport_cancellation_does_not_wait_for_a_slow_body(monkeypatch):
+    stop = Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "1000000")
+            self.end_headers()
+            try:
+                for _ in range(60):
+                    if stop.wait(0.05):
+                        break
+                    self.wfile.write(b"x" * 1024)
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    connect = asyncio.open_connection
+
+    async def local_connection(_host, _port, *, ssl):
+        assert ssl.check_hostname
+        return await connect("127.0.0.1", server.server_port)
+
+    monkeypatch.setattr(swe_bench.asyncio, "open_connection", local_connection)
+
+    async def read():
+        source = swe_bench.SWEbenchVerifiedSource(associations={})
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(source.fetch(), timeout=0.1)
+
+    try:
+        started = time.monotonic()
+        asyncio.run(read())
+        assert time.monotonic() - started < 1
+    finally:
+        stop.set()
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+@pytest.mark.parametrize("framing", ["length", "chunked", "error", "truncated"])
+def test_optional_transport_decodes_complete_http_responses(monkeypatch, framing):
+    requests = []
+    connect = asyncio.open_connection
+    body = b'<script id="leaderboard-data">[{"name":"Verified","results":[]}]</script>'
+
+    async def serve(reader, writer):
+        requests.append(await reader.readuntil(b"\r\n\r\n"))
+        if framing == "chunked":
+            response = (
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                + f"{len(body):x}\r\n".encode() + body + b"\r\n0\r\n\r\n"
+            )
+        else:
+            status = "503 Unavailable" if framing == "error" else "200 OK"
+            length = len(body) + (10 if framing == "truncated" else 0)
+            response = (
+                f"HTTP/1.1 {status}\r\nContent-Length: {length}\r\n\r\n".encode() + body
+            )
+        writer.write(response)
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    async def read():
+        server = await asyncio.start_server(serve, "127.0.0.1", 0)
+        async with server:
+            async def local_connection(host, port, *, ssl):
+                assert (host, port) == ("www.swebench.com", 443)
+                assert ssl.check_hostname
+                return await connect("127.0.0.1", server.sockets[0].getsockname()[1])
+
+            monkeypatch.setattr(swe_bench.asyncio, "open_connection", local_connection)
+            source = swe_bench.SWEbenchVerifiedSource(associations={})
+            if framing in {"error", "truncated"}:
+                with pytest.raises(swe_bench.SWEbenchSourceError):
+                    await source.fetch()
+            else:
+                assert (await source.fetch()).records == ()
+
+    asyncio.run(read())
+    assert requests == [
+        b"GET / HTTP/1.1\r\nHost: www.swebench.com\r\n"
+        b"Accept-Encoding: identity\r\nConnection: close\r\n\r\n"
+    ]
 
 
 @pytest.mark.parametrize(

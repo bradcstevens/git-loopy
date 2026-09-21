@@ -471,6 +471,10 @@ reconstructed provenance suffix before validating selector prose; no Event
 field or selector limit changes. Optional transport has a smaller bound within
 the existing deadline, and malformed nested source data is an unavailable
 optional read rather than a required-evidence refusal.
+The optional transport now uses cancellable TLS streams with bounded response
+bytes and standard-library HTTP framing. A slow body can no longer keep a
+blocking worker alive after the routing timeout and delay Run shutdown;
+truncated responses are refused rather than admitted as complete source reads.
 
 The shared `publication_recovery` matrix now carries recorded init/update
 authorization through repeated real CLI Runs in serial and Lane modes. Eight cases
