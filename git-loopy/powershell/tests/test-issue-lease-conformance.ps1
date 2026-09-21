@@ -72,3 +72,32 @@ foreach ($Field in $Fixture.record.Keys) {
 }
 
 Write-Output "PASS: Lease record Conformance"
+
+# The pure action decision: one table, three Orchestrators, identical answers.
+$Cases = 0
+foreach ($Case in $Fixture.action_cases) {
+    $Actual = Get-GitLoopyLeaseActionDecision `
+        -Action $Case.action -State $Case.state `
+        -Owner $Case.owner -RunId $Case.run_id
+    if ($Actual -cne $Case.expected) {
+        throw "FAIL: Lease action $($Case.id): expected $($Case.expected), got $Actual"
+    }
+    $Cases++
+}
+if ($Cases -eq 0) { throw "FAIL: the Lease fixture drove no action case" }
+
+foreach ($Invalid in @(
+    @{ Action = "steal"; State = "expired" },
+    @{ Action = "claim"; State = "gone" }
+)) {
+    $Failure = $null
+    try {
+        $null = Get-GitLoopyLeaseActionDecision `
+            -Action $Invalid.Action -State $Invalid.State -Owner $null -RunId "r"
+    } catch { $Failure = $_.Exception.Message }
+    if ($null -eq $Failure -or -not $Failure.Contains("Lease action: invalid")) {
+        throw "FAIL: invalid Lease action accepted: $($Invalid.Action)/$($Invalid.State)"
+    }
+}
+
+Write-Output "PASS: Lease action Conformance"

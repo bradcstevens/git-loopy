@@ -1207,6 +1207,38 @@ function Get-GitLoopyLeaseInspection {
     }
 }
 
+function Get-GitLoopyLeaseActionDecision {
+    # ADR-0033: the pure Lease action decision, identical in every member.
+    # Only identity confers ownership, and an unreadable record (a null Owner)
+    # is owned by nobody, so it can neither wedge an issue nor grant permission.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowNull()]$Action,
+        [Parameter(Mandatory)][AllowNull()]$State,
+        [AllowNull()]$Owner,
+        [Parameter(Mandatory)][AllowNull()]$RunId
+    )
+
+    if (@("claim", "release", "fence") -cnotcontains $Action) {
+        throw "Lease action: invalid action $Action"
+    }
+    if (@("absent", "live", "expired") -cnotcontains $State) {
+        throw "Lease action: invalid state $State"
+    }
+    $Ours = ($null -ne $Owner) -and ($Owner -ceq $RunId)
+    if ($Action -ceq "claim") {
+        if ($State -ceq "live") { return "refuse" }
+        if ($State -ceq "absent") { return "claim" }
+        return "steal"
+    }
+    if ($Action -ceq "fence") {
+        if ($Ours) { return "hold" } else { return "lost" }
+    }
+    if ($State -ceq "absent") { return "absent" }
+    if ($Ours) { return "release" }
+    return "not_owned"
+}
+
 function Get-GitLoopyPriorityLabel {
     [CmdletBinding()]
     param()
@@ -4895,6 +4927,7 @@ Export-ModuleMember -Function @(
     "Get-GitLoopyReadiness",
     "Get-GitLoopyCandidateReadiness",
     "Get-GitLoopyLeaseInspection",
+    "Get-GitLoopyLeaseActionDecision",
     "Get-GitLoopyPriorityLabel",
     "Get-GitLoopyAcceptedYearRange",
     "Get-GitLoopyPriorityRank",

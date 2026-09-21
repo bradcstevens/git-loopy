@@ -58,4 +58,30 @@ actual="$(git_loopy_inspect_lease "$request" | jq -cS '.record')"
   printf 'FAIL: Lease inspection changed the stored record\n' >&2
   exit 1
 }
+cases=0
+while IFS= read -r case_json; do
+  request="$(jq -c '{action, state, owner, run_id}' <<<"$case_json")"
+  actual="$(git_loopy_decide_lease_action "$request")"
+  expected="$(jq -r '.expected' <<<"$case_json")"
+  if [[ "$actual" != "$expected" ]]; then
+    printf 'FAIL: %s\nexpected: %s\nactual:   %s\n' \
+      "$(jq -r .id <<<"$case_json")" "$expected" "$actual" >&2
+    exit 1
+  fi
+  cases=$((cases + 1))
+done < <(jq -c '.action_cases[]' "$fixture")
+((cases > 0))
+
+for invalid in '{"action":"steal","state":"expired","owner":null,"run_id":"r"}' \
+               '{"action":"claim","state":"gone","owner":null,"run_id":"r"}'; do
+  if diagnostic="$(git_loopy_decide_lease_action "$invalid" 2>&1)"; then
+    printf 'FAIL: invalid Lease action accepted: %s\n' "$invalid" >&2
+    exit 1
+  fi
+  [[ "$diagnostic" == *"Lease action: invalid"* ]] || {
+    printf 'FAIL: unexpected Lease action diagnostic: %s\n' "$diagnostic" >&2
+    exit 1
+  }
+done
+
 printf 'Lease record Conformance passed.\n'

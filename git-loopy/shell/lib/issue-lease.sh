@@ -50,3 +50,27 @@ git_loopy_inspect_lease() {
       end
   '
 }
+
+# ADR-0033: the pure Lease action decision, identical in every member.
+# Input is {action, state, owner: nullable run_id, run_id}; prints the verdict.
+# Only identity confers ownership, and an unreadable record is owned by nobody.
+git_loopy_decide_lease_action() {
+  jq -rn --argjson input "$1" '
+    $input
+    | .action as $action
+    | .state as $state
+    | (.owner != null and .owner == .run_id) as $ours
+    | if (["claim", "release", "fence"] | index($action)) == null
+        then error("Lease action: invalid action \($action)")
+      elif (["absent", "live", "expired"] | index($state)) == null
+        then error("Lease action: invalid state \($state)")
+      elif $action == "claim" then
+        if $state == "live" then "refuse"
+        elif $state == "absent" then "claim"
+        else "steal" end
+      elif $action == "fence" then (if $ours then "hold" else "lost" end)
+      elif $state == "absent" then "absent"
+      elif $ours then "release"
+      else "not_owned" end
+  '
+}

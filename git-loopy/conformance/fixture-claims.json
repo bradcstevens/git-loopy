@@ -64,9 +64,9 @@
       "rust": {"kind": "waived_out_of_scope", "reason": "Homebrew publication is a packaging channel, not a Dashboard-core responsibility."}
     },
     "issue-lease.json": {
-      "python": {"kind": "claimed", "reason": "python/tests/test_issue_lease.py drives the production Lease inspection seam with fixture records, clocks and invalid contexts."},
-      "shell": {"kind": "claimed", "reason": "shell/tests/test-issue-lease-conformance.sh drives the production Lease inspection function with fixture records, clocks and invalid contexts."},
-      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-issue-lease-conformance.ps1 drives the production Lease inspection function with fixture records, clocks and invalid contexts."},
+      "python": {"kind": "claimed", "reason": "python/tests/test_issue_lease.py drives the production Lease inspection and action-decision seams with fixture records, clocks, invalid contexts and every action case."},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-issue-lease-conformance.sh drives the production Lease inspection and action-decision functions with fixture records, clocks, invalid contexts and every action case."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-issue-lease-conformance.ps1 drives the production Lease inspection and action-decision functions with fixture records, clocks, invalid contexts and every action case."},
       "rust": {"kind": "waived_out_of_scope", "reason": "A Lease is taken and fenced by an Orchestrator at Pickup; the Dashboard renders the Events it emits and owns no Lease decision."}
     },
     "issue-ordering.json": {

@@ -89,6 +89,8 @@ class FakeGitClient:
         changed_paths: Mapping[str, Sequence[str]] | None = None,
         _branch_registry: dict[str, FakeGitClient] | None = None,
         _abort_spy: list[Path] | None = None,
+        _ref_shas: dict[tuple[str, str], str] | None = None,
+        _objects: dict[str, str] | None = None,
     ) -> None:
         self._root = Path(root)
         self._sha_counter = 0
@@ -154,6 +156,25 @@ class FakeGitClient:
         self.branch_deletes: list[str] = []
         self.remote_refs: dict[tuple[str, str], FakeGitClient] = {}
         self.fetch_calls: list[tuple[str, str, str]] = []
+        # Lease ref store (#390 / ADR-0033). Models the *remote* side of the
+        # compare-and-swap: ``_ref_shas`` is the ref advertisement and
+        # ``_objects`` the commit messages behind it, both repo-wide and shared
+        # with every worktree child exactly as ``_branches`` is. Kept separate
+        # from ``remote_refs`` above, which maps a ref to a whole clone rather
+        # than to a SHA. ``push_ref_calls`` and ``fetched_messages`` are spies
+        # so a fence test can assert on the *absence* of a write.
+        self._ref_shas: dict[tuple[str, str], str] = (
+            {} if _ref_shas is None else _ref_shas
+        )
+        self._objects: dict[str, str] = {} if _objects is None else _objects
+        self.push_ref_calls: list[tuple[str, str, str | None, str | None]] = []
+        self.fetched_messages: list[tuple[str, str]] = []
+        self.push_ref_errors: list[GitError] = []
+        # Set to a callable to interleave a rival Run *inside* a push, landing
+        # its ref between this caller's read and its swap. That is the only
+        # honest way to test a compare-and-swap without threads: a sequential
+        # second claim would simply observe the first and never race it.
+        self.push_ref_interceptor: object | None = None
         # Integration recovery (#63 / ADR-0020). ``merge_conflicts`` scripts the
         # issue numbers whose **Lane** branch raises on :meth:`merge` (models a
         # conflicting landing) so a test drives the abort + auto-resolution path.
@@ -345,6 +366,8 @@ class FakeGitClient:
             tracked_paths=self._tracked_paths,
             _branch_registry=self._branches,
             _abort_spy=self.repo_merge_aborts,
+            _ref_shas=self._ref_shas,
+            _objects=self._objects,
         )
         self._worktrees[wt_path] = child
         self._branches[branch] = child
@@ -447,9 +470,62 @@ class FakeGitClient:
                 self._log.append(commit)
 
     def probe_remote_ref(self, remote: str, ref: str) -> str | None:
-        """Return the scripted remote contribution ref, if the remote has it."""
+        """Return the scripted remote contribution or Lease ref SHA, if present."""
         branch = self.remote_refs.get((remote, ref))
-        return branch.head_sha() if branch is not None else None
+        if branch is not None:
+            return branch.head_sha()
+        return self._ref_shas.get((remote, ref))
+
+    # -- Lease ref store (#390 / ADR-0033) ---------------------------------- #
+
+    def seed_remote_ref(self, remote: str, ref: str, message: str) -> str:
+        """Place ``message`` at ``ref`` on ``remote`` and return its SHA.
+
+        The arrange half of a Lease race: it writes the remote directly,
+        bypassing the compare-and-swap, so a test can stage a rival's Lease
+        without pretending to be that rival.
+        """
+        sha = self.write_orphan_commit(message)
+        self._ref_shas[(remote, ref)] = sha
+        return sha
+
+    def write_orphan_commit(self, message: str) -> str:
+        """Record ``message`` as a parentless commit and return its SHA."""
+        sha = self._next_sha()
+        self._objects[sha] = message
+        return sha
+
+    def fetch_commit_message(self, remote: str, sha: str) -> str:
+        """Return the message of an advertised commit, fetching it first."""
+        self.fetched_messages.append((remote, sha))
+        if sha not in self._objects:
+            raise GitError(["git", "fetch", remote, sha], 128, "unknown remote SHA")
+        return self._objects[sha]
+
+    def push_ref(
+        self, remote: str, ref: str, sha: str | None, expected: str | None
+    ) -> bool:
+        """Compare-and-swap ``ref`` on ``remote``, ``sha=None`` deleting it.
+
+        Returns ``False`` when the remote's current SHA differs from
+        ``expected`` — the rejection real ``--force-with-lease`` produces —
+        and raises a scripted :exc:`GitError` for transport failure, so a
+        caller's retry policy can tell the two apart.
+        """
+        self.push_ref_calls.append((remote, ref, sha, expected))
+        interceptor = self.push_ref_interceptor
+        if interceptor is not None:
+            self.push_ref_interceptor = None
+            interceptor()  # type: ignore[operator]
+        if self.push_ref_errors:
+            raise self.push_ref_errors.pop(0)
+        if self._ref_shas.get((remote, ref)) != expected:
+            return False
+        if sha is None:
+            self._ref_shas.pop((remote, ref), None)
+        else:
+            self._ref_shas[(remote, ref)] = sha
+        return True
 
     def fetch_sha(self, remote: str, sha: str, branch: str) -> None:
         """Materialize a scripted remote ref as a local branch."""
