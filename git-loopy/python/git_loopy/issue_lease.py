@@ -10,15 +10,41 @@ steals and releases a Lease by compare-and-swapping one ref per issue, and
 from __future__ import annotations
 
 import json
+import logging
+import math
+import random
 import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from .git import GitError
 
+
+_log = logging.getLogger(__name__)
 _MAX_INTEGER = 2**53 - 1
 _RUN_ID = re.compile(r"[0-7][0-9A-HJKMNP-TV-Z]{25}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _LEASE_REF_PREFIX = "refs/heads/git-loopy/leases/issue-"
+_WRITE_ATTEMPTS = 4
+_WRITE_BUDGET_SECONDS = 15.0
+_PERMANENT_WRITE_FAILURE = re.compile(
+    r"authentication failed|permission denied|access denied|repository not found|"
+    r"certificate|host key verification failed|protected branch|"
+    r"pre-receive hook declined|remote rejected|stale info",
+    re.IGNORECASE,
+)
+_TRANSIENT_WRITE_FAILURE = re.compile(
+    r"\b(?:HTTP\s+|requested URL returned error:\s*)(?:429|5\d\d)\b|"
+    r"rate limit exceeded|secondary rate limit|too many requests|"
+    r"could not resolve host|temporary failure in name resolution|"
+    r"failed to connect|unable to connect|"
+    r"(?:connection|operation) timed out|connection reset|connection closed|"
+    r"remote end hung up unexpectedly|unexpected disconnect|"
+    r"empty reply from server|network is unreachable",
+    re.IGNORECASE,
+)
 
 
 def lease_ref(issue: int) -> str:
@@ -191,7 +217,8 @@ class LeaseRefPort(Protocol):
         ...
 
     def push_ref(
-        self, remote: str, ref: str, sha: str | None, expected: str | None
+        self, remote: str, ref: str, sha: str | None, expected: str | None,
+        *, timeout_seconds: float = 15.0,
     ) -> bool:
         """Compare-and-swap ``ref``; ``False`` on rejection, raise on transport."""
         ...
@@ -303,6 +330,12 @@ class LeaseTransport:
     Holds no Lease state of its own: every decision is made against a fresh
     read of the remote, because a cached answer is exactly what the fence
     exists to refuse (ADR-0033 §4.4).
+
+    Transient writes retry the same SHA and expectation up to four attempts
+    within a 15-second monotonic budget, with jittered 1/2/4-second backoff.
+    The clock, sleeper and jitter are injectable; no retry buys a new Pickup.
+    Git cleanup has its own bounded grace period. Reads are not retried, and
+    exhausted writes propagate their last error rather than implying success.
     """
 
     def __init__(
@@ -312,11 +345,51 @@ class LeaseTransport:
         remote: str,
         repository: str,
         skew_tolerance_seconds: int = 60,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+        jitter: Callable[[float], float] | None = None,
     ) -> None:
         self._git = git
         self._remote = remote
         self._repository = repository
         self._skew_tolerance_seconds = skew_tolerance_seconds
+        self._clock = clock
+        self._sleep = sleep
+        self._jitter = (
+            jitter if jitter is not None
+            else lambda interval: random.uniform(interval / 2, interval)
+        )
+
+    def _push(self, ref: str, sha: str | None, expected: str | None) -> bool:
+        """Retry the identical swap, never a fresh observation or a rejected swap."""
+        deadline = self._clock() + _WRITE_BUDGET_SECONDS
+        for attempt in range(_WRITE_ATTEMPTS):
+            try:
+                return self._git.push_ref(
+                    self._remote, ref, sha, expected,
+                    timeout_seconds=deadline - self._clock(),
+                )
+            except GitError as exc:
+                if (
+                    attempt == _WRITE_ATTEMPTS - 1
+                    or exc.returncode == 127
+                    or _PERMANENT_WRITE_FAILURE.search(exc.stderr_tail)
+                    or not _TRANSIENT_WRITE_FAILURE.search(exc.stderr_tail)
+                ):
+                    raise
+                interval = min(2.0**attempt, 4.0)
+                delay = self._jitter(interval)
+                if not math.isfinite(delay) or not 0 <= delay <= interval:
+                    raise ValueError("Lease retry jitter must be within its interval")
+                if self._clock() + delay >= deadline:
+                    raise
+                _log.warning(
+                    "Lease write for %s failed; retrying in %.3fs: %s", ref, delay, exc
+                )
+                self._sleep(delay)
+                if self._clock() >= deadline:
+                    raise
+        raise AssertionError("Lease write attempt limit did not terminate")
 
     def observe(self, issue: int, *, now: int) -> LeaseObservation:
         """Read the Lease ref for ``issue`` and judge it against ``now``.
@@ -407,7 +480,7 @@ class LeaseTransport:
         )
         ref = lease_ref(issue)
         sha = self._git.write_orphan_commit(render_record(record))
-        if not self._git.push_ref(self._remote, ref, sha, expected):
+        if not self._push(ref, sha, expected):
             return None
         return LeaseHold(
             ref=ref,
@@ -503,6 +576,10 @@ class LeaseTransport:
         if verdict != "release":
             return "absent" if verdict == "absent" else "not_owned"
         assert observation.sha is not None
-        if not self._git.push_ref(self._remote, hold.ref, None, observation.sha):
+        if not self._push(hold.ref, None, observation.sha):
+            # A delete may have landed before its acknowledgement was lost.
+            # Re-reading can confirm absence, but never authorizes another write.
+            if self.observe(hold.issue, now=now).state == "absent":
+                return "absent"
             return "not_owned"
         return "released"

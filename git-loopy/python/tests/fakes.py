@@ -168,8 +168,10 @@ class FakeGitClient:
         )
         self._objects: dict[str, str] = {} if _objects is None else _objects
         self.push_ref_calls: list[tuple[str, str, str | None, str | None]] = []
+        self.push_ref_timeouts: list[float] = []
         self.fetched_messages: list[tuple[str, str]] = []
         self.push_ref_errors: list[GitError] = []
+        self.push_ref_ack_errors: list[GitError] = []
         # Set to a callable to interleave a rival Run *inside* a push, landing
         # its ref between this caller's read and its swap. That is the only
         # honest way to test a compare-and-swap without threads: a sequential
@@ -502,8 +504,18 @@ class FakeGitClient:
             raise GitError(["git", "fetch", remote, sha], 128, "unknown remote SHA")
         return self._objects[sha]
 
+    def commit_message(self, sha: str) -> str:
+        """Read an orphan Lease record or an ordinary local commit's message."""
+        if sha in self._objects:
+            return self._objects[sha]
+        for commit in self._log:
+            if commit.sha == sha:
+                return commit.message
+        raise GitError(["git", "show", "-s", "--format=%B", sha], 128, "unknown SHA")
+
     def push_ref(
-        self, remote: str, ref: str, sha: str | None, expected: str | None
+        self, remote: str, ref: str, sha: str | None, expected: str | None,
+        *, timeout_seconds: float = 15.0,
     ) -> bool:
         """Compare-and-swap ``ref`` on ``remote``, ``sha=None`` deleting it.
 
@@ -513,18 +525,25 @@ class FakeGitClient:
         caller's retry policy can tell the two apart.
         """
         self.push_ref_calls.append((remote, ref, sha, expected))
+        self.push_ref_timeouts.append(timeout_seconds)
         interceptor = self.push_ref_interceptor
         if interceptor is not None:
             self.push_ref_interceptor = None
             interceptor()  # type: ignore[operator]
         if self.push_ref_errors:
             raise self.push_ref_errors.pop(0)
+        # Real git reports an identical non-delete target as up to date even
+        # when the original expectation is now stale (a lost acknowledgement).
+        if sha is not None and self._ref_shas.get((remote, ref)) == sha:
+            return True
         if self._ref_shas.get((remote, ref)) != expected:
             return False
         if sha is None:
             self._ref_shas.pop((remote, ref), None)
         else:
             self._ref_shas[(remote, ref)] = sha
+        if self.push_ref_ack_errors:
+            raise self.push_ref_ack_errors.pop(0)
         return True
 
     def fetch_sha(self, remote: str, sha: str, branch: str) -> None:

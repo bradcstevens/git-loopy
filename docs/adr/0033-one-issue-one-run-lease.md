@@ -89,3 +89,26 @@ design makes deliberately.
   convention (*"Injected so backoff is deterministic"*) and `GIT_LOOPY_GATE_TIMEOUT_SECONDS`
   establishes the override convention. Lease expiry follows both, or it cannot be pinned in
   `conformance/`.
+
+## Staged implementation
+
+The record/expiry and action decisions are present in all three Orchestrators;
+the ref transport is currently Python-only. Its writes now retry recognized
+transport, rate-limit and HTTP 5xx failures, never authentication, policy, unknown
+failures or a compare-and-swap rejection. Each write keeps one immutable target
+SHA and expectation across at most four attempts within a 15-second monotonic
+budget, using 1/2/4-second exponential windows with jitter in each window's upper
+half. Tests inject the clock, sleeper and jitter rather than sleeping.
+
+Each git push gets the remaining budget, disables credential prompts, and shares
+Integration's bounded process cleanup: on POSIX it kills the private process
+group, elsewhere the direct child, then allows five seconds to drain and, if
+needed, five more to reap. A lost acknowledgement replays the same write. Git can
+report a replayed record as up to date but rejects a replayed deletion; release
+then confirms absence without making another write. Exhaustion surfaces the last
+failure. Ordinary branch pushes and GitHub writes do not acquire retry policy.
+
+These seams are not yet activated at serial or Lane Pickup. Shell/PowerShell
+transport and retry, lifecycle wiring with every side-effect fence, independent
+renewal, the human mirror, and Events/Dashboard remain pending in #390. This
+staging does **not** yet provide live cross-Run exclusivity.
