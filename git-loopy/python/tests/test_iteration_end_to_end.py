@@ -112,6 +112,7 @@ _ROUTING_CONFORMANCE = json.loads(
 _MIGRATION_RECOVERY = _ROUTING_CONFORMANCE["migration_recovery"]
 _FIRST_SETUP = _ROUTING_CONFORMANCE["first_setup"]
 _PREFLIGHT_DEADLINE = _ROUTING_CONFORMANCE["preflight_deadline"]
+_PUBLICATION_RECOVERY = _ROUTING_CONFORMANCE["publication_recovery"]
 
 
 # ---------------------------------------------------------------------------
@@ -8407,6 +8408,194 @@ def test_saved_dynamic_policy_replays_while_pending_publication_recovers(
     assert {"ready-for-agent", "task-type:implementation"} <= set(tracker.issue_labels(42))
     recovered = _delivery_events(tmp_path)[1:]
     assert recovered and all(event["status"] == "published" for event in recovered)
+
+
+@pytest.mark.parametrize("mode", _PUBLICATION_RECOVERY["modes"])
+@pytest.mark.parametrize("entrypoint", _PUBLICATION_RECOVERY["entrypoints"])
+@pytest.mark.parametrize(
+    "case", _PUBLICATION_RECOVERY["cases"], ids=lambda case: case["id"]
+)
+def test_recorded_routing_reuse_preserves_publication_recovery_bounds(
+    tmp_path, monkeypatch, capsys, mode, entrypoint, case
+) -> None:
+    from git_loopy import model_listing
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
+    from tests.fakes import FakeGateRunner
+    from tests.test_loop_parallel import _ParallelFakeClient
+    from tests.test_routing_migration import _update
+
+    client, git = _wire_single_issue_github(tmp_path, monkeypatch)
+    if mode == "lane":
+        client = _ParallelFakeClient(fake_git=git, scripted_events=[])
+        monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    labels = [
+        "ready-for-agent", "task-type:implementation", "semver:none", "operator-owned",
+        *(["parallel-safe"] if mode == "lane" else []),
+    ]
+    attempts = {"comment": 0, "label": 0}
+    fault = case["fault"]
+    assert case["operation"] in {"comment", "label"}
+
+    class Tracker(FakeGitHubClient):
+        def post_issue_comment(self, number, body):
+            attempts["comment"] += 1
+            if fault and case["operation"] == "comment":
+                raise RouteDeliveryError(fault)
+            super().post_issue_comment(number, body)
+
+        def replace_route_label(self, number, *, remove, add):
+            attempts["label"] += 1
+            if fault and case["operation"] == "label":
+                if case.get("remove_before_failure", False):
+                    issue = self.issue_view(number)
+                    self.seed_issue(dataclass_replace(
+                        issue, labels=[label for label in issue.labels if label not in remove],
+                    ))
+                raise RouteDeliveryError(fault)
+            super().replace_route_label(number, remove=remove, add=add)
+
+    tracker = Tracker(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=list(labels))],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: tracker)
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+    monkeypatch.setattr(cli, "_make_label_client", lambda: None)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("recorded authorization prompted")
+    )
+    for name in (
+        "GIT_LOOPY_ROUTE_POLICY", "GIT_LOOPY_MODEL",
+        "GIT_LOOPY_REASONING_EFFORT", "GIT_LOOPY_CONTEXT_TIER",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    listing = tuple(
+        _listed_model(row["model"], row["efforts"])
+        for row in _MIGRATION_RECOVERY["harness"]
+    )
+
+    async def fetch_listing():
+        return list(listing)
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", fetch_listing)
+    rows = tuple(
+        _aa_row(row["id"], row["intelligence_index"], row["output_tokens_per_second"])
+        for row in _MIGRATION_RECOVERY["evidence"]
+    )
+    _wire_dynamic_ports(
+        monkeypatch, rows=rows, listing=listing,
+        answer=_elects(_MIGRATION_RECOVERY["selector_choice"]),
+    )
+    path = settings.project_config_path(tmp_path)
+    settings.write_config_atomic(path, _MIGRATION_RECOVERY["saved_config"])
+    if entrypoint == "init":
+        assert cli.main(["init", "--yes", "--project", "--routing", "migrate"]) == 0
+    else:
+        assert entrypoint == "update"
+        assert _update(tmp_path, routing_choice="migrate") == 0
+    saved = path.read_bytes()
+    assert not client.create_calls and not tracker.route_comment_calls
+    original_decision = None
+    last_published_label = None
+    for step in case["runs"]:
+        fault = case["fault"] if step["tracker_unavailable"] else None
+        tracker.seed_issue(dataclass_replace(tracker.issue_view(42), state="OPEN"))
+        capabilities = []
+
+        def fresh_listing():
+            capabilities.append("listing")
+            return tuple(
+                model for model in listing if model.id not in step.get("withdraw_models", [])
+            )
+
+        spied = _wire_dynamic_ports(
+            monkeypatch, rows=rows, listing=fresh_listing,
+            answer=_elects(step.get("selector_choice", _MIGRATION_RECOVERY["selector_choice"])),
+        )
+        logs = set((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+        calls_before = len(client.create_calls)
+        capsys.readouterr()
+
+        assert cli.main(["1"]) == 0
+
+        (log,) = set((tmp_path / ".git-loopy" / "logs").glob("*.jsonl")) - logs
+        events = [json.loads(line) for line in log.read_text().splitlines()]
+        (call,) = client.create_calls[calls_before:]
+        (pickup,) = [e for e in events if e["type"] == "wrapper.pickup.bound"]
+        (record,) = [e for e in events if e["type"] == "wrapper.routing.resolved"]
+        expected = step.get("route", _PUBLICATION_RECOVERY["route"])
+        assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+            expected["model"], expected["effort"], expected["context_tier"],
+        )
+        assert {key: pickup[key] for key in expected} == expected
+        assert {key: record[key] for key in ("model", "effort", "context_tier")} == {
+            key: expected[key] for key in ("model", "effort", "context_tier")
+        }
+        assert record["routing_reuse"] == step["reuse"]
+        assert len(spied["assessments"]) == step["selector_calls"]
+        assert spied["evidence"] >= 2 and len(capabilities) >= 2
+        if step["reuse"] == "elected":
+            if original_decision is not None:
+                assert record["reassessed"] is True
+                assert record["superseded_proposal_id"] == original_decision["proposal_id"]
+                assert record["relevant_input_identity"] != original_decision["relevant_input_identity"]
+            original_decision = record
+        else:
+            assert original_decision is not None
+            assert record["reused_proposal_id"] == original_decision["proposal_id"]
+            assert record["reused_validated_at"] == original_decision["validated_at"]
+            assert record["relevant_input_identity"] == original_decision["relevant_input_identity"]
+            assert record["validated_at"] != original_decision["validated_at"]
+            assert record["selector_attempts"] == 0 and record["routing_credits"] == "0"
+        deliveries = [e for e in events if e["type"] == "wrapper.routing.delivery"]
+        assert [e["status"] for e in deliveries] == step["delivery"]
+        assert attempts == step["attempts"]
+        assert len(tracker.route_comment_calls) == step["comments"]
+        assert len({body for _, body in tracker.route_comment_calls}) == step["comments"]
+        owned = [label for label in tracker.issue_labels(42) if label.startswith("git-loopy-route:")]
+        if step["delivery"][-1] == "published":
+            assert owned == [deliveries[-1]["label"]]
+            last_published_label = deliveries[-1]["label"]
+            _, comment = tracker.route_comment_calls[-1]
+            assert f'<!-- git-loopy-route:v1:{deliveries[-1]["identity"]} -->' in comment
+            for key in ("model", "effort", "context_tier"):
+                assert f'`{json.dumps(expected[key])}`' in comment
+        elif step.get("owned_label", "absent") == "previous":
+            assert last_published_label is not None
+            assert owned == [last_published_label]
+            assert owned != [deliveries[-1]["label"]]
+        else:
+            assert step.get("owned_label", "absent") == "absent"
+            assert owned == []
+        dashboard = LiveRunState()
+        for event in events:
+            dashboard.render(event)
+        view = project_run_view(dashboard, RunSummary(), issue=42)
+        (row,) = view["dashboard"]["queue"]["rows"]
+        assert (row["route"]["model"], row["route"]["effort"], row["route"]["source"]) == (
+            expected["model"], expected["effort"], expected["routing_source"],
+        )
+        assert row["route"].get("context_tier", "default") == expected["context_tier"]
+        types = {e["type"] for e in events}
+        assert ("wrapper.contribution.start" in types) == (mode == "lane")
+        assert ("wrapper.iteration.start" in types) == (mode == "serial")
+        assert set(labels) <= set(tracker.issue_labels(42))
+        assert all(added in tracker.route_labels for _, _, added in tracker.route_label_calls)
+        assert path.read_bytes() == saved
+        captured = capsys.readouterr()
+        if step["delivery"][-1] == "failed":
+            assert "retries exhausted" in captured.out
+        if step["delivery"][-1] != "published":
+            assert case["fault"] in captured.err
+        assert "aa-token" not in (
+            captured.out + captured.err + json.dumps(events)
+            + path.read_text() + repr(tracker.route_comment_calls)
+        )
 
 
 def test_routing_never_feeds_its_own_inputs_so_reuse_does_not_decay(

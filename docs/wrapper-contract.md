@@ -1908,10 +1908,30 @@ resolution.
 - **Retry without time travel.** Pending delivery MUST survive restart and retry
   within a finite bound using the comment identity. A retry must not duplicate a
   comment already accepted by the tracker, and an obsolete delivery MUST NOT
-  overwrite a newer Route label. Delivery state is published separately from the
-  Routing resolution so the CLI and Dashboard distinguish an undecided Route or
+  overwrite a newer Route label. Startup retries and subsequent Pickups of the
+  same assignment MUST share that bound: an exhausted assignment remains visibly
+  failed without further tracker I/O, even after restart or restored access.
+  A materially changed final assignment has its own delivery budget; publication
+  exhaustion MUST NOT prevent its delivery or block locally recorded work.
+  A failed replacement can leave the previous owned association in place, or no
+  association if removal succeeded before the add failed. Neither is a current
+  Routing resolution: local delivery MUST remain failed, not published, and the
+  tracker projection MUST NOT authorize work or unbounded repair calls.
+  Delivery state is published separately from the Routing resolution so the CLI
+  and Dashboard distinguish an undecided Route or
   failed Agent from an already-decided Route whose tracker projection is pending
   or failed.
+
+The `publication_recovery` matrix in `routing-resolution.json` exercises recorded
+Python-local init/update authorization through repeated real CLI Runs and actual
+serial/Lane sessions. It pins fresh reuse and its original provenance, permission,
+rate-limit and transient failures, idempotent partial recovery, exhausted delivery
+across Pickups (including stale or missing associations), and a changed assignment
+after capability withdrawal. Actual work
+settings, canonical Pickup and Dashboard route readback must agree while Config
+and unrelated labels remain unchanged. This is a Python activation obligation;
+shell/PowerShell implementation remains deferred, and historical streams,
+Subagent and Integration settings are unchanged.
 
 ### 14.6 Routing preparation (contract 2.9)
 

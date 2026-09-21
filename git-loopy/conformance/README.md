@@ -66,6 +66,22 @@ The Python adapter is
 same suite. This does not cover bare init/auto-setup activation or grant other
 Runner members setup support.
 
+The `publication_recovery` matrix carries an explicit migrate choice through
+init/update over authored unselected Config, then repeats real CLI Runs in serial
+and Lane modes. It reuses the migration matrix's synthetic inputs and checks
+actual sessions, canonical Pickup, Dashboard route readback, fresh source reads
+and original reuse provenance alongside cumulative tracker operations.
+Permission, rate-limit and transient failures stay non-blocking; partial delivery
+does not repeat an accepted comment. Exhausted retries remain exhausted across
+Pickups and restored access, while capability withdrawal requires a new final
+assignment with its own delivery budget. Replacement failures cover both a
+stale owned association and removal accepted before the new association fails;
+both remain visibly failed rather than claiming tracker agreement. The Python adapter is
+`test_recorded_routing_reuse_preserves_publication_recovery_bounds` in the same
+suite. These are recorded-authorization cases, not another first-wizard claim.
+Shell/PowerShell activation remains deferred; no default, historical stream,
+Subagent or Integration behavior changes.
+
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent
 from every port's vocabulary, not just the shared fixture and Python reference.
