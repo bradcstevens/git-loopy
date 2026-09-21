@@ -1600,6 +1600,17 @@ requires a new final assignment. Session settings,
 canonical Pickup, Dashboard route readback and tracker effects agree; Config is
 unchanged. This does not enable the final Dynamic default or remote-host routing.
 
+Dynamic provenance and Pickup are both mandatory local writes. If either fails,
+the affected work starts no Agent or tracker publication, including when the route
+was freshly revalidated from an earlier Run. The diagnostic names the local-write
+failure; repair the local storage problem before starting another Run. Fresh
+checks can reuse only provenance that actually reached the canonical log. A
+selector's already-observed bill remains Run Consumption despite the refusal.
+The shared `local_durability` cases exercise these failures and recovery through
+saved init/update choices in serial and Lane modes, preserving Config, existing
+tracker projections and Lease release without charging a Strike. This is not a
+promise that a total storage outage leaves unrelated logging available.
+
 ### What a later attempt is told
 
 Only the endings that say something about the *work* count against a

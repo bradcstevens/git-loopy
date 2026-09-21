@@ -157,6 +157,21 @@ stays unchanged and no unstarted work incurs a Strike. Existing helper-level
 malformed-billing cases remain separate; this matrix does not claim them or
 activate final defaults, native members, non-local, Subagent or Integration routing.
 
+The `local_durability` matrix is adapted by
+`python/tests/test_routing_durability_conformance.py`. Four new-election/reuse
+and provenance/Pickup write-failure cases cross recorded init/update authority
+and real CLI serial/Lane execution: 16 combinations. The adapter refuses the
+canonical Event-log write before it reaches disk. No affected work or new tracker
+publication starts, no Strike is charged, and the Pickup-time Lease is released.
+Config and any existing tracker projection are preserved. A later repaired Run
+checks current evidence and capabilities and reuses only successfully recorded
+provenance, retaining the original decision's identity. Actual session settings,
+canonical Pickup, individual CLI Pickup lines, Dashboard readback and idempotent
+tracker effects agree. SDK-observed selector bills remain Run-only Consumption
+even when binding fails; no billing observation is not a reported zero. The fault
+is scoped to the named write, not a total storage outage. Defaults, historical
+streams and native-member/non-local/Subagent/Integration deferrals are unchanged.
+
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent
 from every port's vocabulary, not just the shared fixture and Python reference.

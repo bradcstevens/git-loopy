@@ -1980,6 +1980,20 @@ and unrelated labels remain unchanged. This is a Python activation obligation;
 shell/PowerShell implementation remains deferred, and historical streams,
 Subagent and Integration settings are unchanged.
 
+The `local_durability` matrix composes the mandatory local-write boundary with
+recorded init/update authority in both Python-local modes. A refused provenance
+write MUST prevent the Dynamic binding, including freshly validated cross-Run
+reuse; a written provenance record still requires a durable Pickup before work
+or tracker publication. Failure MUST remain visible without new work, final
+publication or a Strike, and the Pickup-time Lease must be released. After repair,
+fresh checks may reuse only successfully recorded provenance, preserving the
+original decision identity. Actual sessions, canonical records, CLI/Dashboard
+readback and idempotent tracker effects agree without Config changes. Selector
+Consumption survives a refused binding; missing billing remains unknown rather
+than zero. These cases inject one mandatory write failure, not a claim that an
+arbitrary storage outage leaves other records writable. They retain the same
+member and placement deferrals and do not activate Dynamic defaults.
+
 ### 14.6 Routing preparation (contract 2.9)
 
 A Runner MAY prepare **Routing proposals** for candidates it has already
