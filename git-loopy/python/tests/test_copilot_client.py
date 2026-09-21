@@ -10,6 +10,7 @@ from unittest.mock import create_autospec
 import pytest
 from copilot import CopilotClient, CopilotSession, RuntimeConnection
 
+from git_loopy import loop as loop_module
 from git_loopy.config import RunConfig
 from git_loopy.copilot_client import (
     make_copilot_client,
@@ -93,7 +94,7 @@ async def test_model_discovery_uses_the_work_clients_runtime_identity(
             lifecycle.append("stop")
 
     monkeypatch.setattr("copilot.CopilotClient", Client)
-    work = make_copilot_client()
+    work = loop_module._make_client()
     assert await fetch_live_models() == ["eligible-model"]
     assert await fetch_live_models() == ["eligible-model"]
 
