@@ -233,6 +233,18 @@ retain their legacy path; selected policies still refuse rather than substitutin
 local eligibility. `--route-policy unselected` can explicitly retain that remote
 legacy path even when local Config records a policy, without rewriting Config.
 This compatibility boundary is not completed migration or remote routing support.
+The shared no-I/O authority verdict now rejects selected non-local placement at
+CLI startup and direct Run entry, before local model listing, Skill migration,
+interactive detachment or remote host construction and green-base dispatch.
+Previously only the later live routing preflight applied this refusal, so a
+known-unverifiable placement still dispatched a remote job first and an unrelated
+host-preparation failure could hide the actionable routing diagnostic. The shared
+`execution_host_refusal` matrix carries recorded, inherited and temporary choices,
+including run-wide pins and context-only controls, through those startup paths
+without Config edits, work, Lease, Strike or Route publication. The explicitly
+unselected remote compatibility path remains usable. This closes the premature
+dispatch defect; it does not supply the executing host's capabilities or settle
+the remaining non-local activation obligations.
 Wrapper contract 14.3 and the Conformance routing-resolution notes now state this
 Python-local guard and explicitly defer shell/PowerShell enforcement. Existing
 one-route cases and historical streams are unchanged. The fixture's

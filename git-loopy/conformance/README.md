@@ -67,6 +67,17 @@ The Python adapter is
 same suite. This does not cover bare init/auto-setup activation or grant other
 Runner members setup support.
 
+The `execution_host_refusal` matrix covers selected policies on the independently
+authenticated GitHub Actions host. Eight cases run through CLI, interactive
+startup and direct Run entry in `python/tests/test_loop_parallel.py`, proving
+refusal before local model listing, Skill migration, detachment, host construction
+or remote green-base dispatch. Saved and temporary authority, model/effort pins
+and context-only controls cannot authorize that placement. Config stays unchanged
+and no work, Lease, Strike or Route publication starts. The existing unselected
+remote execution cases protect the staged compatibility path; this matrix does
+not implement remote capabilities, activate Dynamic defaults or remove native
+member deferrals.
+
 The `retry_lifecycle` matrix carries a recorded `update --routing migrate`
 choice through actual CLI work in
 `python/tests/test_routing_retry_conformance.py`. Seven cases run in serial and
