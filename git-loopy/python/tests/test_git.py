@@ -13,9 +13,12 @@ Acceptance criteria reference: issue #6.
 
 from __future__ import annotations
 
+import os
 import shutil
+import signal
 import subprocess
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -1676,6 +1679,19 @@ def test_push_ref_deletes_a_ref_it_still_matches(tmp_path: Path) -> None:
     assert client.probe_remote_ref("origin", LEASE_REF) is None
 
 
+def test_push_ref_can_replay_a_write_after_its_acknowledgement_was_lost(
+    tmp_path: Path,
+) -> None:
+    client, _ = _bare_remote(tmp_path)
+    sha = client.write_orphan_commit("held")
+    assert client.push_ref("origin", LEASE_REF, sha, None)
+    assert client.push_ref("origin", LEASE_REF, sha, None)
+    assert client.push_ref("origin", LEASE_REF, None, sha)
+    # Git rejects the repeated delete; the transport must confirm absence.
+    assert not client.push_ref("origin", LEASE_REF, None, sha)
+    assert client.probe_remote_ref("origin", LEASE_REF) is None
+
+
 def test_push_ref_raises_rather_than_reporting_a_lost_race_on_transport_failure(
     tmp_path: Path,
 ) -> None:
@@ -1684,6 +1700,68 @@ def test_push_ref_raises_rather_than_reporting_a_lost_race_on_transport_failure(
     sha = client.write_orphan_commit("held")
     with pytest.raises(GitError):
         client.push_ref("nowhere", LEASE_REF, sha, None)
+
+
+def test_push_ref_timeout_reaps_the_command_and_surfaces_a_transport_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    process = Mock(spec=subprocess.Popen)
+    process.pid = 12345
+    process.communicate.side_effect = [
+        subprocess.TimeoutExpired("git push", 2.5),
+        ("", "transport stalled"),
+    ]
+    popen = Mock(return_value=process)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    if os.name == "posix":
+        monkeypatch.setattr(os, "getpgid", lambda pid: pid)
+        killpg = Mock()
+        monkeypatch.setattr(os, "killpg", killpg)
+    client = SubprocessGitClient(tmp_path)
+    with pytest.raises(GitError, match="timed out") as caught:
+        client.push_ref("origin", LEASE_REF, "a" * 40, None, timeout_seconds=2.5)
+    assert caught.value.returncode == 124
+    assert "transport stalled" in caught.value.stderr_tail
+    assert popen.call_args.kwargs["start_new_session"] == (os.name == "posix")
+    assert process.communicate.call_args_list[0].kwargs["timeout"] == 2.5
+    assert len(process.communicate.call_args_list) == 2
+    assert process.communicate.call_args_list[1].kwargs["timeout"] > 0
+    if os.name == "posix":
+        killpg.assert_called_once_with(12345, signal.SIGKILL)
+    else:
+        process.kill.assert_called_once()
+
+
+@pytest.mark.parametrize("timeout", [0.0, -1.0, float("inf"), float("nan")])
+def test_push_ref_refuses_an_unbounded_timeout(tmp_path: Path, timeout: float) -> None:
+    with pytest.raises(ValueError, match="finite and positive"):
+        SubprocessGitClient(tmp_path).push_ref(
+            "origin", LEASE_REF, "a" * 40, None, timeout_seconds=timeout
+        )
+
+
+def test_lease_push_never_asks_for_credentials_and_preserves_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "1")
+    monkeypatch.setenv("GCM_INTERACTIVE", "always")
+    monkeypatch.setenv("npm_config_registry", "https://packagefeedproxy.microsoft.io/npm/")
+    monkeypatch.setenv("UV_DEFAULT_INDEX", "https://packagefeedproxy.microsoft.io/pypi/simple/")
+    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i corporate-key")
+    process = Mock(spec=subprocess.Popen)
+    process.communicate.return_value = ("ok", "")
+    process.returncode = 0
+    popen = Mock(return_value=process)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    assert SubprocessGitClient(tmp_path).push_ref("origin", LEASE_REF, "a" * 40, None)
+    env = popen.call_args.kwargs["env"]
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GCM_INTERACTIVE"] == "never"
+    assert env["GIT_ASKPASS"] == ""
+    assert env["SSH_ASKPASS_REQUIRE"] == "never"
+    assert env["LC_ALL"] == "C"
+    for key in ("npm_config_registry", "UV_DEFAULT_INDEX", "GIT_SSH_COMMAND"):
+        assert env[key] == os.environ[key]
 
 
 def test_fetch_commit_message_reads_a_record_only_the_remote_has(
@@ -1705,3 +1783,26 @@ def test_fetch_commit_message_reads_a_record_only_the_remote_has(
     )
     reader = SubprocessGitClient(other)
     assert reader.fetch_commit_message("origin", sha).strip() == '{"run_id":"remote-only"}'
+
+
+def test_remote_url_reads_the_url_this_clone_contends_on(tmp_path: Path) -> None:
+    """The Lease's repository identity starts here, with no network call."""
+    _init_repo(tmp_path)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "remote", "add", "origin",
+         "git@github.com:bradcstevens/git-loopy.git"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert SubprocessGitClient(tmp_path).remote_url("origin") == (
+        "git@github.com:bradcstevens/git-loopy.git"
+    )
+
+
+def test_remote_url_answers_none_for_a_clone_with_no_such_remote(
+    tmp_path: Path,
+) -> None:
+    """No remote is an ordinary state, so it holds no Lease rather than raising."""
+    _init_repo(tmp_path)
+    assert SubprocessGitClient(tmp_path).remote_url("origin") is None

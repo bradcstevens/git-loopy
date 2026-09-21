@@ -162,10 +162,10 @@ def test_recorded_dynamic_authority_governs_permitted_retries(
     work_calls = [call for role, call in transport.calls if role == "work"]
     selector_calls = [call for role, call in transport.calls if role == "selector"]
     assert all(role in {"work", "selector"} for role, _ in transport.calls)
-    assert len(work_calls) == len(expected["assignments"])
-    for call, assignment in zip(work_calls, expected["assignments"], strict=True):
+    assert len(work_calls) == len(expected["pickups"])
+    for call, pickup in zip(work_calls, expected["pickups"], strict=True):
         assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
-            assignment["model"], assignment["effort"], assignment["context_tier"],
+            pickup["model"], pickup["effort"], pickup["context_tier"],
         )
     if mode == "lane":
         assert Path(work_calls[0]["working_directory"]).name == "issue-42"
@@ -197,23 +197,23 @@ def test_recorded_dynamic_authority_governs_permitted_retries(
     )
     events = _read_events(tmp_path)
     pickups = [event for event in events if event["type"] == "wrapper.pickup.bound"]
-    assert len(pickups) == len(expected["assignments"])
-    for pickup, assignment in zip(pickups, expected["assignments"], strict=True):
+    assert len(pickups) == len(expected["pickups"])
+    for pickup, expected_pickup in zip(pickups, expected["pickups"], strict=True):
         assert {
-            key: pickup[key] for key in assignment if key != "attempt"
-        } == {key: value for key, value in assignment.items() if key != "attempt"}
+            key: pickup[key] for key in expected_pickup if key != "attempt"
+        } == {key: value for key, value in expected_pickup.items() if key != "attempt"}
     resolutions = [
         event for event in events if event["type"] == "wrapper.routing.resolved"
     ]
-    dynamic_assignments = [
-        assignment for assignment in expected["assignments"]
-        if assignment["routing_source"] == "dynamic"
+    dynamic_pickups = [
+        pickup for pickup in expected["pickups"]
+        if pickup["routing_source"] == "dynamic"
     ]
-    assert len(resolutions) == len(dynamic_assignments)
-    for record, assignment in zip(resolutions, dynamic_assignments, strict=True):
+    assert len(resolutions) == len(dynamic_pickups)
+    for record, pickup in zip(resolutions, dynamic_pickups, strict=True):
         assert {
-            key: record[key] for key in assignment if key != "routing_source"
-        } == {key: value for key, value in assignment.items() if key != "routing_source"}
+            key: record[key] for key in pickup if key != "routing_source"
+        } == {key: value for key, value in pickup.items() if key != "routing_source"}
     assert [
         record["repeat_justification"] is not None for record in resolutions
     ] == expected["repeat_justified"]
@@ -250,18 +250,20 @@ def test_recorded_dynamic_authority_governs_permitted_retries(
                 if row["issue"] == event["issue"]
             )
             projected.append(row["route"])
-    for route, assignment in zip(projected, expected["assignments"], strict=True):
-        assert (route["model"], route["effort"], route.get("context_tier", "default")) == (
-            assignment["model"], assignment["effort"], assignment["context_tier"],
+    for route, pickup in zip(projected, expected["pickups"], strict=True):
+        assert (route["model"], route["effort"]) == (
+            pickup["model"], pickup["effort"],
         )
-        assert route["source"] == assignment["routing_source"]
-        assert route["lifecycle_position"] == assignment["lifecycle_position"]
-    for line, assignment in zip(pickup_lines, expected["assignments"], strict=True):
+        # Historical default tiers are implicit in this projection, not lost at Pickup.
+        assert pickup["context_tier"] == "default" and "context_tier" not in route
+        assert route["source"] == pickup["routing_source"]
+        assert route["lifecycle_position"] == pickup["lifecycle_position"]
+    for line, pickup in zip(pickup_lines, expected["pickups"], strict=True):
         assert (
-            f"pickup #{assignment['issue']} {assignment['model']} @ {assignment['effort']} "
+            f"pickup #{pickup['issue']} {pickup['model']} @ {pickup['effort']} "
         ) in line
-        assert assignment["lifecycle_position"] in line
-        assert assignment["routing_source"] in line
+        assert pickup["lifecycle_position"] in line
+        assert pickup["routing_source"] in line
     usage = [event for event in events if event["type"] == "usage.tokens"]
     assert len(usage) == expected["selector_calls"]
     assert all(event["iter"] is None and event.get("lane_issue") is None for event in usage)
@@ -272,18 +274,18 @@ def test_recorded_dynamic_authority_governs_permitted_retries(
         Decimal(expected["routing_credits"])
     )
     assert "Run-only Consumption:" in output.getvalue()
-    publications = [expected["assignments"][index] for index in expected["published_assignments"]]
-    for (issue, comment), assignment in zip(
+    publications = [expected["pickups"][index] for index in expected["published_pickups"]]
+    for (issue, comment), pickup in zip(
         tracker.route_comment_calls, publications, strict=True,
     ):
-        assert issue == assignment["issue"]
+        assert issue == pickup["issue"]
         for key in ("model", "effort", "context_tier"):
-            assert f'`{json.dumps(assignment[key])}`' in comment
-    final_assignments = {assignment["issue"]: assignment for assignment in expected["assignments"]}
-    for issue, assignment in final_assignments.items():
+            assert f'`{json.dumps(pickup[key])}`' in comment
+    final_pickups = {pickup["issue"]: pickup for pickup in expected["pickups"]}
+    for issue, pickup in final_pickups.items():
         comment = tracker.issue_comments(issue)[-1]
         for key in ("model", "effort", "context_tier"):
-            assert f'`{json.dumps(assignment[key])}`' in comment
+            assert f'`{json.dumps(pickup[key])}`' in comment
         labels = tracker.issue_labels(issue)
         assert "ready-for-agent" in labels and "semver:none" in labels
         owned = [label for label in labels if label.startswith("git-loopy-route:")]

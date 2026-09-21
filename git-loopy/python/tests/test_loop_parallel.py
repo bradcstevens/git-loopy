@@ -98,6 +98,7 @@ import itertools
 import json
 import logging
 import re
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from dataclasses import replace as dataclass_replace
@@ -120,6 +121,7 @@ from git_loopy import git as git_module
 from git_loopy import cli as cli_module
 from git_loopy import loop as loop_module
 from git_loopy import rolling_pressure
+from git_loopy import rolling_scheduler
 from git_loopy.attempt_lifecycle import AttemptState
 from git_loopy.config import RunConfig
 from git_loopy.execution_host import (
@@ -133,6 +135,7 @@ from git_loopy.execution_host import (
 )
 from git_loopy.gate import LoopFailure
 from git_loopy.interactive.state import LiveRunState, issue_detail, queue_rows
+from git_loopy.issue_lease import lease_ref
 from git_loopy.readiness import BlockedByRead, BlockerNode
 from git_loopy.release_version import (
     RELEASE_VERSION_PATHS,
@@ -9350,3 +9353,565 @@ def test_preparation_reserves_nothing_and_opens_no_session(
     # A proposal names no binding: the Pickup's record is the only one that
     # reports a **Routing source**.
     assert all("routing_source" not in event for event in prepared), prepared
+
+
+def test_a_real_run_takes_and_gives_back_the_lease_on_the_issue_it_works(
+    tmp_path, monkeypatch
+) -> None:
+    """Activation (#390, ADR-0033): the Lease is reached by a Run, not a fixture.
+
+    A serial **Iteration** against a clone whose ``origin`` names a GitHub
+    repository must take that issue's Lease ref before the session starts and
+    delete it when the Iteration ends. Asserted at the compare-and-swap seam,
+    because the ref is gone again by the time the Run finishes — a Lease that
+    were never taken and one released correctly both leave no ref behind.
+    """
+    fake_git = _wire_repo(tmp_path)
+    fake_git.remote_urls = {"origin": "git@github.com:bradcstevens/git-loopy.git"}
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="bradcstevens", name="git-loopy",
+                            default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+            serial_closes=True,
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    swaps = [call for call in fake_git.push_ref_calls if call[1] == lease_ref(42)]
+    assert [(remote, sha is not None, expected) for remote, _, sha, expected in swaps] == [
+        ("origin", True, None),
+        ("origin", False, swaps[0][2]),
+    ]
+    assert fake_git.probe_remote_ref("origin", lease_ref(42)) is None
+
+
+def _lease_swaps(fake_git: FakeGitClient, issue: int) -> list[tuple[str, str | None, str | None]]:
+    """Every compare-and-swap this Run attempted on ``issue``'s **Lease** ref.
+
+    Asserted at the swap rather than on the surviving ref, because a Lease
+    correctly released and one never taken at all both leave nothing behind.
+    """
+    return [
+        (remote, sha, expected)
+        for remote, ref, sha, expected in fake_git.push_ref_calls
+        if ref == lease_ref(issue)
+    ]
+
+
+def test_a_lane_takes_and_gives_back_the_lease_on_the_issue_it_works(
+    tmp_path, monkeypatch
+) -> None:
+    """Lane **Pickup** takes a Lease, exactly as a serial one does (#390, ADR-0033).
+
+    Parallel mode is the mode that most needs cross-Run exclusivity — it is the
+    one that works several issues at once — and until now a **Lane** took no
+    Lease at all, so every ``parallel-safe`` issue was worked unguarded while
+    the serial path was protected.
+    """
+    fake_git = _wire_repo(tmp_path)
+    fake_git.remote_urls = {"origin": "git@github.com:bradcstevens/git-loopy.git"}
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(
+            owner="bradcstevens", name="git-loopy", default_branch="main"
+        ),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    swaps = _lease_swaps(fake_git, 42)
+    assert [(remote, sha is not None, expected) for remote, sha, expected in swaps] == [
+        ("origin", True, None),
+        ("origin", False, swaps[0][1]),
+    ], swaps
+    assert fake_git.probe_remote_ref("origin", lease_ref(42)) is None
+
+
+def _rival_lease(
+    fake_git: FakeGitClient,
+    issue: int,
+    *,
+    run_id: str = "01M316V0C65NX886W39WH0J2RQ",
+    age_seconds: int = 0,
+    repository: str = "bradcstevens/git-loopy",
+) -> str:
+    """Stage another Run's **Lease** on ``issue`` and return its ref SHA.
+
+    Writes the remote directly, bypassing the compare-and-swap, so a test can
+    put a rival in possession without pretending to be that rival.
+    """
+    now = int(time.time())
+    return fake_git.seed_remote_ref(
+        "origin",
+        lease_ref(issue),
+        json.dumps(
+            {
+                "run_id": run_id,
+                "issue": issue,
+                "repository": repository,
+                "claimed_at": now - age_seconds,
+                "heartbeat_at": now - age_seconds,
+                "ttl_seconds": 300,
+                "host": "rival-host",
+                "pid": 4321,
+            }
+        ),
+    )
+
+
+def test_a_lane_whose_issue_another_run_holds_opens_no_session(
+    tmp_path, monkeypatch
+) -> None:
+    """The loser of a Lane race costs nothing (#390, ADR-0033 §2.3).
+
+    Exclusivity is only worth having if it is cheap to lose: the Lease is taken
+    before the worktree is cut and before the **Agent** is asked for anything,
+    so a contended candidate is passed over having spent one round trip. A
+    Lease another Run holds live is the mechanism working, not a conflict
+    (§8.2), so the Run carries on rather than failing.
+
+    "Cheap" includes writing nothing on the issue. The Lease is taken *before*
+    ``_classify_at_pickup``, which applies ``task-type:`` and ``semver:``
+    labels and buys a classifier session to decide them — irreversible tracker
+    writes onto an issue that belongs, right now, to somebody else.
+    """
+    fake_git = _wire_repo(tmp_path)
+    fake_git.remote_urls = {"origin": "git@github.com:bradcstevens/git-loopy.git"}
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    _rival_lease(fake_git, 42)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(
+            owner="bradcstevens", name="git-loopy", default_branch="main"
+        ),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    asyncio.run(loop_module.run(cfg))
+
+    assert fake_client.created == []
+    assert _lane_worktree_adds(fake_git) == []
+    assert fake_gh.issue_close_calls == []
+    # Nothing was written on the rival's issue -- no classifier label, no
+    # comment. The Lease is taken before classification for exactly this.
+    assert fake_gh.route_label_calls == []
+    assert fake_gh.issue_comment_calls == []
+    # The rival's ref is untouched: refused, never stolen, never deleted.
+    assert fake_git.probe_remote_ref("origin", lease_ref(42)) is not None
+    skips = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.pickup.skipped" and event.get("issue") == 42
+    ]
+    assert [event["reason"] for event in skips] == [
+        "held by another Run's live Lease"
+    ], skips
+
+
+class _StealingClient(_ParallelFakeClient):
+    """A client that lets a rival steal the Lane's **Lease** during its session.
+
+    The steal is staged the moment the **Agent** session opens — after the
+    Lane took its Lease and before it has written anything — which is exactly
+    the window §4.4's fence exists for.
+    """
+
+    def __init__(self, *, steal_issue: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._steal_issue = steal_issue
+        self.stolen_sha: str | None = None
+
+    async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+        session = await super().create_session(**kwargs)
+        if self.stolen_sha is None:
+            self.stolen_sha = _rival_lease(self._fake_git, self._steal_issue)
+        return session
+
+
+def test_a_lane_whose_lease_was_stolen_publishes_nothing_and_closes_nothing(
+    tmp_path, monkeypatch
+) -> None:
+    """**The fence**, on the Lane path (#390, ADR-0033 §4.4).
+
+    A false steal must cost duplicated *effort* and never corrupted *state*,
+    and that holds only if every write is individually gated on a fresh read.
+    For a Lane the loudest write is its publication onto base: that is the
+    moment its commits become the Run's trunk, and the very next serial
+    **Iteration**'s auto-push sends them to the remote under a *different*
+    issue's fence. An unfenced Lane publication would launder a lost Lease's
+    work onto the remote through a fence that never asked about it.
+
+    Asserted on the absence of calls, which is the only way to assert a write
+    did not happen.
+    """
+    fake_git = _wire_repo(tmp_path)
+    fake_git.remote_urls = {"origin": "git@github.com:bradcstevens/git-loopy.git"}
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    base_before = fake_git.head_sha()
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(
+            owner="bradcstevens", name="git-loopy", default_branch="main"
+        ),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _StealingClient(
+        steal_issue=42,
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    asyncio.run(loop_module.run(cfg))
+
+    # The Lane ran — this is a fence test, not a Pickup test.
+    assert len(fake_client.created) == 1
+    # ...and then wrote nothing at all over the Lease it no longer held.
+    assert fake_gh.issue_close_calls == []
+    assert fake_gh.issue_comment_calls == []
+    assert fake_git.head_sha() == base_before
+    events = _logged_events(tmp_path)
+    assert [e for e in events if e["type"] == "wrapper.auto_close"] == []
+    # The thief's ref is left exactly as the thief wrote it: a Lease this Run
+    # no longer owns is never deleted, or it would free an issue another Run
+    # is now working (§5.4).
+    assert fake_git.probe_remote_ref("origin", lease_ref(42)) == fake_client.stolen_sha
+
+
+def test_each_lane_holds_its_own_lease_and_one_contention_frees_no_other(
+    tmp_path, monkeypatch
+) -> None:
+    """Leases are per **Lane**, never per Run (#390, ADR-0033 §3.5).
+
+    The property Parallel mode turns on: a Run works several issues at once,
+    so a Lease it holds has to name one issue rather than the Run. A rival
+    holding one candidate must pass over exactly that candidate — the sibling
+    Lane keeps its own Lease, works, lands and gives its own back, and nothing
+    about the contended issue reaches it.
+    """
+    fake_git = _wire_repo(tmp_path)
+    fake_git.remote_urls = {"origin": "git@github.com:bradcstevens/git-loopy.git"}
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    rival_sha = _rival_lease(fake_git, 42)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(
+            owner="bradcstevens", name="git-loopy", default_branch="main"
+        ),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=2,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    asyncio.run(loop_module.run(cfg))
+
+    # #43 was taken and released on its own ref; #42 was never swapped at all.
+    swaps_43 = _lease_swaps(fake_git, 43)
+    assert [(sha is not None, expected) for _remote, sha, expected in swaps_43] == [
+        (True, None),
+        (False, swaps_43[0][1]),
+    ], swaps_43
+    assert _lease_swaps(fake_git, 42) == []
+    assert fake_git.probe_remote_ref("origin", lease_ref(42)) == rival_sha
+    assert fake_git.probe_remote_ref("origin", lease_ref(43)) is None
+
+    # The sibling Lane did its whole job; the contended one never started.
+    assert [n for (n, _c) in fake_gh.issue_close_calls] == [43]
+    assert [add[1].rsplit("/", 1)[-1] for add in _lane_worktree_adds(fake_git)] == [
+        "issue-43"
+    ]
+
+
+def test_a_lane_whose_lease_remote_cannot_be_read_passes_over_and_ends(
+    tmp_path, monkeypatch
+) -> None:
+    """An unreadable Lease remote denies a Lane candidate, once (#390, §8.3).
+
+    A read that did not happen is never absence — absence admits a claim, so
+    inferring it would hand one issue to two Runs — and **Pickup** is
+    unattended, so a candidate it cannot take it passes over rather than
+    failing the Run.
+
+    Passing it over has to refuse its *candidacy* for the rest of this Run,
+    which is the Rolling half of the decision and the reason this test exists.
+    A bare reservation release consumes no ``max_iterations`` unit, so the
+    scheduler would refill from the same ordered pool and the Run would spin
+    on the unreadable remote forever. The bound is what makes the refusal
+    safe; the diagnostic is what keeps it honest.
+
+    And a bounded refusal must not then *misreport* itself. A candidate left
+    behind by a failed read is unknown, not refused, so the Run ends
+    ``preflight_failed`` — what the serial path returns for the identical
+    fault — and never ``all_skipped``, which would assert a claim about the
+    work that no read established.
+    """
+    fake_git = _wire_repo(tmp_path)
+    fake_git.remote_urls = {"origin": "git@github.com:bradcstevens/git-loopy.git"}
+    probes: list[tuple[str, str]] = []
+
+    def unreadable(remote: str, ref: str) -> str | None:
+        probes.append((remote, ref))
+        raise git_module.GitError(["git", "ls-remote", remote, ref], 128, "no route")
+
+    monkeypatch.setattr(fake_git, "probe_remote_ref", unreadable)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(
+            owner="bradcstevens", name="git-loopy", default_branch="main"
+        ),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    exit_code = asyncio.run(asyncio.wait_for(loop_module.run(cfg), timeout=30))
+
+    assert fake_client.created == []
+    assert _lane_worktree_adds(fake_git) == []
+    events = _logged_events(tmp_path)
+    # An unread Lease is unknown, not refused: the Run must not claim it could
+    # take no work from this Pool on the strength of a read that failed.
+    # Asserted on the outcome rather than the exit code, which cannot tell
+    # `preflight_failed` from `all_skipped` -- both are 1.
+    run_ends = [event for event in events if event["type"] == "wrapper.run.end"]
+    assert [event["outcome"] for event in run_ends] == ["preflight_failed"], run_ends
+    assert exit_code == loop_module.exit_code_for("preflight_failed"), exit_code
+    lease_probes = [probe for probe in probes if probe[1] == lease_ref(42)]
+    assert len(lease_probes) == 1, lease_probes
+    skips = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.pickup.skipped" and event.get("issue") == 42
+    ]
+    assert [event["reason"] for event in skips] == [
+        "Lease could not be taken (remote unreadable)"
+    ], skips
+
+
+def test_a_parked_contribution_keeps_its_lease_until_it_is_integrated(
+    tmp_path, monkeypatch
+) -> None:
+    """A Lease outlives the Lane task when the contribution does (ADR-0033 §5.1).
+
+    §3.9 frees a Lane the instant its contribution is **admitted**, and §4.1
+    caps the **Integration backlog** at two. A contribution that finishes its
+    session against a full backlog therefore *parks*: its Lane lifecycle task
+    returns, and the contribution is integrated later from inside whichever
+    other contribution's ``finalize()`` drains the FIFO.
+
+    So "the Lane task returned" is not "the issue is done with", and releasing
+    the Lease there would be wrong twice over. It would free the issue for a
+    rival Run while this Run still intends to publish and close it — the very
+    collision this design exists to prevent — and it would then trip this
+    Run's *own* fence, so the parked contribution could never land.
+
+    The timeline is forced rather than raced: #42's stage gates red once and
+    its recovery session is held, so #42 stays admitted and holds Integration.
+    #44 takes #42's freed Lane and is released first, filling the backlog to
+    its high-water. Only then is #43 released, so its ``finish_work`` is the
+    one that finds H full and parks.
+    """
+    fake_git = _wire_repo(tmp_path)
+    fake_git.remote_urls = {"origin": "git@github.com:bradcstevens/git-loopy.git"}
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(
+            owner="bradcstevens", name="git-loopy", default_branch="main"
+        ),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(44, labels=["ready-for-agent", "parallel-safe"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    hold_43 = asyncio.Event()
+    hold_44 = asyncio.Event()
+    hold_resolution = asyncio.Event()
+    resolution_started = asyncio.Event()
+    admitted_44 = asyncio.Event()
+    parked_43 = asyncio.Event()
+
+    real_finish_work = rolling_scheduler.RollingScheduler.finish_work
+
+    def spy_finish_work(self, contribution, **kwargs: Any) -> str:
+        disposition = real_finish_work(self, contribution, **kwargs)
+        if contribution.ref == 44 and disposition == rolling_scheduler.ADMITTED:
+            admitted_44.set()
+        if contribution.ref == 43 and disposition == rolling_scheduler.PARKED:
+            parked_43.set()
+        return disposition
+
+    monkeypatch.setattr(
+        rolling_scheduler.RollingScheduler, "finish_work", spy_finish_work
+    )
+
+    class _GatedClient(_ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            session = await super().create_session(**kwargs)
+            working_directory = str(kwargs.get("working_directory") or "")
+            if working_directory.endswith("issue-43"):
+                gate_on, announce = hold_43, None
+            elif working_directory.endswith("issue-44"):
+                gate_on, announce = hold_44, None
+            elif "/integrate/" in working_directory:
+                gate_on, announce = hold_resolution, resolution_started
+            else:
+                return session
+            real_send_and_wait = session.send_and_wait
+
+            async def gated_send_and_wait(
+                prompt: str, *, timeout: float = 60.0, **extra: Any
+            ) -> SessionEvent | None:
+                if announce is not None:
+                    announce.set()
+                await gate_on.wait()
+                return await real_send_and_wait(prompt, timeout=timeout, **extra)
+
+            session.send_and_wait = gated_send_and_wait  # type: ignore[method-assign]
+            return session
+
+    fake_client = _GatedClient(
+        fake_git=fake_git,
+        scripted_events=[_usage_event("claude-opus-4.8-max")],
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_gate_runner",
+        lambda: FakeGateRunner(by_issue={42: [False]}),
+    )
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    async def scenario() -> int:
+        run_task = asyncio.create_task(loop_module.run(cfg))
+        await asyncio.wait_for(resolution_started.wait(), timeout=5)
+        hold_44.set()
+        await asyncio.wait_for(admitted_44.wait(), timeout=5)
+        hold_43.set()
+        await asyncio.wait_for(parked_43.wait(), timeout=5)
+        hold_resolution.set()
+        return await asyncio.wait_for(run_task, timeout=15)
+
+    exit_code = asyncio.run(scenario())
+
+    assert exit_code == 0, f"expected exit 0, got {exit_code}"
+    # The load-bearing assertion: the parked contribution still landed. With
+    # its Lease released when its Lane task returned, its own fence would have
+    # denied the publication and #43 would never have closed.
+    assert fake_gh.issue_view(43).state == "CLOSED"
+    assert fake_gh.issue_view(42).state == "CLOSED"
+    assert fake_gh.issue_view(44).state == "CLOSED"
+    # And the Lease was still given back once the contribution was done.
+    assert _lease_swaps(fake_git, 43), "#43 never took a Lease"
+    assert fake_git.probe_remote_ref("origin", lease_ref(43)) is None

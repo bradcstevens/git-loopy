@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.8 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.9 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -1652,7 +1652,7 @@ model listing, so they have no route to verify. They declare it unsupported in
 The Dashboard needs no policy-aware branch — it renders the verified triple off
 `wrapper.pickup.bound` exactly as it renders any other.
 
-**Staged Python-local migration guard (#567).** A local Python Run with nonempty project or
+**Staged Python-local migration guard (contract 2.9, #567).** A local Python Run with nonempty project or
 global Config MUST supply or inherit an explicit `static`/`dynamic` Route policy before Agent
 work. Absence remains absence, not implicit Static consent: the Runner refuses with an actionable
 `update --routing keep`/`migrate` or temporary `--route-policy`/`GIT_LOOPY_ROUTE_POLICY` remedy,
@@ -1700,6 +1700,14 @@ are unchanged.
 Under `dynamic` the route for one issue is **elected from live public benchmark evidence** rather
 than written down in advance (ADR-0057). It is opt-in, and the rules below are what make the
 election an answer an operator can audit rather than a plausible-looking guess.
+
+Contract 2.9 includes §14.3's staged migration guard and opt-in first setup,
+the affected-work refusal and shared preflight-deadline obligations below,
+Route publication (§14.5) and Routing preparation (§14.6). The affected
+`routing-resolution.json`, `event-schema.json` and `dashboard-insights.json`
+fixtures declare that provenance at 2.9; Event wire compatibility remains 1.2.
+This declaration correction adds no Event fields, activates no Dynamic defaults,
+and leaves fixture cases and historical streams' interpretation unchanged.
 
 - **Opt-in, with its own prerequisites, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run
@@ -1851,7 +1859,7 @@ canonical Pickup, outcome history, CLI/Dashboard readback and idempotent tracker
 publication rather than inferring execution from a resolver result. Selector
 bills cross the SDK session transport into Run-only Consumption, including an
 invalid retry that starts no work. Each CLI Pickup line is observed separately
-from startup and earlier assignments. Its cases
+from startup and earlier Pickups. Its cases
 cover changed and repeated elections, required repeat justification, infrastructure
 failure, advancing work, attempt/allowance exhaustion and explicit Static
 escalation. A refused retry spends no task attempt or Strike, while later

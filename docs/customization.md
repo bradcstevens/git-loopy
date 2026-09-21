@@ -191,6 +191,88 @@ paths (Integration runs in a throwaway worktree on whatever host the operator ha
 
 If you're on Azure or Microsoft tech, add **Azure conventions** and **Microsoft tooling** sections to `AGENTS.md` documenting the `SecurityControl=Ignore` tag and the `disableLocalAuth: false` default for Foundry resources. Otherwise skip them.
 
+## Leases — running more than one Run against one tracker
+
+A **Lease** is a run's exclusive right to work one issue. It is taken at **Pickup**,
+before any agent session starts and before any worktree exists, renewed every 60
+seconds while its owner lives, and it expires on its own if the owner stops. That is
+what lets two runs share one tracker: an issue under another run's live Lease is
+passed over silently, and a crashed run's issues free themselves with no label
+cleanup and nothing for you to do (ADR-0033).
+
+A Lease **is** a git ref on your `origin` remote — one per issue, holding a
+parentless commit whose message is the record:
+
+```bash
+# Which issues are being worked right now, and by which run:
+git ls-remote origin 'refs/heads/git-loopy/leases/*'
+
+# Read one Lease's record (run_id, timestamps, ttl, host, pid):
+git fetch --no-tags origin <sha> && git --no-pager show -s --format=%B <sha>
+
+# Remove one by hand — only ever for a Lease you know is dead:
+git push origin --delete refs/heads/git-loopy/leases/issue-<N>
+```
+
+Deleting a Lease by hand is almost never necessary: expiry already covers a crashed
+run. Do it only if you must reclaim an issue sooner than its TTL, and only when you
+know the owning run is gone — deleting a *live* run's Lease is how you get two agents
+on one issue, which is the failure the Lease exists to prevent.
+
+- **`GIT_LOOPY_LEASE_TTL_SECONDS`** sets how long a Lease survives without renewal.
+  Default `300`. Raise it if your network or your host regularly stalls a run for
+  minutes at a time; the cost of a longer TTL is only that a genuinely crashed run's
+  issues stay parked for longer. A value below one 60-second renewal interval is
+  refused (it would expire *between* beats however healthy its owner), as are
+  non-integer, non-positive and `inf` values — all fall back to the default rather
+  than aborting the run, and there is deliberately no value meaning "never expires".
+
+You do not need to tune this to be safe. Expiry is an optimisation, not the safety
+mechanism: before every push, comment, label write and issue close, a run re-reads
+its own Lease and abandons the issue if it no longer holds it. A Lease taken from a
+run that was merely slow therefore costs duplicated *effort*, never corrupted state.
+
+### When Leases are off
+
+A run resolves the repository it contends on from its `origin` URL — a local config
+read, not a network call — and holds no Lease at all when it cannot. Four cases,
+each announced in the run's diagnostics, because a run that has quietly stopped
+guarding its issues looks exactly like one that is guarding them:
+
+- the clone has **no `origin` remote**;
+- `origin` **names no `owner/repo`** — a local path or a `file://` clone;
+- the run uses the legacy **`prds` backend**, whose issues are files in the worktree
+  rather than rows on a shared tracker, so there is nothing for two runs to contend on;
+- the clone **cannot write the Lease refs**, which the run discovers the first time it
+  tries and then stops trying. A read-only `origin` in a fork workflow, a ruleset that
+  forbids creating refs under `refs/heads/**`, or an expired SSO authorization all land
+  here. The run says so loudly and then does its work unguarded — a Lease it is not
+  allowed to take would protect nothing, and refusing the work to protect nothing is
+  worse. Grant the token push access to `refs/heads/git-loopy/leases/*` to restore it.
+
+Every URL spelling of one repository resolves to one name, so a clone that fetched
+over SSH and a clone that fetched over HTTPS contend on the same Lease:
+
+```bash
+# Confirm what this clone will contend on:
+git remote get-url origin
+```
+
+An unleased run is not broken — it behaves exactly as every run did before ADR-0033.
+It simply offers no protection against a second run working the same issue.
+
+There is one refusal you may see against a *working* Lease setup, and it is the
+mechanism succeeding rather than failing. When another live run holds an issue,
+this run passes that issue over and moves to the next one — and in Parallel mode it
+passes it over for the rest of the run rather than retrying it, because a lane
+reservation costs no iteration and retrying would spin on a remote round trip per
+turn. Start another run later and it will pick the issue up normally.
+
+So: running two runs against one tracker is safe for **serial** iterations and for
+`parallel-safe` issues worked in **Lanes**, on a clone whose `origin` names a
+repository it can push Lease refs to. Check `git remote get-url origin`, then watch
+the run's first diagnostics for a line saying exclusivity is off.
+
 ---
 
 **Next:**
