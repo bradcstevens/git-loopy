@@ -182,7 +182,7 @@ def test_bare_first_run_on_tty_runs_wizard_then_loop(
         # The real wizard always persists a Skill policy, so the fake must too;
         # a Config without one is legacy and would route to migration instead.
         (cfg_dir / "config.toml").write_text(
-            'model = "gpt-5.4"\nenabled_skills = ["tdd"]\n'
+            'model = "gpt-5.4"\nenabled_skills = ["tdd"]\nroute_policy = "static"\n'
         )
         return 0
 
@@ -213,7 +213,7 @@ def test_bare_first_run_on_tty_runs_wizard_then_detaches(
         cfg_dir = tmp_path / "git-loopy"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / "config.toml").write_text(
-            'model = "gpt-5.4"\nenabled_skills = ["tdd"]\n'
+            'model = "gpt-5.4"\nenabled_skills = ["tdd"]\nroute_policy = "static"\n'
         )
         return 0
 
@@ -252,6 +252,35 @@ def test_bare_first_run_without_tty_uses_defaults_and_never_prompts(
     assert called == []  # the wizard never ran
     cfg, _driver = captured[0]
     assert cfg.model == cli_module._DEFAULT_MODEL
+
+
+def test_auto_setup_without_a_routing_choice_saves_then_refuses_work(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+) -> None:
+    """Setup is durable even when the later Run still needs routing authority."""
+    _clear_run_env(monkeypatch)
+    monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    _fake_terminal(monkeypatch, stdin=True, stdout=True)
+    path = settings.project_config_path(tmp_path)
+    values = {"model": "gpt-5.4", "enabled_skills": ["tdd"]}
+
+    def setup(**_kwargs):
+        settings.write_config_atomic(path, values)
+        return 0
+
+    monkeypatch.setattr("git_loopy.init.run_init", setup)
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+    sidecars: list[RunConfig] = []
+    _install_fake_tty_sidecar(monkeypatch, sidecars)
+
+    assert cli_module.main([]) == 1
+
+    assert captured == [] and sidecars == []
+    assert settings.load_config_table(path) == values
+    assert not path.with_suffix(".toml.bak").exists()
+    assert "explicit keep-or-migrate decision" in capsys.readouterr().err
 
 
 def test_bare_first_run_with_a_redirected_stdout_never_opens_the_wizard(
@@ -322,7 +351,7 @@ def test_bare_run_with_project_config_skips_wizard(
     cfg_dir = tmp_path / "git-loopy"
     cfg_dir.mkdir(parents=True)
     (cfg_dir / "config.toml").write_text(
-        'model = "gpt-5.4"\nenabled_skills = ["tdd"]\n'
+        'model = "gpt-5.4"\nenabled_skills = ["tdd"]\nroute_policy = "static"\n'
     )
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
@@ -351,7 +380,7 @@ def test_bare_run_with_global_config_skips_wizard(
     xdg = tmp_path / "xdg"
     (xdg / "git-loopy").mkdir(parents=True)
     (xdg / "git-loopy" / "config.toml").write_text(
-        'model = "gpt-5.4"\nenabled_skills = ["tdd"]\n'
+        'model = "gpt-5.4"\nenabled_skills = ["tdd"]\nroute_policy = "static"\n'
     )
     monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)

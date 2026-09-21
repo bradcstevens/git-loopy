@@ -710,8 +710,10 @@ class RunConfig:
             Route selector's own tier or suppress model/effort selection.
         route_policy: Which **Route policy** the operator selected (#560, #561,
             ADR-0057). :attr:`~git_loopy.static_route.RoutePolicy.UNSELECTED` —
-            the default — is the *absence* of a decision and keeps every legacy
-            behaviour: the roster gates rescue an unsupported setting, the
+            the default — is the *absence* of a decision. Saved Config without
+            that decision is refused before work. A genuinely unconfigured Run
+            retains legacy behaviour until final default activation: the
+            roster gates rescue an unsupported setting, the
             built-in **Escalation rung** applies, and no harness capability read
             happens at all. ``STATIC`` selects ADR-0057's Static route, under
             which the selected model/effort/tier travel verbatim and are
@@ -720,6 +722,10 @@ class RunConfig:
             route for its **Task type** gets its route from the **Route
             selector** — and which is refused at preflight unless the four
             fields below and the Artificial Analysis key are all supplied.
+        saved_config_present: Whether a nonempty project or global Config was
+            loaded. Run-local startup state, not a Config key: an unselected
+            policy on saved Config requires explicit keep-or-migrate authority.
+            Kept through detached startup so the worker uses the same verdict.
         routing_deadline_seconds: The finite wall-clock budget one Run may spend
             on routing work (#561, ADR-0057), or ``None`` for "not supplied".
             ``None`` is not a default of "unbounded": ADR-0057 requires an
@@ -804,6 +810,7 @@ class RunConfig:
     context_tier: str = DEFAULT_CONTEXT_TIER
     context_tier_override: bool = False
     route_policy: RoutePolicy = RoutePolicy.UNSELECTED
+    saved_config_present: bool = False
     routing_deadline_seconds: float | None = None
     routing_credit_allowance: Decimal | None = None
     selector_concurrency: int | None = None

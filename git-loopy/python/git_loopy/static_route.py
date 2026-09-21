@@ -18,11 +18,12 @@ implemented next door.
 
 Three ideas, one per section below.
 
-**A policy is selected, never inherited.** ADR-0057 requires a keep-or-migrate
+**A policy is selected, never inferred.** ADR-0057 requires a keep-or-migrate
 decision rather than a guess that a saved recommended value is disposable, so
 :class:`RoutePolicy` has an ``UNSELECTED`` member and it is the default. Every
-behaviour in this module is conditional on ``STATIC``; a Run that never named a
-policy is byte-for-byte the Run it was before this module existed.
+behaviour in this module is conditional on ``STATIC``. Shared preflight refuses
+saved Config without a selected policy; historical unselected records and the
+staged no-Config path retain their legacy interpretation.
 
 **The authenticated harness is the authority.** :class:`HarnessCapabilities`
 reads the model listing of the very CLI the Run spawns — its eligibility
@@ -82,8 +83,9 @@ class RoutePolicy(Enum):
     ``UNSELECTED`` is not "static by default". It is the *absence* of a
     decision, and it is load-bearing: ADR-0057 forbids reinterpreting an
     existing Config as though the new policy had always been in force, so a
-    Run that never named a policy keeps every legacy gate, the built-in
-    **Escalation rung**, and the historical event stream unchanged.
+    saved Config without a choice is refused by shared preflight. Historical
+    unselected records keep their legacy interpretation; the no-Config path
+    remains staged until final default activation.
 
     ``DYNAMIC`` is the opt-in policy :mod:`git_loopy.dynamic_route` implements
     (#561). It lives here beside ``STATIC`` because the two are one closed

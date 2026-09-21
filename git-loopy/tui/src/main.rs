@@ -76,6 +76,7 @@ controls (--render, --attach):
   up/down, k/j              move through the Queue
   home/end, g/G             jump to its head or tail
   enter, right, l           open the selected issue's Log
+  click a Queue row         open that issue's Log
   esc, backspace, left, h   go back
   drag the Activity header  size the Activity band
   click it, or a            collapse the band to its header, or restore it

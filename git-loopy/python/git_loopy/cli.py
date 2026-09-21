@@ -525,7 +525,10 @@ def build_parser() -> argparse.ArgumentParser:
             "the Route selector choose an unpinned issue's route from live "
             "Artificial Analysis evidence, and needs "
             "GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY plus the three bounds below. "
-            "Unset keeps the current behaviour."
+            "Saved Config requires an explicit static/dynamic choice, here, "
+            "in GIT_LOOPY_ROUTE_POLICY, or recorded with update --routing "
+            "keep/migrate. Both choices preserve authored Static rows and "
+            "require explicit [escalation] for Static retries."
         ),
     )
     parser.add_argument(
@@ -2498,8 +2501,9 @@ def _resolve_route_policy(
     Absence is the answer that matters. ADR-0057 requires a keep-or-migrate
     decision rather than a guess that a saved recommended value is disposable,
     so an unset key resolves to
-    :attr:`~git_loopy.static_route.RoutePolicy.UNSELECTED` and every existing
-    Config keeps behaving exactly as it did.
+    :attr:`~git_loopy.static_route.RoutePolicy.UNSELECTED`. Saved Config then
+    requires explicit authority at startup and shared Run/doctor preflight;
+    resolution and readback alone neither choose nor persist a policy.
     """
     sources: tuple[tuple[str | None, str], ...] = (
         (getattr(args, "route_policy", None), "--route-policy"),
@@ -2796,6 +2800,7 @@ def resolve_config(
             or bool(env.get("GIT_LOOPY_CONTEXT_TIER", "").strip())
         ),
         route_policy=route_policy,
+        saved_config_present=bool(project or global_),
         routing_deadline_seconds=_resolve_dynamic_bound(
             args,
             env,
@@ -3147,6 +3152,12 @@ def main(argv: list[str] | None = None) -> int:
 
     config = resolved.run
 
+    from git_loopy.run_routing_preflight import routing_choice_refusal
+
+    if (refusal := routing_choice_refusal(config)) is not None:
+        print(f"git-loopy: {refusal}", file=sys.stderr)
+        return 1
+
     # One-time Skill-policy migration (#230, ADR-0015): Config that predates
     # `enabled_skills` is not the same as no Config at all — the wizard above
     # never ran for it, so it would otherwise resolve the Minimal Skill policy
@@ -3187,6 +3198,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"git-loopy: error: {exc}", file=sys.stderr)
             return 1
         config = resolved.run
+        if (refusal := routing_choice_refusal(config)) is not None:
+            print(f"git-loopy: {refusal}", file=sys.stderr)
+            return 1
     elif startup_state is SkillPolicyStartupState.LEGACY:
         _warn(_LEGACY_SKILL_POLICY_WARNING)
 

@@ -281,15 +281,24 @@ impl DashboardBands {
 
     /// Whether a pointer at these terminal coordinates landed on that handle.
     ///
-    /// The whole of hit-testing, and deliberately the library's rather than the
-    /// binary's: the coordinates a terminal reports mean nothing without the
-    /// layout they were drawn in, and that layout is [`dashboard_bands`].
+    /// Hit-testing belongs to the library rather than the binary: the
+    /// coordinates mean nothing without the layout they were drawn in.
     pub fn hits_activity_handle(&self, column: u16, row: u16) -> bool {
         let handle = self.activity_handle();
         column >= handle.x
             && column < handle.x.saturating_add(handle.width)
             && row >= handle.y
             && row < handle.y.saturating_add(handle.height)
+    }
+
+    /// The visible Queue row slot, excluding borders and column headings.
+    pub(crate) fn queue_row_at(&self, column: u16, row: u16) -> Option<usize> {
+        let inner = Block::default().borders(Borders::ALL).inner(self.queue);
+        if !inner.contains((column, row).into()) {
+            return None;
+        }
+        row.checked_sub(inner.y.saturating_add(TABLE_HEADER_HEIGHT))
+            .map(usize::from)
     }
 }
 
@@ -355,6 +364,8 @@ fn fitted(columns: &[Column], width: u16) -> Vec<usize> {
 /// The padding the tables lay out with, and that `cells` splits rows on.
 const COLUMN_SPACING: u16 = 2;
 
+const TABLE_HEADER_HEIGHT: u16 = 1;
+
 /// One table drawn with only the columns that fit.
 fn draw_table(
     frame: &mut Frame,
@@ -389,7 +400,11 @@ fn draw_table(
 
     frame.render_widget(
         Table::new(body, widths)
-            .header(Row::new(headings).style(Style::default().add_modifier(Modifier::BOLD)))
+            .header(
+                Row::new(headings)
+                    .height(TABLE_HEADER_HEIGHT)
+                    .style(Style::default().add_modifier(Modifier::BOLD)),
+            )
             .column_spacing(COLUMN_SPACING)
             .block(glyphs.block(title.to_string())),
         area,

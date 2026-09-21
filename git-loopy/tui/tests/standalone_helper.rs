@@ -343,10 +343,15 @@ mod live_terminal {
         }
 
         fn assert_draws_and_accepts_quit(&mut self) {
+            self.assert_interactions(&[("queue", b""), ("summary", b"q")]);
+        }
+
+        fn assert_interactions(&mut self, steps: &[(&str, &[u8])]) {
             let deadline = Instant::now() + Duration::from_secs(5);
             let mut output = Vec::new();
             let mut replies = 0;
-            let mut quit_sent = false;
+            let mut next_step = 0;
+            let mut observed = 0;
             let mut status = None;
             while Instant::now() < deadline {
                 let mut descriptor = libc::pollfd {
@@ -377,12 +382,19 @@ mod live_terminal {
                             .expect("the terminal answers the cursor query");
                     }
                     replies = requests;
-                    let text = String::from_utf8_lossy(&output).to_lowercase();
-                    if !quit_sent && text.contains("queue") && text.contains("summary") {
+                }
+                if let Some((expected, input)) = steps.get(next_step) {
+                    let text = String::from_utf8_lossy(&output[observed..]).to_lowercase();
+                    if let Some(position) = text.find(expected) {
                         self.master
-                            .write_all(b"q")
-                            .expect("the operator quits through the terminal");
-                        quit_sent = true;
+                            .write_all(input)
+                            .expect("the operator sends input through the terminal");
+                        next_step += 1;
+                        observed = if input.is_empty() {
+                            observed + position + expected.len()
+                        } else {
+                            output.len()
+                        };
                     }
                 }
                 status = self.child.try_wait().expect("the helper is waitable");
@@ -390,9 +402,11 @@ mod live_terminal {
                     break;
                 }
             }
-            assert!(
-                quit_sent,
-                "the helper never drew Queue and Summary with redirected stdin: {:?}",
+            assert_eq!(
+                next_step,
+                steps.len(),
+                "the helper did not reach {:?} with redirected stdin: {:?}",
+                steps.get(next_step).map(|(expected, _)| expected),
                 String::from_utf8_lossy(&output)
             );
             assert_eq!(
@@ -436,6 +450,36 @@ mod live_terminal {
             .arg(control)
             .stdin(Stdio::null());
         TerminalChild::spawn(&mut command).assert_draws_and_accepts_quit();
+    }
+
+    #[test]
+    fn live_attach_opens_a_queue_row_from_terminal_mouse_reports() {
+        let scratch = Scratch::new();
+        let trace = scratch.0.join("trace.jsonl");
+        let control = scratch.0.join("run.control");
+        fs::write(
+            &trace,
+            concat!(
+                "{\"type\":\"wrapper.run.start\",\"run_id\":\"r\"}\n",
+                "{\"type\":\"wrapper.afk_ready.collected\",\"issues\":[42,43]}\n",
+            ),
+        )
+        .unwrap();
+        let owner = File::create(&control).unwrap();
+        assert_eq!(unsafe { libc::flock(owner.as_raw_fd(), libc::LOCK_EX) }, 0);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_git-loopy-tui"));
+        command
+            .arg("--attach")
+            .arg(trace)
+            .arg("--control")
+            .arg(control)
+            .args(["--issue", "42"])
+            .stdin(Stdio::null());
+        TerminalChild::spawn(&mut command).assert_interactions(&[
+            ("#43", b"\x1b[<0;2;8M\x1b[<0;2;8m"),
+            ("issue #43", b"\x1b"),
+            ("queue", b"q"),
+        ]);
     }
 
     #[test]

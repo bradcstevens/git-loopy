@@ -78,6 +78,11 @@ impl Cursor {
         &self.selected
     }
 
+    pub(crate) fn open(&mut self, issue: IssueRef) {
+        self.selected = issue;
+        self.screen = Screen::DrillIn;
+    }
+
     /// Apply one intent against the Queue as it is currently projected.
     ///
     /// The three Activity-band sizing intents never reach here: they move no
@@ -87,7 +92,7 @@ impl Cursor {
     pub(crate) fn apply(&mut self, key: Key, queue: &[IssueRef]) -> Flow {
         match key {
             Key::Quit => return Flow::Quit,
-            Key::Open => self.screen = Screen::DrillIn,
+            Key::Open => self.open(self.selected.clone()),
             Key::Back => self.screen = Screen::Dashboard,
             Key::First => self.jump(queue.first()),
             Key::Last => self.jump(queue.last()),

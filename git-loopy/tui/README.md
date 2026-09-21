@@ -101,19 +101,25 @@ did name rather than reporting nothing.
 
 ### Navigation
 
-`Screen`, `Key` and `DashboardSession::handle_key` are the whole model; `main.rs`
-only decides which key press means which `Key`.
+`Screen`, `Key`, `Pointer` and `DashboardSession` own navigation; `main.rs`
+only translates terminal key and mouse reports into those inputs.
 
-| Intent | Keys |
+| Intent | Controls |
 | --- | --- |
 | Move through the Queue | `↑`/`k`, `↓`/`j`, `Home`/`g`, `End`/`G` |
 | Open the selected issue | `Enter`, `→`, `l` |
+| Open a visible issue | Click anywhere inside its Queue row |
 | Back to the Dashboard | `Esc`, `Backspace`, `←`, `h` |
 | Quit | `q`, `Ctrl-C`, `Ctrl-D` |
 
 The cursor holds an **issue, not a row**. The Queue groups active before queued
 before history, so a row moves the moment an issue is activated, and a
 positional cursor would silently retarget under the operator's hands.
+
+A Queue click opens the issue's Log on release, provided the pointer has not
+dragged and the same issue is still under it. Borders, column headings and
+empty rows are not click targets. Activity-header clicks still collapse or
+restore the band, and dragging that header only resizes it.
 
 ### Narrow terminals
 
