@@ -367,6 +367,14 @@ class RoutePublisher:
                 assignment.identity,
                 assignment.label,
             )
+        if entry.get("terminal") is True:
+            return RouteDeliveryResult(
+                assignment.issue,
+                RouteDeliveryStatus.FAILED,
+                assignment.identity,
+                assignment.label,
+                str(entry["last_error"]),
+            )
 
         comment_status = str(entry.get("comment"))
         if comment_status != "published":

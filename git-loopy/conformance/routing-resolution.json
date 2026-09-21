@@ -1,6 +1,152 @@
 {
   "schema_version": 1,
   "contract_version": "2.5",
+  "publication_recovery": {
+    "note": "Recorded Dynamic authorization, fresh cross-Run reuse and bounded tracker delivery through actual serial/Lane sessions. Uses migration_recovery's saved_config, harness, evidence and selector_choice. Each case starts with explicit migrate through init or update over authored unselected Config; later Runs use only the saved policy. Counts are cumulative external tracker writes, including refused calls. Delivery lists are the current Run's canonical statuses, not guessed from tracker state. A Run may retry pending delivery at startup and publish at Pickup, but those paths share the same finite bound per assignment. withdraw_models removes named configurations only for that Run's fresh routing reads; selector_choice scripts a new answer and route declares its independently expected work settings. Neither a new Run nor repaired tracker access renews an exhausted assignment's budget; a changed final assignment gets its own delivery. remove_before_failure models a tracker accepting owned-label removal but refusing the replacement add. On non-published steps, owned_label is absent by default or previous for a stale association; the canonical failure remains authoritative.",
+    "modes": ["serial", "lane"],
+    "entrypoints": ["init", "update"],
+    "route": {
+      "model": "synthetic-fancy-9", "effort": "high",
+      "context_tier": "default", "routing_source": "dynamic"
+    },
+    "cases": [
+      {
+        "id": "exhausted-replacement-leaves-a-visible-stale-association",
+        "operation": "label", "fault": "HTTP 403",
+        "runs": [
+          {"tracker_unavailable": false, "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 1, "label": 1}, "comments": 1},
+          {
+            "tracker_unavailable": true, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1", "owned_label": "previous",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "elected", "selector_calls": 1, "delivery": ["partial"], "attempts": {"comment": 2, "label": 2}, "comments": 2
+          },
+          {
+            "tracker_unavailable": true, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1", "owned_label": "previous",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["partial", "failed"], "attempts": {"comment": 2, "label": 4}, "comments": 2
+          },
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1", "owned_label": "previous",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 2, "label": 4}, "comments": 2
+          }
+        ]
+      },
+      {
+        "id": "exhausted-remove-then-add-leaves-a-visible-missing-association",
+        "operation": "label", "fault": "HTTP 503", "remove_before_failure": true,
+        "runs": [
+          {"tracker_unavailable": false, "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 1, "label": 1}, "comments": 1},
+          {
+            "tracker_unavailable": true, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "elected", "selector_calls": 1, "delivery": ["partial"], "attempts": {"comment": 2, "label": 2}, "comments": 2
+          },
+          {
+            "tracker_unavailable": true, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["partial", "failed"], "attempts": {"comment": 2, "label": 4}, "comments": 2
+          },
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 2, "label": 4}, "comments": 2
+          }
+        ]
+      },
+      {
+        "id": "permanent-comment-failure-remains-bounded-across-pickups",
+        "operation": "comment", "fault": "HTTP 403",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["pending"], "attempts": {"comment": 1, "label": 0}, "comments": 0},
+          {"tracker_unavailable": true, "reuse": "revalidated", "selector_calls": 0, "delivery": ["pending", "failed"], "attempts": {"comment": 3, "label": 0}, "comments": 0},
+          {"tracker_unavailable": true, "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 3, "label": 0}, "comments": 0},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 3, "label": 0}, "comments": 0},
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 4, "label": 1}, "comments": 1
+          },
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["published"], "attempts": {"comment": 4, "label": 1}, "comments": 1
+          }
+        ]
+      },
+      {
+        "id": "exhausted-partial-delivery-does-not-repeat-the-accepted-comment",
+        "operation": "label", "fault": "HTTP 403",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["partial"], "attempts": {"comment": 1, "label": 1}, "comments": 1},
+          {"tracker_unavailable": true, "reuse": "revalidated", "selector_calls": 0, "delivery": ["partial", "failed"], "attempts": {"comment": 1, "label": 3}, "comments": 1},
+          {"tracker_unavailable": true, "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 1, "label": 3}, "comments": 1},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 1, "label": 3}, "comments": 1},
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 2, "label": 4}, "comments": 2
+          }
+        ]
+      },
+      {
+        "id": "permission-repair-publishes-once-before-exhaustion",
+        "operation": "comment", "fault": "HTTP 403",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["pending"], "attempts": {"comment": 1, "label": 0}, "comments": 0},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published", "published"], "attempts": {"comment": 2, "label": 1}, "comments": 1},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published"], "attempts": {"comment": 2, "label": 1}, "comments": 1}
+        ]
+      },
+      {
+        "id": "rate-limit-recovery-does-not-buy-another-selector",
+        "operation": "comment", "fault": "HTTP 429",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["pending"], "attempts": {"comment": 1, "label": 0}, "comments": 0},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published", "published"], "attempts": {"comment": 2, "label": 1}, "comments": 1},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published"], "attempts": {"comment": 2, "label": 1}, "comments": 1}
+        ]
+      },
+      {
+        "id": "transient-tracker-failure-does-not-block-recorded-work",
+        "operation": "comment", "fault": "HTTP 503",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["pending"], "attempts": {"comment": 1, "label": 0}, "comments": 0},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published", "published"], "attempts": {"comment": 2, "label": 1}, "comments": 1},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published"], "attempts": {"comment": 2, "label": 1}, "comments": 1}
+        ]
+      },
+      {
+        "id": "partial-delivery-recovers-without-duplicating-the-comment",
+        "operation": "label", "fault": "HTTP 429",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["partial"], "attempts": {"comment": 1, "label": 1}, "comments": 1},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published", "published"], "attempts": {"comment": 1, "label": 2}, "comments": 1},
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 2, "label": 3}, "comments": 2
+          },
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["published"], "attempts": {"comment": 2, "label": 3}, "comments": 2
+          }
+        ]
+      }
+    ]
+  },
   "task_type_taxonomy": [
     "planning",
     "review",
