@@ -4972,6 +4972,38 @@ class _RemoteBranchExecutionHost:
         )
 
 
+def test_run_start_discloses_host_metering_and_ci_identity_once(
+    tmp_path, monkeypatch
+) -> None:
+    """Run-start retains the source's visibility without another GitHub read."""
+    fake_git, fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    fake_gh.repo = gh_module.Repo(
+        owner="x", name="y", default_branch="main", visibility="PUBLIC"
+    )
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    host = _RemoteBranchExecutionHost(fake_git)
+    real_parallel_loop = loop_module._ParallelLoop
+
+    def _inject_host(*args: Any, **kwargs: Any) -> loop_module._ParallelLoop:
+        return real_parallel_loop(*args, **{**kwargs, "execution_host": host})
+
+    monkeypatch.setattr(loop_module, "_ParallelLoop", _inject_host)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    starts = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.run.start"
+    ]
+    assert len(starts) == 1
+    assert starts[0]["execution_host"]["placement"] == "github-actions"
+    assert starts[0]["host_metering"]["state"] == "free"
+    assert starts[0]["ci_trigger_identity"]["can_trigger_downstream_ci"] is False
+
+
 def test_parallel_loop_materializes_remote_contributions_before_integration(
     tmp_path, monkeypatch
 ) -> None:

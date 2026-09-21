@@ -51,6 +51,13 @@ The contract is strictly enforced:
   (e.g., mismatch between requested publication mode and repository policy) fail closed
   before any publication step runs.
 
+The trust policy must exist in the tagged commit and the publication worktree's
+copy must match it. An untracked policy cannot supply
+a promise the tag never made. A source-only Rehearsal forwards its explicit mode
+to that verifier and refuses a committed artifact-bearing policy rather than
+returning a source-only Publication input for it. Unreadable policies, including
+invalid UTF-8, are publication refusals, not implicit defaults.
+
 ### Consuming an older helper from a source-only Runner Release
 
 Source-only describes publication, not Dashboard compatibility. Python maintenance
@@ -66,8 +73,11 @@ trust policy explicitly declares `source-only`. This preserves a locally built
 Dashboard without inferring publication mode from missing assets. Unreadable
 release history or policy still refuses maintenance.
 
-The shell and PowerShell installers still request the exact declared helper
-Release. Their `--no-tui` / `-NoTui` options skip that download; they do not install
+The shell and PowerShell installers also resolve the newest non-draft helper
+Release at or below the declared version, requiring the host's archive and
+checksum. They verify the resolved identity and retain its install record beside
+the helper; failed activation restores the previous helper and record together
+(#492). Their `--no-tui` / `-NoTui` options skip that download; they do not install
 a Dashboard. The built-in **line-printer** remains a diagnostic/plain-output path,
 not a replacement for the Python Runner's required terminal interface (ADR-0053).
 

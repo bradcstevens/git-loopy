@@ -17,7 +17,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
 | `exit-codes.json` | Clean, aborted, and usage-error process exits — including the `all_skipped` abort (§10, #413) a Pickup owes when the Pool is non-empty and it could bind none of it — plus `pool_emptiness_cases`, the one rule every member asks before claiming the exit-`0` empty Pool (§2.2, #541): only a *complete* read that found nothing establishes emptiness, so a failed or truncated read that found nothing is unknown rather than empty. plus `unbound_pool_cases`, its refusal-side companion (§3.3.1, #542): a Pool that bound nothing and holds one refusal nobody could read ends under `preflight_failed`, because `all_skipped` and `all_blocked` are claims about the *work* and an unprovable readiness verdict is a report about the *read*. Both rules ride this fixture rather than ones of their own because they decide which of these exits a Run is entitled to |
 | `event-schema.json` | Additive compatibility schema 1 (fixture revision 1.1): exact type literals, exact Run-start Release identity, per-Orchestrator Insight and **Parallel mode** capability manifests, production-seam normalized rollup cases, payload contracts, the rolling-dispatch **Lane contribution** identity and lifecycle vocabulary, whole ordered rolling Event streams every member serializes through its own seam, null/zero and UTC/monotonic semantics, and stable envelope-first JSON serialization |
-| `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.2): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, per-band projection field inventory and per-column field mapping, Queue and Iteration-breakdown columns and scopes, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, the activation `binding_source` vocabulary, and expected semantic view models consumed by Python and the Rust Dashboard core |
+| `dashboard-insights.json` | Renderer-neutral Dashboard seam (fixture revision 1.5): normalized Event prefixes, injected clock/zone/config inputs, canonical Dashboard and drill-in inventory, per-band projection field inventory — including the Header's **Parallel** posture composite — and per-column field mapping, Queue and Iteration-breakdown columns and scopes, placeholders, an SDK-backed and a native-Orchestrator unavailable-capability case, the activation `binding_source` vocabulary, and expected semantic view models consumed by Python and the Rust Dashboard core |
 | `skill-consultation.json` | Per-Iteration consulted-skill detection, deduplication, ordering, and Summary rendering |
 | `skill-policy.json` | Closed-world **Skill policy** (§17): base-scope selection, explicit empty policy, exact environment replacement, Run overlays with disable-wins, deprecated legacy subtraction, Minimal fallback and its reason, the four validation failures, startup classification, and the redacted `wrapper.skill_policy.resolved` projection |
 | `model-roster.json` | Canonical fallback `model → accepted reasoning-effort` sets; its keys are the supported-model set, stamped with the `cli_version` used for the latest observed-capability refresh because effort capability is a function of Copilot CLI version (§14, ADR-0019). ADR-0019 explicitly distinguishes seven unchanged compatibility rows not reverified at that stamp; it admits no new unobserved effort sets. Also carries `context_tiers` — the tier half of the same roster (ADR-0017), which carries a row only for a model whose tiers were captured for that stamp and is empty until they are |
@@ -27,7 +27,7 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | `attempt-lifecycle.json` | The **Attempt lifecycle** (§14): the closed ordered `fresh`/`retrying`/`skipped` states, the total ending-to-disposition table over every **Session outcome** — and over the *absence* of one, which spends no attempt and refunds none — beside whether the same ending owes the **Escalation rung**, plus scripted walks pinning monotonicity across an advancing Iteration, the shared budget two retryable endings draw on, and a Run with escalation off still defeating an issue it cannot finish. The two dials one ending turns are pinned in one row on purpose: they are separate ledgers reading one record, and a fixture that pinned either alone would let them drift |
 | `calibration-search.json` | The **Calibration** search: its own synthetic roster and the five-of-five promotion rule declared rather than inferred, then the cheapest-first walk, unanimity, early rung abandonment, the equal-price tie-break, both the **AI Credit** and the wall-clock ceiling, an unreported Consumption latching credits to unknown, an interrupted and an exhausted walk, a Proving set too thin to promote anything, the newest-first Proving-task draw every rung measures, and — at a declared `concurrency` — the probe run alone, the remainder bought at the operator's width, and a wall-clock ceiling spent once by Trials that overlap rather than once each |
 | `release-version.json` | Root Release version expectation, representative valid/invalid SemVer values, stable/prerelease publication classification, invalid tag scenarios including missing authored notes, unavailable-authority scenarios, and source/runtime/package/publication drift cases |
-| `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners, cross container and package provisioning, and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, the download URL one Release publishes them at, and the host aliases and selection cases an installer resolves its own artifact with |
+| `tui-artifacts.json` | The published **TUI helper** artifact set: the pinned release toolchain, the seven Phase 2 targets with their release runners, cross container and package provisioning, and native/cross build kind, targets deferred *by name* rather than by absence, canonical archive/checksum/executable naming, the download and paginated Release-index URLs, and the host and Release-resolution cases an installer resolves its own artifact with |
 | `release-trust.json` | The **platform-trust gate** a Release passes before publication: the declared **distribution mode** (source-only or artifact-bearing), per-platform signing mechanism and the cargo-dist key that enables it, the credentials each mechanism reads, the protected and unprotected release environments and the credential-free jobs, evidence a platform *cannot* carry recorded by name and reason, the evidence each channel requires, and the stable/prerelease publication decisions including the marking the GitHub Release itself must carry |
 | `homebrew-tap.json` | The **Homebrew channel**: the tap and formula identity, the four platforms Homebrew runs on and the artifact each installs, the three published targets it excludes *by name*, the stable-only publication decisions including the marking the Release itself must carry, and the version, URL, host, digest, coverage, and version-probe drift a formula is refused for |
 | `windows-channels.json` | The **winget and Scoop channels**: the package identity and committed paths each writes, the one published target a Windows package manager runs and the six it excludes *by name*, the claims neither format can carry recorded *by name and reason*, the stable-only publication decisions, the trust-receipt defects that keep an unsigned or unattributable artifact out of both channels, and the version, identifier, URL, host, digest, publisher, and version-probe drift committed metadata is refused for |
@@ -165,6 +165,37 @@ label, and cancellation cleanup retains additional billing exactly once. Config
 stays unchanged and no unstarted work incurs a Strike. Existing helper-level
 malformed-billing cases remain separate; this matrix does not claim them or
 activate final defaults, native members, non-local, Subagent or Integration routing.
+
+The `local_durability` matrix is adapted by
+`python/tests/test_routing_durability_conformance.py`. Four new-election/reuse
+and provenance/Pickup write-failure cases cross recorded init/update authority
+and real CLI serial/Lane execution: 16 combinations. The adapter refuses the
+canonical Event-log write before it reaches disk. No affected work or new tracker
+publication starts, no Strike is charged, and the Pickup-time Lease is released.
+Config and any existing tracker projection are preserved. A later repaired Run
+checks current evidence and capabilities and reuses only successfully recorded
+provenance, retaining the original decision's identity. Actual session settings,
+canonical Pickup, individual CLI Pickup lines, Dashboard readback and idempotent
+tracker effects agree. SDK-observed selector bills remain Run-only Consumption
+even when binding fails; no billing observation is not a reported zero. The fault
+is scoped to the named write, not a total storage outage. Defaults, historical
+streams and native-member/non-local/Subagent/Integration deferrals are unchanged.
+
+The `effort_semantics` matrix is adapted by
+`python/tests/test_routing_effort_conformance.py`: seven cases in serial and local
+Lane modes carry recorded migration into exact selector/work-session settings,
+canonical Pickup, CLI wording, raw Dashboard projection, Run-only Consumption and idempotent
+tracker publication. A bare Dynamic association means no effort dial, whereas
+`@none` names an advertised effort value; an empty advertised dial supplies
+neither. Unchanged inputs support fresh reuse
+without another selector bill; either direction of incompatible dial change
+refuses new work, including after a prior final assignment. Refusals preserve
+Config and tracker state and spend no assessment or Strike. Static omission
+semantics, historical streams, current combined labels and all activation
+deferrals remain unchanged.
+Rendered Rust Dashboard cells/preparation still use legacy backend/default
+wording for null effort; that readback correction remains before final
+activation and is not claimed by this Python matrix.
 
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent
@@ -643,6 +674,15 @@ them when the Pickup recorded them, and omit them for older records rather than
 inventing a tier or a first-attempt claim. A reassessed Dynamic retry may keep
 the same configuration; its lifecycle position must still distinguish it from
 the earlier contribution.
+
+One case sits outside `cases`, under `rolling_dashboard_cases`, and is replayed by
+the Rust Dashboard core alone. A rolling-dispatch stream is the one trace whose
+Header carries a declared **Parallel** posture, and replaying it through Python
+would demand a posture reducer the Textual Dashboard has no surface for (ADR-0051
+defers that to #312). Keeping it out of `cases` is therefore what lets every shared
+snapshot carry the one undeclared posture truthfully — but it is not exempt from the
+contract: the projection-field inventory sweep covers it alongside the shared cases,
+so a private case cannot be an unasserted one.
 
 The **Activity** band's sizing gestures — the drag, the click and `shift+↑` / `shift+↓`
 (ADR-0038) — are deliberately **not** in this fixture set, now that both renderers

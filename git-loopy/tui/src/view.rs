@@ -13,12 +13,12 @@
 
 use serde::Serialize;
 
-use crate::event::{ContextWindowSample, IssueRef, IterationSummary};
+use crate::event::{ContextWindowSample, IssueRef, IterationSummary, LaneSlot};
 use crate::state::LOG_TAIL_LINES;
 use crate::state::{
-    routing_preparation_text, routing_resolution_text, DashboardState, IssueContribution,
-    IssueLedgerEntry, IterationRow, LogContent, LogLine, ResolvedRoute, RouteDelivery,
-    RoutePreparation, STATUS_ACTIVE, STATUS_GONE, STATUS_QUEUED,
+    routing_preparation_text, routing_resolution_text, ContributionSummaryEntry, DashboardState,
+    IssueContribution, IssueLedgerEntry, IterationRow, LogContent, LogLine, ResolvedRoute,
+    RouteDelivery, RoutePreparation, SummaryEntryRef, STATUS_ACTIVE, STATUS_GONE, STATUS_QUEUED,
 };
 use crate::timestamp::{Timestamp, Zone};
 
@@ -128,6 +128,7 @@ pub struct Header {
     pub cost: Declaration,
     pub rate_card: Declaration,
     pub routing: Declaration,
+    pub parallel: ParallelDeclaration,
 }
 
 /// One Run-scoped **Insight capability**, projected as its own declaration.
@@ -158,6 +159,31 @@ impl Declaration {
             },
         }
     }
+}
+
+/// The Header's `parallel` Declaration (ADR-0044): the four Run-scoped
+/// posture Events — `wrapper.concurrency.changed`, `wrapper.parallel.degraded`,
+/// `wrapper.parallel.serial_fallback`, `wrapper.serial.requested` — folded
+/// into the one place an operator learns whether, and why, a Run is not
+/// filling the Lane cap it was configured with.
+///
+/// Follows the same **Insight capability** device as [`Declaration`] in shape,
+/// but not in what gates it: `availability` reports whether this Run has a
+/// posture *at all* — `not_declared` until one of the four posture Events
+/// arrives, `available` from then on (ADR-0063). The Run-start manifest is a
+/// producer's statement of what it could do, which is a different question
+/// from what this Run is doing.
+#[derive(Clone, Debug, Serialize)]
+pub struct ParallelDeclaration {
+    pub availability: &'static str,
+    pub configured_lane_limit: Option<i64>,
+    pub effective_lane_limit: Option<i64>,
+    pub pressure: Option<String>,
+    pub degraded: bool,
+    pub degraded_reason: Option<String>,
+    pub serial_fallback_reason: Option<String>,
+    pub serial_required: Option<i64>,
+    pub refill_stopped: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -336,6 +362,20 @@ impl PreparationView {
 pub struct Activity {
     pub issue: Option<IssueRef>,
     pub lines: Vec<LogLineView>,
+    pub windows: Vec<ActivityWindow>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ActivityWindow {
+    pub kind: &'static str,
+    pub lane: Option<IssueRef>,
+    pub issue: IssueRef,
+    pub task_type: Option<Vec<String>>,
+    pub route: Option<RouteView>,
+    pub context_fill: ContextFill,
+    pub subagents: Option<usize>,
+    pub live: bool,
+    pub lines: Vec<LogLineView>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -364,7 +404,7 @@ pub struct RunConsumption {
 pub struct SummaryRow {
     pub kind: &'static str,
     pub iteration: Option<i64>,
-    pub lane: Option<IssueRef>,
+    pub lane: Option<LaneSlot>,
     pub outcome: Option<String>,
     pub duration_seconds: Option<f64>,
     pub model: Option<String>,
@@ -412,8 +452,9 @@ pub struct IterationBreakdown {
 #[derive(Clone, Debug, Serialize)]
 pub struct ContributionRow {
     pub kind: &'static str,
+    pub contribution_id: String,
     pub iteration: Option<i64>,
-    pub lane: Option<IssueRef>,
+    pub lane: Option<LaneSlot>,
     pub outcome: Option<String>,
     pub duration_seconds: Option<f64>,
     pub status: String,
@@ -456,15 +497,45 @@ pub fn project_run_view(
             activity: Activity {
                 issue: state.active_ref.clone(),
                 lines: log_lines(state.live_log(), context),
+                windows: state
+                    .agents
+                    .windows
+                    .iter()
+                    .map(|agent| ActivityWindow {
+                        kind: agent.kind,
+                        lane: agent.lane.clone(),
+                        issue: agent.issue.clone(),
+                        task_type: agent.task_type.clone(),
+                        route: agent.route.as_ref().map(RouteView::project),
+                        context_fill: agent_context_fill(
+                            agent.context,
+                            state.capabilities.context_window,
+                        ),
+                        subagents: agent.subagents,
+                        live: agent.live,
+                        lines: log_lines(state.issue_log(&agent.issue), context),
+                    })
+                    .collect(),
             },
             summary: Summary {
-                rows: state.completed_iterations.iter().map(summary_row).collect(),
                 run_consumption: state.run_usage.as_ref().map(|usage| RunConsumption {
                     tokens_in: usage.tokens_in,
                     tokens_out: usage.tokens_out,
                     credits: usage.credits.value(),
                     premium_requests: usage.premium_requests.value(),
                 }),
+                rows: state
+                    .summary_order
+                    .iter()
+                    .map(|entry_ref| match entry_ref {
+                        SummaryEntryRef::Iteration(index) => {
+                            summary_row(&state.completed_iterations[*index])
+                        }
+                        SummaryEntryRef::Contribution(index) => {
+                            contribution_summary_row(&state.completed_contributions[*index])
+                        }
+                    })
+                    .collect(),
             },
         },
         drill_in: drill_in_view(state, context, drill_in),
@@ -507,15 +578,39 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
         cost: Declaration::from_capability(state.capabilities.cost),
         rate_card: Declaration::from_capability(state.capabilities.rate_card),
         routing: Declaration::from_capability(state.capabilities.routing),
+        parallel: parallel_declaration(state),
+    }
+}
+
+fn parallel_declaration(state: &DashboardState) -> ParallelDeclaration {
+    let posture = &state.parallel;
+    ParallelDeclaration {
+        availability: if posture.observed {
+            "available"
+        } else {
+            "not_declared"
+        },
+        configured_lane_limit: posture.configured_lane_limit,
+        effective_lane_limit: posture.effective_lane_limit,
+        pressure: posture.pressure.clone(),
+        degraded: posture.degraded,
+        degraded_reason: posture.degraded_reason.clone(),
+        serial_fallback_reason: posture.serial_fallback_reason.clone(),
+        serial_required: posture.serial_required,
+        refill_stopped: posture.refill_stopped,
     }
 }
 
 fn context_fill(state: &DashboardState) -> ContextFill {
-    let Some(sample) = state.context_window.and_then(normalize_sample) else {
+    agent_context_fill(state.context_window, state.capabilities.context_window)
+}
+
+fn agent_context_fill(sample: Option<ContextWindowSample>, available: Option<bool>) -> ContextFill {
+    let Some(sample) = sample.and_then(normalize_sample) else {
         // A capability declared false is "this Orchestrator cannot measure
         // it"; anything else is simply "not measured yet".
         return ContextFill {
-            availability: if state.capabilities.context_window == Some(false) {
+            availability: if available == Some(false) {
                 "unavailable"
             } else {
                 "not_observed"
@@ -619,6 +714,41 @@ fn summary_row(row: &IterationRow) -> SummaryRow {
     }
 }
 
+/// One finalized **Lane contribution**'s Summary row (ADR-0044).
+///
+/// The contribution vocabulary carries no Credits, Premium requests, tool
+/// count, Skill count, consulted Skills, or PR advances — `cost_usd` is
+/// retired and `contribution.end`'s summary names none of the rest — so
+/// those columns read as unobserved rather than an observed zero.
+fn contribution_summary_row(row: &ContributionSummaryEntry) -> SummaryRow {
+    SummaryRow {
+        kind: "contribution",
+        iteration: None,
+        lane: row.lane.clone(),
+        outcome: row.outcome.clone(),
+        duration_seconds: row.duration_seconds,
+        model: row.model.clone(),
+        tokens_in: row.tokens_in,
+        tokens_out: row.tokens_out,
+        observed_tokens: row.observed_tokens,
+        credits: row.credits,
+        premium_requests: row.premium_requests,
+        tool_count: row.tool_count,
+        skill_call_count: row.skill_call_count,
+        skills_consulted: row.skills_consulted.clone(),
+        commits: row.commits,
+        auto_closures: row.auto_closures,
+        pr_advances: 0,
+        strikes: 0,
+        peak_context_window: row.peak_context_window.map(|sample| PeakContext {
+            current_tokens: sample.current_tokens,
+            token_limit: sample.token_limit,
+            effective_target_tokens: sample.effective_target_tokens,
+            effective_ceiling_tokens: sample.effective_ceiling_tokens,
+        }),
+    }
+}
+
 /// A measurement an Orchestrator reported, or `None` when it declared it
 /// unavailable by sending `null`.
 fn reported<T>(value: &Option<Option<T>>) -> Option<&Option<T>> {
@@ -683,6 +813,7 @@ fn contribution_count(entry: &IssueLedgerEntry) -> usize {
 fn contribution_row(contribution: &IssueContribution) -> ContributionRow {
     ContributionRow {
         kind: contribution.kind,
+        contribution_id: contribution.contribution_id.clone(),
         iteration: contribution.iteration,
         lane: contribution.lane.clone(),
         outcome: contribution.outcome.clone(),

@@ -1159,6 +1159,10 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "capacity",
                 "starting_lane_limit",
             ],
+            "run_start_disclosures_optional": [
+                "host_metering",
+                "ci_trigger_identity",
+            ],
             # #410: the **Run readback**. Optional beside `required`, never in
             # it: a port that routes nothing has no Config to read back, and
             # obliging it to publish one would make it fabricate a table.
@@ -1661,6 +1665,25 @@ def test_event_fixture_pins_execution_host_event_provenance() -> None:
     )
 
 
+def test_event_fixture_pins_run_start_host_disclosures() -> None:
+    """Host metering and CI identity are Run facts, not host-object members."""
+    disclosures = _EVENT_SCHEMA["run_start_disclosures"]
+    assert disclosures["keys"] == ["host_metering", "ci_trigger_identity"]
+    assert disclosures["host_metering_states"] == [
+        "not_applicable",
+        "free",
+        "metered",
+    ]
+    assert disclosures["producers"] == ["python"]
+    assert disclosures["non_producers"] == ["shell", "powershell"]
+    assert (
+        _EVENT_SCHEMA["payload_contracts"]["wrapper.run.start"][
+            "run_start_disclosures_optional"
+        ]
+        == disclosures["keys"]
+    )
+
+
 def test_python_parallel_manifest_matches_the_producers_it_has() -> None:
     """A declared capability is a claim about this distribution's own code.
 
@@ -2130,10 +2153,9 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.4 adds the Routing resolution: a third header declaration and a `route`
-    # on every Queue row and every contribution row, so a consumer pinned to 1.3
-    # projects rows this fixture no longer matches.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.4"
+    # 1.5 carries the Parallel posture and per-Agent Activity windows alongside
+    # the existing Routing resolution and additive route fields.
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.5"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -2207,9 +2229,27 @@ def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
         "summary_row": "iteration_or_lane_contribution",
         "iteration_breakdown": "issue_contributions",
         "activity": "current_active_issue",
+        "activity_windows": "per_agent_slot",
         "log": "issue_across_contributions",
         "route": "issue_latest_routing_resolution",
     }
+    assert contract["projection_fields"]["activity"] == ["issue", "lines", "windows"]
+    assert contract["projection_fields"]["activity_window"] == [
+        "kind",
+        "lane",
+        "issue",
+        "task_type",
+        "route",
+        "context_fill",
+        "subagents",
+        "live",
+        "lines",
+    ]
+    assert contract["activity_window_inventory"]["kinds"] == [
+        "serial",
+        "lane",
+        "integration",
+    ]
     assert contract["presentation_exclusions"] == [
         "glyphs",
         "colors",
@@ -2386,6 +2426,97 @@ def _resolve_field(row: dict[str, Any], path: str) -> Any:
     return value
 
 
+def _assert_route_fields(
+    route: dict[str, Any], fields: dict[str, Any], where: str
+) -> None:
+    required = fields["route"]
+    optional = _DASHBOARD_INSIGHTS["semantic_contract"][
+        "optional_projection_fields"
+    ]["route"]
+    assert list(route)[: len(required)] == required, where
+    assert list(route)[len(required) :] == [
+        key for key in optional if key in route
+    ], where
+
+
+def _empty_inventory_tally() -> dict[str, int]:
+    """A zeroed tally of what one inventory sweep reached."""
+    return {
+        "snapshots": 0,
+        "queue_rows": 0,
+        "breakdown_rows": 0,
+        "summary_rows": 0,
+        "log_lines": 0,
+        "routes": 0,
+        "activity_windows": 0,
+    }
+
+
+def _sweep_snapshot_inventory(
+    case: dict[str, Any],
+    snapshot: dict[str, Any],
+    contract: dict[str, Any],
+    counted: dict[str, int],
+) -> None:
+    """Assert one snapshot against the contract's own field inventory."""
+    fields = contract["projection_fields"]
+    where = f"{case['id']} @ {snapshot['after_event_count']}"
+    expected = snapshot["expected"]
+    assert list(expected["dashboard"]) == contract["dashboard_band_order"], where
+    assert list(expected["drill_in"]) == contract["drill_in_band_order"], where
+
+    header = expected["dashboard"]["header"]
+    assert list(header) == fields["header"], where
+    assert list(header["context_fill"]) == fields["context_fill"], where
+    # One capability answers exactly one question, so both declarations
+    # project the same single field (ADR-0026): a Dashboard that could
+    # read *cost* but not *rate_card* would have collapsed the two facts
+    # a separate declaration exists to keep apart.
+    assert list(header["cost"]) == fields["declaration"], where
+    assert list(header["rate_card"]) == fields["declaration"], where
+    # The Parallel posture is the one Header entry the Declaration device
+    # does *not* fit (ADR-0051): `availability` gates it, but eight further
+    # facts hang off that gate, so it declares an inventory of its own
+    # rather than borrowing `declaration`'s single field.
+    assert list(header["parallel"]) == fields["parallel"], where
+    assert list(expected["dashboard"]["activity"]) == fields["activity"], where
+    for window in expected["dashboard"]["activity"]["windows"]:
+        assert list(window) == fields["activity_window"], where
+        assert list(window["context_fill"]) == fields["context_fill"], where
+        if window["route"] is not None:
+            _assert_route_fields(window["route"], fields, where)
+        for line in window["lines"]:
+            assert list(line) == fields["log_line"], where
+            counted["log_lines"] += 1
+        counted["activity_windows"] += 1
+    assert list(expected["drill_in"]["detail_header"]) == fields["detail_header"], where
+
+    for row in expected["dashboard"]["queue"]["rows"]:
+        assert list(row) == fields["queue_row"], where
+        counted["queue_rows"] += 1
+        # A route is nullable where a consumption is not: the record's
+        # absence is what "nothing has priced this issue yet" looks
+        # like, so its keys are only asserted where one was resolved.
+        if row["route"] is not None:
+            _assert_route_fields(row["route"], fields, where)
+            counted["routes"] += 1
+    for row in expected["dashboard"]["summary"]["rows"]:
+        assert list(row) == fields["summary_row"], where
+        counted["summary_rows"] += 1
+    for row in expected["drill_in"]["iteration_breakdown"]["rows"]:
+        assert list(row) == fields["iteration_breakdown_row"], where
+        assert list(row["consumption"]) == fields["consumption"], where
+        if row["route"] is not None:
+            _assert_route_fields(row["route"], fields, where)
+            counted["routes"] += 1
+        counted["breakdown_rows"] += 1
+    for line in (
+        expected["dashboard"]["activity"]["lines"] + expected["drill_in"]["log"]["lines"]
+    ):
+        assert list(line) == fields["log_line"], where
+        counted["log_lines"] += 1
+
+
 def test_every_dashboard_projection_matches_the_declared_field_inventory() -> None:
     """Every projected band carries exactly the fields the contract declares.
 
@@ -2398,75 +2529,49 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     rendered column is required to resolve onto that inventory -- so a new
     column cannot be added without a field to carry it, and a field cannot be
     renamed without the column following.
+
+    The rolling-dispatch case is swept here too. It is deliberately not one of
+    the shared cases -- only the Rust core folds a rolling stream, and replaying
+    it through Python would demand the posture reducer ADR-0051 defers to #312 --
+    but staying private must not mean staying unasserted, and the inventory is a
+    fixture-internal claim that needs no second projection to check.
     """
     contract = _DASHBOARD_INSIGHTS["semantic_contract"]
     fields = contract["projection_fields"]
-    optional_fields = contract["optional_projection_fields"]
-
-    checked_queue_rows = 0
-    checked_breakdown_rows = 0
-    checked_summary_rows = 0
-    checked_log_lines = 0
-    checked_routes = 0
-    for case in _DASHBOARD_INSIGHTS["cases"]:
-        for snapshot in case["snapshots"]:
-            where = f"{case['id']} @ {snapshot['after_event_count']}"
-            expected = snapshot["expected"]
-            assert list(expected["dashboard"]) == contract["dashboard_band_order"], where
-            assert list(expected["drill_in"]) == contract["drill_in_band_order"], where
-
-            header = expected["dashboard"]["header"]
-            assert list(header) == fields["header"], where
-            assert list(header["context_fill"]) == fields["context_fill"], where
-            # One capability answers exactly one question, so both declarations
-            # project the same single field (ADR-0026): a Dashboard that could
-            # read *cost* but not *rate_card* would have collapsed the two facts
-            # a separate declaration exists to keep apart.
-            assert list(header["cost"]) == fields["declaration"], where
-            assert list(header["rate_card"]) == fields["declaration"], where
-            assert list(expected["dashboard"]["activity"]) == fields["activity"], where
-            assert list(expected["drill_in"]["detail_header"]) == (
-                fields["detail_header"]
-            ), where
-
-            for row in expected["dashboard"]["queue"]["rows"]:
-                assert list(row) == fields["queue_row"], where
-                checked_queue_rows += 1
-            for row in expected["dashboard"]["summary"]["rows"]:
-                assert list(row) == fields["summary_row"], where
-                checked_summary_rows += 1
-            for row in expected["drill_in"]["iteration_breakdown"]["rows"]:
-                assert list(row) == fields["iteration_breakdown_row"], where
-                assert list(row["consumption"]) == fields["consumption"], where
-                checked_breakdown_rows += 1
-            for row in (
-                expected["dashboard"]["queue"]["rows"]
-                + expected["drill_in"]["iteration_breakdown"]["rows"]
-            ):
-                route = row["route"]
-                if route is not None:
-                    assert list(route) == fields["route"] + [
-                        field
-                        for field in optional_fields["route"]
-                        if field in route
-                    ], where
-                    checked_routes += 1
-            for line in (
-                expected["dashboard"]["activity"]["lines"]
-                + expected["drill_in"]["log"]["lines"]
-            ):
-                assert list(line) == fields["log_line"], where
-                checked_log_lines += 1
+    counted = _empty_inventory_tally()
+    rolling_counted = _empty_inventory_tally()
+    # A collection this sweep never reaches is a collection it cannot fail on,
+    # so each one is required to be present and non-empty before it is swept:
+    # a fixture that lost its cases would otherwise report a clean inventory.
+    # The two collections tally separately for the same reason -- a shared
+    # guard the private case could discharge is a guard the shared oracle has
+    # stopped carrying.
+    shared_cases = _DASHBOARD_INSIGHTS["cases"]
+    rolling_cases = _DASHBOARD_INSIGHTS["rolling_dashboard_cases"]
+    assert shared_cases
+    assert rolling_cases
+    for cases, tally in ((shared_cases, counted), (rolling_cases, rolling_counted)):
+        for case in cases:
+            assert case["snapshots"], case["id"]
+            for snapshot in case["snapshots"]:
+                _sweep_snapshot_inventory(case, snapshot, contract, tally)
+                tally["snapshots"] += 1
 
     # An empty inventory sweep would pass vacuously.
-    assert checked_queue_rows > 0
-    assert checked_breakdown_rows > 0
-    assert checked_summary_rows > 0
-    assert checked_log_lines > 0
+    assert counted["snapshots"] > 0
+    assert counted["queue_rows"] > 0
+    assert counted["breakdown_rows"] > 0
+    assert counted["summary_rows"] > 0
+    assert counted["log_lines"] > 0
+    assert counted["activity_windows"] > 0
     # ... and so would a case set where every row's route were null, which is
     # exactly what a fixture updated for the column but not for the payload
     # would look like.
-    assert checked_routes > 0
+    assert counted["routes"] > 0
+    # The private rolling case resolves no route, so it is held to reaching the
+    # rows it does carry rather than to the shared set's guards.
+    assert rolling_counted["snapshots"] > 0
+    assert rolling_counted["queue_rows"] > 0
 
     sample_queue = _dashboard_case("baseline-closed-iteration")["snapshots"][-1][
         "expected"
@@ -2770,6 +2875,69 @@ def test_python_semantic_view_matches_every_dashboard_fixture_snapshot() -> None
                 "semantic_contract"
             ]["drill_in_band_order"]
             assert actual == snapshot["expected"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _DASHBOARD_INSIGHTS["activity_window_cases"],
+    ids=lambda case: case["id"],
+)
+def test_python_activity_windows_match_the_shared_fixture(
+    case: dict[str, Any],
+) -> None:
+    """Replay each Activity window through the public Event-to-view seam."""
+    offset = timezone(timedelta(minutes=case["inputs"]["local_utc_offset_minutes"]))
+    run_started = datetime.fromisoformat(case["events"][0]["ts"].replace("Z", "+00:00"))
+    clock = _FixtureClock()
+    wall = _FixtureWallClock(run_started.astimezone(offset))
+    state = LiveRunState(
+        model=case["inputs"]["model"],
+        reasoning_effort=case["inputs"]["reasoning_effort"],
+        monotonic=clock,
+        wall_clock=wall,
+    )
+
+    applied = 0
+    for snapshot in case["snapshots"]:
+        for event in case["events"][applied : snapshot["after_event_count"]]:
+            at = datetime.fromisoformat(event["ts"].replace("Z", "+00:00"))
+            wall.value = at.astimezone(offset)
+            clock.value = _fixture_monotonic(
+                event.get("observed_monotonic"), at, run_started
+            )
+            state.render(event)
+        applied = snapshot["after_event_count"]
+        actual = project_run_view(
+            state,
+            None,
+            issue=case["inputs"]["drill_in_issue"],
+        )["dashboard"]["activity"]["windows"]
+        assert actual == snapshot["expected"]
+
+
+def test_activity_window_fixture_counts_distinct_subagent_lifecycles() -> None:
+    """Only observed start/completion identities can reach an observed zero."""
+    case = next(
+        candidate
+        for candidate in _DASHBOARD_INSIGHTS["activity_window_cases"]
+        if candidate["id"] == "lane-order-refill-late-end-and-subagent-lifecycle"
+    )
+    lifecycle = [
+        (event["type"], event["tool_call_id"])
+        for event in case["events"]
+        if event["type"].startswith("subagent.")
+        and event.get("lane_issue") == 601
+    ]
+    assert lifecycle == [
+        ("subagent.started", "call-601"),
+        ("subagent.started", "call-601"),
+        ("subagent.started", "call-601-secondary"),
+        ("subagent.completed", "call-601"),
+        ("subagent.failed", "call-601-secondary"),
+    ]
+    assert [
+        snapshot["expected"][0]["subagents"] for snapshot in case["snapshots"][:4]
+    ] == [1, 2, 1, 0]
 
 
 @pytest.mark.parametrize(

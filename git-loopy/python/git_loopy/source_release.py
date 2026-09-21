@@ -16,6 +16,7 @@ from typing import Sequence
 
 from git_loopy.distribution_mode import (
     DISTRIBUTION_MODE_SOURCE_ONLY,
+    TRUST_POLICY_PATH,
     DistributionModeError,
     resolve_distribution_mode,
 )
@@ -172,6 +173,29 @@ def inspect_release_tag(
     ):
         raise SourceReleaseError(
             f"authored release notes must be committed before tagging: {notes_path}"
+        )
+
+    try:
+        _run_git(
+            repository_root,
+            "cat-file",
+            "-e",
+            f"{commit}:{TRUST_POLICY_PATH.as_posix()}",
+        )
+    except SourceReleaseError as exc:
+        raise SourceReleaseError(
+            f"Release trust policy must be committed before tagging: {TRUST_POLICY_PATH}"
+        ) from exc
+    if _git_text(
+        repository_root,
+        "diff",
+        "--name-only",
+        "HEAD",
+        "--",
+        TRUST_POLICY_PATH.as_posix(),
+    ):
+        raise SourceReleaseError(
+            f"Release trust policy must be committed before tagging: {TRUST_POLICY_PATH}"
         )
 
     try:

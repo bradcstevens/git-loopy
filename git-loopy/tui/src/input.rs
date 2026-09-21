@@ -59,7 +59,7 @@ pub struct Pointer {
 
 /// The pointer gestures the Dashboard distinguishes.
 ///
-/// [`Wheel`](PointerAction::Wheel) is here precisely so that "the wheel never
+/// Wheel gestures are here precisely so that "the wheel never
 /// resizes" (ADR-0038) is a pinned behaviour of the shipped path rather than an
 /// event the caller happens not to forward: resize-by-wheel is the accidental
 /// gesture class ADR-0021's Context section is an argument against.
@@ -71,8 +71,12 @@ pub enum PointerAction {
     Drag,
     /// The button came back up.
     Release,
-    /// The wheel turned, either way.
+    /// A horizontal or directionless wheel gesture; it never resizes.
     Wheel,
+    /// Scroll towards the first row of the band under the pointer.
+    WheelUp,
+    /// Scroll towards the last row of the band under the pointer.
+    WheelDown,
 }
 
 /// What became of an offered input.
@@ -99,11 +103,11 @@ pub enum Admission {
 /// appending: a coalesced input takes the *newest* position in the buffer, so a
 /// pointer move overtaking the release that ended its drag would re-apply the
 /// drag after the gesture was over.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Delta {
     Resize,
     Clock,
-    ContextWindow,
+    ContextWindow(Option<crate::event::IssueRef>),
 }
 
 impl Delta {
@@ -112,7 +116,9 @@ impl Delta {
             Input::Resized(..) => Some(Delta::Resize),
             Input::Tick(_) => Some(Delta::Clock),
             Input::Trace(line) => match Event::from_jsonl_line(line) {
-                Some(event) if event.kind == "usage.context_window" => Some(Delta::ContextWindow),
+                Some(event) if event.kind == "usage.context_window" => {
+                    Some(Delta::ContextWindow(event.lane_issue))
+                }
                 _ => None,
             },
             Input::Key(_) | Input::Pointer(_) | Input::EndOfTrace | Input::Failed(_) => None,
@@ -123,7 +129,8 @@ impl Delta {
 /// Whether this input's meaning depends on the terminal's current geometry.
 ///
 /// A pointer gesture is hit-tested against the laid-out bands, and an Activity
-/// sizing key is capped by the ceiling those bands leave, so both mean
+/// sizing key is capped by the ceiling those bands leave, and a page scroll
+/// depends on the height of its viewport, so these mean
 /// something different on a terminal of a different size. Nothing else in the
 /// buffer does: an Event is reduced identically at every size, and the drawn
 /// frame measures the surface it is handed.
@@ -131,7 +138,15 @@ fn depends_on_geometry(input: &Input) -> bool {
     matches!(
         input,
         Input::Pointer(_)
-            | Input::Key(Key::ToggleActivity | Key::GrowActivity | Key::ShrinkActivity)
+            | Input::Key(
+                Key::ToggleActivity
+                    | Key::GrowActivity
+                    | Key::ShrinkActivity
+                    | Key::PageUp
+                    | Key::PageDown
+                    | Key::ActivityPageUp
+                    | Key::ActivityPageDown
+            )
     )
 }
 
@@ -171,15 +186,41 @@ impl InputQueue {
             if let Some(position) = self
                 .items
                 .iter()
-                .position(|queued| Delta::of(queued) == Some(class))
+                .rposition(|queued| Delta::of(queued).as_ref() == Some(&class))
             {
                 let overtakes_a_gesture = class == Delta::Resize
                     && self.items.iter().skip(position).any(depends_on_geometry);
-                if !overtakes_a_gesture {
+                let crosses_an_agent = matches!(class, Delta::ContextWindow(_))
+                    && self
+                        .items
+                        .iter()
+                        .skip(position + 1)
+                        .any(changes_activity_agent);
+                if !overtakes_a_gesture && !crosses_an_agent {
                     self.items.remove(position);
                     self.items.push_back(input);
                     self.coalesced += 1;
                     return Admission::Coalesced;
+                }
+
+                fn changes_activity_agent(input: &Input) -> bool {
+                    let Input::Trace(line) = input else {
+                        return false;
+                    };
+                    Event::from_jsonl_line(line).is_some_and(|event| {
+                        matches!(
+                            event.kind.as_str(),
+                            "wrapper.issue.activated"
+                                | "wrapper.iteration.start"
+                                | "wrapper.iteration.end"
+                                | "wrapper.contribution.start"
+                                | "wrapper.contribution.work_finished"
+                                | "wrapper.contribution.end"
+                                | "wrapper.integration.recovery_started"
+                                | "wrapper.integration.published"
+                                | "wrapper.run.end"
+                        )
+                    })
                 }
             }
         }

@@ -1,6 +1,119 @@
 {
   "schema_version": 1,
   "contract_version": "2.9",
+  "local_durability": {
+    "note": "Recorded init/update authorization crosses the real CLI, actual serial/Lane sessions and the canonical Event-log write boundary. Uses migration_recovery's saved_config, harness, evidence and selector_choice. Refuse the named Event write before it reaches disk, both for a new election and after an earlier Run supplied a reusable route. A failed Run starts no work, publishes nothing new, charges no Strike, releases its Lease and preserves Config and existing tracker projections. A repaired Run still checks current capabilities and evidence; only successfully persisted provenance can supply reuse. Selector bills remain Run-only Consumption, including a refused binding; no billing observation remains unknown, not a fabricated zero. The fault is scoped to the declared mandatory write, not a claim that arbitrary storage failure leaves all other records writable.",
+    "modes": ["serial", "lane"],
+    "entrypoints": ["init", "update"],
+    "selector_credits": "0.25",
+    "baseline": {"selector_calls": 1, "routing_credits": "0.25", "reuse": "elected"},
+    "route": {
+      "model": "synthetic-fancy-9", "effort": "high",
+      "context_tier": "default", "routing_source": "dynamic"
+    },
+    "cases": [
+      {
+        "id": "unrecorded-election-cannot-start-work",
+        "prior_route": false,
+        "failed_event": "wrapper.routing.resolved",
+        "failure": {"records": 0, "selector_calls": 1, "routing_credits": "0.25"},
+        "recovery": {"reuse": "elected", "selector_calls": 1, "routing_credits": "0.25"}
+      },
+      {
+        "id": "recorded-provenance-still-needs-a-durable-pickup",
+        "prior_route": false,
+        "failed_event": "wrapper.pickup.bound",
+        "failure": {"records": 1, "selector_calls": 1, "routing_credits": "0.25"},
+        "recovery": {"reuse": "revalidated", "selector_calls": 0, "routing_credits": "0"}
+      },
+      {
+        "id": "reuse-needs-a-new-durable-validation",
+        "prior_route": true,
+        "failed_event": "wrapper.routing.resolved",
+        "failure": {"records": 0, "selector_calls": 0, "routing_credits": "0"},
+        "recovery": {"reuse": "revalidated", "selector_calls": 0, "routing_credits": "0"}
+      },
+      {
+        "id": "revalidated-provenance-still-needs-a-durable-pickup",
+        "prior_route": true,
+        "failed_event": "wrapper.pickup.bound",
+        "failure": {"records": 1, "selector_calls": 0, "routing_credits": "0"},
+        "recovery": {"reuse": "revalidated", "selector_calls": 0, "routing_credits": "0"}
+      }
+    ]
+  },
+  "effort_semantics": {
+    "note": "Recorded update --routing migrate through real CLI serial/local Lane work. A bare Dynamic association asserts that effort is not configurable; it is not permission to let a configurable model choose an unscored backend effort. The literal string none remains an advertised effort value. Each case first authorizes against initial_efforts, then uses each run's fresh harness listing. Expected settings, selector calls, Consumption and refusal are independent literals. Reopening the same issue preserves its observational publication so unchanged-input reuse must keep the original decision without another assessment. A newly incompatible dial refuses fresh work even when canonical history and a Route label name the old assignment. Current combined labels remain the shipped representation; ADR-0060 implementation is not claimed.",
+    "modes": ["serial", "lane"],
+    "saved_config": {
+      "routing_deadline_seconds": 30,
+      "routing_credit_allowance": "2.5",
+      "selector_concurrency": 1
+    },
+    "evidence": {"id": "aa-effort", "intelligence_index": 80, "output_tokens_per_second": 100},
+    "cases": [
+      {
+        "id": "no-dial-is-absent-through-work-and-fresh-reuse",
+        "model": "synthetic-effortless-0", "association": "synthetic-effortless-0",
+        "initial_efforts": null, "effort": null,
+        "runs": [
+          {"efforts": null, "exit_code": 0, "outcome": "iteration_cap", "reuse": "elected", "selector_calls": 1, "credits": "0.30"},
+          {"efforts": null, "exit_code": 0, "outcome": "iteration_cap", "reuse": "revalidated", "selector_calls": 0, "credits": "0"}
+        ]
+      },
+      {
+        "id": "none-remains-a-value-through-work-and-fresh-reuse",
+        "model": "synthetic-nonable-3", "association": "synthetic-nonable-3@none",
+        "initial_efforts": ["none", "high"], "effort": "none",
+        "runs": [
+          {"efforts": ["none", "high"], "exit_code": 0, "outcome": "iteration_cap", "reuse": "elected", "selector_calls": 1, "credits": "0.30"},
+          {"efforts": ["none", "high"], "exit_code": 0, "outcome": "iteration_cap", "reuse": "revalidated", "selector_calls": 0, "credits": "0"}
+        ]
+      },
+      {
+        "id": "new-dial-refuses-a-saved-bare-association",
+        "model": "synthetic-effortless-0", "association": "synthetic-effortless-0",
+        "initial_efforts": null, "effort": null,
+        "runs": [
+          {"efforts": ["none", "high"], "exit_code": 1, "outcome": "all_skipped", "reuse": null, "selector_calls": 0, "credits": "0"}
+        ]
+      },
+      {
+        "id": "empty-advertised-dial-does-not-authorize-a-backend-default",
+        "model": "synthetic-effortless-0", "association": "synthetic-effortless-0",
+        "initial_efforts": null, "effort": null,
+        "runs": [
+          {"efforts": [], "exit_code": 1, "outcome": "all_skipped", "reuse": null, "selector_calls": 0, "credits": "0"}
+        ]
+      },
+      {
+        "id": "absent-dial-refuses-a-saved-none-value",
+        "model": "synthetic-nonable-3", "association": "synthetic-nonable-3@none",
+        "initial_efforts": ["none", "high"], "effort": "none",
+        "runs": [
+          {"efforts": null, "exit_code": 1, "outcome": "all_skipped", "reuse": null, "selector_calls": 0, "credits": "0"}
+        ]
+      },
+      {
+        "id": "new-dial-cannot-reuse-an-earlier-no-dial-assignment",
+        "model": "synthetic-effortless-0", "association": "synthetic-effortless-0",
+        "initial_efforts": null, "effort": null,
+        "runs": [
+          {"efforts": null, "exit_code": 0, "outcome": "iteration_cap", "reuse": "elected", "selector_calls": 1, "credits": "0.30"},
+          {"efforts": ["none", "high"], "exit_code": 1, "outcome": "all_skipped", "reuse": null, "selector_calls": 0, "credits": "0"}
+        ]
+      },
+      {
+        "id": "absent-dial-cannot-reuse-an-earlier-none-assignment",
+        "model": "synthetic-nonable-3", "association": "synthetic-nonable-3@none",
+        "initial_efforts": ["none", "high"], "effort": "none",
+        "runs": [
+          {"efforts": ["none", "high"], "exit_code": 0, "outcome": "iteration_cap", "reuse": "elected", "selector_calls": 1, "credits": "0.30"},
+          {"efforts": null, "exit_code": 1, "outcome": "all_skipped", "reuse": null, "selector_calls": 0, "credits": "0"}
+        ]
+      }
+    ]
+  },
   "publication_recovery": {
     "note": "Recorded Dynamic authorization, fresh cross-Run reuse and bounded tracker delivery through actual serial/Lane sessions. Uses migration_recovery's saved_config, harness, evidence and selector_choice. Each case starts with explicit migrate through init or update over authored unselected Config; later Runs use only the saved policy. Counts are cumulative external tracker writes, including refused calls. Delivery lists are the current Run's canonical statuses, not guessed from tracker state. A Run may retry pending delivery at startup and publish at Pickup, but those paths share the same finite bound per assignment. withdraw_models removes named configurations only for that Run's fresh routing reads; selector_choice scripts a new answer and route declares its independently expected work settings. Neither a new Run nor repaired tracker access renews an assignment's exhausted retries; a changed final assignment gets its own delivery. remove_before_failure models a tracker accepting owned-label removal but refusing the replacement add. On non-published steps, owned_label is absent by default or previous when the previous owned association remains; the canonical failure remains authoritative.",
     "modes": ["serial", "lane"],

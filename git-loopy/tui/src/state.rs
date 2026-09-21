@@ -8,12 +8,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::activity::ActivityAgents;
 use crate::event::{
-    CommitRecorded, ContextWindowSample, Event, EventPayload, ExecutionHostDeclaration,
-    InsightCapabilities, IssueRef, IterationEnd, IterationIssue, IterationSummary, Pickup,
-    ReleaseAdvanced, RoutingDelivery, RoutingDeliveryStatus, RoutingPrepared, RoutingResolved,
-    StopRequested, ROUTE_ELECTED, ROUTE_PREPARATION_PROPOSED, ROUTE_PREPARATION_REUSABLE,
-    ROUTE_PREPARATION_STATIC, ROUTE_PREPARATION_UNAVAILABLE, ROUTE_REVALIDATED,
+    AutoClosed, CommitRecorded, ContextWindowSample, ContributionEnd, ContributionIdentity, Event,
+    EventPayload, ExecutionHostDeclaration, InsightCapabilities, IssueRef, IterationEnd,
+    IterationIssue, IterationSummary, LaneSlot, Pickup, ReleaseAdvanced, RoutingDelivery,
+    RoutingDeliveryStatus, RoutingPrepared, RoutingResolved, StopRequested, ROUTE_ELECTED,
+    ROUTE_PREPARATION_PROPOSED, ROUTE_PREPARATION_REUSABLE, ROUTE_PREPARATION_STATIC,
+    ROUTE_PREPARATION_UNAVAILABLE, ROUTE_REVALIDATED,
 };
 use crate::timestamp::Timestamp;
 
@@ -110,6 +112,8 @@ impl RunInputs {
 /// One line of an issue's bounded Log.
 #[derive(Clone, Debug)]
 pub(crate) struct LogLine {
+    /// Position in this issue's Log, including lines no longer retained.
+    pub(crate) ordinal: usize,
     pub(crate) at: Option<Timestamp>,
     pub(crate) kind: String,
     pub(crate) content: LogContent,
@@ -201,7 +205,7 @@ impl ResolvedRoute {
     /// Every routing field is optional-when-present (contract 1.21), so a
     /// Runner that routes nothing emits the binding exactly as it always did
     /// and must not be read as having routed to a null pair.
-    fn from_pickup(pickup: &Pickup) -> Option<Self> {
+    pub(crate) fn from_pickup(pickup: &Pickup) -> Option<Self> {
         if pickup.model.is_none()
             && pickup.effort.is_none()
             && pickup.context_tier.is_none()
@@ -302,8 +306,9 @@ impl RoutePreparation {
 #[derive(Clone, Debug)]
 pub(crate) struct IssueContribution {
     pub(crate) kind: &'static str,
+    pub(crate) contribution_id: String,
     pub(crate) iteration: Option<i64>,
-    pub(crate) lane: Option<IssueRef>,
+    pub(crate) lane: Option<LaneSlot>,
     pub(crate) outcome: Option<String>,
     pub(crate) duration_seconds: Option<f64>,
     pub(crate) status: String,
@@ -321,6 +326,32 @@ pub(crate) struct IssueContribution {
     pub(crate) cache_read: Option<i64>,
     pub(crate) cache_write: Option<i64>,
     pub(crate) peak_context_window: Option<ContextWindowSample>,
+}
+
+/// The Header's `parallel` Declaration data, folded from the four Run-scoped
+/// posture Events ADR-0044 collapses into one Declaration rather than four
+/// fields or a band of its own.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ParallelPosture {
+    /// Whether any of the four posture Events has been folded yet, which is
+    /// what the Header's `availability` gate reports (ADR-0063).
+    pub(crate) observed: bool,
+    /// The immutable configured Lane cap, once a signal has named one.
+    pub(crate) configured_lane_limit: Option<i64>,
+    /// The Lane limit currently in effect.
+    pub(crate) effective_lane_limit: Option<i64>,
+    /// What is narrowing the effective limit below the configured cap.
+    pub(crate) pressure: Option<String>,
+    /// Whether Parallel mode degraded entirely to the serial path this Run.
+    pub(crate) degraded: bool,
+    /// Why it degraded.
+    pub(crate) degraded_reason: Option<String>,
+    /// The reason the most recent serial-Iteration fallback named.
+    pub(crate) serial_fallback_reason: Option<String>,
+    /// How many serial-required items the latest latching peek saw.
+    pub(crate) serial_required: Option<i64>,
+    /// Whether Lane refill is currently stopped for serial-required work.
+    pub(crate) refill_stopped: bool,
 }
 
 /// One issue's lifecycle within a Run.
@@ -393,9 +424,42 @@ pub(crate) struct IterationRow {
     pub(crate) summary: IterationSummary,
 }
 
+/// One finalized **Lane contribution** row for the Summary band (ADR-0044).
+///
+/// Named on the contribution's own terms, matching [`IssueContribution`]: the
+/// optional tool and Skill observations come from the summary, while billed
+/// Consumption comes from the canonical issue row rather than `cost_usd`.
+#[derive(Clone, Debug)]
+pub(crate) struct ContributionSummaryEntry {
+    pub(crate) lane: Option<LaneSlot>,
+    pub(crate) outcome: Option<String>,
+    pub(crate) duration_seconds: Option<f64>,
+    pub(crate) model: Option<String>,
+    pub(crate) tokens_in: Option<i64>,
+    pub(crate) tokens_out: Option<i64>,
+    pub(crate) observed_tokens: Option<i64>,
+    pub(crate) credits: Option<f64>,
+    pub(crate) premium_requests: Option<f64>,
+    pub(crate) tool_count: Option<i64>,
+    pub(crate) skill_call_count: Option<i64>,
+    pub(crate) skills_consulted: Option<Vec<String>>,
+    pub(crate) commits: i64,
+    pub(crate) auto_closures: i64,
+    pub(crate) peak_context_window: Option<ContextWindowSample>,
+}
+
+/// Which of the two Summary vectors one row belongs to, and at what index —
+/// the Summary band's actual row order (ADR-0044).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SummaryEntryRef {
+    Iteration(usize),
+    Contribution(usize),
+}
+
 /// The complete live Dashboard state for one Run.
 #[derive(Clone, Debug)]
 pub struct DashboardState {
+    pub(crate) agents: ActivityAgents,
     inputs: RunInputs,
     pub(crate) run_id: Option<String>,
     pub(crate) status: String,
@@ -419,6 +483,8 @@ pub struct DashboardState {
     contribution_hosts: BTreeMap<String, String>,
     pub(crate) wind_down: Option<WindDown>,
     pub(crate) wind_down_observed: bool,
+    /// The folded `parallel` Declaration (ADR-0044).
+    pub(crate) parallel: ParallelPosture,
     pub(crate) context_window: Option<ContextWindowSample>,
     /// The last successfully committed **Release line** this Run announced.
     pub(crate) release_line: Option<ReleaseAdvanced>,
@@ -428,6 +494,13 @@ pub struct DashboardState {
     pub(crate) ledger: BTreeMap<IssueRef, IssueLedgerEntry>,
     pub(crate) completed_iterations: Vec<IterationRow>,
     pub(crate) run_usage: Option<RunConsumption>,
+    /// Finalized **Lane contribution** rows (ADR-0044), in their own
+    /// insertion order.
+    pub(crate) completed_contributions: Vec<ContributionSummaryEntry>,
+    /// The Summary band's row order across both vectors above, since a
+    /// Parallel-mode Run interleaves serial Iterations with Lane
+    /// contributions and neither may reorder the other's rows.
+    pub(crate) summary_order: Vec<SummaryEntryRef>,
     /// Pool membership for the open Iteration.
     iteration_pool: Vec<IssueRef>,
     /// Output produced before this Iteration named its Active issue.
@@ -457,6 +530,7 @@ impl DashboardState {
     /// A Run that has emitted no Event yet.
     pub fn new(inputs: RunInputs) -> Self {
         Self {
+            agents: ActivityAgents::default(),
             inputs,
             run_id: None,
             status: RUN_STARTING.to_string(),
@@ -474,6 +548,7 @@ impl DashboardState {
             contribution_hosts: BTreeMap::new(),
             wind_down: None,
             wind_down_observed: false,
+            parallel: ParallelPosture::default(),
             context_window: None,
             release_line: None,
             active_ref: None,
@@ -481,6 +556,8 @@ impl DashboardState {
             ledger: BTreeMap::new(),
             completed_iterations: Vec::new(),
             run_usage: None,
+            completed_contributions: Vec::new(),
+            summary_order: Vec::new(),
             iteration_pool: Vec::new(),
             pending_log: Vec::new(),
             pending_usage: (0, 0),
@@ -538,6 +615,7 @@ impl DashboardState {
     /// An Event type this core does not model contributes only its Run
     /// identity, so an additive schema extension reduces cleanly.
     pub fn apply(&mut self, event: &Event) {
+        self.agents.apply(event);
         if self.run_id.is_none() {
             if let Some(run_id) = &event.run_id {
                 self.run_id = Some(run_id.clone());
@@ -548,6 +626,14 @@ impl DashboardState {
             self.first_ts = now;
         }
         let now_monotonic = self.monotonic_at_option(now, event.observed_monotonic);
+        if let EventPayload::ContributionStart(start) = &event.payload {
+            if let Some(contribution_id) = &start.contribution_id {
+                self.contribution_hosts.insert(
+                    contribution_id.clone(),
+                    start.host.clone().unwrap_or_else(|| "unknown".to_string()),
+                );
+            }
+        }
         // Multi-active dispatch (issue #66, ADR-0008): a runner-stamped
         // `lane_issue` routes this Lane's output to its own timer / Log /
         // Consumption, bypassing the serial single-Active inference. Without
@@ -565,6 +651,32 @@ impl DashboardState {
             if is_lane_event(&event.kind) {
                 self.render_lane_event(&lane, event, now, now_monotonic);
                 return;
+            }
+        }
+        // The rolling-dispatch counterpart (ADR-0044): every
+        // `contribution_identity`-stamped or lifecycle record carries its own
+        // `issue`, so attribution reads it directly — no `contribution_id` →
+        // issue lookup is needed, and the ledger stays keyed by issue exactly
+        // as the legacy `lane_issue` arm above leaves it. A record reaches
+        // this arm only by carrying the whole identity, so an ordinary serial
+        // record naming an issue alone falls through to the serial path
+        // below, unchanged.
+        if let Some(contribution) = event.contribution.clone() {
+            match &event.payload {
+                EventPayload::ContributionStart(_) => {
+                    self.lane_touch(&contribution.issue, now_monotonic, now);
+                    return;
+                }
+                EventPayload::ContributionEnd(end) => {
+                    self.record_contribution_end(&contribution, end, now, now_monotonic);
+                    return;
+                }
+                _ => {
+                    if is_contribution_stamped_event(&event.kind) {
+                        self.render_lane_event(&contribution.issue, event, now, now_monotonic);
+                        return;
+                    }
+                }
             }
         }
         match &event.payload {
@@ -637,7 +749,9 @@ impl DashboardState {
             EventPayload::UsageContextWindow(sample) => {
                 if sample.current_tokens.is_some_and(|tokens| tokens >= 0) {
                     self.capabilities.context_window = Some(true);
-                    self.context_window = Some(*sample);
+                    if event.lane_issue.is_none() {
+                        self.context_window = Some(*sample);
+                    }
                 }
             }
             EventPayload::UsageTokens(usage) => {
@@ -653,6 +767,9 @@ impl DashboardState {
             }
             EventPayload::CommitRecorded(commit) => {
                 self.append_log_block(LOG_EVENT, &commit_log_text(commit), now)
+            }
+            EventPayload::AutoClosed(closure) => {
+                self.append_log_block(LOG_EVENT, &auto_close_log_text(closure), now)
             }
             EventPayload::Strike(strike) => {
                 if let Some(strikes) = strike.strikes {
@@ -687,7 +804,45 @@ impl DashboardState {
                 }
             }
             EventPayload::StopLifted(_) => {}
-            EventPayload::Other => {}
+            EventPayload::ContributionEnd(_) => {
+                // Reached only when the record carries no whole identity
+                // (`event.contribution` was `None` above); nothing to fold.
+            }
+            EventPayload::ConcurrencyChanged(changed) => {
+                self.parallel.observed = true;
+                self.parallel.configured_lane_limit = changed
+                    .configured_lane_limit
+                    .or(self.parallel.configured_lane_limit);
+                self.parallel.effective_lane_limit = changed
+                    .effective_lane_limit
+                    .or(self.parallel.effective_lane_limit);
+                if let Some(pressure) = changed.pressure.clone() {
+                    self.parallel.pressure = pressure;
+                }
+            }
+            EventPayload::ParallelDegraded(degraded) => {
+                self.parallel.observed = true;
+                self.parallel.degraded = true;
+                self.parallel.degraded_reason = degraded.reason.clone();
+                self.parallel.configured_lane_limit =
+                    degraded.lane_cap.or(self.parallel.configured_lane_limit);
+            }
+            EventPayload::ParallelSerialFallback(fallback) => {
+                self.parallel.observed = true;
+                self.parallel.serial_fallback_reason = fallback.reason.clone();
+                self.parallel.configured_lane_limit =
+                    fallback.lane_cap.or(self.parallel.configured_lane_limit);
+            }
+            EventPayload::SerialRequested(requested) => {
+                self.parallel.observed = true;
+                if let Some(refill_stopped) = requested.refill_stopped {
+                    self.parallel.refill_stopped = refill_stopped;
+                }
+                if let Some(seen) = requested.serial_required {
+                    self.parallel.serial_required = seen;
+                }
+            }
+            EventPayload::Other | EventPayload::SubagentLifecycle(_) => {}
         }
     }
 
@@ -756,6 +911,9 @@ impl DashboardState {
             }
             EventPayload::CommitRecorded(commit) => {
                 self.append_lane_log(lane, LOG_EVENT, &commit_log_text(commit), now)
+            }
+            EventPayload::AutoClosed(closure) => {
+                self.append_lane_log(lane, LOG_EVENT, &auto_close_log_text(closure), now)
             }
             EventPayload::UsageTokens(usage) => {
                 if let Some(entry) = self.ledger.get_mut(lane) {
@@ -884,6 +1042,7 @@ impl DashboardState {
         push_bounded(
             &mut entry.log,
             LogLine {
+                ordinal: 0,
                 at,
                 kind: LOG_EVENT.to_string(),
                 content,
@@ -1065,6 +1224,9 @@ impl DashboardState {
             duration_seconds: rollup.duration_seconds,
             summary,
         });
+        self.summary_order.push(SummaryEntryRef::Iteration(
+            self.completed_iterations.len() - 1,
+        ));
     }
 
     fn record_normalized_contributions(&mut self, iteration: Option<i64>, rollup: &IterationEnd) {
@@ -1092,32 +1254,50 @@ impl DashboardState {
             }
             entry.closed_at = row.closed_at;
             entry.issue_elapsed_seconds = row.issue_elapsed_seconds.map(|value| value.max(0.0));
-            entry.usage_observed = entry
-                .contributions
-                .iter()
-                .any(|contribution| contribution.usage_observed);
-            entry.tokens_in = entry
-                .contributions
-                .iter()
-                .map(|contribution| contribution.tokens_in)
-                .sum();
-            entry.tokens_out = entry
-                .contributions
-                .iter()
-                .map(|contribution| contribution.tokens_out)
-                .sum();
-            // The Queue total follows an all-or-nothing rule: a billed total
-            // missing one contribution's term latches to unknown rather than
-            // understating the work.
-            let mut credits = BilledTotal::default();
-            let mut premium_requests = BilledTotal::default();
-            for contribution in &entry.contributions {
-                credits.add(contribution.credits);
-                premium_requests.add(contribution.premium_requests);
-            }
-            entry.credits = credits;
-            entry.premium_requests = premium_requests;
+            recompute_contribution_totals(entry);
         }
+    }
+
+    /// Fold one finalized **Lane contribution**'s authoritative row
+    /// (`wrapper.contribution.end`, ADR-0044) onto its issue's ledger entry.
+    ///
+    /// The ledger stays keyed by issue: `contribution_id` earns its place only
+    /// in the drill-in, where it would separate two contributions on the same
+    /// issue — a shape the Wave stream could not produce.
+    fn record_contribution_end(
+        &mut self,
+        contribution: &ContributionIdentity,
+        end: &ContributionEnd,
+        now: Option<Timestamp>,
+        now_monotonic: Option<f64>,
+    ) {
+        let issue = &contribution.issue;
+        self.insert_entry(issue.clone());
+        // This contribution's own Pickup resolution, never a later one: an
+        // escalated issue is a change between rows, so a row inheriting the
+        // issue's newest pair would erase the change it exists to show.
+        let route = self.iteration_routes.get(issue).cloned();
+        let row = contribution_from_rolling(contribution, end, route);
+        let summary_row = contribution_summary_entry(contribution, end, &row);
+        let status = row.status.clone();
+        self.deactivate(issue, now_monotonic, Some(status.as_str()));
+        let entry = self
+            .ledger
+            .get_mut(issue)
+            .expect("entry inserted immediately above");
+        entry.contributions.push(row);
+        entry.status = status.clone();
+        if status == STATUS_CLOSED {
+            entry.closed_at = now;
+        }
+        recompute_contribution_totals(entry);
+        // The Summary band's own row for this contribution (ADR-0044): it
+        // reuses the home the Iteration rollup already has rather than a
+        // fourth render surface.
+        self.completed_contributions.push(summary_row);
+        self.summary_order.push(SummaryEntryRef::Contribution(
+            self.completed_contributions.len() - 1,
+        ));
     }
 
     /// Append a Lane's own output to that Lane's Log, bypassing `active_ref`.
@@ -1213,6 +1393,26 @@ fn is_lane_event(kind: &str) -> bool {
     )
 }
 
+/// `contribution_identity.stamped_types` (ADR-0044): the Event types a
+/// rolling-dispatch Runner stamps with the contribution triple, routed to the
+/// issue the triple's own `issue` names rather than through the serial
+/// single-Active inference.
+fn is_contribution_stamped_event(kind: &str) -> bool {
+    matches!(
+        kind,
+        "agent.output"
+            | "assistant.message"
+            | "assistant.reasoning"
+            | "tool.call"
+            | "tool.result"
+            | "usage.context_window"
+            | "usage.tokens"
+            | "wrapper.auto_close"
+            | "wrapper.checkpoint.recorded"
+            | "wrapper.commit.recorded"
+    )
+}
+
 /// Whether a binding source names work the Iteration had already begun.
 fn is_retroactive_binding(source: Option<&str>) -> bool {
     matches!(source, Some("closure" | "commit" | "single_member_pool"))
@@ -1226,6 +1426,15 @@ fn commit_log_text(commit: &CommitRecorded) -> String {
     if let Some(subject) = commit.subject.as_deref().filter(|s| !s.is_empty()) {
         text.push_str("  ");
         text.push_str(subject.split('\n').next().unwrap_or(subject));
+    }
+    text
+}
+
+fn auto_close_log_text(closure: &AutoClosed) -> String {
+    let mut text = format!("✓ auto-closed {}", pickup_issue_label(&closure.issue));
+    if let Some(sha) = closure.sha.as_deref().filter(|sha| !sha.is_empty()) {
+        let short: String = sha.chars().take(SHORT_SHA_LENGTH).collect();
+        text.push_str(&format!("  ({short})"));
     }
     text
 }
@@ -1411,6 +1620,7 @@ fn non_empty(value: Option<&str>) -> Option<String> {
 fn split_log_block(kind: &str, text: &str, at: Option<Timestamp>) -> Vec<LogLine> {
     text.split('\n')
         .map(|line| LogLine {
+            ordinal: 0,
             at,
             kind: kind.to_string(),
             content: LogContent::Text(line.to_string()),
@@ -1435,8 +1645,9 @@ fn contribution_from(
         // A Lane's work is named by the Lane it ran in, not by the serial
         // Iteration number it happened to share with its siblings.
         kind: if is_lane { "lane" } else { "iteration" },
+        contribution_id: String::new(),
         iteration: if is_lane { None } else { iteration },
-        lane: is_lane.then(|| row.issue.clone()),
+        lane: is_lane.then(|| LaneSlot::from(row.issue.clone())),
         outcome: rollup.outcome.clone(),
         duration_seconds: rollup.duration_seconds.map(|value| value.max(0.0)),
         status: row
@@ -1468,7 +1679,129 @@ fn contribution_from(
     }
 }
 
-fn push_bounded(buffer: &mut Vec<LogLine>, line: LogLine) {
+/// One finalized **Lane contribution** row from its authoritative
+/// `wrapper.contribution.end` record (ADR-0044).
+///
+/// Named on the contribution's own terms — `reason` for how it ended,
+/// `closure_outcome` for its terminal status — rather than the Iteration
+/// vocabulary `contribution_from` reads: a contribution answers "what did
+/// this piece of work cost and achieve", not "what happened this round".
+/// `cost_usd` is retired on the same terms as the Iteration rollup's (#330),
+/// so Credits and Premium requests are never populated from it.
+fn contribution_from_rolling(
+    contribution: &ContributionIdentity,
+    end: &ContributionEnd,
+    route: Option<ResolvedRoute>,
+) -> IssueContribution {
+    let summary = end.summary.clone().unwrap_or_default();
+    let consumption = end
+        .issues
+        .iter()
+        .find(|row| row.issue == contribution.issue)
+        .and_then(|row| row.consumption.as_ref());
+    let usage_observed = summary.tokens_in.is_some() || summary.tokens_out.is_some();
+    IssueContribution {
+        kind: "contribution",
+        contribution_id: contribution.contribution_id.clone(),
+        iteration: None,
+        lane: Some(contribution.lane_id.clone()),
+        outcome: end.reason.clone(),
+        duration_seconds: summary.lifecycle_seconds.map(|value| value.max(0.0)),
+        status: summary
+            .closure_outcome
+            .clone()
+            .unwrap_or_else(|| STATUS_NO_PROGRESS.to_string()),
+        active_seconds: summary.agent_seconds.unwrap_or(0.0).max(0.0),
+        route,
+        model: usage_observed
+            .then(|| summary.model.clone())
+            .flatten()
+            .filter(|model| !model.is_empty()),
+        tokens_in: if usage_observed {
+            summary.tokens_in.unwrap_or(0).max(0)
+        } else {
+            0
+        },
+        tokens_out: if usage_observed {
+            summary.tokens_out.unwrap_or(0).max(0)
+        } else {
+            0
+        },
+        usage_observed,
+        credits: consumption.and_then(|usage| usage.credits),
+        premium_requests: consumption.and_then(|usage| usage.premium_requests),
+        cache_read: consumption
+            .and_then(|usage| usage.cache_read)
+            .map(|value| value.max(0)),
+        cache_write: consumption
+            .and_then(|usage| usage.cache_write)
+            .map(|value| value.max(0)),
+        peak_context_window: summary.peak_context_window,
+    }
+}
+
+/// Project one finalized **Lane contribution**'s Summary row (ADR-0044).
+fn contribution_summary_entry(
+    contribution: &ContributionIdentity,
+    end: &ContributionEnd,
+    row: &IssueContribution,
+) -> ContributionSummaryEntry {
+    let summary = end.summary.clone().unwrap_or_default();
+    ContributionSummaryEntry {
+        lane: Some(contribution.lane_id.clone()),
+        outcome: end.reason.clone(),
+        duration_seconds: summary.lifecycle_seconds.map(|value| value.max(0.0)),
+        model: summary.model.clone().filter(|model| !model.is_empty()),
+        tokens_in: summary.tokens_in.map(|value| value.max(0)),
+        tokens_out: summary.tokens_out.map(|value| value.max(0)),
+        observed_tokens: summary.observed_tokens.map(|value| value.max(0)),
+        credits: row.credits,
+        premium_requests: row.premium_requests,
+        tool_count: summary.tool_count.map(|value| value.max(0)),
+        skill_call_count: summary.skill_call_count.map(|value| value.max(0)),
+        skills_consulted: summary.skills_consulted,
+        commits: summary.commits.unwrap_or(0).max(0),
+        auto_closures: summary.closures.unwrap_or(0).max(0),
+        peak_context_window: summary.peak_context_window,
+    }
+}
+
+/// Recompute one issue's aggregate Consumption from its own accumulated
+/// contributions.
+///
+/// Shared by the Wave rollup path and the rolling-contribution path so the
+/// Queue's all-or-nothing billed-total rule — a total missing one
+/// contribution's term latches to unknown rather than understating the work —
+/// is enforced identically by both.
+fn recompute_contribution_totals(entry: &mut IssueLedgerEntry) {
+    entry.usage_observed = entry
+        .contributions
+        .iter()
+        .any(|contribution| contribution.usage_observed);
+    entry.tokens_in = entry
+        .contributions
+        .iter()
+        .map(|contribution| contribution.tokens_in)
+        .sum();
+    entry.tokens_out = entry
+        .contributions
+        .iter()
+        .map(|contribution| contribution.tokens_out)
+        .sum();
+    let mut credits = BilledTotal::default();
+    let mut premium_requests = BilledTotal::default();
+    for contribution in &entry.contributions {
+        credits.add(contribution.credits);
+        premium_requests.add(contribution.premium_requests);
+    }
+    entry.credits = credits;
+    entry.premium_requests = premium_requests;
+}
+
+fn push_bounded(buffer: &mut Vec<LogLine>, mut line: LogLine) {
+    line.ordinal = buffer
+        .last()
+        .map_or(0, |last| last.ordinal.saturating_add(1));
     if buffer.len() == LOG_TAIL_LINES {
         buffer.remove(0);
     }

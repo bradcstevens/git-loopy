@@ -1272,6 +1272,11 @@ selector_concurrency = 2                # or --selector-concurrency
 [route_associations]
 # benchmark identity -> the Copilot configuration you have verified it names
 "gpt-5.6-terra" = "gpt-5.6-terra@high"
+
+# Optional: exact official SWE-bench Verified model identity -> the same
+# Copilot configuration. This informs the work-model assessment only.
+[swe_bench_associations]
+"GPT Test (20260901)" = "gpt-5.6-terra@high"
 ```
 
 and `GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY` in the environment. The key is read from the
@@ -1397,6 +1402,20 @@ within the saved bound of one or two. The next serial Pickup or Lane refill does
 not wait for unrelated open selectors; cancelled assessments keep their Run-only
 Consumption and visible unavailable preparation records. Pending issues remain
 open, unleased and unpublished, with unchanged labels and Config.
+Shared `effort_semantics` cases carry recorded migration through actual serial
+and Lane sessions and fresh cross-Run reuse. A bare `[route_associations]` value
+asserts that the model has no effort dial; it does not authorize an unscored
+backend default if the live harness reports a dial. Use `model@none` only when
+`none` is the exact scored and advertised effort value. An incompatible dial
+change refuses new Dynamic work even when an earlier assignment is recorded,
+without a selector bill, Strike, Config edit or new tracker publication.
+An advertised but empty dial supplies no supported Dynamic effort. CLI Pickup
+and preparation readback call a Dynamic null effort "not configurable", not a
+backend default.
+Deliberately omitted effort in an operator-selected Static route is unchanged.
+The Dashboard's raw projection preserves null versus `none`, but its Rust Route
+cells/preparation text still use legacy backend/default wording. That rendered
+readback correction remains an activation obligation, not a claim of this slice.
 Non-local activation, the remaining composed activation matrix and the remaining
 Wrapper/Conformance activation obligations still precede the final default
 change. Existing Config is not migrated implicitly.
@@ -1426,8 +1445,10 @@ What happens per issue:
    its matched effort, in the smallest context tier that fits the input.
 4. **A bounded, read-only assessment** sees the issue, its acceptance criteria,
    the task type, your declared **Feedback loops**, and any *measured* rows from
-   `measured-routing.json`. It does not read your tree, run Trials, or do the
-   work.
+   `measured-routing.json`. When `[swe_bench_associations]` is configured, it
+   also sees matching public official **SWE-bench Verified** results from the
+   same `mini-SWE-agent` harness version. It does not read your tree, run
+   Trials, or do the work.
 5. **Revalidation at Pickup.** Evidence and eligibility are re-read before the
    work session opens. Unchanged inputs do not buy a second selector call; a
    candidate that changed or became ineligible does not start on its old route.
@@ -1465,6 +1486,18 @@ Two properties are worth knowing before you turn it on:
   or issue's work bill, even while Pool preparation runs beside work. A refused
   route still reports the assessment already billed. Missing billing stays
   unknown rather than becoming a zero or a complete-looking subtotal.
+- **SWE-bench is supporting evidence, not an election score.** Artificial
+  Analysis Intelligence Index remains the deterministic selector-election
+  authority. The Runner reads only the public official leaderboard page and
+  sends it no issue, repository, credential, or assessment material. It admits
+  exact configured mappings from `mini-SWE-agent` rows only, and only when all
+  mapped rows share one harness release; arbitrary agent systems, unknown model
+  identities, and incompatible releases are excluded rather than treated as
+  comparable. A missing or unreadable optional read is named in the existing
+  canonical routing summary and is never cached or promoted into a
+  dynamic-routing failure; required Artificial Analysis and eligibility reads
+  retain their blocking behavior. A public resolved rate is benchmark evidence,
+  not a probability of this issue succeeding.
 
 ### Reusing a route a previous Run already elected
 
@@ -1599,6 +1632,17 @@ previous or missing owned associations after replacement failure. Capability wit
 requires a new final assignment. Session settings,
 canonical Pickup, Dashboard route readback and tracker effects agree; Config is
 unchanged. This does not enable the final Dynamic default or remote-host routing.
+
+Dynamic provenance and Pickup are both mandatory local writes. If either fails,
+the affected work starts no Agent or tracker publication, including when the route
+was freshly revalidated from an earlier Run. The diagnostic names the local-write
+failure; repair the local storage problem before starting another Run. Fresh
+checks can reuse only provenance that actually reached the canonical log. A
+selector's already-observed bill remains Run Consumption despite the refusal.
+The shared `local_durability` cases exercise these failures and recovery through
+saved init/update choices in serial and Lane modes, preserving Config, existing
+tracker projections and Lease release without charging a Strike. This is not a
+promise that a total storage outage leaves unrelated logging available.
 
 ### What a later attempt is told
 
