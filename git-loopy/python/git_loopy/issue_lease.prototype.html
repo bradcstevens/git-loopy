@@ -1,0 +1,110 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>THROWAWAY: Lease record decisions</title>
+<style>
+  body { max-width: 850px; margin: 3rem auto; padding: 0 1rem; font: 17px/1.6 system-ui; color: #172b39; background: #f6f8fa; }
+  section { background: white; border: 1px solid #ccd7df; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+  button { background: white; color: #176588; border: 1px solid #176588; border-radius: 4px; padding: .6rem; margin: .3rem; cursor: pointer; }
+  button[aria-selected=true] { color: white; background: #176588; }
+  dt { font-weight: bold; } dd { margin: 0 0 .5rem; overflow-wrap: anywhere; }
+</style>
+<h1>Lease record decisions</h1>
+<p><strong>THROWAWAY, in-memory only.</strong> Can all three Orchestrators agree when a
+Lease expires, without confusing malformed data or clock skew with ownership?
+This prototype settles record inspection only, not remote compare-and-swap,
+renewal scheduling, or fencing. An expired Lease does not itself authorize a write.</p>
+<section><h2>Current state</h2><dl id="state"></dl></section>
+<section><h2>Free play</h2><div id="actions"></div></section>
+<section><h2>Guided walkthroughs</h2><div id="tabs" role="tablist"></div>
+<p id="scenario"></p><div id="steps"></div></section>
+<script id="logic">
+const runA = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+function record(at = 1000) {
+  return {run_id: runA, issue: 390, repository: "bradcstevens/git-loopy",
+    claimed_at: at, heartbeat_at: at, ttl_seconds: 300, host: "laptop", pid: 42};
+}
+function inspect(raw, now) {
+  if (raw === null) return {state: "absent", record: null, diagnostics: []};
+  let r;
+  try { r = JSON.parse(raw); } catch { return {state: "expired", record: null, diagnostics: ["malformed_record"]}; }
+  const whole = (x, min) => Number.isSafeInteger(x) && x >= min;
+  if (!r || Array.isArray(r) || !/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/.test(r.run_id)
+      || r.issue !== 390 || typeof r.repository !== "string"
+      || r.repository.toLowerCase() !== "bradcstevens/git-loopy"
+      || !whole(r.claimed_at, 0) || !whole(r.heartbeat_at, 0)
+      || r.heartbeat_at < r.claimed_at || !whole(r.ttl_seconds, 1)
+      || typeof r.host !== "string" || !r.host.trim() || !whole(r.pid, 1)) {
+    return {state: "expired", record: null, diagnostics: ["malformed_record"]};
+  }
+  return {state: now - r.heartbeat_at > r.ttl_seconds ? "expired" : "live", record: r,
+    diagnostics: r.claimed_at - now > 60 ? ["clock_skew"] : []};
+}
+function initial() { return {now: 1000, raw: null, last: "Reset; no Lease ref exists."}; }
+function step(state, action) {
+  let {now, raw} = state;
+  if (action === "reset") return initial();
+  if (action === "take") raw = JSON.stringify(record(now));
+  if (action === "boundary") now += 300;
+  if (action === "second") now += 1;
+  if (action === "renew") {
+    const r = inspect(raw, now).record;
+    if (r) raw = JSON.stringify({...r, heartbeat_at: now});
+  }
+  if (action === "corrupt") raw = "{broken";
+  if (action === "future") raw = JSON.stringify(record(now + 61));
+  return {now, raw, last: action};
+}
+</script>
+<script>
+const labels = {reset: "Reset", take: "Take a Lease", boundary: "Advance 300 seconds",
+  second: "Advance one second", renew: "Record renewal", corrupt: "Unreadable record",
+  future: "Owner clock 61 seconds ahead"};
+const scenarios = [
+  ["TTL boundary", "The exact TTL is still live. Only strictly older is expired.",
+    ["take", "boundary", "second"]],
+  ["Quiet Agent", "Renewal is independent of Agent output. The latest heartbeat sets expiry.",
+    ["take", "boundary", "renew", "second", "boundary"]],
+  ["Broken record", "Unreadable data is expired with a diagnostic, never silently absent.",
+    ["take", "corrupt"]],
+  ["Clock skew", "A future claim stays live and reports skew. A warning is not authority to steal.",
+    ["future", "second"]]
+];
+let state = initial();
+function button(text, action) {
+  const b = document.createElement("button");
+  b.textContent = text;
+  b.onclick = action;
+  return b;
+}
+function render() {
+  const result = inspect(state.raw, state.now);
+  const fields = {Clock: state.now, Decision: result.state,
+    Diagnostics: result.diagnostics.join(", ") || "none",
+    "Last action": state.last, ...(result.record || {}), "Raw record": state.raw ?? "no ref"};
+  document.getElementById("state").replaceChildren(...Object.entries(fields).flatMap(([k,v]) => {
+    const dt = document.createElement("dt"), dd = document.createElement("dd");
+    dt.textContent = k; dd.textContent = v; return [dt, dd];
+  }));
+}
+function act(action) { state = step(state, action); render(); }
+for (const [key, label] of Object.entries(labels))
+  document.getElementById("actions").append(button(label, () => act(key)));
+scenarios.forEach(([title, text, actions], index) => {
+  const tab = button(title, () => {
+    state = initial(); render();
+    document.querySelectorAll('[role=tab]').forEach((b, i) => b.setAttribute("aria-selected", i === index));
+    document.getElementById("scenario").textContent = text;
+    let next = 0;
+    const buttons = actions.map((action, i) => button(`${i+1}. ${labels[action]}`, () => {
+      if (i !== next) return;
+      act(action); next++;
+      buttons.forEach((b, j) => b.disabled = j !== next);
+    }));
+    buttons.forEach((b, i) => b.disabled = i !== 0);
+    document.getElementById("steps").replaceChildren(...buttons);
+  });
+  tab.setAttribute("role", "tab");
+  document.getElementById("tabs").append(tab);
+});
+document.querySelector('[role=tab]').click();
+</script>
