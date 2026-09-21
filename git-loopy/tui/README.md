@@ -182,6 +182,10 @@ when the operator quits. Attach mode (`--attach` + `--control`) draws that same
 client from a local trace file, replays from the start, ignores temporary EOF,
 and exits only when the trace records `wrapper.run.end`, the control lock
 releases, or the operator quits the client.
+On Unix, keyboard/mouse input and cursor-position replies come from the
+controlling terminal even when stdin is a trace pipe or `/dev/null`. The helper
+enables Crossterm's `use-dev-tty` backend so redirected input cannot leave startup
+waiting on a blank alternate screen.
 The pipeline default is deliberate: a caller that only wants the view must not
 need a terminal, and the JSON path is the anti-drift control that proves the
 binary adds no behaviour of its own.
@@ -220,7 +224,7 @@ before committing a trace to it:
 ```json
 {
   "name": "git-loopy-tui",
-  "version": "0.11.0-dev.3",
+  "version": "0.11.0-dev.5",
   "min_event_schema_version": 1,
   "max_event_schema_version": 1,
   "wrapper_contract_version": "1.4"

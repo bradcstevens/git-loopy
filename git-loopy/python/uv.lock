@@ -138,7 +138,7 @@ wheels = [
 
 [[package]]
 name = "git-loopy"
-version = "0.11.0.dev3"
+version = "0.11.0.dev5"
 source = { editable = "." }
 dependencies = [
     { name = "github-copilot-sdk" },
@@ -166,7 +166,7 @@ release = [
 ]
 [package.metadata]
 requires-dist = [
-    { name = "github-copilot-sdk", specifier = "==1.0.14" },
+    { name = "github-copilot-sdk", specifier = "==1.0.13" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.24.0" },
     { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.20,<2" },
     { name = "opentelemetry-exporter-otlp", marker = "extra == 'otel'", specifier = ">=1.20,<2" },
@@ -185,7 +185,7 @@ provides-extras = ["otel", "release", "dev"]
 
 [[package]]
 name = "github-copilot-sdk"
-version = "1.0.14"
+version = "1.0.13"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -193,7 +193,7 @@ dependencies = [
     { name = "python-dateutil" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ed/e2/4d8c622545f55f06773548cf86ffe60f59e6a4cedcc412ff84fcac244b2b/github_copilot_sdk-1.0.14-py3-none-any.whl", hash = "sha256:9f4538cec7295f24507c650d794307396458a51f280a0fbbcd840da177109050", size = 614607, upload-time = "2026-09-16T05:11:14.572017Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/6d/4f2e3dddc576ff49739317adba6f9b8c35e93b835ece923e46f1b7fa6028/github_copilot_sdk-1.0.13-py3-none-any.whl", hash = "sha256:941dd5b55cf32ba55c73c651052a4a52b259b470c68bf6a6ac3d240c235402c9", size = 588198 },
 ]
 
 [[package]]
