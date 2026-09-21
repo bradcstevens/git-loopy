@@ -936,6 +936,50 @@
       }
     ]
   },
+  "pool_priority": {
+    "note": "Recorded migration and the real local Python CLI carry several eligible pending Dynamic candidates through preparation into serial Pickup or actual Lane refill. Preparation must follow existing Pool order, complete the next candidate before speculative selectors start, and obey selector concurrency. Running Agents are held until the declared speculative selectors are open; the next Pickup must not wait for those unrelated assessments. This pins existing section 14.6 behavior, not final defaults or native-member, remote-host, Subagent or Integration routing.",
+    "inputs": "Reuse migration_recovery's saved_config, harness and evidence, overriding selector_concurrency per case. Reuse pool_revalidation's running_issues per mode. Seed running issues plus pending issues 44, 45 and 46 in reverse numeric order; all are classified implementation work and all are Parallel-safe in Lane mode. priority_issues receive the priority label. The strongest selector chooses synthetic-fancy-9 for running issues and synthetic-cheap-1 for expected.next_issue, all at high/default. Hold that next selector until every running Agent has started. Each speculative selector asserts that the next proposal is already durably recorded, bills 0.25 Run-only credits, and stays open until cancelled. Release running Agents only after selector_concurrency speculative sessions are open. Permit exactly one more work session. Pending issues retain their labels and have no Lease, final route or tracker publication; cancelled assessments retain their bills and explicit unavailable preparation records before Run end. Expected credit totals include all running, next and interrupted selector calls.",
+    "modes": ["serial", "lane"],
+    "created_at": {
+      "42": "2026-01-01T00:00:00Z",
+      "43": "2026-01-02T00:00:00Z",
+      "44": "2026-01-04T00:00:00Z",
+      "45": "2026-01-03T00:00:00Z",
+      "46": "2026-01-05T00:00:00Z"
+    },
+    "cases": [
+      {
+        "id": "oldest-pending-before-speculation",
+        "selector_concurrency": 1,
+        "priority_issues": [],
+        "expected": {
+          "next_issue": 45, "speculative_issues": [44],
+          "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default",
+          "routing_credits": {"serial": "0.75", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "priority-pending-before-older-candidates",
+        "selector_concurrency": 1,
+        "priority_issues": [42, 43, 46],
+        "expected": {
+          "next_issue": 46, "speculative_issues": [45],
+          "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default",
+          "routing_credits": {"serial": "0.75", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "priority-pending-before-two-concurrent-assessments",
+        "selector_concurrency": 2,
+        "priority_issues": [42, 43, 46],
+        "expected": {
+          "next_issue": 46, "speculative_issues": [44, 45],
+          "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default",
+          "routing_credits": {"serial": "1.00", "lane": "1.25"}
+        }
+      }
+    ]
+  },
   "first_setup": {
     "note": "Python-local first setup starts with no project or global Config. The guided init --routing flow collects an operator choice, finite limits and verified associations, checks readiness before saving, and never starts work. A refused setup saves no Config, prompt or Skill policy and writes no tracker labels. Repair the declared input and retry setup, then invoke the real CLI Run without routing overrides. Compare actual serial/Lane session settings, canonical Pickup, Dashboard readback and tracker publication, with unchanged Config and the key outside saved assets. These cases exercise explicit opt-in setup, not bare init, auto-setup or final Dynamic defaults. Shell/PowerShell, non-local, Subagent and Integration activation remain deferred.",
     "inputs": "Use migration_recovery's synthetic saved_config as collected answers, not pre-existing Config, and its harness, evidence and selector_choice as external inputs. Accept the wizard's default Static-route choice rather than supplying a prebuilt answer. Keep collects only model/effort and no Dynamic access or limits. Case initial inputs apply only to the first setup attempt: answers overlays collected Dynamic limits/associations, access controls the outside-Config key, evidence_available controls the evidence transport, and harness_available controls the fresh authenticated readiness listing, not the earlier picker display. Access defaults to true for Migrate and false for Keep; both transports default to available. Repair restores the shared inputs before repeating setup. expected_refusal declares either a Config input error (config_key) or an existing Dynamic routing_reason; prerequisite_missing also names the setting the diagnostic must identify. Its absence means setup succeeds immediately. Both Config scopes start absent; scope selects the only one init may write. The final expected settings are independent literals, not derived from the supplied answers or routing algorithm.",

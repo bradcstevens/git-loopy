@@ -384,3 +384,280 @@ def test_saved_authority_revalidates_prepared_work_at_pickup(
         assert delivery["status"] == "published" and delivery["label"] == owned[0]
         assert f'<!-- git-loopy-route:v1:{delivery["identity"]} -->' in comment
     assert "fixture-owned-key" not in json.dumps(events) + repr(tracker.route_comment_calls)
+
+
+_PRIORITY = _ROUTING_CONFORMANCE["pool_priority"]
+
+
+@pytest.mark.parametrize("mode", _PRIORITY["modes"])
+@pytest.mark.parametrize("case", _PRIORITY["cases"], ids=lambda case: case["id"])
+def test_saved_authority_prepares_the_next_pickup_before_bounded_speculation(
+    tmp_path, monkeypatch, mode, case,
+):
+    shared = _ROUTING_CONFORMANCE["migration_recovery"]
+    expected = case["expected"]
+    running = _POOL["modes"][mode]["running_issues"]
+    next_issue = expected["next_issue"]
+    pending = {44, 45, 46} - {next_issue}
+    _, git = _wire_single_issue_github(tmp_path, monkeypatch)
+    git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    base_labels = [
+        "ready-for-agent", "semver:none", "task-type:implementation",
+        *(["parallel-safe"] if mode == "lane" else []),
+    ]
+    tracker = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            replace(
+                _make_issue(ref, labels=[
+                    *base_labels, *(["priority"] if ref in case["priority_issues"] else []),
+                ]),
+                created_at=_PRIORITY["created_at"][str(ref)],
+            )
+            for ref in sorted([*running, 44, 45, 46], reverse=True)
+        ],
+    )
+    original_labels = {
+        ref: set(tracker.issue_labels(ref)) for ref in [*running, next_issue, *pending]
+    }
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: tracker)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(
+        loop_module.execution_host_module, "local_execution_host_capacity", lambda: 2,
+    )
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("recorded authority prompted"),
+    )
+    for name in (
+        "GIT_LOOPY_ROUTE_POLICY", "GIT_LOOPY_MODEL", "GIT_LOOPY_REASONING_EFFORT",
+        "GIT_LOOPY_CONTEXT_TIER",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "fixture-owned-key")
+    listing = tuple(
+        _listed_model(row["model"], row["efforts"]) for row in shared["harness"]
+    )
+
+    async def fetch_listing():
+        return list(listing)
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", fetch_listing)
+    assessments = []
+    started = {}
+    active_selectors = set()
+    peak_selectors = 0
+    cancelled = []
+    running_started = asyncio.Event()
+    speculation_started = asyncio.Event()
+    next_started = asyncio.Event()
+    observations = []
+
+    def assess(prompt):
+        (ref,) = [int(value) for value in re.findall(r"#(\d+):", prompt)]
+        assessments.append(ref)
+        candidates, _ = json.JSONDecoder().raw_decode(
+            prompt.split("CANDIDATES (choose exactly one `candidate_identity`):\n")[1]
+        )
+        model = "synthetic-cheap-1" if ref == next_issue else "synthetic-fancy-9"
+        chosen = next(row for row in candidates if row["model"] == model)
+        return json.dumps({
+            "candidate_identity": chosen["candidate_identity"],
+            "summary": "fixture forecast, not a measurement",
+        })
+
+    async def routing(role, prompt, _kwargs):
+        nonlocal peak_selectors
+        assert role == "selector"
+        (ref,) = [int(value) for value in re.findall(r"#(\d+):", prompt)]
+        active_selectors.add(ref)
+        peak_selectors = max(peak_selectors, len(active_selectors))
+        try:
+            if ref == next_issue:
+                assert not pending.intersection(assessments)
+                await asyncio.wait_for(running_started.wait(), timeout=5)
+            elif ref in pending:
+                records = [
+                    event for event in _read_events(tmp_path)
+                    if event["type"] == "wrapper.routing.prepared"
+                    and event["issue"] == next_issue and event["state"] == "proposed"
+                ]
+                assert len(records) == 1
+                observations.append(records[0])
+                if len(active_selectors) == case["selector_concurrency"]:
+                    speculation_started.set()
+                await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled.append(ref)
+            raise
+        finally:
+            active_selectors.remove(ref)
+
+    async def work(prompt, kwargs):
+        (ref,) = [int(value) for value in re.findall(r"=== Issue #(\d+):", prompt)]
+        assert ref not in started
+        started[ref] = kwargs
+        if ref in running:
+            if set(running) <= started.keys():
+                running_started.set()
+            await asyncio.wait_for(speculation_started.wait(), timeout=5)
+            events = _read_events(tmp_path)
+            assert next_issue not in started
+            assert not any(
+                event["type"] in {
+                    "wrapper.pickup.bound", "wrapper.routing.resolved", "wrapper.routing.delivery",
+                } and event["issue"] in {next_issue, *pending}
+                for event in events
+            )
+            assert not any(
+                call[1] == lease_ref(ref) for call in git.push_ref_calls
+                for ref in {next_issue, *pending}
+            )
+            assert not any(
+                ref in {next_issue, *pending} for ref, _ in tracker.route_comment_calls
+            )
+            assert not any(
+                call[0] in {next_issue, *pending} for call in tracker.route_label_calls
+            )
+        else:
+            assert ref == next_issue
+            next_started.set()
+
+    client = _ParallelFakeClient(fake_git=git, scripted_events=[], serial_closes=True)
+    transport = _BilledRoutingClient(
+        client, selector_credits="0.25", selector_answer=assess,
+        on_routing=routing, on_work=work,
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: transport)
+    spied = _wire_dynamic_ports(
+        monkeypatch,
+        rows=tuple(
+            _aa_row(row["id"], row["intelligence_index"], row["output_tokens_per_second"])
+            for row in shared["evidence"]
+        ),
+        answer=None, listing=listing, session_selector=True,
+    )
+    path = settings.project_config_path(tmp_path)
+    settings.write_config_atomic(path, {
+        **shared["saved_config"], "selector_concurrency": case["selector_concurrency"],
+    })
+    assert _update(tmp_path, routing_choice="migrate") == 0
+    saved = path.read_bytes()
+    assert transport.calls == []
+    evidence_before_run = spied["evidence"]
+
+    assert cli.main([str(len(running) + 1)]) == 0
+
+    assert path.read_bytes() == saved
+    assert not settings.global_config_path(os.environ).exists()
+    assert next_started.is_set() and not active_selectors
+    assert peak_selectors == case["selector_concurrency"]
+    assert sorted(cancelled) == expected["speculative_issues"]
+    assert assessments[:len(running) + 1] == [*running, next_issue]
+    assert sorted(assessments[len(running) + 1:]) == expected["speculative_issues"]
+    assert set(started) == {*running, next_issue}
+    assert len(observations) == case["selector_concurrency"]
+    assert spied["evidence"] > evidence_before_run
+    selector_calls = [call for role, call in transport.calls if role == "selector"]
+    assert len(selector_calls) == len(assessments)
+    assert all(
+        (call["model"], call["reasoning_effort"], call["context_tier"])
+        == ("synthetic-fancy-9", "high", "default") for call in selector_calls
+    )
+    assert all(role in {"selector", "work"} for role, _ in transport.calls)
+    assert sum(role == "work" for role, _ in transport.calls) == len(started)
+    events = _read_events(tmp_path)
+    pickups = [event for event in events if event["type"] == "wrapper.pickup.bound"]
+    assert [event["issue"] for event in pickups] == [*running, next_issue]
+    (resolution,) = [
+        event for event in events
+        if event["type"] == "wrapper.routing.resolved" and event["issue"] == next_issue
+    ]
+    assert resolution["proposal_id"] == observations[0]["proposal_id"]
+    assert resolution["relevant_input_identity"] == observations[0]["relevant_input_identity"]
+    assert all(events.index(pickup) < events.index(observations[0]) for pickup in pickups[:-1])
+    assert events.index(observations[0]) < events.index(pickups[-1])
+    assert not any(event["type"] == "wrapper.strike" for event in events)
+    assert events[-1]["type"] == "wrapper.run.end"
+    assert events[-1]["outcome"] == "iteration_cap"
+    for ref in pending:
+        assert tracker.issue_view(ref).state == "OPEN"
+        assert set(tracker.issue_labels(ref)) == original_labels[ref]
+        assert not any(call[1] == lease_ref(ref) for call in git.push_ref_calls)
+        assert not any(
+            event["type"] in {
+                "wrapper.pickup.bound", "wrapper.routing.resolved", "wrapper.routing.delivery",
+            } and event["issue"] == ref for event in events
+        )
+    for ref in expected["speculative_issues"]:
+        (record,) = [
+            event for event in events
+            if event["type"] == "wrapper.routing.prepared" and event["issue"] == ref
+        ]
+        assert record["state"] == "unavailable" and "cancelled" in record["detail"]
+        assert record["proposal_id"] is None
+    usage = [event for event in events if event["type"] == "usage.tokens"]
+    assert len(usage) == len(selector_calls)
+    assert all(event["iter"] is None and event.get("lane_issue") is None for event in usage)
+    assert all(Decimal(str(event["credits"])) == Decimal("0.25") for event in usage)
+    assert sum(Decimal(str(event["credits"])) for event in usage) == Decimal(
+        expected["routing_credits"][mode]
+    )
+    renderer, summary, output = _make_renderer()
+    dashboard = LiveRunState()
+    for event in events:
+        before = output.tell()
+        renderer.render(event)
+        dashboard.render(event)
+        if event["type"] != "wrapper.pickup.bound":
+            continue
+        ref = event["issue"]
+        call = started[ref]
+        model = expected["model"] if ref == next_issue else "synthetic-fancy-9"
+        assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+            model, expected["effort"], expected["context_tier"],
+        )
+        assert (event["model"], event["effort"], event["context_tier"]) == (
+            model, expected["effort"], expected["context_tier"],
+        )
+        assert event["routing_source"] == "dynamic"
+        if mode == "lane":
+            assert Path(call["working_directory"]).name == f"issue-{ref}"
+        else:
+            assert call["working_directory"] is None
+        line = " ".join(output.getvalue()[before:].split())
+        assert f"pickup #{ref} {model} @ high" in line
+        view = project_run_view(dashboard, summary, issue=ref)
+        row = next(row for row in view["dashboard"]["queue"]["rows"] if row["issue"] == ref)
+        assert row["route"]["model"] == model and row["route"]["effort"] == "high"
+        assert row["route"]["source"] == "dynamic"
+        # The historical default tier is implicit in Dashboard route readback.
+        assert "context_tier" not in row["route"]
+    assert summary.totals().credits == Decimal(expected["routing_credits"][mode])
+    view = project_run_view(dashboard, summary, issue=next_issue)
+    assert Decimal(str(view["dashboard"]["summary"]["run_consumption"]["credits"])) == (
+        Decimal(expected["routing_credits"][mode])
+    )
+    assert sorted(ref for ref, _ in tracker.route_comment_calls) == sorted(started)
+    assert {call[0] for call in tracker.route_label_calls} == set(started)
+    for ref, comment in tracker.route_comment_calls:
+        assert tracker.issue_view(ref).state == "CLOSED"
+        assert f'`{json.dumps(started[ref]["model"])}`' in comment
+        assert '`"high"`' in comment and '`"default"`' in comment
+        owned = [
+            label for label in tracker.issue_labels(ref) if label.startswith("git-loopy-route:")
+        ]
+        assert len(owned) == 1 and original_labels[ref] <= set(tracker.issue_labels(ref))
+        (delivery,) = [
+            event for event in events
+            if event["type"] == "wrapper.routing.delivery" and event["issue"] == ref
+        ]
+        assert delivery["status"] == "published" and delivery["label"] == owned[0]
+        assert f'<!-- git-loopy-route:v1:{delivery["identity"]} -->' in comment
+        swaps = [call for call in git.push_ref_calls if call[1] == lease_ref(ref)]
+        assert swaps[0][2] is not None and swaps[0][3] is None
+        assert swaps[-1][2] is None
+        assert git.probe_remote_ref("origin", lease_ref(ref)) is None
+    assert "fixture-owned-key" not in json.dumps(events) + repr(tracker.route_comment_calls)
