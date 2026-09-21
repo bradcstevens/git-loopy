@@ -980,6 +980,155 @@
       }
     ]
   },
+  "in_flight_consumption": {
+    "note": "Recorded init/update Dynamic authorization flows through the real unattended CLI into serial or local Lane work. An already-open classifier or selector reports a bill that exhausts the allowance before returning. No further assessment may start; already-bound work finishes on its frozen settings. Completion, cancellation, cancellation-time billing and a late result retain every observed bill exactly once in Run-only Consumption. Proposals never receive final tracker publication. This pins existing behavior, not final defaults or shell/PowerShell, non-local, Subagent or Integration activation.",
+    "inputs_note": "Use the declared harness/evidence and operator-owned access outside Config. Record Dynamic setup with no Static rows, associations aa-opus=claude-opus-5@high and aa-terra=gpt-5.6-terra@high, the given deadline/concurrency and each allowance. These identifiers are test configurations, not a recommended recipe. Each assessment reports initial_bill with 100 input and 20 output tokens. All selector replies choose work_model. All issues are eligible and semver:none; only held_issue lacks a Task type when pending_role is classifier. Keep work open until refused_issue has its unavailable preparation record. Hold held_issue until partner_issue starts, then report in_flight_bill with the same token counts while both assessments remain open. partner_issue may finish; held_issue must still be open when the next assessment is refused. complete releases its result; cancel ends the Run with it still pending; cancel_billed additionally reports cleanup_bill during disconnect; deadline advances the injected clock past deadline_seconds before releasing the result. Work sessions each report work_bill with the same token counts. The allowance booleans are the expected overshoot at admission refusal, before any cleanup bill. Case overshot values describe final settlement.",
+    "entrypoints": ["init", "update"],
+    "modes": {
+      "serial": {"max_iterations": 1, "work_issues": [42]},
+      "lane": {"max_iterations": 2, "work_issues": [42, 43]}
+    },
+    "allowances": {"0.60": true, "0.80": false},
+    "inputs": {
+      "issues": [42, 43, 44, 45, 46, 47],
+      "held_issue": 45,
+      "partner_issue": 46,
+      "refused_issue": 47,
+      "deadline_seconds": 30,
+      "late_result_seconds": 31,
+      "selector_concurrency": 2,
+      "initial_bill": "0.10",
+      "in_flight_bill": "0.30",
+      "cleanup_bill": "0.20",
+      "work_bill": "0.10",
+      "work_model": "gpt-5.6-terra",
+      "classifier_model": "gpt-5.6-terra",
+      "effort": "high",
+      "harness": [
+        {"model": "claude-opus-5", "efforts": ["high"]},
+        {"model": "gpt-5.6-terra", "efforts": ["high"]}
+      ],
+      "evidence": [
+        {"id": "aa-opus", "intelligence_index": 70, "output_tokens_per_second": 90},
+        {"id": "aa-terra", "intelligence_index": 40, "output_tokens_per_second": 200}
+      ]
+    },
+    "expected_assessed": [42, 43, 44, 45, 46],
+    "expected_refusal": {
+      "state": "unavailable", "reason": "quota_exhausted", "routing_credits": "0.80"
+    },
+    "expected_sessions": {
+      "work": {"model": "gpt-5.6-terra", "effort": "high", "context_tier": "default"},
+      "selector": {"model": "claude-opus-5", "effort": "high", "context_tier": "default"},
+      "classifier": {"model": "gpt-5.6-terra", "effort": "high", "context_tier": null}
+    },
+    "cases": [
+      {
+        "id": "classifier-completes-after-exhausting-allowance",
+        "pending_role": "classifier", "ending": "complete",
+        "expected": {
+          "state": "unavailable", "reason": "quota_exhausted",
+          "cancelled": [], "classification_attempts": 1, "selector_attempts": 4,
+          "task_labels": [[45, "task-type:implementation"]],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "classifier-cancelled-after-exhausting-allowance",
+        "pending_role": "classifier", "ending": "cancel",
+        "expected": {
+          "state": "unavailable", "reason": null,
+          "cancelled": [45], "classification_attempts": 1, "selector_attempts": 4,
+          "task_labels": [],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "classifier-cancellation-cleanup-adds-visible-billing",
+        "pending_role": "classifier", "ending": "cancel_billed",
+        "expected": {
+          "state": "unavailable", "reason": null,
+          "cancelled": [45], "classification_attempts": 1, "selector_attempts": 4,
+          "task_labels": [],
+          "routing_credits": "1.00", "overshot": {"0.60": true, "0.80": true},
+          "usage_samples": 7,
+          "run_consumption": {"tokens_in": 700, "tokens_out": 140, "credits": 1.0, "premium_requests": null},
+          "total_credits": {"serial": "1.10", "lane": "1.20"}
+        }
+      },
+      {
+        "id": "late-classification-keeps-billing-without-publishing-task-type",
+        "pending_role": "classifier", "ending": "deadline",
+        "expected": {
+          "state": "unavailable", "reason": "deadline_exhausted",
+          "cancelled": [], "classification_attempts": 1, "selector_attempts": 4,
+          "task_labels": [],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "selector-completes-an-already-admitted-proposal",
+        "pending_role": "selector", "ending": "complete",
+        "expected": {
+          "state": "proposed", "reason": null,
+          "cancelled": [], "classification_attempts": 0, "selector_attempts": 5,
+          "task_labels": [],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "selector-cancelled-after-exhausting-allowance",
+        "pending_role": "selector", "ending": "cancel",
+        "expected": {
+          "state": "unavailable", "reason": null,
+          "cancelled": [45], "classification_attempts": 0, "selector_attempts": 5,
+          "task_labels": [],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "selector-cancellation-cleanup-adds-visible-billing",
+        "pending_role": "selector", "ending": "cancel_billed",
+        "expected": {
+          "state": "unavailable", "reason": null,
+          "cancelled": [45], "classification_attempts": 0, "selector_attempts": 5,
+          "task_labels": [],
+          "routing_credits": "1.00", "overshot": {"0.60": true, "0.80": true},
+          "usage_samples": 7,
+          "run_consumption": {"tokens_in": 700, "tokens_out": 140, "credits": 1.0, "premium_requests": null},
+          "total_credits": {"serial": "1.10", "lane": "1.20"}
+        }
+      },
+      {
+        "id": "late-selector-keeps-billing-without-producing-a-proposal",
+        "pending_role": "selector", "ending": "deadline",
+        "expected": {
+          "state": "unavailable", "reason": "deadline_exhausted",
+          "cancelled": [], "classification_attempts": 0, "selector_attempts": 5,
+          "task_labels": [],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      }
+    ]
+  },
   "first_setup": {
     "note": "Python-local first setup starts with no project or global Config. The guided init --routing flow collects an operator choice, finite limits and verified associations, checks readiness before saving, and never starts work. A refused setup saves no Config, prompt or Skill policy and writes no tracker labels. Repair the declared input and retry setup, then invoke the real CLI Run without routing overrides. Compare actual serial/Lane session settings, canonical Pickup, Dashboard readback and tracker publication, with unchanged Config and the key outside saved assets. These cases exercise explicit opt-in setup, not bare init, auto-setup or final Dynamic defaults. Shell/PowerShell, non-local, Subagent and Integration activation remain deferred.",
     "inputs": "Use migration_recovery's synthetic saved_config as collected answers, not pre-existing Config, and its harness, evidence and selector_choice as external inputs. Accept the wizard's default Static-route choice rather than supplying a prebuilt answer. Keep collects only model/effort and no Dynamic access or limits. Case initial inputs apply only to the first setup attempt: answers overlays collected Dynamic limits/associations, access controls the outside-Config key, evidence_available controls the evidence transport, and harness_available controls the fresh authenticated readiness listing, not the earlier picker display. Access defaults to true for Migrate and false for Keep; both transports default to available. Repair restores the shared inputs before repeating setup. expected_refusal declares either a Config input error (config_key) or an existing Dynamic routing_reason; prerequisite_missing also names the setting the diagnostic must identify. Its absence means setup succeeds immediately. Both Config scopes start absent; scope selects the only one init may write. The final expected settings are independent literals, not derived from the supplied answers or routing algorithm.",
