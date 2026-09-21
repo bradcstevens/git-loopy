@@ -6599,17 +6599,21 @@ def test_saved_dynamic_reuse_keeps_context_authority_in_the_relevant_inputs(
 
 @pytest.mark.parametrize("entrypoint", ["update", "init", "upgrade"])
 @pytest.mark.parametrize(
-    ("choice", "saved_route", "missing_access", "expected_model", "expected_source"),
+    (
+        "choice", "saved_route", "missing_access", "invalid_limits",
+        "expected_model", "expected_source",
+    ),
     [
-        ("keep", False, False, "gpt-5.6-terra", "routed"),
-        ("migrate", False, False, "claude-opus-5", "dynamic"),
-        ("migrate", True, False, "gpt-5.6-terra", "routed"),
-        ("migrate", True, True, "gpt-5.6-terra", "routed"),
+        ("keep", False, False, False, "gpt-5.6-terra", "routed"),
+        ("migrate", False, False, False, "claude-opus-5", "dynamic"),
+        ("migrate", True, False, False, "gpt-5.6-terra", "routed"),
+        ("migrate", True, True, False, "gpt-5.6-terra", "routed"),
+        ("migrate", True, False, True, "gpt-5.6-terra", "routed"),
     ],
 )
 def test_a_saved_routing_choice_reaches_the_serial_session_and_canonical_pickup(
     tmp_path, monkeypatch, capsys, entrypoint, choice, saved_route, missing_access,
-    expected_model, expected_source
+    invalid_limits, expected_model, expected_source
 ) -> None:
     from git_loopy import settings
     from tests.test_config_cmd import _write_measured
@@ -6676,7 +6680,7 @@ def test_a_saved_routing_choice_reaches_the_serial_session_and_canonical_pickup(
     tables = settings.load_configs(tmp_path, os.environ)
     config = cli.resolve_config(
         cli.build_parser().parse_args(["1"]),
-        {},
+        {"GIT_LOOPY_SELECTOR_CONCURRENCY": "65"} if invalid_limits else {},
         project=tables.project,
         global_=tables.global_,
         measured=tables.measured,

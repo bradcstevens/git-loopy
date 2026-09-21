@@ -259,12 +259,12 @@ routing setup preserves saved/inherited model, effort, prompt and Skill policy a
 `--yes` as consent. Cancellation, readiness failure or detected edits to its
 inputs abort before scope writes. The operator-owned key stays outside Config.
 
-Missing Dynamic prerequisites at Run preflight now leave retained Static work
+Missing or invalid Dynamic prerequisites at Run preflight now leave retained Static work
 usable rather than refusing the whole Run. The shared verdict still validates
 Static settings and makes setup, migration and doctor refuse an unready Dynamic
 choice. Classification keeps its existing order: explicit routing limits can
 authorize it to discover a retained Static route without leaderboard access,
-and its usage still consumes the same Run allowance. Missing or exhausted limits
+and its usage still consumes the same Run allowance. Missing, invalid or exhausted limits
 admit no classification. In serial and Lane Pickups, work still uncovered after
 classification is refused before a Bump-class or fallback work session; later
 eligible Static work can proceed. Saved init/update/upgrade cases remove access
