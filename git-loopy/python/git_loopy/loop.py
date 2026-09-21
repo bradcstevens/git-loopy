@@ -2847,6 +2847,7 @@ class _Loop:
             self._emit(
                 events_module.WRAPPER_ROUTING_RESOLVED,
                 iter_num=None,
+                require_persistence=True,
                 **routing_provenance_payload(decision),
             )
         except Exception as exc:
