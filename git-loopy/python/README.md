@@ -463,7 +463,12 @@ forced into an unusable choice. Selected Static/Dynamic policies still refuse
 that placement: use `--execution-host local`, or `--route-policy unselected`
 (`GIT_LOOPY_ROUTE_POLICY=unselected` for doctor) to retain remote legacy behavior.
 The latter is not strict routing or completed migration. No remote capability
-support is implied by the local migration guard.
+support is implied by the local migration guard. The refusal happens before
+local model listing, Skill migration, interactive detachment or any remote host
+preparation, including its green-base workflow dispatch. An explicit model,
+effort or context-only override does not authorize the remote placement. Config
+remains unchanged; a remote environment error cannot hide this known routing
+refusal behind an unnecessary preflight job.
 
 ---
 

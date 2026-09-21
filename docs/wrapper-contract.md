@@ -1618,6 +1618,14 @@ the default, and the absence of a decision — `static` (this section), and `dyn
   placement's verdict is exactly the substitution the rule above forbids. An Orchestrator MUST
   refuse the combination before work rather than verify the wrong harness. Only a placement whose
   sessions run under the Run's own authenticated harness is verifiable today.
+  Python's no-I/O placement refusal precedes local model listing, Skill migration, interactive
+  detachment and remote host preparation, including the green-base preflight dispatch. It shares
+  the routing authority verdict used by setup, doctor and Run preflight; a run-wide model/effort
+  override does not waive it. The `execution_host_refusal` cases in `routing-resolution.json`
+  exercise recorded and temporary authority through CLI, interactive startup and direct Run,
+  preserving Config and starting no work, Lease, Strike or Route publication. An explicitly
+  unselected remote Run retains its staged legacy path, not strict routing support. This
+  refusal does not complete non-local activation or change shell/PowerShell's routing deferral.
 - **Refuse, never rescue.** §14's *gate and fall back* rule does not apply to a Static route and
   MUST NOT be reached for: an effort the model does not accept, a tier it does not offer, a model
   this account may not use, a model the harness never listed, and a listing that could not be read

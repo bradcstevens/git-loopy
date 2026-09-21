@@ -184,7 +184,10 @@ from git_loopy.measured_routing import (
     measured_routing_path,
 )
 from git_loopy.routing_input import build_routing_request
-from git_loopy.run_routing_preflight import resolve_run_routing_preflight
+from git_loopy.run_routing_preflight import (
+    resolve_run_routing_preflight,
+    routing_choice_refusal,
+)
 from git_loopy.route_publication import (
     RouteDeliveryStatus,
     RoutePublicationStore,
@@ -6986,6 +6989,10 @@ async def run(
     except ReleaseVersionError as exc:
         print(f"git-loopy: Release version error: {exc}", file=sys.stderr)
         return 1
+
+    if (refusal := routing_choice_refusal(config)) is not None:
+        print(f"git-loopy: {refusal}", file=sys.stderr)
+        return exit_code_for("preflight_failed")
 
     # 1) Git seam (root-bound) + prompt file. The client resolves and binds the
     #    repository root once; ``.root`` feeds the writers / prompt / source setup.

@@ -400,6 +400,30 @@
     "dynamic_precedence": "Under `dynamic` a Static route still wins. A [routing] entry, an explicit flag or environment pin, and a configured escalation rung are instructions, and a Runner MUST NOT spend a Route selector call to contradict one -- they are verified against the harness exactly as under `static`. What the selector elects is the route for every Task type those instructions do not cover; the run-wide default is NOT one of them, because under this policy the selector replaces it and refusing the Run over a pair it will never take would be a refusal about nothing. An explicit pin suppresses routing entirely, which makes the default the route again and therefore verifiable again.",
     "scope": "These cases validate ONE route. A Run validates every route its Config holds -- the run-wide default, each [routing] entry, and an explicitly configured escalation rung -- before it picks up any issue, so a route that is never exercised is still refused at the start rather than mid-Run."
   },
+  "execution_host_refusal": {
+    "note": "Python selected Static/Dynamic policies cannot authorize the independently authenticated GitHub Actions host from a local capability listing. Refuse before local model listing, Skill migration, interactive detachment, host construction or remote green-base dispatch. A run-wide model/effort pin suppresses selection, not this placement rule. Config remains unchanged and no work, Lease, Strike or Route publication occurs. The same no-I/O verdict is used by CLI startup, direct Run and live routing preflight. This does not provide remote routing support or activate final defaults; an explicitly unselected remote Run retains its legacy path. Shell/PowerShell routing remains deferred.",
+    "entrypoints": ["cli", "interactive", "run"],
+    "saved_config": {"model": "synthetic-work", "reasoning_effort": "high"},
+    "environment": {"GIT_LOOPY_EXECUTION_HOST": "github-actions"},
+    "expected": {
+      "exit_code": 1,
+      "diagnostics": [
+        "this machine's model listing is not the listing",
+        "--execution-host local",
+        "--route-policy unselected"
+      ]
+    },
+    "cases": [
+      {"id": "recorded-project-static", "project": {"route_policy": "static"}},
+      {"id": "inherited-global-dynamic", "global": {"route_policy": "dynamic"}},
+      {"id": "temporary-static-flag", "args": ["--route-policy", "static"]},
+      {"id": "temporary-dynamic-environment", "environment": {"GIT_LOOPY_ROUTE_POLICY": "dynamic"}},
+      {"id": "dynamic-model-pin-is-not-remote-authority", "project": {"route_policy": "dynamic"}, "args": ["--model", "synthetic-work"]},
+      {"id": "dynamic-effort-pin-is-not-remote-authority", "project": {"route_policy": "dynamic"}, "environment": {"GIT_LOOPY_REASONING_EFFORT": "high"}},
+      {"id": "dynamic-context-only-is-not-remote-authority", "project": {"route_policy": "dynamic"}, "args": ["--context-tier", "long_context"]},
+      {"id": "static-flag-overrides-inherited-dynamic", "global": {"route_policy": "dynamic"}, "args": ["--route-policy", "static", "--execution-host", "github-actions"]}
+    ]
+  },
   "migration_recovery": {
     "note": "Every case starts with an unattended local Python Run refusing the saved Config unchanged, before listing, assessment or work. Supply the declared authority, then drive a real Run and compare actual issue-owning session settings, canonical Pickup and Dashboard readback with expected, or assert the declared refusal with no work, final route, publication or Strike. Static policy recovery has no leaderboard credential or evidence request. Temporary authority must expire on the next invocation; recorded authority must remain effective without flags or environment. No historical case or Event stream is reinterpreted. Shell/PowerShell activation is deferred; this is not remote, Subagent or Integration routing support or final default activation.",
     "inputs": "Case saved_config entries overlay the shared saved_config at top level. A case harness replaces the shared listing; each model's long_context defaults to false and must feed every Static and Dynamic capability read. run_overrides are temporary CLI settings, not saved authority. run_access and run_evidence_available default to true and change only after the authorization step; false respectively removes the operator-owned key or makes the evidence transport fail. proposed_context_tier defaults to default and scripts the selector's work proposal, never the selector's own settings. A missing expected.exit_code means 0 and one work session; a refusal case declares its nonzero exit, named Static/Dynamic refusal and Run outcome (null for refusal before a Run event stream exists). The adapter checks its CLI's diagnostic for that refusal. run_evidence_requests counts only the Run after authorization. The Dashboard retains its historical implicit-default-tier projection.",

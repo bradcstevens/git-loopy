@@ -67,6 +67,17 @@ The Python adapter is
 same suite. This does not cover bare init/auto-setup activation or grant other
 Runner members setup support.
 
+The `execution_host_refusal` matrix covers selected policies on the independently
+authenticated GitHub Actions host. Eight cases run through CLI, interactive
+startup and direct Run entry in `python/tests/test_loop_parallel.py`, proving
+refusal before local model listing, Skill migration, detachment, host construction
+or remote green-base dispatch. Saved and temporary authority, model/effort pins
+and context-only controls cannot authorize that placement. Config stays unchanged
+and no work, Lease, Strike or Route publication starts. The existing unselected
+remote execution cases protect the staged compatibility path; this matrix does
+not implement remote capabilities, activate Dynamic defaults or remove native
+member deferrals.
+
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent
 from every port's vocabulary, not just the shared fixture and Python reference.
