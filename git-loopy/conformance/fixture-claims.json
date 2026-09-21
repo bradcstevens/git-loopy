@@ -49,7 +49,7 @@
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py serializes fixture Event cases through the production event seam."},
       "shell": {"kind": "claimed", "reason": "shell/tests/test-event-conformance.sh serializes fixture Event cases through production event seams."},
       "powershell": {"kind": "claimed", "reason": "powershell/tests/test-event-conformance.ps1 serializes fixture Event cases through production event seams."},
-      "rust": {"kind": "waived_owed", "reason": "The Dashboard is assigned the consumer Event-stream fold but its suite does not exercise this fixture.", "issue": 557}
+      "rust": {"kind": "claimed", "reason": "tui/tests/event_schema_conformance.rs folds the fixture's rolling_stream_cases obliging rust through DashboardSession::ingest, the production consumer Event-folding seam ADR-0045 assigns it."}
     },
     "exit-codes.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py compares fixture exit-code, Pool-emptiness and unbound-Pool cases with the production exit-code function, emptiness rule and unbound-outcome rule."},

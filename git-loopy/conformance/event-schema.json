@@ -1383,7 +1383,8 @@
       "distributions": [
         "python",
         "shell",
-        "powershell"
+        "powershell",
+        "rust"
       ],
       "events": [
         {
@@ -1923,7 +1924,8 @@
       "distributions": [
         "python",
         "shell",
-        "powershell"
+        "powershell",
+        "rust"
       ],
       "events": [
         {
