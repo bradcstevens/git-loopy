@@ -398,7 +398,7 @@ def test_saved_authority_prepares_the_next_pickup_before_bounded_speculation(
     expected = case["expected"]
     running = _POOL["modes"][mode]["running_issues"]
     next_issue = expected["next_issue"]
-    pending = {44, 45, 46} - {next_issue}
+    pending = {44, 45, 46, 47} - {next_issue}
     _, git = _wire_single_issue_github(tmp_path, monkeypatch)
     git.remote_urls = {"origin": "git@github.com:x/y.git"}
     base_labels = [
@@ -414,7 +414,7 @@ def test_saved_authority_prepares_the_next_pickup_before_bounded_speculation(
                 ]),
                 created_at=_PRIORITY["created_at"][str(ref)],
             )
-            for ref in sorted([*running, 44, 45, 46], reverse=True)
+            for ref in sorted([*running, 44, 45, 46, 47], reverse=True)
         ],
     )
     original_labels = {
