@@ -348,12 +348,17 @@ fn effort_readback_keeps_preparation_nonbinding_and_renders_its_log() {
     {
         let id = &case["id"];
         let mut event = case["fields"].clone();
+        let model = if case["state"] == "proposed" {
+            serde_json::json!("p")
+        } else {
+            Value::Null
+        };
         for (key, value) in [
             ("type", serde_json::json!("wrapper.routing.prepared")),
             ("issue", serde_json::json!(42)),
-            ("state", serde_json::json!("proposed")),
-            ("model", serde_json::json!("p")),
-            ("selector_model", serde_json::json!("p")),
+            ("state", case["state"].clone()),
+            ("model", model.clone()),
+            ("selector_model", model),
         ] {
             event[key] = value;
         }

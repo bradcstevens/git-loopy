@@ -269,10 +269,15 @@ pub(crate) struct RoutePreparation {
 
 impl RoutePreparation {
     fn from_event(prepared: &RoutingPrepared) -> Option<Self> {
+        let effort = |value| {
+            non_empty_reported(value).filter(|value| {
+                value.is_some() || prepared.state.as_deref() == Some(ROUTE_PREPARATION_PROPOSED)
+            })
+        };
         Some(Self {
             state: non_empty(prepared.state.as_deref())?,
             model: non_empty(prepared.model.as_deref()),
-            effort: non_empty_reported(&prepared.effort),
+            effort: effort(&prepared.effort),
             context_tier: non_empty(prepared.context_tier.as_deref()),
             summary: non_empty(prepared.summary.as_deref()),
             proposal_id: non_empty(prepared.proposal_id.as_deref()),
@@ -280,7 +285,7 @@ impl RoutePreparation {
             valid_until: non_empty(prepared.valid_until.as_deref()),
             relevant_input_identity: non_empty(prepared.relevant_input_identity.as_deref()),
             selector_model: non_empty(prepared.selector_model.as_deref()),
-            selector_effort: non_empty_reported(&prepared.selector_effort),
+            selector_effort: effort(&prepared.selector_effort),
             selector_context_tier: non_empty(prepared.selector_context_tier.as_deref()),
             evidence_source: non_empty(prepared.evidence_source.as_deref()),
             source_model_identity: non_empty(prepared.source_model_identity.as_deref()),

@@ -646,12 +646,14 @@ the earlier contribution.
 
 The additive `effort_readback` matrix is a **Rust display-adapter** obligation:
 six Pickup cases run through both serial and Lane-stamped contribution replay
-and six preparation cases run through projection and actual rendered Queue and
+and nine preparation cases run through projection and actual rendered Queue and
 drill-in screens. Explicit Dynamic null effort reads as **not configurable**;
 the advertised value `none`, deliberate Static omission and historical sparse
 records stay distinct. Preparation retains explicit nulls without inventing
 missing fields or becoming a final Route, and its full work/selector wording
-survives in the issue Log. Its pinned Queue text is Rust presentation, including
+survives in the issue Log. Nulls in Static, reusable and unavailable preparation
+mean no proposal, not no dial, and retain their historical omitted projection.
+Its pinned Queue text is Rust presentation, including
 the existing column clipping, not a new cross-toolkit layout requirement.
 The existing semantic snapshots and native producer obligations are unchanged.
 This is not a substitute for the composed actual-work-session routing matrix;

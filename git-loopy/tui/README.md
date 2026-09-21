@@ -91,8 +91,9 @@ null Dynamic effort displays **not configurable**; the advertised effort `none`
 stays `none`. Static omission and historical records without an effort retain
 their backend wording. A prepared Route remains marked **not binding**, with
 the full work and selector effort wording in the issue Log when the Queue cell
-needs clipping. Explicit null preparation efforts survive in the raw projection;
-missing historical fields remain absent. These displays do not activate routing
+needs clipping. Explicit null efforts in a proposal survive in the raw projection;
+other preparation states make no effort-dial claim. Missing historical fields
+remain absent. These displays do not activate routing
 in the shell or PowerShell Orchestrators.
 
 The **Queue** is the Run's whole ledger rather than one Iteration's input, so a

@@ -435,6 +435,7 @@
     "preparations": [
       {
         "id": "no-dial-work-and-selector",
+        "state": "proposed",
         "fields": {"effort": null, "selector_effort": null},
         "expected_fields": {"effort": null, "selector_effort": null},
         "queue_text": "p@not configurable [not binding]",
@@ -442,6 +443,7 @@
       },
       {
         "id": "advertised-none-work-and-selector",
+        "state": "proposed",
         "fields": {"effort": "none", "selector_effort": "none"},
         "expected_fields": {"effort": "none", "selector_effort": "none"},
         "queue_text": "proposed p @ none [not binding]",
@@ -449,6 +451,7 @@
       },
       {
         "id": "no-dial-work-advertised-none-selector",
+        "state": "proposed",
         "fields": {"effort": null, "selector_effort": "none"},
         "expected_fields": {"effort": null, "selector_effort": "none"},
         "queue_text": "p@not configurable [not binding]",
@@ -456,6 +459,7 @@
       },
       {
         "id": "advertised-none-work-no-dial-selector",
+        "state": "proposed",
         "fields": {"effort": "none", "selector_effort": null},
         "expected_fields": {"effort": "none", "selector_effort": null},
         "queue_text": "proposed p @ none [not binding]",
@@ -463,6 +467,7 @@
       },
       {
         "id": "historical-unreported-efforts",
+        "state": "proposed",
         "fields": {},
         "expected_fields": {},
         "queue_text": "proposed p @ (bac... [not binding]",
@@ -470,10 +475,35 @@
       },
       {
         "id": "historical-empty-efforts",
+        "state": "proposed",
         "fields": {"effort": "", "selector_effort": ""},
         "expected_fields": {},
         "queue_text": "proposed p @ (bac... [not binding]",
         "text": "Route proposed: p@default (not bound); selector: p@backend default"
+      },
+      {
+        "id": "static-preparation-has-no-proposed-effort",
+        "state": "static",
+        "fields": {"effort": null, "selector_effort": null},
+        "expected_fields": {},
+        "queue_text": "[not binding]",
+        "text": "Route preparation: static route applies, no selector call"
+      },
+      {
+        "id": "reusable-preparation-has-no-proposed-effort",
+        "state": "reusable",
+        "fields": {"effort": null, "selector_effort": null},
+        "expected_fields": {},
+        "queue_text": "[not binding]",
+        "text": "Route preparation: an earlier decision is available for Pickup revalidation"
+      },
+      {
+        "id": "unavailable-preparation-has-no-proposed-effort",
+        "state": "unavailable",
+        "fields": {"effort": null, "selector_effort": null},
+        "expected_fields": {},
+        "queue_text": "[not binding]",
+        "text": "Route not prepared; available for Pickup revalidation"
       }
     ]
   },

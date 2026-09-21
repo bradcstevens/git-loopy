@@ -495,3 +495,7 @@ published Python effort-matching and local-durability deliveries still require
 integration, and executing-host capability authority and remaining composed
 activation obligations remain outstanding. Shell/PowerShell activation and
 Subagent/Integration routing remain deferred.
+The Event-schema declarations distinguish Dynamic/proposed null efforts from
+legacy backend-choice semantics and from non-proposed preparation's nulls (no
+proposal). Static, reusable and unavailable preparations keep those null effort
+keys out of the Dashboard projection rather than acquiring a no-dial claim.

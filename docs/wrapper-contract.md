@@ -740,8 +740,9 @@ consumer reads a Pickup's pair the way it reads a Lane's. `routing_source` is sp
 rather than as `source` because the same payload's `reason` answers "why" in the unrelated Pickup
 vocabulary (`order` / `priority` / `pin`), and one record cannot carry two differently-scoped
 answers to one word. Every one of the seven is optional-when-present, so a Runner that implements
-no routing emits the binding exactly as before and stays conforming; `null` is a *value* (the
-backend chooses) and not an absence. `event_schema_version` does not move: the seven are additive
+no routing emits the binding exactly as before and stays conforming; `null` is a *value* and not
+an absence. Static and legacy null settings retain backend-choice semantics; an explicitly
+null Dynamic effort means **not configurable** (§14.3). `event_schema_version` does not move: the seven are additive
 payload fields, which every schema-1 consumer already ignores when unknown.
 
 Contract-1.24 addition within compatibility schema 1, and an extension of an existing record for
@@ -1402,8 +1403,10 @@ run-wide default:
   **optional-when-present**: a port that resolves nothing (see the Python-only note below) says
   nothing and stays conforming, and a consumer MUST treat their absence as "this Runner does not
   route" rather than as a route it failed to report. A `null` `model` or `effort` is *present*
-  and means the backend chooses — for `effort`, the accompanying gate warning is what separates
-  an operator who asked for nothing from one whose effort was dropped.
+  and under Static or legacy routing means the backend chooses — for legacy `effort`, the
+  accompanying gate warning separates deliberate omission from an effort the gate dropped.
+  An explicitly null effort with Routing source `dynamic` instead means **not configurable**,
+  not the value `none`; a missing historical field supplies no such claim.
 - **Read back what it parsed (contract 1.24).** An Orchestrator that routes MUST print, at **Run
   start** and **unconditionally**, a labelled readback of the model settings it parsed: the
   run-wide **Default pair**'s model, effort and context tier; the **Escalation rung**; whether an
@@ -1667,9 +1670,11 @@ not elect or validate a route. An explicitly null effort with Routing source
 `dynamic` means **not configurable**, not a backend default or the value `none`.
 Rust preserves that distinction in Queue and contribution Route cells. Static
 nulls and historical missing effort fields retain their existing backend wording.
-For `wrapper.routing.prepared`, explicit null work/selector efforts likewise mean
+For `wrapper.routing.prepared` in state `proposed`, explicit null work/selector efforts likewise mean
 not configurable and remain explicit nulls in the semantic projection; missing
-or historically empty fields retain their previous readback. Preparation remains
+or historically empty fields retain their previous readback. In all other states,
+null efforts mean no proposal and retain their historical omitted projection,
+not a claim about an effort dial. Preparation remains
 nonbinding, including when its Route cell is clipped; the issue Log retains its
 full work and selector wording. The shared `dashboard-insights.json`
 `effort_readback` matrix pins this Rust Event-replay/display boundary, not actual
