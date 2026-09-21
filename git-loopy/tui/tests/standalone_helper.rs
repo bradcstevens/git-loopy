@@ -234,3 +234,220 @@ fn render_mode_ends_when_its_input_ends_rather_than_waiting_for_a_key() {
     assert_ne!(code, 2);
     assert!(stdout.is_empty());
 }
+
+#[cfg(unix)]
+mod live_terminal {
+    use super::*;
+    use std::fs::{self, File};
+    use std::io::{self, Read};
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::process::CommandExt;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "git-loopy-terminal-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).expect("the test owns a fresh directory");
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).expect("the test removes its own directory");
+        }
+    }
+
+    struct TerminalChild {
+        child: Child,
+        master: File,
+        _slave: File,
+        original_mode: libc::termios,
+    }
+
+    fn terminal_mode(device: &File) -> libc::termios {
+        let mut mode = std::mem::MaybeUninit::uninit();
+        // tcgetattr initializes the termios value on success.
+        assert_eq!(
+            unsafe { libc::tcgetattr(device.as_raw_fd(), mode.as_mut_ptr()) },
+            0,
+            "tcgetattr failed: {}",
+            io::Error::last_os_error()
+        );
+        unsafe { mode.assume_init() }
+    }
+
+    impl TerminalChild {
+        fn spawn(command: &mut Command) -> Self {
+            let mut master = -1;
+            let mut slave = -1;
+            let mut size = libc::winsize {
+                ws_row: 40,
+                ws_col: 120,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            };
+            // openpty initializes two descriptors owned exclusively by this test.
+            let result = unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::addr_of_mut!(size),
+                )
+            };
+            assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
+            let master = unsafe { File::from_raw_fd(master) };
+            let slave = unsafe { File::from_raw_fd(slave) };
+            let original_mode = terminal_mode(&slave);
+            for device in [&master, &slave] {
+                assert_eq!(
+                    unsafe { libc::fcntl(device.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) },
+                    0
+                );
+            }
+            let terminal_fd = slave.as_raw_fd();
+            command
+                .env("TERM", "xterm-256color")
+                .stdout(slave.try_clone().expect("the terminal is cloned"))
+                .stderr(slave.try_clone().expect("the terminal is cloned"));
+            // Only async-signal-safe session/terminal syscalls run after fork.
+            unsafe {
+                command.pre_exec(move || {
+                    // ioctl request types differ between macOS and Linux.
+                    #[allow(clippy::useless_conversion)]
+                    let request = libc::TIOCSCTTY.into();
+                    if libc::setsid() == -1 || libc::ioctl(terminal_fd, request, 0) == -1 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            Self {
+                child: command
+                    .spawn()
+                    .expect("the helper starts in its own terminal"),
+                master,
+                _slave: slave,
+                original_mode,
+            }
+        }
+
+        fn assert_draws_and_accepts_quit(&mut self) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut output = Vec::new();
+            let mut replies = 0;
+            let mut quit_sent = false;
+            let mut status = None;
+            while Instant::now() < deadline {
+                let mut descriptor = libc::pollfd {
+                    fd: self.master.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let ready = unsafe { libc::poll(&mut descriptor, 1, 25) };
+                if ready < 0 {
+                    let error = io::Error::last_os_error();
+                    assert_eq!(error.kind(), io::ErrorKind::Interrupted, "{error}");
+                    continue;
+                }
+                if ready > 0 {
+                    let mut buffer = [0; 65536];
+                    let count = self
+                        .master
+                        .read(&mut buffer)
+                        .expect("terminal output is readable");
+                    output.extend_from_slice(&buffer[..count]);
+                    let requests = output
+                        .windows(4)
+                        .filter(|bytes| *bytes == b"\x1b[6n")
+                        .count();
+                    for _ in replies..requests {
+                        self.master
+                            .write_all(b"\x1b[1;1R")
+                            .expect("the terminal answers the cursor query");
+                    }
+                    replies = requests;
+                    let text = String::from_utf8_lossy(&output).to_lowercase();
+                    if !quit_sent && text.contains("queue") && text.contains("summary") {
+                        self.master
+                            .write_all(b"q")
+                            .expect("the operator quits through the terminal");
+                        quit_sent = true;
+                    }
+                }
+                status = self.child.try_wait().expect("the helper is waitable");
+                if status.is_some() {
+                    break;
+                }
+            }
+            assert!(
+                quit_sent,
+                "the helper never drew Queue and Summary with redirected stdin: {:?}",
+                String::from_utf8_lossy(&output)
+            );
+            assert_eq!(
+                status.and_then(|status| status.code()),
+                Some(0),
+                "the terminal quit key must end the client"
+            );
+            let restored = terminal_mode(&self.master);
+            assert_eq!(restored.c_iflag, self.original_mode.c_iflag);
+            assert_eq!(restored.c_oflag, self.original_mode.c_oflag);
+            assert_eq!(restored.c_cflag, self.original_mode.c_cflag);
+            assert_eq!(restored.c_lflag, self.original_mode.c_lflag);
+            assert_eq!(restored.c_cc, self.original_mode.c_cc);
+            assert!(
+                output.windows(8).any(|bytes| bytes == b"\x1b[?1049l"),
+                "the helper must leave the alternate screen"
+            );
+        }
+    }
+
+    impl Drop for TerminalChild {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    #[test]
+    fn live_attach_draws_and_accepts_keys_with_null_stdin() {
+        let scratch = Scratch::new();
+        let trace = scratch.0.join("trace.jsonl");
+        let control = scratch.0.join("run.control");
+        fs::write(&trace, "").expect("an idle Run has an empty trace");
+        let owner = File::create(&control).expect("the control artifact is created");
+        assert_eq!(unsafe { libc::flock(owner.as_raw_fd(), libc::LOCK_EX) }, 0);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_git-loopy-tui"));
+        command
+            .arg("--attach")
+            .arg(trace)
+            .arg("--control")
+            .arg(control)
+            .stdin(Stdio::null());
+        TerminalChild::spawn(&mut command).assert_draws_and_accepts_quit();
+    }
+
+    #[test]
+    fn live_render_draws_and_accepts_keys_without_consuming_the_trace_pipe() {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_git-loopy-tui"));
+        command.arg("--render").stdin(Stdio::piped());
+        let mut terminal = TerminalChild::spawn(&mut command);
+        let mut trace_pipe = terminal.child.stdin.take().expect("the trace is piped");
+        trace_pipe
+            .write_all(fixture_trace().as_bytes())
+            .expect("the trace is written");
+        terminal.assert_draws_and_accepts_quit();
+        drop(trace_pipe);
+    }
+}

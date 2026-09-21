@@ -40,6 +40,20 @@ Gemini 3.8 was not an existing roster entry and was not returned by that listing
 It remains off-roster, preserving configured selections and efforts through the
 warning-and-pass-through path rather than introducing an unverified capability gate.
 
+## Corporate-compatible release record: SDK 1.0.13
+
+For [#610](https://github.com/bradcstevens/git-loopy/issues/610), the operator
+explicitly selected SDK 1.0.13 because the corporate feed did not offer 1.0.14.
+This carries current main's changes into dev.5 rather than returning to the
+dev.2-only maintenance baseline of #595.
+
+The cached SDK runtime reported CLI 1.0.83 and protocol 3 on 2026-09-20.
+Its live listing returned the same 19 observed models and effort sets as the
+existing fallback, so only the CLI provenance stamp changes. The seven
+compatibility entries and saved model choices remain unchanged. Global Skill
+metadata is read through `ServerSkillsApi.discover`, without an agent session.
+The SDK 1.0.14 record above remains historical evidence, not the current pin.
+
 ## The premise that was wrong
 
 Reasoning-effort capability is not vendor data reaching the kit through two paths. In the
@@ -220,7 +234,8 @@ is indistinguishable from the defective one, which is how the last correction we
 - **At decision time, the pending SDK bump was a known roster change.** The pin was two
   releases behind, and the proposed CLI sat between a version where `gemini-3.6-flash`
   was absent and one where it was present. That motivated verifying the new harness
-  before every bump; the SDK 1.0.14 upgrade record above documents the current refresh.
+  before every change; the corporate-compatible SDK 1.0.13 record above documents
+  the current refresh.
 - The prose stating that the fixture's keys *are* the supported-model set becomes false for
   the Python Orchestrator, which reads the live set. The contract must say which
   Orchestrators are held to the fixture and which are not.

@@ -1,6 +1,6 @@
 [project]
 name = "git-loopy"
-version = "0.11.0-dev.3"
+version = "0.11.0-dev.5"
 description = "git-loopy — encode engineering knowledge into repeatable, autonomous workflows on the GitHub Copilot Python SDK."
 readme = "README.md"
 license = { text = "MIT" }
@@ -13,16 +13,17 @@ keywords = ["github-copilot", "git-loopy", "autonomous", "agent", "afk"]
 # breaking ways" (see PRD #1, "Further Notes"), so future slices should bump
 # this pin deliberately rather than tracking `main`.
 #
-# SDK 1.0.14 pins CLI 1.0.85. Bump the SDK, lockfile, and model-roster CLI
+# SDK 1.0.13 pins CLI 1.0.83 and is available through the corporate feed.
+# Change the SDK, lockfile, and model-roster CLI
 # stamp together (ADR-0019). Offline tests cover the real client constructor,
 # session signatures, permission/event types, and Skill discovery surface.
-# The 1.0.5 -> 1.0.14 migration also normalizes the new SDK Skill source;
+# The SDK migration also normalizes the new SDK Skill source;
 # future bumps must pass those contract checks and the full suite.
 #
 # Rich is the renderer for the Python variant's terminal experience
 # (streaming prints + frozen iteration Panels + a frozen run-end Table).
 dependencies = [
-    "github-copilot-sdk==1.0.14",
+    "github-copilot-sdk==1.0.13",
     "rich>=13.7.0,<14",
     # Textual 7.0.0 raises its floor to rich>=14.2.0, while the Run renderer
     # pins Rich 13. Textual 6 and below require only rich>=13.3.3.

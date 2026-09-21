@@ -26,7 +26,9 @@ its own config home (`$XDG_CONFIG_HOME/git-loopy/skills/`, else
 every Run. That install is git-loopy's own Skill source; the consuming
 repository's `<repo>/.copilot/skills` is **not** read
 ([ADR-0025](adr/0025-installed-skill-catalog.md)). Discovery reads **metadata
-only**: a name, a description, a source, and Copilot's own enabled flag. Being
+only** through the SDK's global discovery RPC, without opening an agent session:
+a name, a description, a source, and Copilot's own enabled flag. A reported load
+error refuses discovery instead of returning a partial catalog. Being
 in the catalog does **not** make a Skill loadable — no instructions, scripts, or
 resources are read for a Skill the policy leaves out. Inspect it with `git-loopy
 skills list`. Where the installed catalog comes from — one external source of

@@ -1,6 +1,6 @@
 [package]
 name = "git-loopy-tui"
-version = "0.11.0-dev.3"
+version = "0.11.0-dev.5"
 edition = "2021"
 rust-version = "1.74"
 description = "Shared git-loopy TUI helper: the semantic Dashboard core plus the standalone renderer binary."
@@ -49,6 +49,13 @@ serde_json = { version = "1", features = ["preserve_order"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_System_Time"] }
+
+[target.'cfg(unix)'.dependencies]
+# Stdin carries the trace or /dev/null, not terminal replies and keyboard events.
+crossterm = { version = "0.29", features = ["use-dev-tty"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
 
 # The release toolchain, pinned (PRD #173, ADR-0016).
 #

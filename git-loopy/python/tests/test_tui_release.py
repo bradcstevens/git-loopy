@@ -891,6 +891,101 @@ def test_refresh_machine_local_helper_selects_older_fallback_when_exact_version_
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+@pytest.mark.parametrize("published", [(), ("1.2.4",)])
+def test_refresh_preserves_a_matching_local_build_for_an_explicit_source_only_release(
+    tmp_path: Path, published: tuple[str, ...]
+) -> None:
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
+    installed = _write_fake_helper(
+        tui_release.machine_local_helper_paths(env)[0], version="1.2.5-dev.1"
+    )
+    record = tui_release.helper_release_record_path(installed)
+    record.write_text("1.2.5-dev.1\n", encoding="utf-8")
+    before = installed.read_bytes(), record.read_bytes()
+    policy_url = (
+        "https://raw.githubusercontent.com/bradcstevens/git-loopy/"
+        "v1.2.5-dev.1/git-loopy/conformance/release-trust.json"
+    )
+    requested: list[str] = []
+
+    def download(url: str) -> bytes:
+        requested.append(url)
+        assert url == policy_url, "a matching local source build must not be downgraded"
+        return json.dumps({
+            "distribution_mode": "source-only",
+            "distribution_modes": ["source-only", "artifact-bearing"],
+        }).encode()
+
+    refreshed = tui_release.refresh_machine_local_helper(
+        "1.2.5-dev.1",
+        env,
+        host_system=lambda: "Darwin",
+        host_machine=lambda: "arm64",
+        host_libc=lambda: None,
+        releases_fetcher=lambda _artifact: published,
+        download=download,
+    )
+
+    assert refreshed == installed
+    assert (installed.read_bytes(), record.read_bytes()) == before
+    assert requested == [policy_url]
+    assert tui_release.resolve_runtime_helper(
+        tmp_path / "repo", release_version="1.2.5-dev.1",
+        warn=lambda message: pytest.fail(message), env=env,
+    ) == installed
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+@pytest.mark.parametrize(
+    "policy",
+    [
+        b'{"distribution_mode":"artifact-bearing","distribution_modes":["source-only","artifact-bearing"]}',
+        b'{"distribution_mode":"unknown","distribution_modes":["source-only"]}',
+        b'{"distribution_modes":["source-only"]}',
+        b"not JSON",
+    ],
+)
+def test_refresh_does_not_infer_source_only_from_missing_assets(
+    tmp_path: Path, policy: bytes
+) -> None:
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
+    installed = _write_fake_helper(
+        tui_release.machine_local_helper_paths(env)[0], version="1.2.5-dev.1"
+    )
+    before = installed.read_bytes()
+
+    with pytest.raises(tui_release.TuiReleaseError):
+        tui_release.refresh_machine_local_helper(
+            "1.2.5-dev.1", env,
+            host_system=lambda: "Darwin", host_machine=lambda: "arm64",
+            host_libc=lambda: None, releases_fetcher=lambda _artifact: (),
+            download=lambda _url: policy,
+        )
+
+    assert installed.read_bytes() == before
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake helper is a POSIX shell script")
+def test_a_matching_local_helper_cannot_hide_an_unreadable_release_index(
+    tmp_path: Path,
+) -> None:
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "config-home")}
+    _write_fake_helper(
+        tui_release.machine_local_helper_paths(env)[0], version="1.2.5-dev.1"
+    )
+
+    def unavailable(_url: str) -> bytes:
+        raise tui_release.TuiReleaseError("release index unavailable")
+
+    with pytest.raises(tui_release.TuiReleaseError, match="release index unavailable"):
+        tui_release.refresh_machine_local_helper(
+            "1.2.5-dev.1", env,
+            host_system=lambda: "Darwin", host_machine=lambda: "arm64",
+            host_libc=lambda: None, download=unavailable,
+        )
+
+
 def test_the_release_index_reader_stops_paginating_on_an_endless_index(
     tmp_path: Path,
 ) -> None:

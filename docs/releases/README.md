@@ -60,6 +60,12 @@ identity, and its Event-schema compatibility before activation. A newer helper i
 not substituted, and an incompatible older one is not made compatible merely by
 being downloadable (ADR-0052; #591).
 
+A matching machine-local source build is retained when its version and schema
+match the installed Runner, no exact helper is published, and the immutable tag's
+trust policy explicitly declares `source-only`. This preserves a locally built
+Dashboard without inferring publication mode from missing assets. Unreadable
+release history or policy still refuses maintenance.
+
 The shell and PowerShell installers still request the exact declared helper
 Release. Their `--no-tui` / `-NoTui` options skip that download; they do not install
 a Dashboard. The built-in **line-printer** remains a diagnostic/plain-output path,

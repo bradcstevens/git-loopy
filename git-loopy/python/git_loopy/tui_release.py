@@ -34,7 +34,13 @@ from urllib.parse import quote, urlsplit
 from urllib.request import urlopen
 
 from .events import EVENT_SCHEMA_VERSION
-from .distribution_mode import DistributionModeError, resolve_distribution_mode
+from .distribution_mode import (
+    DISTRIBUTION_MODE_SOURCE_ONLY,
+    TRUST_POLICY_PATH,
+    DistributionModeError,
+    read_trust_policy,
+    resolve_distribution_mode,
+)
 from .release_version import ReleaseVersionError, is_prerelease, read_release_version
 from .settings import global_dir
 
@@ -54,6 +60,10 @@ _RUNTIME_RELEASE_URL = (
 )
 _RUNTIME_RELEASE_INDEX_URL = (
     "https://api.github.com/repos/bradcstevens/git-loopy/releases?per_page=100&page={page}"
+)
+_RUNTIME_RELEASE_POLICY_URL = (
+    "https://raw.githubusercontent.com/bradcstevens/git-loopy/"
+    f"v{{version}}/{TRUST_POLICY_PATH.as_posix()}"
 )
 
 #: The page size ``_RUNTIME_RELEASE_INDEX_URL`` asks for, and the ceiling on how
@@ -854,6 +864,11 @@ def refresh_machine_local_helper(
     checksum-verified, identity-verified against the version it was resolved as,
     and proven to speak this Event schema before it is activated.
 
+    A matching local build is retained when the tagged policy explicitly
+    declares source-only and no exact published helper is available. The
+    complete index and the tagged policy must both be readable; missing assets
+    alone never establish the publication mode.
+
     The Release index and download URLs come from this module's constants rather
     than from ``tui-artifacts.json``, because an installed Runner has no source
     checkout; reading that fixture relative to the working directory would let
@@ -888,11 +903,33 @@ def refresh_machine_local_helper(
     selected_version: str | None = None
     extracted_helper: Path | None = None
     newest_rejection: tuple[str, str] | None = None
+    local_rejection = ""
 
     with tempfile.TemporaryDirectory(
         prefix=f".{HELPER_COMMAND_NAME}-", dir=destination.parent
     ) as scratch_dir:
         scratch = Path(scratch_dir)
+
+        if release_version not in remaining_versions and _executable((destination,)):
+            try:
+                local_probe = probe_runtime_helper(
+                    destination, event_schema_version=event_schema_version
+                )
+            except TuiReleaseError as exc:
+                local_rejection = f"; the installed helper was rejected: {exc}"
+            else:
+                if local_probe.reported_version == release_version:
+                    policy_url = _RUNTIME_RELEASE_POLICY_URL.format(version=release_version)
+                    policy_path = scratch / "release-trust.json"
+                    try:
+                        policy_path.write_bytes(fetch(policy_url))
+                        policy = read_trust_policy(policy_path)
+                    except (OSError, HTTPException, UnicodeError, DistributionModeError) as exc:
+                        raise TuiReleaseError(
+                            f"cannot verify tagged Release policy {policy_url}: {exc}"
+                        ) from exc
+                    if policy["distribution_mode"] == DISTRIBUTION_MODE_SOURCE_ONLY:
+                        return destination
 
         while remaining_versions:
             try:
@@ -968,6 +1005,7 @@ def refresh_machine_local_helper(
             raise TuiReleaseError(
                 f"no published git-loopy-tui Release carrying {artifact.archive_name} "
                 f"is at or below declared Release version {release_version!r}"
+                f"{local_rejection}"
             )
 
         backup_helper = scratch / "backup_helper"
