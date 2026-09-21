@@ -14,7 +14,7 @@
 //! colour — read from the injected [`TerminalCapabilities`]; information,
 //! order, scope, localization, and empty states do not.
 
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::Line;
@@ -22,11 +22,12 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
 use crate::band::{ActivityBand, ACTIVITY_BAND_MIN_HEIGHT, QUEUE_MIN_HEIGHT};
-use crate::navigation::Screen;
+use crate::navigation::{LogPosition, Screen};
 use crate::session::{DashboardFrame, Diagnostics};
 use crate::view::{
-    Activity, ContextFill, ContributionRow, DeliveryView, DetailHeader, DrillIn, Header,
-    LogLineView, PeakContext, PreparationView, QueueRow, RouteView, Summary, TerminalCapabilities,
+    Activity, ActivityWindow, ContextFill, ContributionRow, DeliveryView, DetailHeader, DrillIn,
+    Header, LogLineView, PeakContext, PreparationView, QueueRow, RouteView, Summary,
+    TerminalCapabilities,
 };
 
 /// The placeholder for a value the Run has not measured.
@@ -206,12 +207,25 @@ pub fn draw_dashboard(frame: &mut Frame, dashboard: &DashboardFrame) {
     draw_queue(
         frame,
         bands.queue,
-        &view.dashboard.queue.rows,
+        &view.dashboard.queue.rows[dashboard.queue_offset.min(
+            view.dashboard
+                .queue
+                .rows
+                .len()
+                .saturating_sub(usize::from(bands.queue_rows().height)),
+        )..],
         cost_placeholder(&view.dashboard.header, &glyphs),
         routing_placeholder(&view.dashboard.header, &glyphs),
         &glyphs,
     );
-    draw_activity(frame, bands.activity, &view.dashboard.activity, &glyphs);
+    draw_activity(
+        frame,
+        bands.activity,
+        &view.dashboard.activity,
+        dashboard.activity_position,
+        &dashboard.activity_positions,
+        &glyphs,
+    );
     draw_summary(
         frame,
         bands.summary,
@@ -267,6 +281,16 @@ pub struct DashboardBands {
 }
 
 impl DashboardBands {
+    /// Queue data cells, excluding the border and column headings.
+    pub(crate) fn queue_rows(&self) -> Rect {
+        Rect::new(
+            self.queue.x.saturating_add(1),
+            self.queue.y.saturating_add(2),
+            self.queue.width.saturating_sub(2),
+            self.queue.height.saturating_sub(3),
+        )
+    }
+
     /// The Activity band's header row, which is also its drag handle
     /// (ADR-0021, ADR-0038).
     ///
@@ -528,6 +552,7 @@ fn draw_header(
     ];
     segments.extend(routing_segment(header).map(|note| (5, note)));
     segments.extend(rate_card_segment(header).map(|note| (6, note)));
+    segments.extend(parallel_segment(header));
     segments.extend(diagnostic_segment(diagnostics).map(|note| (0, note)));
     let progress = fitted_line(segments, area, glyphs);
 
@@ -637,17 +662,7 @@ fn route(
         .unwrap_or_default();
     let rendered = match route {
         Some(route) => {
-            let effort = route
-                .effort
-                .as_ref()
-                .and_then(|value| value.as_deref())
-                .unwrap_or(
-                    if route.source.as_deref() == Some("dynamic") && route.effort == Some(None) {
-                        "(not configurable)"
-                    } else {
-                        "(backend)"
-                    },
-                );
+            let effort = route_effort(route);
             match &route.context_tier {
                 Some(context_tier) => format!(
                     "{}@{}/{}",
@@ -756,6 +771,47 @@ fn rate_card_segment(header: &Header) -> Option<String> {
     }
 }
 
+fn parallel_segment(header: &Header) -> Option<(u8, String)> {
+    let parallel = &header.parallel;
+    if parallel.availability != "available" {
+        return None;
+    }
+
+    // Healthy capacity yields to declarative notes; an interrupted dispatch
+    // takes their place because the operator needs its cause to steer the Run.
+    if let Some(reason) = parallel.serial_fallback_reason.as_deref() {
+        return Some((4, format!("serial fallback: {reason}")));
+    }
+
+    if parallel.refill_stopped {
+        let serial_required = parallel
+            .serial_required
+            .map(|count| format!("{count} serial-required"))
+            .unwrap_or_else(|| "serial-required work".to_string());
+        return Some((4, format!("lane refill stopped: {serial_required}")));
+    }
+
+    if parallel.degraded {
+        return Some((
+            4,
+            match parallel.degraded_reason.as_deref() {
+                Some(reason) => format!("parallel degraded: {reason}"),
+                None => "parallel degraded".to_string(),
+            },
+        ));
+    }
+
+    match (
+        parallel.effective_lane_limit,
+        parallel.configured_lane_limit,
+    ) {
+        (Some(effective), Some(configured)) => {
+            Some((7, format!("lanes {effective} of {configured}")))
+        }
+        _ => None,
+    }
+}
+
 /// A premium-request count, or the unknown placeholder.
 ///
 /// Whole counts read without a decimal point — the ordinary case, one request
@@ -850,21 +906,281 @@ fn consulted(skills: Option<&[String]>, glyphs: &Glyphs) -> String {
     }
 }
 
-/// The live tail for the Active issue.
-///
-/// The band follows the Active issue rather than the Queue cursor: it is an
-/// active-only glance, so it stays attributable when the active row has
-/// scrolled out of a long Queue. The Queue cursor's own issue is what the
-/// drill-in shows.
-fn draw_activity(frame: &mut Frame, area: Rect, activity: &Activity, glyphs: &Glyphs) {
-    let title = match &activity.issue {
-        Some(issue) => format!(" Activity {}{} ", glyphs.attribution, issue_label(issue)),
-        None => " Activity ".to_string(),
+/// The band's handle survives Collapse; Agent facts belong to the window,
+/// never to the Queue selection or the Run's default pair.
+fn draw_activity(
+    frame: &mut Frame,
+    area: Rect,
+    activity: &Activity,
+    position: LogPosition,
+    positions: &[LogPosition],
+    glyphs: &Glyphs,
+) {
+    let agent = activity
+        .windows
+        .iter()
+        .find(|agent| agent.live)
+        .or_else(|| activity.windows.first());
+    let mut title = match agent {
+        Some(agent) => format!(
+            " Activity {}{} {} ",
+            glyphs.attribution,
+            issue_label(&agent.issue),
+            activity_pair(agent, glyphs)
+        ),
+        None => match &activity.issue {
+            Some(issue) => format!(" Activity {}{} ", glyphs.attribution, issue_label(issue)),
+            None => " Activity ".to_string(),
+        },
     };
-    frame.render_widget(
-        Paragraph::new(log_lines(&activity.lines)).block(glyphs.block(title)),
-        area,
-    );
+    if area.height == 1 {
+        let pairs: Vec<_> = activity
+            .windows
+            .iter()
+            .filter(|agent| agent.live)
+            .map(|agent| {
+                format!(
+                    "{} {}",
+                    issue_label(&agent.issue),
+                    activity_pair(agent, glyphs)
+                )
+            })
+            .collect();
+        let mut kept = pairs.len();
+        while kept > 0 {
+            let more = if kept < pairs.len() {
+                format!(" | +{} more", pairs.len() - kept)
+            } else {
+                String::new()
+            };
+            title = format!(
+                " Activity {}{}{} ",
+                glyphs.attribution,
+                pairs[..kept].join(" | "),
+                more
+            );
+            if Line::raw(&title).width() <= usize::from(area.width.saturating_sub(2)) || kept == 1 {
+                break;
+            }
+            kept -= 1;
+        }
+    }
+    let block = glyphs.block(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if activity.windows.is_empty() {
+        let offset = position.offset(activity.lines.len(), inner.height);
+        frame.render_widget(Paragraph::new(log_lines(&activity.lines[offset..])), inner);
+        return;
+    }
+    let windows = activity_layout(inner, activity, glyphs);
+    for window in &windows {
+        let agent = &activity.windows[window.index];
+        let style = if agent.live {
+            Style::default()
+        } else {
+            Style::default().add_modifier(Modifier::DIM)
+        };
+        frame.render_widget(
+            Paragraph::new(
+                activity_header(agent, inner.width, glyphs)
+                    .into_iter()
+                    .map(Line::from)
+                    .collect::<Vec<_>>(),
+            )
+            .style(style.add_modifier(Modifier::BOLD)),
+            window.header,
+        );
+        let offset = positions
+            .get(window.index)
+            .copied()
+            .unwrap_or(position)
+            .offset(agent.lines.len(), window.tail.height);
+        frame.render_widget(
+            Paragraph::new(log_lines(&agent.lines[offset..])).style(style),
+            window.tail,
+        );
+    }
+    if windows.len() < activity.windows.len() && inner.height > 0 {
+        let remaining = activity.windows.len() - windows.len();
+        frame.render_widget(
+            Paragraph::new(format!("+{remaining} more Lanes")),
+            Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
+        );
+    }
+}
+
+pub(crate) struct ActivityWindowArea {
+    pub(crate) index: usize,
+    pub(crate) header: Rect,
+    pub(crate) tail: Rect,
+}
+
+pub(crate) fn activity_window_areas(
+    area: Rect,
+    activity: &Activity,
+    capabilities: &TerminalCapabilities,
+) -> Vec<ActivityWindowArea> {
+    let glyphs = Glyphs::for_terminal(capabilities);
+    activity_layout(glyphs.block("").inner(area), activity, &glyphs)
+}
+
+fn activity_layout(inner: Rect, activity: &Activity, glyphs: &Glyphs) -> Vec<ActivityWindowArea> {
+    let count = activity.windows.len();
+    if count == 0 || inner.height == 0 {
+        return Vec::new();
+    }
+    let heights: Vec<usize> = activity
+        .windows
+        .iter()
+        .map(|agent| activity_header(agent, inner.width, glyphs).len())
+        .collect();
+    let rows = usize::from(inner.height);
+    let compact = heights.iter().sum::<usize>() > rows;
+    let visible = if count > rows {
+        rows.saturating_sub(1)
+    } else {
+        count
+    };
+    let header_rows = if compact {
+        visible
+    } else {
+        heights.iter().sum()
+    };
+    let spare_rows = rows.saturating_sub(header_rows + usize::from(visible < count));
+    let tail_rows = if compact { 0 } else { spare_rows };
+    let mut extra_header_rows = if compact { spare_rows } else { 0 };
+    let mut y = inner.y;
+    (0..visible)
+        .map(|index| {
+            let header_height = if compact {
+                let extra = extra_header_rows.min(heights[index].saturating_sub(1));
+                extra_header_rows -= extra;
+                1 + extra
+            } else {
+                heights[index]
+            } as u16;
+            let tail_height =
+                (tail_rows / visible + usize::from(index < tail_rows % visible)) as u16;
+            let header = Rect::new(inner.x, y, inner.width, header_height);
+            y += header_height;
+            let tail = Rect::new(inner.x, y, inner.width, tail_height);
+            y += tail_height;
+            ActivityWindowArea {
+                index,
+                header,
+                tail,
+            }
+        })
+        .collect()
+}
+
+fn route_effort(route: &RouteView) -> &str {
+    route
+        .effort
+        .as_ref()
+        .and_then(|value| value.as_deref())
+        .unwrap_or(
+            if route.source.as_deref() == Some("dynamic") && route.effort == Some(None) {
+                "(not configurable)"
+            } else {
+                "(backend)"
+            },
+        )
+}
+
+fn activity_pair(agent: &ActivityWindow, glyphs: &Glyphs) -> String {
+    agent.route.as_ref().map_or_else(
+        || glyphs.unknown.to_string(),
+        |route| {
+            format!(
+                "{} @ {}",
+                route.model.as_deref().unwrap_or("(backend)"),
+                route_effort(route)
+            )
+        },
+    )
+}
+
+fn activity_header(agent: &ActivityWindow, width: u16, glyphs: &Glyphs) -> Vec<String> {
+    let task_type = match &agent.task_type {
+        None => glyphs.unknown.to_string(),
+        Some(keys) if keys.is_empty() => "unlabelled".to_string(),
+        Some(keys) => keys.join(", "),
+    };
+    let mut fill = match agent.context_fill.percentage {
+        Some(percentage) => {
+            let filled = ((percentage / 10.0) as i64).clamp(0, BAR_SEGMENTS);
+            format!(
+                "{}% [{}{}]",
+                percentage.round() as i64,
+                glyphs.bar_filled.repeat(filled as usize),
+                glyphs.bar_empty.repeat((BAR_SEGMENTS - filled) as usize)
+            )
+        }
+        None => context_fill(&agent.context_fill, glyphs),
+    };
+    if let Some(tier) = agent
+        .route
+        .as_ref()
+        .and_then(|route| route.context_tier.as_deref())
+    {
+        fill.push_str(&format!(" {tier}"));
+    }
+    let identity = match &agent.lane {
+        Some(lane) => format!("{} {}", lane_text(lane), issue_label(&agent.issue)),
+        None if agent.kind == "integration" => format!("Integration {}", issue_label(&agent.issue)),
+        None => issue_label(&agent.issue),
+    };
+    wrap_facts(
+        &[
+            identity,
+            task_type,
+            activity_pair(agent, glyphs),
+            format!("ctx {fill}"),
+            format!(
+                "sub {}",
+                agent
+                    .subagents
+                    .map_or_else(|| glyphs.unknown.to_string(), |count| count.to_string())
+            ),
+        ],
+        width,
+    )
+}
+
+fn lane_text(lane: &crate::event::IssueRef) -> String {
+    match lane {
+        crate::event::IssueRef::Number(number) => format!("Lane {number}"),
+        crate::event::IssueRef::Path(name) => name.clone(),
+    }
+}
+
+/// Keep whole facts together when possible, but never truncate a long model
+/// or local issue path merely to keep a header on one row.
+fn wrap_facts(segments: &[String], width: u16) -> Vec<String> {
+    let width = usize::from(width.max(1));
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for segment in segments {
+        if !line.is_empty() {
+            if Line::raw(format!("{line} | {segment}")).width() <= width {
+                line.push_str(" | ");
+            } else {
+                lines.push(std::mem::take(&mut line));
+            }
+        }
+        for ch in segment.chars() {
+            if !line.is_empty() && Line::raw(format!("{line}{ch}")).width() > width {
+                lines.push(std::mem::take(&mut line));
+            }
+            line.push(ch);
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 /// The locked Iteration-breakdown columns, in the locked order.
@@ -905,15 +1221,15 @@ pub fn draw_drill_in(frame: &mut Frame, dashboard: &DashboardFrame) {
     let view = &dashboard.view;
     let glyphs = Glyphs::for_terminal(&dashboard.capabilities);
     let area = frame.area();
-    // The Log is what a drill-in is opened for, so it is the band that keeps
-    // the remaining rows; the breakdown gives way on a short terminal.
-    let (breakdown_rows, _) = tail_heights(area.height, 9, 9);
-    let [detail, breakdown, log] = Layout::vertical([
-        Constraint::Length(HEADER_ROWS),
-        Constraint::Length(breakdown_rows),
-        Constraint::Min(3),
-    ])
-    .areas(area);
+    let Some(DrillInBands {
+        detail,
+        breakdown,
+        log,
+    }) = drill_in_bands(area)
+    else {
+        draw_minimum_size(frame, area);
+        return;
+    };
     draw_detail_header(
         frame,
         detail,
@@ -929,7 +1245,36 @@ pub fn draw_drill_in(frame: &mut Frame, dashboard: &DashboardFrame) {
         routing_placeholder(&view.dashboard.header, &glyphs),
         &glyphs,
     );
-    draw_issue_log(frame, log, &view.drill_in, &glyphs);
+    draw_issue_log(frame, log, &view.drill_in, dashboard.log_position, &glyphs);
+}
+
+/// Shared by drawing and pointer input; the Log keeps the remaining rows.
+pub(crate) fn drill_in_bands(area: Rect) -> Option<DrillInBands> {
+    if area.width < MINIMUM_COLUMNS || area.height < MINIMUM_ROWS {
+        return None;
+    }
+    let (breakdown_rows, _) = tail_heights(area.height, 9, 9);
+    let [detail, breakdown, log] = Layout::vertical([
+        Constraint::Length(HEADER_ROWS),
+        Constraint::Length(breakdown_rows),
+        Constraint::Min(3),
+    ])
+    .areas(area);
+    Some(DrillInBands {
+        detail,
+        breakdown,
+        log,
+    })
+}
+
+pub(crate) struct DrillInBands {
+    pub(crate) detail: Rect,
+    pub(crate) breakdown: Rect,
+    pub(crate) log: Rect,
+}
+
+pub(crate) fn log_height(area: Rect) -> u16 {
+    area.inner(Margin::new(1, 1)).height
 }
 
 /// Join `segments` to fit `area`, giving up the least decisive ones first.
@@ -1041,13 +1386,18 @@ fn draw_breakdown(
     );
 }
 
-/// One contribution's identity: the serial Iteration that produced it, or the
-/// Lane it ran in once Parallel contributions reach this band.
+/// One contribution's identity: its identifier where rolling dispatch gave it
+/// one, plus the serial Iteration or Lane slot that produced it.
 fn contribution_label(row: &ContributionRow, glyphs: &Glyphs) -> String {
-    match (&row.lane, row.iteration) {
-        (Some(lane), _) => format!("lane {}", issue_label(lane)),
+    let slot = match (&row.lane, row.iteration) {
+        (Some(lane), _) => lane_slot_label(lane),
         (None, Some(iteration)) => format!("iter {iteration}"),
         (None, None) => glyphs.unknown.to_string(),
+    };
+    if row.contribution_id.is_empty() {
+        slot
+    } else {
+        format!("{} {slot}", row.contribution_id)
     }
 }
 
@@ -1064,9 +1414,16 @@ fn peak_context(peak: Option<&PeakContext>, glyphs: &Glyphs) -> String {
 }
 
 /// The issue's accumulated Log, across every Iteration that worked it.
-fn draw_issue_log(frame: &mut Frame, area: Rect, drill_in: &DrillIn, glyphs: &Glyphs) {
+fn draw_issue_log(
+    frame: &mut Frame,
+    area: Rect,
+    drill_in: &DrillIn,
+    position: LogPosition,
+    glyphs: &Glyphs,
+) {
+    let offset = position.offset(drill_in.log.lines.len(), log_height(area));
     frame.render_widget(
-        Paragraph::new(log_lines(&drill_in.log.lines)).block(glyphs.block(" Log ")),
+        Paragraph::new(log_lines(&drill_in.log.lines[offset..])).block(glyphs.block(" Log ")),
         area,
     );
 }
@@ -1180,6 +1537,18 @@ fn issue_label(issue: &crate::event::IssueRef) -> String {
     match issue {
         crate::event::IssueRef::Number(number) => format!("#{number}"),
         crate::event::IssueRef::Path(path) => path.clone(),
+    }
+}
+
+/// A **Lane** slot as the operator reads it.
+///
+/// A named slot (`lane-1`) already carries its own noun, so prefixing one would
+/// stutter and cost width the identifier beside it now needs; a legacy Wave
+/// trace's numeric slot carries nothing and is given one.
+fn lane_slot_label(lane: &crate::event::LaneSlot) -> String {
+    match lane {
+        crate::event::LaneSlot::Number(number) => format!("lane #{number}"),
+        crate::event::LaneSlot::Name(name) => name.clone(),
     }
 }
 

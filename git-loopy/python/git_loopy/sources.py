@@ -773,6 +773,16 @@ class IssueSource(Protocol):
         ...
 
 
+@runtime_checkable
+class RepositoryVisibilityReporting(Protocol):
+    """A source that retained repository visibility from its preflight read."""
+
+    @property
+    def repository_visibility(self) -> str | None:
+        """Return GitHub visibility once source preflight has resolved it."""
+        ...
+
+
 # --------------------------------------------------------------------------- #
 # GitHub backend                                                              #
 # --------------------------------------------------------------------------- #
@@ -835,12 +845,18 @@ class GitHubIssueSource:
         self._include_prs = include_prs
         self._pin = pin
         self._pin_requires_parallel_safe = pin_requires_parallel_safe
+        self._repository: gh_module.Repo | None = None
         # Which (ref, defect) pairs §3.2's undated diagnostic has already named.
         # A membership refresh repeats on a backoff and a broken `created_at`
         # does not heal between refreshes, so without this the one line an
         # operator needs would be re-emitted every few seconds until it reads as
         # background noise. Run-scoped because the source is.
         self._undated_reported: set[tuple[int, str]] = set()
+
+    @property
+    def repository_visibility(self) -> str | None:
+        """The existing preflight's visibility fact, or unknown before it runs."""
+        return None if self._repository is None else self._repository.visibility
 
     def rate_limited_reads(self) -> int | None:
         """How many reads GitHub throttled this Run, or ``None`` if unknown.
@@ -870,6 +886,7 @@ class GitHubIssueSource:
                 exc,
             )
             return exit_code_for("preflight_failed")
+        self._repository = repo
         readiness_rc = self._preflight_readiness()
         if readiness_rc is not None:
             return readiness_rc

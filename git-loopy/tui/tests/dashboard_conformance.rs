@@ -109,3 +109,46 @@ fn the_rust_core_matches_every_dashboard_fixture_snapshot() {
         }
     }
 }
+#[test]
+fn activity_window_facts_replay_the_shared_serial_parallel_and_refill_cases() {
+    let fixture = fixture();
+    let cases = fixture["activity_window_cases"]
+        .as_array()
+        .expect("Activity cases are pinned");
+    assert!(!cases.is_empty());
+    for case in cases {
+        let inputs = &case["inputs"];
+        let mut state = DashboardState::new(RunInputs {
+            model: inputs["model"].as_str().map(str::to_string),
+            reasoning_effort: inputs["reasoning_effort"].as_str().map(str::to_string),
+        });
+        let events = case["events"].as_array().unwrap();
+        let mut applied = 0;
+        for snapshot in case["snapshots"].as_array().unwrap() {
+            let upto = snapshot["after_event_count"].as_u64().unwrap() as usize;
+            for event in &events[applied..upto] {
+                state.apply(&Event::from_json(event).expect("Activity event decodes"));
+            }
+            applied = upto;
+            let context = ViewContext {
+                now: instant(&snapshot["render_at_utc"]),
+                now_monotonic: snapshot["render_at_monotonic"].as_f64(),
+                zone: Zone::from_offset_minutes(
+                    inputs["local_utc_offset_minutes"].as_i64().unwrap() as i32,
+                ),
+                capabilities: TerminalCapabilities::default(),
+            };
+            let view = project_run_view(
+                &state,
+                &context,
+                &IssueRef::from_value(&inputs["drill_in_issue"]).unwrap(),
+            );
+            assert_eq!(
+                serde_json::to_value(view.dashboard.activity.windows).unwrap(),
+                snapshot["expected"],
+                "{} after {upto} Events",
+                case["id"]
+            );
+        }
+    }
+}

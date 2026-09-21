@@ -758,6 +758,10 @@ class RunConfig:
             :class:`RunConfig` is serialized verbatim into the detached Run's
             control payload — which is exactly the "exposing credentials" the
             policy rules out.
+        swe_bench_associations: Optional exact mappings from official SWE-bench
+            Verified model identities to Copilot configurations. They admit
+            supporting assessment evidence only; they never participate in
+            Artificial Analysis selector election.
         routing_suppressed: ``True`` only when an explicit model or effort
             override suppressed routing run-wide. Kept on the effective config
             so the per-issue resolver can report that distinct fallback source.
@@ -816,6 +820,7 @@ class RunConfig:
     routing_credit_allowance: Decimal | None = None
     selector_concurrency: int | None = None
     route_associations: Mapping[str, str] = field(default_factory=dict)
+    swe_bench_associations: Mapping[str, str] = field(default_factory=dict)
     routing_suppressed: bool = False
     skill_policy: SkillPolicyInputs = field(default_factory=SkillPolicyInputs)
     classifier_model: str | None = None
@@ -900,6 +905,11 @@ class RunConfig:
             )
         object.__setattr__(
             self, "route_associations", MappingProxyType(dict(self.route_associations))
+        )
+        object.__setattr__(
+            self,
+            "swe_bench_associations",
+            MappingProxyType(dict(self.swe_bench_associations)),
         )
 
 

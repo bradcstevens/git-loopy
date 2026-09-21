@@ -2624,6 +2624,30 @@ def _resolve_route_associations(
     return merged
 
 
+def _resolve_swe_bench_associations(
+    project: Mapping[str, object], global_: Mapping[str, object]
+) -> dict[str, str]:
+    """Merge exact official SWE-bench identities as optional supporting evidence."""
+    merged: dict[str, str] = {}
+    for scope, table in (("global", global_), ("project", project)):
+        rows = table.get("swe_bench_associations")
+        if rows is None:
+            continue
+        if not isinstance(rows, Mapping):
+            raise SystemExit(
+                f"git-loopy: error: {scope} config swe_bench_associations must be "
+                'a table of `<official SWE-bench model identity> = "<model>@<effort>"`'
+            )
+        for identity, configuration in rows.items():
+            if not isinstance(configuration, str) or not configuration.strip():
+                raise SystemExit(
+                    f"git-loopy: error: {scope} config swe_bench_associations "
+                    f"[{identity!r}] must be a `<model>@<effort>` string"
+                )
+            merged[str(identity)] = configuration.strip()
+    return merged
+
+
 @dataclasses.dataclass(frozen=True)
 class ResolvedConfig:
     """The fully-resolved Run configuration and routing provenance.
@@ -2834,6 +2858,7 @@ def resolve_config(
             coerce=_positive_concurrency,
         ),
         route_associations=_resolve_route_associations(project, global_),
+        swe_bench_associations=_resolve_swe_bench_associations(project, global_),
         routing_suppressed=suppressed_by is not None,
         skill_policy=skill_policy,
         classifier_model=classifier_model,

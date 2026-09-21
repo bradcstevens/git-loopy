@@ -177,6 +177,7 @@ def test_repo_view_happy_path(monkeypatch) -> None:
                     "owner": {"id": "id1", "login": "bradcstevens"},
                     "name": "git-loopy",
                     "defaultBranchRef": {"name": "main"},
+                    "visibility": "PUBLIC",
                 }
             ),
         )
@@ -186,11 +187,13 @@ def test_repo_view_happy_path(monkeypatch) -> None:
     assert r.owner == "bradcstevens"
     assert r.name == "git-loopy"
     assert r.default_branch == "main"
+    assert r.visibility == "PUBLIC"
     assert r.nwo == "bradcstevens/git-loopy"
-    # argv shape: gh repo view --json owner,name,defaultBranchRef
+    # Visibility shares the existing repository read; it is the meter state.
     assert captured["cmd"][0] == "gh"
     assert "repo" in captured["cmd"] and "view" in captured["cmd"]
     assert "--json" in captured["cmd"]
+    assert "visibility" in captured["cmd"][captured["cmd"].index("--json") + 1]
 
 
 def test_repo_view_nonzero_exit_raises_gh_error(monkeypatch) -> None:

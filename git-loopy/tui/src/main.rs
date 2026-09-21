@@ -76,8 +76,12 @@ controls (--render, --attach):
   up/down, k/j              move through the Queue
   home/end, g/G             jump to its head or tail
   enter, right, l           open the selected issue's Log
-  click a Queue row         open that issue's Log
+  click a Queue row         select it and open its Log
   esc, backspace, left, h   go back
+  wheel                     scroll the Queue, Log, or Activity tail under it
+  page up/down              scroll the Queue or open Log by a page
+  ctrl-page up/down         scroll the Activity tail without changing focus
+  f                         resume following the Log and Activity tails
   drag the Activity header  size the Activity band
   click it, or a            collapse the band to its header, or restore it
   shift+up, shift+down      size it a row at a time, with no mouse at all
@@ -943,19 +947,17 @@ fn read_the_keyboard(pending: Arc<Pending>, stopping: Arc<AtomicBool>) {
 /// Every button drags, deliberately: ADR-0038 says nothing about which, and the
 /// Python renderer accepts any, so narrowing it here would open exactly the
 /// drift between the two renderers this port exists to close. A bare move with
-/// no button held is not a gesture — the handle has not been taken — and every
-/// wheel direction becomes the one inert [`PointerAction::Wheel`], so "the
-/// wheel never resizes" is answered by the state machine rather than by this
-/// mapping quietly declining to forward it.
+/// no button held is not a gesture — the handle has not been taken. Vertical
+/// wheel direction reaches the session so it can scroll the band under the
+/// pointer without moving the selection or resizing Activity.
 fn gesture(mouse: MouseEvent) -> Option<Pointer> {
     let action = match mouse.kind {
         MouseEventKind::Down(_) => PointerAction::Press,
         MouseEventKind::Drag(_) => PointerAction::Drag,
         MouseEventKind::Up(_) => PointerAction::Release,
-        MouseEventKind::ScrollUp
-        | MouseEventKind::ScrollDown
-        | MouseEventKind::ScrollLeft
-        | MouseEventKind::ScrollRight => PointerAction::Wheel,
+        MouseEventKind::ScrollUp => PointerAction::WheelUp,
+        MouseEventKind::ScrollDown => PointerAction::WheelDown,
+        MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => PointerAction::Wheel,
         MouseEventKind::Moved => return None,
     };
     Some(Pointer {
@@ -980,6 +982,8 @@ fn intent(code: KeyCode, modifiers: KeyModifiers) -> Option<Key> {
     if modifiers.contains(KeyModifiers::CONTROL) {
         return match code {
             KeyCode::Char('c') | KeyCode::Char('d') => Some(Key::Quit),
+            KeyCode::PageUp => Some(Key::ActivityPageUp),
+            KeyCode::PageDown => Some(Key::ActivityPageDown),
             _ => None,
         };
     }
@@ -998,6 +1002,9 @@ fn intent(code: KeyCode, modifiers: KeyModifiers) -> Option<Key> {
         KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => Some(Key::Open),
         KeyCode::Esc | KeyCode::Backspace | KeyCode::Left | KeyCode::Char('h') => Some(Key::Back),
         KeyCode::Char('a') => Some(Key::ToggleActivity),
+        KeyCode::PageUp => Some(Key::PageUp),
+        KeyCode::PageDown => Some(Key::PageDown),
+        KeyCode::Char('f') => Some(Key::Follow),
         KeyCode::Char('q') => Some(Key::Quit),
         _ => None,
     }
@@ -1253,6 +1260,77 @@ mod tests {
 
     #[cfg(unix)]
     static UNIQUE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn terminal_wheel_direction_and_coordinates_reach_the_session() {
+        for (kind, action) in [
+            (MouseEventKind::ScrollUp, PointerAction::WheelUp),
+            (MouseEventKind::ScrollDown, PointerAction::WheelDown),
+            (MouseEventKind::ScrollLeft, PointerAction::Wheel),
+            (MouseEventKind::ScrollRight, PointerAction::Wheel),
+        ] {
+            assert_eq!(
+                gesture(MouseEvent {
+                    kind,
+                    column: 17,
+                    row: 23,
+                    modifiers: KeyModifiers::NONE,
+                }),
+                Some(Pointer {
+                    action,
+                    column: 17,
+                    row: 23
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn pointer_navigation_keeps_existing_keys_and_adds_keyboard_scroll_fallbacks() {
+        for (code, key) in [
+            (KeyCode::Up, Key::Up),
+            (KeyCode::Down, Key::Down),
+            (KeyCode::Char('k'), Key::Up),
+            (KeyCode::Char('j'), Key::Down),
+            (KeyCode::Home, Key::First),
+            (KeyCode::End, Key::Last),
+            (KeyCode::Char('g'), Key::First),
+            (KeyCode::Char('G'), Key::Last),
+            (KeyCode::Enter, Key::Open),
+            (KeyCode::Right, Key::Open),
+            (KeyCode::Char('l'), Key::Open),
+            (KeyCode::Esc, Key::Back),
+            (KeyCode::Backspace, Key::Back),
+            (KeyCode::Left, Key::Back),
+            (KeyCode::Char('h'), Key::Back),
+            (KeyCode::Char('a'), Key::ToggleActivity),
+            (KeyCode::Char('q'), Key::Quit),
+            (KeyCode::PageUp, Key::PageUp),
+            (KeyCode::PageDown, Key::PageDown),
+            (KeyCode::Char('f'), Key::Follow),
+        ] {
+            assert_eq!(intent(code, KeyModifiers::NONE), Some(key));
+        }
+        assert_eq!(
+            intent(KeyCode::Up, KeyModifiers::SHIFT),
+            Some(Key::GrowActivity)
+        );
+        assert_eq!(
+            intent(KeyCode::Down, KeyModifiers::SHIFT),
+            Some(Key::ShrinkActivity)
+        );
+        for code in [KeyCode::Char('c'), KeyCode::Char('d')] {
+            assert_eq!(intent(code, KeyModifiers::CONTROL), Some(Key::Quit));
+        }
+        assert_eq!(
+            intent(KeyCode::PageUp, KeyModifiers::CONTROL),
+            Some(Key::ActivityPageUp)
+        );
+        assert_eq!(
+            intent(KeyCode::PageDown, KeyModifiers::CONTROL),
+            Some(Key::ActivityPageDown)
+        );
+    }
 
     fn invocation(arguments: &[&str]) -> Invocation {
         parse(arguments.iter().map(|argument| argument.to_string())).expect("the arguments parse")

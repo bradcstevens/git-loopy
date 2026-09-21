@@ -181,7 +181,7 @@ def test_recorded_dynamic_authority_governs_permitted_retries(
         if not history:
             assert heading not in prompt
             continue
-        prior = prompt.split(heading)[1].strip().splitlines()
+        prior = prompt.split(heading, 1)[1].strip().split("\n\n", 1)[0].splitlines()
         assert len(prior) == len(history)
         for line, outcome, is_capability_evidence in zip(prior, history, capability, strict=True):
             assert f"synthetic-fancy-9 @ high / default ended {outcome}" in line

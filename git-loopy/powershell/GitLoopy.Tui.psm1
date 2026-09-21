@@ -281,10 +281,31 @@ function Test-GitLoopyTuiSchemaSupport {
     return ""
 }
 
+# The installer records the resolved Release only after the staged helper proves
+# that identity. A clone-local helper that differs from the tree may use that
+# record, while an arbitrary stale helper still fails closed.
+function Get-GitLoopyTuiInstalledRelease {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Helper
+    )
+
+    try {
+        $Lines = @([IO.File]::ReadAllLines("$Helper.release"))
+    }
+    catch {
+        return ""
+    }
+    if ($Lines.Count -ne 1 -or [string]::IsNullOrEmpty($Lines[0])) {
+        return ""
+    }
+    return $Lines[0]
+}
+
 # Contract §16: Release equality is product identity, never a compatibility
-# authority. A helper staged as part of *this* distribution must match exactly
-# and fails closed on drift; an externally discovered one may still run on the
-# strength of the schema probe, but the operator is told the Releases differ.
+# authority. An installed helper may instead match the Release its installer
+# resolved; an externally discovered helper may still run on the strength of
+# the schema probe, but the operator is told the Releases differ.
 #
 # The diagnostic is *returned* rather than written, so the decision and the
 # sentence that explains it stay together while the one place that owns this
@@ -299,7 +320,10 @@ function Test-GitLoopyTuiReleaseIdentity {
         [string]$HelperVersion,
         [AllowNull()]
         [AllowEmptyString()]
-        [string]$ReleaseVersion
+        [string]$ReleaseVersion,
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$ResolvedReleaseVersion
     )
 
     $Drifted = (
@@ -317,7 +341,10 @@ function Test-GitLoopyTuiReleaseIdentity {
     if ($Source -ceq "clone-local") {
         return [pscustomobject]@{
             PSTypeName = "GitLoopy.TuiReleaseIdentity"
-            Trusted = $false
+            Trusted = (
+                -not [string]::IsNullOrEmpty($ResolvedReleaseVersion) -and
+                $HelperVersion -ceq $ResolvedReleaseVersion
+            )
             Warning = $null
         }
     }
@@ -571,10 +598,17 @@ function Start-GitLoopyTuiSession {
         return $false
     }
 
+    $ResolvedHelperRelease = if ($Discovered.Source -ceq "clone-local") {
+        Get-GitLoopyTuiInstalledRelease -Helper $Discovered.Path
+    }
+    else {
+        ""
+    }
     $Identity = Test-GitLoopyTuiReleaseIdentity `
         -Source $Discovered.Source `
         -HelperVersion $HelperVersion `
-        -ReleaseVersion $ReleaseVersion
+        -ReleaseVersion $ReleaseVersion `
+        -ResolvedReleaseVersion $ResolvedHelperRelease
     if (-not $Identity.Trusted) {
         Write-GitLoopyTuiWarning (
             "the pinned $($Discovered.Path) reports Release version " +
@@ -601,6 +635,7 @@ Export-ModuleMember -Function @(
     "Resolve-GitLoopyTuiIntent",
     "Find-GitLoopyTuiHelper",
     "Test-GitLoopyTuiSchemaSupport",
+    "Get-GitLoopyTuiInstalledRelease",
     "Test-GitLoopyTuiReleaseIdentity",
     "Start-GitLoopyTuiSession",
     "Write-GitLoopyTuiLine",

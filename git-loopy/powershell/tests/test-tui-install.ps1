@@ -182,6 +182,31 @@ Assert-Equal (
         -Artifact git-loopy-tui-aarch64-apple-darwin.tar.xz
 ) "artifact URL resolves against the published Release tag"
 
+# --- Release resolution -----------------------------------------------------
+#
+# The shared fixture pins the four outcomes in both installer families. The
+# selected version is later passed to the staged helper identity probe.
+foreach ($Case in @($Metadata["release_resolution_cases"])) {
+    if ($null -eq $Case["resolved_version"]) {
+        Assert-Contains (Get-RefusalMessage {
+                Resolve-GitLoopyTuiRelease -Metadata $ArtifactMetadata `
+                    -DeclaredVersion $Case["declared_version"] `
+                    -PublishedVersions @($Case["published_versions"])
+            }) ([string]$Case["error"]) "release-resolution fixture error: $($Case["id"])"
+        continue
+    }
+    Assert-Equal $Case["resolved_version"] (
+        Resolve-GitLoopyTuiRelease -Metadata $ArtifactMetadata `
+            -DeclaredVersion $Case["declared_version"] `
+            -PublishedVersions @($Case["published_versions"])
+    ) "release-resolution fixture result: $($Case["id"])"
+}
+Assert-Contains (Get-RefusalMessage {
+        Resolve-GitLoopyTuiRelease -Metadata $ArtifactMetadata `
+            -DeclaredVersion 4.5.5 -PublishedVersions @()
+    }) "no published git-loopy-tui Release is at or below" `
+    "an empty published-release index has the named refusal"
+
 # --- Checksum verification --------------------------------------------------
 #
 # Both halves are load-bearing. A digest that matches proves nothing if it was
@@ -529,9 +554,15 @@ function Start-LoopbackReleaseServer {
                         $Body = [Text.Encoding]::ASCII.GetBytes("no such artifact")
                         $Status = "404 Not Found"
                     }
+                    $ContentType = if ($Name.EndsWith(".json")) {
+                        "application/json; charset=utf-8"
+                    }
+                    else {
+                        "application/octet-stream"
+                    }
                     $Head = [Text.Encoding]::ASCII.GetBytes(
                         "HTTP/1.1 $Status`r`nContent-Length: $($Body.Length)`r`n" +
-                        "Content-Type: application/octet-stream`r`nConnection: close`r`n`r`n"
+                        "Content-Type: $ContentType`r`nConnection: close`r`n`r`n"
                     )
                     $Stream.Write($Head, 0, $Head.Length)
                     $Stream.Write($Body, 0, $Body.Length)
@@ -623,6 +654,64 @@ try {
 finally {
     Stop-LoopbackReleaseServer -Server $Server
 }
+
+$InvalidReleaseIndexMetadata = Join-Path (New-Scratch -Name release-index) "metadata.json"
+$InvalidReleaseIndex = Join-Path $ReleaseDir "invalid-release-index-1.json"
+[IO.File]::WriteAllText($InvalidReleaseIndex, '{"message":"not a Release index"}')
+$InvalidReleaseMetadata = Get-Content -LiteralPath $ArtifactMetadata -Raw |
+    ConvertFrom-Json -AsHashtable
+$InvalidReleaseServer = Start-LoopbackReleaseServer -Root $ReleaseDir
+try {
+    $InvalidReleaseMetadata["release_index_url_template"] = (
+        "$($InvalidReleaseServer.BaseUrl)/invalid-release-index-{page}.json"
+    )
+    [IO.File]::WriteAllText(
+        $InvalidReleaseIndexMetadata,
+        ($InvalidReleaseMetadata | ConvertTo-Json -Depth 10)
+    )
+    $InvalidReleaseIndexRefusal = Get-RefusalMessage {
+        Get-GitLoopyTuiPublishedReleases -Metadata $InvalidReleaseIndexMetadata `
+            -ArchiveName $HostNames.Archive -ChecksumName $HostNames.Checksum
+    }
+}
+finally {
+    Stop-LoopbackReleaseServer -Server $InvalidReleaseServer
+}
+Assert-Contains $InvalidReleaseIndexRefusal "cannot read published helper Releases" `
+    "a non-array Release index is refused rather than treated as empty"
+
+$BoundedIndex = New-Scratch -Name bounded-release-index
+$FullPage = @(1..100 | ForEach-Object { @{ draft = $true; assets = @() } }) |
+    ConvertTo-Json -Depth 10 -Compress
+for ($Page = 1; $Page -lt 10; $Page++) {
+    [IO.File]::WriteAllText((Join-Path $BoundedIndex "releases-$Page.json"), $FullPage)
+}
+[IO.File]::WriteAllText((Join-Path $BoundedIndex "releases-10.json"), "[]")
+$BoundedMetadataPath = Join-Path $BoundedIndex "metadata.json"
+$BoundedMetadata = Get-Content -LiteralPath $ArtifactMetadata -Raw |
+    ConvertFrom-Json -AsHashtable
+$BoundedServer = Start-LoopbackReleaseServer -Root $BoundedIndex
+try {
+    $BoundedMetadata["release_index_url_template"] = (
+        "$($BoundedServer.BaseUrl)/releases-{page}.json"
+    )
+    [IO.File]::WriteAllText(
+        $BoundedMetadataPath, ($BoundedMetadata | ConvertTo-Json -Depth 10)
+    )
+    $CompletedIndex = @(Get-GitLoopyTuiPublishedReleases -Metadata $BoundedMetadataPath `
+            -ArchiveName $HostNames.Archive -ChecksumName $HostNames.Checksum)
+    Assert-Equal 0 $CompletedIndex.Count "a Release index ending on page ten completes"
+    [IO.File]::WriteAllText((Join-Path $BoundedIndex "releases-10.json"), $FullPage)
+    $BoundedRefusal = Get-RefusalMessage {
+        Get-GitLoopyTuiPublishedReleases -Metadata $BoundedMetadataPath `
+            -ArchiveName $HostNames.Archive -ChecksumName $HostNames.Checksum
+    }
+}
+finally {
+    Stop-LoopbackReleaseServer -Server $BoundedServer
+}
+Assert-Contains $BoundedRefusal "pagination limit" `
+    "ten full Release-index pages refuse before requesting an eleventh"
 
 # --- The installer, end to end ----------------------------------------------
 #
@@ -781,9 +870,35 @@ if ($CanRunFabricatedHelper) {
         "the launcher shim was not installed"
     Assert-Equal "git-loopy-tui 4.5.6" ((& $Helper --version | Out-String).Trim()) `
         "the staged helper is the Release this clone pins"
+    Assert-Equal "4.5.6" ([IO.File]::ReadAllText("$Helper.release").Trim()) `
+        "the staged helper records the Release its installer verified"
     Assert-Contains $Installed.Output $Helper "the installation reports where the helper landed"
 
-    # 7. An air-gapped host installs from local files and never reaches for a URL.
+    # 7. A failure to persist the resolved Release leaves the active helper alone.
+    # The record's staging path is a directory, so its real filesystem write
+    # fails before the installation can change what a Run discovers.
+    $RecordFailureClone = Join-Path $CliDir "record-failure"
+    [void](New-FakeClone -Root $RecordFailureClone -Version 4.5.6)
+    $RecordFailureHelper = Join-Path (
+        Join-Path $RecordFailureClone ".git-loopy/bin"
+    ) $HostNames.Executable
+    [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $RecordFailureHelper))
+    [IO.File]::WriteAllText($RecordFailureHelper, "previously installed helper")
+    [void](New-Item -ItemType Directory -Path "$RecordFailureHelper.release.$PID")
+    $RecordFailure = Get-RefusalMessage {
+        Install-GitLoopyTuiHelper -Metadata $ArtifactMetadata `
+            -RepositoryRoot $RecordFailureClone `
+            -ReleaseVersion 4.5.6 `
+            -SchemaVersion $SchemaVersion `
+            -Archive (Join-Path $ReleaseDir $HostNames.Archive) `
+            -Checksum (Join-Path $ReleaseDir $HostNames.Checksum)
+    }
+    Assert-Contains $RecordFailure "cannot record the resolved helper Release" `
+        "a failed resolved-Release record names the failure"
+    Assert-Equal "previously installed helper" ([IO.File]::ReadAllText($RecordFailureHelper)) `
+        "a failed resolved-Release record leaves the installed helper untouched"
+
+    # 8. An air-gapped host installs from local files and never reaches for a URL.
     $Airgap = Invoke-Installer -Installer $AirgapInstaller -Arguments @(
         "-BinDir", (Join-Path $CliDir "airgap-bin"),
         "-TuiArchive", (Join-Path $ReleaseDir $HostNames.Archive),
@@ -795,7 +910,7 @@ if ($CanRunFabricatedHelper) {
     Assert-Equal "git-loopy-tui 4.5.6" ((& $AirgapHelper --version | Out-String).Trim()) `
         "a local artifact installs when its published checksum matches"
 
-    # 8. A helper from another Release is refused before it is activated.
+    # 9. A helper from another Release is refused before it is activated.
     $Foreign = Join-Path $CliDir "foreign"
     [void](Publish-FakeRelease -Into $Foreign -ReportedVersion 9.9.9)
     $ForeignResult = Invoke-Installer -Installer $Installer -Arguments @(
@@ -806,7 +921,7 @@ if ($CanRunFabricatedHelper) {
     Assert-Equal "git-loopy-tui 4.5.6" ((& $Helper --version | Out-String).Trim()) `
         "a refused Release leaves the installed helper untouched"
 
-    # 9. A helper that cannot decode this Event schema is refused too.
+    # 10. A helper that cannot decode this Event schema is refused too.
     $Incapable = Join-Path $CliDir "incapable"
     [void](Publish-FakeRelease -Into $Incapable -ReportedVersion 4.5.6 -Maximum 0)
     $IncapableResult = Invoke-Installer -Installer $Installer -Arguments @(
@@ -817,6 +932,50 @@ if ($CanRunFabricatedHelper) {
         "an incapable helper is refused by capability"
     Assert-Equal "git-loopy-tui 4.5.6" ((& $Helper --version | Out-String).Trim()) `
         "an incapable helper leaves the installed one untouched"
+
+    # If activation fails after recording a new fallback Release, the old helper
+    # and its identity record must remain a pair a future Run can trust.
+    $ActivationFailureClone = Join-Path $CliDir "activation-failure"
+    [void](New-FakeClone -Root $ActivationFailureClone -Version 4.5.6)
+    $ActivationFailureHelper = Join-Path (
+        Join-Path $ActivationFailureClone ".git-loopy/bin"
+    ) $HostNames.Executable
+    [void](New-Item -ItemType Directory -Force -Path (
+            Split-Path -Parent $ActivationFailureHelper
+        ))
+    [IO.File]::WriteAllText($ActivationFailureHelper, "previously installed helper")
+    [IO.File]::WriteAllText("$ActivationFailureHelper.release", "4.5.5`n")
+    $TuiInstallModule = Get-Module GitLoopy.TuiInstall
+    & $TuiInstallModule {
+        function script:Move-GitLoopyTuiHelper {
+            param(
+                [Parameter(Mandatory)]
+                [string]$Verified,
+                [Parameter(Mandatory)]
+                [string]$Destination
+            )
+
+            throw (New-GitLoopyTuiInstallError -Message (
+                    "cannot install the verified helper to $Destination"
+                ))
+        }
+    }
+    $ActivationFailure = Get-RefusalMessage {
+        Install-GitLoopyTuiHelper -Metadata $ArtifactMetadata `
+            -RepositoryRoot $ActivationFailureClone `
+            -ReleaseVersion 4.5.6 `
+            -SchemaVersion $SchemaVersion `
+            -Archive (Join-Path $ReleaseDir $HostNames.Archive) `
+            -Checksum (Join-Path $ReleaseDir $HostNames.Checksum)
+    }
+    Assert-Contains $ActivationFailure "cannot install the verified helper" `
+        "an activation failure names the failed step"
+    Assert-Equal "previously installed helper" (
+        [IO.File]::ReadAllText($ActivationFailureHelper)
+    ) "an activation failure leaves the previous helper untouched"
+    Assert-Equal "4.5.5" (
+        [IO.File]::ReadAllText("$ActivationFailureHelper.release").Trim()
+    ) "an activation failure restores the previous helper Release record"
 }
 else {
     [Console]::Out.WriteLine(

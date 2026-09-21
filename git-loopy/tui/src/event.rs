@@ -66,6 +66,128 @@ impl<'de> Deserialize<'de> for IssueRef {
     }
 }
 
+/// One reusable **Lane** slot identity, as the Event stream names it
+/// (ADR-0044).
+///
+/// A Lane slot is not an issue: it is reused across many contributions over a
+/// Run's life, so a `"lane-1"` string or a legacy numeric slot must never be
+/// read through [`IssueRef`], whose `Path` variant means *"a local-markdown
+/// issue path"* and would be a type lie for a slot name. The shape mirrors
+/// `IssueRef`'s number-or-string tolerance because a Wave trace's numeric
+/// `lane: 310` is a truthful slot identity that must keep decoding unchanged.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum LaneSlot {
+    /// A legacy Wave-era numeric slot (the issue it held for the Iteration).
+    Number(i64),
+    /// A named Lane slot (`"lane-1"`).
+    Name(String),
+}
+
+impl LaneSlot {
+    /// The slot identity a JSON value names, or `None` when it names nothing.
+    pub fn from_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::Number(number) => number.as_i64().map(LaneSlot::Number),
+            Value::String(text) => Some(LaneSlot::Name(text.clone())),
+            _ => None,
+        }
+    }
+}
+
+impl From<IssueRef> for LaneSlot {
+    /// A Wave trace's `lane_issue`, read as the truthful slot identity it was
+    /// for that Iteration (ADR-0044): the slot genuinely was that issue's, so
+    /// converting it is not the reinterpretation `event-schema.json:429`
+    /// forbids.
+    fn from(issue: IssueRef) -> Self {
+        match issue {
+            IssueRef::Number(number) => LaneSlot::Number(number),
+            IssueRef::Path(path) => LaneSlot::Name(path),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for LaneSlot {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        LaneSlot::from_value(&value)
+            .ok_or_else(|| D::Error::custom("Lane slot identity must be a number or a string"))
+    }
+}
+
+/// The whole `contribution_id` / `issue` / `lane_id` triple a rolling-dispatch
+/// Event carries (ADR-0044).
+///
+/// `issue` is the ledger's own key, so a stamped record needs no lookup to
+/// attribute itself. `contribution_id` distinguishes two contributions on the
+/// same issue, a shape a Wave stream could not produce, and earns its place
+/// only in the drill-in. `lane_id` names the reusable slot the work ran in.
+///
+/// Every field is required because the identity is only ever whole: the type
+/// cannot represent the partial form an ordinary serial record carries, so a
+/// record naming an issue alone can never be mistaken for a Contribution.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContributionIdentity {
+    /// The contribution this Event belongs to.
+    pub contribution_id: String,
+    /// The issue the ledger keys on.
+    pub issue: IssueRef,
+    /// The reusable Lane slot the contribution started in.
+    pub lane_id: LaneSlot,
+}
+
+impl ContributionIdentity {
+    /// Read a whole triple off an Event's JSON object, or `None` when the
+    /// record is not a contribution-stamped one.
+    ///
+    /// `event-schema.json`'s `contribution_identity` states the rule this
+    /// enforces: the `keys` triple *and* `"iter": null`. Both halves matter.
+    /// Without the triple, an ordinary serial record — an issue activation, a
+    /// Pickup binding, an auto-close — names an `issue` and nothing else, and
+    /// admitting it to the rolling attribution path would handle it as though
+    /// it belonged to a Lane contribution. Without the Iteration check, a
+    /// Wave trace's Iteration-scoped record would be reinterpreted as rolling
+    /// work, which `event-schema.json`'s stamped-existing-records rule
+    /// forbids.
+    ///
+    /// An Iteration key must be *present and null*, not merely unreadable as
+    /// a number. The envelope is on every line, and a contribution-scoped
+    /// record's `iter` MUST be `null` (`docs/wrapper-contract.md`, "Identity,
+    /// not Lane"), so scope is a fact the record states rather than one this
+    /// consumer infers from a missing key — the same reason a Calibration
+    /// record carries `run_id: null` instead of dropping it. A record whose
+    /// Iteration key is absent or unreadable is malformed, and the serial arm
+    /// below already handles it.
+    fn from_object(object: &serde_json::Map<String, Value>) -> Option<Self> {
+        if !matches!(object.get("iter"), Some(Value::Null)) {
+            return None;
+        }
+        Some(Self {
+            contribution_id: identity_key(object, "contribution_id")
+                .and_then(Value::as_str)?
+                .to_string(),
+            issue: identity_key(object, "issue").and_then(IssueRef::from_value)?,
+            lane_id: identity_key(object, "lane_id").and_then(LaneSlot::from_value)?,
+        })
+    }
+}
+
+/// One identity key's value, or `None` when it is absent or names an empty
+/// string.
+///
+/// Present-but-empty is not a usable identity, and the family agrees: the
+/// reference Runner's producer lists an empty key alongside a missing one
+/// (`git_loopy.events._require_contribution_identity`), so a consumer that
+/// accepted `""` would build a Contribution out of a record no Orchestrator
+/// in the family can emit.
+fn identity_key<'a>(object: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a Value> {
+    match object.get(key)? {
+        Value::String(text) if text.is_empty() => None,
+        value => Some(value),
+    }
+}
+
 /// One decoded Event: the shared envelope plus its typed payload.
 #[derive(Clone, Debug)]
 pub struct Event {
@@ -84,8 +206,20 @@ pub struct Event {
     /// The runner-stamped Lane this Event belongs to (issue #66, ADR-0008).
     ///
     /// A stamped Event is attributed explicitly to its Lane instead of through
-    /// the serial single-Active inference.
+    /// the serial single-Active inference. Legacy Wave traces only: the
+    /// Event schema retires this key for rolling dispatch (ADR-0044) and it
+    /// MUST NOT be reinterpreted from a `contribution_id`/`issue`/`lane_id`
+    /// triple.
     pub lane_issue: Option<IssueRef>,
+    /// The rolling **Lane contribution** identity triple this Event carries
+    /// (ADR-0044), when it carries a whole one.
+    ///
+    /// Every `contribution_identity.stamped_types` and lifecycle Event
+    /// carries its own `issue`, so attribution reads this instead of
+    /// resolving `contribution_id` to an issue: the short-circuit is a
+    /// near-exact mirror of the `lane_issue` arm it joins. `None` for every
+    /// serial record, which names an issue without the rest of the triple.
+    pub contribution: Option<ContributionIdentity>,
     /// The exact Event type literal.
     pub kind: String,
     /// The typed payload for the Event types the Dashboard reduces.
@@ -122,10 +256,14 @@ pub enum EventPayload {
     AgentOutput(AgentOutput),
     /// `usage.context_window`
     UsageContextWindow(ContextWindowSample),
+    /// Additive Subagent lifecycle observations (ADR-0022).
+    SubagentLifecycle(SubagentLifecycle),
     /// `usage.tokens`
     UsageTokens(UsageTokens),
     /// `wrapper.commit.recorded`
     CommitRecorded(CommitRecorded),
+    /// `wrapper.auto_close`, also retained in a finished Activity tail.
+    AutoClosed(AutoClosed),
     /// `wrapper.strike`
     Strike(Strike),
     /// `wrapper.iteration.end`
@@ -136,8 +274,31 @@ pub enum EventPayload {
     StopRequested(StopRequested),
     /// `wrapper.stop.lifted`
     StopLifted(StopLifted),
+    /// `wrapper.contribution.end`
+    ContributionEnd(Box<ContributionEnd>),
+    /// `wrapper.concurrency.changed`
+    ConcurrencyChanged(ConcurrencyChanged),
+    /// `wrapper.parallel.degraded`
+    ParallelDegraded(ParallelDegraded),
+    /// `wrapper.parallel.serial_fallback`
+    ParallelSerialFallback(ParallelSerialFallback),
+    /// `wrapper.serial.requested`
+    SerialRequested(SerialRequested),
     /// Any other Event type in the supported schema.
     Other,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ContributionScope {
+    pub(crate) issue: Option<IssueRef>,
+    pub(crate) lane: Option<IssueRef>,
+    pub(crate) id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct SubagentLifecycle {
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
 }
 
 /// The Run-start payload: Release identity and per-Orchestrator capabilities.
@@ -146,6 +307,9 @@ pub struct RunStart {
     /// What this Orchestrator can truthfully observe.
     #[serde(default)]
     pub insight_capabilities: Option<InsightCapabilities>,
+    /// What this Orchestrator can do with **Parallel mode** (ADR-0044).
+    #[serde(default)]
+    pub parallel_capabilities: Option<ParallelCapabilities>,
     /// The configured consecutive-Strike limit.
     #[serde(default)]
     pub max_nmt_strikes: Option<i64>,
@@ -176,6 +340,20 @@ pub struct ContributionStart {
     pub host: Option<String>,
 }
 
+/// Per-Orchestrator **Parallel mode** capabilities declared at Run start.
+///
+/// A capability declared `false` is the difference between "this Orchestrator
+/// cannot do it" and "it has not happened yet". The Header's `parallel`
+/// posture does *not* read this manifest — it reports what this Run is doing,
+/// not what its Orchestrator could do (ADR-0063) — so the manifest is decoded
+/// here as the Run-start contract declares it and projected by nothing yet.
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+pub struct ParallelCapabilities {
+    /// Whether this Orchestrator can fill more than one Lane at a time.
+    #[serde(default)]
+    pub parallel_mode: Option<bool>,
+}
+
 /// Per-Orchestrator Insight capabilities declared at Run start.
 ///
 /// A capability declared `false` is the difference between "this Orchestrator
@@ -194,6 +372,8 @@ pub struct InsightCapabilities {
     /// Context fill.
     #[serde(default)]
     pub context_window: Option<bool>,
+    #[serde(default)]
+    pub subagents: Option<bool>,
     /// Consulted-Skill detection.
     #[serde(default)]
     pub skill_consultation: Option<bool>,
@@ -277,6 +457,9 @@ pub struct IssueActivated {
 pub struct Pickup {
     /// The issue this Pickup bound, or passed over.
     pub issue: IssueRef,
+    /// `None` is unread/unpublished; an observed empty list is unlabelled.
+    #[serde(default)]
+    pub task_type_keys: Option<Vec<String>>,
     /// Why it was taken (`order`, `priority`, `pin`), or why it was passed
     /// over. Open text on a skip: the reason originates in whatever admission
     /// the Orchestrator applied.
@@ -667,6 +850,14 @@ pub struct CommitRecorded {
     pub subject: Option<String>,
 }
 
+/// One issue closed from its completion commit.
+#[derive(Clone, Debug, Deserialize)]
+pub struct AutoClosed {
+    pub issue: IssueRef,
+    #[serde(default)]
+    pub sha: Option<String>,
+}
+
 /// One consecutive-no-measurable-progress Strike.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Strike {
@@ -709,6 +900,166 @@ pub struct StopLifted {
     pub draining: Option<i64>,
 }
 
+/// The authoritative finalized **Lane contribution** row (ADR-0044).
+///
+/// `wrapper.contribution.start` carries only the identity triple (decoded
+/// through [`Event::contribution`]) and needs no payload of its own; this is
+/// the row `wrapper.contribution.end` publishes once, never re-reported.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ContributionEnd {
+    /// Whether this contribution reached publication.
+    #[serde(default)]
+    pub published: Option<bool>,
+    /// Why the contribution ended (`published`, `unchanged_branch`,
+    /// `checkpoint_failed`, `serial_fallback`).
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// The contribution's own rollup.
+    #[serde(default)]
+    pub summary: Option<ContributionSummary>,
+    #[serde(default, deserialize_with = "lenient_issue_rows")]
+    pub issues: Vec<IterationIssue>,
+}
+
+/// One **Lane contribution**'s rollup, named on its own terms
+/// (`closures`/`lifecycle_seconds`/`closure_outcome`) rather than the
+/// Iteration vocabulary: a contribution's row answers "what did this piece of
+/// work cost and achieve", not "what happened this round". `cost_usd` is
+/// retired on the same terms as the Iteration rollup's (#330): the list-price
+/// estimate is gone and Credits are never read out of a dollar-named key.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ContributionSummary {
+    /// The model this contribution billed against.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The reasoning effort this contribution ran at.
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// Input tokens.
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub tokens_in: Option<i64>,
+    /// Output tokens.
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub tokens_out: Option<i64>,
+    /// Tokens observed in the Context window.
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub observed_tokens: Option<i64>,
+    /// Agent-authored commits, Runner Checkpoint commits excluded.
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub commits: Option<i64>,
+    /// Runner-driven issue closures.
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub closures: Option<i64>,
+    /// The contribution's terminal lifecycle status.
+    #[serde(default)]
+    pub closure_outcome: Option<String>,
+    /// How many recovery attempts this contribution's Integration made.
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub recovery_attempts: Option<i64>,
+    /// Agent-work seconds.
+    #[serde(default)]
+    pub agent_seconds: Option<f64>,
+    /// Contribution-start to contribution-end.
+    #[serde(default)]
+    pub lifecycle_seconds: Option<f64>,
+    /// The contribution's peak Context fill, when the Orchestrator reports it
+    /// as a structured sample rather than a bare token count.
+    #[serde(default, deserialize_with = "lenient_context_sample")]
+    pub peak_context_window: Option<ContextWindowSample>,
+    /// How this contribution moved the consecutive-Strike counter (`reset` or
+    /// `+1`).
+    #[serde(default)]
+    pub strike_reaction: Option<String>,
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub tool_count: Option<i64>,
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub skill_call_count: Option<i64>,
+    #[serde(default)]
+    pub skills_consulted: Option<Vec<String>>,
+}
+
+/// One authoritative effective-Lane-limit transition (ADR-0044).
+///
+/// Emitted only for a transition, never per observation: the configured Lane
+/// cap is immutable for the Run, so only `effective_lane_limit` and the
+/// Pressure that moved it change.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ConcurrencyChanged {
+    /// The immutable configured Lane cap.
+    #[serde(default)]
+    pub configured_lane_limit: Option<i64>,
+    /// The Lane limit currently in effect.
+    #[serde(default)]
+    pub effective_lane_limit: Option<i64>,
+    /// What narrowed the limit below the configured cap, or `None` when
+    /// nothing is pressing (a signal this Run cannot observe is also `None`;
+    /// the two are not told apart because neither is an estimate).
+    #[serde(default, deserialize_with = "reported")]
+    pub pressure: Option<Option<String>>,
+}
+
+/// A Parallel-mode Run degrading entirely to the serial path for the whole
+/// Run (ADR-0044). Emitted at most once per Run, never by one that fills, or
+/// could fill, a single Lane.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ParallelDegraded {
+    /// Why Parallel mode degraded (`source_not_rolling_capable`).
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// The Lane cap that goes unused.
+    #[serde(default)]
+    pub lane_cap: Option<i64>,
+    /// The issue source this property belongs to.
+    #[serde(default)]
+    pub issue_source: Option<String>,
+}
+
+/// One serial Iteration a Rolling-capable Run works because the Pool holds no
+/// eligible Parallel-safe candidate (ADR-0044). Per Iteration, fixed by
+/// triage, and counted — distinct from [`ParallelDegraded`], which is per Run.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ParallelSerialFallback {
+    /// Eligible Parallel-safe candidates found. Always `0` when emitted.
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub eligible: Option<i64>,
+    /// Parallel-safe candidates that could not be read.
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub unavailable: Option<i64>,
+    /// Parallel-safe candidates already worked this Run.
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub worked: Option<i64>,
+    /// Why no eligible candidate was found.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// The configured Lane cap.
+    #[serde(default)]
+    pub lane_cap: Option<i64>,
+}
+
+/// A latch that Lane refill stopped because serial-required work is waiting
+/// (ADR-0044). Emitted when refill stops, not when the serial turn is finally
+/// granted.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct SerialRequested {
+    /// The first serial-required issue the latching peek saw, or `None` when
+    /// the Orchestrator reports one without naming it.
+    #[serde(default, deserialize_with = "reported")]
+    pub issue: Option<Option<IssueRef>>,
+    /// Why the issue is serial-required (`not_parallel_safe`,
+    /// `serial_fallback`).
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// How many serial-required items the latching peek saw. `Some(None)` is
+    /// a latch nothing counted (only the driver's own Pool peek can, and it
+    /// is skipped once demand is latched); never `Some(Some(0))`, since a
+    /// latch with nothing behind it cannot happen.
+    #[serde(default, deserialize_with = "reported")]
+    pub serial_required: Option<Option<i64>>,
+    /// Whether refill stopped.
+    #[serde(default)]
+    pub refill_stopped: Option<bool>,
+}
+
 impl Event {
     /// Decode one Event from its JSON representation.
     ///
@@ -733,9 +1084,11 @@ impl Event {
             run_scoped_usage: kind == "usage.tokens"
                 && object.get("run_id").and_then(Value::as_str).is_some()
                 && object.get("iter") == Some(&Value::Null)
+                && object.get("issue").map_or(true, Value::is_null)
                 && object.get("lane_issue").map_or(true, Value::is_null)
                 && object.get("contribution_id").map_or(true, Value::is_null),
             lane_issue: object.get("lane_issue").and_then(IssueRef::from_value),
+            contribution: ContributionIdentity::from_object(object),
             kind,
             payload,
         })
@@ -792,13 +1145,35 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         },
         "agent.output" => EventPayload::AgentOutput(decode_or_default(value)),
         "usage.context_window" => EventPayload::UsageContextWindow(decode_or_default(value)),
+        "subagent.started" | "subagent.completed" | "subagent.failed" => {
+            EventPayload::SubagentLifecycle(decode_or_default(value))
+        }
         "usage.tokens" => EventPayload::UsageTokens(decode_or_default(value)),
         "wrapper.commit.recorded" => EventPayload::CommitRecorded(decode_or_default(value)),
+        "wrapper.auto_close" => match serde_json::from_value(value.clone()) {
+            Ok(closure) => EventPayload::AutoClosed(closure),
+            Err(_) => EventPayload::Other,
+        },
         "wrapper.strike" => EventPayload::Strike(decode_or_default(value)),
         "wrapper.iteration.end" => EventPayload::IterationEnd(Box::new(decode_or_default(value))),
         "wrapper.run.end" => EventPayload::RunEnd(decode_or_default(value)),
         "wrapper.stop.requested" => EventPayload::StopRequested(decode_or_default(value)),
         "wrapper.stop.lifted" => EventPayload::StopLifted(decode_or_default(value)),
+        // Only the rolling types with a producer are modelled (ADR-0044): the
+        // Lane-contribution lifecycle and the four Run/Iteration-scoped
+        // posture events. The `contribution_identity.lifecycle_types` and
+        // `scheduler_scoped_types` this core does not model — including every
+        // `wrapper.integration.*` type, filed to #435 — still degrade to
+        // `EventPayload::Other` below, unchanged.
+        "wrapper.contribution.end" => {
+            EventPayload::ContributionEnd(Box::new(decode_or_default(value)))
+        }
+        "wrapper.concurrency.changed" => EventPayload::ConcurrencyChanged(decode_or_default(value)),
+        "wrapper.parallel.degraded" => EventPayload::ParallelDegraded(decode_or_default(value)),
+        "wrapper.parallel.serial_fallback" => {
+            EventPayload::ParallelSerialFallback(decode_or_default(value))
+        }
+        "wrapper.serial.requested" => EventPayload::SerialRequested(decode_or_default(value)),
         _ => EventPayload::Other,
     }
 }
@@ -857,6 +1232,16 @@ fn lenient_issue_refs<'de, D: Deserializer<'de>>(
 ) -> Result<Vec<IssueRef>, D::Error> {
     let refs = Vec::<Value>::deserialize(deserializer)?;
     Ok(refs.iter().filter_map(IssueRef::from_value).collect())
+}
+
+/// Decode a Context-fill sample that some producers report as a bare token
+/// count instead of the structured shape, treating anything but an object as
+/// unreported rather than failing the payload it lives in.
+fn lenient_context_sample<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ContextWindowSample>, D::Error> {
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
 }
 
 /// Decode the per-issue rollup rows, dropping any row that names no issue.

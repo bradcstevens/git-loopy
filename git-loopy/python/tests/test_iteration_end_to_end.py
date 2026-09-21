@@ -79,6 +79,7 @@ from git_loopy import settings
 from git_loopy import skill_install
 from git_loopy import sources as sources_module
 from git_loopy import static_route
+from git_loopy import swe_bench
 from git_loopy.static_route import RoutePolicy
 from git_loopy.config import RunConfig, SkillPolicyInput, SkillPolicyInputs
 from git_loopy.emit import EventEmitter
@@ -5788,6 +5789,25 @@ def _dynamic_run(
     return fake_client, spied, code
 
 
+def test_missing_copilot_refuses_before_live_routing_reads(tmp_path, monkeypatch) -> None:
+    from git_loopy.run_environment_preflight import (
+        RunEnvironmentCheck,
+        RunEnvironmentPreflight,
+    )
+
+    monkeypatch.setattr(
+        loop_module, "resolve_run_environment_preflight",
+        lambda **_kwargs: RunEnvironmentPreflight(checks=(
+            RunEnvironmentCheck("copilot", False, "copilot is not on PATH"),
+        )),
+    )
+    client, spied, code = _dynamic_run(tmp_path, monkeypatch)
+    assert code != 0
+    assert spied["evidence"] == 0
+    assert spied["assessments"] == []
+    assert client.create_calls == []
+
+
 def _dynamic_pool_run(tmp_path, monkeypatch, *, issues, **overrides):
     """A multi-issue dynamic Run, for the **Routing preparation** slice (#566).
 
@@ -6093,6 +6113,77 @@ def test_queued_eligibility_is_reread_before_any_preparation_spend(
     assert classified == []
     assert len(spied["assessments"]) == 2
     assert _prepared_records(tmp_path)[-1]["state"] == "unavailable"
+
+
+@pytest.mark.parametrize("refresh_fails", [False, True])
+def test_a_dynamic_run_carries_official_swe_bench_support_to_its_record(
+    tmp_path, monkeypatch, refresh_fails
+) -> None:
+    """Optional supporting evidence reaches the actual assessment and projection."""
+    reads = 0
+
+    class _SupportingSource:
+        def __init__(self, *, associations: dict[str, str]) -> None:
+            assert associations == {"GPT Test (20260901)": "claude-opus-5@high"}
+
+        async def fetch(self) -> swe_bench.SWEbenchVerifiedResult:
+            nonlocal reads
+            reads += 1
+            if refresh_fails and reads > 1:
+                raise OSError("fixture: the fresh optional source read failed")
+            return swe_bench.SWEbenchVerifiedResult(
+                source_identity=swe_bench.SWE_BENCH_VERIFIED_URL,
+                retrieved_at=datetime(2026, 9, 18, 12, tzinfo=timezone.utc),
+                records=(
+                    swe_bench.SWEbenchVerifiedRecord(
+                        source_identity=swe_bench.SWE_BENCH_VERIFIED_URL,
+                        source_model_identity="GPT Test (20260901)",
+                        associated_copilot_model="claude-opus-5",
+                        associated_copilot_effort="high",
+                        association_provenance=(
+                            "swe_bench_associations:GPT Test (20260901)"
+                        ),
+                        resolved=Decimal("72.4"),
+                        benchmark_version="SWE-bench Verified",
+                        harness="mini-SWE-agent",
+                        harness_version="2.4.1",
+                        conditions=(
+                            "reasoning_effort=high; evaluated_on=2026-09-01"
+                        ),
+                    ),
+                ),
+            )
+
+    monkeypatch.setattr(loop_module, "SWEbenchVerifiedSource", _SupportingSource)
+    _client, spied, exit_code = _dynamic_run(
+        tmp_path,
+        monkeypatch,
+        swe_bench_associations={"GPT Test (20260901)": "claude-opus-5@high"},
+    )
+
+    assert exit_code == 0
+    (candidate,) = [
+        candidate
+        for candidate in spied["assessments"][0][1].candidates
+        if candidate.model == "claude-opus-5"
+    ]
+    assert candidate.supporting_evidence[0].score == Decimal("72.4")
+    events = [json.loads(raw) for raw in _log_lines(tmp_path)]
+    (record,) = [
+        event for event in events if event["type"] == "wrapper.routing.resolved"
+    ]
+    if refresh_fails:
+        assert reads >= 2
+        assert len(spied["assessments"]) == 2
+        assert all(
+            not candidate.supporting_evidence
+            for candidate in spied["assessments"][-1][1].candidates
+        )
+        assert record["reassessed"] is True
+        assert "source unavailable" in record["summary"]
+        assert "72.4%" not in record["summary"]
+    else:
+        assert "SWE-bench Verified 72.4% via mini-SWE-agent 2.4.1" in record["summary"]
 
 
 @pytest.mark.parametrize("already_labelled", [False, True])
