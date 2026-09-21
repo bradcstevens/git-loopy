@@ -89,8 +89,9 @@ Pickups and restored access, while capability withdrawal requires a new final
 assignment with its own finite retry bound. Replacement failures cover both the
 previous owned association remaining and removal accepted before the new association fails;
 both remain visibly failed rather than claiming tracker agreement. The Python adapter is
-`test_recorded_routing_reuse_preserves_publication_recovery_bounds` in the same
-suite. These are recorded-authorization cases, not another first-wizard claim.
+`test_recorded_routing_reuse_preserves_publication_recovery_bounds` in
+`python/tests/test_iteration_end_to_end.py`. These are recorded-authorization
+cases, not another first-wizard claim.
 Shell/PowerShell activation remains deferred; no default, historical stream,
 Subagent or Integration behavior changes.
 
