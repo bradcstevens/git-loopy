@@ -75,10 +75,15 @@ design makes deliberately.
   flaky claim fails hard today. A Lease that cannot be renewed through a transient failure
   expires and is stolen — the failure mode is exactly the one we designed against.
 - **A background heartbeat must exist in three languages.** AGENTS.md gates Python, shell, and
-  PowerShell alike. Python is `asyncio` already (ADR-0008); shell has no threads, though
-  `orchestrator.sh:1740` runs a background ticker subprocess for its monotonic clock and is
-  the pattern to copy. **If the heartbeat cannot be made to work in all three, the design
-  degrades to a long fixed TTL and the Lease becomes much weaker.**
+  PowerShell alike. The
+  [heartbeat prototype](https://github.com/bradcstevens/git-loopy/blob/99ad228/HEARTBEAT-PROTOTYPE.md)
+  proved all three feasible, but rejected two tempting precedents: a Python
+  `asyncio` task is starved by the Orchestrator's blocking git/gh calls, and
+  shell's unbound background ticker survives its parent's death. Python needs a
+  dedicated per-Lease thread. The shell renewer must monitor its parent; an
+  inherited death-pipe alone did not stop when the Agent still held it open.
+  PowerShell's tested Job/ThreadJob shapes remain viable. The long-fixed-TTL
+  degradation is not needed.
 - **Conflicts warn and skip; they never prompt.** `ready-for-agent` means *ready for autonomous
   execution*, and a blocking prompt fires precisely when nobody is watching — crash recovery
   happens on the *next* run, which is the unattended one. Two situations warn: stealing an
@@ -89,3 +94,44 @@ design makes deliberately.
   convention (*"Injected so backoff is deterministic"*) and `GIT_LOOPY_GATE_TIMEOUT_SECONDS`
   establishes the override convention. Lease expiry follows both, or it cannot be pinned in
   `conformance/`.
+
+## Staged implementation
+
+The record/expiry and action decisions are present in all three Orchestrators;
+the ref transport is currently Python-only. Its writes now retry recognized
+transport, rate-limit and HTTP 5xx failures, never authentication, policy, unknown
+failures or a compare-and-swap rejection. Each write keeps one immutable target
+SHA and expectation across at most four attempts within a 15-second monotonic
+budget, using 1/2/4-second exponential windows with jitter in each window's upper
+half. Tests inject the clock, sleeper and jitter rather than sleeping.
+
+Each git push gets the remaining budget, disables credential prompts, and shares
+Integration's bounded process cleanup: on POSIX it kills the private process
+group, elsewhere the direct child, then allows five seconds to drain and, if
+needed, five more to reap. A lost acknowledgement replays the same write. Git can
+report a replayed record as up to date but rejects a replayed deletion; release
+then confirms absence without making another write. Exhaustion surfaces the last
+failure. Ordinary branch pushes and GitHub writes do not acquire retry policy.
+
+The Python `LeaseHeartbeat` scheduler is also staged. One daemon thread per held
+Lease renews independently of the Agent, the event loop and other Lanes. It uses
+the stored TTL and injected wall/monotonic clocks: 60-second renewal intervals,
+capped at half the TTL for short Leases. Transient failures can recover on later
+beats, but never extend the last acknowledged deadline. Each renewal's retry
+budget is capped to the remaining TTL, including local record-creation time.
+Rejection, non-transient failure, a backwards heartbeat clock or elapsed TTL
+signals terminal loss, never another Pickup. The owner conservatively stops at
+its deadline; this does not change the reader's strictly-past-TTL expiry rule.
+
+Callers must start a heartbeat only after taking a Lease, monitor `wait_lost`
+to cancel work, and call `stop` before release. `stop` joins an in-flight renewal
+and returns the latest acknowledged Hold, so renewal cannot race the delete.
+Immutable snapshots expose the latest Hold, renewal count and failure without
+calling the Orchestrator or writing Events on a worker thread. A snapshot is
+never a fence: every individual side effect still needs its fresh remote read.
+Unexpected worker exceptions remain visible and also signal loss.
+
+These seams are not yet activated at serial or Lane Pickup. Shell/PowerShell
+transport and retry, lifecycle wiring with every side-effect fence, independent
+native renewal, the human mirror, and Events/Dashboard remain pending in #390. This
+staging does **not** yet provide live cross-Run exclusivity.
