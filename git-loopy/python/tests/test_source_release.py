@@ -120,6 +120,32 @@ def test_annotated_tag_classifies_source_release(
     assert release.commit == _git(root, "rev-parse", "HEAD")
 
 
+@pytest.mark.parametrize("staged", [False, True], ids=["worktree", "index"])
+def test_tagged_publication_refuses_an_uncommitted_distribution_promise(
+    tmp_path: Path,
+    staged: bool,
+) -> None:
+    root = _tagged_source_distribution(tmp_path)
+    version = RELEASE_FIXTURE["expected_release_version"]
+    policy_path = root / "git-loopy/conformance/release-trust.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["distribution_mode"] = "artifact-bearing"
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    if staged:
+        _git(root, "add", str(policy_path))
+    archive = tmp_path / "source.tar"
+
+    with pytest.raises(SourceReleaseError, match="trust policy must be committed"):
+        verify_tagged_source_release(
+            root,
+            f"refs/tags/v{version}",
+            archive,
+            distribution_mode="artifact-bearing",
+        )
+
+    assert not archive.exists()
+
+
 @pytest.mark.parametrize(
     "case",
     RELEASE_FIXTURE["invalid_tag_cases"],
@@ -235,8 +261,21 @@ def _replace_release_version(root: Path, old: str, new: str) -> None:
         )
 
 
-def _tagged_source_distribution(tmp_path: Path, *, drift: bool = False) -> Path:
+def _tagged_source_distribution(
+    tmp_path: Path,
+    *,
+    drift: bool = False,
+    committed_policy: bool = True,
+    distribution_mode: str = "source-only",
+) -> Path:
     root = _copy_source_distribution(tmp_path)
+    policy_path = root / "git-loopy/conformance/release-trust.json"
+    if committed_policy:
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        policy["distribution_mode"] = distribution_mode
+        policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    else:
+        policy_path.unlink()
     version = RELEASE_FIXTURE["expected_release_version"]
     previous = "0.0.0"
     _replace_release_version(root, version, previous)
@@ -266,10 +305,12 @@ def _tagged_source_distribution(tmp_path: Path, *, drift: bool = False) -> Path:
     return root
 
 
+@pytest.mark.parametrize("distribution_mode", ["source-only", "artifact-bearing"])
 def test_tagged_source_archive_is_verified_from_committed_publication_input(
     tmp_path: Path,
+    distribution_mode: str,
 ) -> None:
-    root = _tagged_source_distribution(tmp_path)
+    root = _tagged_source_distribution(tmp_path, distribution_mode=distribution_mode)
     version = RELEASE_FIXTURE["expected_release_version"]
     archive = tmp_path / "git-loopy-source.tar"
 
@@ -277,11 +318,35 @@ def test_tagged_source_archive_is_verified_from_committed_publication_input(
         root,
         f"refs/tags/v{version}",
         archive,
+        distribution_mode=distribution_mode,
     )
 
     assert release.version == version
+    assert release.distribution_mode == distribution_mode
     assert archive.is_file()
     assert archive.stat().st_size > 0
+
+
+def test_a_worktree_policy_cannot_supply_a_promise_missing_from_the_tag(
+    tmp_path: Path,
+) -> None:
+    root = _tagged_source_distribution(tmp_path, committed_policy=False)
+    version = RELEASE_FIXTURE["expected_release_version"]
+    shutil.copy2(
+        REPOSITORY_ROOT / "git-loopy/conformance/release-trust.json",
+        root / "git-loopy/conformance/release-trust.json",
+    )
+    archive = tmp_path / "source.tar"
+
+    with pytest.raises(SourceReleaseError, match="trust policy must be committed"):
+        verify_tagged_source_release(
+            root,
+            f"refs/tags/v{version}",
+            archive,
+            distribution_mode="source-only",
+        )
+
+    assert not archive.exists()
 
 
 @pytest.mark.parametrize(

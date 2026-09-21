@@ -51,6 +51,13 @@ The contract is strictly enforced:
   (e.g., mismatch between requested publication mode and repository policy) fail closed
   before any publication step runs.
 
+The trust policy must exist in the tagged commit and the publication worktree's
+copy must match it. An untracked policy cannot supply
+a promise the tag never made. A source-only Rehearsal forwards its explicit mode
+to that verifier and refuses a committed artifact-bearing policy rather than
+returning a source-only Publication input for it. Unreadable policies, including
+invalid UTF-8, are publication refusals, not implicit defaults.
+
 ### Consuming an older helper from a source-only Runner Release
 
 Source-only describes publication, not Dashboard compatibility. Python maintenance
