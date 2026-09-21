@@ -1947,8 +1947,10 @@ the rendered Rust wording.
 Orchestrators implement no per-issue routing and read no harness listing, so they have no route to
 elect. They declare it unsupported in
 [`fixture-claims.json`](../git-loopy/conformance/fixture-claims.json) rather than by implication.
-The Dashboard needs no policy-aware branch — it renders the elected triple off
-`wrapper.pickup.bound` exactly as it renders any other.
+The Dashboard reads the elected triple and Routing source from
+`wrapper.pickup.bound`, without electing or validating a route. It uses the
+source-aware null-effort readback defined in §14.3 rather than treating every
+null effort as a backend default.
 
 The **Run readback** MUST distinguish an absent Static table from retained Static
 routes. Under unsuppressed `dynamic`, `unconfigured_task_type_keys` names work awaiting
