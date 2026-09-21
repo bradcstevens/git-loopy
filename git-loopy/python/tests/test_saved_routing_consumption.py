@@ -51,8 +51,9 @@ async def _wait_for_preparation(tmp_path, ref):
 @pytest.mark.parametrize("mode", ["serial", "lane"])
 @pytest.mark.parametrize("allowance", ["0", "0.20"])
 @pytest.mark.parametrize("saved_route", [False, True])
+@pytest.mark.parametrize("concurrency", ["1", "65"])
 def test_classification_can_discover_a_saved_static_route_without_leaderboard_access(
-    tmp_path, monkeypatch, mode, allowance, saved_route,
+    tmp_path, monkeypatch, mode, allowance, saved_route, concurrency,
 ):
     from tests.test_init_routing import _first_setup_for_run
     from tests.test_iteration_end_to_end import _harness
@@ -89,6 +90,7 @@ def test_classification_can_discover_a_saved_static_route_without_leaderboard_ac
             "GIT_LOOPY_CLASSIFIER_MODEL": "gpt-5.6-terra",
             "GIT_LOOPY_CLASSIFIER_REASONING_EFFORT": "high",
             "GIT_LOOPY_ROUTING_CREDIT_ALLOWANCE": allowance,
+            "GIT_LOOPY_SELECTOR_CONCURRENCY": concurrency,
         },
         project=tables.project, global_=tables.global_, measured=tables.measured,
     ).run
@@ -106,7 +108,7 @@ def test_classification_can_discover_a_saved_static_route_without_leaderboard_ac
     events = _read_events(tmp_path)
     bound = [e for e in events if e["type"] == "wrapper.pickup.bound"]
     assert not any(e["type"] == "wrapper.strike" for e in events)
-    if allowance == "0":
+    if allowance == "0" or concurrency == "65":
         assert code == 1
         assert client.create_calls == [] and bound == [] and labels.applied == []
         return

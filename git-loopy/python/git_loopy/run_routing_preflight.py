@@ -125,12 +125,7 @@ async def resolve_run_routing_preflight(
         try:
             prerequisites = resolve_prerequisites(config, env)
         except RoutingPrerequisiteError as exc:
-            dynamic_refusal = (
-                f"the selected Dynamic route was refused: {exc} "
-                "No Route selector or classifier was called; eligible Static "
-                "work may still proceed. Supply the missing prerequisites "
-                "before starting a new Run for Dynamic work."
-            )
+            dynamic_refusal = _dynamic_prerequisite_refusal(str(exc))
 
     async def live_capabilities() -> FreshHarnessCapabilities | None:
         if harness_evidence_fetch is not None:
@@ -173,7 +168,10 @@ async def resolve_run_routing_preflight(
                 selector_concurrency=config.selector_concurrency,
             )
         except ValueError as exc:
-            return RunRoutingPreflight(refusal=f"Dynamic routing needs valid limits: {exc}")
+            prerequisites = None
+            dynamic_refusal = _dynamic_prerequisite_refusal(
+                f"Dynamic routing needs valid limits: {exc}"
+            )
     if prerequisites is None:
         return RunRoutingPreflight(
             dynamic_refusal=dynamic_refusal, admission_ledger=ledger,
@@ -203,6 +201,15 @@ async def resolve_run_routing_preflight(
             if isinstance(inputs, RoutingUnavailable)
             else None
         ),
+    )
+
+
+def _dynamic_prerequisite_refusal(detail: str) -> str:
+    return (
+        f"the selected Dynamic route was refused: {detail} "
+        "No Route selector or classifier was called; eligible Static "
+        "work may still proceed. Repair the prerequisites "
+        "before starting a new Run for Dynamic work."
     )
 
 
