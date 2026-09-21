@@ -8,16 +8,25 @@ from pathlib import Path
 
 import pytest
 
+from git_loopy import settings
 
-def _uv_tool_executable(tmp_path: Path) -> tuple[dict[str, str], Path]:
-    """A proven ``uv tool install`` artifact, in the directory uv owns."""
+
+def _uv_tool_executable(
+    tmp_path: Path, *, route_policy: str | None = "static"
+) -> tuple[dict[str, str], Path]:
+    """A proven uv artifact with an operator-recorded policy unless unselected."""
     executable = tmp_path / "uv" / "tools" / "git-loopy" / "bin" / "git-loopy"
     executable.parent.mkdir(parents=True)
     executable.touch()
-    return {
+    env = {
         "UV_TOOL_DIR": str(tmp_path / "uv" / "tools"),
         "XDG_CONFIG_HOME": str(tmp_path / "config-home"),
-    }, executable
+    }
+    if route_policy is not None:
+        settings.write_config_atomic(
+            settings.global_config_path(env), {"route_policy": route_policy}
+        )
+    return env, executable
 
 
 def test_upgrade_hands_the_newest_published_release_to_the_owning_channel(
@@ -51,7 +60,7 @@ def test_upgrade_hands_the_newest_published_release_to_the_owning_channel(
             "uv tool install --force "
             "'git+https://github.com/bradcstevens/git-loopy"
             "@v1.3.0#subdirectory=git-loopy/python' && "
-            f"{executable} update",
+            f"{executable} update --routing ask",
         )
     ]
 
@@ -68,6 +77,9 @@ def test_upgrade_runs_update_from_the_artifact_it_moved(tmp_path: Path) -> None:
         "UV_TOOL_DIR": str(tmp_path / "uv tools"),
         "XDG_CONFIG_HOME": str(tmp_path / "config-home"),
     }
+    settings.write_config_atomic(
+        settings.global_config_path(env), {"route_policy": "static"}
+    )
 
     result = upgradecmd.run_upgrade(
         env=env,
@@ -86,7 +98,7 @@ def test_upgrade_runs_update_from_the_artifact_it_moved(tmp_path: Path) -> None:
             "uv tool install --force "
             "'git+https://github.com/bradcstevens/git-loopy"
             "@v1.3.0#subdirectory=git-loopy/python' && "
-            f"'{executable}' update",
+            f"'{executable}' update --routing ask",
         )
     ]
 
@@ -510,7 +522,7 @@ def test_upgrade_drives_the_real_seams_when_neither_is_injected(
                 "uv tool install --force "
                 "'git+https://github.com/bradcstevens/git-loopy"
                 "@v1.3.0#subdirectory=git-loopy/python' && "
-                f"{executable} update",
+                f"{executable} update --routing ask",
             ),
         )
     ]
@@ -593,7 +605,7 @@ def test_the_handoff_runs_through_the_windows_command_interpreter(
             "uv tool install --force "
             "git+https://github.com/bradcstevens/git-loopy"
             "@v1.3.0#subdirectory=git-loopy/python && "
-            f"{executable} update",
+            f"{executable} update --routing ask",
         )
     ]
 

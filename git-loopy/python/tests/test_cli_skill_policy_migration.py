@@ -403,6 +403,8 @@ def _drive_main(
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    # Routing authority is separate from the Skill migration under test.
+    monkeypatch.setenv("GIT_LOOPY_ROUTE_POLICY", "static")
     for name, value in (extra_env or {}).items():
         monkeypatch.setenv(name, value)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
@@ -493,6 +495,31 @@ def test_legacy_config_on_a_tty_migrates_before_detach(
     assert code == 0
     assert order == ["migration", "detach"]
     assert ran[0].skill_policy.global_.names == ("tdd",)
+
+
+def test_a_routing_choice_removed_during_skill_migration_cannot_authorize_detach(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+) -> None:
+    global_path = settings.global_config_path({"HOME": str(tmp_path / "home")})
+    settings.write_config(global_path, {
+        "model": "gpt-5.4", "route_policy": "static",
+    })
+
+    def migrate(**_kwargs):
+        settings.write_config(global_path, {
+            "model": "gpt-5.4", "enabled_skills": ["tdd"],
+        })
+        return 0
+
+    code, order, ran = _drive_main(
+        monkeypatch, tmp_path, isatty=True, interactive=True, migration=migrate,
+        extra_env={"GIT_LOOPY_ROUTE_POLICY": ""},
+    )
+
+    assert code == 1
+    assert order == ["migration"] and ran == []
+    assert "route_policy" not in settings.load_config_table(global_path)
+    assert "explicit keep-or-migrate decision" in capsys.readouterr().err
 
 
 def test_migration_is_offered_the_legacy_denials_to_uncheck(

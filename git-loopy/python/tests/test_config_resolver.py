@@ -694,7 +694,8 @@ def test_main_reads_project_config_into_run(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "config.toml").write_text(
-        'max_consecutive_abandonments = 9\nissue_source = "prds"\n', encoding="utf-8"
+        'max_consecutive_abandonments = 9\nissue_source = "prds"\nroute_policy = "static"\n',
+        encoding="utf-8",
     )
     captured: list = []
     _fake_loop_run(monkeypatch, captured)

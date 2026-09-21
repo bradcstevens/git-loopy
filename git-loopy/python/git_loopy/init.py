@@ -35,6 +35,14 @@ Design (mirrors :mod:`git_loopy.settings` being the pure I/O half):
   :func:`git_loopy.interactive.models.to_model_choices` (stdlib + config only, no
   Textual), rendered by the setup wizard.
 
+Opt-in ``--routing``, or an already recorded Static/Dynamic choice in the chosen
+scope, collects routing authorization and checks the shared Run/doctor readiness
+verdict before any scope write. Its ``--yes`` path never
+prompts or invents authorization, but does read live model data when authorized.
+Routing's operator-owned credential stays outside Config. The fullscreen review
+discloses the subsequent terminal authorization questions; cancellation there
+abandons the entire candidate, not just its Route policy.
+
 The Skill policy is collected through :func:`git_loopy.skillscmd.collect_skill_policy`,
 the same seam ``git-loopy skills edit`` uses, so both commands share one Skill
 baseline seeding rule, one picker, and one set of Required-Skill and
@@ -50,6 +58,7 @@ from __future__ import annotations
 import inspect
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -121,7 +130,11 @@ def _prerequisite_residue(outcome: RefreshOutcome) -> str | None:
 
 @dataclass(frozen=True)
 class InitAnswers:
-    """The complete answer set returned by an interactive setup runner."""
+    """The complete answer set returned by an interactive setup runner.
+
+    ``routing_updates_only`` retains additive collection semantics across
+    scope changes. It preserves saved rows, never supplies Route policy consent.
+    """
 
     scope: str
     model: str
@@ -129,6 +142,7 @@ class InitAnswers:
     routing: dict[str, tuple[str, str]] | None
     scaffold: bool
     enabled_skills: tuple[str, ...]
+    routing_updates_only: bool = False
 
 
 class SkillSelectionRebuilder(Protocol):
@@ -289,6 +303,16 @@ def _scaffold_prompt(prompt_path: Path, source: Path) -> None:
     """Copy the packaged prompt into the scope's ``PROMPT.md`` override path."""
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, prompt_path)
+
+
+def _verify_setup_inputs(originals: Mapping[Path, bytes | None]) -> None:
+    for path, original in originals.items():
+        current = path.read_bytes() if path.exists() else None
+        if current != original:
+            raise settings.SettingsError(
+                f"{path} changed during setup; the newer content "
+                "was not overwritten. Re-run init."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -494,6 +518,7 @@ def run_init(
     required_skills: Sequence[str] | None = None,
     label_client: Any = None,
     writer: Callable[[Path, Mapping[str, object]], None] = settings.write_config_atomic,
+    routing_choice: str | None = None,
 ) -> int:
     """Run the first-run setup wizard; write Config (and optional assets) and exit.
 
@@ -563,6 +588,45 @@ def run_init(
     resolved_scope = scope or ("project" if repo_root is not None else "global")
     targets = _resolve_targets(resolved_scope, repo_root, env)
     prompt_source = packaged_prompt or _packaged_prompt_path()
+    initial_configs: dict[str, dict[Path, bytes | None]] = {}
+
+    def recorded_routing_setup(selected_scope: str) -> str | None:
+        from git_loopy.routing_migration import recorded_migration
+
+        config_path = _resolve_targets(selected_scope, repo_root, env).config_path
+        paths = {config_path}
+        if selected_scope == "project":
+            paths.add(settings.global_config_path(env))
+        initial_configs[selected_scope] = {
+            path: path.read_bytes() if path.exists() else None for path in paths
+        }
+        recorded = recorded_migration(
+            scope=selected_scope,
+            table=settings.load_config_table(config_path),
+            inherited=(
+                settings.load_config_table(settings.global_config_path(env))
+                if selected_scope == "project" else {}
+            ),
+        )
+        return "ask" if recorded is not None else None
+
+    routing_choices: dict[str, str | None] = {}
+    routing_errors: dict[str, OSError | settings.SettingsError] = {}
+    for option in ((resolved_scope,) if assume_yes else scope_options):
+        try:
+            recorded = (
+                recorded_routing_setup(option) if routing_choice in {None, "ask"} else None
+            )
+            routing_choices[option] = routing_choice or recorded
+        except (OSError, settings.SettingsError) as exc:
+            # An unavailable scope must not prevent choosing a different one.
+            routing_choices[option] = None
+            routing_errors[option] = exc
+    if (assume_yes or scope is not None) and resolved_scope in routing_errors:
+        warn(abandoned(str(routing_errors[resolved_scope])))
+        return 1
+    if assume_yes and routing_choice is None:
+        routing_choice = routing_choices[resolved_scope]
     #: Every ``(scope, scaffold, policy)`` the rebuild callback already resolved,
     #: so the answer set the runner returns is re-resolved only when it is a new
     #: one. ``scaffold`` belongs in the key because it *selects the requirement*:
@@ -570,13 +634,23 @@ def run_init(
     #: and a non-scaffolding one against whatever prompt is already on disk, so
     #: the same policy can be valid under one and invalid under the other.
     validated_policies: list[tuple[str, bool, tuple[str, ...]]] = []
+    routing_updates_only = False
 
     try:
         if assume_yes:
             model = default_model
             effort = _gate_default_effort(default_model, default_effort)  # type: ignore[arg-type]
             routing = None
-            scaffold = True
+            scaffold = not (
+                routing_choice is not None
+                and (
+                    targets.prompt_path.exists()
+                    or (
+                        resolved_scope == "project"
+                        and settings.global_prompt_path(env).exists()
+                    )
+                )
+            )
             # The Minimal Skill policy: exactly the Required Skills, and never a
             # machine-specific Copilot import (ADR-0015). No client is built.
             enabled_skills = tuple(
@@ -657,23 +731,26 @@ def run_init(
 
                 selected_targets = _resolve_targets(selected_scope, repo_root, env)
                 try:
-                    return skillscmd.discover_skill_policy(
-                        scope=selected_scope,
-                        repo_root=repo_root,
-                        env=env,
-                        client_factory=client_factory,
-                        discoverer=discoverer or skillscmd.discover_skill_catalog,
-                        git=git,
-                        required_skills=_post_setup_required_skills(
+                    # Textual owns this thread's event loop; discovery owns another.
+                    with ThreadPoolExecutor(max_workers=1) as discovery:
+                        return discovery.submit(
+                            skillscmd.discover_skill_policy,
+                            scope=selected_scope,
                             repo_root=repo_root,
                             env=env,
-                            prompt_path=selected_targets.prompt_path,
-                            prompt_source=prompt_source,
-                            scaffold=scaffold_decision,
-                            required_skills=required_skills,
-                        ),
-                        installed_skills_dir=skills_source,
-                    ).model
+                            client_factory=client_factory,
+                            discoverer=discoverer or skillscmd.discover_skill_catalog,
+                            git=git,
+                            required_skills=_post_setup_required_skills(
+                                repo_root=repo_root,
+                                env=env,
+                                prompt_path=selected_targets.prompt_path,
+                                prompt_source=prompt_source,
+                                scaffold=scaffold_decision,
+                                required_skills=required_skills,
+                            ),
+                            installed_skills_dir=skills_source,
+                        ).result().model
                 except skillscmd.SKILL_POLICY_FAILURES as exc:
                     raise _SkillPolicyUnavailable(
                         f"cannot establish a Skill policy: {type(exc).__name__}: {exc}"
@@ -690,6 +767,8 @@ def run_init(
                         for option in scope_options
                     },
                     "skill_selection_model": build_skill_selection_model,
+                    "routing_choice": routing_choices[resolved_scope],
+                    "routing_choices": routing_choices,
                 },
             )
             answers = wizard_runner(
@@ -710,9 +789,15 @@ def run_init(
                 )
             resolved_scope = answers.scope
             targets = _resolve_targets(resolved_scope, repo_root, env)
+            if resolved_scope in routing_errors:
+                warn(abandoned(str(routing_errors[resolved_scope])))
+                return 1
+            if routing_choice is None:
+                routing_choice = routing_choices[resolved_scope]
             model = answers.model
             effort = answers.effort
             routing = answers.routing
+            routing_updates_only = answers.routing_updates_only
             scaffold = answers.scaffold
             enabled_skills = tuple(answers.enabled_skills)
             # The runner owns the questions, never the invariants. A policy the
@@ -752,7 +837,35 @@ def run_init(
 
     # Loading an existing Config can fail; do it before invalidating provenance
     # so that a failed re-init leaves a valid record untouched.
-    values: dict[str, object] = dict(settings.load_config_table(targets.config_path))
+    from git_loopy.measured_routing import (
+        MEASURED_ROUTING_FILENAME,
+        load_measured_routing,
+    )
+
+    try:
+        initial_scope_configs = initial_configs.get(resolved_scope, {})
+        _verify_setup_inputs(initial_scope_configs)
+        watched_paths = {targets.config_path, targets.prompt_path}
+        if resolved_scope == "project":
+            watched_paths.update((
+                settings.global_config_path(env),
+                settings.global_prompt_path(env),
+                targets.config_path.with_name(MEASURED_ROUTING_FILENAME),
+            ))
+        originals = (
+            {path: path.read_bytes() if path.exists() else None for path in watched_paths}
+            if routing_choice is not None else {}
+        )
+        originals.update(initial_scope_configs)
+        values: dict[str, object] = dict(settings.load_config_table(targets.config_path))
+        inherited = (
+            settings.load_config_table(settings.global_config_path(env))
+            if routing_choice is not None and resolved_scope == "project"
+            else {}
+        )
+    except (OSError, settings.SettingsError) as exc:
+        warn(abandoned(str(exc)))
+        return 1
 
     try:
         release_version = read_runtime_release_version()
@@ -761,23 +874,62 @@ def run_init(
         warn(abandoned(f"cannot record scaffold provenance: {exc}"))
         return 1
 
-    # Commit phase — every decision is in hand, so nothing above wrote anything.
+    # Build the candidate before routing authorization or any scope write.
     # The wizard owns only the keys it collected: everything else in an existing
     # Config at this scope (including a routing table the operator declined to
     # revisit) survives the write untouched.
-    values["model"] = model
-    if effort is not None:
-        values["reasoning_effort"] = effort
-    else:
-        # The wizard owns this key: a model with no reasoning must not inherit
-        # the previous model's effort just because the merge preserved it.
-        values.pop("reasoning_effort", None)
+    if not (assume_yes and routing_choice is not None):
+        values["model"] = model
+        if effort is not None:
+            values["reasoning_effort"] = effort
+        else:
+            # The wizard owns this key: a model with no reasoning must not inherit
+            # the previous model's effort just because the merge preserved it.
+            values.pop("reasoning_effort", None)
     if routing is not None:
-        values["routing"] = {
+        new_routes = {
             key: {"model": route_model, "effort": route_effort}
             for key, (route_model, route_effort) in routing.items()
         }
-    values["enabled_skills"] = list(enabled_skills)
+        if routing_choice is not None or routing_updates_only:
+            saved_routes = values.get("routing", {})
+            if not isinstance(saved_routes, Mapping):
+                warn(abandoned("routing must be a Config table"))
+                return 1
+            values["routing"] = {**saved_routes, **new_routes}
+        else:
+            values["routing"] = new_routes
+    if not (
+        assume_yes and routing_choice is not None
+        and ("enabled_skills" in values or "enabled_skills" in inherited)
+    ):
+        values["enabled_skills"] = list(enabled_skills)
+
+    try:
+        if routing_choice is not None:
+            from git_loopy.routing_migration import prepare_migration
+
+            values = prepare_migration(
+                routing_choice,
+                scope=resolved_scope,
+                table=values,
+                inherited=inherited,
+                measured=(
+                    load_measured_routing(
+                        targets.config_path.with_name(MEASURED_ROUTING_FILENAME)
+                    ).routing
+                    if resolved_scope == "project"
+                    else {}
+                ),
+                env=env,
+                output_fn=output_fn,
+                input_fn=None if assume_yes else input_fn,
+                command="init",
+            )
+        _verify_setup_inputs(originals)
+    except (OSError, settings.SettingsError) as exc:
+        warn(abandoned(str(exc)))
+        return 1
 
     if previous_provenance is not None:
         try:

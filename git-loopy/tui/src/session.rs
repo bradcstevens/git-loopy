@@ -70,12 +70,19 @@ pub struct Diagnostics {
     pub unreadable_lines: usize,
     /// The most recent one, truncated.
     pub latest: Option<String>,
+    /// Whether every instant is being shown in UTC because the viewing
+    /// machine's zone could not be resolved (ADR-0058).
+    ///
+    /// A Dashboard that quietly showed UTC would be indistinguishable from one
+    /// showing local time to an operator in Greenwich and *wrong* to everyone
+    /// else, so the fallback is stated rather than assumed.
+    pub local_zone_unresolved: bool,
 }
 
 impl Diagnostics {
     /// Whether there is anything worth telling the operator.
     pub fn is_empty(&self) -> bool {
-        self.unreadable_lines == 0
+        self.unreadable_lines == 0 && !self.local_zone_unresolved
     }
 
     fn record(&mut self, line: &str) {
@@ -124,7 +131,7 @@ pub struct DashboardSession {
     /// handed — so a stale size can misplace a drag handle and can never
     /// misdraw a band.
     terminal: Rect,
-    /// The drag in progress, if the operator is holding the handle.
+    /// The pointer gesture in progress, held until release.
     grab: Option<Grab>,
     /// The instant the projection is pinned to, when the caller pins one.
     pinned_instant: Option<Timestamp>,
@@ -137,26 +144,27 @@ pub struct DashboardSession {
     diagnostics: Diagnostics,
 }
 
-/// One drag of the Activity band's handle, in progress.
-///
-/// Measured from where the pointer was grabbed rather than from the previous
-/// move, so a pointer that runs past the band's ceiling and comes back lands
-/// where it started instead of drifting.
-#[derive(Clone, Copy, Debug)]
-struct Grab {
-    /// The screen row the handle was grabbed on.
-    row: u16,
-    /// The band's on-screen height at that moment.
-    height: u16,
-    /// Whether the pointer has left the row it was grabbed on. A press and
-    /// release that never does is a **click** — a *toggle* gesture — and not a
-    /// drag that happened to size the band to where it already was.
-    moved: bool,
+#[derive(Clone, Debug)]
+enum Grab {
+    Activity {
+        /// Measure the drag from its origin, not from the previous move.
+        row: u16,
+        height: u16,
+        moved: bool,
+    },
+    /// Hold identity so a live Queue reorder cannot retarget the click.
+    Queue(IssueRef),
+    /// Hold identity so a live Activity-window reorder cannot retarget the click.
+    ActivityWindow(IssueRef),
 }
 
 impl DashboardSession {
     /// Start a session for one Run.
     pub fn new(inputs: RunInputs, zone: Zone, drill_in: IssueRef) -> Self {
+        let diagnostics = Diagnostics {
+            local_zone_unresolved: zone.is_utc_fallback(),
+            ..Diagnostics::default()
+        };
         Self {
             state: DashboardState::new(inputs),
             zone,
@@ -173,7 +181,7 @@ impl DashboardSession {
             pinned_monotonic: None,
             last_instant: None,
             last_monotonic: None,
-            diagnostics: Diagnostics::default(),
+            diagnostics,
         }
     }
 
@@ -299,7 +307,7 @@ impl DashboardSession {
             } else {
                 self.last_monotonic
             },
-            zone: self.zone,
+            zone: self.zone.clone(),
             capabilities: self.capabilities,
         };
         project_run_view(&self.state, &context, self.cursor.selected())
@@ -483,10 +491,15 @@ impl DashboardSession {
 
     /// Apply one pointer gesture, reporting whether the loop should go on.
     ///
+    /// A click on an issue row or Activity-window header opens that issue's
+    /// Log. Its press and release must name the same issue, with no drag, so a
+    /// live reorder cannot open a different row.
+    ///
     /// The **drag → click → keys** ladder's first two rungs (ADR-0038). A press
     /// on the Activity band's header row takes the handle; a move sizes the
     /// band; a release lets go, and a release that never moved is a *click*,
-    /// which toggles **Collapsed**. A Queue row press selects and opens its Log.
+    /// which toggles **Collapsed**. A Queue row or Activity-window header
+    /// opens that issue's Log on release.
     ///
     /// Every event between the press and the release belongs to the handle,
     /// whatever it is over: that is what keeps a drag wandering down across the
@@ -513,67 +526,54 @@ impl DashboardSession {
                 if self.grab.is_some() {
                     return Flow::Continue;
                 }
-                self.grab = bands
-                    .hits_activity_handle(pointer.column, pointer.row)
-                    .then_some(Grab {
+                self.grab = if bands.hits_activity_handle(pointer.column, pointer.row) {
+                    Some(Grab::Activity {
                         row: pointer.row,
                         height: self.band.on_screen_height(Some(ceiling)),
                         moved: false,
-                    });
-                let rows = bands.queue_rows();
-                if rows.contains(Position::new(pointer.column, pointer.row)) {
-                    let view = self.view();
-                    let queue = &view.dashboard.queue.rows;
-                    let offset = self
-                        .queue_offset
-                        .min(queue.len().saturating_sub(usize::from(rows.height)));
-                    if let Some(row) = queue.get(offset + usize::from(pointer.row - rows.y)) {
-                        if self.cursor.selected() != &row.issue {
-                            self.log_position = LogPosition::default();
-                        }
-                        self.cursor.open(row.issue.clone());
-                    }
-                } else if self.grab.is_none() {
-                    let activity = self.view().dashboard.activity;
-                    for window in
-                        activity_window_areas(bands.activity, &activity, &self.capabilities)
-                    {
-                        if window
-                            .header
-                            .contains(Position::new(pointer.column, pointer.row))
-                        {
-                            let issue = &activity.windows[window.index].issue;
-                            if self.cursor.selected() != issue {
-                                self.log_position = LogPosition::default();
-                            }
-                            self.cursor.open(issue.clone());
-                            break;
-                        }
-                    }
-                }
+                    })
+                } else {
+                    self.queue_issue_at(bands, pointer)
+                        .map(Grab::Queue)
+                        .or_else(|| {
+                            self.activity_issue_at(bands, pointer)
+                                .map(Grab::ActivityWindow)
+                        })
+                };
             }
             PointerAction::Drag => {
-                if let Some(grab) = self.grab {
+                if let Some(Grab::Activity { row, height, moved }) = &mut self.grab {
                     // The handle is the band's top edge and the bottom edge does
                     // not move, so the height is the rows between them.
-                    let rows = i32::from(grab.row) - i32::from(pointer.row);
-                    if rows != 0 || grab.moved {
-                        self.grab = Some(Grab {
-                            moved: true,
-                            ..grab
-                        });
-                        self.band
-                            .drag_to(i32::from(grab.height) + rows, Some(ceiling));
+                    let rows = i32::from(*row) - i32::from(pointer.row);
+                    if rows != 0 || *moved {
+                        *moved = true;
+                        self.band.drag_to(i32::from(*height) + rows, Some(ceiling));
                     }
+                } else {
+                    self.grab = None;
                 }
             }
-            PointerAction::Release => {
-                if let Some(grab) = self.grab.take() {
-                    if !grab.moved {
-                        self.band.toggle();
+            PointerAction::Release => match self.grab.take() {
+                Some(Grab::Activity { moved: false, .. }) => self.band.toggle(),
+                Some(Grab::Queue(issue))
+                    if self.queue_issue_at(bands, pointer).as_ref() == Some(&issue) =>
+                {
+                    if self.cursor.selected() != &issue {
+                        self.log_position = LogPosition::default();
                     }
+                    self.cursor.open(issue);
                 }
-            }
+                Some(Grab::ActivityWindow(issue))
+                    if self.activity_issue_at(bands, pointer).as_ref() == Some(&issue) =>
+                {
+                    if self.cursor.selected() != &issue {
+                        self.log_position = LogPosition::default();
+                    }
+                    self.cursor.open(issue);
+                }
+                _ => {}
+            },
         }
         self.fit_positions();
         Flow::Continue
@@ -674,6 +674,26 @@ impl DashboardSession {
         if let Some(position) = self.activity_positions.first() {
             self.activity_position = *position;
         }
+    }
+
+    fn queue_issue_at(&self, bands: DashboardBands, pointer: Pointer) -> Option<IssueRef> {
+        let index = bands.queue_row_at(pointer.column, pointer.row)?;
+        let queue = self.view().dashboard.queue.rows;
+        let offset = self.queue_offset.min(
+            queue
+                .len()
+                .saturating_sub(usize::from(bands.queue_rows().height)),
+        );
+        queue.get(offset + index).map(|row| row.issue.clone())
+    }
+
+    fn activity_issue_at(&self, bands: DashboardBands, pointer: Pointer) -> Option<IssueRef> {
+        let activity = self.view().dashboard.activity;
+        let point = Position::new(pointer.column, pointer.row);
+        activity_window_areas(bands.activity, &activity, &self.capabilities)
+            .into_iter()
+            .find(|window| window.header.contains(point))
+            .map(|window| activity.windows[window.index].issue.clone())
     }
 }
 

@@ -80,3 +80,38 @@ This division is what makes #517, #519, and ADR-0054 consistent with one another
 competing: #519 already requires that every fixable row "say what fixes it, deferring to the commands
 that already own those repairs rather than duplicating them," which is the same rule read from the
 reporting side.
+
+## Routing implementation status (#567)
+
+Run and doctor now call `run_routing_preflight.resolve_run_routing_preflight`
+for the same selected-policy configuration verdict: execution placement,
+Dynamic authorization and finite limits, and live verification of configured
+Static routes. A run-wide model/effort override requires no Dynamic authorization,
+and a successful Skill-policy repair cannot clear a routing refusal.
+
+Authorized Dynamic preflight now also uses `dynamic_route.RoutingLiveRead`, the
+same deadline-bounded evidence/capability read and candidate election used by
+proposal and Pickup. It checks the verified candidate intersection without issue
+input or a paid assessment. Doctor cannot promise issue fit, a successful future
+selector call, or a Pickup. Required-source failures and exhausted bounds are
+reported without calling a selector or classifier. The Run retains the admission
+ledger created at preflight, rather than restarting the assessment deadline.
+
+A configuration refusal blocks the Run. A live Dynamic-readiness refusal makes
+doctor nonzero, but leaves eligible Static work reachable in a Run and permits a
+later fresh check to recover. No readiness snapshot is authority for work:
+proposal and Pickup still read again. This is partial activation work, not the
+final Dynamic default. Explicit `update --routing` now consumes this same verdict
+over the candidate saved scope before committing a keep-or-migrate choice.
+Temporary Run overrides cannot mask an invalid saved route or missing Dynamic
+authorization during that migration. Opt-in `init --routing` now consumes the
+same verdict after collecting operator-owned authorization and before any scope
+write. It shares missing-bound and verified-association collection with update,
+not a separate readiness implementation. Composed first-setup serial and Lane
+cases observe actual session settings and fresh refusals after setup.
+The shared live read also checks that a context-only environment override has
+verified work candidates supporting the requested tier. This does not constrain
+the strongest selector's own tier, buy an assessment, or promise issue fit.
+Automatic upgrade/Run migration enforcement and the remaining composed
+activation matrix are still outstanding. Existing unselected-policy behavior
+is unchanged.

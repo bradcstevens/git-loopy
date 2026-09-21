@@ -7,6 +7,20 @@
 
 **Status:** accepted
 
+**Accepted-design amendment:** [ADR-0057](0057-live-evidence-guides-per-issue-routing.md)
+treats Calibration results as evidence for dynamic choices, permits concise forecast
+rationales in canonical Run events, and authorizes bounded automatic selection explicitly.
+Its reusable local records are not another committed routing table or machine writes into
+human Config. Delivery is judged against the new policy; the original artifact's meaning
+and this decision's rationale are preserved below.
+
+**Implementation status (#567):** Python now excludes the Measured routing tier
+from Static precedence under an explicitly selected Dynamic policy. The artifact
+is retained as supporting evidence; it cannot suppress a selector merely because
+no human-authored route covers a Task type. Unselected and Static policies retain
+the precedence chain described below. This is partial opt-in activation, not a
+change to the default policy or a claim of shell/PowerShell Dynamic support.
+
 Once **Calibration** ([ADR-0027](0027-routing-is-calibrated-by-measurement.md)) produces a
 better **Routed pair**, something has to own it. The proposal was that git-loopy write the
 result into `config.toml`, keep a log of the models available at each run, re-calibrate

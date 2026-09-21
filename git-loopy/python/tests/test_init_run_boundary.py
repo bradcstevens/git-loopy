@@ -234,6 +234,7 @@ def test_a_saved_setup_survives_a_blocked_run_and_names_the_blocker(
     assert saved["enabled_skills"]
 
     # 2) The Run that follows, refused by a precondition it really fails.
+    monkeypatch.setenv("GIT_LOOPY_ROUTE_POLICY", "static")
     monkeypatch.setenv("PATH", _path_without_copilot(tmp_path))
     monkeypatch.chdir(repo)
     _fake_terminal(monkeypatch, stdin=True, stdout=True)

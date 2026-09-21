@@ -1,6 +1,152 @@
 {
   "schema_version": 1,
-  "contract_version": "2.5",
+  "contract_version": "2.9",
+  "publication_recovery": {
+    "note": "Recorded Dynamic authorization, fresh cross-Run reuse and bounded tracker delivery through actual serial/Lane sessions. Uses migration_recovery's saved_config, harness, evidence and selector_choice. Each case starts with explicit migrate through init or update over authored unselected Config; later Runs use only the saved policy. Counts are cumulative external tracker writes, including refused calls. Delivery lists are the current Run's canonical statuses, not guessed from tracker state. A Run may retry pending delivery at startup and publish at Pickup, but those paths share the same finite bound per assignment. withdraw_models removes named configurations only for that Run's fresh routing reads; selector_choice scripts a new answer and route declares its independently expected work settings. Neither a new Run nor repaired tracker access renews an assignment's exhausted retries; a changed final assignment gets its own delivery. remove_before_failure models a tracker accepting owned-label removal but refusing the replacement add. On non-published steps, owned_label is absent by default or previous when the previous owned association remains; the canonical failure remains authoritative.",
+    "modes": ["serial", "lane"],
+    "entrypoints": ["init", "update"],
+    "route": {
+      "model": "synthetic-fancy-9", "effort": "high",
+      "context_tier": "default", "routing_source": "dynamic"
+    },
+    "cases": [
+      {
+        "id": "exhausted-replacement-leaves-the-previous-owned-association",
+        "operation": "label", "fault": "HTTP 403",
+        "runs": [
+          {"tracker_unavailable": false, "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 1, "label": 1}, "comments": 1},
+          {
+            "tracker_unavailable": true, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1", "owned_label": "previous",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "elected", "selector_calls": 1, "delivery": ["partial"], "attempts": {"comment": 2, "label": 2}, "comments": 2
+          },
+          {
+            "tracker_unavailable": true, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1", "owned_label": "previous",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["partial", "failed"], "attempts": {"comment": 2, "label": 4}, "comments": 2
+          },
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1", "owned_label": "previous",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 2, "label": 4}, "comments": 2
+          }
+        ]
+      },
+      {
+        "id": "exhausted-remove-then-add-leaves-a-visible-missing-association",
+        "operation": "label", "fault": "HTTP 503", "remove_before_failure": true,
+        "runs": [
+          {"tracker_unavailable": false, "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 1, "label": 1}, "comments": 1},
+          {
+            "tracker_unavailable": true, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "elected", "selector_calls": 1, "delivery": ["partial"], "attempts": {"comment": 2, "label": 2}, "comments": 2
+          },
+          {
+            "tracker_unavailable": true, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["partial", "failed"], "attempts": {"comment": 2, "label": 4}, "comments": 2
+          },
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 2, "label": 4}, "comments": 2
+          }
+        ]
+      },
+      {
+        "id": "permanent-comment-failure-remains-bounded-across-pickups",
+        "operation": "comment", "fault": "HTTP 403",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["pending"], "attempts": {"comment": 1, "label": 0}, "comments": 0},
+          {"tracker_unavailable": true, "reuse": "revalidated", "selector_calls": 0, "delivery": ["pending", "failed"], "attempts": {"comment": 3, "label": 0}, "comments": 0},
+          {"tracker_unavailable": true, "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 3, "label": 0}, "comments": 0},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 3, "label": 0}, "comments": 0},
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 4, "label": 1}, "comments": 1
+          },
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["published"], "attempts": {"comment": 4, "label": 1}, "comments": 1
+          }
+        ]
+      },
+      {
+        "id": "exhausted-partial-delivery-does-not-repeat-the-accepted-comment",
+        "operation": "label", "fault": "HTTP 403",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["partial"], "attempts": {"comment": 1, "label": 1}, "comments": 1},
+          {"tracker_unavailable": true, "reuse": "revalidated", "selector_calls": 0, "delivery": ["partial", "failed"], "attempts": {"comment": 1, "label": 3}, "comments": 1},
+          {"tracker_unavailable": true, "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 1, "label": 3}, "comments": 1},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 1, "label": 3}, "comments": 1},
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 2, "label": 4}, "comments": 2
+          }
+        ]
+      },
+      {
+        "id": "permission-repair-publishes-once-before-exhaustion",
+        "operation": "comment", "fault": "HTTP 403",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["pending"], "attempts": {"comment": 1, "label": 0}, "comments": 0},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published", "published"], "attempts": {"comment": 2, "label": 1}, "comments": 1},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published"], "attempts": {"comment": 2, "label": 1}, "comments": 1}
+        ]
+      },
+      {
+        "id": "rate-limit-recovery-does-not-buy-another-selector",
+        "operation": "comment", "fault": "HTTP 429",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["pending"], "attempts": {"comment": 1, "label": 0}, "comments": 0},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published", "published"], "attempts": {"comment": 2, "label": 1}, "comments": 1},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published"], "attempts": {"comment": 2, "label": 1}, "comments": 1}
+        ]
+      },
+      {
+        "id": "transient-tracker-failure-does-not-block-recorded-work",
+        "operation": "comment", "fault": "HTTP 503",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["pending"], "attempts": {"comment": 1, "label": 0}, "comments": 0},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published", "published"], "attempts": {"comment": 2, "label": 1}, "comments": 1},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published"], "attempts": {"comment": 2, "label": 1}, "comments": 1}
+        ]
+      },
+      {
+        "id": "partial-delivery-recovers-without-duplicating-the-comment",
+        "operation": "label", "fault": "HTTP 429",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["partial"], "attempts": {"comment": 1, "label": 1}, "comments": 1},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published", "published"], "attempts": {"comment": 1, "label": 2}, "comments": 1},
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 2, "label": 3}, "comments": 2
+          },
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["published"], "attempts": {"comment": 2, "label": 3}, "comments": 2
+          }
+        ]
+      }
+    ]
+  },
   "task_type_taxonomy": [
     "planning",
     "review",
@@ -389,7 +535,8 @@
   "static_route_policies": ["unselected", "static", "dynamic"],
   "static_route_refusals": ["unverifiable", "unnamed_model", "unlisted_model", "ineligible_model", "effort_not_configurable", "unsupported_effort", "unsupported_context_tier"],
   "static_route_notes": {
-    "policy": "Contract 2.8. The file-level contract_version above stays at the revision that first described the measured tier; these Static route cases arrived at 2.8 and say so here rather than moving a declaration that belongs to a different decision. The Route policy is SELECTED, never inherited. `unselected` is the absence of a decision and MUST keep every legacy behaviour -- the hardcoded roster gates, the built-in escalation rung, the historical event stream -- byte-for-byte. Only `static` activates the cases below; `dynamic` selects the Dynamic route (contract 14.4), whose election is scored from live evidence rather than pinned here, and whose own record is pinned by event-schema.json's `wrapper.routing.resolved`. A Runner MUST NOT reinterpret an existing Config as though the policy had always been in force, and MUST NOT read the absence of a policy as a choice of one.",
+    "policy": "Contract 2.9 includes staged Python-local migration, opt-in first setup, affected-work refusal and shared preflight-deadline obligations, alongside Route publication and Routing preparation (sections 14.5/14.6). This fixture, event-schema.json and dashboard-insights.json declare that provenance at 2.9, including the previously added Event vocabulary and preparation projection. This declaration correction adds no Event fields or fixture cases; wire compatibility stays 1.2. The measured-tier cases introduced at 2.5 and Static route cases introduced at 2.8 retain their interpretation; no historical Event stream changes. The Route policy is SELECTED, never inferred. `unselected` is the absence of a decision and retains legacy routing interpretation -- the hardcoded roster gates, the built-in escalation rung, the historical event stream -- subject to the staged Python-local startup refusal described by migration_activation. Only `static` activates the cases below; `dynamic` selects the Dynamic route (contract 14.4), whose election is scored from live evidence rather than pinned here, and whose own record is pinned by event-schema.json's `wrapper.routing.resolved`. A Runner MUST NOT reinterpret an existing Config as though the policy had always been in force, and MUST NOT read the absence of a policy as a choice of one.",
+    "migration_activation": "Python local Runs with nonempty project or global Config MUST supply or inherit an explicit static/dynamic policy before Agent work. Missing authority refuses without prompting or Config writes, naming update --routing keep/migrate and temporary --route-policy/GIT_LOOPY_ROUTE_POLICY remedies. Model/effort overrides alone are not consent. CLI startup, detached startup and Run/doctor preflight share this authority verdict; selected policies still require live readiness and fresh Pickup validation. Historical records, empty Config scopes and unselected non-local Runs retain their legacy path during staged activation. Shell and PowerShell enforcement is deferred and unchanged members remain conforming. This is not final Dynamic-default activation or remote, Subagent or Integration routing support. The one-route cases below do not model startup; migration_recovery drives the composed CLI/serial/Lane recovery seam.",
     "verifiable_placement": "The harness whose answer counts is the one the WORK SESSION runs under. Where an Execution host opens its sessions on a machine that authenticates as itself, the orchestrator's own listing describes a different installation under a different identity, and a Runner MUST refuse that combination before work rather than report a local read as that placement's verdict. Only a placement whose sessions run under the Run's own authenticated harness is verifiable.",
   "authority": "Under `static` the authority is the AUTHENTICATED HARNESS THIS RUN SPAWNS -- its own model listing, read fresh. A Runner MUST NOT validate a Static route against a hardcoded roster, a published plan or licence catalogue, or another CLI installation, and MUST NOT satisfy the read from a cache held across the Run: a stale answer is the failure this rule exists to prevent, not a cheaper version of it. Reading eligibility MUST NOT rewrite billing provenance already recorded for the Run.",
     "refuse_never_rescue": "Every verdict other than `accepted` ends the Run BEFORE any work, naming the selected settings. A Runner MUST NOT drop an unsupported effort, downgrade an unoffered context tier, or substitute a backend default and call the result a route: a Static route is honoured exactly or not at all.",
@@ -398,6 +545,681 @@
     "static_is_fixed": "A Static route stays fixed for an Agent and across every permitted retry. A Runner MUST NOT promote it to a different model or effort unless the operator explicitly configured an escalation rung: a rung a Runner ships by default is not consent. Attempt and Strike accounting is unchanged either way.",
     "dynamic_precedence": "Under `dynamic` a Static route still wins. A [routing] entry, an explicit flag or environment pin, and a configured escalation rung are instructions, and a Runner MUST NOT spend a Route selector call to contradict one -- they are verified against the harness exactly as under `static`. What the selector elects is the route for every Task type those instructions do not cover; the run-wide default is NOT one of them, because under this policy the selector replaces it and refusing the Run over a pair it will never take would be a refusal about nothing. An explicit pin suppresses routing entirely, which makes the default the route again and therefore verifiable again.",
     "scope": "These cases validate ONE route. A Run validates every route its Config holds -- the run-wide default, each [routing] entry, and an explicitly configured escalation rung -- before it picks up any issue, so a route that is never exercised is still refused at the start rather than mid-Run."
+  },
+  "execution_host_refusal": {
+    "note": "Python selected Static/Dynamic policies cannot authorize the independently authenticated GitHub Actions host from a local capability listing. Refuse before local model listing, Skill migration, interactive detachment, host construction or remote green-base dispatch. A run-wide model/effort pin suppresses selection, not this placement rule. Config remains unchanged and no work, Lease, Strike or Route publication occurs. The same no-I/O verdict is used by CLI startup, direct Run and live routing preflight. This does not provide remote routing support or activate final defaults; an explicitly unselected remote Run retains its legacy path. Shell/PowerShell routing remains deferred.",
+    "entrypoints": ["cli", "interactive", "run"],
+    "saved_config": {"model": "synthetic-work", "reasoning_effort": "high"},
+    "environment": {"GIT_LOOPY_EXECUTION_HOST": "github-actions"},
+    "expected": {
+      "exit_code": 1,
+      "diagnostics": [
+        "this machine's model listing is not the listing",
+        "--execution-host local",
+        "--route-policy unselected"
+      ]
+    },
+    "cases": [
+      {"id": "recorded-project-static", "project": {"route_policy": "static"}},
+      {"id": "inherited-global-dynamic", "global": {"route_policy": "dynamic"}},
+      {"id": "temporary-static-flag", "args": ["--route-policy", "static"]},
+      {"id": "temporary-dynamic-environment", "environment": {"GIT_LOOPY_ROUTE_POLICY": "dynamic"}},
+      {"id": "dynamic-model-pin-is-not-remote-authority", "project": {"route_policy": "dynamic"}, "args": ["--model", "synthetic-work"]},
+      {"id": "dynamic-effort-pin-is-not-remote-authority", "project": {"route_policy": "dynamic"}, "environment": {"GIT_LOOPY_REASONING_EFFORT": "high"}},
+      {"id": "dynamic-context-only-is-not-remote-authority", "project": {"route_policy": "dynamic"}, "args": ["--context-tier", "long_context"]},
+      {"id": "static-flag-overrides-inherited-dynamic", "global": {"route_policy": "dynamic"}, "args": ["--route-policy", "static", "--execution-host", "github-actions"]}
+    ]
+  },
+  "migration_recovery": {
+    "note": "Every case starts with an unattended local Python Run refusing the saved Config unchanged, before listing, assessment or work. Supply the declared authority, then drive a real Run and compare actual issue-owning session settings, canonical Pickup and Dashboard readback with expected, or assert the declared refusal with no work, final route, publication or Strike. Static policy recovery has no leaderboard credential or evidence request. Temporary authority must expire on the next invocation; recorded authority must remain effective without flags or environment. No historical case or Event stream is reinterpreted. Shell/PowerShell activation is deferred; this is not remote, Subagent or Integration routing support or final default activation.",
+    "inputs": "Case saved_config entries overlay the shared saved_config at top level. A case harness replaces the shared listing; each model's long_context defaults to false and must feed every Static and Dynamic capability read. run_overrides are temporary CLI settings, not saved authority. run_access and run_evidence_available default to true and change only after the authorization step; false respectively removes the operator-owned key or makes the evidence transport fail. proposed_context_tier defaults to default and scripts the selector's work proposal, never the selector's own settings. A missing expected.exit_code means 0 and one work session; a refusal case declares its nonzero exit, named Static/Dynamic refusal and Run outcome (null for refusal before a Run event stream exists). The adapter checks its CLI's diagnostic for that refusal. run_evidence_requests counts only the Run after authorization. The Dashboard retains its historical implicit-default-tier projection.",
+    "modes": ["serial", "lane"],
+    "saved_config": {
+      "model": "synthetic-cheap-1",
+      "reasoning_effort": "high",
+      "routing_deadline_seconds": 30,
+      "routing_credit_allowance": "2.5",
+      "selector_concurrency": 1,
+      "route_associations": {
+        "aa-strong": "synthetic-fancy-9@high",
+        "aa-cheap": "synthetic-cheap-1@high"
+      }
+    },
+    "harness": [
+      {"model": "synthetic-fancy-9", "efforts": ["high"]},
+      {"model": "synthetic-cheap-1", "efforts": ["high"]}
+    ],
+    "evidence": [
+      {"id": "aa-strong", "intelligence_index": 70, "output_tokens_per_second": 90},
+      {"id": "aa-cheap", "intelligence_index": 40, "output_tokens_per_second": 200}
+    ],
+    "selector_choice": "synthetic-fancy-9",
+    "cases": [
+      {
+        "id": "temporary-static-flag",
+        "authority": "flag", "policy": "static",
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "defaulted_unknown_task_type_key", "selector_calls": 0, "persists_choice": false}
+      },
+      {
+        "id": "temporary-dynamic-flag",
+        "authority": "flag", "policy": "dynamic",
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1, "persists_choice": false}
+      },
+      {
+        "id": "temporary-static-environment",
+        "authority": "environment", "policy": "static",
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "defaulted_unknown_task_type_key", "selector_calls": 0, "persists_choice": false}
+      },
+      {
+        "id": "temporary-dynamic-environment",
+        "authority": "environment", "policy": "dynamic",
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1, "persists_choice": false}
+      },
+      {
+        "id": "recorded-project-keep",
+        "authority": "update", "policy": "static",
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "defaulted_unknown_task_type_key", "selector_calls": 0, "persists_choice": true}
+      },
+      {
+        "id": "recorded-project-migrate",
+        "authority": "update", "policy": "dynamic",
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1, "persists_choice": true}
+      },
+      {
+        "id": "inherited-global-static",
+        "authority": "global", "policy": "static",
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "defaulted_unknown_task_type_key", "selector_calls": 0, "persists_choice": true}
+      },
+      {
+        "id": "inherited-global-dynamic",
+        "authority": "global", "policy": "dynamic",
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1, "persists_choice": true}
+      },
+      {
+        "id": "migrate-retains-authored-static-pair-and-inherited-tier",
+        "authority": "update", "policy": "dynamic",
+        "harness": [
+          {"model": "synthetic-fancy-9", "efforts": ["high"], "long_context": true},
+          {"model": "synthetic-cheap-1", "efforts": ["high"], "long_context": true}
+        ],
+        "saved_config": {
+          "context_tier": "long_context",
+          "routing": {"implementation": {"model": "synthetic-cheap-1", "effort": "high"}}
+        },
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "long_context", "routing_source": "routed", "selector_calls": 0, "persists_choice": true}
+      },
+      {
+        "id": "migrated-run-wide-pin-needs-no-leaderboard-access",
+        "authority": "update", "policy": "dynamic",
+        "run_overrides": {"model": "synthetic-cheap-1", "reasoning_effort": "high"},
+        "run_access": false,
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "defaulted_explicit_override", "selector_calls": 0, "run_evidence_requests": 0, "persists_choice": true}
+      },
+      {
+        "id": "migration-readiness-does-not-authorize-work-after-access-is-lost",
+        "authority": "update", "policy": "dynamic",
+        "run_access": false,
+        "expected": {"exit_code": 1, "refusal": "prerequisite_missing", "outcome": "all_skipped", "selector_calls": 0, "run_evidence_requests": 0, "persists_choice": true}
+      },
+      {
+        "id": "migration-readiness-does-not-authorize-work-through-a-source-outage",
+        "authority": "update", "policy": "dynamic",
+        "run_evidence_available": false,
+        "expected": {"exit_code": 1, "refusal": "source_unavailable", "outcome": "all_skipped", "selector_calls": 0, "persists_choice": true}
+      },
+      {
+        "id": "keep-retains-authored-static-pair-and-inherited-tier",
+        "authority": "update", "policy": "static",
+        "harness": [
+          {"model": "synthetic-fancy-9", "efforts": ["high"], "long_context": true},
+          {"model": "synthetic-cheap-1", "efforts": ["high"], "long_context": true}
+        ],
+        "saved_config": {
+          "context_tier": "long_context",
+          "routing": {"implementation": {"model": "synthetic-fancy-9", "effort": "high"}}
+        },
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "long_context", "routing_source": "routed", "selector_calls": 0, "run_evidence_requests": 0, "persists_choice": true}
+      },
+      {
+        "id": "migrated-static-work-survives-lost-access",
+        "authority": "update", "policy": "dynamic",
+        "saved_config": {
+          "routing": {"implementation": {"model": "synthetic-cheap-1", "effort": "high"}}
+        },
+        "run_access": false,
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "routed", "selector_calls": 0, "run_evidence_requests": 0, "persists_choice": true}
+      },
+      {
+        "id": "migrated-static-work-survives-a-source-outage",
+        "authority": "update", "policy": "dynamic",
+        "saved_config": {
+          "routing": {"implementation": {"model": "synthetic-cheap-1", "effort": "high"}}
+        },
+        "run_evidence_available": false,
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "routed", "selector_calls": 0, "persists_choice": true}
+      },
+      {
+        "id": "migrated-context-only-control-keeps-the-strongest-selector",
+        "authority": "update", "policy": "dynamic",
+        "harness": [
+          {"model": "synthetic-fancy-9", "efforts": ["high"], "long_context": true},
+          {"model": "synthetic-cheap-1", "efforts": ["high"], "long_context": true}
+        ],
+        "run_overrides": {"context_tier": "long_context"},
+        "proposed_context_tier": "long_context",
+        "expected": {
+          "model": "synthetic-fancy-9", "effort": "high", "context_tier": "long_context",
+          "routing_source": "dynamic", "selector_calls": 1, "persists_choice": true,
+          "selector": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default"}
+        }
+      },
+      {
+        "id": "temporary-static-authority-cannot-authorize-an-unoffered-tier",
+        "authority": "flag", "policy": "static",
+        "run_overrides": {"context_tier": "long_context"},
+        "expected": {"exit_code": 1, "refusal": "unsupported_context_tier", "outcome": null, "selector_calls": 0, "run_evidence_requests": 0, "persists_choice": false}
+      }
+    ]
+  },
+  "retry_lifecycle": {
+    "note": "Python-local recorded Dynamic authority is saved by update --routing migrate before an unattended CLI Run. Synthetic inputs come from migration_recovery; retained_routes remain authoritative. Both modes start issue 42 while serial-required Static issue 43 remains in the Pool. Lane mode starts 42 in a Lane, then exercises its permitted retry through serial fallback. The existing one-Lane-per-issue rule is unchanged. Actual work sessions, canonical Pickup, Dynamic records, CLI/Dashboard readback, tracker comments and unchanged Config must agree. Shell/PowerShell, non-local, Subagent and Integration routing remain deferred; this is not final default activation.",
+    "inputs": "session_outcomes scripts actual work transport endings. selector_models scripts assessment replies in order through the SDK session transport; every selector call reports 0.25 routing credits there. justify_repeat defaults to false; true supplies justification on a later assessment. saved_config overlays migration_recovery.saved_config and retained_routes before migration. Expected Pickups and assessment histories are independent literals; published_pickups names zero-based positions in expected.pickups whose final choices require a comment. Expected routing_credits is total Run Consumption (the work transport reports no usage). The Dashboard retains its historical implicit-default-tier projection; actual session and Pickup records carry the explicit default tier. A refused election starts no work and spends no task attempt.",
+    "modes": ["serial", "lane"],
+    "retained_routes": {"docs": {"model": "synthetic-cheap-1", "effort": "high"}},
+    "cases": [
+      {
+        "id": "permitted-retry-reselects-after-no-progress",
+        "max_iterations": 2, "max_strikes": 9,
+        "session_outcomes": ["no_progress", "no_progress"],
+        "selector_models": ["synthetic-fancy-9", "synthetic-cheap-1"],
+        "expected": {
+          "exit_code": 0, "run_outcome": "iteration_cap", "strikes": 1,
+          "selector_calls": 2, "routing_credits": "0.50", "published_pickups": [0, 1],
+          "assessment_history": [[], ["did_not_solve"]],
+          "capability_history": [[], [true]],
+          "repeat_justified": [false, false],
+          "pickups": [
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 1, "lifecycle_position": "fresh"},
+            {"issue": 42, "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 2, "lifecycle_position": "retrying"}
+          ]
+        }
+      },
+      {
+        "id": "explicit-static-rung-overrules-dynamic-reselection",
+        "max_iterations": 2, "max_strikes": 9,
+        "saved_config": {
+          "escalation": {"enabled": true, "model": "synthetic-cheap-1", "effort": "high"}
+        },
+        "session_outcomes": ["no_progress", "no_progress"],
+        "selector_models": ["synthetic-fancy-9"],
+        "expected": {
+          "exit_code": 0, "run_outcome": "iteration_cap", "strikes": 1,
+          "selector_calls": 1, "routing_credits": "0.25", "published_pickups": [0, 1],
+          "assessment_history": [[]], "capability_history": [[]],
+          "repeat_justified": [false],
+          "pickups": [
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 1, "lifecycle_position": "fresh"},
+            {"issue": 42, "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "escalated", "lifecycle_position": "retrying"}
+          ]
+        }
+      },
+      {
+        "id": "advance-preserves-history-without-inventing-a-failed-attempt",
+        "max_iterations": 2, "max_strikes": 9,
+        "session_outcomes": ["advanced", "no_progress"],
+        "selector_models": ["synthetic-fancy-9", "synthetic-fancy-9"],
+        "expected": {
+          "exit_code": 0, "run_outcome": "iteration_cap", "strikes": 0,
+          "selector_calls": 2, "routing_credits": "0.50", "published_pickups": [0],
+          "assessment_history": [[], ["advanced"]],
+          "capability_history": [[], [false]],
+          "repeat_justified": [false, false],
+          "pickups": [
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 1, "lifecycle_position": "fresh"},
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 2, "lifecycle_position": "fresh"}
+          ]
+        }
+      },
+      {
+        "id": "justified-repeat-exhausts-attempts-with-no-third-assessment",
+        "max_iterations": 3, "max_strikes": 9,
+        "justify_repeat": true,
+        "session_outcomes": ["no_progress", "no_progress", "no_progress"],
+        "selector_models": ["synthetic-fancy-9", "synthetic-fancy-9"],
+        "expected": {
+          "exit_code": 0, "run_outcome": "iteration_cap", "strikes": 1,
+          "selector_calls": 2, "routing_credits": "0.50", "published_pickups": [0, 2],
+          "assessment_history": [[], ["did_not_solve"]],
+          "capability_history": [[], [true]],
+          "repeat_justified": [false, true],
+          "pickups": [
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 1, "lifecycle_position": "fresh"},
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 2, "lifecycle_position": "retrying"},
+            {"issue": 43, "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "routed", "lifecycle_position": "fresh"}
+          ]
+        }
+      },
+      {
+        "id": "infrastructure-failure-does-not-demand-repeat-justification",
+        "max_iterations": 2, "max_strikes": 9,
+        "session_outcomes": ["crash", "no_progress"],
+        "selector_models": ["synthetic-fancy-9", "synthetic-fancy-9"],
+        "expected": {
+          "exit_code": 0, "run_outcome": "iteration_cap", "strikes": 1,
+          "selector_calls": 2, "routing_credits": "0.50", "published_pickups": [0],
+          "assessment_history": [[], ["infrastructure_failure"]],
+          "capability_history": [[], [false]],
+          "repeat_justified": [false, false],
+          "pickups": [
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 1, "lifecycle_position": "fresh"},
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 2, "lifecycle_position": "retrying"}
+          ]
+        }
+      },
+      {
+        "id": "unjustified-repeat-cannot-start-a-retry",
+        "max_iterations": 2, "max_strikes": 9,
+        "justify_repeat": false,
+        "session_outcomes": ["no_progress", "no_progress"],
+        "selector_models": ["synthetic-fancy-9", "synthetic-fancy-9"],
+        "expected": {
+          "exit_code": 0, "run_outcome": "iteration_cap", "strikes": 0,
+          "selector_calls": 2, "routing_credits": "0.50", "published_pickups": [0, 1],
+          "assessment_history": [[], ["did_not_solve"]],
+          "capability_history": [[], [true]],
+          "repeat_justified": [false], "refusal": "invalid_selector_output",
+          "pickups": [
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 1, "lifecycle_position": "fresh"},
+            {"issue": 43, "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "routed", "lifecycle_position": "fresh"}
+          ]
+        }
+      },
+      {
+        "id": "allowance-exhaustion-refuses-retry-but-keeps-static-work",
+        "max_iterations": 2, "max_strikes": 9,
+        "saved_config": {"routing_credit_allowance": "0.25"},
+        "session_outcomes": ["no_progress", "no_progress"],
+        "selector_models": ["synthetic-fancy-9"],
+        "expected": {
+          "exit_code": 0, "run_outcome": "iteration_cap", "strikes": 0,
+          "selector_calls": 1, "routing_credits": "0.25", "published_pickups": [0, 1],
+          "assessment_history": [[]], "capability_history": [[]],
+          "repeat_justified": [false], "refusal": "quota_exhausted",
+          "pickups": [
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 1, "lifecycle_position": "fresh"},
+            {"issue": 43, "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "routed", "lifecycle_position": "fresh"}
+          ]
+        }
+      }
+    ]
+  },
+  "pool_revalidation": {
+    "note": "Recorded update --routing migrate authorizes a real CLI Run. While the declared issue-owning Agents are still running, issue 44 reaches a nonbinding Routing proposal: it has no Pickup, Lease or tracker publication. Authoritative Pickup then validates current inputs before opening the next actual work session. Initially Blocked issue 40 and unreadable issue 41 buy neither classification nor selection. Config is unchanged throughout the Run. This Python-local obligation does not activate defaults or imply shell/PowerShell, remote-host, Subagent or Integration routing support.",
+    "inputs": "Reuse migration_recovery's saved_config, harness and evidence. Retain a Static docs pair synthetic-cheap-1 @ high with inherited default tier for issue 45. Lane cases mark the whole Pool Parallel-safe, so retained Static work does not trigger serial drain and issue 44's replacement really takes a Lane. Once every running Agent has observed issue 44's proposal, apply change before any running Agent completes: none preserves all inputs; issue changes issue 44's acceptance text; evidence lowers aa-strong's index to 10; eligibility removes synthetic-fancy-9; evidence_outage fails the required-source transport; blocked introduces an open dependency on x/y#99; unreadable makes dependency readiness unprovable. The scripted selector chooses synthetic-cheap-1 after issue/evidence/eligibility changes and otherwise synthetic-fancy-9. expected.prepared_issue_selectors lists the model each issue-44 selector session itself runs on, in call order, not its chosen work model; prepared_issue_assessments counts those calls. expected.model is the next actual work session's model. Each selector bill is 0.25 Run-only credits. The Run admits one more work session after the running issues, so a refusal of issue 44 must leave retained Static issue 45 usable. Serial readiness refusals emit Pickup skips; Rolling filters newly ineligible candidates during a fresh Pool read before reservation. Required-source failure emits a routing skip in either mode and releases the Lease taken during Pickup. Preparation itself takes no Lease in either mode.",
+    "modes": {
+      "serial": {"running_issues": [42]},
+      "lane": {"running_issues": [42, 43]}
+    },
+    "cases": [
+      {
+        "id": "unchanged-proposal",
+        "change": "none",
+        "expected": {
+          "next_issue": 44, "model": "synthetic-fancy-9",
+          "prepared_issue_assessments": 1,
+          "prepared_issue_selectors": ["synthetic-fancy-9"],
+          "routing_credits": {"serial": "0.50", "lane": "0.75"}
+        }
+      },
+      {
+        "id": "changed-issue-after-preparation",
+        "change": "issue",
+        "expected": {
+          "next_issue": 44, "model": "synthetic-cheap-1",
+          "prepared_issue_assessments": 2,
+          "prepared_issue_selectors": ["synthetic-fancy-9", "synthetic-fancy-9"],
+          "routing_credits": {"serial": "0.75", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "changed-evidence-after-preparation",
+        "change": "evidence",
+        "expected": {
+          "next_issue": 44, "model": "synthetic-cheap-1",
+          "prepared_issue_assessments": 2,
+          "prepared_issue_selectors": ["synthetic-fancy-9", "synthetic-cheap-1"],
+          "routing_credits": {"serial": "0.75", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "withdrawn-eligibility-after-preparation",
+        "change": "eligibility",
+        "expected": {
+          "next_issue": 44, "model": "synthetic-cheap-1",
+          "prepared_issue_assessments": 2,
+          "prepared_issue_selectors": ["synthetic-fancy-9", "synthetic-cheap-1"],
+          "routing_credits": {"serial": "0.75", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "required-evidence-outage-after-preparation",
+        "change": "evidence_outage",
+        "expected": {
+          "next_issue": 45, "model": "synthetic-cheap-1",
+          "prepared_issue_assessments": 1,
+          "prepared_issue_selectors": ["synthetic-fancy-9"],
+          "refusal": "source_unavailable",
+          "routing_credits": {"serial": "0.50", "lane": "0.75"}
+        }
+      },
+      {
+        "id": "blocked-after-preparation",
+        "change": "blocked",
+        "expected": {
+          "next_issue": 45, "model": "synthetic-cheap-1",
+          "prepared_issue_assessments": 1,
+          "prepared_issue_selectors": ["synthetic-fancy-9"],
+          "refusal": "blocked_by_open_dependency",
+          "routing_credits": {"serial": "0.50", "lane": "0.75"}
+        }
+      },
+      {
+        "id": "unreadable-after-preparation",
+        "change": "unreadable",
+        "expected": {
+          "next_issue": 45, "model": "synthetic-cheap-1",
+          "prepared_issue_assessments": 1,
+          "prepared_issue_selectors": ["synthetic-fancy-9"],
+          "refusal": "readiness_unprovable",
+          "routing_credits": {"serial": "0.50", "lane": "0.75"}
+        }
+      }
+    ]
+  },
+  "pool_priority": {
+    "note": "Recorded migration and the real local Python CLI carry several eligible pending Dynamic candidates through Routing preparation into serial Pickup or actual Lane refill. Preparation must follow existing Pool order, complete the next candidate before selectors assess other candidates, and obey selector concurrency. Running Agents are held until the declared other assessments are open; the next Pickup must not wait for those unrelated assessments. This pins existing section 14.6 behavior, not final defaults or native-member, remote-host, Subagent or Integration routing.",
+    "inputs": "Reuse migration_recovery's saved_config, harness and evidence, overriding selector_concurrency per case. Reuse pool_revalidation's running_issues per mode. Seed running issues plus pending issues 44, 45, 46 and 47 in reverse numeric order with the declared created_at values; all are classified implementation work and all are Parallel-safe in Lane mode. priority_issues receive the priority label. The strongest selector chooses synthetic-fancy-9 for running issues and synthetic-cheap-1 for expected.next_issue, all at high/default. Hold that next selector until every running Agent has started. Each selector for another pending candidate asserts that the next proposal is already durably recorded, bills 0.25 Run-only credits, and stays open until cancelled. Release running Agents only after selector_concurrency other assessments are open. There are more remaining candidates than available selector slots in every case; issue 47 must buy no assessment even with concurrency two. Permit exactly one more work session. Pending issues retain their labels and have no Lease, final route or tracker publication; cancelled assessments retain their bills and explicit unavailable preparation records before Run end. Expected credit totals include all running, next and interrupted selector calls.",
+    "modes": ["serial", "lane"],
+    "created_at": {
+      "42": "2026-01-01T00:00:00Z",
+      "43": "2026-01-02T00:00:00Z",
+      "44": "2026-01-04T00:00:00Z",
+      "45": "2026-01-03T00:00:00Z",
+      "46": "2026-01-05T00:00:00Z",
+      "47": "2026-01-06T00:00:00Z"
+    },
+    "cases": [
+      {
+        "id": "oldest-pending-before-other-candidates",
+        "selector_concurrency": 1,
+        "priority_issues": [],
+        "expected": {
+          "next_issue": 45, "other_assessed_issues": [44],
+          "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default",
+          "routing_credits": {"serial": "0.75", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "priority-pending-before-older-candidates",
+        "selector_concurrency": 1,
+        "priority_issues": [42, 43, 46],
+        "expected": {
+          "next_issue": 46, "other_assessed_issues": [45],
+          "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default",
+          "routing_credits": {"serial": "0.75", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "priority-pending-before-two-concurrent-assessments",
+        "selector_concurrency": 2,
+        "priority_issues": [42, 43, 46],
+        "expected": {
+          "next_issue": 46, "other_assessed_issues": [44, 45],
+          "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default",
+          "routing_credits": {"serial": "1.00", "lane": "1.25"}
+        }
+      }
+    ]
+  },
+  "in_flight_consumption": {
+    "note": "Recorded init/update Dynamic authorization flows through the real unattended CLI into serial or local Lane work. An already-open classifier or selector reports a bill that exhausts the allowance before returning. No further assessment may start; already-bound work finishes on its frozen settings. Completion, cancellation, cancellation-time billing and a late result retain every observed bill exactly once in Run-only Consumption. Proposals never receive final tracker publication. This pins existing behavior, not final defaults or shell/PowerShell, non-local, Subagent or Integration activation.",
+    "inputs_note": "Use the declared harness/evidence and operator-owned access outside Config. Record Dynamic setup with no Static rows, associations aa-opus=claude-opus-5@high and aa-terra=gpt-5.6-terra@high, the given deadline/concurrency and each allowance. These identifiers are test configurations, not a recommended recipe. Each assessment reports initial_bill with 100 input and 20 output tokens. All selector replies choose work_model. All issues are eligible and semver:none; only held_issue lacks a Task type when pending_role is classifier. Keep work open until refused_issue has its unavailable preparation record. Hold held_issue until partner_issue starts, then report in_flight_bill with the same token counts while both assessments remain open. partner_issue may finish; held_issue must still be open when the next assessment is refused. complete releases its result; cancel ends the Run with it still pending; cancel_billed additionally reports cleanup_bill during disconnect; deadline advances the injected clock past deadline_seconds before releasing the result. Work sessions each report work_bill with the same token counts. The allowance booleans are the expected overshoot at admission refusal, before any cleanup bill. Case overshot values describe final settlement.",
+    "entrypoints": ["init", "update"],
+    "modes": {
+      "serial": {"max_iterations": 1, "work_issues": [42]},
+      "lane": {"max_iterations": 2, "work_issues": [42, 43]}
+    },
+    "allowances": {"0.60": true, "0.80": false},
+    "inputs": {
+      "issues": [42, 43, 44, 45, 46, 47],
+      "held_issue": 45,
+      "partner_issue": 46,
+      "refused_issue": 47,
+      "deadline_seconds": 30,
+      "late_result_seconds": 31,
+      "selector_concurrency": 2,
+      "initial_bill": "0.10",
+      "in_flight_bill": "0.30",
+      "cleanup_bill": "0.20",
+      "work_bill": "0.10",
+      "work_model": "gpt-5.6-terra",
+      "classifier_model": "gpt-5.6-terra",
+      "effort": "high",
+      "harness": [
+        {"model": "claude-opus-5", "efforts": ["high"]},
+        {"model": "gpt-5.6-terra", "efforts": ["high"]}
+      ],
+      "evidence": [
+        {"id": "aa-opus", "intelligence_index": 70, "output_tokens_per_second": 90},
+        {"id": "aa-terra", "intelligence_index": 40, "output_tokens_per_second": 200}
+      ]
+    },
+    "expected_assessed": [42, 43, 44, 45, 46],
+    "expected_refusal": {
+      "state": "unavailable", "reason": "quota_exhausted", "routing_credits": "0.80"
+    },
+    "expected_sessions": {
+      "work": {"model": "gpt-5.6-terra", "effort": "high", "context_tier": "default"},
+      "selector": {"model": "claude-opus-5", "effort": "high", "context_tier": "default"},
+      "classifier": {"model": "gpt-5.6-terra", "effort": "high", "context_tier": null}
+    },
+    "cases": [
+      {
+        "id": "classifier-completes-after-exhausting-allowance",
+        "pending_role": "classifier", "ending": "complete",
+        "expected": {
+          "state": "unavailable", "reason": "quota_exhausted",
+          "cancelled": [], "classification_attempts": 1, "selector_attempts": 4,
+          "task_labels": [[45, "task-type:implementation"]],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "classifier-cancelled-after-exhausting-allowance",
+        "pending_role": "classifier", "ending": "cancel",
+        "expected": {
+          "state": "unavailable", "reason": null,
+          "cancelled": [45], "classification_attempts": 1, "selector_attempts": 4,
+          "task_labels": [],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "classifier-cancellation-cleanup-adds-visible-billing",
+        "pending_role": "classifier", "ending": "cancel_billed",
+        "expected": {
+          "state": "unavailable", "reason": null,
+          "cancelled": [45], "classification_attempts": 1, "selector_attempts": 4,
+          "task_labels": [],
+          "routing_credits": "1.00", "overshot": {"0.60": true, "0.80": true},
+          "usage_samples": 7,
+          "run_consumption": {"tokens_in": 700, "tokens_out": 140, "credits": 1.0, "premium_requests": null},
+          "total_credits": {"serial": "1.10", "lane": "1.20"}
+        }
+      },
+      {
+        "id": "late-classification-keeps-billing-without-publishing-task-type",
+        "pending_role": "classifier", "ending": "deadline",
+        "expected": {
+          "state": "unavailable", "reason": "deadline_exhausted",
+          "cancelled": [], "classification_attempts": 1, "selector_attempts": 4,
+          "task_labels": [],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "selector-completes-an-already-admitted-proposal",
+        "pending_role": "selector", "ending": "complete",
+        "expected": {
+          "state": "proposed", "reason": null,
+          "cancelled": [], "classification_attempts": 0, "selector_attempts": 5,
+          "task_labels": [],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "selector-cancelled-after-exhausting-allowance",
+        "pending_role": "selector", "ending": "cancel",
+        "expected": {
+          "state": "unavailable", "reason": null,
+          "cancelled": [45], "classification_attempts": 0, "selector_attempts": 5,
+          "task_labels": [],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "selector-cancellation-cleanup-adds-visible-billing",
+        "pending_role": "selector", "ending": "cancel_billed",
+        "expected": {
+          "state": "unavailable", "reason": null,
+          "cancelled": [45], "classification_attempts": 0, "selector_attempts": 5,
+          "task_labels": [],
+          "routing_credits": "1.00", "overshot": {"0.60": true, "0.80": true},
+          "usage_samples": 7,
+          "run_consumption": {"tokens_in": 700, "tokens_out": 140, "credits": 1.0, "premium_requests": null},
+          "total_credits": {"serial": "1.10", "lane": "1.20"}
+        }
+      },
+      {
+        "id": "late-selector-keeps-billing-without-producing-a-proposal",
+        "pending_role": "selector", "ending": "deadline",
+        "expected": {
+          "state": "unavailable", "reason": "deadline_exhausted",
+          "cancelled": [], "classification_attempts": 0, "selector_attempts": 5,
+          "task_labels": [],
+          "routing_credits": "0.80", "overshot": {"0.60": true, "0.80": false},
+          "usage_samples": 6,
+          "run_consumption": {"tokens_in": 600, "tokens_out": 120, "credits": 0.8, "premium_requests": null},
+          "total_credits": {"serial": "0.90", "lane": "1.00"}
+        }
+      }
+    ]
+  },
+  "first_setup": {
+    "note": "Python-local first setup starts with no project or global Config. The guided init --routing flow collects an operator choice, finite limits and verified associations, checks readiness before saving, and never starts work. A refused setup saves no Config, prompt or Skill policy and writes no tracker labels. Repair the declared input and retry setup, then invoke the real CLI Run without routing overrides. Compare actual serial/Lane session settings, canonical Pickup, Dashboard readback and tracker publication, with unchanged Config and the key outside saved assets. These cases exercise explicit opt-in setup, not bare init, auto-setup or final Dynamic defaults. Shell/PowerShell, non-local, Subagent and Integration activation remain deferred.",
+    "inputs": "Use migration_recovery's synthetic saved_config as collected answers, not pre-existing Config, and its harness, evidence and selector_choice as external inputs. Accept the wizard's default Static-route choice rather than supplying a prebuilt answer. Keep collects only model/effort and no Dynamic access or limits. Case initial inputs apply only to the first setup attempt: answers overlays collected Dynamic limits/associations, access controls the outside-Config key, evidence_available controls the evidence transport, and harness_available controls the fresh authenticated readiness listing, not the earlier picker display. Access defaults to true for Migrate and false for Keep; both transports default to available. Repair restores the shared inputs before repeating setup. expected_refusal declares either a Config input error (config_key) or an existing Dynamic routing_reason; prerequisite_missing also names the setting the diagnostic must identify. Its absence means setup succeeds immediately. Both Config scopes start absent; scope selects the only one init may write. The final expected settings are independent literals, not derived from the supplied answers or routing algorithm.",
+    "routing_refusals": ["prerequisite_missing", "quota_exhausted", "no_runnable_candidate", "source_unavailable", "capabilities_unavailable"],
+    "modes": ["serial", "lane"],
+    "scopes": ["project", "global"],
+    "cases": [
+      {
+        "id": "first-dynamic-setup-collects-authority-without-static-seeds",
+        "choice": "migrate",
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1}
+      },
+      {
+        "id": "first-static-setup-needs-no-leaderboard-access-or-limits",
+        "choice": "keep",
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "defaulted_unknown_task_type_key", "selector_calls": 0}
+      },
+      {
+        "id": "missing-access-refuses-first-setup-until-repaired",
+        "choice": "migrate",
+        "initial": {"access": false},
+        "expected_refusal": {"routing_reason": "prerequisite_missing", "setting": "GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY"},
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1}
+      },
+      {
+        "id": "nonfinite-deadline-refuses-first-setup-until-repaired",
+        "choice": "migrate",
+        "initial": {"answers": {"routing_deadline_seconds": "nan"}},
+        "expected_refusal": {"config_key": "routing_deadline_seconds"},
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1}
+      },
+      {
+        "id": "exhausted-allowance-refuses-first-setup-until-authorized",
+        "choice": "migrate",
+        "initial": {"answers": {"routing_credit_allowance": "0"}},
+        "expected_refusal": {"routing_reason": "quota_exhausted"},
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1}
+      },
+      {
+        "id": "invalid-concurrency-refuses-first-setup-until-repaired",
+        "choice": "migrate",
+        "initial": {"answers": {"selector_concurrency": 65}},
+        "expected_refusal": {"routing_reason": "prerequisite_missing", "setting": "selector_concurrency"},
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1}
+      },
+      {
+        "id": "empty-verified-candidates-refuse-first-setup-until-repaired",
+        "choice": "migrate",
+        "initial": {"answers": {"route_associations": {"aa-unmatched": "synthetic-fancy-9@high"}}},
+        "expected_refusal": {"routing_reason": "no_runnable_candidate"},
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1}
+      },
+      {
+        "id": "required-evidence-outage-refuses-first-setup-until-repaired",
+        "choice": "migrate",
+        "initial": {"evidence_available": false},
+        "expected_refusal": {"routing_reason": "source_unavailable"},
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1}
+      },
+      {
+        "id": "unavailable-harness-refuses-first-setup-until-repaired",
+        "choice": "migrate",
+        "initial": {"harness_available": false},
+        "expected_refusal": {"routing_reason": "capabilities_unavailable"},
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1}
+      }
+    ]
+  },
+  "preflight_deadline": {
+    "note": "Python-local activation cases reuse migration_recovery's synthetic saved_config and harness, record Dynamic consent, and retain a Static implementation route on synthetic-cheap-1/high/default. The first live Static validation consumes 31 seconds of the authorized 30-second routing deadline. No later classifier or Route selector may start. Issue 42 cannot start or incur a Strike; optional already-classified Static issue 43 still runs on its exact retained settings. No Run rewrites Config. The deadline belongs to the Run, not to the point after Static validation finishes.",
+    "modes": ["serial", "lane"],
+    "static_work": [false, true],
+    "expected_static_route": {
+      "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default",
+      "routing_source": "routed"
+    },
+    "cases": [
+      {
+        "id": "selector-deadline-includes-static-validation",
+        "leaderboard_access": true,
+        "task_type_labels": ["task-type:docs"],
+        "expected_skip_reason": "deadline_exhausted"
+      },
+      {
+        "id": "classifier-deadline-includes-static-validation-without-access",
+        "leaderboard_access": false,
+        "task_type_labels": [],
+        "expected_skip_reason": "deadline_exhausted"
+      }
+    ]
   },
   "static_route_cases": [
     {

@@ -55,8 +55,13 @@ pure projection. Everything ambient is a parameter:
   measured on an axis a wall-clock adjustment mid-Run cannot move. Left `None`
   the axis is derived from the trace's first instant, which is what a Run
   without monotonic telemetry has always done;
-- **the zone** — a fixed offset, never the host's `TZ`, so it only ever moves
-  how instants are *rendered*, not what was measured;
+- **the zone** — a rule set, never the host's `TZ`, so it only ever moves how
+  instants are *rendered*, not what was measured. `Zone::from_offset_minutes`
+  still pins one fixed offset for a fixture; `Zone::from_rules` carries real
+  transitions, so a Run that spans a DST changeover reads each instant at the
+  offset that instant was actually under. Resolving the *viewer's* rules is the
+  binary's job (ADR-0058) — the library never reads `TZ`, `TZDIR` or
+  `/etc/localtime`, it is only handed the result;
 - **terminal capabilities** — injected for a renderer to consult and
   semantically inert; two projections of one state are byte-identical no matter
   what the terminal can do.
@@ -94,15 +99,25 @@ That is what keeps a backlog deeper than the started **Lanes** visible. A read
 that could only partly be named is simply a smaller read — it adds the refs it
 did name rather than reporting nothing.
 
+The Status cell keeps the six Status values and shows an observed Session outcome
+inline, such as `no-progress - timed out` on an ASCII terminal. An advanced row
+can show its positive commit count; an absent ending stays absent. Both serial
+`wrapper.iteration.end` rows and Rolling-dispatch `wrapper.contribution.end` rows
+use the same issue-accounting reduction. A contribution finalizes only its own
+issue and Summary row, without stopping a sibling's Active timer or a refilled
+Lane's Activity window. The broader Integration and scheduler display remains
+separate work tracked in #432.
+
 ### Navigation
 
-`DashboardSession` owns selection, pointer hit-testing, and view positions.
-`main.rs` only maps terminal reports to `Key` and `Pointer` inputs.
+`Screen`, `Key`, `Pointer` and `DashboardSession` own navigation; `main.rs`
+only translates terminal key and mouse reports into those inputs.
 
-| Intent | Keys |
+| Intent | Controls |
 | --- | --- |
 | Move through the Queue | `↑`/`k`, `↓`/`j`, `Home`/`g`, `End`/`G` |
 | Open the selected issue | `Enter`, `→`, `l` |
+| Open a visible issue | Click anywhere inside its Queue row |
 | Back to the Dashboard | `Esc`, `Backspace`, `←`, `h` |
 | Scroll the Queue or open Log by a page | `PageUp`, `PageDown` |
 | Scroll the Activity tail without changing focus | `Ctrl-PageUp`, `Ctrl-PageDown` |
@@ -117,6 +132,8 @@ A **single click** on a visible Queue row or an **Activity window** header
 selects that issue and opens its Log; Back returns to the Dashboard. Table
 headers, borders and empty space select nothing.
 No double-click timer or host clock is involved (ADR-0062).
+The click opens on release only when the same issue remains under the pointer
+and no drag was reported, so a live reorder cannot retarget it.
 
 The wheel scrolls the **Queue**, **Log**, or **Activity** tail under the pointer
 without changing the selected issue or any Run facts. Log and Activity positions
@@ -215,9 +232,40 @@ when the operator quits. Attach mode (`--attach` + `--control`) draws that same
 client from a local trace file, replays from the start, ignores temporary EOF,
 and exits only when the trace records `wrapper.run.end`, the control lock
 releases, or the operator quits the client.
+On Unix, keyboard/mouse input and cursor-position replies come from the
+controlling terminal even when stdin is a trace pipe or `/dev/null`. The helper
+enables Crossterm's `use-dev-tty` backend so redirected input cannot leave startup
+waiting on a blank alternate screen.
 The pipeline default is deliberate: a caller that only wants the view must not
 need a terminal, and the JSON path is the anti-drift control that proves the
 binary adds no behaviour of its own.
+
+### Which clock an operator reads
+
+Human-facing wall-clock times are the *viewing* machine's, resolved per instant
+(ADR-0058). The binary reads the viewer's zone once at startup — `TZ` first,
+whether it names a zone (`America/Denver`, searched under `TZDIR` and the
+conventional `zoneinfo` directories) or is a POSIX specification
+(`MST7MDT,M3.2.0,M11.1.0`), then `/etc/localtime` on Unix or the native Windows
+timezone configuration and its recorded annual rules — and hands the resulting
+**rules** to the library. Because they are rules rather than one sampled
+offset, a Run that crosses a DST changeover shows each instant at the offset it
+happened under, not at the offset the Dashboard started under.
+
+`--utc-offset-minutes N` overrides that with one fixed offset and is honoured
+exactly as given, including `0`. It is what fixtures and the Conformance
+adapters pass, and it stays available to an operator who wants a pinned clock.
+
+Routing preparation, expiry, reuse, and evidence times follow these same rules
+in both the projected fields and Log text; dates and numeric offsets stay visible.
+Windows needs no IANA database for normal launch: its native historical rules
+are resolved at the executable boundary, not inside the pure core.
+
+Where no zone can be resolved, the binary says so on stderr, the Dashboard header
+carries `times in UTC — local zone unresolved`, and instants render in UTC. The
+one outcome that is refused is a UTC instant shown as though it were local.
+Setting `TZ` to a POSIX specification or passing `--utc-offset-minutes` gives
+such a host a correct clock.
 
 `--schema-version` prints the compatibility probe and exits without reading
 standard input, so an Orchestrator can decide whether to launch this helper
@@ -226,7 +274,7 @@ before committing a trace to it:
 ```json
 {
   "name": "git-loopy-tui",
-  "version": "0.11.0-dev.3",
+  "version": "0.11.0-dev.5",
   "min_event_schema_version": 1,
   "max_event_schema_version": 1,
   "wrapper_contract_version": "1.4"
@@ -254,6 +302,7 @@ other's oracle, so the two cannot drift toward each other:
 | `tests/injected_environment.rs` | Capabilities are inert; the zone moves only rendering; elapsed comes from the injected instant |
 | `tests/additive_compatibility.rs` | An unmodelled Event type and unknown fields still reduce to the same view, including beside an add-only Membership read |
 | `tests/library_purity.rs` | The library reaches for nothing the caller did not supply |
+| `tests/viewer_local_time.rs` | Human-facing instants use the viewer's zone, resolved per instant, through the real executable; canonical UTC records and durations are untouched |
 | `tests/binary_seam.rs` | The binary is a thin shell over the library, through the real process boundary, and malformed attach CLI usage still exits `2` |
 | `tests/dashboard_render.rs` | What each Dashboard band says, read back from the fixture; ASCII fallback; the end-of-input frame and single restoration; whole-frame layout snapshots |
 | `tests/drill_in_render.rs` | What each drill-in band says, read back from the fixture; the locked band order; ASCII fallback; whole-frame layout snapshot |

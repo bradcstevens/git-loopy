@@ -26,7 +26,9 @@ its own config home (`$XDG_CONFIG_HOME/git-loopy/skills/`, else
 every Run. That install is git-loopy's own Skill source; the consuming
 repository's `<repo>/.copilot/skills` is **not** read
 ([ADR-0025](adr/0025-installed-skill-catalog.md)). Discovery reads **metadata
-only**: a name, a description, a source, and Copilot's own enabled flag. Being
+only** through the SDK's global discovery RPC, without opening an agent session:
+a name, a description, a source, and Copilot's own enabled flag. A reported load
+error refuses discovery instead of returning a partial catalog. Being
 in the catalog does **not** make a Skill loadable — no instructions, scripts, or
 resources are read for a Skill the policy leaves out. Inspect it with `git-loopy
 skills list`. Where the installed catalog comes from — one external source of
@@ -253,9 +255,16 @@ enabled    enabled      yes       packaged  tdd          Test-driven development
   GIT-LOOPY column.
 - **REQUIRED** — `yes` when the active prompt declares it in `required-skills`.
 - **SOURCE** — the winning source kind: `inherited`, `personal`, `plugin`
-  (rendered `plugin:<name>`), `custom`, `builtin`, or `packaged` — the last
+  (rendered `plugin:<name>` when the SDK identifies its owner, or
+  `plugin (name unavailable)` when it does not), `custom`, `builtin`, or `packaged` — the last
   meaning git-loopy's installed catalog. `project` is a historical value that no
   current Run produces; see [ADR-0025](adr/0025-installed-skill-catalog.md).
+
+Global SDK metadata does not provide a separate plugin-owner field. An explicit
+owner-qualified canonical command preserves that attribution; an unqualified
+command does not. The catalog never guesses an owner from cache paths or creates
+an agent session merely to recover this label. Skill enablement and exposure are
+independent of that display-only availability.
 
 Output is stable and path-free by design, so it is safe to diff between machines
 and to paste into an issue: no absolute home-directory paths appear.
@@ -418,7 +427,7 @@ exactly as it found it, so the fix is always yours to make deliberately.
 
 `git-loopy doctor` is the report half of Run-preflight recovery, following the
 same report-first shape as `git-loopy labels`. It resolves the exact
-environment and Skill policy a Run preflight resolves, without starting a Run,
+environment, routing readiness, and Skill policy a Run preflight resolves, without starting a Run,
 opening a picker, spending AI Credits, changing Copilot settings, or installing
 anything. It never refreshes the **installed catalog** either; only
 `doctor --apply` does (see
@@ -435,6 +444,45 @@ carry the Labels a Run **reads**; and `AGENTS.md` must declare at least one
 runnable feedback loop. Every one of them is evaluated in a single pass, so one
 failure never hides the next, and each failing row names the command or operator
 action that owns its remedy.
+
+Doctor also uses the Run's `resolve_run_routing_preflight` verdict. A local Run
+with saved Config but no explicit Static/Dynamic choice reports the same
+keep-or-migrate refusal as startup, with `update --routing` and temporary
+`GIT_LOOPY_ROUTE_POLICY` remedies. No policy is invented; empty Config scopes
+and unselected non-local Runs retain their staged legacy path.
+For a selected policy, Static settings are checked against a
+fresh authenticated harness listing; unsuppressed Dynamic routing requires
+operator-owned access and explicit valid limits. An explicit run-wide model or
+effort override needs no leaderboard credential. Routing refusals remain failures
+even if `--apply` successfully repairs a Skill policy, and that repair does not
+alter routes or choose a migration policy.
+Doctor evaluates Config and environment only; it cannot anticipate flags on a
+later Run. Supply `GIT_LOOPY_MODEL` / `GIT_LOOPY_REASONING_EFFORT` to doctor
+when diagnosing that Run's explicit model/effort override.
+
+For authorized Dynamic routing it reads current Artificial Analysis evidence and
+authenticated Copilot capabilities through the live-readiness module also used by
+proposal and Pickup. Missing evidence, no verified runnable candidates, or exhausted
+assessment bounds produce an actionable refusal. No selector or classifier is
+called, but the live data requests consume the provider's request quota.
+
+A successful readiness row promises neither issue-specific fit nor a route:
+proposal and Pickup must check fresh inputs again. A failed Dynamic-readiness row
+makes doctor nonzero while eligible Static work can still proceed in a Run,
+including when Dynamic access or limits are missing. Authority or invalid Static
+settings still stop that Run. Classification needs explicit valid limits even
+when it might discover a Static route without leaderboard access. The deadline
+starts before live routing preflight, including retained Static validation, and
+is not reset when the Run constructs its router. The explicit
+`git-loopy update --routing [keep|migrate]` and `init --routing [keep|migrate]` paths
+call this same readiness seam before saving. Opt-in init collects missing limits
+and explicitly authored associations after the fullscreen review; refusal or
+cancellation saves neither a Skill policy nor any other operator choice.
+They preserve Static route authority and require operator-owned Dynamic access
+and finite limits; doctor never makes that choice.
+This remains partial #567 work: automatic upgrade/Run migration
+enforcement, the remaining composed activation matrix, and final defaults are not
+delivered. Bare update and unselected-policy Runs retain their existing behavior.
 
 The Label row judges the presence of the names a Run reads and cannot create for
 itself — the triage roles, `parallel-safe`, `priority`, and `ready-for-agent`,

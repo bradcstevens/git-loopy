@@ -2689,6 +2689,9 @@ if [[ "${1:-}" == "--schema-version" ]]; then
   exit "${FAKE_TUI_PROBE_STATUS:-0}"
 fi
 printf '%s\n' "$label" >>"$FAKE_TUI_STARTED"
+printf '%s\n' "$*" >>"$FAKE_TUI_ARGV"
+printf '%s\n' "${TZ-<unset>}" >>"$FAKE_TUI_ZONE"
+printf '%s\n' "${TZDIR-<unset>}" >>"$FAKE_TUI_ZONE_DIR"
 delivered=0
 while IFS= read -r line; do
   delivered=$((delivered + 1))
@@ -2707,9 +2710,17 @@ EOF
 
 setup_tui_env() {
   local prefix="$1"
-  rm -f "$temp_dir/$prefix-tui.stdin" "$temp_dir/$prefix-tui.started"
+  rm -f "$temp_dir/$prefix-tui.stdin" "$temp_dir/$prefix-tui.started" \
+    "$temp_dir/$prefix-tui.argv" "$temp_dir/$prefix-tui.zone" \
+    "$temp_dir/$prefix-tui.zone-directory"
   export FAKE_TUI_STDIN="$temp_dir/$prefix-tui.stdin"
   export FAKE_TUI_STARTED="$temp_dir/$prefix-tui.started"
+  # What the launch actually handed the helper. Both belong to #597: the helper
+  # resolves the *viewing* machine's zone, which only works while this
+  # Orchestrator states no offset of its own and passes its environment through.
+  export FAKE_TUI_ARGV="$temp_dir/$prefix-tui.argv"
+  export FAKE_TUI_ZONE="$temp_dir/$prefix-tui.zone"
+  export FAKE_TUI_ZONE_DIR="$temp_dir/$prefix-tui.zone-directory"
   # A clone-local helper is an artifact of this distribution, so contract §16
   # requires exact Release-version equality; the default fake is a well-installed
   # one and a case that wants drift says so explicitly.
@@ -2760,6 +2771,52 @@ assert_equal \
   "helper stdin and replay log parity"
 grep -q '"type": "wrapper.run.end"' "$FAKE_TUI_STDIN" ||
   fail "helper never received the final Run event"
+
+# Human-facing time belongs to the viewer (#597, ADR-0058). The helper resolves
+# the zone of the machine a person is actually looking at, which it can only do
+# while this Orchestrator keeps out of the way: state no offset, and hand the
+# child the environment the operator launched from. Both are observed at the
+# process boundary, because an Orchestrator that quietly pinned a clock would
+# leave every other assertion in this file green.
+tui_repo="$temp_dir/tui-viewer-zone"
+tui_bin="$temp_dir/tui-viewer-zone-bin"
+make_repo "$tui_repo"
+write_fake_tools "$tui_bin"
+write_fake_tui "$tui_repo/.git-loopy/bin/git-loopy-tui" "clone-local"
+setup_tui_env "viewer-zone"
+export FAKE_GH_LOG="$temp_dir/tui-viewer-zone-gh.log"
+previous_tz="${TZ-}"
+previous_tz_set="${TZ+x}"
+export TZ="America/Denver"
+previous_tzdir="${TZDIR-}"
+previous_tzdir_set="${TZDIR+x}"
+export TZDIR="$temp_dir/viewer-zoneinfo"
+
+set +e
+run_entrypoint \
+  "$tui_repo" "$tui_bin" \
+  "$temp_dir/tui-viewer-zone.stdout" "$temp_dir/tui-viewer-zone.stderr" \
+  --interactive
+status=$?
+set -e
+if [[ -n "$previous_tz_set" ]]; then
+  export TZ="$previous_tz"
+else
+  unset TZ
+fi
+if [[ -n "$previous_tzdir_set" ]]; then
+  export TZDIR="$previous_tzdir"
+else
+  unset TZDIR
+fi
+assert_equal "0" "$status" "viewer-zone Run exit"
+[[ -s "$FAKE_TUI_STARTED" ]] || fail "viewer-zone Run never started the helper"
+assert_equal "" "$(<"$FAKE_TUI_ARGV")" \
+  "the shell launch states no offset, so the helper resolves the viewer's zone"
+assert_equal "America/Denver" "$(<"$FAKE_TUI_ZONE")" \
+  "the helper inherits the viewing machine's zone from the launch"
+assert_equal "$temp_dir/viewer-zoneinfo" "$(<"$FAKE_TUI_ZONE_DIR")" \
+  "the helper inherits the viewing machine's timezone database directory"
 
 # Discovery falls through to PATH only when the clone has no pinned helper. The
 # two fakes label themselves, so "which one ran" is observed rather than assumed.
@@ -3144,14 +3201,16 @@ write_pin_view() {
   local state="$2"
   local labels_json="$3"
   local body="$4"
+  local title="${5:-Pinned #$number}"
   jq -n \
     --argjson number "$number" \
     --arg state "$state" \
     --argjson labels "$labels_json" \
     --arg body "$body" \
+    --arg title "$title" \
     '{
       number: $number,
-      title: ("Pinned #" + ($number | tostring)),
+      title: $title,
       body: $body,
       labels: ($labels | map({name: .})),
       state: $state,
@@ -3247,6 +3306,33 @@ assert_pin_refused 45 no-sections \
   'missing `## What to build` and `## Acceptance criteria`'
 
 assert_pin_refused 46 missing "could not be read from the tracker"
+
+write_pin_view 47 "OPEN" '["ready-for-agent"]' "$pin_afk_body" "PRD: Planning document"
+assert_pin_refused 47 prd "is a planning document"
+write_pin_view 48 "OPEN" '["ready-for-agent"]' "$pin_afk_body" "Spec: Planning document"
+assert_pin_refused 48 spec "is a planning document"
+
+# A listed document is never enriched; a ticket renamed during enrichment is
+# excluded from the authoritative title instead.
+jq -s '.[0].title = "PRD: Planning document" | .[1].title = "Executable ticket"' \
+  "$FAKE_GH_VIEW_DIR/47.json" "$FAKE_GH_VIEW_DIR/48.json" >"$FAKE_GH_LIST_JSON"
+: >"$FAKE_GH_LOG"
+run_entrypoint "$pin_repo" "$pin_bin" "$temp_dir/planning.stdout" \
+  "$temp_dir/planning.stderr" 1 ||
+  fail "planning-only Pool did not exit cleanly"
+jq -se '
+  ([.[] | select(.type == "wrapper.pool.excluded") | .issue] == [47, 48])
+  and ([.[] | select(.type == "wrapper.pool.excluded") | .reason]
+    | all(. == "planning_document"))
+  and ([.[] | select(.type == "wrapper.afk_ready.collected") | .issues]
+    | all(. == []))
+' "$temp_dir/planning.stdout" >/dev/null ||
+  fail "planning documents reached the executable Pool"
+if grep -q '^issue view 47 ' "$FAKE_GH_LOG"; then
+  fail "listed planning document was enriched"
+fi
+grep -q '^issue view 48 ' "$FAKE_GH_LOG" ||
+  fail "authoritative title exclusion was not exercised"
 
 # The other half: an eligible pin is worked *instead of* the head of the order,
 # the Pickup Event says `pin` rather than crediting the order or a Priority

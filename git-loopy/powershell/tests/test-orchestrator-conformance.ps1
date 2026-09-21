@@ -50,11 +50,11 @@ $Discriminator = Get-Content `
     -Raw |
     ConvertFrom-Json -AsHashtable
 foreach ($Case in $Discriminator["cases"]) {
-    $Actual = Test-GitLoopyAfkReady -Body $Case["body"]
+    $Actual = Test-GitLoopyAfkReady -Body $Case["body"] -Title ([string]$Case["title"])
     Assert-Equal $Case["eligible"] $Actual "discriminator fixture: $($Case["id"])"
     # Wrapper contract §3.1 — the reason is drawn through the same production
     # seam as membership, so the two cannot drift.
-    $ActualReason = Get-GitLoopyAfkReadyExclusion -Body $Case["body"]
+    $ActualReason = Get-GitLoopyAfkReadyExclusion -Body $Case["body"] -Title ([string]$Case["title"])
     Assert-Equal `
         $Case["exclusion_reason"] `
         $ActualReason `

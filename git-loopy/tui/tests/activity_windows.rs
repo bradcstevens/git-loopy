@@ -259,6 +259,12 @@ fn scrolling_one_window_never_pauses_its_sibling_and_headers_open_the_right_log(
         column: 5,
         row: header as u16,
     });
+    assert_ne!(session.frame().selected, IssueRef::number(606));
+    session.handle_pointer(Pointer {
+        action: PointerAction::Release,
+        column: 5,
+        row: header as u16,
+    });
     assert_eq!(session.frame().selected, IssueRef::number(606));
 }
 

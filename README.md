@@ -162,11 +162,24 @@ uv tool install "git+https://github.com/bradcstevens/git-loopy@<unreleased-commi
 
 Once installed, `git-loopy upgrade` moves between Releases for you: it resolves
 the newest published Release (or the one `--to` names, or the ref `--edge`
-names), hands the move to the **Install channel** that placed the artifact it is
-running from, and then runs `git-loopy update`. A channel it cannot prove, or
+names), requires an explicit or recorded global keep-or-migrate routing choice,
+hands the move to the **Install channel** that placed the artifact it is
+running from, and then runs `git-loopy update --routing`. Unattended use without
+a recorded choice must supply `--routing keep` or `--routing migrate`; Config
+is saved only after the installed Runner's readiness checks pass. A channel it cannot prove, or
 cannot pin to one Release, changes nothing and prints the exact command instead
 — see
 [moving between Releases](git-loopy/python/README.md#moving-between-releases-git-loopy-upgrade).
+
+A local Python Run with saved Config also refuses before work until a routing choice
+is supplied or recorded. Use `git-loopy update --routing keep` or
+`git-loopy update --routing migrate` with `--project`/`--global`, or select
+`--route-policy static`/`dynamic` for one Run. Config is not rewritten by a Run;
+Retained Static work needs no leaderboard access even when Dynamic prerequisites
+are missing; uncovered Dynamic work is refused, not run on a fallback.
+Non-local activation remains deferred,
+so unselected GitHub Actions Runs retain their legacy path. This migration guard
+is not final Dynamic-default activation; see [routing migration](git-loopy/python/README.md#explicit-routing-migration).
 
 `git-loopy uninstall` takes the same installation back off the machine through
 the same proven channel, together with the global config-home, the installed
@@ -226,6 +239,7 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 | [`/codebase-audit`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/codebase-audit) | Audit a codebase line by line for junk files, dead code, and security holes before a push. |
 | [`/resolving-merge-conflicts`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/resolving-merge-conflicts) | Resolve merge or rebase conflicts hunk by hunk from each side's documented intent. |
 | [`/push`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/push) | Publish finished work: stage the intended changes, commit, push, and open a pull request when one is needed. |
+| [`/release`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/release) | Publish one release for all unreleased issues git-loopy completed, using the target project's versioning and release gates. Install this user-invoked skill separately in your agent; it is not a Required Skill in a Run. |
 
 ### Set up and extend the workflow
 

@@ -329,11 +329,9 @@ fn a_drag_that_wanders_down_over_the_queue_keeps_sizing_the_band() {
         "the grab outlives the pointer leaving the handle: a drag is measured \
          wherever it goes, or the band would stop following at the first row"
     );
-    // The other half of capture — that no *other* element answers the pointer
-    // meanwhile — costs nothing to assert and nothing to hold today, because
-    // this renderer has no Queue pointer path yet. It is where the collision
-    // ADR-0038 warns about would first show up.
+    session.handle_pointer(at(PointerAction::Release, grabbed + 4));
     assert_eq!(session.frame().selected, before);
+    assert_eq!(session.frame().screen, Screen::Dashboard);
 }
 
 #[test]

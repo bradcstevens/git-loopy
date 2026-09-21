@@ -165,19 +165,15 @@ from git_loopy.dynamic_route import (
     DynamicRouteDecision,
     DynamicRoutePrerequisites,
     DynamicRouter,
-    FreshHarnessCapabilities,
     ReusableRoute,
     RoutingAdmissionLedger,
     RoutingCallCancelled,
-    RoutingPrerequisiteError,
     RoutingProposal,
     RoutingRequest,
-    RoutingSourceError,
     RoutingUnavailable,
     RoutingUnavailableReason,
     SelectorCallResult,
-    refresh_harness_evidence,
-    resolve_prerequisites,
+    refresh_harness_evidence as _fetch_harness_evidence,
 )
 from git_loopy.emit import EventEmitter
 from git_loopy.live_read import SharedLiveRead
@@ -188,6 +184,10 @@ from git_loopy.measured_routing import (
     measured_routing_path,
 )
 from git_loopy.routing_input import build_routing_request
+from git_loopy.run_routing_preflight import (
+    resolve_run_routing_preflight,
+    routing_choice_refusal,
+)
 from git_loopy.route_publication import (
     RouteDeliveryStatus,
     RoutePublicationStore,
@@ -234,10 +234,7 @@ from git_loopy.run_environment_preflight import resolve_run_environment_prefligh
 from git_loopy.static_route import (
     HarnessCapabilities,
     RoutePolicy,
-    StaticRoute,
-    StaticRouteError,
     refresh_harness_capabilities,
-    validate_static_route,
 )
 from git_loopy.skill_install import (
     SkillInstallError,
@@ -279,6 +276,7 @@ from git_loopy.skill_run_preflight import (
     resolve_run_skill_preflight,
 )
 from git_loopy.bump_class_pickup import PickupBumpClassifier
+from git_loopy.lease_lifecycle import LeaseLifecycle, build_lease_lifecycle
 from git_loopy.bump_class_session import SessionBumpClassProposer
 from git_loopy.task_type_classifier import ClassifierPair
 from git_loopy.task_type_pickup import (
@@ -552,6 +550,41 @@ def _execution_host_capacity(
     return capacity
 
 
+def _make_lease_lifecycle(
+    config: RunConfig,
+    git: git_module.GitClient,
+    *,
+    run_id: str,
+    diag: logging.Logger,
+) -> LeaseLifecycle | None:
+    """Construct this Run's **Lease** lifecycle, or ``None`` when it holds none.
+
+    Dispatches on :attr:`RunConfig.issue_source` before anything else, because
+    the ``prds`` backend's issues are files in this worktree: there is no
+    shared remote ref two Runs could contend on, so there is no Lease to take.
+    A ``github`` Run delegates to
+    :func:`~git_loopy.lease_lifecycle.build_lease_lifecycle`, which answers
+    ``None`` for a clone whose remote names no repository.
+
+    ``None`` never fails the Run — it restores exactly the pre-ADR-0033
+    behaviour of one Run, unguarded — but it is always accompanied by a
+    diagnostic, because a Run that has quietly stopped guarding its issues is
+    indistinguishable from one that is guarding them.
+
+    Factored to module scope alongside :func:`_make_issue_source` for the same
+    reason: the composition :func:`run` performs is then a decision a test can
+    reach without standing up a whole Run.
+    """
+    if config.issue_source != "github":
+        return None
+    return build_lease_lifecycle(
+        git,
+        run_id=run_id,
+        env=os.environ,
+        warn=lambda message: diag.warning("%s", message),
+    )
+
+
 def _make_issue_source(
     config: RunConfig,
     repo_root: Path,
@@ -715,6 +748,17 @@ _AUTO_RESOLUTION_FALLBACK_COMMENT = (
     "Iteration and keeping the Lane branch as a breadcrumb. -- git-loopy"
 )
 """The single automated breadcrumb left on an issue that fell back to serial."""
+
+_LEASE_HELD_ELSEWHERE = "held by another Run's live Lease"
+"""**Pickup** skip reason: a rival Run answered, and its answer was no."""
+
+_LEASE_UNREADABLE = "Lease could not be taken (remote unreadable)"
+"""**Pickup** skip reason: the Lease probe failed, so nobody answered at all.
+
+Distinguished from :data:`_LEASE_HELD_ELSEWHERE` because only one of them is
+a fact about the work. Conflating them would let a Run report a Pool it never
+finished reading as one it was refused (#390, ADR-0033 §8.3).
+"""
 
 
 def _integration_worktree_path(
@@ -933,16 +977,6 @@ async def _refresh_harness_capabilities(
     return await refresh_harness_capabilities(warn=warn)
 
 
-#: The one **Execution host** whose authenticated harness is the harness this
-#: capability read can actually reach. Every other placement opens its work
-#: sessions on a machine that authenticates as *itself* — the Actions host's
-#: built-in token, on a runner the operator never logged into — so the listing
-#: read here describes a different installation, which is precisely what
-#: ADR-0057 excludes as the authority for a Static route. Derived from the seam's
-#: own constant rather than spelled again, so "which placement is in-process"
-#: keeps one answer.
-_VERIFIABLE_EXECUTION_HOST = execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT
-
 #: The two refusals a **Routing preparation** proposal may draw at its own
 #: **Pickup** that say something about *the proposal* rather than about routing:
 #: it aged past its validity window while the Run worked something else, or the
@@ -956,128 +990,6 @@ _DISCARDABLE_PROPOSAL_REFUSALS: frozenset[RoutingUnavailableReason] = frozenset(
         RoutingUnavailableReason.INVALID_PROPOSAL,
     }
 )
-
-
-def _remote_placement_refusal(config: RunConfig) -> str | None:
-    """Say why this host's harness cannot answer for a remote placement, or ``None``.
-
-    Shared by both selected policies because both rest on the same authority:
-    ADR-0057 wants the verdict from *the authenticated harness the Run actually
-    uses*, and names "another CLI installation" as explicitly not it. A
-    ``github-actions`` contribution opens its work session on a GitHub-hosted
-    runner authenticating as itself, so the operator's own listing describes a
-    different installation — and under a **Dynamic route** it is worse than
-    wrong in the abstract: the selector would *elect* from that listing, so the
-    Run would not merely mis-verify a route, it would choose one the runner may
-    have no access to at all. Refused by name rather than downgraded, which is
-    the criterion's own "fail explicitly before work".
-    """
-    if config.execution_host == _VERIFIABLE_EXECUTION_HOST:
-        return None
-    return (
-        f"the {config.execution_host!r} Execution host opens its work "
-        "sessions on a machine that authenticates as itself, so this "
-        "machine's model listing is not the listing that would run them. "
-        "A selected route can only be verified for the "
-        f"{_VERIFIABLE_EXECUTION_HOST!r} placement — run there, or leave "
-        "route_policy unset for this one."
-    )
-
-
-def _configured_static_routes(
-    config: RunConfig,
-) -> tuple[tuple[str, StaticRoute], ...]:
-    """Every Static route this Run could resolve to, each with what to call it.
-
-    The run-wide default, every ``[routing]`` entry, and the **Escalation rung**
-    where the operator configured one — all under the run-level context tier,
-    which is the whole point of the tier being run-level rather than a
-    ``[routing]`` column. The classifier's own pair is deliberately absent:
-    ADR-0057 leaves Subagents and non-Iteration sessions on their existing
-    settings, and the **Task-type classifier** is not an issue-owning Agent.
-
-    Named rather than numbered, because the refusal an operator reads has to
-    say *which* entry to go and fix.
-
-    Under a **Dynamic route** the run-wide default is omitted unless an explicit
-    flag or environment pin suppressed routing (#561). It is not a route this
-    Run can resolve to: every Task type the ``[routing]`` table does not cover
-    goes to the **Route selector**, and a selector that is unavailable refuses
-    rather than falling back. Verifying it anyway would refuse the whole Run
-    over a default the operator never asked to use — most sharply for the
-    kit's *own* built-in default on an account that does not carry it.
-    """
-    routes: list[tuple[str, StaticRoute]] = []
-    default_can_run = (
-        config.route_policy is not RoutePolicy.DYNAMIC or config.routing_suppressed
-    )
-    if default_can_run:
-        routes.append(
-            (
-                "the run-wide default",
-                StaticRoute(
-                    config.model, config.reasoning_effort, config.context_tier
-                ),
-            )
-        )
-    for key in sorted(config.routing):
-        model, effort = config.routing[key]
-        routes.append(
-            (f"[routing] {key}", StaticRoute(model, effort, config.context_tier))
-        )
-    if config.escalation_rung is not None:
-        model, effort = config.escalation_rung
-        routes.append(
-            ("[escalation]", StaticRoute(model, effort, config.context_tier))
-        )
-    return tuple(routes)
-
-
-async def _static_route_preflight(
-    config: RunConfig, *, warn: Callable[[str], None]
-) -> str | None:
-    """Verify every configured Static route, or say why the Run cannot start.
-
-    Answers ``None`` when there is nothing to refuse — which is *always*, and
-    without a round trip, for a Run that selected no policy (#560, ADR-0057).
-
-    Whole-configuration rather than per-Pickup. "Fail explicitly before work"
-    is only true of a check that runs before the first session, and checking
-    only the route this Pickup resolved would leave a broken ``[routing]``
-    entry to be discovered by the Iteration that finally picks up an issue
-    carrying that Task type — after the Run has already spent work. It also
-    makes the refusal deterministic: the same Config refuses the same way
-    whatever the Pool happened to contain.
-
-    **The placement is checked before the routes are**, because it decides
-    whether this host's answer is the answer at all.
-
-    A **Dynamic route** comes through here too (#561): under it a configured
-    ``[routing]`` entry still wins over the selector (AC5), so an entry the
-    harness refuses is just as dead as it is under a Static route — and the
-    selector's own candidates need no check here, having been elected from that
-    same listing.
-
-    Args:
-        config: The Run's frozen configuration.
-        warn: Sink for the observed cause of an unreadable listing, which the
-            ``unverifiable`` refusal can only guess at.
-    """
-    if config.route_policy is RoutePolicy.UNSELECTED:
-        return None
-    placement_refusal = _remote_placement_refusal(config)
-    if placement_refusal is not None:
-        return placement_refusal
-    routes = _configured_static_routes(config)
-    if not routes:
-        return None
-    capabilities = await _refresh_harness_capabilities(warn=warn)
-    for name, route in routes:
-        try:
-            validate_static_route(route, capabilities)
-        except StaticRouteError as exc:
-            return f"{name}: {exc}"
-    return None
 
 
 class DynamicRouteUnavailable(RuntimeError):
@@ -1107,62 +1019,17 @@ def _assessed_task_type(resolution: RoutingResolution) -> str:
 
 @dataclass(frozen=True)
 class _DynamicRoutingSetup:
-    """Everything one Run needs to route dynamically, resolved once at preflight.
+    """The Run's authorized routing budget and any complete selector prerequisites.
 
-    One object rather than three constructor parameters because the three are
-    never individually meaningful: a Run either selected the policy and has all
-    of them, or did not and has none. It also keeps the "did this Run select
-    the policy?" question answerable by a single ``is None``, the way the
-    **Task-type classifier**'s pair already is.
+    Classification may discover a Static route without leaderboard access. It
+    still needs explicit limits and shares their ledger with any Route selector.
+    Missing prerequisites permit no selector, not an unmetered classifier.
     """
 
-    prerequisites: DynamicRoutePrerequisites
+    prerequisites: DynamicRoutePrerequisites | None
+    admission_ledger: RoutingAdmissionLedger
     feedback_loops: tuple[FeedbackLoop, ...]
     measured: MeasuredRouting | None
-
-
-def _dynamic_route_preflight(
-    config: RunConfig, env: Mapping[str, str], *, repo_root: Path | None = None
-) -> tuple[_DynamicRoutingSetup | None, str | None]:
-    """Resolve the Run's dynamic routing, or say why it cannot start.
-
-    Answers ``(None, None)`` for every Run that did not select the policy, so
-    the legacy and Static paths keep costing nothing.
-
-    Resolved once for the whole Run rather than per Pickup, for the reason
-    ADR-0057 gives: the deadline, the routing-credit allowance, the selector
-    concurrency and the operator's own Artificial Analysis authorization are
-    *bounds the operator agreed to*, not defaults the Runner may invent, so a
-    Run missing one has nothing to fall back to — and discovering that at the
-    first Pickup means a session was already opened under a route nobody could
-    have elected. "Missing prerequisites start no dynamic work" is only true of
-    a check that runs before the first session.
-
-    The repository's own two contributions — its declared **Feedback loops**
-    and its **Measured routing** artifact — are read here for a weaker but
-    real reason: both are properties of the checkout rather than of an issue,
-    so a per-Pickup read would spend I/O to answer the same question again.
-    Neither can refuse the Run: an unreadable ``AGENTS.md`` or a malformed
-    artifact leaves the selector with less context, which is a worse assessment
-    and not an unsafe one.
-    """
-    if config.route_policy is not RoutePolicy.DYNAMIC:
-        return None, None
-    placement_refusal = _remote_placement_refusal(config)
-    if placement_refusal is not None:
-        return None, placement_refusal
-    try:
-        prerequisites = resolve_prerequisites(config, env)
-    except RoutingPrerequisiteError as exc:
-        return None, str(exc)
-    return (
-        _DynamicRoutingSetup(
-            prerequisites=prerequisites,
-            feedback_loops=_declared_feedback_loops(repo_root),
-            measured=_declared_measured_routing(repo_root),
-        ),
-        None,
-    )
 
 
 def _declared_feedback_loops(repo_root: Path | None) -> tuple[FeedbackLoop, ...]:
@@ -1192,6 +1059,8 @@ def _make_dynamic_router(
     *,
     selector_assess: Callable[..., Awaitable[SelectorCallResult]],
     recorder: Callable[[DynamicRouteDecision], Awaitable[object]],
+    admission_ledger: RoutingAdmissionLedger,
+    warn: Callable[[str], None],
 ) -> DynamicRouter:
     """Assemble the Run's router, as a module seam tests substitute.
 
@@ -1216,32 +1085,13 @@ def _make_dynamic_router(
     )
     return DynamicRouter(
         evidence_fetch=SharedLiveRead(source.fetch),
-        capabilities_fetch=SharedLiveRead(_fetch_harness_evidence),
+        capabilities_fetch=SharedLiveRead(
+            lambda: _fetch_harness_evidence(warn=warn)
+        ),
         selector_assess=selector_assess,
         recorder=recorder,
-        admission_ledger=RoutingAdmissionLedger(
-            deadline_seconds=prerequisites.deadline_seconds,
-            routing_credit_allowance=prerequisites.routing_credit_allowance,
-            selector_concurrency=prerequisites.selector_concurrency,
-        ),
+        admission_ledger=admission_ledger,
     )
-
-
-async def _fetch_harness_evidence() -> FreshHarnessCapabilities:
-    """The router's eligibility-and-capacity read, as a module seam.
-
-    Raises rather than answering ``None``, because the router's port is typed
-    for a value and turns every exception into
-    ``capabilities_unavailable`` — the same verdict, reached through the
-    contract the router already has, instead of a second ``None``-means-unknown
-    convention for the same fact.
-    """
-    fresh = await refresh_harness_evidence()
-    if fresh is None:
-        raise RoutingSourceError(
-            "the authenticated harness listing could not be read"
-        )
-    return fresh
 
 
 #: The **Wind-down** ladder as a rung lookup, derived from the family's ordered
@@ -1285,6 +1135,7 @@ class _Loop:
         task_type_client: TaskTypeLabelClient | None = None,
         route_tracker: gh_module.GitHubClient | None = None,
         dynamic_routing: "_DynamicRoutingSetup | None" = None,
+        lease: LeaseLifecycle | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -1302,6 +1153,11 @@ class _Loop:
         self._skill_exposure = skill_preflight.exposure
         self._source = source
         self._diag = diag
+        #: This Run's **Lease**s, or ``None`` when Leases are not in force —
+        #: the PRDs backend has no remote to contend on, and a clone with no
+        #: resolvable GitHub repository cannot address a Lease ref. ``None``
+        #: restores exactly the pre-ADR-0033 behaviour: one Run, unguarded.
+        self._lease = lease
         self._include_prs = include_prs
         self._rollup = IterationRollupAccumulator(denomination=denomination)
         # An extra, Run-scoped Consumption observer (#309). The rollup owns one
@@ -1445,10 +1301,9 @@ class _Loop:
                 tracker=route_tracker,
             )
         )
-        # The **Route selector**'s router, or `None` for every Run that did not
-        # select the policy (#561, ADR-0057) — the same "a `None` makes the
-        # whole object inert" discipline the classifier above keeps, so no
-        # Pickup carries a second copy of "does this Run route dynamically?".
+        # The **Route selector**'s router, or `None` when not selected or its
+        # prerequisites are unavailable. Absence buys no assessment; it is not
+        # authority for uncovered Dynamic work to use the run-wide default.
         #
         # Assembled here for the classifier's reason, doubled. Two of its four
         # ports need things that exist only once this constructor has run: the
@@ -1458,7 +1313,7 @@ class _Loop:
         # AC9 requires before work is an Event on this Run's own log.
         self._dynamic_router = (
             None
-            if dynamic_routing is None
+            if dynamic_routing is None or dynamic_routing.prerequisites is None
             else _make_dynamic_router(
                 dynamic_routing.prerequisites,
                 selector_assess=SessionRouteSelector(
@@ -1474,9 +1329,12 @@ class _Loop:
                     send_timeout_seconds=config.send_timeout_seconds,
                     skill_exposure=self._skill_exposure,
                     cost_meter=self._session_observer,
+                    on_routing_credits=dynamic_routing.admission_ledger.observe_credits,
                     warn=self._diag.warning,
                 ),
                 recorder=self._record_dynamic_route,
+                admission_ledger=dynamic_routing.admission_ledger,
+                warn=self._diag.warning,
             )
         )
         self._dynamic_routing = dynamic_routing
@@ -1838,6 +1696,23 @@ class _Loop:
     async def _run_one_iteration(
         self, iter_num: int
     ) -> tuple[str, int, int]:
+        """Run one AFK Iteration and give back every **Lease** it took.
+
+        The release is in a ``finally`` because a Lease must not outlive the
+        Iteration that took it *however* that Iteration ends — returned,
+        raised, or cancelled by a **Wind-down**. Leaving one behind would park
+        its issue for a whole TTL while this Run, still alive, moved on
+        (ADR-0033 §5.3). It cannot be guaranteed against ``SIGKILL``, which is
+        the one case expiry is for.
+        """
+        try:
+            return await self._iterate(iter_num)
+        finally:
+            self._release_all_leases()
+
+    async def _iterate(
+        self, iter_num: int
+    ) -> tuple[str, int, int]:
         """Run a single AFK iteration.
 
         Returns:
@@ -2093,7 +1968,9 @@ class _Loop:
             #    closes the issue via gh; the PRDs backend always returns
             #    [] (the agent owns the `git mv ... done/` step).
             with telemetry.span("git_loopy.enforce_closures"):
-                completions = self._handle_completions_safely(pool, new_commits)
+                completions = self._handle_completions_safely(
+                    pool, new_commits, leased_pool=True
+                )
 
             if issue_binding.active_ref is None:
                 fallback = self._infer_active_binding(
@@ -2165,7 +2042,13 @@ class _Loop:
             #    locally. Non-fatal: a missing remote/upstream, an auth failure,
             #    or a non-fast-forward warns and the loop carries on. Like the
             #    Checkpoint, a push is NOT Strike progress (it creates no commit).
-            self._maybe_push(iter_num, new_commits, checkpoint_sha)
+            self._maybe_push(
+                iter_num,
+                new_commits,
+                checkpoint_sha,
+                active_ref=active.ref,
+                active_kind=active.kind,
+            )
 
             # 10) Observe the ending, charge its issue, then read the shared guard.
             commits_in_iter = len(new_commits)
@@ -2413,43 +2296,62 @@ class _Loop:
 
         Raises:
             DynamicRouteUnavailable: When this Run selected the **Dynamic
-                route**, no Static route applies to the settled **Task type**,
-                and the route could not be elected (#561). Raised rather than
+                route** and no Static route can be established within the
+                authorized classification limits, or the required selector
+                cannot elect a route (#561). Raised rather than
                 returned because there is no second answer to return: AC11
                 forbids the stale, default and cheaper-selector fallbacks, so
                 the only honest outcome is that this issue is not worked this
                 time. Classification itself still never raises — a failure to
                 acquire a *label* costs the issue nothing.
         """
-        task_type_labelled = await self._labelled_for_routing(item)
+        if (
+            self._config.route_policy is RoutePolicy.DYNAMIC
+            and not self._config.routing_suppressed
+            and self._dynamic_routing is None
+        ):
+            task_type_labelled = item
+        else:
+            task_type_labelled = await self._labelled_for_routing(item)
         if isinstance(task_type_labelled, RoutingUnavailable):
             raise DynamicRouteUnavailable(task_type_labelled.reason.value)
+        resolution = routed
+        if task_type_labelled is not item:
+            try:
+                resolution = self._resolve_route(
+                    task_type_labelled, warn=lambda _message: None
+                )
+            except TaskTypeError as exc:
+                self._diag.warning(
+                    "issue #%s: inferred task type did not re-route (%s); keeping "
+                    "the pair its Pickup admitted it on",
+                    item.ref,
+                    exc,
+                )
+                task_type_labelled = item
+            else:
+                self._diag.info(
+                    "issue #%s classified as %s; routed to %s @ %s",
+                    task_type_labelled.ref,
+                    ", ".join(resolution.task_type_keys) or "nothing",
+                    resolution.model,
+                    resolution.reasoning_effort,
+                )
+        self._require_route_selector(resolution)
         labelled = await self._bump_classifier.labelled(task_type_labelled)
-        if task_type_labelled is item:
-            return labelled, await self._bound_route(labelled, routed)
-        try:
-            resolution = self._resolve_route(labelled, warn=lambda _message: None)
-        except TaskTypeError as exc:
-            # Unreachable while the classifier writes only closed-taxonomy keys,
-            # and handled anyway: by this point the issue is *bound*, so the
-            # refusal that would have been a skip at admission has nowhere to go
-            # but the Iteration. Keeping the admitted pair loses the inference
-            # and nothing else.
-            self._diag.warning(
-                "issue #%s: inferred task type did not re-route (%s); keeping "
-                "the pair its Pickup admitted it on",
-                item.ref,
-                exc,
-            )
-            return item, await self._bound_route(item, routed)
-        self._diag.info(
-            "issue #%s classified as %s; routed to %s @ %s",
-            labelled.ref,
-            ", ".join(resolution.task_type_keys) or "nothing",
-            resolution.model,
-            resolution.reasoning_effort,
-        )
         return labelled, await self._bound_route(labelled, resolution)
+
+    def _require_route_selector(self, resolution: RoutingResolution) -> None:
+        """Uncovered Dynamic work needs a selector, never a placeholder default."""
+        if (
+            self._config.route_policy is RoutePolicy.DYNAMIC
+            and not self._config.routing_suppressed
+            and self._dynamic_router is None
+            and not static_route_applies(resolution)
+        ):
+            raise DynamicRouteUnavailable(
+                RoutingUnavailableReason.PREREQUISITE_MISSING.value
+            )
 
     async def _bound_route(
         self, item: AfkReadyItem, resolution: RoutingResolution
@@ -2475,7 +2377,11 @@ class _Loop:
         self, pair: ClassifierPair, item: AfkReadyItem
     ) -> str | None:
         """Admit and meter each actual classification, never a cached label read."""
-        meter = RoutingCostMeter(self._session_observer)
+        on_credits = (
+            None if self._dynamic_routing is None
+            else self._dynamic_routing.admission_ledger.observe_credits
+        )
+        meter = RoutingCostMeter(self._session_observer, on_routing_credits=on_credits)
         proposer = SessionTaskTypeProposer(
             client=self._client,
             config=self._config,
@@ -2493,13 +2399,21 @@ class _Loop:
             try:
                 output = await proposer(pair, item)
             except asyncio.CancelledError:
-                raise RoutingCallCancelled(meter.drain()) from None
-            return SelectorCallResult(output=output, routing_credits=meter.drain())
+                reported = meter.reported_routing_credits
+                credits = meter.drain()
+                raise RoutingCallCancelled(
+                    credits, reported,
+                ) from None
+            reported = meter.reported_routing_credits
+            credits = meter.drain()
+            return SelectorCallResult(
+                output=output, routing_credits=credits,
+                reported_routing_credits=reported,
+            )
 
-        router = self._dynamic_router
-        if router is None:
+        if self._dynamic_routing is None:
             return await proposer(pair, item)
-        result = await router.classify(call)
+        result = await self._dynamic_routing.admission_ledger.classify(call)
         if isinstance(result, RoutingUnavailable):
             self._classification_denials[item.ref] = result
             return None
@@ -2527,7 +2441,7 @@ class _Loop:
         type the operator routed, an explicit flag or environment pin, and a
         configured **Escalation rung** — :func:`static_route_applies` is where
         that list lives, so the rule reads the same here as it does on the
-        record. Those are the routes ``_static_route_preflight`` already
+        record. Those are the routes ``resolve_run_routing_preflight`` already
         verified against the harness, so the two halves cover the Run between
         them with no gap and no overlap.
 
@@ -2566,6 +2480,7 @@ class _Loop:
         something a cache may participate in either.
         """
         router = self._dynamic_router
+        self._require_route_selector(resolution)
         if router is None or static_route_applies(resolution):
             return resolution
         request = self._routing_request(item, resolution)
@@ -2648,6 +2563,9 @@ class _Loop:
             prior_attempts=self._attempt_evidence.prior_attempts(item.ref),
             feedback_loops=_declared_feedback_loops(self._git.root),
             measured=_declared_measured_routing(self._git.root),
+            work_context_tier=(
+                self._config.context_tier if self._config.context_tier_override else None
+            ),
         )
 
     def _start_preparation_pass(
@@ -3030,7 +2948,14 @@ class _Loop:
             except TaskTypeError as exc:
                 return f"routing refused: {exc}"
             self._routes[item.ref] = resolution
-            return None
+            # **Taking the Lease is the last step of Pickup** (ADR-0033 §2.4).
+            # Last, so a candidate this Run would have passed over anyway never
+            # costs a round trip or a Lease; and *inside* `admit`, because a
+            # Lease another Run holds must behave exactly like every other
+            # refusal here — a recorded skip that moves the ordered walk to the
+            # next candidate (§2.2) — rather than a raise that would end a whole
+            # Run over an issue somebody else is simply already working.
+            return self._take_lease_at_pickup(item)
 
         while True:
             pickup = pick_serial(pool, admit=admit, pin=self._config.issue_pin)
@@ -3045,6 +2970,10 @@ class _Loop:
                 # behind it. The ordered walk remains the only dispatcher.
                 routing_refusals[pickup.item.ref] = f"dynamic route unavailable: {exc}"
                 self._routes.pop(pickup.item.ref, None)
+                # The Lease `admit` took for this candidate must go back, or
+                # the walk would leave a Lease on an issue no Run is working
+                # and park it for a whole TTL (ADR-0033 §2.5).
+                self._release_lease(pickup.item.ref)
                 continue
             self._routes[bound.ref] = resolution
             pickup = dataclass_replace(pickup, item=bound)
@@ -3076,6 +3005,87 @@ class _Loop:
                 resolution=resolution,
             )
         return pickup
+
+    def _take_lease_at_pickup(
+        self, item: AfkReadyItem
+    ) -> str | AdmissionRefusal | None:
+        """Take ``item``'s **Lease**, or say why this **Pickup** may not happen.
+
+        Returns ``None`` to admit the candidate, or the refusal the ordered
+        walk records as a **Pickup skip**.
+
+        A Lease is a GitHub *issue's*. A PR candidate and the PRDs backend
+        pass through unguarded — and the PR is the trap worth naming, because
+        its ``ref`` is an ``int`` exactly like an issue's, so only ``kind``
+        separates them. Leasing on the number alone would put PR #412 and
+        issue #412 on one ``refs/heads/git-loopy/leases/issue-412``, and each
+        would lock the other out of an issue it has nothing to do with.
+        """
+        if self._lease is None or item.kind != "issue" or not isinstance(item.ref, int):
+            return None
+        take = self._lease.take(item.ref)
+        if take.granted:
+            return None
+        if self._lease.disabled():
+            # The refusal that proved this clone can never write a Lease ref
+            # also proved a Lease here protects nothing, so refusing the work
+            # buys nothing. The lifecycle has already warned that exclusivity
+            # is off; admit the candidate unguarded rather than end a Run that
+            # would otherwise do every bit of its work.
+            return None
+        if take.verdict == "refused":
+            # Not a conflict: another Run is working it, which is the mechanism
+            # working (ADR-0033 §8.2). Skipped silently rather than warned.
+            return "held by another Run's live Lease"
+        # An unreadable Lease remote is a read that did not happen, not this
+        # candidate refusing work (#542, ADR-0047) — the same distinction the
+        # **Readiness** branch above draws. It matters because a systemic
+        # failure (network down, credentials expired) refuses *every*
+        # candidate this way, and a terminal outcome that called that
+        # `all_skipped` would report a fact about the Pool that nobody ever
+        # established.
+        return AdmissionRefusal(
+            reason="Lease could not be taken (remote unreadable)",
+            unresolved=True,
+        )
+
+    def _release_lease(self, ref: int | str) -> None:
+        """Give back one issue's **Lease**, if this Run holds it.
+
+        Idempotent and never raising: release runs on the success path and on
+        every handled failure path alike, so it must not be able to turn a
+        finished Iteration into a crashed one.
+        """
+        if self._lease is None or not isinstance(ref, int):
+            return
+        self._lease.release(ref)
+
+    def _release_all_leases(self) -> None:
+        """Free every issue this Run still holds, at the end of an Iteration."""
+        if self._lease is not None:
+            self._lease.release_all()
+
+    def _leased(self, ref: int | str, action: str, *, kind: str = "issue") -> bool:
+        """**The fence**: may this Run perform ``action`` on ``ref``? (ADR-0033 §4.4)
+
+        Asked immediately before each *individual* side effect, never once for
+        a batch. With no Lease in force the answer is yes, which is exactly the
+        behaviour that shipped before the Lease existed.
+
+        ``kind`` must be passed for anything that is not a GitHub issue. Only
+        issues are Lease-governed, and a PR's ``ref`` is an ``int`` just like
+        an issue's, so asking about one by number alone would deny it at
+        ``hold is None`` — refusing writes over a Lease that was never its to
+        hold.
+        """
+        if self._lease is None or kind != "issue" or not isinstance(ref, int):
+            return True
+        if self._lease.disabled():
+            # Same answer as no lifecycle at all: a Lease this clone was never
+            # allowed to take cannot be lost, so gating writes on one would
+            # discard work to protect nothing.
+            return True
+        return self._lease.fence(ref, action)
 
     def _finish_unworked_iteration(
         self, iter_num: int, pickup: SerialPickup
@@ -3114,6 +3124,14 @@ class _Loop:
         """
         assert pickup.skipped
         unresolved = tuple(skip.ref for skip in pickup.skipped if skip.unresolved)
+        # Name the refusals rather than assume them. Readiness is no longer the
+        # only read that can fail to complete: since #390 activated the Lease,
+        # an unreadable Lease remote is unresolved too, and an operator sent to
+        # `gh auth status` over a Lease ref they cannot push has been sent to
+        # the wrong place entirely.
+        unresolved_reasons = tuple(
+            dict.fromkeys(skip.reason for skip in pickup.skipped if skip.unresolved)
+        )
         outcome = unbound_pool_outcome(
             candidates=len(pickup.skipped),
             waiting=sum(1 for skip in pickup.skipped if skip.waiting_on_blocker),
@@ -3121,16 +3139,17 @@ class _Loop:
         )
         if outcome == "preflight_failed":
             self._diag.error(
-                "serial Pickup bound nothing, and the readiness of %d of the %d "
-                "candidate(s) in the Pool could not be read (%s); an unread "
-                "candidate is unknown, not refused, so this Run will not report "
-                "the Pool as one it could take no work from. Check "
-                "`gh auth status`, this host's network path to the tracker, and "
+                "serial Pickup bound nothing, and %d of the %d candidate(s) in "
+                "the Pool could not be read (%s: %s); an unread candidate is "
+                "unknown, not refused, so this Run will not report the Pool as "
+                "one it could take no work from. Check `gh auth status`, this "
+                "host's network path to the tracker and to `origin`, and "
                 "whether those issues' blockers live in a repository this token "
                 "can see, then re-run.",
                 len(unresolved),
                 len(pickup.considered),
                 ", ".join(f"#{ref}" for ref in unresolved),
+                "; ".join(unresolved_reasons),
             )
             self._finish_iteration(iter_num, outcome=outcome)
             # Reported as `preflight_failed`, routed under its own name: see
@@ -3230,6 +3249,8 @@ class _Loop:
         iter_num: int,
         new_commits: list[git_module.Commit],
         checkpoint_sha: str | None,
+        active_ref: int | str | None = None,
+        active_kind: str = "issue",
     ) -> bool:
         """Push the current branch to its upstream after an iteration's new commits.
 
@@ -3254,6 +3275,12 @@ class _Loop:
         """
         if not new_commits and checkpoint_sha is None:
             return False
+        if active_ref is not None and not self._leased(
+            active_ref, "push", kind=active_kind
+        ):
+            # **The fence** (ADR-0033 §4.4). A Run that was stolen from must
+            # not push the work it did under a Lease it no longer holds.
+            return False
         try:
             self._git.push()
         except git_module.GitError as exc:
@@ -3269,6 +3296,8 @@ class _Loop:
         self,
         pool: list[AfkReadyItem],
         new_commits: list[git_module.Commit],
+        *,
+        leased_pool: bool = False,
     ) -> list[Any]:
         """Call ``source.handle_completions`` with crash containment.
 
@@ -3276,11 +3305,42 @@ class _Loop:
         abort the iteration — the commit accounting and strike
         bookkeeping still need to run. Returns an empty list on
         failure (logged at WARNING via the diagnostics logger).
+
+        ``leased_pool`` says whether ``pool`` is one this Run took **Leases**
+        over, and only then is **the fence** applied to it (ADR-0033 §4.4).
+        This is the runner's issue *close* and its accompanying *comment*, the
+        two loudest writes it makes, and a Run whose Lease was stolen must
+        make neither: the Run that took the issue over is the one entitled to
+        say it is done. Off by default, because a caller whose pool was never
+        Lease-governed — the PRDs backend, or any pool assembled from items no
+        **Pickup** took a Lease for — would have every ref denied at ``hold is
+        None`` and close nothing at all. Deny-by-default is right for the
+        fence and wrong for whether to ask it. A **Lane**'s completion pool
+        *is* Lease-governed and passes ``True``.
+
+        It is fenced by narrowing the pool rather than by refusing the call,
+        because the pool *is* the whitelist ``_handle_issue_closures`` filters
+        stray closing keywords against (``sources.py``): an issue the fence
+        denies simply is not closable. Gating the whole batch on one ref would
+        be the "never once for a batch" mistake in both directions — it would
+        let a Lease on one issue authorise closing another, and in Parallel
+        mode it would let one Lane's lost Lease suppress every other Lane's
+        completions. Only ``kind == "issue"`` items are asked about: a PR's
+        ``ref`` is an ``int`` too, but no Lease ref names one, and dropping PR
+        items here would hide every PR-head advance from progress detection
+        and earn Strikes for an Iteration that was progressing.
         """
+        guarded = pool
+        if leased_pool:
+            guarded = [
+                item
+                for item in pool
+                if item.kind != "issue" or self._leased(item.ref, "issue close")
+            ]
         try:
             return list(
                 self._source.handle_completions(
-                    pool=pool, new_commits=new_commits
+                    pool=guarded, new_commits=new_commits
                 )
             )
         except Exception as exc:  # pragma: no cover - defensive
@@ -3750,6 +3810,7 @@ class _ParallelLoop:
         route_tracker: gh_module.GitHubClient | None = None,
         execution_host: execution_host_module.ExecutionHost | None = None,
         dynamic_routing: "_DynamicRoutingSetup | None" = None,
+        lease: LeaseLifecycle | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -3810,6 +3871,19 @@ class _ParallelLoop:
         # exception. Keep the candidate cached but ineligible for this Run so
         # the terminal classifier can honestly report all_skipped.
         self._rolling_refused: set[int | str] = set()
+        # The subset of :attr:`_rolling_refused` a **Lease** *read* refused
+        # rather than a rival's answer. Kept apart because the two are not the
+        # same fact: a rival holding the issue is the mechanism working, while
+        # a probe that failed established nothing at all — so only this set
+        # may make the Run's terminal outcome `preflight_failed` rather than
+        # the `all_skipped` that would assert a refusal nobody read.
+        self._lease_unreadable: set[int | str] = set()
+        #: This Run's **Lease**s — the *same* lifecycle the embedded serial
+        #: driver holds, deliberately, because a Run must not contend with
+        #: itself: one object knows every issue this Run holds, whichever path
+        #: took it, so a Lane and a serial **Iteration** can never both be
+        #: granted one issue. ``None`` when Leases are not in force.
+        self._lease = lease
         # Bounded adaptive Lane concurrency (#219 §6, #309). The bound
         # **Execution host** declares the safety ceiling. Under sustained
         # **Integration** backpressure, 429s, AI-credit or host/setup pressure,
@@ -3835,6 +3909,7 @@ class _ParallelLoop:
                 eligible=self._lane_candidate_eligible,
                 cacheable=self._lane_candidate_cacheable,
                 on_membership_read=self._emit_membership_read,
+                read_refused=self._lane_lease_unreadable,
             )
             self._scheduler = rolling_scheduler.RollingScheduler(
                 diag=diag,
@@ -3855,6 +3930,12 @@ class _ParallelLoop:
         # reclamation needs this alongside the workspace to close interrupted
         # accounting after salvaging the branch.
         self._open_lane_contributions: dict[str, rolling_scheduler.Contribution] = {}
+        # The issues a **Lane** holds a **Lease** on. Recorded at the take and
+        # consulted at every release, so a release authorises itself on this
+        # Run having actually taken *that* Lane Lease rather than on the bare
+        # ref: a Lease the serial path took, or a ref that never carried one,
+        # is never deleted from here (ADR-0033 §5.4).
+        self._lane_leases: set[int] = set()
         # The contributions Run-exit reclamation closed out rather than the
         # work boundary doing it (#452).  Kept so **Demotion** can tell an
         # interrupted contribution from a failed one — see
@@ -3933,6 +4014,7 @@ class _ParallelLoop:
             task_type_client=task_type_client,
             route_tracker=route_tracker,
             dynamic_routing=dynamic_routing,
+            lease=lease,
         )
 
     def request_stop_drain(self) -> None:
@@ -4824,6 +4906,136 @@ class _ParallelLoop:
     async def _run_lane_lifecycle(
         self, reservation: rolling_scheduler.Reservation
     ) -> None:
+        """Drive one reservation's lifecycle, releasing a **Lease** it still owes.
+
+        A Lane task returning is *not* the end of the issue's work, which is
+        the trap here. §3.9 frees a Lane the instant its contribution is
+        admitted, and a contribution that finishes against a full
+        **Integration backlog** parks: this task returns while the
+        contribution is integrated later, from inside whichever other
+        contribution's ``finalize()`` drains the FIFO. Releasing here would
+        free the issue for a rival Run while this Run still intends to publish
+        and close it — and would then trip this Run's *own* fence, so the
+        parked contribution could never land.
+
+        So the Lease is given back where the contribution finishes
+        (:meth:`_finalize_contribution`, the single such seam), and this
+        ``finally`` is only the net for a Lane that ended *before* it ever
+        became a contribution — a failed worktree, a raise, a **Wind-down**
+        cancellation. Without that net such a Lease would strand the issue for
+        a whole TTL while this Run, still alive, moved on (ADR-0033 §5.3).
+
+        Per Lane rather than per Run, which is the whole point in Parallel
+        mode: every other Lane's Lease is untouched, so a Lane that crashes
+        frees its own issue and nobody else's.
+        """
+        try:
+            await self._drive_lane_lifecycle(reservation)
+        finally:
+            ref = reservation.item.ref
+            still_owed = any(
+                contribution.ref == ref
+                for contribution in self._open_lane_contributions.values()
+            )
+            if not still_owed:
+                self._release_lane_lease(ref)
+
+    def _take_lane_lease(self, item: AfkReadyItem) -> str | None:
+        """Take ``item``'s **Lease** — Lane **Pickup**'s last step — or say why not.
+
+        Returns ``None`` when this Lane may work the item, and otherwise the
+        **Pickup skip** reason that passes the candidate over.
+
+        Placed where the serial path places it (§2.4): the last step of
+        **Pickup**, after routing has admitted the candidate and *before*
+        classification, which is where serial `admit` takes it too. So a
+        candidate this Lane would have refused anyway never costs a round trip
+        or a Lease; a lost race costs that round trip and nothing else,
+        because no worktree exists yet (§2.3); and the classifier's label
+        writes — an irreversible tracker side effect — never land on an issue
+        a rival Run holds.
+
+        Only issues are Lease-governed, discriminated by ``kind`` and never by
+        ref type — a pull request's ``ref`` is an ``int`` exactly like an
+        issue's, so leasing on the number alone would put PR #412 and issue
+        #412 on one ref (ADR-0033). Today's membership read yields only
+        issues; this keeps that a stated precondition rather than a silent one.
+        """
+        ref = item.ref
+        if (
+            self._lease is None
+            or item.kind != "issue"
+            or not isinstance(ref, int)
+        ):
+            return None
+        take = self._lease.take(ref)
+        if take.granted:
+            self._lane_leases.add(ref)
+            return None
+        if self._lease.disabled():
+            # This clone may never write a Lease ref, so a Lease here protects
+            # nothing and refusing the work buys nothing. Same answer as no
+            # lifecycle at all — the warning has already been issued once.
+            return None
+        if take.verdict == "refused":
+            return _LEASE_HELD_ELSEWHERE
+        return _LEASE_UNREADABLE
+
+    def _lane_lease_unreadable(self, candidate: PoolCandidate) -> bool:
+        """Was ``candidate`` passed over by a **Lease** read that did not happen?
+
+        The :class:`~git_loopy.rolling_pool.RollingPool`'s ``read_refused``
+        seam. A candidate here is unknown rather than refused, so it ends the
+        Run under ``preflight_failed`` — what the serial path already returns
+        for the identical fault — instead of the ``all_skipped`` that would
+        claim this Run could take no work from a Pool it never finished
+        reading.
+        """
+        return candidate.ref in self._lease_unreadable
+
+    def _release_lane_lease(self, ref: int | str) -> None:
+        """Give back one Lane's **Lease**, if *this Lane* took it.
+
+        Gated on :attr:`_lane_leases` rather than on the ref alone, which is
+        the ``kind`` discrimination in its release-side form. A pull request's
+        ``ref`` is an ``int`` exactly like an issue's, so a bare-ref release
+        would let a PR #412 contribution finishing delete issue #412's live
+        Lease — freeing an issue this Run is still working, which is the
+        collision the design exists to prevent. Only a ref a Lane actually
+        took a Lease on is in the set, so nothing else can be released
+        through here, including a Lease the serial path holds.
+
+        Idempotent and never raising: it runs on every path out of a Lane,
+        including the ones that ended before a Lease was ever taken.
+        """
+        if self._lease is None or not isinstance(ref, int):
+            return
+        if ref not in self._lane_leases:
+            return
+        self._lane_leases.discard(ref)
+        self._lease.release(ref)
+
+    def _leased(self, item: AfkReadyItem, action: str) -> bool:
+        """**The fence**, on the Lane path — may this Lane still write ``action``?
+
+        The same seam a serial **Iteration** asks (:meth:`AfkLoop._leased`),
+        deliberately, so one implementation answers for both modes and a Lane
+        cannot drift into a weaker reading of ownership than a serial
+        Iteration has — including its ``kind`` discrimination, which is why
+        this takes the item rather than the bare ref.
+
+        Asked immediately before each individual side effect and never once
+        for a batch (ADR-0033 §4.4). A Lane's are its publication onto base,
+        the issue close that follows it, and the breadcrumb comment a terminal
+        auto-resolution leaves — each separated from the last by a gate, an
+        **Agent** session or a merge, so an answer taken at the start of
+        Integration is not an answer at the end of it.
+        """
+        return self._serial._leased(item.ref, action, kind=item.kind)
+
+    async def _drive_lane_lifecycle(
+        self, reservation: rolling_scheduler.Reservation
+    ) -> None:
         """One reservation's full lifecycle: setup, session, finish, Integration.
 
         The concurrent unit of Rolling dispatch (#219, ADR-0020): worktree
@@ -4902,6 +5114,41 @@ class _ParallelLoop:
             scheduler.release(reservation)
             return
 
+        # **Taking the Lease is the last step of Pickup** (ADR-0033 §2.4), and
+        # on the Lane path that is here — *before* classification, exactly
+        # where serial `admit` takes it (:meth:`AfkLoop._take_lease_at_pickup`
+        # runs last inside `admit`, and `_classify_at_pickup` then runs on the
+        # candidate that already won). Routing has admitted the candidate, so
+        # one this Lane would have refused anyway never costs a round trip or
+        # a Lease; and no worktree exists yet, so a lost race costs that round
+        # trip and nothing else (§2.3).
+        #
+        # Ordering it after classification would break the fence's whole
+        # point. `_classify_at_pickup` is not a read: it applies `task-type:`
+        # and `semver:` labels to the issue, and spends a classifier session
+        # doing it. A Lane that classified first would write twice onto an
+        # issue a rival Run holds a live Lease on, and buy an AI session for
+        # work it is about to be refused.
+        refusal = self._take_lane_lease(item)
+        if refusal is not None:
+            # Refused *candidacy* for the rest of this Run, not merely this
+            # reservation. A bare release would hand the candidate straight
+            # back to the scheduler, which refills from the same ordered pool
+            # — a hot loop spending a remote round trip per turn for as long
+            # as the rival holds it, exactly as the dynamic-route refusal
+            # below describes. The serial ordered walk moves on by
+            # construction (§8.2); the Lane path has to be told to.
+            self._diag.info("lane #%s passed over: %s", ref, refusal)
+            passed_over(refusal)
+            self._rolling_refused.add(ref)
+            if refusal != _LEASE_HELD_ELSEWHERE:
+                # A probe that failed refused nothing; it only failed to ask.
+                # Bounding the candidate is still right — see above — but the
+                # Run must not then report it as work it was *refused*.
+                self._lease_unreadable.add(ref)
+            scheduler.release(reservation)
+            return
+
         # The **Task-type classifier**'s second call site (#409, ADR-0029),
         # through the same shared seam. Deliberately *after* the refusal above:
         # a candidate whose human labelling is already broken is passed over,
@@ -4926,7 +5173,10 @@ class _ParallelLoop:
             # Releasing the reservation is still what "preserve already-running
             # work where possible" means here: every other Lane keeps its route
             # and its session, and the freed slot goes to a candidate that can
-            # be routed rather than being held by one that cannot.
+            # be routed rather than being held by one that cannot. The Lease
+            # this Lane now holds goes back through
+            # :meth:`_run_lane_lifecycle`'s ``finally``, which covers every
+            # exit before a contribution exists.
             self._diag.warning("lane #%s dynamic route unavailable: %s", ref, exc)
             passed_over(f"dynamic route unavailable: {exc}")
             self._rolling_refused.add(ref)
@@ -5911,6 +6161,11 @@ class _ParallelLoop:
         """
         self._sync_abandonment_guard()
         self._open_lane_contributions.pop(contribution.contribution_id, None)
+        # The contribution is done with the issue, so give back its **Lease**
+        # here rather than where its Lane task returned: a parked contribution
+        # outlives that task, and this is the one seam every contribution
+        # reaches whatever its disposition was (ADR-0033 §5.1).
+        self._release_lane_lease(contribution.ref)
         lane_work = self._lane_work.get(contribution.contribution_id)
         if lane_work is not None and lane_work.reclaimed:
             self._lane_work.pop(contribution.contribution_id, None)
@@ -6083,6 +6338,25 @@ class _ParallelLoop:
         was cut and this merge is the verified result exactly.
         """
         ref = contribution.ref
+        if not self._leased(lane_work.item, "publication onto base"):
+            # **The fence** (ADR-0033 §4.4), immediately before the write and
+            # not once at the start of Integration: a gate, a merge and any
+            # bounded auto-resolution sit between those two moments, so an
+            # answer taken then is not an answer now.
+            #
+            # Publication is a Lane's loudest write even though base is local:
+            # it is the moment these commits become the Run's trunk, and the
+            # next serial **Iteration**'s auto-push sends them to the remote
+            # under a *different* issue's fence. Landing them here would
+            # launder a lost Lease's work past a fence that never asked about
+            # it. The contribution finishes unpublished and its Lane branch
+            # stays as the breadcrumb it always was on an unpublished path.
+            self._diag.warning(
+                "integration #%s: this Run no longer holds the Lease; "
+                "abandoning the issue unpublished",
+                ref,
+            )
+            return False
         try:
             pre_base = self._git.head_sha()
         except git_module.GitError as exc:
@@ -6373,7 +6647,7 @@ class _ParallelLoop:
             )
             landed = []
         for completion in self._serial._handle_completions_safely(
-            [item], landed
+            [item], landed, leased_pool=True
         ):
             self._serial._emit(
                 events_module.WRAPPER_AUTO_CLOSE,
@@ -6557,7 +6831,15 @@ class _ParallelLoop:
         on this exact fallback) re-collects the issue and works it. The
         failed Lane branch is intentionally **kept** (never deleted) as a
         breadcrumb.
+
+        The comment is fenced individually (ADR-0033 §4.4): it is a write on
+        an issue, and a Run whose Lease was stolen must not make it. The Run
+        that took the issue over owns what is said on it, and a breadcrumb
+        promising a serial **Iteration** that this Run will no longer take is
+        worse than silence.
         """
+        if not self._leased(lane_work.item, "auto-resolution fallback comment"):
+            return
         self._source.comment(lane_work.item.ref, _AUTO_RESOLUTION_FALLBACK_COMMENT)
 
     def _resolve_base_ref(self) -> str:
@@ -6686,6 +6968,10 @@ async def run(
     except ReleaseVersionError as exc:
         print(f"git-loopy: Release version error: {exc}", file=sys.stderr)
         return 1
+
+    if (refusal := routing_choice_refusal(config)) is not None:
+        print(f"git-loopy: {refusal}", file=sys.stderr)
+        return exit_code_for("preflight_failed")
 
     # 1) Git seam (root-bound) + prompt file. The client resolves and binds the
     #    repository root once; ``.root`` feeds the writers / prompt / source setup.
@@ -6818,15 +7104,18 @@ async def run(
     # opened, so an unsupported or unverifiable selection costs no work at all
     # (#560, #561, ADR-0057). A Run that selected no policy never reaches the
     # network for it.
-    dynamic_routing, dynamic_refusal = _dynamic_route_preflight(
-        config, os.environ, repo_root=repo_root
+    routing_preflight = await resolve_run_routing_preflight(
+        config,
+        os.environ,
+        capabilities_fetch=lambda: _refresh_harness_capabilities(
+            warn=lambda message: diag.warning(
+                "harness capability read failed: %s", message
+            )
+        ),
+        harness_evidence_fetch=lambda: _fetch_harness_evidence(warn=diag.warning),
     )
-    if dynamic_refusal is not None:
-        print(
-            f"git-loopy: the selected Dynamic route was refused — "
-            f"{dynamic_refusal}",
-            file=sys.stderr,
-        )
+    if routing_preflight.refusal is not None:
+        print(f"git-loopy: {routing_preflight.refusal}", file=sys.stderr)
         try:
             writers.run_summary.flush()
         except Exception as flush_exc:
@@ -6834,24 +7123,16 @@ async def run(
         control.close()
         return exit_code_for("preflight_failed")
 
-    static_route_refusal = await _static_route_preflight(
-        config,
-        warn=lambda message: diag.warning(
-            "harness capability read failed: %s", message
-        ),
+    if routing_preflight.dynamic_refusal is not None:
+        print(f"git-loopy: {routing_preflight.dynamic_refusal}", file=sys.stderr)
+    dynamic_routing = None
+    if routing_preflight.admission_ledger is not None:
+        dynamic_routing = _DynamicRoutingSetup(
+            prerequisites=routing_preflight.prerequisites,
+            admission_ledger=routing_preflight.admission_ledger,
+            feedback_loops=_declared_feedback_loops(repo_root),
+            measured=_declared_measured_routing(repo_root),
     )
-    if static_route_refusal is not None:
-        print(
-            f"git-loopy: the selected Static route was refused — "
-            f"{static_route_refusal}",
-            file=sys.stderr,
-        )
-        try:
-            writers.run_summary.flush()
-        except Exception as flush_exc:
-            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
-        control.close()
-        return exit_code_for("preflight_failed")
 
     try:
         prompt_text = _read_prompt(repo_root, os.environ)
@@ -7096,6 +7377,13 @@ async def run(
         config, staircase, warn=lambda message: diag.warning("%s", message)
     )
     task_type_client = _make_task_type_label_client()
+    # Activation of the **Lease** (#390, ADR-0033). Resolved here, once per
+    # Run, so every Lease this Run holds is held by one lifecycle under one
+    # `run_id` — which is also what stops a Run contending with itself, since
+    # the serial driver and every Lane consult the same object. `None` — the
+    # PRDs backend, or a clone whose `origin` names no repository — restores
+    # exactly the pre-ADR-0033 behaviour of one Run, unguarded, everywhere.
+    lease = _make_lease_lifecycle(config, git, run_id=writers.run_id, diag=diag)
     loop: _ParallelLoop
     try:
         loop = _ParallelLoop(
@@ -7120,6 +7408,7 @@ async def run(
             route_tracker=github_client,
             execution_host=selected_execution_host,
             dynamic_routing=dynamic_routing,
+            lease=lease,
         )
     except git_module.GitError as exc:
         # Rolling dispatch resolves where its **Lane workspaces** live up front

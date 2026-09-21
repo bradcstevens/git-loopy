@@ -572,6 +572,7 @@ def verify_promotion_candidate(
             candidate.workspace,
             f"refs/tags/{candidate.tag}",
             archive_output,
+            distribution_mode=distribution_mode,
         )
     except (
         SourceReleaseError,
@@ -617,7 +618,7 @@ def verify_promotion_candidate(
         notes_digest=_digest(notes),
         archive_path=archive_output.resolve(),
         archive_digest=_file_digest(archive_output),
-        distribution_mode=distribution_mode,
+        distribution_mode=release.distribution_mode,
         trigger_kind=candidate.trigger_kind,
         gate_loops=gate.ran,
     )

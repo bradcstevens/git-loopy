@@ -90,6 +90,11 @@ def _ignore_membership_read(_candidates: tuple[PoolCandidate, ...]) -> None:
     """Default visibility seam for callers that do not publish Membership reads."""
 
 
+def _never_read_refused(_candidate: PoolCandidate) -> bool:
+    """Default for callers whose **Pickup** performs no read beyond Readiness."""
+    return False
+
+
 @dataclass(frozen=True)
 class RefreshBackoff:
     """Bounded exponential backoff for demand-gated membership refresh.
@@ -191,6 +196,14 @@ class RollingPool:
     on_membership_read: Callable[[tuple[PoolCandidate, ...]], None] = (
         _ignore_membership_read
     )
+    #: Whether a survivor was passed over by a *read that did not happen*,
+    #: rather than by an answer. Readiness supplies its own such candidates
+    #: below; this is the injection point for the other reads a dispatcher
+    #: performs at **Pickup** — today the **Lease** probe (#390, ADR-0033),
+    #: whose failure is likewise unknown rather than refused. Both feed one
+    #: ``unresolved`` count so the two dispatch modes cannot drift apart on
+    #: what a Pool nobody could bind work out of is entitled to report.
+    read_refused: Callable[[PoolCandidate], bool] = _never_read_refused
 
     _entries: list[_CachedCandidate] = field(default_factory=list, init=False)
     _refreshing: bool = field(default=False, init=False)
@@ -412,12 +425,32 @@ class RollingPool:
                 len(survivors),
                 ", ".join(f"#{ref}" for ref in unreadable),
             )
+        unread_lease = tuple(
+            candidate.ref
+            for candidate in survivors
+            if candidate.ref not in unreadable and self.read_refused(candidate)
+        )
+        if unread_lease:
+            # Named separately from the readiness case because the operator's
+            # next move is different: this one is about the **Lease** remote,
+            # and sending them to `gh auth status` over a git ref they could
+            # not read would misdirect them (#390, ADR-0033).
+            self.diag.error(
+                "the Lease on %d of the %d candidate(s) left in the Pool could "
+                "not be read (%s); an unread Lease is unknown, not free, so "
+                "this Run will not report the Pool as one it could take no "
+                "work from. Check this host's network path to the Lease remote "
+                "and that its credentials still reach it, then re-run.",
+                len(unread_lease),
+                len(survivors),
+                ", ".join(f"#{ref}" for ref in unread_lease),
+            )
         return unbound_pool_outcome(
             candidates=len(survivors),
             waiting=sum(
                 1 for candidate in survivors if has_proven_open_blocker(candidate)
             ),
-            unresolved=len(unreadable),
+            unresolved=len(unreadable) + len(unread_lease),
         )
 
     def _refresh_now(self) -> MembershipSnapshot:

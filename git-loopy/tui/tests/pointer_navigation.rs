@@ -132,7 +132,13 @@ fn the_queue_wheel_moves_only_the_view_and_a_click_opens_the_row_now_drawn_there
     assert_eq!(session.frame().selected, IssueRef::number(42));
     assert_eq!(session.frame().screen, Screen::Dashboard);
     assert_eq!(serde_json::to_value(session.view()).unwrap(), before);
-    drive(&mut session, [pointer(PointerAction::Press, 1, first_row)]);
+    drive(
+        &mut session,
+        [
+            pointer(PointerAction::Press, 1, first_row),
+            pointer(PointerAction::Release, 1, first_row),
+        ],
+    );
     assert_eq!(session.frame().selected, IssueRef::number(43));
     assert_eq!(session.frame().screen, Screen::DrillIn);
     drive(
@@ -422,7 +428,11 @@ fn row_clicks_use_the_current_size_and_projected_active_first_order() {
     session.ingest(r#"{"type":"wrapper.issue.activated","issue":44}"#);
     drive(
         &mut session,
-        [Input::Resized(80, 24), pointer(PointerAction::Press, 1, 6)],
+        [
+            Input::Resized(80, 24),
+            pointer(PointerAction::Press, 1, 6),
+            pointer(PointerAction::Release, 1, 6),
+        ],
     );
     assert_eq!(session.frame().selected, IssueRef::number(44));
     assert_eq!(session.frame().screen, Screen::DrillIn);

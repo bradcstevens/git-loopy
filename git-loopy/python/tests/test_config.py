@@ -191,7 +191,7 @@ def test_run_config_routing_copies_input_not_aliased() -> None:
 
 
 def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -> None:
-    """Pin CLI 1.0.85's observed capabilities without dropping compatibility IDs."""
+    """Pin CLI 1.0.83's observed capabilities without dropping compatibility IDs."""
     from git_loopy.config import (
         MODEL_REASONING_EFFORTS,
         REASONING_EFFORTS,

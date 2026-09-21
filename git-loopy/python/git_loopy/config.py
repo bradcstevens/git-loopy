@@ -139,7 +139,7 @@ MODEL_REASONING_EFFORTS: dict[str, frozenset[str]] = {
 #: differs from the CLI the SDK actually spawns, every gate verdict in the Run
 #: was reached against a description of some *other* binary, and the divergence
 #: is what the **Run readback** reports at Run start.
-MODEL_ROSTER_CLI_VERSION = "1.0.85"
+MODEL_ROSTER_CLI_VERSION = "1.0.83"
 
 #: The model ids the kit officially supports (the keys of
 #: :data:`MODEL_REASONING_EFFORTS`). :mod:`git_loopy.cli` uses this to
@@ -712,10 +712,16 @@ class RunConfig:
             depends on that model. ``--context-tier`` / ``GIT_LOOPY_CONTEXT_TIER``
             / Config resolve it through the ordinary precedence chain, but it is
             not a model/effort override and therefore never suppresses routing.
+        context_tier_override: Whether a context-tier flag or environment override
+            fixes Dynamic work to ``context_tier``. It does not constrain the
+            Route selector's own tier or suppress model/effort selection.
         route_policy: Which **Route policy** the operator selected (#560, #561,
             ADR-0057). :attr:`~git_loopy.static_route.RoutePolicy.UNSELECTED` —
-            the default — is the *absence* of a decision and keeps every legacy
-            behaviour: the roster gates rescue an unsupported setting, the
+            the default — is the *absence* of a decision. Local saved Config without
+            that decision is refused before work. Non-local activation remains
+            deferred. A genuinely unconfigured Run
+            retains legacy behaviour until final default activation: the
+            roster gates rescue an unsupported setting, the
             built-in **Escalation rung** applies, and no harness capability read
             happens at all. ``STATIC`` selects ADR-0057's Static route, under
             which the selected model/effort/tier travel verbatim and are
@@ -724,6 +730,10 @@ class RunConfig:
             route for its **Task type** gets its route from the **Route
             selector** — and which is refused at preflight unless the four
             fields below and the Artificial Analysis key are all supplied.
+        saved_config_present: Whether a nonempty project or global Config was
+            loaded. Run-local startup state, not a Config key: an unselected
+            policy on local saved Config requires explicit keep-or-migrate authority.
+            Kept through detached startup so the worker uses the same verdict.
         routing_deadline_seconds: The finite wall-clock budget one Run may spend
             on routing work (#561, ADR-0057), or ``None`` for "not supplied".
             ``None`` is not a default of "unbounded": ADR-0057 requires an
@@ -807,7 +817,9 @@ class RunConfig:
     send_timeout_seconds: float = DEFAULT_SEND_TIMEOUT_SECONDS
     routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)
     context_tier: str = DEFAULT_CONTEXT_TIER
+    context_tier_override: bool = False
     route_policy: RoutePolicy = RoutePolicy.UNSELECTED
+    saved_config_present: bool = False
     routing_deadline_seconds: float | None = None
     routing_credit_allowance: Decimal | None = None
     selector_concurrency: int | None = None

@@ -42,7 +42,7 @@ Choose the command by what changed:
 | Command | What it does | Does not do |
 | --- | --- | --- |
 | `git-loopy update` | Refreshes the machine-local state the installed Release owns: the installed catalog, TUI helper, global prompt override when **Scaffold provenance** proves it untouched, and a Release-retired Config route. | Does not replace the distribution, start a Run, or write to the tracker. |
-| `git-loopy upgrade` | Replaces the executing distribution through its proven **Install channel**, then runs `update`. | Does not guess an Install channel, update a clone it does not own, or replace a second `git-loopy` artifact on `PATH`. |
+| `git-loopy upgrade` | Requires a global keep-or-migrate choice, replaces the executing distribution through its proven **Install channel**, then runs `update --routing`. | Does not guess an Install channel, write Config before handoff, update a clone it does not own, or replace a second `git-loopy` artifact on `PATH`. |
 | `git-loopy uninstall` | Removes the distribution through its proven Install channel and the machine-local state. | Does not edit repository contents by default or remove a live Lane's work. |
 
 An **Edge install** is an explicit `upgrade --edge <ref>` landing on unreleased
@@ -53,8 +53,8 @@ proof that allows a prompt replacement without overwriting operator prose.
 
 | Command | Flags | Exit behavior | Worked example |
 | --- | --- | --- | --- |
-| `update` | `--global` (default), `--project`, `--dry-run` | `0` when the chosen Config scope settles and every refreshed asset reaches the installed Release; `1` for an ambiguous or failed repair or asset refresh. | `git-loopy update --project` |
-| `upgrade` | `--to <version>`, `--edge` / `--ref <ref>`, `--allow-downgrade` | `0` when already on the requested Release, or when the channel move and chained `update` both succeed; `1` when the target, direction, or channel cannot be proven, handoff fails, or the chained refresh fails. | `git-loopy upgrade --to 0.10.0` |
+| `update` | `--global` (default), `--project`, `--dry-run`, `--routing [keep\|migrate\|ask]` | `0` when the chosen Config scope settles and every refreshed asset reaches the installed Release; `1` for an undecided/refused migration, ambiguous or failed repair, or asset refresh failure. | `git-loopy update --project` |
+| `upgrade` | `--to <version>`, `--edge` / `--ref <ref>`, `--allow-downgrade`, `--routing [keep\|migrate\|ask]` | `0` when the required move and routing-aware `update` succeed; nonzero when the target, direction, channel, or routing choice is refused, handoff fails, or the chained install/refresh fails. | `git-loopy upgrade --routing keep` |
 | `uninstall` | `--all`, `--yes` / `-y` | `0` only when every planned removal succeeds; `1` for an unconfirmed plan, an unsafe path, a live or unreadable Lane, a channel that cannot be proven, or any incomplete removal. | `git-loopy uninstall --yes` |
 
 The refusals are intentional safeguards, not partial upgrades: a customized or
@@ -87,8 +87,8 @@ a fallback. The other prerequisites (`gh` signed in, `git`, `copilot`) are liste
 The bootstrap is per-clone; subsequent invocations of `git-loopy` use
 the cached environment under `git-loopy/python/.venv/`.
 
-The Runner pins `github-copilot-sdk==1.0.14`, which downloads and runs Copilot
-CLI `1.0.85` by default. Updating the separate `copilot` command on `PATH`
+The corporate-compatible Runner pins `github-copilot-sdk==1.0.13`, which runs
+Copilot CLI `1.0.83` by default. Updating the separate `copilot` command on `PATH`
 does not update that harness. The refreshed roster recognizes
 `gpt-6-astra` (including `max` reasoning). The pinned-harness listing did not
 offer Gemini 3.8 on the account used for this upgrade, so no unverified effort
@@ -102,6 +102,8 @@ session, permission, event, and Skill-discovery interfaces. SDK-provided
 Skills normalize to the existing `custom` source kind; a pathless provider
 Skill still cannot enter a Run's isolated Skill exposure unless the
 installed catalog supplies a filesystem-backed winner of the same name.
+Global Skill discovery uses the typed metadata RPC without creating an agent
+session. Discovery errors are reported rather than accepted as a partial catalog.
 
 ---
 
@@ -293,6 +295,11 @@ scope — needs a repository.
 
 Source-only Releases carry no helper assets of their own; they can still consume
 an eligible older helper under the same checksum, identity, and schema checks.
+When no exact helper is published, a machine-local build that reports the installed
+Runner's exact version and compatible Event schema is retained if the immutable
+tag's `release-trust.json` explicitly declares `source-only`. Missing assets alone
+do not establish that mode, and an unreadable index or policy remains an error.
+Otherwise the verified published-helper selection remains unchanged.
 
 That helper is one a Run attaches to. The Python Runner resolves a helper in this
 order, first hit wins:
@@ -368,21 +375,120 @@ passed off as a refresh. It never starts a Run or writes to the tracker;
 `git-loopy labels --apply` remains the only command that changes the **Label
 vocabulary** on GitHub.
 
+### Explicit routing migration
+
+```bash
+# Collect a keep-or-migrate choice; blank input, q, EOF or Ctrl-C cancels.
+git-loopy update --project --routing
+
+# Supply the decision without prompting, or preview it offline.
+git-loopy update --global --routing keep
+git-loopy update --project --routing migrate --dry-run
+```
+
+**Keep** records `route_policy = "static"`: saved routes and the run-wide default
+remain authoritative, and the Measured routing tier remains effective.
+**Migrate** records `route_policy = "dynamic"`: every authored `[routing]` row
+is retained, including rows identical to an old recommendation; only work
+uncovered by those rows becomes Dynamic. Calibration artifacts remain unchanged
+as supporting evidence, not Static pins under Dynamic policy. Remove a row you
+no longer want explicitly with `config routing unset <task-type> --<scope>`.
+Both choices disclose and enable strict live validation rather than silent
+effort/tier correction. Legacy pairs retain their inherited run-level tier, and
+only an explicitly configured `[escalation]` authorizes Static escalation.
+
+Migration needs your own `GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY` outside Config
+and an explicitly authored, verified `[route_associations]` table; no key or
+model association is invented. When no associations are configured or inherited,
+the interactive path asks for a TOML inline table matching exact benchmark
+identities to the Copilot configurations they scored, not similar display names.
+Unattended use must already have that table in Config.
+It collects missing `routing_deadline_seconds`,
+`routing_credit_allowance`, and `selector_concurrency` on an interactive terminal,
+with **no defaults**. Existing scope/inherited values may supply them; inherited
+values remain inherited rather than being copied into the project.
+Explicit `GIT_LOOPY_ROUTING_DEADLINE_SECONDS`,
+`GIT_LOOPY_ROUTING_CREDIT_ALLOWANCE`, and `GIT_LOOPY_SELECTOR_CONCURRENCY` values
+override those saved values for this migration and are persisted in the chosen
+scope. The credential is never saved. Classification and selector retries count
+toward Run Consumption; post-paid in-flight billing can overshoot the allowance.
+Exhaustion admits no further calls and never substitutes a cheaper selector.
+
+The candidate Config crosses the same routing readiness seam as doctor and a
+Run **before** any write. It verifies the chosen scope (plus global inheritance
+and the Measured routing tier for a project), without temporary Run overrides
+masking a missing prerequisite or invalid saved route. A global migration does
+not judge any repository's overrides. Readiness calls no selector, classifier,
+Calibration, or tracker write; its model-data requests use provider request quota.
+Every later Run, proposal and Pickup checks afresh.
+
+Without a terminal, `--routing` must find a recorded `route_policy` in the chosen
+scope, inherit an explicit global choice, or receive `keep`/`migrate` explicitly.
+An inherited choice remains inherited rather than creating a project override.
+An outstanding decision, cancelled
+question, invalid authorization, or failed readiness exits nonzero without
+writing Config or refreshing assets. Operator edits detected during readiness
+are not overwritten. Successful changes use an atomic write and the ordinary
+numbered Config backup; unchanged recorded choices are not rewritten.
+If a subsequent asset refresh fails, the successful Config migration stays saved.
+`--dry-run` neither prompts nor reads live readiness and explicitly says readiness
+was not checked. It requires a supplied or recorded choice.
+
+This option migrates policy, not retired routing keys: repair those separately
+with the installed Release's `update --project` or `update --global` before
+retrying policy migration. `upgrade` now requires this
+decision and chains the routing-aware update described below. Bare `update`
+still repairs assets and retired keys without choosing a policy.
+
+**Local Runs with saved Config now require the choice automatically.** If either
+scope contains Config values but no effective Static/Dynamic policy is selected,
+the Run refuses before Skill migration, model listing, detachment or Agent work.
+It never prompts or writes Config to resolve this decision. Doctor reports the
+same authority refusal, and the detached worker retains it. Model/effort overrides
+alone are not keep-or-migrate consent. Record the choice with the commands above,
+or supply `--route-policy static`/`dynamic` (`GIT_LOOPY_ROUTE_POLICY` for doctor
+or unattended use) for this invocation only. Temporary authority does not settle
+the next Run's decision. A selected Static path requires live Copilot eligibility,
+not leaderboard access or a Route selector.
+
+This is partial #567 work, not final default activation: a genuinely unconfigured
+Run (both Config tables empty) retains its previous path. Bare init can still save
+Config without a routing choice, but the subsequent Run will refuse until that
+choice is supplied. Prefer `init --routing` to authorize setup before saving.
+
+**Non-local activation is deferred.** The GitHub Actions Execution host
+authenticates on another machine; the local listing cannot validate its settings.
+Unselected remote Runs therefore retain their legacy path rather than being
+forced into an unusable choice. Selected Static/Dynamic policies still refuse
+that placement: use `--execution-host local`, or `--route-policy unselected`
+(`GIT_LOOPY_ROUTE_POLICY=unselected` for doctor) to retain remote legacy behavior.
+The latter is not strict routing or completed migration. No remote capability
+support is implied by the local migration guard. The refusal happens before
+local model listing, Skill migration, interactive detachment or any remote host
+preparation, including its green-base workflow dispatch. An explicit model,
+effort or context-only override does not authorize the remote placement. Config
+remains unchanged; a remote environment error cannot hide this known routing
+refusal behind an unnecessary preflight job.
+
 ---
 
 ## Moving between Releases (`git-loopy upgrade`)
 
 `git-loopy upgrade` replaces the git-loopy artifact it is **itself running from**
 with a published **Release version**, through the **Install channel** that placed
-it, and then runs `git-loopy update` from what the move installed — landing a new
+it, and then runs `git-loopy update --routing` from what the move installed — landing a new
 Release is precisely the event that invalidates the scaffolded assets. It needs
 no repository, and it moves nothing else: a clone-local helper, the shell
 Orchestrator's launcher, and anything else on your `PATH` are other channels'
 artifacts.
 
 ```bash
-# Move to the newest published Release, then refresh machine-local assets.
+# Move to the newest published Release, using a recorded choice or prompting.
 git-loopy upgrade
+
+# Supply the machine-global choice explicitly for unattended use.
+git-loopy upgrade --routing keep
+git-loopy upgrade --routing migrate
 
 # Pin a named published Release, or move deliberately backwards.
 git-loopy upgrade --to 0.9.0
@@ -398,12 +504,41 @@ git-loopy upgrade --edge 0123456789abcdef0123456789abcdef01234567
 | `--to <version>` | That Release version, **verified published** first. A version nobody cut is refused here rather than becoming a failed install, or an **Edge install** you were never told about. |
 | `--edge <ref>` (alias `--ref`) | That commit or ref, reported as an **Edge install**: identify it by the ref, not by the `VERSION` its source reports. A ref spelled like a Release tag is refused and pointed at `--to`. |
 | `--allow-downgrade` | A move that is not provably forward of the installed Release. Required for an older Release, and for one whose direction cannot be established at all. |
+| `--routing [keep\|migrate\|ask]` | Global routing consent, not a target. With no value or no flag, reuse a recorded global policy or ask on an interactive terminal. Otherwise supply the choice explicitly; no unattended default is inferred. |
 
 Already on the Release the move resolved? Nothing is re-installed: `upgrade` says
-so and names `git-loopy update` as the command that refreshes the assets.
+so, but still requires routing consent and runs the routing-aware `update`.
+An outstanding choice cannot be bypassed by the same-Release path.
+
+**Consent precedes the move; readiness precedes the Config write.** An
+unattended upgrade with no recorded or supplied choice exits nonzero before
+handoff, with `upgrade --routing keep` / `upgrade --routing migrate` as the remedy.
+Interactive cancellation also leaves the installation and Config unchanged.
+Upgrade considers only global Config: a project policy or temporary Run override
+does not supply global consent. It discloses retained Static routes, inherited
+tiers, strict validation and the end of implicit Static escalation.
+
+The installed Runner's `update` then collects any missing Dynamic authorization
+on an interactive terminal and uses the shared readiness verdict before saving.
+Keep requires no leaderboard key or selector call. A recorded choice is re-read
+after installation rather than forwarded as a new explicit override of a later
+operator edit. No project Config is written, and no Calibration or work starts.
+Failed readiness leaves Config unchanged, but does **not** roll back a successful
+distribution install. Fix the reported prerequisite and run
+`git-loopy update --routing keep` or `git-loopy update --routing migrate`.
+If the new Release retires a routing key, the chained routing-aware update
+refuses that Config rather than applying the bare update's automatic key
+repair. Config and machine-local assets remain unchanged at that step, while
+the new distribution stays installed. Run `git-loopy update --global` from the
+newly installed Release to perform its disclosed, backed-up key repair, then
+retry `git-loopy update --routing keep` or `git-loopy update --routing migrate`.
+An ambiguous repair still requires the operator to choose which route to keep.
+If a deliberately selected older target lacks `update --routing`, its command
+refusal is likewise nonzero, not a successful migration; upgrade never silently
+falls back to a routing-unaware refresh.
 
 **The move is a process replacement, not a write.** The chain — the channel's
-install command, then `git-loopy update` — replaces the running `git-loopy`, so
+install command, then `git-loopy update --routing` — replaces the running `git-loopy`, so
 the executable Windows holds open is released with the process rather than
 written over while locked, and the chained `update` runs from the artifact the
 move installed.
@@ -496,7 +631,7 @@ The wizard:
 - **Asks the scope first** — **global** (this machine) or **project** (this
   repo). `--global` / `--project` skip the question; outside a git repository
   only **global** is available.
-- **Always writes `config.toml`** to that scope with your chosen `model` /
+- **Writes `config.toml` on successful setup** to that scope with your chosen `model` /
   `reasoning_effort`, seeded from the same live model list the `--select-model`
   picker uses.
 - **Uses one continuous keyboard wizard** for scope, model, effort, routing,
@@ -546,6 +681,64 @@ The wizard:
   tracker label was written. The prerequisite Skill catalog install is
   machine-wide and remains at ~/.config/git-loopy/skills (revision 4f1c2a9e8b03).
   ```
+
+### Explicit routing setup (opt-in)
+
+`git-loopy init --routing [keep|migrate|ask]` composes first setup with the same
+authorization and live routing-readiness verdict as `update --routing`, doctor,
+and a Run. Bare init also uses that path when the chosen scope already records
+or inherits an explicit Static/Dynamic policy; omitting `--routing` does not
+bypass readiness or replace saved choices with unattended defaults.
+**This is not final default activation:** without a supplied or recorded choice,
+bare init and auto-setup retain their existing routing policy.
+
+Choose `migrate` for Dynamic uncovered work or `keep` for strict Static policy.
+Omit the argument (or use `ask`) to inherit a recorded choice or decide at the
+terminal with no default. The fullscreen wizard still collects scope, model,
+optional Static routes, prompt and Skills; its review discloses that terminal
+routing authorization follows before anything is saved. The default routing
+answer adds **no Static rows**. Recommended Static values remain an explicit
+choice, and authored routes still outrank Dynamic work.
+The custom walk adds or replaces only the rows you explicitly choose. Skipped
+and unvisited task types preserve saved rows and acquire no recommended seed;
+remove an unwanted saved row with `config routing unset`, not by skipping it.
+Changing scope in the wizard follows that scope's recorded choice. Unvisited
+wizard defaults do not become Static pins when moving into routing-aware setup;
+explicitly chosen rows, including an explicitly chosen recommended recipe, remain.
+Once routes have been collected as additions, switching back to an unselected
+scope cannot turn skipped rows into deletions or silently seed recommendations.
+This preserves rows without recording migration consent in that scope.
+
+Supply your own `GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY` in the environment before
+Dynamic setup. Setup never requests a key in an echoed prompt or saves one.
+Missing deadline, per-Run credit allowance and selector concurrency are collected
+with no invented values. Missing associations are authored as a TOML inline
+table, for example `{"<AA id>" = "<Copilot model>@<scored effort>"}`; verify the
+identity/revision/effort correspondence yourself. A model without an effort dial
+uses its bare identifier. Current scores and authenticated harness eligibility
+must then agree. No selector, classifier or Calibration session is started.
+
+`--yes` never prompts and is **not** routing consent: supply `keep`/`migrate` or
+inherit an explicit recorded choice, plus the required authorization for Dynamic
+work. Saved/inherited model, effort, prompt and Skill policy remain untouched
+on this path; absent model/effort resolve normally, and only unconfigured prompt
+and Skill policy are scaffolded. Inherited limits and associations are not
+copied, while explicitly supplied environment bounds are saved. Keep needs no
+leaderboard credential or routing allowance.
+
+Cancellation, invalid authorization or failed readiness saves no Config, prompt,
+Skill policy, scaffold provenance or tracker labels. Edits detected during the
+live read to the chosen Config, inherited global Config, prompt or Measured
+routing artifact abort rather than being overwritten or approved against stale
+inputs. Bare init and `--routing ask` also capture Config inputs before opening
+the wizard, including when no policy is yet recorded. Any byte change to those
+chosen-scope inputs aborts before an authorization prompt or readiness request:
+setup preserves the edit and asks you to re-run init, not choose a policy.
+Invalid authority is an
+actionable refusal, not a traceback; an invalid unchosen scope does not prevent
+configuring another scope. The prerequisite machine-wide Skill catalog may remain, as described
+above. After successful setup, later Run failures leave those saved choices
+intact; proposal and Pickup must validate fresh inputs, not trust setup readiness.
 
 ### Tracker labels the wizard ensures
 
@@ -633,8 +826,9 @@ afterwards without hand-finding the file, use the
 The **very first** bare `git-loopy` — when no `config.toml` resolves in *either*
 scope — sets itself up:
 
-- On an **interactive TTY** it auto-runs the wizard above, then **continues into
-  the loop** on the Config it just wrote. The terminal test is the same one
+- On an **interactive TTY** it auto-runs the wizard above, then checks the Run's
+  preconditions on the Config it just wrote. A missing routing choice refuses
+  work with the `update --routing` or `--route-policy` remedy above. The terminal test is the same one
   explicit `git-loopy init` applies — stdin *and* stdout — so `git-loopy > log`
   on a fresh clone takes the no-TTY path below rather than opening a fullscreen
   wizard against a pipe.
@@ -646,7 +840,7 @@ scope — sets itself up:
   defaults and goes straight to the loop, so automated runs can't hang on the
   wizard.
 - Once Config exists in either scope, a bare `git-loopy` skips the wizard entirely
-  and goes straight to the loop.
+  and checks the Run's preconditions, including routing authority.
 
 **Setup finishing is not the loop starting.** `init` saves and exits; the Run is
 a separate act with its own preconditions (a git repository, `copilot` on
@@ -793,7 +987,7 @@ reclaims nothing, and never reaches your issue tracker. It needs only `git`.
 | `GIT_LOOPY_MODEL`                           | `claude-opus-5`                | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `GIT_LOOPY_REASONING_EFFORT` for backward compatibility. With ModelSelectionMode enabled (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`) this value is the startup picker's pre-selected cursor and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly. |
 | `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, case-insensitive (the `--reasoning-effort` flag overrides this). Explicit `none` requests no reasoning; an omitted value lets the backend choose when no configured/default effort applies. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A model without configurable reasoning (`auto`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
 | `GIT_LOOPY_CONTEXT_TIER`                    | `default`                       | Root-session tier: `default` or `long_context`. `--context-tier` wins, then this value, project Config, global Config, and the default. It constrains every **Routing resolution**, including a legacy `[routing]` model/effort pair, but does **not** suppress per-task-type routing. |
-| `GIT_LOOPY_ROUTE_POLICY`                    | unset (`unselected`)            | Which **Route policy** this Run uses. `unselected` — the default, and what you get by saying nothing — keeps every existing behaviour unchanged. `static` selects the **Static route** (ADR-0057): your `model` / `reasoning_effort` / `context_tier` are verified against the **authenticated harness this Run spawns** and then honoured exactly, rather than being passed through the built-in model roster's capability gate. `--route-policy` wins, then this value, project Config, global Config. A settings combination the harness does not support **fails before any work** instead of being quietly downgraded. `dynamic` selects the **Dynamic route** (ADR-0057): each issue's pair is elected from live Artificial Analysis evidence by a bounded **Route selector**, and needs `ARTIFICIAL_ANALYSIS_API_KEY` plus a deadline, a credit allowance, a selector concurrency and a verified `[route_associations]` table, or the Run refuses before any work. |
+| `GIT_LOOPY_ROUTE_POLICY`                    | unset (`unselected`)            | Which **Route policy** this Run uses. `unselected` is absence of consent: local saved Config requires an explicit Static/Dynamic choice before work. Staged no-Config and non-local paths retain legacy behavior. `static` selects the **Static route** (ADR-0057): your `model` / `reasoning_effort` / `context_tier` are verified against the **authenticated harness this Run spawns** and then honoured exactly, rather than being passed through the built-in model roster's capability gate. `--route-policy` wins, then this value, project Config, global Config. A settings combination the harness does not support **fails before any work** instead of being quietly downgraded. `dynamic` selects the **Dynamic route** (ADR-0057): each issue's pair is elected from live Artificial Analysis evidence by a bounded **Route selector**, and needs `GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY` plus a deadline, a credit allowance, a selector concurrency and a verified `[route_associations]` table. An explicit run-wide model or effort override bypasses those dynamic prerequisites, but its Static settings must still pass live harness validation. |
 | `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type** and **Bump-class classifiers** run on. Each reads an unlabelled issue's own content and writes a closed `task-type:` or `semver:` label back at **Pickup** (ADR-0029, ADR-0052). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
 | `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort both classifiers run at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
@@ -1016,10 +1210,11 @@ not `config` keys.
 ### The Route policy and the Static route
 
 `route_policy` (flag: `--route-policy`, env: `GIT_LOOPY_ROUTE_POLICY`) chooses
-how this Run decides what each issue runs on. It has two values today:
+how this Run decides what each issue runs on:
 
-- **`unselected`** — the default. Everything works exactly as documented above:
-  the pair you configure is passed through the built-in **model roster**'s
+- **`unselected`** — absence of a decision, not consent. Local saved Config with this
+  effective policy refuses before work and names the keep-or-migrate remedy.
+  Staged no-Config/non-local paths and historical records retain the built-in **model roster**'s
   capability gate, an effort the roster says the model cannot take is dropped to
   "let the backend pick", a context tier the roster does not list for that model
   is downgraded to `default`, and the run keeps going.
@@ -1039,7 +1234,7 @@ with exit `1` **before any issue is picked up**, naming the setting and which
 entry it came from:
 
 ```
-git-loopy: the selected Static route was refused — [routing] docs: 'gpt-5-mini'
+git-loopy: the selected Static route was refused: [routing] docs: 'gpt-5-mini'
 does not accept reasoning effort 'max'. It accepts: low, medium.
 ```
 
@@ -1074,7 +1269,7 @@ locally, or leave `route_policy` unset for that placement.
 
 `dynamic` routes **one issue at a time** from current public benchmark
 evidence instead of from a pair you wrote down. It is opt-in, off by default,
-and starts nothing at all unless every prerequisite is present:
+and starts no dynamic work unless every prerequisite is present:
 
 ```toml
 route_policy = "dynamic"
@@ -1087,10 +1282,142 @@ selector_concurrency = 2                # or --selector-concurrency
 "gpt-5.6-terra" = "gpt-5.6-terra@high"
 ```
 
-and `ARTIFICIAL_ANALYSIS_API_KEY` in the environment. The key is read from the
+and `GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY` in the environment. The key is read from the
 environment **only** — never written into Config, never serialized into a
 detached child, never echoed into diagnostics — and nothing from your
 repository is sent to the leaderboard service.
+
+An explicit run-wide `--model` or `--reasoning-effort` override (or its
+`GIT_LOOPY_` environment equivalent) suppresses Dynamic routing completely:
+it needs no leaderboard access, routing limits, association table, or Route
+selector. Its model, effort, and tier are still verified against the live
+harness and either honoured exactly or refused, never silently corrected.
+A context-only `--context-tier` / `GIT_LOOPY_CONTEXT_TIER` override fixes the work
+tier without suppressing Dynamic model/effort selection. Only verified candidates
+supporting that exact tier may be offered; no fitting candidate means no assessment
+or Dynamic work, not a tier downgrade. The strongest Route selector is still elected
+independently and uses the smallest tier fitting its own input, even when it cannot
+serve as the work model at the requested tier. Persisted `context_tier` remains the
+inherited tier for Static pairs; it is not a context-only Run override.
+
+`git-loopy doctor` and a Run share routing **preflight**:
+missing authorization or limits, non-finite bounds, selector concurrency outside
+1–64, unverifiable execution placement, and invalid Static settings produce the
+same refusal. Doctor spends no routing credits and rewrites no routes, including
+under `--apply`. Doctor evaluates Config and environment, not flags on a
+separate future Run; to check a run-wide override, supply its
+`GIT_LOOPY_MODEL` / `GIT_LOOPY_REASONING_EFFORT` equivalent to doctor, or
+`GIT_LOOPY_CONTEXT_TIER` for a context-only override.
+They also read current Artificial Analysis evidence and authenticated Copilot
+capabilities through the same live-readiness module used by proposal and Pickup.
+Unavailable sources, an empty verified candidate intersection, or exhausted
+assessment bounds produce a refusal with a remedy, without a selector,
+classification, Calibration, or tracker write. These reads use the provider's
+request quota, but spend no routing AI Credits.
+
+A successful readiness row is **not a Pickup or an issue-fit guarantee**: no
+issue context has been assessed, and proposal and Pickup must check fresh inputs
+again. A failed Dynamic-readiness row makes doctor nonzero but does not prevent a
+Run from reaching eligible Static work or recovering on a later fresh check.
+Missing or invalid Dynamic prerequisites leave uncovered work unavailable for that
+Run: no Route selector or fallback work session is started for it. A Task-type
+classifier may still discover a retained Static route without leaderboard access,
+but only within the explicitly authorized routing deadline, allowance and
+concurrency. Its usage remains Run Consumption; missing, invalid or exhausted limits admit
+no classification. Retained Static routes still undergo live validation.
+Restore the prerequisites before starting a
+new Dynamic Run; unlike a transient source outage, a Run with no authorized
+routing setup cannot recover by inventing it later. Setup and migration still
+refuse to save an unready Dynamic choice, and doctor remains nonzero.
+Outstanding migration authority, unsupported placement, and invalid Static
+settings still stop the Run. The routing deadline starts before live preflight,
+including a listing shared with retained Static validation. The Run carries that
+ledger into routing; neither completed validation nor missing leaderboard access
+grants a new assessment budget. Expiration still permits already-classified
+Static work on freshly validated settings.
+
+**Activation status (#567): incomplete.** `init --routing`, `update --routing`,
+and the update chained by `upgrade` offer explicit keep-or-migrate authorization and this shared readiness
+verdict. Composed first-setup and saved-migration serial/Lane cases observe actual
+session settings and canonical records, including fresh outages after setup.
+They also carry saved choices through outcome-aware retries, attempt/allowance
+exhaustion, fresh cross-Run reuse, and pending issue-publication recovery without
+rewriting Config or duplicating tracker comments.
+Saved-setup coverage also exercises model/effort overrides without leaderboard
+access and context-only controls in both modes. Work-tier authority survives
+detached startup, fresh proposal/Pickup capability checks, and cross-Run reuse;
+changed evidence or eligibility cannot carry an obsolete proposal into work.
+Saved-setup Consumption cases also compose concurrent classifier/selector billing,
+allowance exhaustion and post-paid overshoot with actual work in both modes.
+An open routing session's observed bill closes admission immediately; completion
+and cancellation preserve the charge exactly once, including additional billing
+reported during cancellation cleanup. Malformed cleanup billing cannot swallow
+cancellation or undo valid charges already observed. An assessment returned after the authorized
+deadline is refused without publishing its classification or proposal; its
+Consumption remains visible, and already-bound work may finish.
+The shared `in_flight_consumption` Conformance matrix now drives these valid-bill
+cases through recorded init/update authorization and the real unattended CLI:
+eight cases across exact exhaustion/overshoot and serial/Lane execution.
+It observes refusal while the assessment is still open, the concurrency ceiling,
+unchanged strongest selector, actual frozen work settings, canonical Pickup,
+CLI/Dashboard Consumption and final tracker publication. Pending candidates
+remain open without final assignments; saved Config stays unchanged. This
+extends the shared proof of opt-in behavior, not the activation defaults.
+Upgrade requires consent before handoff, including when the target is already
+installed. Its saved global choice reaches actual serial/Lane sessions, with
+retained Static routes and fresh post-setup outages covered.
+Local Run migration authority is now enforced before work, with temporary
+flag/environment and recorded project/global recovery exercised by the shared
+`routing-resolution.json` Conformance cases. They observe retained Static rows,
+inherited tiers, run-wide and context-only overrides, and loss of access/evidence
+after migration through actual sessions and canonical/Dashboard readback.
+The shared `first_setup` cases also start without either Config scope, collect
+guided project/global answers through the real Textual `init --routing` walk,
+and carry repaired readiness failures into actual serial/Lane work. Missing access, invalid bounds,
+no verified candidates and unavailable evidence/capabilities save no choices
+or tracker labels; Static setup needs no Dynamic access or limits. Canonical
+Pickup, Dashboard and final tracker comments agree with actual session settings,
+and subsequent Runs preserve the saved Config. These are opt-in setup obligations,
+not evidence that bare init or auto-setup activates Dynamic defaults.
+That walk exposed and fixed Skill discovery trying to nest an event loop inside
+the fullscreen wizard; discovery now completes on its own joined worker before
+the wizard can save, with validation failures still propagated without writes.
+Shared `retry_lifecycle` Conformance now carries recorded migration through seven
+serial/Lane retry cases. Actual session settings agree with canonical Pickup,
+outcome history, CLI/Dashboard readback and tracker publication. It covers
+reselection, justified and refused repeats, infrastructure failure, advances,
+attempt/allowance exhaustion and explicit Static escalation. Refusal leaves
+later eligible Static work usable and spends no task attempt or Strike. A Lane's
+retry uses existing serial fallback, not a second Lane; Config stays unchanged.
+Shared `pool_revalidation` cases also carry recorded migration through a prepared
+proposal into real serial Pickup or Lane refill. A proposal takes no Lease and
+publishes no final route. Unchanged inputs avoid another selector call; changed
+issue text, evidence or eligibility cause reassessment before work. Required
+evidence loss or newly ineligible work cannot start the proposed Agent, but
+already-running Agents finish on their frozen settings and retained Static work
+continues. Actual settings agree with canonical Pickup, CLI/Dashboard readback,
+Run-only selector Consumption and final tracker publication. Config and existing
+Pickup-time Lease acquisition/release remain unchanged.
+Shared `pool_priority` cases extend that seam to several eligible pending
+candidates: oldest-first order and explicit Priority determine the next proposal,
+not whichever other assessment finishes first. Selector concurrency stays
+within the saved bound of one or two. The next serial Pickup or Lane refill does
+not wait for unrelated open selectors; cancelled assessments keep their Run-only
+Consumption and visible unavailable preparation records. Pending issues remain
+open, unleased and unpublished, with unchanged labels and Config.
+Non-local activation, the remaining composed activation matrix and the remaining
+Wrapper/Conformance activation obligations still precede the final default
+change. Existing Config is not migrated implicitly.
+Python issue-owning serial and
+Lane sessions are the implementation scope; shell/PowerShell activation remains
+deferred, and this does not add Subagent or Integration routing.
+
+The Run's startup readback distinguishes uncovered Dynamic work awaiting Pickup
+from a configured default pair. No fixed escalation rung does not disable
+permitted Dynamic retries; they reselect from outcome evidence. Retained Static
+routes and explicit escalation are shown exactly as configured under either
+selected policy, without applying legacy offline-roster effort downgrades.
+Historical unselected-policy readbacks remain unchanged.
 
 What happens per issue:
 
@@ -1137,7 +1464,15 @@ Two properties are worth knowing before you turn it on:
 - **Routing costs credits.** Classification and selector calls count toward
   `routing_credit_allowance` and toward the Run's **Consumption**. Billing
   already in flight when a bound is reached is disclosed rather than hidden, and
-  no further routing call is admitted afterwards.
+  no further routing call is admitted afterwards. Observed credits count
+  immediately, not only when the billed session finishes. Cancellation retains
+  that charge; completion does not charge it again.
+  These sessions remain **Run**-only **Consumption**: the CLI includes them in Run
+  totals and names their subtotal separately; the **Dashboard** shows that subtotal
+  in its **Summary** band. They do not inflate an **Iteration**, **Lane contribution**
+  or issue's work bill, even while Pool preparation runs beside work. A refused
+  route still reports the assessment already billed. Missing billing stays
+  unknown rather than becoming a zero or a complete-looking subtotal.
 
 ### Reusing a route a previous Run already elected
 
@@ -1253,8 +1588,25 @@ These tracker writes are observational. They never become Routing input, never
 change a Task type, and never override Config. A failed comment or label write
 does not stop the already-recorded work: its local delivery state remains
 pending or failed, is retried finitely on a later Run, and appears separately in
-the Dashboard. A failed local final-resolution record is different and starts no
-work.
+the Dashboard. The three failed delivery attempts are shared across startup
+retries and later Pickups of the same assignment. Once exhausted, that assignment
+stays visibly failed without contacting the tracker again; restarting or restoring
+tracker access does not renew exhausted retries. A materially changed final assignment
+has its own finite retry bound. Neither state blocks locally recorded work. A failed local
+final-resolution record is different and starts no work.
+An exhausted label replacement may leave the previous Route label, or no Route label
+if its removal succeeded before the replacement failed. Read the canonical local
+Route and delivery status, not that incomplete tracker projection. Correcting an
+association on the tracker does not change routing authority or renew retries.
+
+The shared `publication_recovery` Conformance cases carry explicit init/update
+authorization through repeated offline CLI Runs in serial and Lane modes. They
+cover fresh reuse without another selector call, permission/rate-limit/transient
+failures, partial delivery without duplicate comments, exhausted retries, and
+previous or missing owned associations after replacement failure. Capability withdrawal
+requires a new final assignment. Session settings,
+canonical Pickup, Dashboard route readback and tracker effects agree; Config is
+unchanged. This does not enable the final Dynamic default or remote-host routing.
 
 ### What a later attempt is told
 
@@ -1584,7 +1936,7 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `mai-code-1.1-flash`          | `low` `medium` `high`                    |
 | `mai-code-1-flash-picker`     | `low` `medium` `high`                    |
 
-This fallback covers all 19 models returned by the SDK-pinned CLI `1.0.85`
+This fallback covers all 19 models returned by the SDK-pinned CLI `1.0.83`
 on the upgrade account, plus seven retained compatibility entries:
 `claude-sonnet-4.6`, `claude-sonnet-4.5`, `claude-opus-4.6`, all three Gemini
 rows, and `mai-code-1-flash-picker`. Those seven were not offered by that

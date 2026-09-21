@@ -26,7 +26,7 @@ use crate::navigation::{LogPosition, Screen};
 use crate::session::{DashboardFrame, Diagnostics};
 use crate::view::{
     Activity, ActivityWindow, ContextFill, ContributionRow, DeliveryView, DetailHeader, DrillIn,
-    Header, LogLineView, PeakContext, PreparationView, QueueRow, RouteView, SummaryRow,
+    Header, LogLineView, PeakContext, PreparationView, QueueRow, RouteView, Summary,
     TerminalCapabilities,
 };
 
@@ -231,7 +231,7 @@ pub fn draw_dashboard(frame: &mut Frame, dashboard: &DashboardFrame) {
     draw_summary(
         frame,
         bands.summary,
-        &view.dashboard.summary.rows,
+        &view.dashboard.summary,
         cost_placeholder(&view.dashboard.header, &glyphs),
         &glyphs,
     );
@@ -307,15 +307,24 @@ impl DashboardBands {
 
     /// Whether a pointer at these terminal coordinates landed on that handle.
     ///
-    /// Deliberately the library's rather than the
-    /// binary's: the coordinates a terminal reports mean nothing without the
-    /// layout they were drawn in, and that layout is [`dashboard_bands`].
+    /// Hit-testing belongs to the library rather than the binary: the
+    /// coordinates mean nothing without the layout they were drawn in.
     pub fn hits_activity_handle(&self, column: u16, row: u16) -> bool {
         let handle = self.activity_handle();
         column >= handle.x
             && column < handle.x.saturating_add(handle.width)
             && row >= handle.y
             && row < handle.y.saturating_add(handle.height)
+    }
+
+    /// The visible Queue row slot, excluding borders and column headings.
+    pub(crate) fn queue_row_at(&self, column: u16, row: u16) -> Option<usize> {
+        let inner = Block::default().borders(Borders::ALL).inner(self.queue);
+        if !inner.contains((column, row).into()) {
+            return None;
+        }
+        row.checked_sub(inner.y.saturating_add(TABLE_HEADER_HEIGHT))
+            .map(usize::from)
     }
 }
 
@@ -381,6 +390,8 @@ fn fitted(columns: &[Column], width: u16) -> Vec<usize> {
 /// The padding the tables lay out with, and that `cells` splits rows on.
 const COLUMN_SPACING: u16 = 2;
 
+const TABLE_HEADER_HEIGHT: u16 = 1;
+
 /// One table drawn with only the columns that fit.
 fn draw_table(
     frame: &mut Frame,
@@ -415,7 +426,11 @@ fn draw_table(
 
     frame.render_widget(
         Table::new(body, widths)
-            .header(Row::new(headings).style(Style::default().add_modifier(Modifier::BOLD)))
+            .header(
+                Row::new(headings)
+                    .height(TABLE_HEADER_HEIGHT)
+                    .style(Style::default().add_modifier(Modifier::BOLD)),
+            )
             .column_spacing(COLUMN_SPACING)
             .block(glyphs.block(title.to_string())),
         area,
@@ -834,12 +849,23 @@ fn grouped(value: i64) -> String {
 ///
 /// Every column is a field of the normalized Iteration rollup, so the band is
 /// an audit of what the Orchestrator reported rather than a second tally.
-fn draw_summary(frame: &mut Frame, area: Rect, rows: &[SummaryRow], cost: &str, glyphs: &Glyphs) {
+fn draw_summary(frame: &mut Frame, area: Rect, summary: &Summary, cost: &str, glyphs: &Glyphs) {
+    let title = summary.run_consumption.as_ref().map_or_else(
+        || " Summary ".to_string(),
+        |usage| {
+            format!(
+                " Summary | Run-only: {} in / {} out / {} credits ",
+                usage.tokens_in,
+                usage.tokens_out,
+                credits(usage.credits, cost),
+            )
+        },
+    );
     draw_table(
         frame,
         area,
         &SUMMARY_COLUMNS,
-        rows.iter().map(|row| {
+        summary.rows.iter().map(|row| {
             vec![
                 row.iteration
                     .map_or_else(|| glyphs.unknown.to_string(), |number| number.to_string()),
@@ -861,7 +887,7 @@ fn draw_summary(frame: &mut Frame, area: Rect, rows: &[SummaryRow], cost: &str, 
                 row.strikes.to_string(),
             ]
         }),
-        " Summary ",
+        &title,
         glyphs,
     );
 }
@@ -1416,8 +1442,18 @@ const WALL_CLOCK_WIDTH: usize = 11;
 /// lines this helper cannot decode will write many, and a Header that scrolled
 /// their contents would bury the Run it exists to describe. The most recent
 /// line is kept on the session for the operator to ask for.
+///
+/// An unresolved viewing zone is stated in the same slot, and stated as what
+/// it is: the clocks below are UTC, not this machine's local time (ADR-0058).
 fn diagnostic_segment(diagnostics: &Diagnostics) -> Option<String> {
-    (!diagnostics.is_empty()).then(|| format!("input {} unreadable", diagnostics.unreadable_lines))
+    let mut notes = Vec::new();
+    if diagnostics.unreadable_lines > 0 {
+        notes.push(format!("input {} unreadable", diagnostics.unreadable_lines));
+    }
+    if diagnostics.local_zone_unresolved {
+        notes.push("times in UTC — local zone unresolved".to_string());
+    }
+    (!notes.is_empty()).then(|| notes.join("  "))
 }
 
 /// The Header's compact Context-fill slot.

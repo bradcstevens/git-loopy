@@ -84,9 +84,10 @@ from git_loopy.events import (
     WRAPPER_STOP_REQUESTED,
 )
 
-from git_loopy.usage import BillingSample
+from git_loopy.usage import BillingSample, is_run_scoped_usage
 
 from .console import STYLES
+from .local_time import viewer_local
 from .summary import RunSummary
 
 __all__ = ["Renderer"]
@@ -617,7 +618,9 @@ class Renderer:
                 text.append(f"  ({origin})", style=STYLES["meta"])
             validated = event.get("reused_validated_at")
             if isinstance(validated, str) and validated:
-                text.append(f"  decided {validated}", style=STYLES["meta"])
+                text.append(
+                    f"  decided {viewer_local(validated)}", style=STYLES["meta"]
+                )
         elif isinstance(superseded, str) and superseded:
             text.append("  reassessed — a recorded route no longer validates")
             text.append(f"  ({superseded})", style=STYLES["meta"])
@@ -658,7 +661,9 @@ class Renderer:
                 text.append(f" ({tier})", style=STYLES["meta"])
             valid_until = event.get("valid_until")
             if isinstance(valid_until, str) and valid_until:
-                text.append(f"  valid until {valid_until}", style=STYLES["meta"])
+                text.append(
+                    f"  valid until {viewer_local(valid_until)}", style=STYLES["meta"]
+                )
             for label, field in (
                 ("proposal", "proposal_id"),
                 ("rationale", "summary"),
@@ -674,6 +679,8 @@ class Renderer:
             ):
                 value = event.get(field)
                 if isinstance(value, str) and value:
+                    if field in _ROUTING_INSTANTS:
+                        value = viewer_local(value)
                     text.append(f"  {label} {value}", style=STYLES["meta"])
             selector_model = event.get("selector_model")
             selector_effort = event.get("selector_effort")
@@ -925,6 +932,7 @@ class Renderer:
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             billing=BillingSample.from_event(event),
+            run_scoped=is_run_scoped_usage(event),
         )
         # No live ticker — accumulated silently. The frozen iteration
         # Panel surfaces the totals at iteration end.
@@ -1052,6 +1060,22 @@ _DELIVERY_PHRASES: dict[str, str] = {
 #: projection owes nothing, so it prints without the warning colour.
 _UNDELIVERED_ROUTE_PROJECTIONS: frozenset[str] = frozenset(
     {"pending", "partial", "failed"}
+)
+
+#: The **Routing preparation** provenance fields that are *instants*, and so
+#: belong to whoever is reading them rather than to the Execution host that
+#: recorded them (ADR-0058).
+#:
+#: Named rather than sniffed: the same detail loop carries a proposal id, a
+#: model identity and a benchmark version, and a readback that guessed which
+#: of those looked like a date would eventually rewrite one that was not.
+_ROUTING_INSTANTS: frozenset[str] = frozenset(
+    {
+        "prepared_at",
+        "evidence_retrieved_at",
+        "capabilities_retrieved_at",
+        "measurement_at",
+    }
 )
 
 #: The sources whose phrase is completed by the keys the tracker actually
@@ -1242,6 +1266,11 @@ def _routing_status_phrase(event: dict[str, Any]) -> str:
     """
     if event.get("routing_suppressed") is True:
         return "suppressed run-wide by an explicit model pin"
+    if event.get("route_policy") == "dynamic":
+        phrase = "Static routes in force" if _routes(event) else "no table configured"
+        if _string_list(event.get("unconfigured_task_type_keys")):
+            phrase += "; uncovered work awaits Dynamic Pickup"
+        return phrase
     if not _string_list([route.get("key") for route in _routes(event)]):
         return "no table configured — every issue runs on the default pair"
     return "in force"
@@ -1264,9 +1293,11 @@ def _run_readback_lines(event: dict[str, Any]) -> list[tuple[str, str, str]]:
     """
     warning_style = STYLES["warning"]
     plain = STYLES["meta"]
+    policy = event.get("route_policy")
+    dynamic = policy == "dynamic" and event.get("routing_suppressed") is not True
     lines: list[tuple[str, str, str]] = [
         (
-            "default pair",
+            "configured pair" if dynamic else "default pair",
             _readback_pair_phrase(
                 {
                     "model": event.get("model"),
@@ -1290,7 +1321,13 @@ def _run_readback_lines(event: dict[str, Any]) -> list[tuple[str, str, str]]:
             )
         )
     else:
-        lines.append(("escalation rung", "off — a stalled issue is not retried", plain))
+        if dynamic:
+            retry = "none; permitted retries retain Static routes or reselect Dynamic work"
+        elif policy in {"static", "dynamic"}:
+            retry = "off; permitted Static retries retain their selected route"
+        else:
+            retry = "off — a stalled issue is not retried"
+        lines.append(("escalation rung", retry, plain))
     lines.append(("routing", _routing_status_phrase(event), plain))
     for route in _routes(event):
         key = route.get("key")
@@ -1306,7 +1343,9 @@ def _run_readback_lines(event: dict[str, Any]) -> list[tuple[str, str, str]]:
         )
     unconfigured = _string_list(event.get("unconfigured_task_type_keys"))
     if unconfigured:
-        lines.append(("unrouted", ", ".join(unconfigured), plain))
+        lines.append((
+            "dynamic pending" if dynamic else "unrouted", ", ".join(unconfigured), plain,
+        ))
     lines.append(("harness", _roster_phrase(event), plain))
     return lines
 

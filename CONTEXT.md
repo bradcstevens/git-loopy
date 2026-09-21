@@ -436,29 +436,22 @@ _Avoid_: shutdown, teardown, quiescing, stopping (**Stop** is the gesture; this 
 state it latches).
 
 **Detach**:
-Leaving the live interface while the run keeps going unattended, falling back to the
-line-by-line scrollback output. It has two forms: the **voluntary** one the operator
-asks for, and the **involuntary** one a **Dashboard fault** produces. Both produce the
-same continuation — the loop runs on, the sinks swap to the parked line printer — and
-are labelled differently, because one of them is a bug the operator wants to see
-(ADR-0024).
-_Avoid_: background, minimize, exit.
+Disconnecting one client from a **Run** and returning its terminal to the shell,
+without stopping the work or affecting other clients. Observing the Run through a
+line-printer fallback is still attachment, not Detach (ADR-0058).
+_Avoid_: background, minimize, Stop, line-printer fallback.
 
 **Dashboard fault**:
-A **Dashboard** that raises — at startup or mid-**Run** — which the Run survives. It
-is an involuntary **Detach**: the operator loses the live view, not the work, and the
-Run continues on the parked line printer (ADR-0024). It is recorded distinguishably
-from a voluntary Detach, reported at the point of the swap, and carries its own exit
-code, so a supervising script is never told everything was fine.
+A failure of the **Dashboard** view that leaves the **Run** and its outcome unchanged.
+The affected client reports the fault, restores the terminal, and remains attached
+through the line printer; this is not **Detach** (ADR-0058).
 _Avoid_: TUI crash, renderer error, dashboard failure (as the name).
 
 **Terminal owner**:
-The single component responsible for the terminal's mode state for the whole process
-(ADR-0024). It captures the terminal's entry state before the **Dashboard** starts and
-restores that captured state — not an assumed one — on every ordinary exit path,
-including a **Stop**, a **Detach**, a **Dashboard fault**, an unhandled exception and a
-signal. Release is idempotent, and the non-interactive path acquires no ownership at
-all.
+The sole owner of a terminal's mode state for the client process (ADR-0024, amended
+by ADR-0058). It restores the captured entry state when releasing that terminal,
+including a handoff or client failure; the **Run**'s lifetime does not depend on
+terminal ownership.
 _Avoid_: terminal manager, screen guard, teardown hook (restoration is not the
 Dashboard's teardown).
 
@@ -485,6 +478,24 @@ finished is never permission to control or **Sweep** its work.
 _Avoid_: running/not running, status, health, heartbeat.
 
 ### The live interface
+
+**Viewing machine**:
+The machine presenting a **Run** to an operator. Its clock governs human-facing
+wall-clock timestamps, independently of the **Execution host** doing the work.
+Different viewers may therefore see different local times for the same recorded instant.
+_Avoid_: Run host, worker host, source machine.
+
+**Display zone**:
+The Viewing machine's timezone rules applied at each displayed instant, including
+historical and daylight-saving changes. It changes how an instant is shown, never
+the recorded instant, elapsed duration, or event order.
+_Avoid_: startup offset, stored timezone, execution timezone.
+
+**Attach**:
+Observing an existing **Run** through a client without starting or taking ownership
+of its work. Attach may be repeated or concurrent: navigation belongs to each client,
+while only an explicit **Stop** request crosses into the Run's lifecycle (ADR-0058).
+_Avoid_: reconnect (as a separate operation), resume (the Run did not stop).
 
 **Dashboard**:
 The single top-level screen of the live interface (no tabs): the header band, the
@@ -565,6 +576,18 @@ Cost. Consumption *carries* what was billed; it does not denominate it. Turning 
 Consumption tally into a Cost figure is the **Cost denomination**'s job. A figure no
 sample reported stays unknown, and a total missing one of its terms is unknown too
 rather than an understatement.
+**Task-type classifier** and **Route selector** sessions also carry **Run**-only
+**Consumption**, with `iter: null` and no **Lane contribution**. It contributes
+to Run totals, never to whichever work row or **Active issue** happens to be open.
+The CLI names it separately and the **Dashboard** shows it in the **Summary** band,
+including when routing refuses all work.
+Under **Dynamic routing**, each observed routing bill immediately consumes the
+Run's allowance, even while its session remains open. Completion and cancellation
+retain that bill without counting it twice. Already admitted calls may overshoot;
+that is not authorization for another call or a cheaper **Route selector**.
+Billing reported during cancellation cleanup is still Run Consumption. An
+assessment returned after the authorized deadline retains its bill but supplies
+neither a Task-type classification nor a Routing proposal.
 _Avoid_: usage, spend (for the token measure); billing.
 
 **Cost denomination**:
@@ -699,13 +722,16 @@ _Avoid_: draft tag, temporary tag, pre-tag.
 
 **Publication**:
 Making one **Publication input** public: pushing the *proved* annotated tag object
-itself and creating the GitHub Release that carries the committed notes. Reconciled
-against what the remote actually holds rather than assumed, so it is safely
+itself under an immutable public tag, with matching release notes and the distribution
+it promises. **Promotion** changes the Release line to stable; Publication makes that
+distribution available by creating the GitHub Release that carries the committed
+notes. Reconciled against what the remote actually holds rather than assumed, so it is safely
 repeatable — matching state is a successful no-op, disagreeing state is a refusal
 that mutates nothing, and a write whose response was lost is resolved by reading the
 remote back rather than by retrying blindly
 ([ADR-0059](docs/adr/0059-verify-the-promoted-snapshot-before-publishing-an-immutable-tag.md)).
-_Avoid_: release, deploy, upload, push (the git operation).
+_Avoid_: Promotion, tagging alone (a tag does not prove a complete publication),
+release, deploy, upload, push (the git operation).
 
 **Distribution mode**:
 The explicit promise one Release makes about what it carries. `source-only` publishes
@@ -742,6 +768,16 @@ later Run precondition refuses stays saved while the Run exits non-zero naming t
 blocker. Cancelling saves no Config, prompt, **Skill policy** or tracker label — a
 narrower claim than "writes nothing", because the catalog install is a machine-wide
 prerequisite that precedes the first question (ADR-0058).
+Opt-in `init --routing` adds explicit keep-or-migrate authorization and the
+shared Run/doctor routing-readiness verdict before saving. Missing bounds and
+verified associations are collected without defaults; the credential stays in
+the operator's environment. New Static rows are optional, not automatic seeds.
+The review discloses this authorization step, and cancelling it abandons every
+operator choice. A recorded Static/Dynamic policy in the chosen scope (including
+inherited global authority) also enters this path on bare init: omitting
+`--routing` cannot bypass readiness or overwrite unattended saved choices.
+The wizard follows scope changes without promoting unvisited defaults to
+authored Static routes. Unselected init does not yet activate Dynamic defaults.
 _Avoid_: setup, bootstrap; install (install is the separate act of putting the `git-loopy` command
 on PATH).
 
@@ -775,6 +811,14 @@ _Avoid_: upgrade, sync, refresh-all.
 **upgrade (subcommand)**:
 Replacing the installed distribution with a different **Release version** through its **install
 channel**, then running **update**. Moves exactly one artifact: the one it is itself running from.
+Python requires an explicit or recorded global keep-or-migrate choice before
+handoff (ADR-0057). The installed Runner's routing-aware update checks readiness
+before writing Config; a same-Release target skips reinstallation, not consent.
+Retired routing keys refuse that update until an explicit bare **update**
+repairs them; the successful distribution install is not rolled back.
+Project Config remains outside this command's scope. Local Runs with saved Config now
+independently require a supplied or recorded routing choice before work; this
+does not activate Dynamic defaults.
 _Avoid_: update, self-update, install.
 
 **uninstall (subcommand)**:
@@ -873,10 +917,15 @@ independent constant: it resembles one seeded **Routed pair** by rationale, neve
 _Avoid_: global default (ambiguous — **Config** has global scope), fallback model.
 
 **Route policy**:
-Which rule this **Run** decides a **Routing resolution** by. Selected, never inherited: *unselected*
-is the absence of a decision and keeps every existing behaviour — the model roster's capability
-gate, the built-in **Escalation rung**, the historical Event stream — exactly as it was, and a
-**Run** that names nothing is never read as having chosen. *Static* selects the **Static route**;
+Which rule this **Run** decides a **Routing resolution** by. Selected, never inferred: *unselected*
+is the absence of a decision. Local Python refuses saved Config with no effective choice
+before work; flag/environment authority may supply it temporarily, while
+`update --routing` records it in Config. The same no-write verdict is used by
+CLI startup, doctor and Run preflight, including detached startup. A model/effort
+override alone does not answer the migration question. Historical streams and
+staged no-Config/non-local paths retain their legacy semantics. Non-local
+activation awaits the executing host's actual capabilities; a local model
+listing cannot authorize its selected routes. *Static* selects the **Static route**;
 *dynamic* selects the **Dynamic route**.
 A name the kit does not implement is refused rather than absorbed, because a policy silently
 ignored runs the **Run** under one the operator did not ask for and believes is active. It is one
@@ -917,6 +966,12 @@ lifecycle** admits elects **again** rather than inheriting a fixed **Escalation 
 election is handed the issue's **Attempt evidence** beside the freshly-read sources; the record
 keeps the attempt's lifecycle position separate from the configuration it elected, so a reassessed
 retry stays tellable from a first election that happened to agree (ADR-0057).
+A context-only Run flag or environment override fixes the work tier without
+fixing its model/effort. The candidate must support that tier at proposal and
+Pickup; the selector's own tier remains independently elected for input fit.
+This authority survives detached startup and participates in the relevant inputs
+used for cross-Run reuse. Persisted run-level context still supplies Static
+pairs' inherited tier rather than becoming a Dynamic Run override.
 _Avoid_: auto-routing, smart routing, model recommendation.
 
 **Route selector**:
@@ -932,12 +987,14 @@ _Avoid_: router agent, routing model, meta-model.
 **Route projection**:
 The observational copy of a final **Routing resolution** on the issue that resolution belongs to:
 one idempotent, append-only comment carrying the exact model, reasoning effort and **Context tier**
-plus an issue-safe rationale and provenance references, and one owned **Route label** encoding the
-same triple compactly. Written *after* the canonical local record, never before — a resolution that
+plus an issue-safe rationale and provenance references, and owned **Route labels** describing its
+model, verified context capacity, and applicable effort. Written *after* the canonical local record,
+never before — a resolution that
 could not be recorded locally starts no work and is published nowhere — and non-blocking once that
 record exists, so a permission failure, rate limit or half-delivered pair is retained as *pending*,
 *partial* or *failed* delivery and retried a bounded number of times rather than reported as
-published. It is strictly an output: a comment or label cannot pin, select or validate a route, the
+published. Exhausted delivery remains *failed*, not renewed by a later Run or restored access.
+It is strictly an output: a comment or label cannot pin, select or validate a route, the
 Runner keeps its own projection out of the issue block it reads back so publishing cannot invalidate
 the assessment that produced it, and a projection a newer resolution has overtaken is *stale* and is
 dropped rather than delivered late over the current label. Only a materially changed final
@@ -1095,22 +1152,27 @@ refresh; retained compatibility entries do not imply current availability. It ex
 validator for the `[routing]` table can exist — its keys are the operator's vocabulary and its
 pairs are the vendor's — so an operator reading back what the kit understood is the only
 validation available anywhere. It therefore carries the **keys themselves and never a count of
-them**, and gate-checks every configured pair **non-fatally**, so a route this Run never
-exercises still has its model id and effort checked and a dropped effort warns before it costs
-an **Iteration** rather than after. Unconditional: a Run that configured nothing prints the
-readback saying so.
+them**. Under an unselected **Route policy**, it gate-checks configured pairs
+**non-fatally**, warning about legacy effort drops before an **Iteration**. Under
+either selected policy, it echoes retained **Static routes** and explicit escalation
+unchanged: live preflight and Pickup validate them, not the offline roster. Under
+unsuppressed **Dynamic routing**, uncovered work awaits Pickup rather than the
+Default pair, and permitted retries may reselect without a fixed Escalation rung.
+Unconditional: a Run that configured nothing prints the readback saying so.
 _Avoid_: config dump, banner, routing validation (nothing is refused here — the readback reports).
 
 **Measured routing**:
-The **Calibration**-authored precedence tier — one rung between global **Config** and the
-built-in default, so it supplies a **Routed pair** only where the operator is silent and a
-hand-written `[routing]` entry beats it forever, with no override flag and no special case. It
+The **Calibration**-authored artifact. Under an unselected or Static **Route policy** it is
+one precedence rung between global **Config** and the built-in default, supplying a
+**Routed pair** only where the operator is silent; a hand-written `[routing]` entry always
+beats it. Under **Dynamic routing** it supplies supporting evidence, never a Static pin
+or authority to bypass the **Route selector** (ADR-0057). It
 is a single committed artifact, `routing.measured.toml` beside the project `config.toml`,
 carrying the table and its evidence in the same file and no free-text key for an opinion to
 occupy. Only current state is stored, because git is the ledger: a change arrives as a
 reviewable pull-request diff rather than a cache refresh, `git blame` names the **Calibration**
 that set a **Task type**'s pair, and deleting the file is the entire opt-out. It is a committed tier rather than a
-cache for that reason (ADR-0028), and like all **Routing** it takes effect in every mode, a
+cache for that reason (ADR-0028). Its policy-dependent role holds in every mode, a
 serial **Iteration** as much as a **Lane** (ADR-0037) — it was reported as inert at
 `parallel == 1` until the pair a **Pickup** resolves became the pair its session runs on.
 _Avoid_: auto-routing, learned routing, routing cache.
@@ -1501,6 +1563,33 @@ Parallel work is the **Lane contribution**, the concurrency bound is the **Lane 
 the ordering constraint is the **Integration backlog**.
 _Avoid_: using it for anything current — say **Lane contribution**, **Lane cap**, or
 **Rolling dispatch** instead.
+
+### Live routing (accepted design)
+
+These terms complete the vocabulary of
+[ADR-0057](docs/adr/0057-live-evidence-guides-per-issue-routing.md). The existing
+**Static route** and **Route selector** entries above describe their current
+implementation; this decision record does not establish delivery acceptance.
+
+**Dynamic routing**:
+Evidence-grounded choice of an issue's model, reasoning effort, and context tier,
+aimed at the shortest predicted time to an acceptance-passing result.
+_Avoid_: Calibration (an experiment), auto (the harness's own model choice).
+
+**Routing proposal**:
+A nonbinding recommendation for one eligible **Pool** candidate, together with the
+evidence and input identity it depends on. It is revalidated or superseded before
+**Pickup** reaches a **Routing resolution**, and reserves no work.
+_Avoid_: Routing resolution (binding), Lease (authority), assignment.
+
+**Route label**:
+An observational tracker label describing one dimension of an issue's final
+**Routing resolution**: model identity, verified full context capacity for its selected tier,
+or applicable reasoning effort; unavailable dimensions are absent.
+It may still represent a previous resolution or be absent after failed replacement
+and exhausted delivery retries, so the canonical local resolution and delivery status
+describe the current assignment, never the label as authority to choose, override, or pin a route.
+_Avoid_: model pin, routing input.
 
 ## Relationships
 

@@ -334,9 +334,10 @@ def test_a_suppressed_table_is_still_read_back() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_a_static_route_is_read_back_as_selected_not_as_the_roster_would_gate_it() -> (
-    None
-):
+@pytest.mark.parametrize("policy", [RoutePolicy.STATIC, RoutePolicy.DYNAMIC])
+def test_a_static_route_is_read_back_as_selected_not_as_the_roster_would_gate_it(
+    policy,
+) -> None:
     """The readback is the same resolution the session gets, or it is a lie.
 
     Under the Static route the hardcoded roster is not the authority — the
@@ -349,7 +350,8 @@ def test_a_static_route_is_read_back_as_selected_not_as_the_roster_would_gate_it
         reasoning_effort="max",
         routing={"test": ("gpt-5-mini", "max")},
         context_tier="long_context",
-        route_policy=RoutePolicy.STATIC,
+        escalation_rung=("gpt-5-mini", "max"),
+        route_policy=policy,
     )
 
     readback = build_run_readback(config)
@@ -362,6 +364,9 @@ def test_a_static_route_is_read_back_as_selected_not_as_the_roster_would_gate_it
     )
     assert route.gate_warnings == ()
     assert readback.context_tier == "long_context"
+    assert readback.escalation_rung is not None
+    assert readback.escalation_rung.effort == "max"
+    assert readback.escalation_rung.gate_warnings == ()
 
 
 def test_an_unselected_policy_still_gates_exactly_as_before() -> None:

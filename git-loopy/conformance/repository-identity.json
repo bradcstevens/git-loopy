@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.8",
+  "scope": "The pure repository identity a member resolves from its clone's remote URL before it may take a Lease (ADR-0033). Pins canonicalisation — every spelling of one repository must produce one name — and refusal, because a member that invented an identity would contend on a ref belonging to some other repository. Reading the URL is not pinned here: that is a local git config read, not a decision.",
+  "issue": 390,
+  "cases": [
+    {
+      "id": "scp-like-ssh-with-git-suffix",
+      "url": "git@github.com:bradcstevens/git-loopy.git",
+      "expected": "bradcstevens/git-loopy"
+    },
+    {
+      "id": "scp-like-ssh-without-git-suffix",
+      "url": "git@github.com:bradcstevens/git-loopy",
+      "expected": "bradcstevens/git-loopy"
+    },
+    {
+      "id": "https-with-git-suffix",
+      "url": "https://github.com/bradcstevens/git-loopy.git",
+      "expected": "bradcstevens/git-loopy"
+    },
+    {
+      "id": "https-without-git-suffix",
+      "url": "https://github.com/bradcstevens/git-loopy",
+      "expected": "bradcstevens/git-loopy"
+    },
+    {
+      "id": "https-with-trailing-slash",
+      "url": "https://github.com/bradcstevens/git-loopy/",
+      "expected": "bradcstevens/git-loopy"
+    },
+    {
+      "id": "https-with-embedded-credentials",
+      "url": "https://x-access-token:ghs_exampletoken@github.com/bradcstevens/git-loopy.git",
+      "expected": "bradcstevens/git-loopy"
+    },
+    {
+      "id": "ssh-url-scheme",
+      "url": "ssh://git@github.com/bradcstevens/git-loopy.git",
+      "expected": "bradcstevens/git-loopy"
+    },
+    {
+      "id": "ssh-url-scheme-with-port",
+      "url": "ssh://git@github.com:22/bradcstevens/git-loopy.git",
+      "expected": "bradcstevens/git-loopy"
+    },
+    {
+      "id": "git-protocol",
+      "url": "git://github.com/bradcstevens/git-loopy.git",
+      "expected": "bradcstevens/git-loopy"
+    },
+    {
+      "id": "http-scheme",
+      "url": "http://github.example.com/bradcstevens/git-loopy.git",
+      "expected": "bradcstevens/git-loopy"
+    },
+    {
+      "id": "surrounding-whitespace-is-not-part-of-the-name",
+      "url": "  https://github.com/bradcstevens/git-loopy.git\n",
+      "expected": "bradcstevens/git-loopy"
+    },
+    {
+      "id": "case-is-preserved-not-folded",
+      "url": "git@github.com:BradCStevens/Git-Loopy.git",
+      "expected": "BradCStevens/Git-Loopy"
+    },
+    {
+      "id": "uppercase-git-suffix-is-still-a-suffix",
+      "url": "https://github.com/bradcstevens/git-loopy.GIT",
+      "expected": "bradcstevens/git-loopy"
+    },
+    {
+      "id": "enterprise-host-resolves-like-any-other",
+      "url": "git@github.enterprise.example:bradcstevens/git-loopy.git",
+      "expected": "bradcstevens/git-loopy"
+    },
+    {
+      "id": "empty-url-names-nothing",
+      "url": "",
+      "expected": null
+    },
+    {
+      "id": "whitespace-only-url-names-nothing",
+      "url": "   ",
+      "expected": null
+    },
+    {
+      "id": "absolute-local-path-is-not-a-hosted-repository",
+      "url": "/Users/someone/code/git-loopy",
+      "expected": null
+    },
+    {
+      "id": "relative-local-path-is-not-a-hosted-repository",
+      "url": "../sibling-clone.git",
+      "expected": null
+    },
+    {
+      "id": "windows-drive-letter-is-a-path-not-a-host",
+      "url": "C:\\repos\\git-loopy",
+      "expected": null
+    },
+    {
+      "id": "file-scheme-has-no-owner",
+      "url": "file:///tmp/origin.git",
+      "expected": null
+    },
+    {
+      "id": "host-root-names-no-repository",
+      "url": "https://github.com/",
+      "expected": null
+    },
+    {
+      "id": "owner-alone-names-no-repository",
+      "url": "https://github.com/bradcstevens",
+      "expected": null
+    },
+    {
+      "id": "deeper-path-is-refused-not-truncated",
+      "url": "https://github.com/bradcstevens/git-loopy/tree/main",
+      "expected": null
+    },
+    {
+      "id": "scp-like-with-empty-path-names-nothing",
+      "url": "git@github.com:",
+      "expected": null
+    },
+    {
+      "id": "space-in-owner-is-not-a-repository-name",
+      "url": "https://github.com/brad stevens/git-loopy",
+      "expected": null
+    },
+    {
+      "id": "bare-git-suffix-leaves-no-name",
+      "url": "https://github.com/bradcstevens/.git",
+      "expected": null
+    },
+    {
+      "id": "git-plus-ssh-preserves-name-case",
+      "url": "git+ssh://git@github.com/Owner/Repo.GiT",
+      "expected": "Owner/Repo"
+    },
+    {
+      "id": "uppercase-hosted-scheme",
+      "url": "HTTPS://github.com/Owner/Repo.git",
+      "expected": "Owner/Repo"
+    },
+    {
+      "id": "scp-like-host-without-user",
+      "url": "github.com:Owner/Repo.git",
+      "expected": "Owner/Repo"
+    },
+    {
+      "id": "query-and-fragment-are-not-the-repository",
+      "url": "https://github.com/Owner/Repo.git?path=/Other/Repository#fragment",
+      "expected": "Owner/Repo"
+    },
+    {
+      "id": "ipv6-host-with-port",
+      "url": "ssh://git@[2001:db8::1]:22/Owner/Repo.git",
+      "expected": "Owner/Repo"
+    },
+    {
+      "id": "missing-host-is-not-a-hosted-repository",
+      "url": "https:///Owner/Repo.git",
+      "expected": null
+    },
+    {
+      "id": "port-without-host-is-not-a-hosted-repository",
+      "url": "ssh://git@:22/Owner/Repo.git",
+      "expected": null
+    },
+    {
+      "id": "unsupported-transport-is-not-guessed",
+      "url": "ftp://github.com/Owner/Repo.git",
+      "expected": null
+    },
+    {
+      "id": "escaped-path-is-not-decoded-into-a-name",
+      "url": "https://github.com/Owner/%52epo.git",
+      "expected": null
+    },
+    {
+      "id": "dot-segment-does-not-normalize-a-deeper-path",
+      "url": "https://github.com/Other/../Owner/Repo.git",
+      "expected": null
+    },
+    {
+      "id": "duplicate-inner-slash-is-not-collapsed",
+      "url": "https://github.com/Owner//Repo.git",
+      "expected": null
+    },
+    {
+      "id": "git-suffix-is-stripped-only-once",
+      "url": "https://github.com/Owner/Repo.git.git",
+      "expected": "Owner/Repo.git"
+    },
+    {
+      "id": "scp-like-trailing-newlines-are-not-part-of-the-name",
+      "url": "git@github.com:Owner/Repo.git\n\n",
+      "expected": "Owner/Repo"
+    }
+  ]
+}

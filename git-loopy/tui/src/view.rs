@@ -14,9 +14,11 @@
 use serde::Serialize;
 
 use crate::event::{ContextWindowSample, IssueRef, IterationSummary};
+use crate::state::LOG_TAIL_LINES;
 use crate::state::{
-    DashboardState, IssueContribution, IssueLedgerEntry, IterationRow, LogLine, ResolvedRoute,
-    RouteDelivery, RoutePreparation, STATUS_ACTIVE, STATUS_GONE, STATUS_QUEUED,
+    routing_preparation_text, routing_resolution_text, DashboardState, IssueContribution,
+    IssueLedgerEntry, IterationRow, LogContent, LogLine, ResolvedRoute, RouteDelivery,
+    RoutePreparation, STATUS_ACTIVE, STATUS_GONE, STATUS_QUEUED,
 };
 use crate::timestamp::{Timestamp, Zone};
 
@@ -64,7 +66,7 @@ impl Default for TerminalCapabilities {
 }
 
 /// Everything the projection needs that the Event stream does not carry.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ViewContext {
     /// The instant the Dashboard is being rendered at.
     pub now: Timestamp,
@@ -74,7 +76,10 @@ pub struct ViewContext {
     /// the Run's start and this render cannot move them. Left `None` the axis
     /// is derived from [`Self::now`], preserving the wall-clock behaviour.
     pub now_monotonic: Option<f64>,
-    /// The zone every rendered instant is projected into.
+    /// The rules every rendered instant is projected through.
+    ///
+    /// A rule set rather than one offset, so an instant is rendered at the
+    /// offset that zone was on *then* (ADR-0058).
     pub zone: Zone,
     /// The renderer's terminal capabilities.
     pub capabilities: TerminalCapabilities,
@@ -208,9 +213,9 @@ pub struct QueueRow {
 pub struct RouteView {
     pub model: Option<String>,
     pub effort: Option<String>,
+    pub source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_tier: Option<String>,
-    pub source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lifecycle_position: Option<String>,
 }
@@ -220,8 +225,8 @@ impl RouteView {
         Self {
             model: route.model.clone(),
             effort: route.effort.clone(),
-            context_tier: route.context_tier.clone(),
             source: route.source.clone(),
+            context_tier: route.context_tier.clone(),
             lifecycle_position: route.lifecycle_position.clone(),
         }
     }
@@ -295,7 +300,7 @@ pub struct PreparationView {
 }
 
 impl PreparationView {
-    fn project(preparation: &RoutePreparation) -> Self {
+    fn project(preparation: &RoutePreparation, zone: &Zone) -> Self {
         Self {
             state: preparation.state.clone(),
             model: preparation.model.clone(),
@@ -303,17 +308,23 @@ impl PreparationView {
             context_tier: preparation.context_tier.clone(),
             summary: preparation.summary.clone(),
             proposal_id: preparation.proposal_id.clone(),
-            prepared_at: preparation.prepared_at.clone(),
-            valid_until: preparation.valid_until.clone(),
+            prepared_at: local_instant(preparation.prepared_at.as_deref(), zone),
+            valid_until: local_instant(preparation.valid_until.as_deref(), zone),
             relevant_input_identity: preparation.relevant_input_identity.clone(),
             selector_model: preparation.selector_model.clone(),
             selector_effort: preparation.selector_effort.clone(),
             selector_context_tier: preparation.selector_context_tier.clone(),
             evidence_source: preparation.evidence_source.clone(),
             source_model_identity: preparation.source_model_identity.clone(),
-            evidence_retrieved_at: preparation.evidence_retrieved_at.clone(),
-            capabilities_retrieved_at: preparation.capabilities_retrieved_at.clone(),
-            measurement_at: preparation.measurement_at.clone(),
+            evidence_retrieved_at: local_instant(
+                preparation.evidence_retrieved_at.as_deref(),
+                zone,
+            ),
+            capabilities_retrieved_at: local_instant(
+                preparation.capabilities_retrieved_at.as_deref(),
+                zone,
+            ),
+            measurement_at: local_instant(preparation.measurement_at.as_deref(), zone),
             benchmark_version: preparation.benchmark_version.clone(),
             conditions: preparation.conditions.clone(),
             routing_overshot: preparation.routing_overshot,
@@ -353,6 +364,16 @@ pub struct LogLineView {
 #[derive(Clone, Debug, Serialize)]
 pub struct Summary {
     pub rows: Vec<SummaryRow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_consumption: Option<RunConsumption>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RunConsumption {
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    pub credits: Option<f64>,
+    pub premium_requests: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -473,6 +494,12 @@ pub fn project_run_view(
             },
             summary: Summary {
                 rows: state.completed_iterations.iter().map(summary_row).collect(),
+                run_consumption: state.run_usage.as_ref().map(|usage| RunConsumption {
+                    tokens_in: usage.tokens_in,
+                    tokens_out: usage.tokens_out,
+                    credits: usage.credits.value(),
+                    premium_requests: usage.premium_requests.value(),
+                }),
             },
         },
         drill_in: drill_in_view(state, context, drill_in),
@@ -485,7 +512,7 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
         run_id: state.run_id.clone(),
         model: state.model().map(str::to_string),
         reasoning_effort: state.reasoning_effort().map(str::to_string),
-        started_at: state.started_at.map(|at| at.to_zoned_iso(context.zone)),
+        started_at: state.started_at.map(|at| at.to_zoned_iso(&context.zone)),
         elapsed_seconds: state
             .elapsed_seconds(state.monotonic_at(context.now, context.now_monotonic)),
         status: state.status.clone(),
@@ -564,14 +591,17 @@ fn queue_rows(state: &DashboardState, context: &ViewContext) -> Vec<QueueRow> {
                     status: entry.status.clone(),
                     ending: entry.ending.clone(),
                     commits: entry.commits,
-                    started_at: entry.started_at.map(|at| at.to_zoned_iso(context.zone)),
+                    started_at: entry.started_at.map(|at| at.to_zoned_iso(&context.zone)),
                     active_seconds: entry
                         .active_seconds(state.monotonic_at(context.now, context.now_monotonic)),
-                    closed_at: entry.closed_at.map(|at| at.to_zoned_iso(context.zone)),
+                    closed_at: entry.closed_at.map(|at| at.to_zoned_iso(&context.zone)),
                     iteration_count: entry.contributions.len(),
                     route: entry.route.as_ref().map(RouteView::project),
                     delivery: entry.delivery.as_ref().map(DeliveryView::project),
-                    preparation: entry.preparation.as_ref().map(PreparationView::project),
+                    preparation: entry
+                        .preparation
+                        .as_ref()
+                        .map(|preparation| PreparationView::project(preparation, &context.zone)),
                     tokens_in: entry.usage_observed.then_some(entry.tokens_in),
                     tokens_out: entry.usage_observed.then_some(entry.tokens_out),
                     credits: entry.credits.value(),
@@ -597,9 +627,13 @@ fn queue_group(status: &str) -> u8 {
 fn summary_row(row: &IterationRow) -> SummaryRow {
     let summary: &IterationSummary = &row.summary;
     SummaryRow {
-        kind: "iteration",
+        kind: if row.lane.is_some() {
+            "lane"
+        } else {
+            "iteration"
+        },
         iteration: row.iteration,
-        lane: None,
+        lane: row.lane.clone(),
         outcome: row.outcome.clone(),
         duration_seconds: row.duration_seconds,
         model: reported(&summary.model).cloned().flatten(),
@@ -660,10 +694,10 @@ fn drill_in_view(state: &DashboardState, context: &ViewContext, issue: &IssueRef
                 .unwrap_or_else(|| STATUS_GONE.to_string()),
             started_at: entry
                 .and_then(|entry| entry.started_at)
-                .map(|at| at.to_zoned_iso(context.zone)),
+                .map(|at| at.to_zoned_iso(&context.zone)),
             closed_at: entry
                 .and_then(|entry| entry.closed_at)
-                .map(|at| at.to_zoned_iso(context.zone)),
+                .map(|at| at.to_zoned_iso(&context.zone)),
             issue_elapsed_seconds: entry.and_then(|entry| entry.issue_elapsed_seconds),
             active_seconds: entry
                 .map(|entry| {
@@ -730,14 +764,50 @@ fn contribution_row(contribution: &IssueContribution) -> ContributionRow {
 }
 
 fn log_lines(lines: &[LogLine], context: &ViewContext) -> Vec<LogLineView> {
-    lines
+    let mut projected: Vec<_> = lines
         .iter()
-        .map(|line| LogLineView {
-            at: line.at.map(|at| at.to_zoned_iso(context.zone)),
-            kind: line.kind.clone(),
-            text: line.text.clone(),
+        .flat_map(|line| {
+            let text = match &line.content {
+                LogContent::Text(text) => text.clone(),
+                LogContent::Preparation(prepared) => {
+                    let mut projected = prepared.clone();
+                    for field in [
+                        &mut projected.prepared_at,
+                        &mut projected.valid_until,
+                        &mut projected.evidence_retrieved_at,
+                        &mut projected.capabilities_retrieved_at,
+                        &mut projected.measurement_at,
+                    ] {
+                        *field = local_instant(field.as_deref(), &context.zone);
+                    }
+                    routing_preparation_text(&projected).expect("accepted preparation log")
+                }
+                LogContent::Resolution(resolved) => {
+                    let mut projected = resolved.clone();
+                    projected.reused_validated_at =
+                        local_instant(projected.reused_validated_at.as_deref(), &context.zone);
+                    routing_resolution_text(&projected).expect("accepted resolution log")
+                }
+            };
+            text.split('\n')
+                .map(|text| LogLineView {
+                    at: line.at.map(|at| at.to_zoned_iso(&context.zone)),
+                    kind: line.kind.clone(),
+                    text: text.to_string(),
+                })
+                .collect::<Vec<_>>()
         })
-        .collect()
+        .collect();
+    projected.drain(..projected.len().saturating_sub(LOG_TAIL_LINES));
+    projected
+}
+
+fn local_instant(value: Option<&str>, zone: &Zone) -> Option<String> {
+    value.map(|value| {
+        Timestamp::parse_rfc3339(value)
+            .map(|instant| instant.to_zoned_iso(zone))
+            .unwrap_or_else(|| value.to_string())
+    })
 }
 
 /// One Context-fill sample with its counters normalized.

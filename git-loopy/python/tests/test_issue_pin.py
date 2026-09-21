@@ -245,6 +245,11 @@ class TestTheDuplicatedLiteralsAreHeldToOneDeclaration:
     def test_the_parallel_label_is_the_one_a_lane_filters_on(self) -> None:
         assert issue_pin._LABEL_PARALLEL_SAFE == LABEL_PARALLEL_SAFE
 
-    def test_every_discriminator_reason_names_a_section(self) -> None:
+    def test_every_discriminator_reason_has_a_specific_diagnostic(self) -> None:
         """A new exclusion reason must not silently degrade to "check both"."""
-        assert set(issue_pin._MISSING_SECTIONS) == set(EXCLUSION_REASONS)
+        assert set(issue_pin._MISSING_SECTIONS) | {"planning_document"} == set(
+            EXCLUSION_REASONS
+        )
+        refusal = issue_pin.PinRefusal(390, "not_afk_ready", "planning_document")
+        assert "planning document" in refusal.message
+        assert "missing" not in refusal.message

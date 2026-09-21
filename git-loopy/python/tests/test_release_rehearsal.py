@@ -238,6 +238,29 @@ def test_a_rehearsal_refuses_to_certify_a_promise_it_has_no_evidence_for(
         _rehearse(trunk, tmp_path, distribution_mode="artifact-bearing")
 
 
+def test_a_source_only_rehearsal_cannot_downgrade_the_committed_artifact_promise(
+    tmp_path: Path,
+) -> None:
+    trunk = trunk_repository(tmp_path / "trunk", "0.11.0-dev.2")
+    policy_path = trunk / "git-loopy/conformance/release-trust.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["distribution_mode"] = "artifact-bearing"
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    git(trunk, "add", ".")
+    git(trunk, "commit", "-qm", "Declare an artifact-bearing distribution")
+    base = git(trunk, "rev-parse", "HEAD")
+
+    with pytest.raises(
+        ReleaseRehearsalError,
+        match="Inconsistent distribution mode.*source-only.*artifact-bearing",
+    ):
+        _rehearse(trunk, tmp_path, milestone_promotion("v0.11.0"))
+
+    assert not (tmp_path / "git-loopy-source.tar").exists()
+    assert git(trunk, "rev-parse", "HEAD") == base
+    assert git(trunk, "tag", "--list") == ""
+
+
 def test_a_red_family_gate_refuses_the_candidate_it_judged(tmp_path: Path) -> None:
     red = AGENTS_MD.replace("`test -s VERSION`", "`exit 3`")
     trunk, _ = _stable_candidate_trunk(tmp_path, agents_md=red)

@@ -7588,6 +7588,201 @@
           }
         }
       ]
+    },
+    {
+      "id": "rolling-ending-leaves-a-sibling-contribution-active",
+      "inputs": {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high",
+        "max_strikes": 3,
+        "local_utc_offset_minutes": -360,
+        "drill_in_issue": 701
+      },
+      "events": [
+        {
+          "ts": "2026-05-18T16:00:00.000Z",
+          "run_id": "01HXR0000000000000000000RE",
+          "iter": null,
+          "type": "wrapper.run.start",
+          "release_version": "1.2.3",
+          "schema_version": 1,
+          "max_nmt_strikes": 3,
+          "insight_capabilities": {
+            "agent_output": true, "structured_agent_events": true,
+            "token_usage": true, "context_window": true,
+            "skill_consultation": true, "cost": true, "routing": true
+          },
+          "parallel_capabilities": {
+            "parallel_mode": true, "rolling_dispatch": true,
+            "integration_backlog": true, "adaptive_lane_limit": true,
+            "contribution_events": true,
+            "execution_hosts": ["local"]
+          }
+        },
+        {
+          "ts": "2026-05-18T16:00:01.000Z", "run_id": "01HXR0000000000000000000RE",
+          "iter": null, "type": "wrapper.contribution.start",
+          "contribution_id": "ending-701", "issue": 701, "lane_id": "lane-1"
+        },
+        {
+          "ts": "2026-05-18T16:00:01.000Z", "run_id": "01HXR0000000000000000000RE",
+          "iter": null, "type": "wrapper.issue.activated",
+          "contribution_id": "ending-701", "issue": 701, "lane_issue": 701,
+          "lane_id": "lane-1", "binding_source": "lane_pickup",
+          "activated_at": "2026-05-18T16:00:01.000Z"
+        },
+        {
+          "ts": "2026-05-18T16:00:02.000Z", "run_id": "01HXR0000000000000000000RE",
+          "iter": null, "type": "wrapper.contribution.start",
+          "contribution_id": "ending-702", "issue": 702, "lane_id": "lane-2"
+        },
+        {
+          "ts": "2026-05-18T16:00:02.000Z", "run_id": "01HXR0000000000000000000RE",
+          "iter": null, "type": "wrapper.issue.activated",
+          "contribution_id": "ending-702", "issue": 702, "lane_issue": 702,
+          "lane_id": "lane-2", "binding_source": "lane_pickup",
+          "activated_at": "2026-05-18T16:00:02.000Z"
+        },
+        {
+          "ts": "2026-05-18T16:00:05.000Z", "run_id": "01HXR0000000000000000000RE",
+          "iter": null, "type": "wrapper.contribution.end",
+          "contribution_id": "ending-701", "issue": 701, "lane_id": "lane-1",
+          "published": false, "reason": "unchanged_branch",
+          "summary": {
+            "model": "gpt-5.6-sol", "effort": "high",
+            "tokens_in": 20, "tokens_out": 10, "observed_tokens": 30,
+            "cost_usd": null, "commits": 0, "closures": 0,
+            "closure_outcome": "no_progress", "recovery_attempts": 0,
+            "agent_seconds": 4.0, "lifecycle_seconds": 4.0,
+            "peak_context_window": null, "strike_reaction": "increment",
+            "tool_count": 0, "skill_call_count": 0, "skills_consulted": []
+          },
+          "issues": [
+            {
+              "issue": 701, "status": "no-progress", "ending": "timeout",
+              "first_started_at": "2026-05-18T16:00:01.000Z",
+              "closed_at": null, "issue_elapsed_seconds": null,
+              "active_seconds": 4.0, "cumulative_active_seconds": 4.0,
+              "consumption": {
+                "model": "gpt-5.6-sol", "tokens_in": 20, "tokens_out": 10,
+                "credits": 0.25, "premium_requests": 1
+              },
+              "peak_context_window": null
+            }
+          ]
+        }
+      ],
+      "snapshots": [
+        {
+          "after_event_count": 6,
+          "render_at_utc": "2026-05-18T16:00:06.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000000RE",
+                "model": "gpt-5.6-sol", "reasoning_effort": "high",
+                "started_at": "2026-05-18T10:00:00-06:00",
+                "elapsed_seconds": 6.0, "status": "running",
+                "strikes": {"current": 0, "limit": 3},
+                "active_issue": null, "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed", "current_tokens": null,
+                  "token_limit": null, "percentage": null,
+                  "effective_target_tokens": null, "effective_ceiling_tokens": null
+                },
+                "release_target": null, "release_version": null,
+                "cost": {"availability": "available"},
+                "rate_card": {"availability": "not_declared"},
+                "routing": {"availability": "available"}
+              },
+              "queue": {
+                "columns": [
+                  "issue", "status", "started_at", "active_seconds", "closed_at",
+                  "iteration_count", "route", "tokens_in", "tokens_out", "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 702, "status": "active", "ending": null, "commits": null,
+                    "started_at": "2026-05-18T10:00:02-06:00",
+                    "active_seconds": 4.0, "closed_at": null, "iteration_count": 0,
+                    "route": null, "tokens_in": null, "tokens_out": null,
+                    "credits": null, "premium_requests": null
+                  },
+                  {
+                    "issue": 701, "status": "no-progress", "ending": "timeout",
+                    "commits": null, "started_at": "2026-05-18T10:00:01-06:00",
+                    "active_seconds": 4.0, "closed_at": null, "iteration_count": 1,
+                    "route": null, "tokens_in": 20, "tokens_out": 10,
+                    "credits": 0.25, "premium_requests": 1.0
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null, "lines": [],
+                "windows": [
+                  {
+                    "kind": "lane", "lane": "lane-1", "issue": 701,
+                    "task_type": null, "route": null,
+                    "context_fill": {
+                      "availability": "not_observed", "current_tokens": null,
+                      "token_limit": null, "percentage": null,
+                      "effective_target_tokens": null, "effective_ceiling_tokens": null
+                    },
+                    "subagents": null, "live": false, "lines": []
+                  },
+                  {
+                    "kind": "lane", "lane": "lane-2", "issue": 702,
+                    "task_type": null, "route": null,
+                    "context_fill": {
+                      "availability": "not_observed", "current_tokens": null,
+                      "token_limit": null, "percentage": null,
+                      "effective_target_tokens": null, "effective_ceiling_tokens": null
+                    },
+                    "subagents": null, "live": true, "lines": []
+                  }
+                ]
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "lane", "iteration": null, "lane": 701,
+                    "outcome": "no_progress", "duration_seconds": 4.0,
+                    "model": "gpt-5.6-sol", "tokens_in": 20, "tokens_out": 10,
+                    "observed_tokens": 30, "credits": 0.25, "premium_requests": 1.0,
+                    "tool_count": 0, "skill_call_count": 0, "skills_consulted": [],
+                    "commits": 0, "auto_closures": 0, "pr_advances": 0, "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 701, "status": "no-progress",
+                "started_at": "2026-05-18T10:00:01-06:00",
+                "closed_at": null, "issue_elapsed_seconds": null,
+                "active_seconds": 4.0, "iteration_count": 1
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "lane", "iteration": null, "lane": 701,
+                    "outcome": "no_progress", "duration_seconds": 4.0,
+                    "status": "no-progress", "active_seconds": 4.0, "route": null,
+                    "consumption": {
+                      "model": "gpt-5.6-sol", "tokens_in": 20, "tokens_out": 10,
+                      "cache_read": null, "cache_write": null
+                    },
+                    "credits": 0.25, "premium_requests": 1.0, "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {"issue": 701, "lines": []}
+            }
+          }
+        }
+      ]
     }
   ],
   "future_consumer": {

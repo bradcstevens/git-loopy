@@ -44,6 +44,11 @@ blocking gate:
   (`test_conformance.py`, `test_release_identity_conformance.py`) is already
   inside the Python suite row; a second
   row would only pay for it twice.
+- **The native Windows timezone proof** in `runner-family-gate.yml` repeats Rust
+  format/lint checks and runs the native timezone API and executable regressions
+  on Windows. Those tests are already part of the Rust suite above on a Windows
+  host; another row would either repeat them there or require Windows APIs on an
+  operator's non-Windows host. CI supplies that additional platform evidence.
 - **`python -m git_loopy.skill_source`** (acquire and validate the pinned external
   Skill catalog, ADR-0023) reaches the network, so it can never be a gate: an
   unreachable upstream would make Integration red for a reason no change here
@@ -99,6 +104,10 @@ Issues live in this repo's GitHub Issues (managed via the `gh` CLI). See `docs/a
 All five canonical triage roles use their default label strings (`needs-triage`,
 `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See
 `docs/agents/triage-labels.md`.
+
+Issues whose titles begin with `PRD:` or `Spec:` (case-insensitive) are planning
+documents, not executable tickets. Never apply `ready-for-agent` to them; remove
+that label if present. Work their implementation tickets instead.
 
 ### Release milestones
 

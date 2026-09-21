@@ -33,6 +33,55 @@ fn keys(value: &Value) -> Vec<String> {
 }
 
 #[test]
+fn routing_consumption_belongs_to_the_run_not_the_open_work() {
+    let mut state = DashboardState::new(RunInputs::new("work-model", "high"));
+    for raw in [
+        r#"{"type":"wrapper.iteration.start","iter":1}"#,
+        r#"{"type":"usage.tokens","run_id":"run-1","iter":null,"input":100,"output":20,"credits":0.2}"#,
+        r#"{"type":"wrapper.issue.activated","iter":1,"issue":42,"activated_at":"2026-05-16T00:00:00Z","binding_source":"pickup"}"#,
+        r#"{"type":"usage.tokens","iter":1,"input":7,"output":3,"credits":0.1}"#,
+        r#"{"type":"usage.tokens","run_id":"run-1","iter":null,"input":100,"output":20,"credits":0.3}"#,
+    ] {
+        state.apply(&Event::from_jsonl_line(raw).expect("event decodes"));
+    }
+    let projected = view(
+        &state,
+        &context("2026-05-16T00:00:01Z", 0),
+        IssueRef::number(42),
+    );
+    let work = &projected["dashboard"]["queue"]["rows"][0];
+    assert_eq!(work["tokens_in"], 7);
+    assert_eq!(work["credits"], 0.1);
+    let run = &projected["dashboard"]["summary"]["run_consumption"];
+    assert_eq!(run["tokens_in"], 200);
+    assert_eq!(run["tokens_out"], 40);
+    assert_eq!(run["credits"], 0.5);
+    assert!(run["premium_requests"].is_null());
+    assert_eq!(
+        projected["dashboard"]["summary"]["rows"],
+        serde_json::json!([])
+    );
+
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"type":"usage.tokens","run_id":"run-1","iter":null,"input":10,"output":2}"#,
+        )
+        .expect("unbilled event decodes"),
+    );
+    let projected = view(
+        &state,
+        &context("2026-05-16T00:00:02Z", 0),
+        IssueRef::number(42),
+    );
+    assert_eq!(
+        projected["dashboard"]["summary"]["run_consumption"]["tokens_in"],
+        210
+    );
+    assert!(projected["dashboard"]["summary"]["run_consumption"]["credits"].is_null());
+    assert_eq!(projected["dashboard"]["queue"]["rows"][0]["credits"], 0.1);
+}
+
+#[test]
 fn a_run_projects_the_canonical_band_inventory_before_any_event() {
     let state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
     let ctx = context("2026-05-16T00:00:00.000Z", -360);
@@ -872,6 +921,81 @@ fn a_routed_pickup_projects_its_context_tier() {
             "lifecycle_position": "fresh"
         })
     );
+    assert_eq!(
+        queue_row(&projected, 7)["route"]
+            .as_object()
+            .expect("route fields")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "model",
+            "effort",
+            "source",
+            "context_tier",
+            "lifecycle_position"
+        ]
+    );
+}
+
+#[test]
+fn a_same_configuration_dynamic_retry_preserves_each_contributions_position() {
+    let mut events = Vec::new();
+    for (iteration, position, outcome) in [(1, "fresh", "no-progress"), (2, "retrying", "closed")] {
+        events.extend([
+            serde_json::json!({
+                "type": "wrapper.iteration.start", "iter": iteration
+            }),
+            serde_json::json!({
+                "type": "wrapper.pickup.bound", "iter": iteration, "issue": 42,
+                "reason": "order", "model": "gpt-5-mini", "effort": "medium",
+                "context_tier": "long_context", "routing_source": "dynamic",
+                "lifecycle_position": position
+            }),
+            serde_json::json!({
+                "type": "wrapper.issue.activated", "iter": iteration, "issue": 42
+            }),
+            serde_json::json!({
+                "type": "wrapper.iteration.end", "iter": iteration,
+                "outcome": outcome, "duration_seconds": 1.0,
+                "issues": [{"issue": 42, "status": outcome}]
+            }),
+        ]);
+    }
+
+    let projected = reduce(&events, IssueRef::number(42));
+    let rows = projected["drill_in"]["iteration_breakdown"]["rows"]
+        .as_array()
+        .expect("contribution rows");
+    assert_eq!(rows.len(), 2);
+    for (row, position) in rows.iter().zip(["fresh", "retrying"]) {
+        assert_eq!(
+            row["route"],
+            serde_json::json!({
+                "model": "gpt-5-mini", "effort": "medium",
+                "context_tier": "long_context", "source": "dynamic",
+                "lifecycle_position": position
+            })
+        );
+    }
+    assert_eq!(queue_row(&projected, 42)["route"], rows[1]["route"]);
+}
+
+#[test]
+fn a_legacy_pickup_projects_no_unobserved_lifecycle_position_or_tier() {
+    let projected = reduce_jsonl(
+        &[
+            r#"{"type":"wrapper.pickup.bound","iter":1,"issue":42,"model":"gpt-5-mini","effort":"medium","routing_source":"routed"}"#,
+        ],
+        IssueRef::number(42),
+    );
+
+    assert_eq!(
+        queue_row(&projected, 42)["route"],
+        serde_json::json!({
+            "model": "gpt-5-mini", "effort": "medium", "source": "routed"
+        })
+    );
 }
 
 #[test]
@@ -974,7 +1098,7 @@ fn a_revalidated_route_reads_differently_from_a_fresh_assessment() {
     assert_eq!(
         log_texts(&projected),
         [
-            "Route revalidated: reused decision-1, no new assessment",
+            "Route revalidated: reused decision-1, no new assessment; decided: 2026-05-15T00:00:00+00:00",
             "Pickup: bound #7 (order)"
         ]
     );
@@ -1075,7 +1199,7 @@ fn a_prepared_route_is_a_proposal_and_never_a_binding() {
     assert_eq!(
         log_texts(&projected),
         [
-            "Route proposed: gpt-5-mini@medium (not bound); proposal: proposal-1; rationale: best verified match; prepared: 2026-05-15T23:59:00.000Z; valid until: 2026-05-16T00:05:01.000Z; evidence source: benchmark-index; source model: claude-opus-5@2026-05; evidence retrieved: 2026-05-16T00:00:00.000Z; capabilities retrieved: 2026-05-16T00:00:00.500Z; measured: 2026-05-15T00:00:00.000Z; benchmark: swe-bench-verified-2; conditions: repository coding; selector: gpt-5.6-terra@high/long_context; overshot"
+            "Route proposed: gpt-5-mini@medium (not bound); proposal: proposal-1; rationale: best verified match; prepared: 2026-05-15T23:59:00+00:00; valid until: 2026-05-16T00:05:01+00:00; evidence source: benchmark-index; source model: claude-opus-5@2026-05; evidence retrieved: 2026-05-16T00:00:00+00:00; capabilities retrieved: 2026-05-16T00:00:00.500000+00:00; measured: 2026-05-15T00:00:00+00:00; benchmark: swe-bench-verified-2; conditions: repository coding; selector: gpt-5.6-terra@high/long_context; overshot"
         ]
     );
     assert_eq!(queue_row(&projected, 7)["route"], serde_json::Value::Null);
@@ -1108,19 +1232,19 @@ fn a_prepared_route_is_a_proposal_and_never_a_binding() {
             "context_tier": "default",
             "summary": "best verified match",
             "proposal_id": "proposal-1",
-            "prepared_at": "2026-05-15T23:59:00.000Z",
+            "prepared_at": "2026-05-15T23:59:00+00:00",
             "selector_model": "gpt-5.6-terra",
             "selector_effort": "high",
             "selector_context_tier": "long_context",
             "evidence_source": "benchmark-index",
             "source_model_identity": "claude-opus-5@2026-05",
-            "evidence_retrieved_at": "2026-05-16T00:00:00.000Z",
-            "capabilities_retrieved_at": "2026-05-16T00:00:00.500Z",
-            "measurement_at": "2026-05-15T00:00:00.000Z",
+            "evidence_retrieved_at": "2026-05-16T00:00:00+00:00",
+            "capabilities_retrieved_at": "2026-05-16T00:00:00.500000+00:00",
+            "measurement_at": "2026-05-15T00:00:00+00:00",
             "benchmark_version": "swe-bench-verified-2",
             "conditions": "repository coding",
             "routing_overshot": true,
-            "valid_until": "2026-05-16T00:05:01.000Z"
+            "valid_until": "2026-05-16T00:05:01+00:00"
         })
     );
 }

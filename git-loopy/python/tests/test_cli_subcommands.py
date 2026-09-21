@@ -232,7 +232,9 @@ def test_main_update_runs_outside_a_git_repository(
     )
 
     assert cli_module.main(["update"]) == 0
-    assert captured == [{"dry_run": False, "project_root": None}]
+    assert captured == [{
+        "dry_run": False, "project_root": None, "routing_choice": None, "input_fn": None,
+    }]
 
 
 def test_main_update_targets_project_config_only_when_requested(
@@ -248,7 +250,9 @@ def test_main_update_targets_project_config_only_when_requested(
     )
 
     assert cli_module.main(["update", "--project", "--dry-run"]) == 0
-    assert captured == [{"dry_run": True, "project_root": tmp_path}]
+    assert captured == [{
+        "dry_run": True, "project_root": tmp_path, "routing_choice": None, "input_fn": None,
+    }]
 
 
 def test_main_update_project_refuses_outside_a_repository(
@@ -315,10 +319,14 @@ def test_main_upgrade_moves_the_running_artifact_without_starting_the_loop(
     monkeypatch.setattr(
         upgradecmd, "run_upgrade", lambda **kwargs: captured.append(kwargs) or 0
     )
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
     assert cli_module.main(["upgrade", "--to", "1.2.0", "--allow-downgrade"]) == 0
     assert captured == [
-        {"to": "1.2.0", "edge_ref": None, "allow_downgrade": True}
+        {
+            "to": "1.2.0", "edge_ref": None, "allow_downgrade": True,
+            "routing_choice": "ask", "input_fn": None,
+        }
     ]
 
 

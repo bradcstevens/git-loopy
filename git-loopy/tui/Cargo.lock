@@ -176,6 +176,7 @@ dependencies = [
  "crossterm_winapi",
  "derive_more",
  "document-features",
+ "filedescriptor",
  "mio",
  "parking_lot",
  "rustix",
@@ -441,11 +442,14 @@ dependencies = [
 
 [[package]]
 name = "git-loopy-tui"
-version = "0.11.0-dev.3"
+version = "0.11.0-dev.5"
 dependencies = [
+ "crossterm",
+ "libc",
  "ratatui",
  "serde",
  "serde_json",
+ "windows-sys",
 ]
 
 [[package]]

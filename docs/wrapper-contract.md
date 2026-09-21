@@ -138,7 +138,11 @@ The Pool MUST be filtered to issues whose body contains **both** literal section
 - `## Acceptance criteria`
 
 A `## Parent` section is optional. Issues missing either required heading (bare PRDs) MUST be
-skipped. In PR mode a PR is kept only if it carries an `## Agent Brief` (in its body or any
+skipped. GitHub issues whose titles begin with `PRD:` or `Spec:` (case-insensitive)
+MUST also be excluded, even with both headings, `ready-for-agent`, `priority`,
+`parallel-safe`, or an explicit `--issue` pin. They are planning documents, not
+executable tickets. Check the title on both list and authoritative reads.
+In PR mode a PR is kept only if it carries an `## Agent Brief` (in its body or any
 comment) — the PR analogue of the discriminator.
 
 ### 3.1 Pool exclusions (contract 1.5, MUST)
@@ -154,6 +158,7 @@ closed vocabulary:
 | `missing_what_to_build` | `## Acceptance criteria` present, `## What to build` absent |
 | `missing_acceptance_criteria` | `## What to build` present, `## Acceptance criteria` absent |
 | `missing_both_sections` | Neither required heading present |
+| `planning_document` | Issue title begins with `PRD:` or `Spec:`; takes precedence over missing headings |
 
 The reason MUST be derived from the same discriminator pass that decides membership, so the
 reported reason and the membership decision cannot disagree. `discriminator.json` pins the
@@ -165,7 +170,7 @@ fix headings that are probably fine. The existing warn-and-skip path continues t
 
 A candidate that is not **ready** — one carrying an open native `blocked_by` dependency, or one
 whose dependencies could not be read — is likewise NOT an exclusion (contract 2.0). The exclusion
-vocabulary above is **closed at those three reasons**, and readiness MUST NOT be added to it. An
+vocabulary above is **closed at those four reasons**, and readiness MUST NOT be added to it. An
 exclusion is an authoring mistake a human must fix; a blocked candidate is correctly authored work
 whose turn has not come, and it clears itself when its last blocker closes. It MUST remain in the
 **Pool** — the closure whitelist, the collection Event and the emptiness test all still need to
@@ -260,7 +265,7 @@ The pin **bypasses the order and nothing else** (ADR-0032), which is four separa
 3. **It does not bypass eligibility, and an ineligible pin FAILS the invocation.** A pinned issue
    that is closed, missing, unreadable, lacks `ready-for-agent`, or fails the §3.1 AFK-ready
    discriminator MUST end the invocation with the `preflight_failed` exit code, naming what is
-   wrong — and for a discriminator failure, naming the **specific missing section**, so the
+   wrong — and for a discriminator failure, naming the **planning document** or **specific missing section**, so the
    operator can fix the issue rather than guess. It MUST NOT fall back to the head of the order:
    §3.3 makes a candidate the runner cannot take a *skip* precisely because a serial Run merely
    walked past it, whereas a pin is an operator naming an issue, and there is no next candidate
@@ -766,6 +771,9 @@ force, and each entry of `routes` is that object plus the `key` it was configure
 exactly as Config spelled it. Two efforts travel on every pair: `effort` is the **gated** value,
 what would actually be sent, and `configured_effort` is what Config supplied, because a readback
 carrying only the gated one reports the outcome and loses the request an operator can correct.
+That gating describes an unselected Route policy. Under either selected policy
+(§14.3/§14.4), configured Static routes and explicit escalation are echoed unchanged;
+the authenticated harness validates them, not the offline roster.
 `roster_diverged` is three-valued — `true`, `false`, or `null` for an unreadable
 `harness_version` — and a consumer MUST NOT read `null` as agreement. All ten are
 optional-when-present: an Orchestrator that routes nothing emits Run start byte-identically and
@@ -982,7 +990,7 @@ closure-only `issue_elapsed_seconds`, `active_seconds`, `cumulative_active_secon
 `consumption` (`model`, `tokens_in`, `tokens_out`), and nullable `peak_context_window`. Only
 authoritative source closure populates closure-only fields.
 
-Contract-2.9 addition within compatibility schema 1: an issue contribution may carry `ending`,
+Contract-2.10 addition within compatibility schema 1: an issue contribution may carry `ending`,
 one of the five **Session outcome** spellings, beside its unchanged `status`. This is the observed
 ending of that issue's attempt, not its enclosing Iteration's outcome; the same issue rows travel
 on `wrapper.contribution.end` for a Lane contribution. A normally completed session that advanced
@@ -1137,7 +1145,8 @@ and never emit them.
 The language-neutral
 [`dashboard-insights.json`](../git-loopy/conformance/dashboard-insights.json) fixture is the
 semantic boundary between Orchestrators and live-interface implementations. It supplies normalized
-Event prefixes plus injected render time, local UTC offset, and configured Run facts, then pins the
+Event prefixes plus injected render time, display-zone input (a fixed UTC offset in these
+deterministic fixtures), and configured Run facts, then pins the
 expected toolkit-neutral Dashboard and per-issue drill-in model.
 
 The Dashboard inventory is `Header -> Queue -> Activity -> Summary`. The per-issue drill-in is
@@ -1163,8 +1172,26 @@ An unavailable value projects to an em dash, while observed none remains `0` or 
 capability an Orchestrator declares unavailable at Run start arrives as a `null` normalized
 measurement, and renderers MUST project it as unknown rather than as an observed `0`, `[]`, or a
 substituted configured value — including a contribution whose whole `consumption` record is
-unavailable. Renderers localize UTC timestamps from the supplied display-zone input but preserve
-monotonic durations.
+unavailable. Renderers localize UTC timestamps from the supplied display-zone rules at each
+timestamp's own instant, preserving historical and daylight-saving offsets and monotonic durations.
+The presentation boundary resolves the **Viewing machine**'s **Display zone**, not the Run's
+Execution host: `TZ` takes precedence when supplied, otherwise the platform's native zone
+configuration applies, including Windows historical timezone rules. The pure Dashboard core
+receives those rules and MUST NOT read the environment or host clock.
+
+Every human-facing timestamp follows that same rule, including routing preparation, expiry,
+reuse, and evidence provenance in projected fields and Log text. Detailed provenance retains its
+date and numeric UTC offset; compact clocks keep their existing format. Stored Events, replay
+records, machine-readable Run evidence, durations, ordering, and artifact identities remain
+canonical and unchanged. A display projection may carry localized timestamps without rewriting
+its underlying evidence.
+
+Normal launch and Attach MUST preserve the viewer's timezone environment (`TZ` and `TZDIR`)
+and MUST NOT inject a sampled fixed offset. An explicit fixed-offset override, including zero,
+remains authoritative for an operator or deterministic fixture. If zone resolution fails, the
+interface remains usable but MUST diagnose the failure and label its UTC fallback; UTC MUST NOT
+silently masquerade as local time. These presentation rules add no timezone-bearing Event field.
+
 This rule binds every renderer surface for a Run, not just the live band: the
 per-Iteration frozen artifact and the run-end totals artifact project the same unknowns, and a
 cumulative total is unknown only when every completed Iteration in it declared that measurement
@@ -1416,7 +1443,8 @@ run-wide default:
   for the table can exist — its keys are the operator's vocabulary and its pairs are the vendor's
   — so the operator reading back what the kit parsed is the only validation available anywhere,
   and a count can reveal neither a half-filled table nor a key spelled differently from the label
-  it was meant to match. It MUST gate-check **each configured pair**, non-fatally, because a route
+  it was meant to match. Under an unselected Route policy it MUST gate-check
+  **each configured pair**, non-fatally, because a route
   no issue exercises is otherwise never resolved and its model id and effort never checked at all,
   and because a rung is otherwise first gated at a stalled issue's *next* pickup — the one moment
   the Run is already going badly. And the block MUST print on a Run that configured **nothing**,
@@ -1599,9 +1627,10 @@ An operator MAY select one. The policy is a single Config key, `route_policy`, r
 family precedence spine (§11) like any other. Three values are in the vocabulary: `unselected` —
 the default, and the absence of a decision — `static` (this section), and `dynamic` (§14.4).
 
-- **Selected, never inherited.** An Orchestrator MUST NOT read the absence of a policy as a choice
+- **Selected, never inferred.** An Orchestrator MUST NOT read the absence of a policy as a choice
   of one, and MUST NOT reinterpret an existing Config as though `static` had always been in force.
-  A Run that names no policy keeps every rule in §14 exactly, gate warnings and all. An
+  Subject to the Python-local migration guard below, a Run that names no policy keeps every rule
+  in §14 exactly, gate warnings and all. An
   Orchestrator MUST refuse a policy name it does not implement rather than falling back to
   `unselected`: a name it silently ignored would run the Run under a policy the operator did not
   ask for and believes is active.
@@ -1623,6 +1652,14 @@ the default, and the absence of a decision — `static` (this section), and `dyn
   placement's verdict is exactly the substitution the rule above forbids. An Orchestrator MUST
   refuse the combination before work rather than verify the wrong harness. Only a placement whose
   sessions run under the Run's own authenticated harness is verifiable today.
+  Python's no-I/O placement refusal precedes local model listing, Skill migration, interactive
+  detachment and remote host preparation, including the green-base preflight dispatch. It shares
+  the routing authority verdict used by setup, doctor and Run preflight; a run-wide model/effort
+  override does not waive it. The `execution_host_refusal` cases in `routing-resolution.json`
+  exercise recorded and temporary authority through CLI, interactive startup and direct Run,
+  preserving Config and starting no work, Lease, Strike or Route publication. An explicitly
+  unselected remote Run retains its staged legacy path, not strict routing support. This
+  refusal does not complete non-local activation or change shell/PowerShell's routing deferral.
 - **Refuse, never rescue.** §14's *gate and fall back* rule does not apply to a Static route and
   MUST NOT be reached for: an effort the model does not accept, a tier it does not offer, a model
   this account may not use, a model the harness never listed, and a listing that could not be read
@@ -1642,7 +1679,8 @@ the default, and the absence of a decision — `static` (this section), and `dyn
   configures the session, rides `wrapper.pickup.bound`, and reaches the CLI and the **Dashboard**.
   An Orchestrator MUST NOT re-derive it, and MUST NOT publish a gated readback beside an ungated
   session. `wrapper.run.start`'s readback MAY carry `route_policy`; a consumer MUST NOT read an
-  empty `gate_warnings` under `static` as roster approval — it means the roster was not asked.
+  empty `gate_warnings` under `static` or `dynamic` as roster approval — it means the roster was
+  not asked. This includes retained Static routes and explicit escalation under Dynamic policy.
 
 The policy is pinned by [`routing-resolution.json`](../git-loopy/conformance/routing-resolution.json)'s
 `static_route_cases` (one harness listing plus one route → `accepted` or a closed-vocabulary
@@ -1656,18 +1694,77 @@ model listing, so they have no route to verify. They declare it unsupported in
 The Dashboard needs no policy-aware branch — it renders the verified triple off
 `wrapper.pickup.bound` exactly as it renders any other.
 
+**Staged Python-local migration guard (contract 2.9, #567).** A local Python Run with nonempty project or
+global Config MUST supply or inherit an explicit `static`/`dynamic` Route policy before Agent
+work. Absence remains absence, not implicit Static consent: the Runner refuses with an actionable
+`update --routing keep`/`migrate` or temporary `--route-policy`/`GIT_LOOPY_ROUTE_POLICY` remedy,
+without prompting or rewriting Config. A model/effort override alone is not this decision.
+CLI startup checks before Skill migration, listing or detachment, rechecks after a Config reload,
+and carries saved-Config presence through detached startup. Doctor and Run preflight use the
+same authority verdict; live readiness and Pickup validation still apply after authority exists.
+Historical records retain their interpretation. Empty Config scopes and unselected non-local
+Runs retain the legacy path during staged activation; a selected policy still MUST NOT validate
+a remote placement using local eligibility. Shell and PowerShell migration enforcement is
+explicitly deferred and their unchanged behavior remains conforming. This paragraph is the
+member deferral, not final Dynamic-default activation, remote capability support, or Subagent/
+Integration routing support.
+
+`routing-resolution.json`'s `migration_recovery` exercises this guard through the real
+CLI-to-Run-to-work-session seam, in serial and Lane modes. Its cases MUST first refuse
+unselected saved Config unchanged, then supply temporary or recorded authority. The adapter
+MUST compare actual work-session settings, canonical Pickup and Dashboard readback, not merely
+the configuration resolver's answer. Retained Static rows and their inherited tier remain
+authoritative under either choice; a run-wide model/effort pin requires neither leaderboard
+access nor a selector, while a context-only override still uses the strongest selector.
+Migration readiness is not future Pickup authority: loss of required access or evidence MUST
+refuse uncovered Dynamic work without a fallback session, final publication or Strike, while
+eligible Static work remains usable. Runs MUST leave saved Config unchanged; temporary
+authority MUST expire on the next invocation. These executable cases do not claim the
+remaining activation obligations or change the default policy.
+
+The sibling `first_setup` matrix starts with **neither Config scope present** and
+drives explicit `init --routing` into the same serial/Lane work seam, for project
+and global setup. Dynamic setup MUST collect finite bounds and authored associations
+without seeding Static rows or storing the operator-owned key. Missing access,
+invalid bounds, no verified candidates or unavailable required evidence/capabilities
+MUST refuse before saving operator choices or writing tracker labels. Repairing the
+input and retrying setup MUST allow a later, independently validated Run to use the
+recorded policy without temporary overrides. Keep MUST need neither leaderboard
+access nor Dynamic limits. The actual session, canonical Pickup, Dashboard and
+final tracker comment MUST agree, and the Run MUST preserve both Config scopes.
+This is an executable obligation for Python's explicit opt-in setup, not a change
+to bare init or auto-setup. Shell/PowerShell first-setup activation is deferred;
+historical streams and the non-local, Subagent and Integration boundaries above
+are unchanged.
+
 ### 14.4 The Dynamic route (contract 2.8)
 
 Under `dynamic` the route for one issue is **elected from live public benchmark evidence** rather
 than written down in advance (ADR-0057). It is opt-in, and the rules below are what make the
 election an answer an operator can audit rather than a plausible-looking guess.
 
+Contract 2.9 includes §14.3's staged migration guard and opt-in first setup,
+the affected-work refusal and shared preflight-deadline obligations below,
+Route publication (§14.5) and Routing preparation (§14.6). The affected
+`routing-resolution.json`, `event-schema.json` and `dashboard-insights.json`
+fixtures declare that provenance at 2.9; Event wire compatibility remains 1.2.
+This declaration correction adds no Event fields, activates no Dynamic defaults,
+and leaves fixture cases and historical streams' interpretation unchanged.
+
 - **Opt-in, with its own prerequisites, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run
   routing-credit allowance, a bounded selector concurrency, and the verified associations between
-  benchmark identities and harness configurations. An Orchestrator MUST refuse a Run whose
-  prerequisites are incomplete **before any work**, under `preflight_failed` (exit `1`), and MUST
-  NOT start dynamic work it can only half perform. §14.3's remote-placement rule applies unchanged
+  benchmark identities and harness configurations. Incomplete Dynamic prerequisites MUST refuse
+  affected Dynamic work, never an otherwise authorized and freshly validated Static route.
+  Missing Task types may still be classified to discover Static applicability without leaderboard
+  access, but only within explicit valid routing limits and the same Run Consumption ledger.
+  Missing, invalid or exhausted limits MUST admit neither a classifier nor a Route selector.
+  Uncovered work MUST NOT reach a fallback work session or buy Bump-class classification after
+  its Dynamic refusal. If nothing can advance, the Run MUST stop nonzero with the actual reason,
+  not claim an empty Pool or spend an attempt or Strike on work that never started. Setup and
+  doctor report that same incomplete readiness as a failure; setup MUST NOT save an unready
+  Dynamic choice. Authority and Static validation refusals still stop the Run before work.
+  §14.3's remote-placement rule applies unchanged
   and for the same reason: an **Execution host** that authenticates as itself is another
   installation, and a route verified against this machine's listing is not a verdict about that
   one.
@@ -1692,6 +1789,14 @@ election an answer an operator can audit rather than a plausible-looking guess.
   entry, an explicit flag or environment pin, a configured **Escalation rung** — are instructions,
   and an Orchestrator MUST NOT spend a selector call to contradict one. A missing **Task type** is
   classified *before* applicability is resolved, and an existing classification is respected.
+- **A context-only Run override constrains work, not the selector.** An explicit context-tier
+  flag or environment override MUST fix the work tier without suppressing Dynamic model/effort
+  selection. Work candidates MUST support that exact tier on freshly read capabilities; an empty
+  set MUST refuse assessment and work rather than downgrade the tier. The strongest Route
+  selector and its smallest input-fitting tier remain independently elected, even if that model
+  cannot run work at the requested tier. The override MUST survive detached startup and take part
+  in relevant-input identity for proposal validation and cross-Run reuse. Persisted run-level
+  context remains the inherited tier for Static pairs, not a context-only Run override.
 - **The assessment is read-only and bounded.** It receives the issue, its acceptance criteria, the
   settled Task type, bounded relevant repository context, and admitted local measurements. It MUST
   NOT implement the work, run Trials, or audit the whole repository, and untrusted issue prose MUST
@@ -1716,6 +1821,19 @@ election an answer an operator can audit rather than a plausible-looking guess.
   their retries count toward routing usage and the Run's **Consumption**. An Orchestrator MUST
   enforce the deadline and the admission allowance, bound selector concurrency, disclose billing
   overshoot already in flight, and admit no further routing calls once either bound is exhausted.
+  The routing deadline starts before live routing preflight, including a listing shared with
+  retained Static validation; completing that validation MUST NOT start or reset the clock.
+  Deadline exhaustion blocks assessment, not eligible already-classified Static work.
+  Python's **Task-type classifier** and **Route selector** `usage.tokens` records
+  are **Run**-only (`iter: null`, no **Lane contribution**), not **Consumption**
+  of the work that happens to be open. Their billing remains visible in Run
+  totals/readback even when no work is admitted. Historical records without an explicit scope retain their
+  existing interpretation; no new Event field is needed.
+  An observed bill consumes admission allowance while its assessment remains open,
+  not only when the assessment finishes. Completion or cancellation MUST retain
+  that charge exactly once, including any additional bill reported during
+  cancellation cleanup. A result returned after the deadline MUST NOT become a
+  Task-type label or Routing proposal; its observed Consumption remains recorded.
 - **Refuse, never fall back.** A required-source failure, quota exhaustion, an empty verified
   intersection, invalid selector output, unavailable eligibility, or a failed local recording each
   yield an explicit *unavailable* decision. An Orchestrator MUST NOT substitute stale evidence, the
@@ -1781,12 +1899,47 @@ its provenance record by
 [`event-schema.json`](../git-loopy/conformance/event-schema.json)'s `wrapper.routing.resolved`
 contract and the rolling stream that carries one.
 
+The same routing fixture's `retry_lifecycle` matrix exercises these existing
+rules after Python's explicit saved migration, through the real CLI into serial
+work and a Lane followed by a serial retry. It observes actual session settings,
+canonical Pickup, outcome history, CLI/Dashboard readback and idempotent tracker
+publication rather than inferring execution from a resolver result. Selector
+bills cross the SDK session transport into Run-only Consumption, including an
+invalid retry that starts no work. Each CLI Pickup line is observed separately
+from startup and earlier Pickups. Its cases
+cover changed and repeated elections, required repeat justification, infrastructure
+failure, advancing work, attempt/allowance exhaustion and explicit Static
+escalation. A refused retry spends no task attempt or Strike, while later
+eligible Static work still runs. Saved Config remains unchanged. The existing
+one-Lane-per-issue rule is preserved; this matrix does not grant a second Lane,
+activate final defaults or extend routing to another Runner member or placement.
+
+The `in_flight_consumption` matrix carries recorded init/update authorization
+through the real unattended CLI in serial and local Lane modes. Its eight cases,
+each at exact allowance exhaustion and with overshoot, keep an assessment open
+while the next candidate is refused. They observe configured concurrency,
+the unchanged strongest selector, completion/cancellation/late-result settlement,
+actual frozen work settings, canonical records, separate CLI Pickup lines,
+Dashboard Run-only Consumption and final tracker publication. Pending candidates
+remain open without a final assignment or Route projection; no unstarted work
+charges a Strike and Config remains unchanged. These are shared obligations for
+the existing opt-in Python flow, not final-default or native-member activation.
+
 **The Dynamic route is Python-only today**, for the same reason §14.3 is: the shell and PowerShell
 Orchestrators implement no per-issue routing and read no harness listing, so they have no route to
 elect. They declare it unsupported in
 [`fixture-claims.json`](../git-loopy/conformance/fixture-claims.json) rather than by implication.
 The Dashboard needs no policy-aware branch — it renders the elected triple off
 `wrapper.pickup.bound` exactly as it renders any other.
+
+The **Run readback** MUST distinguish an absent Static table from retained Static
+routes. Under unsuppressed `dynamic`, `unconfigured_task_type_keys` names work awaiting
+Dynamic Pickup, not a promise to use the Default pair. A fully covered table MUST
+NOT be described as having uncovered Task types. An absent fixed Escalation rung
+does not disable permitted outcome-aware Dynamic retries. A run-wide model/effort
+override still suppresses Dynamic work, and historical unselected-policy records
+retain their existing meaning. These clarifications change no Event fields or
+compatibility-schema version.
 
 **Dynamic routing is off by default and stays off until an operator selects it.** An Orchestrator
 MUST NOT enable it by inference from the presence of a key, an association table, or any other
@@ -1836,10 +1989,30 @@ resolution.
 - **Retry without time travel.** Pending delivery MUST survive restart and retry
   within a finite bound using the comment identity. A retry must not duplicate a
   comment already accepted by the tracker, and an obsolete delivery MUST NOT
-  overwrite a newer Route label. Delivery state is published separately from the
-  Routing resolution so the CLI and Dashboard distinguish an undecided Route or
+  overwrite a newer Route label. Startup retries and subsequent Pickups of the
+  same assignment MUST share that bound: an exhausted assignment remains visibly
+  failed without further tracker I/O, even after restart or restored access.
+  A materially changed final assignment has its own finite retry bound; publication
+  exhaustion MUST NOT prevent its delivery or block locally recorded work.
+  A failed replacement can leave the previous owned association in place, or no
+  association if removal succeeded before the add failed. Neither is a current
+  Routing resolution: local delivery MUST remain failed, not published, and the
+  tracker projection MUST NOT authorize work or unbounded repair calls.
+  Delivery state is published separately from the Routing resolution so the CLI
+  and Dashboard distinguish an undecided Route or
   failed Agent from an already-decided Route whose tracker projection is pending
   or failed.
+
+The `publication_recovery` matrix in `routing-resolution.json` exercises recorded
+Python-local init/update authorization through repeated real CLI Runs and actual
+serial/Lane sessions. It pins fresh reuse and its original provenance, permission,
+rate-limit and transient failures, idempotent partial recovery, exhausted delivery
+across Pickups (including a previous or missing owned association), and a changed assignment
+after capability withdrawal. Actual work
+settings, canonical Pickup and Dashboard route readback must agree while Config
+and unrelated labels remain unchanged. This is a Python activation obligation;
+shell/PowerShell implementation remains deferred, and historical streams,
+Subagent and Integration settings are unchanged.
 
 ### 14.6 Routing preparation (contract 2.9)
 
@@ -1907,6 +2080,38 @@ validation and never a substitute for one.
   for the life of the Run and are never shared between clones or Runs; a
   cross-Run saving is the **Reusable route** of §14.5's sibling rule, not this
   one.
+
+The shared `routing-resolution.json` `pool_revalidation` matrix composes these
+rules through recorded migration and the real local Python CLI in serial and
+Lane modes. It holds already-bound Agents open until another eligible issue has
+a proposal, then changes issue text, evidence, eligibility or Readiness, or
+withdraws required evidence, before the next Pickup. Unchanged inputs reuse the
+proposal; changed relevant inputs require reassessment. Actual session settings,
+canonical Pickup, CLI/Dashboard readback, SDK-observed Run-only Consumption and
+final tracker publication must agree. Initially Blocked and unreadable candidates
+buy no classification or selection. Preparation takes no Lease or final
+publication; existing Pickup-time Lease acquisition and release remain unchanged.
+Running Agents finish on their frozen settings, while a refused Dynamic candidate
+leaves retained Static work usable without a Strike for unstarted work.
+Rolling may filter newly ineligible candidates on its fresh Pool read before
+reservation, rather than inventing a Pickup skip. This is Python-local composed
+Conformance, not final Dynamic-default activation. Shell/PowerShell activation is
+deferred; no non-local, Subagent or Integration routing is claimed.
+
+The companion `pool_priority` matrix carries recorded migration through four
+eligible pending candidates. It preserves oldest-first order and explicit
+**Priority**, prepares the next candidate before selectors assess other candidates,
+and exercises selector concurrency of one and two with more eligible
+candidates than available slots in either case. Running Agents remain open
+until those other assessments are in flight; the next actual serial Pickup or
+Lane refill advances without waiting for those unrelated assessments.
+Interrupted selectors retain their SDK-observed Run-only Consumption and an
+explicit unavailable preparation record before Run end. Pending issues keep
+their labels and receive no Lease, final route or tracker publication. Actual
+settings, canonical Pickup, separate CLI Pickup lines, Dashboard and final
+publication agree, without Config edits or changes to the existing ordering
+and Lease rules. These are additional Python-local obligations at the same
+staged activation seam, not a change to the member or placement deferrals above.
 
 ## 15. Release and compatibility identity (MUST)
 

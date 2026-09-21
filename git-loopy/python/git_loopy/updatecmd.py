@@ -53,6 +53,8 @@ def run_update(
     | None = None,
     helper_refresh: Callable[[str, Mapping[str, str]], Path] | None = None,
     output_fn: Callable[[str], None] = print,
+    routing_choice: str | None = None,
+    input_fn: Callable[[str], str] | None = None,
 ) -> int:
     """Refresh mutable machine state, and repair the Config a Release retired.
 
@@ -74,14 +76,28 @@ def run_update(
         else settings.project_config_path(project_root)
     )
     try:
-        config_settled = _update_config(
-            path=config_path,
-            scope=config_scope,
-            dry_run=dry_run,
-            output_fn=output_fn,
-        )
+        if routing_choice is not None:
+            _update_routing_policy(
+                path=config_path,
+                scope=config_scope,
+                choice=routing_choice,
+                env=environ,
+                dry_run=dry_run,
+                output_fn=output_fn,
+                input_fn=input_fn,
+            )
+            config_settled = True
+        else:
+            config_settled = _update_config(
+                path=config_path,
+                scope=config_scope,
+                dry_run=dry_run,
+                output_fn=output_fn,
+            )
     except (OSError, settings.SettingsError) as exc:
         output_fn(f"Could not repair the {config_scope} Config ({config_path}): {exc}")
+        if routing_choice is not None:
+            return 1
         config_settled = False
     if dry_run:
         output_fn(
@@ -126,12 +142,67 @@ def run_update(
     refresh_helper = helper_refresh or tui_release.refresh_machine_local_helper
     try:
         helper = refresh_helper(release_version, environ)
-        output_fn(f"Updated TUI helper: {helper}")
+        output_fn(f"TUI helper ready: {helper}")
         helper_settled = True
     except (OSError, tui_release.TuiReleaseError) as exc:
         output_fn(f"Could not refresh the TUI helper: {exc}")
         helper_settled = False
     return 0 if config_settled and prompt_settled and catalog_settled and helper_settled else 1
+
+
+def _update_routing_policy(
+    *,
+    path: Path,
+    scope: str,
+    choice: str,
+    env: Mapping[str, str],
+    dry_run: bool,
+    output_fn: Callable[[str], None],
+    input_fn: Callable[[str], str] | None,
+) -> None:
+    from .measured_routing import MEASURED_ROUTING_FILENAME, load_measured_routing
+    from .routing_migration import prepare_migration
+
+    original = path.read_bytes() if path.exists() else None
+    table = settings.load_config_table(path)
+    candidate = prepare_migration(
+        choice,
+        scope=scope,
+        table=table,
+        inherited=(
+            settings.load_config_table(settings.global_config_path(env))
+            if scope == "project"
+            else {}
+        ),
+        measured=(
+            load_measured_routing(path.with_name(MEASURED_ROUTING_FILENAME)).routing
+            if scope == "project"
+            else {}
+        ),
+        env=env,
+        output_fn=output_fn,
+        input_fn=input_fn,
+        dry_run=dry_run,
+    )
+    if dry_run:
+        policy = candidate.get("route_policy")
+        planned = f"route_policy = {policy}" if policy else "inherited Route policy"
+        output_fn(f"Planned {planned} for {path}; no Config was written.")
+        return
+    current = path.read_bytes() if path.exists() else None
+    if current != original:
+        raise settings.SettingsError(
+            "Config changed during routing migration; the newer content was "
+            "not overwritten. Re-run update with your explicit routing choice."
+        )
+    if candidate == table:
+        output_fn(f"Route policy is already recorded or inherited; {path} unchanged.")
+        return
+    if path.exists():
+        backup = _backup_config(path)
+        output_fn(f"Backed up the {scope} Config to {backup}; comments remain there.")
+    settings.write_config_atomic(path, candidate, normalize_enabled_skills=False)
+    output_fn(f"Recorded routing Config in {path}.")
 
 
 def _update_config(

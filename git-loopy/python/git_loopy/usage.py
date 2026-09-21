@@ -47,7 +47,19 @@ from decimal import Decimal
 from typing import Any, Mapping
 
 
-__all__ = ["BillingSample", "UsageTally"]
+__all__ = ["BillingSample", "UsageTally", "is_run_scoped_usage"]
+
+
+def is_run_scoped_usage(event: Mapping[str, Any]) -> bool:
+    """Explicit Run-only billing is not work, even while an Iteration is open."""
+    return (
+        event.get("type") == "usage.tokens"
+        and isinstance(event.get("run_id"), str)
+        and "iter" in event
+        and event["iter"] is None
+        and event.get("lane_issue") is None
+        and event.get("contribution_id") is None
+    )
 
 
 @dataclass(frozen=True)

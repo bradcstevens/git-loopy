@@ -87,7 +87,7 @@ fn the_rust_core_matches_every_dashboard_fixture_snapshot() {
             let context = ViewContext {
                 now: instant(&snapshot["render_at_utc"]),
                 now_monotonic: snapshot["render_at_monotonic"].as_f64(),
-                zone,
+                zone: zone.clone(),
                 capabilities: TerminalCapabilities::default(),
             };
             let projected = serde_json::to_value(project_run_view(&state, &context, &drill_in))
@@ -143,6 +143,25 @@ fn issue_endings_are_additive_and_absence_is_not_an_ending() {
         assert_eq!(row["status"], issue["status"]);
         assert_eq!(row["ending"], issue["ending"]);
         assert_eq!(row["commits"], issue["commits"]);
+
+        let contribution = serde_json::json!({
+            "ts": event["ts"],
+            "run_id": event["run_id"],
+            "iter": null,
+            "type": "wrapper.contribution.end",
+            "contribution_id": format!("ending-{}", issue["issue"]),
+            "issue": issue["issue"],
+            "lane_id": "lane-1",
+            "issues": [issue],
+        });
+        let modern = project(&contribution);
+        assert_eq!(
+            modern["dashboard"]["queue"]["rows"],
+            serde_json::json!([row])
+        );
+        let mut future = contribution;
+        future["issues"][0]["future_detail"] = serde_json::json!({"unknown": true});
+        assert_eq!(project(&future), modern);
     }
 
     let mut future = event.clone();

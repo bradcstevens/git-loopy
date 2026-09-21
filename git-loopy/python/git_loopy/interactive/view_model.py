@@ -65,6 +65,22 @@ def project_run_view(
 ) -> dict[str, Any]:
     """Project one complete renderer-neutral Dashboard and issue drill-in."""
     denomination = credits_denomination_for(summary)
+    summary_view: dict[str, Any] = {
+        "rows": (
+            [
+                _summary_row(snapshot, denomination=denomination)
+                for snapshot in summary.completed
+            ]
+            if summary is not None else []
+        )
+    }
+    if summary is not None and summary.run_usage_observed:
+        summary_view["run_consumption"] = {
+            "tokens_in": summary.run_usage.tokens_in,
+            "tokens_out": summary.run_usage.tokens_out,
+            "credits": _decimal_float(denomination.cost(summary.run_usage)),
+            "premium_requests": _decimal_float(summary.run_usage.premium_requests),
+        }
     return {
         "dashboard": {
             "header": _header(state),
@@ -102,16 +118,7 @@ def project_run_view(
                     for window in state.activity_windows()
                 ],
             },
-            "summary": {
-                "rows": (
-                    [
-                        _summary_row(snapshot, denomination=denomination)
-                        for snapshot in summary.completed
-                    ]
-                    if summary is not None
-                    else []
-                ),
-            },
+            "summary": summary_view,
         },
         "drill_in": _drill_in(state, issue, denomination=denomination),
     }
@@ -249,9 +256,9 @@ def _summary_row(
         return None if key in unavailable else value
 
     return {
-        "kind": "iteration",
-        "iteration": snapshot.iter_num,
-        "lane": None,
+        "kind": "lane" if snapshot.lane_issue is not None else "iteration",
+        "iteration": None if snapshot.lane_issue is not None else snapshot.iter_num,
+        "lane": snapshot.lane_issue,
         "outcome": snapshot.outcome,
         "duration_seconds": snapshot.duration_seconds,
         "model": observed("model", snapshot.model),

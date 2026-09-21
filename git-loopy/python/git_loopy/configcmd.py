@@ -714,8 +714,12 @@ def run_routing_list(
             f"below is in force."
         )
     for key in sorted(walked):
-        tier, (model, effort) = walked[key]
-        out(f"task-type:{key} = {model} @ {effort} ({tier})")
+        if resolved.run.route_policy is RoutePolicy.DYNAMIC and suppressed_by is None:
+            value, source = routing_report(resolved, key)
+            out(f"task-type:{key} = {value} ({source})")
+        else:
+            tier, (model, effort) = walked[key]
+            out(f"task-type:{key} = {model} @ {effort} ({tier})")
     return 0
 
 
@@ -1097,11 +1101,16 @@ def routing_report(resolved: "ResolvedConfig", key: str) -> tuple[str, str]:
       routing*, rather than naming a tier whose value is not in force.
     """
     from git_loopy.cli import RoutingTier
-    from git_loopy.config import resolve_iteration_model
+    from git_loopy.config import resolve_iteration_model, static_route_applies
 
     resolution = resolve_iteration_model(
         resolved.run, [TASK_TYPE_LABEL_PREFIX + key]
     )
+    if (
+        resolved.run.route_policy is RoutePolicy.DYNAMIC
+        and not static_route_applies(resolution)
+    ):
+        return "pending Pickup", "dynamic"
     value = _render_pair(resolution.model, resolution.reasoning_effort)
     suppressed_by = resolved.routing_suppressed_by
     if suppressed_by is not None:

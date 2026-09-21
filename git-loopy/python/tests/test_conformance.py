@@ -90,6 +90,7 @@ from git_loopy.staircase import Candidate
 from git_loopy.interactive.view_model import project_run_view
 from git_loopy import rolling_scheduler as rolling_scheduler_module
 from git_loopy import serial_pickup
+from git_loopy.repository_identity import repository_from_remote_url
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy import rollup as rollup_module
 from git_loopy.skill_exposure import SkillExposure
@@ -141,7 +142,11 @@ _DISCRIMINATOR = _load_fixture("discriminator.json")
     ids=lambda case: case["id"],
 )
 def test_discriminator_fixture(case: dict[str, Any]) -> None:
-    assert is_afk_ready(case["body"]) is case["eligible"]
+    from git_loopy.sources import afk_ready_exclusion
+
+    title = case.get("title", "")
+    assert is_afk_ready(case["body"], title=title) is case["eligible"]
+    assert afk_ready_exclusion(case["body"], title=title) == case["exclusion_reason"]
 
 
 _ISSUE_ORDERING = _load_fixture("issue-ordering.json")
@@ -427,6 +432,31 @@ def test_close_reference_fixture(case: dict[str, Any]) -> None:
         wrapper_module.actionable_close_refs(case["commit_messages"], pool)
         == case["actionable_refs"]
     )
+
+
+_REPOSITORY_IDENTITY = _load_fixture("repository-identity.json")
+
+
+@pytest.mark.parametrize(
+    "case",
+    _REPOSITORY_IDENTITY["cases"],
+    ids=lambda case: case["id"],
+)
+def test_repository_identity_fixture(case: dict[str, Any]) -> None:
+    """Drive the production resolver, not a copy of its rules.
+
+    Translation only, per the Conformance README: the fixture supplies the URL
+    a clone's ``origin`` carries and the name every member must reduce it to,
+    and ``null`` is as much an expected answer as a name — a member that
+    guessed one would contend on a **Lease** ref belonging to another
+    repository (ADR-0033).
+    """
+    assert repository_from_remote_url(case["url"]) == case["expected"]
+
+
+def test_repository_identity_fixture_case_ids_are_unique() -> None:
+    ids = [case["id"] for case in _REPOSITORY_IDENTITY["cases"]]
+    assert len(ids) == len(set(ids))
 
 
 _PROGRESS_STRIKES = _load_fixture("progress-strikes.json")
@@ -1052,6 +1082,10 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     2.8 adds the **Route policy** to the Run readback (§14.3). Purely additive
     on an already-optional section, so the wire axis stays at 1.2: a consumer
     pinned to it reads every field it knew and skips one it does not.
+
+    2.9 adds Route publication and Routing preparation (§14.5/§14.6).
+    Their Event vocabulary advances the fixture's provenance stamp, not its
+    wire compatibility: unknown Event types remain additive extensions.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
@@ -1142,7 +1176,7 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "harness_version",
                 "roster_cli_version",
                 "roster_diverged",
-                # #560, ADR-0057: the **Route policy** in force. Under `static`
+                # ADR-0057: under either selected **Route policy**
                 # every pair above is published ungated, which a reader cannot
                 # tell from a set of pairs that passed the gate unless the
                 # policy that ungated them travels beside them.
@@ -1181,31 +1215,36 @@ def test_event_fixture_pins_dashboard_insight_contract() -> None:
                 "validation available anywhere, and a count reveals neither a "
                 "misspelling nor a half-filled table. "
                 "unconfigured_task_type_keys is the other half: the taxonomy "
-                "members no entry names, which route to the Default pair and "
-                "say so nowhere else until a Pickup has already happened."
+                "members no entry names. Under unsuppressed `dynamic` they await "
+                "Dynamic Pickup, not the Default pair; an explicit run-wide "
+                "model/effort override remains authoritative. Under `unselected` "
+                "or `static` they use the Default pair."
             ),
             "readback_two_efforts": (
-                "effort is the GATED effort -- what would actually be sent -- "
+                "Under `unselected`, effort is the GATED effort -- what would actually be sent -- "
                 "and configured_effort is what Config supplied. Both travel "
                 "because a readback carrying only the gated value reports the "
                 "outcome and loses the request, and the request is the half "
-                "an operator can correct. gate_warnings is the verdict, drawn "
+                "an operator can correct. gate_warnings is the legacy verdict, drawn "
                 "from the same vocabulary wrapper.pickup.bound's "
-                "gate_warnings carries, and rides every configured pair "
-                "including the escalation rung, which nothing else gates "
-                "until an issue has already stalled."
+                "gate_warnings carries, including for the escalation rung. "
+                "Under `static` or `dynamic`, retained Static routes and explicit "
+                "escalation are echoed unchanged; live preflight and Pickup "
+                "validate them instead of the offline roster."
             ),
             "readback_route_policy": (
                 "Contract 2.8. route_policy names the Route policy this Run "
-                "selected (ADR-0057): `unselected` -- the default, and today's "
-                "behaviour byte-for-byte -- or `static`, the operator-selected "
-                "Static route. It travels because under `static` the hardcoded "
-                "roster is not the authority and every pair above is published "
+                "selected (ADR-0057): `unselected` -- the default, preserving "
+                "historical behaviour -- `static`, or opt-in `dynamic`. It "
+                "travels because under either selected policy the hardcoded "
+                "roster is not the authority and every configured pair above is published "
                 "UNGATED, which is otherwise indistinguishable from a set of "
                 "pairs that merely passed the gate. A consumer MUST NOT read "
-                "an empty gate_warnings under `static` as `the roster approved "
-                "this`; it means the roster was not asked. It also MUST NOT "
-                "treat an unrecognised policy name as `unselected`: a Runner "
+                "an empty gate_warnings under `static` or `dynamic` as `the roster approved "
+                "this`; it means the roster was not asked. An absent fixed "
+                "escalation rung under `dynamic` does not forbid permitted "
+                "outcome-aware reselection. A consumer MUST NOT treat an "
+                "unrecognised policy name as `unselected`: a Runner "
                 "that names a policy this consumer does not know is describing "
                 "a Run whose routing it cannot explain."
             ),
@@ -2392,13 +2431,14 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     to gain, lose, or reorder a field that no column names, so a second
     implementation could disagree about the payload while agreeing about the
     headings. The inventory is asserted from the fixture's own
-    ``projection_fields`` against every snapshot of every case, and each
+    ``projection_fields`` and declared additive fields against every snapshot, and each
     rendered column is required to resolve onto that inventory -- so a new
     column cannot be added without a field to carry it, and a field cannot be
     renamed without the column following.
     """
     contract = _DASHBOARD_INSIGHTS["semantic_contract"]
     fields = contract["projection_fields"]
+    optional_fields = contract["optional_projection_fields"]
 
     checked_queue_rows = 0
     checked_breakdown_rows = 0
@@ -2439,22 +2479,25 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
             for row in expected["dashboard"]["queue"]["rows"]:
                 assert list(row) == fields["queue_row"], where
                 checked_queue_rows += 1
-                # A route is nullable where a consumption is not: the record's
-                # absence is what "nothing has priced this issue yet" looks
-                # like, so its keys are only asserted where one was resolved.
-                if row["route"] is not None:
-                    _assert_route_fields(row["route"], fields, where)
-                    checked_routes += 1
             for row in expected["dashboard"]["summary"]["rows"]:
                 assert list(row) == fields["summary_row"], where
                 checked_summary_rows += 1
             for row in expected["drill_in"]["iteration_breakdown"]["rows"]:
                 assert list(row) == fields["iteration_breakdown_row"], where
                 assert list(row["consumption"]) == fields["consumption"], where
-                if row["route"] is not None:
-                    _assert_route_fields(row["route"], fields, where)
-                    checked_routes += 1
                 checked_breakdown_rows += 1
+            for row in (
+                expected["dashboard"]["queue"]["rows"]
+                + expected["drill_in"]["iteration_breakdown"]["rows"]
+            ):
+                route = row["route"]
+                if route is not None:
+                    assert list(route) == fields["route"] + [
+                        field
+                        for field in optional_fields["route"]
+                        if field in route
+                    ], where
+                    checked_routes += 1
             for line in (
                 expected["dashboard"]["activity"]["lines"]
                 + expected["drill_in"]["log"]["lines"]
@@ -3010,7 +3053,7 @@ def test_the_roster_preserves_compatibility_efforts_alongside_pinned_models() ->
     """A pinned-harness refresh does not erase saved Config's compatibility rows.
 
     ADR-0019 recorded that CLI ``1.0.67`` lacked the later Gemini capabilities.
-    CLI ``1.0.85`` verified Astra's ceiling. The upgrade account did not list
+    CLI ``1.0.83`` verified Astra's ceiling. The upgrade account did not list
     Gemini, so those rows are retained compatibility data, not a live capture.
     """
     roster = _MODEL_ROSTER["roster"]
@@ -4062,36 +4105,29 @@ def test_the_contract_states_a_task_type_labels_origin_is_unobservable() -> None
     assert "Task-type classifier" in section
 
 
-#: The contract revision whose text first described the **measured tier** — the
-#: one the two fixtures below pin their decisions against (§18). A literal
-#: rather than `_written_contract_version()`, because a later revision that
-#: changes something else entirely (2.6's unread-Pool rule, §2.2) leaves the
-#: measured tier exactly where it was, and a fixture that re-declared itself at
-#: every bump would claim a decision moved when nothing did.
-_MEASURED_TIER_CONTRACT_VERSION = "2.5"
+@pytest.mark.parametrize(("fixture", "expected"), [
+    ("routing-resolution.json", "2.9"),
+    ("calibration-search.json", "2.5"),
+])
+def test_routing_and_calibration_fixtures_pin_the_contracts_that_changed_them(
+    fixture: str, expected: str,
+) -> None:
+    """Only an affected fixture advances with its decision (§18).
 
-
-def test_the_measured_tier_fixtures_pin_the_contract_that_records_them() -> None:
-    """The decision and its fixtures move as one change (§18).
-
-    ``routing-resolution.json`` gained the measured-tier precedence cases and
-    ``calibration-search.json`` is the search fixture; until the contract
-    described the tier, both pinned behaviour no written contract stated. Now
-    that it does, they declare the version whose text explains them — and keep
-    declaring *that* version, not whichever one the contract has since reached.
+    Both gained measured-tier obligations at 2.5. Routing now also owns 2.9's
+    staged migration and preflight deadlines; Calibration has not changed.
+    Pin each decision's revision, not whichever version the header later reaches.
     """
     written = _written_contract_version()
     declared = _declared_fixture_contract_versions()
 
     # Non-vacuity: the revision these fixtures name is one the contract reached.
-    assert tuple(int(p) for p in _MEASURED_TIER_CONTRACT_VERSION.split(".")) <= tuple(
+    assert tuple(int(p) for p in expected.split(".")) <= tuple(
         int(p) for p in written.split(".")
     )
-    for fixture in ("routing-resolution.json", "calibration-search.json"):
-        assert declared[fixture] == _MEASURED_TIER_CONTRACT_VERSION, (
-            f"{fixture} pins the measured tier but declares contract "
-            f"{declared[fixture]}, not {_MEASURED_TIER_CONTRACT_VERSION}"
-        )
+    assert declared[fixture] == expected, (
+        f"{fixture} declares contract {declared[fixture]}, not {expected}"
+    )
 
 
 _TASK_TYPE_TAXONOMY = _ROUTING_RESOLUTION["task_type_taxonomy"]
@@ -4223,6 +4259,19 @@ def test_the_static_route_fixture_names_the_policies_the_kit_can_parse() -> None
     assert set(_ROUTING_RESOLUTION["static_route_policies"]) == {
         policy.value for policy in RoutePolicy
     }
+
+
+def test_first_setup_exercises_its_declared_dynamic_readiness_refusals() -> None:
+    from git_loopy.dynamic_route import RoutingUnavailableReason
+
+    fixture = _ROUTING_RESOLUTION["first_setup"]
+    reached = {
+        case["expected_refusal"]["routing_reason"]
+        for case in fixture["cases"]
+        if "routing_reason" in case.get("expected_refusal", {})
+    }
+    assert reached == set(fixture["routing_refusals"])
+    assert reached <= {reason.value for reason in RoutingUnavailableReason}
 
 
 _DYNAMIC_RETRY = _ROUTING_RESOLUTION["dynamic_retry_cases"]

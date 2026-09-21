@@ -12,6 +12,13 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 
 When a skill mentions a role (for example, "apply the `ready-for-agent` triage label"), use the corresponding label string from this table.
 
+**Planning documents are never agent-ready.** Issues whose titles begin with
+`PRD:` or `Spec:` (case-insensitive) must not receive `ready-for-agent`, even if
+their bodies contain task headings. Remove that label when found; preserve the
+document and its other labels. Triage and execute the implementation tickets
+derived from the document instead. All runners exclude these titles even when
+mislabelled, prioritized, marked `parallel-safe`, or explicitly pinned.
+
 Edit the right-hand column to match whatever vocabulary you actually use. `git-loopy init`
 reads this table when it ensures the labels exist in the tracker, so a renamed role is
 created under *your* string, not the canonical one — the two cannot silently desynchronise.

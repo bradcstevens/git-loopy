@@ -16,7 +16,7 @@ import json
 import math
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
@@ -66,6 +66,8 @@ __all__ = [
     "DynamicRoutePrerequisites",
     "resolve_prerequisites",
     "RoutingSourceError",
+    "RoutingLiveRead",
+    "RoutingReady",
     "DynamicRouter",
     "EvidenceRecord",
     "DynamicCandidate",
@@ -913,7 +915,12 @@ class RoutingRequest:
     source_input_identity: str | None = None
     """Digest of relevant source inputs before bounding the selector's prompt."""
 
+    work_context_tier: str | None = None
+    """Explicit work-tier authority, separate from the selector's input-fit tier."""
+
     def __post_init__(self) -> None:
+        if self.work_context_tier not in (None, BASE_CONTEXT_TIER, LONG_CONTEXT_TIER):
+            raise ValueError("work context tier must be default or long_context")
         if self.source_input_identity is not None and (
             not isinstance(self.source_input_identity, str)
             or len(self.source_input_identity) != 64
@@ -1015,14 +1022,19 @@ class SelectorCallResult:
 
     output: object
     routing_credits: Decimal
+    reported_routing_credits: Decimal = Decimal(0)
+    """The part already observed by this call's admission ledger."""
 
 
 class RoutingCallCancelled(asyncio.CancelledError):
-    """An interrupted routing call, carrying only credits already reported."""
+    """An interrupted call carrying its observations, even malformed billing."""
 
-    def __init__(self, routing_credits: Decimal) -> None:
+    def __init__(
+        self, routing_credits: Decimal, reported_routing_credits: Decimal = Decimal(0)
+    ) -> None:
         super().__init__("routing call cancelled")
-        self.routing_credits = _validate_routing_credits(routing_credits)
+        self.routing_credits = routing_credits
+        self.reported_routing_credits = reported_routing_credits
 
 
 @dataclass(frozen=True)
@@ -1046,6 +1058,34 @@ class _AdmissionRefusal(Enum):
     SELECTOR = "selector"
 
 
+def _validate_routing_limits(
+    deadline_seconds: float,
+    routing_credit_allowance: Decimal,
+    selector_concurrency: int,
+) -> None:
+    if (
+        isinstance(deadline_seconds, bool)
+        or not isinstance(deadline_seconds, (int, float))
+        or not math.isfinite(deadline_seconds)
+        or deadline_seconds <= 0
+    ):
+        raise ValueError("routing_deadline_seconds must be finite and positive")
+    if (
+        not isinstance(routing_credit_allowance, Decimal)
+        or not routing_credit_allowance.is_finite()
+        or routing_credit_allowance < 0
+    ):
+        raise ValueError(
+            "routing_credit_allowance must be a non-negative finite Decimal"
+        )
+    if (
+        isinstance(selector_concurrency, bool)
+        or not isinstance(selector_concurrency, Integral)
+        or not 1 <= selector_concurrency <= 64
+    ):
+        raise ValueError("selector_concurrency must be an integer between 1 and 64")
+
+
 class RoutingAdmissionLedger:
     """Admit bounded selector calls and account post-paid routing usage."""
 
@@ -1057,27 +1097,9 @@ class RoutingAdmissionLedger:
         selector_concurrency: int,
         monotonic: Callable[[], float] | None = None,
     ) -> None:
-        if (
-            isinstance(deadline_seconds, bool)
-            or not isinstance(deadline_seconds, (int, float))
-            or not math.isfinite(deadline_seconds)
-            or deadline_seconds <= 0
-        ):
-            raise ValueError("deadline_seconds must be finite and positive")
-        if (
-            not isinstance(routing_credit_allowance, Decimal)
-            or not routing_credit_allowance.is_finite()
-            or routing_credit_allowance < 0
-        ):
-            raise ValueError(
-                "routing_credit_allowance must be a non-negative finite Decimal"
-            )
-        if (
-            isinstance(selector_concurrency, bool)
-            or not isinstance(selector_concurrency, Integral)
-            or not 1 <= selector_concurrency <= 64
-        ):
-            raise ValueError("selector_concurrency must be between 1 and 64")
+        _validate_routing_limits(
+            deadline_seconds, routing_credit_allowance, selector_concurrency
+        )
         self._allowance = routing_credit_allowance
         self._monotonic = monotonic or time.monotonic
         self._deadline = self._monotonic() + float(deadline_seconds)
@@ -1096,6 +1118,14 @@ class RoutingAdmissionLedger:
             self._classification_attempts += 1
             self._complete_cost(cost)
 
+    def observe_credits(self, routing_credits: Decimal) -> None:
+        """Charge an SDK observation synchronously on the Run's event loop.
+
+        An in-flight call's reported bill is already spent. Its result must name
+        this reported portion so settlement charges only any unobserved remainder.
+        """
+        self._complete_cost(_validate_routing_credits(routing_credits))
+
     async def run_selector(
         self, call: Callable[[], Awaitable[SelectorCallResult]]
     ) -> tuple[SelectorCallResult | None, _AdmissionRefusal | None]:
@@ -1108,6 +1138,21 @@ class RoutingAdmissionLedger:
         """Classification shares the selector's admission limits, not its count."""
         return await self._run_call(call, classification=True)
 
+    async def classify(
+        self, call: Callable[[], Awaitable[SelectorCallResult]]
+    ) -> SelectorCallResult | RoutingUnavailable:
+        """Admit classification independently of leaderboard access or evidence."""
+        result, refusal = await self.run_classification(call)
+        if refusal is _AdmissionRefusal.QUOTA:
+            reason = RoutingUnavailableReason.QUOTA_EXHAUSTED
+        elif refusal is _AdmissionRefusal.DEADLINE:
+            reason = RoutingUnavailableReason.DEADLINE_EXHAUSTED
+        elif result is None:
+            reason = RoutingUnavailableReason.SELECTOR_UNAVAILABLE
+        else:
+            return result
+        return RoutingUnavailable(reason=reason, usage=self.snapshot())
+
     async def _run_call(
         self, call: Callable[[], Awaitable[SelectorCallResult]], *, classification: bool
     ) -> tuple[SelectorCallResult | None, _AdmissionRefusal | None]:
@@ -1115,8 +1160,15 @@ class RoutingAdmissionLedger:
             try:
                 return await call()
             except RoutingCallCancelled as exc:
+                try:
+                    cost = _validate_routing_credits(exc.routing_credits)
+                    reported = _validate_routing_credits(exc.reported_routing_credits)
+                    remainder = _validate_routing_credits(cost - reported)
+                except ValueError as error:
+                    # Invalid settlement must not convert cancellation to a refusal.
+                    raise exc from error
                 async with self._lock:
-                    self._complete_cost(exc.routing_credits)
+                    self._complete_cost(remainder)
                 raise
 
         remaining = self._deadline - self._monotonic()
@@ -1128,10 +1180,9 @@ class RoutingAdmissionLedger:
             return None, _AdmissionRefusal.DEADLINE
         try:
             async with self._lock:
-                if self._monotonic() >= self._deadline:
-                    return None, _AdmissionRefusal.DEADLINE
-                if self._credits >= self._allowance:
-                    return None, _AdmissionRefusal.QUOTA
+                refusal = self.assessment_refusal()
+                if refusal is not None:
+                    return None, refusal
                 if classification:
                     self._classification_attempts += 1
                 else:
@@ -1156,10 +1207,15 @@ class RoutingAdmissionLedger:
                     self._in_flight -= 1
             try:
                 cost = _validate_routing_credits(result.routing_credits)
+                reported = _validate_routing_credits(result.reported_routing_credits)
+                remainder = _validate_routing_credits(cost - reported)
             except (AttributeError, ValueError):
                 return None, _AdmissionRefusal.SELECTOR
             async with self._lock:
-                self._complete_cost(cost)
+                self._complete_cost(remainder)
+            # A transport can finish after the deadline despite wait_for's cancellation.
+            if self.remaining_seconds() <= 0:
+                return None, _AdmissionRefusal.DEADLINE
             return result, None
         finally:
             self._semaphore.release()
@@ -1178,9 +1234,17 @@ class RoutingAdmissionLedger:
         """Return the finite wall-clock budget remaining for routing work."""
         return max(0.0, self._deadline - self._monotonic())
 
+    def assessment_refusal(self) -> _AdmissionRefusal | None:
+        """Inspect bounds without reserving a slot or admitting a paid call."""
+        if self.remaining_seconds() <= 0:
+            return _AdmissionRefusal.DEADLINE
+        if self._credits >= self._allowance:
+            return _AdmissionRefusal.QUOTA
+        return None
+
     def _complete_cost(self, cost: Decimal) -> None:
         self._credits += cost
-        if self._credits > self._allowance:
+        if cost > 0 and self._credits > self._allowance:
             self._overshoot_count += 1
 
 
@@ -1455,6 +1519,10 @@ def resolve_prerequisites(
             "(--selector-concurrency, GIT_LOOPY_SELECTOR_CONCURRENCY or Config) "
             "so parallel Pickups cannot each buy a Route selector call at once."
         )
+    try:
+        _validate_routing_limits(deadline, allowance, concurrency)
+    except ValueError as exc:
+        raise RoutingPrerequisiteError(f"Dynamic routing needs valid limits: {exc}") from exc
     associations = _parse_associations(getattr(config, "route_associations", {}) or {})
     if not associations:
         raise RoutingPrerequisiteError(
@@ -1497,9 +1565,111 @@ class RoutingSourceError(RuntimeError):
 
 
 _EvidenceFetch = Callable[[], Awaitable[FreshEvidence | ArtificialAnalysisResult]]
-_CapabilitiesFetch = Callable[[], Awaitable[FreshHarnessCapabilities]]
+_CapabilitiesFetch = Callable[[], Awaitable[FreshHarnessCapabilities | None]]
 _Assess = Callable[[SelectorSettings, AssessmentRequest], Awaitable[SelectorCallResult]]
 _Record = Callable[[DynamicRouteDecision], Awaitable[object]]
+
+
+@dataclass(frozen=True)
+class RoutingReady:
+    """Live inputs and their verified election, never a binding work route."""
+
+    evidence: FreshEvidence
+    capabilities: FreshHarnessCapabilities
+    election: ElectionResult
+
+
+class RoutingLiveRead:
+    """Fresh, deadline-bounded routing inputs, without an assessment or Pickup."""
+
+    def __init__(
+        self,
+        *,
+        evidence_fetch: _EvidenceFetch,
+        capabilities_fetch: _CapabilitiesFetch,
+        admission_ledger: RoutingAdmissionLedger,
+    ) -> None:
+        self._evidence_fetch = evidence_fetch
+        self._capabilities_fetch = capabilities_fetch
+        self._ledger = admission_ledger
+
+    async def read(
+        self, bounded_input_tokens: int = 0, *, require_assessment: bool = False,
+        work_context_tier: str | None = None,
+    ) -> RoutingReady | RoutingUnavailable:
+        """Check current sources and candidates; zero tokens asserts no issue fit."""
+        if unavailable := self._limit_refusal(require_assessment):
+            return unavailable
+        try:
+            evidence = await self._fetch_before_deadline(self._evidence_fetch)
+        except TimeoutError:
+            reason = (
+                RoutingUnavailableReason.DEADLINE_EXHAUSTED
+                if self._ledger.remaining_seconds() <= 0
+                else RoutingUnavailableReason.SOURCE_UNAVAILABLE
+            )
+            return self._unavailable(reason)
+        except RoutingPrerequisiteError:
+            return self._unavailable(RoutingUnavailableReason.PREREQUISITE_MISSING)
+        except Exception:
+            return self._unavailable(RoutingUnavailableReason.SOURCE_UNAVAILABLE)
+        if isinstance(evidence, ArtificialAnalysisResult):
+            evidence = FreshEvidence(
+                source_identity=evidence.source_identity,
+                retrieved_at=evidence.retrieved_at,
+                records=evidence.evidence,
+            )
+        if not _valid_fresh_evidence(evidence):
+            return self._unavailable(RoutingUnavailableReason.SOURCE_UNAVAILABLE)
+        try:
+            capabilities = await self._fetch_before_deadline(self._capabilities_fetch)
+        except TimeoutError:
+            reason = (
+                RoutingUnavailableReason.DEADLINE_EXHAUSTED
+                if self._ledger.remaining_seconds() <= 0
+                else RoutingUnavailableReason.CAPABILITIES_UNAVAILABLE
+            )
+            return self._unavailable(reason)
+        except RoutingPrerequisiteError:
+            return self._unavailable(RoutingUnavailableReason.PREREQUISITE_MISSING)
+        except Exception:
+            return self._unavailable(RoutingUnavailableReason.CAPABILITIES_UNAVAILABLE)
+        if not _valid_fresh_capabilities(capabilities):
+            return self._unavailable(RoutingUnavailableReason.CAPABILITIES_UNAVAILABLE)
+        election = elect_selector(
+            evidence.records,
+            capabilities.capabilities,
+            bounded_input_tokens,
+            tier_capacities=capabilities.tier_capacities,
+        )
+        if election.selector is None or not election.candidates:
+            return self._unavailable(RoutingUnavailableReason.NO_RUNNABLE_CANDIDATE)
+        if not _work_candidates(
+            election, capabilities, bounded_input_tokens, work_context_tier
+        ):
+            return self._unavailable(RoutingUnavailableReason.NO_RUNNABLE_CANDIDATE)
+        if len(election.candidates) > 64:
+            return self._unavailable(RoutingUnavailableReason.BOUNDED_INPUT_EXCEEDED)
+        if unavailable := self._limit_refusal(require_assessment):
+            return unavailable
+        return RoutingReady(evidence, capabilities, election)
+
+    def _limit_refusal(self, require_assessment: bool) -> RoutingUnavailable | None:
+        refusal = self._ledger.assessment_refusal()
+        if refusal is _AdmissionRefusal.DEADLINE:
+            return self._unavailable(RoutingUnavailableReason.DEADLINE_EXHAUSTED)
+        if require_assessment and refusal is _AdmissionRefusal.QUOTA:
+            return self._unavailable(RoutingUnavailableReason.QUOTA_EXHAUSTED)
+        return None
+
+    async def _fetch_before_deadline(self, fetch: Callable[[], Awaitable[Any]]) -> Any:
+        remaining = self._ledger.remaining_seconds()
+        if remaining <= 0:
+            raise TimeoutError
+        return await asyncio.wait_for(fetch(), timeout=remaining)
+
+    def _unavailable(self, reason: RoutingUnavailableReason) -> RoutingUnavailable:
+        return RoutingUnavailable(reason=reason, usage=self._ledger.snapshot())
 
 
 class DynamicRouter:
@@ -1523,8 +1693,11 @@ class DynamicRouter:
             or proposal_ttl_seconds <= 0
         ):
             raise ValueError("proposal_ttl_seconds must be finite and positive")
-        self._evidence_fetch = evidence_fetch
-        self._capabilities_fetch = capabilities_fetch
+        self._live = RoutingLiveRead(
+            evidence_fetch=evidence_fetch,
+            capabilities_fetch=capabilities_fetch,
+            admission_ledger=admission_ledger,
+        )
         self._selector_assess = selector_assess
         self._recorder = recorder
         self._ledger = admission_ledger
@@ -1542,11 +1715,13 @@ class DynamicRouter:
     ) -> RoutingProposal | RoutingUnavailable:
         """Prepare a nonbinding proposal from fresh inputs."""
         self._discard_expired_proposals()
-        inputs = await self._fetch_inputs()
+        inputs = await self._live.read(
+            request.bounded_input_tokens, require_assessment=True,
+            work_context_tier=request.work_context_tier,
+        )
         if isinstance(inputs, RoutingUnavailable):
             return inputs
-        evidence, capabilities = inputs
-        return await self._assess(request, evidence, capabilities)
+        return await self._assess(request, inputs)
 
     async def bind(
         self, proposal: RoutingProposal, request: RoutingRequest
@@ -1559,16 +1734,18 @@ class DynamicRouter:
             self._proposals.pop(proposal.proposal_id, None)
             return self._unavailable(RoutingUnavailableReason.STALE_PROPOSAL)
         self._proposals.pop(proposal.proposal_id, None)
-        inputs = await self._fetch_inputs()
+        inputs = await self._live.read(
+            request.bounded_input_tokens, work_context_tier=request.work_context_tier
+        )
         if isinstance(inputs, RoutingUnavailable):
             return inputs
-        evidence, capabilities = inputs
+        evidence, capabilities = inputs.evidence, inputs.capabilities
         identity = _relevant_input_identity(request, evidence, capabilities)
         active = proposal
         reassessed = False
         superseded: str | None = None
         if identity != proposal.relevant_input_identity:
-            replacement = await self._assess(request, evidence, capabilities)
+            replacement = await self._assess(request, inputs)
             if isinstance(replacement, RoutingUnavailable):
                 return replacement
             active = replacement
@@ -1628,10 +1805,12 @@ class DynamicRouter:
             request: This Pickup's freshly built assessment input.
         """
         self._discard_expired_proposals()
-        inputs = await self._fetch_inputs()
+        inputs = await self._live.read(
+            request.bounded_input_tokens, work_context_tier=request.work_context_tier
+        )
         if isinstance(inputs, RoutingUnavailable):
             return inputs
-        evidence, capabilities = inputs
+        evidence, capabilities = inputs.evidence, inputs.capabilities
         identity = _relevant_input_identity(request, evidence, capabilities)
         for candidate in reusable:
             if candidate.relevant_input_identity != identity:
@@ -1664,7 +1843,7 @@ class DynamicRouter:
                     reused_validated_at=candidate.validated_at,
                 )
             )
-        replacement = await self._assess(request, evidence, capabilities)
+        replacement = await self._assess(request, inputs)
         if isinstance(replacement, RoutingUnavailable):
             return replacement
         self._proposals.pop(replacement.proposal_id, None)
@@ -1735,14 +1914,7 @@ class DynamicRouter:
         self, call: Callable[[], Awaitable[SelectorCallResult]]
     ) -> SelectorCallResult | RoutingUnavailable:
         """Admit a missing Task-type classification under the Run's limits."""
-        result, refusal = await self._ledger.run_classification(call)
-        if refusal is _AdmissionRefusal.QUOTA:
-            return self._unavailable(RoutingUnavailableReason.QUOTA_EXHAUSTED)
-        if refusal is _AdmissionRefusal.DEADLINE:
-            return self._unavailable(RoutingUnavailableReason.DEADLINE_EXHAUSTED)
-        if result is None:
-            return self._unavailable(RoutingUnavailableReason.SELECTOR_UNAVAILABLE)
-        return result
+        return await self._ledger.classify(call)
 
     def _discard_expired_proposals(self) -> None:
         now = self._aware_now()
@@ -1752,72 +1924,18 @@ class DynamicRouter:
             if now <= proposal.valid_until
         }
 
-    async def _fetch_inputs(
-        self,
-    ) -> tuple[FreshEvidence, FreshHarnessCapabilities] | RoutingUnavailable:
-        try:
-            evidence = await self._fetch_before_deadline(self._evidence_fetch)
-        except TimeoutError:
-            reason = (
-                RoutingUnavailableReason.DEADLINE_EXHAUSTED
-                if self._ledger.remaining_seconds() <= 0
-                else RoutingUnavailableReason.SOURCE_UNAVAILABLE
-            )
-            return self._unavailable(reason)
-        except RoutingPrerequisiteError:
-            return self._unavailable(RoutingUnavailableReason.PREREQUISITE_MISSING)
-        except Exception:
-            return self._unavailable(RoutingUnavailableReason.SOURCE_UNAVAILABLE)
-        if isinstance(evidence, ArtificialAnalysisResult):
-            evidence = FreshEvidence(
-                source_identity=evidence.source_identity,
-                retrieved_at=evidence.retrieved_at,
-                records=evidence.evidence,
-            )
-        if not _valid_fresh_evidence(evidence):
-            return self._unavailable(RoutingUnavailableReason.SOURCE_UNAVAILABLE)
-        try:
-            capabilities = await self._fetch_before_deadline(self._capabilities_fetch)
-        except TimeoutError:
-            reason = (
-                RoutingUnavailableReason.DEADLINE_EXHAUSTED
-                if self._ledger.remaining_seconds() <= 0
-                else RoutingUnavailableReason.CAPABILITIES_UNAVAILABLE
-            )
-            return self._unavailable(reason)
-        except RoutingPrerequisiteError:
-            return self._unavailable(RoutingUnavailableReason.PREREQUISITE_MISSING)
-        except Exception:
-            return self._unavailable(RoutingUnavailableReason.CAPABILITIES_UNAVAILABLE)
-        if not _valid_fresh_capabilities(capabilities):
-            return self._unavailable(RoutingUnavailableReason.CAPABILITIES_UNAVAILABLE)
-        return evidence, capabilities
-
-    async def _fetch_before_deadline(self, fetch: Callable[[], Awaitable[Any]]) -> Any:
-        remaining = self._ledger.remaining_seconds()
-        if remaining <= 0:
-            raise TimeoutError
-        return await asyncio.wait_for(fetch(), timeout=remaining)
-
     async def _assess(
         self,
         request: RoutingRequest,
-        evidence: FreshEvidence,
-        capabilities: FreshHarnessCapabilities,
+        inputs: RoutingReady,
     ) -> RoutingProposal | RoutingUnavailable:
-        election = elect_selector(
-            evidence.records,
-            capabilities.capabilities,
-            request.bounded_input_tokens,
-            tier_capacities=capabilities.tier_capacities,
+        evidence, capabilities, election = (
+            inputs.evidence, inputs.capabilities, inputs.election
         )
-        if election.selector is None or not election.candidates:
-            return self._unavailable(RoutingUnavailableReason.NO_RUNNABLE_CANDIDATE)
-        candidates = tuple(
-            _assessment_candidate(candidate) for candidate in election.candidates
+        assert election.selector is not None
+        candidates = _work_candidates(
+            election, capabilities, request.bounded_input_tokens, request.work_context_tier
         )
-        if len(candidates) > 64:
-            return self._unavailable(RoutingUnavailableReason.BOUNDED_INPUT_EXCEEDED)
         assessment_request = AssessmentRequest(
             issue=request.issue,
             acceptance_criteria=request.acceptance_criteria,
@@ -1919,8 +2037,9 @@ def _verified_reuse(
         selector.context_tier,
     ) != reusable.selector_triple:
         return None
-    for candidate in election.candidates:
-        assessed = _assessment_candidate(candidate)
+    for assessed in _work_candidates(
+        election, capabilities, request.bounded_input_tokens, request.work_context_tier
+    ):
         if (
             assessed.model,
             assessed.reasoning_effort,
@@ -1967,6 +2086,33 @@ def _valid_fresh_capabilities(value: object) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _work_candidates(
+    election: ElectionResult,
+    capabilities: FreshHarnessCapabilities,
+    bounded_input_tokens: int,
+    work_context_tier: str | None,
+) -> tuple[AssessmentCandidate, ...]:
+    """Apply work-tier authority without weakening the strongest-selector election."""
+    candidates: list[AssessmentCandidate] = []
+    for candidate in election.candidates:
+        if work_context_tier is not None:
+            model = capabilities.capabilities.get(candidate.selector.model)
+            capacity = capabilities.tier_capacities.get(
+                (candidate.selector.model, work_context_tier)
+            )
+            if (
+                model is None or work_context_tier not in model.context_tiers
+                or capacity is None or capacity < bounded_input_tokens
+            ):
+                continue
+            candidate = replace(
+                candidate,
+                selector=replace(candidate.selector, context_tier=work_context_tier),
+            )
+        candidates.append(_assessment_candidate(candidate))
+    return tuple(candidates)
 
 
 def _assessment_candidate(candidate: DynamicCandidate) -> AssessmentCandidate:

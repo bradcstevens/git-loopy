@@ -10,11 +10,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::activity::ActivityAgents;
 use crate::event::{
-    AutoClosed, CommitRecorded, ContextWindowSample, Event, EventPayload, ExecutionHostDeclaration,
-    InsightCapabilities, IssueRef, IterationEnd, IterationIssue, IterationSummary, Pickup,
-    ReleaseAdvanced, RoutingDelivery, RoutingDeliveryStatus, RoutingPrepared, RoutingResolved,
-    StopRequested, ROUTE_ELECTED, ROUTE_PREPARATION_PROPOSED, ROUTE_PREPARATION_REUSABLE,
-    ROUTE_PREPARATION_STATIC, ROUTE_PREPARATION_UNAVAILABLE, ROUTE_REVALIDATED,
+    AutoClosed, CommitRecorded, ContextWindowSample, ContributionEnd, Event, EventPayload,
+    ExecutionHostDeclaration, InsightCapabilities, IssueRef, IterationEnd, IterationIssue,
+    IterationSummary, Pickup, ReleaseAdvanced, RoutingDelivery, RoutingDeliveryStatus,
+    RoutingPrepared, RoutingResolved, StopRequested, ROUTE_ELECTED, ROUTE_PREPARATION_PROPOSED,
+    ROUTE_PREPARATION_REUSABLE, ROUTE_PREPARATION_STATIC, ROUTE_PREPARATION_UNAVAILABLE,
+    ROUTE_REVALIDATED,
 };
 use crate::timestamp::Timestamp;
 
@@ -50,7 +51,7 @@ const SHORT_SHA_LENGTH: usize = 10;
 
 /// Bounded per-issue Log tail. The complete record stays in the JSONL replay
 /// Log on disk (ADR-0003), so a long Run cannot grow memory without limit.
-const LOG_TAIL_LINES: usize = 200;
+pub(crate) const LOG_TAIL_LINES: usize = 200;
 
 /// The Run-scoped inputs the Event stream does not carry.
 #[derive(Clone, Debug, Default)]
@@ -115,7 +116,14 @@ pub(crate) struct LogLine {
     pub(crate) ordinal: usize,
     pub(crate) at: Option<Timestamp>,
     pub(crate) kind: String,
-    pub(crate) text: String,
+    pub(crate) content: LogContent,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum LogContent {
+    Text(String),
+    Preparation(Box<RoutingPrepared>),
+    Resolution(Box<RoutingResolved>),
 }
 
 /// A running billed total that latches to *unknown* the moment a term is
@@ -132,6 +140,14 @@ pub(crate) struct BilledTotal {
     total: f64,
     observed: bool,
     unknown: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RunConsumption {
+    pub(crate) tokens_in: i64,
+    pub(crate) tokens_out: i64,
+    pub(crate) credits: BilledTotal,
+    pub(crate) premium_requests: BilledTotal,
 }
 
 impl BilledTotal {
@@ -380,6 +396,7 @@ impl IssueLedgerEntry {
 #[derive(Clone, Debug)]
 pub(crate) struct IterationRow {
     pub(crate) iteration: Option<i64>,
+    pub(crate) lane: Option<IssueRef>,
     pub(crate) outcome: Option<String>,
     pub(crate) duration_seconds: Option<f64>,
     pub(crate) summary: IterationSummary,
@@ -410,6 +427,7 @@ pub struct DashboardState {
     pub(crate) capabilities: InsightCapabilities,
     execution_host: ExecutionHostProvenance,
     contribution_hosts: BTreeMap<String, String>,
+    open_contributions: BTreeMap<String, IssueRef>,
     pub(crate) wind_down: Option<WindDown>,
     pub(crate) wind_down_observed: bool,
     pub(crate) context_window: Option<ContextWindowSample>,
@@ -420,6 +438,7 @@ pub struct DashboardState {
     pub(crate) order: Vec<IssueRef>,
     pub(crate) ledger: BTreeMap<IssueRef, IssueLedgerEntry>,
     pub(crate) completed_iterations: Vec<IterationRow>,
+    pub(crate) run_usage: Option<RunConsumption>,
     /// Pool membership for the open Iteration.
     iteration_pool: Vec<IssueRef>,
     /// Output produced before this Iteration named its Active issue.
@@ -465,6 +484,7 @@ impl DashboardState {
             capabilities: InsightCapabilities::default(),
             execution_host: ExecutionHostProvenance::default(),
             contribution_hosts: BTreeMap::new(),
+            open_contributions: BTreeMap::new(),
             wind_down: None,
             wind_down_observed: false,
             context_window: None,
@@ -473,6 +493,7 @@ impl DashboardState {
             order: Vec::new(),
             ledger: BTreeMap::new(),
             completed_iterations: Vec::new(),
+            run_usage: None,
             iteration_pool: Vec::new(),
             pending_log: Vec::new(),
             pending_usage: (0, 0),
@@ -583,6 +604,16 @@ impl DashboardState {
                         start.host.clone().unwrap_or_else(|| "unknown".to_string()),
                     );
                 }
+                if let Some(issue) = &event.contribution.issue {
+                    self.mark_started(now, now_monotonic);
+                    self.status = RUN_RUNNING.to_string();
+                    self.lane_touch(issue, now_monotonic, now);
+                    if let Some(id) = &start.contribution_id {
+                        if !id.is_empty() {
+                            self.open_contributions.insert(id.clone(), issue.clone());
+                        }
+                    }
+                }
             }
             EventPayload::IterationStart => {
                 self.mark_started(now, now_monotonic);
@@ -637,7 +668,17 @@ impl DashboardState {
                     }
                 }
             }
-            EventPayload::UsageTokens(usage) => self.record_usage(usage),
+            EventPayload::UsageTokens(usage) => {
+                if event.run_scoped_usage {
+                    let run = self.run_usage.get_or_insert_with(RunConsumption::default);
+                    run.tokens_in += usage.input.unwrap_or(0).max(0);
+                    run.tokens_out += usage.output.unwrap_or(0).max(0);
+                    run.credits.add(usage.credits);
+                    run.premium_requests.add(usage.premium_requests);
+                } else {
+                    self.record_usage(usage);
+                }
+            }
             EventPayload::CommitRecorded(commit) => {
                 self.append_log_block(LOG_EVENT, &commit_log_text(commit), now)
             }
@@ -656,6 +697,9 @@ impl DashboardState {
                 self.finalize_iteration(now_monotonic);
                 self.record_iteration_row(event.iter, rollup);
                 self.record_normalized_contributions(event.iter, rollup);
+            }
+            EventPayload::ContributionEnd(ended) => {
+                self.finalize_contribution(event.contribution.id.as_deref(), ended, now_monotonic);
             }
             EventPayload::RunEnd(end) => {
                 self.status = end.outcome.clone().unwrap_or_else(|| "ended".to_string());
@@ -851,8 +895,12 @@ impl DashboardState {
         // from the Pickup that bound it, and a provenance record that also
         // wrote the route would be a second authority for it. A record from
         // before reuse existed says nothing here rather than guessing.
-        if let Some(text) = routing_resolution_text(resolved) {
-            self.append_lane_log(&resolved.issue, LOG_EVENT, &text, now);
+        if routing_resolution_text(resolved).is_some() {
+            self.append_routing_log(
+                &resolved.issue,
+                LogContent::Resolution(Box::new(resolved.clone())),
+                now,
+            );
         }
     }
 
@@ -863,9 +911,27 @@ impl DashboardState {
                 entry.preparation = Some(preparation);
             }
         }
-        if let Some(text) = routing_preparation_text(prepared) {
-            self.append_lane_log(&prepared.issue, LOG_EVENT, &text, now);
+        if routing_preparation_text(prepared).is_some() {
+            self.append_routing_log(
+                &prepared.issue,
+                LogContent::Preparation(Box::new(prepared.clone())),
+                now,
+            );
         }
+    }
+
+    fn append_routing_log(&mut self, issue: &IssueRef, content: LogContent, at: Option<Timestamp>) {
+        self.insert_entry(issue.clone());
+        let entry = self.ledger.get_mut(issue).expect("entry inserted above");
+        push_bounded(
+            &mut entry.log,
+            LogLine {
+                ordinal: 0,
+                at,
+                kind: LOG_EVENT.to_string(),
+                content,
+            },
+        );
     }
 
     fn clear_route_preparation(&mut self, issue: &IssueRef) {
@@ -1038,10 +1104,61 @@ impl DashboardState {
         };
         self.completed_iterations.push(IterationRow {
             iteration,
+            lane: None,
             outcome: rollup.outcome.clone(),
             duration_seconds: rollup.duration_seconds,
             summary,
         });
+    }
+
+    fn finalize_contribution(
+        &mut self,
+        id: Option<&str>,
+        ended: &ContributionEnd,
+        now_monotonic: Option<f64>,
+    ) {
+        self.deactivate(&ended.issue, now_monotonic, None);
+        self.iteration_lane_refs.insert(ended.issue.clone());
+        let mut rollup = IterationEnd {
+            issues: ended.issues.clone(),
+            ..IterationEnd::default()
+        };
+        if let Some(summary) = &ended.summary {
+            rollup.outcome = summary.closure_outcome.clone();
+            rollup.duration_seconds = summary.lifecycle_seconds;
+            let mut measurements = summary.measurements.clone();
+            measurements.auto_closures = summary.closures;
+            // Contribution billing lives on its canonical issue rows, not the
+            // historical cost_usd placeholder in the contribution summary.
+            let mut credits = BilledTotal::default();
+            let mut premium_requests = BilledTotal::default();
+            for row in &ended.issues {
+                credits.add(row.consumption.as_ref().and_then(|usage| usage.credits));
+                premium_requests.add(
+                    row.consumption
+                        .as_ref()
+                        .and_then(|usage| usage.premium_requests),
+                );
+            }
+            measurements.credits = Some(credits.value());
+            measurements.premium_requests = Some(premium_requests.value());
+            rollup.summary = Some(measurements);
+        }
+        let started = id
+            .and_then(|id| self.open_contributions.remove(id))
+            .is_some_and(|issue| issue == ended.issue);
+        if started {
+            if let Some(summary) = &rollup.summary {
+                self.completed_iterations.push(IterationRow {
+                    iteration: None,
+                    lane: Some(ended.issue.clone()),
+                    outcome: rollup.outcome.clone(),
+                    duration_seconds: rollup.duration_seconds,
+                    summary: summary.clone(),
+                });
+            }
+        }
+        self.record_normalized_contributions(None, &rollup);
     }
 
     fn record_normalized_contributions(&mut self, iteration: Option<i64>, rollup: &IterationEnd) {
@@ -1271,14 +1388,20 @@ fn pickup_issue_label(issue: &IssueRef) -> String {
     }
 }
 
-fn routing_resolution_text(resolved: &RoutingResolved) -> Option<String> {
+pub(crate) fn routing_resolution_text(resolved: &RoutingResolved) -> Option<String> {
     let origin = non_empty(resolved.reused_proposal_id.as_deref());
     let superseded = non_empty(resolved.superseded_proposal_id.as_deref());
     match resolved.routing_reuse.as_deref()? {
-        ROUTE_REVALIDATED => Some(match origin {
-            Some(origin) => format!("Route revalidated: reused {origin}, no new assessment"),
-            None => "Route revalidated: no new assessment".to_string(),
-        }),
+        ROUTE_REVALIDATED => {
+            let mut text = match origin {
+                Some(origin) => format!("Route revalidated: reused {origin}, no new assessment"),
+                None => "Route revalidated: no new assessment".to_string(),
+            };
+            if let Some(at) = non_empty(resolved.reused_validated_at.as_deref()) {
+                text.push_str(&format!("; decided: {at}"));
+            }
+            Some(text)
+        }
         ROUTE_ELECTED => Some(match superseded {
             Some(superseded) => format!("Route assessed: {superseded} no longer validates"),
             None => "Route assessed: no reusable route for this issue".to_string(),
@@ -1290,7 +1413,7 @@ fn routing_resolution_text(resolved: &RoutingResolved) -> Option<String> {
     }
 }
 
-fn routing_preparation_text(prepared: &RoutingPrepared) -> Option<String> {
+pub(crate) fn routing_preparation_text(prepared: &RoutingPrepared) -> Option<String> {
     match prepared.state.as_deref()? {
         ROUTE_PREPARATION_PROPOSED => {
             let model = non_empty(prepared.model.as_deref())?;
@@ -1396,7 +1519,7 @@ fn split_log_block(kind: &str, text: &str, at: Option<Timestamp>) -> Vec<LogLine
             ordinal: 0,
             at,
             kind: kind.to_string(),
-            text: line.to_string(),
+            content: LogContent::Text(line.to_string()),
         })
         .collect()
 }

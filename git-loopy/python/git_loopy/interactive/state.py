@@ -60,7 +60,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable, Iterable, Mapping
 
-from git_loopy.usage import BillingSample, UsageTally
+from git_loopy.usage import BillingSample, UsageTally, is_run_scoped_usage
 
 __all__ = [
     "LiveRunState",
@@ -879,12 +879,13 @@ class LiveRunState:
         elif etype == _AGENT_OUTPUT:
             self._append_block(LOG_UNCLASSIFIED, event.get("text"))
         elif etype == _USAGE_TOKENS:
-            self._record_usage(
-                event.get("model"),
-                event.get("input"),
-                event.get("output"),
-                BillingSample.from_event(event),
-            )
+            if not is_run_scoped_usage(event):
+                self._record_usage(
+                    event.get("model"),
+                    event.get("input"),
+                    event.get("output"),
+                    BillingSample.from_event(event),
+                )
         elif etype == _USAGE_CONTEXT_WINDOW:
             snapshot = _context_window_snapshot(event)
             if snapshot is not None:

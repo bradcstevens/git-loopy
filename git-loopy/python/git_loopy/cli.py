@@ -529,7 +529,10 @@ def build_parser() -> argparse.ArgumentParser:
             "the Route selector choose an unpinned issue's route from live "
             "Artificial Analysis evidence, and needs "
             "GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY plus the three bounds below. "
-            "Unset keeps the current behaviour."
+            "Local Runs with saved Config require an explicit static/dynamic choice, here, "
+            "in GIT_LOOPY_ROUTE_POLICY, or recorded with update --routing "
+            "keep/migrate. Both choices preserve authored Static rows and "
+            "require explicit [escalation] for Static retries."
         ),
     )
     parser.add_argument(
@@ -799,7 +802,25 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "scope unless --global is given, the built-in default model / "
             "effort, and scaffolds the prompt + skills. Persists the Minimal "
             "Skill policy (only the Required Skills) without contacting the "
-            "machine's Copilot Skill inventory."
+            "machine's Copilot Skill inventory. With --routing or a recorded "
+            "Static/Dynamic policy in the chosen scope, preserves "
+            "saved/inherited model, effort, prompt and Skill policy, and requires routing "
+            "authorization; live readiness is still checked."
+        ),
+    )
+    init.add_argument(
+        "--routing",
+        dest="routing_choice",
+        nargs="?",
+        const="ask",
+        choices=("keep", "migrate", "ask"),
+        help=(
+            "Opt in to explicit routing setup before saving: keep selects "
+            "strict Static policy; migrate makes uncovered work Dynamic. "
+            "Ask reuses a recorded choice or asks interactively. Dynamic "
+            "requires operator-owned access and explicit finite limits; "
+            "--yes supplies no routing consent or allowance. A recorded "
+            "Static/Dynamic choice is checked even without --routing."
         ),
     )
 
@@ -927,6 +948,20 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "no asset."
         ),
     )
+    update.add_argument(
+        "--routing",
+        dest="routing_choice",
+        nargs="?",
+        const="ask",
+        choices=("keep", "migrate", "ask"),
+        help=(
+            "Opt into the keep-or-migrate Route policy decision. Keep records "
+            "strict Static routing; migrate makes uncovered work Dynamic. Both "
+            "preserve saved Static entries. Omit the value to use a recorded "
+            "choice or ask on an interactive terminal. Dynamic authorization "
+            "and live readiness must pass before Config is written."
+        ),
+    )
     update_scope = update.add_mutually_exclusive_group()
     update_scope.add_argument(
         "--project",
@@ -949,7 +984,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         description=(
             "Replace the git-loopy artifact this command is running from with a "
             "published Release, through the Install channel that placed it, and "
-            "then run `git-loopy update` from what the move installed. With no "
+            "then run `git-loopy update --routing` from what the move installed. With no "
             "flags it resolves the newest published Release. It moves exactly "
             "that one artifact and needs no repository. An Install channel that "
             "cannot be proven from the artifact's own location, or that cannot "
@@ -983,6 +1018,23 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help=(
             "Permit a move that is not provably forward of the installed "
             "Release."
+        ),
+    )
+    upgrade.add_argument(
+        "--routing",
+        dest="routing_choice",
+        nargs="?",
+        const="ask",
+        default="ask",
+        choices=("keep", "migrate", "ask"),
+        help=(
+            "Choose the machine-global Route policy before moving: keep retains "
+            "Static routing; migrate makes uncovered work Dynamic. By default, "
+            "reuse a recorded global choice or ask on an interactive terminal; "
+            "unattended use with no choice refuses before the move. Both choices "
+            "preserve saved routes, require strict validation, and remove implicit "
+            "Static escalation. The installed Runner checks readiness and saves "
+            "Config through update; project Config is never changed."
         ),
     )
 
@@ -1274,8 +1326,8 @@ def _run_init(args: argparse.Namespace) -> int:
     """Dispatch ``git-loopy init`` to the first-run wizard.
 
     The wizard module (:mod:`git_loopy.init`) is imported lazily so the subcommand
-    parser stays SDK-free; the SDK is only touched when the wizard actually
-    fetches the live model list (never on the ``--yes`` non-interactive path).
+    parser stays SDK-free; the SDK is touched for the wizard's live model list
+    or routing readiness for supplied/recorded authority (including ``--yes``).
     """
     from git_loopy import init as _init
 
@@ -1299,6 +1351,7 @@ def _run_init(args: argparse.Namespace) -> int:
         assume_yes=bool(args.assume_yes),
         repo_root=repo_root,
         env=os.environ,
+        routing_choice=args.routing_choice,
         # Labels live in a repository's tracker, so there is nothing to ensure
         # when setup is not running inside one.
         label_client=_make_label_client() if repo_root is not None else None,
@@ -1428,6 +1481,12 @@ def _run_update(args: argparse.Namespace) -> int:
     return updatecmd.run_update(
         dry_run=bool(args.dry_run),
         project_root=project_root,
+        routing_choice=args.routing_choice,
+        input_fn=(
+            input
+            if _wizard_terminal_available(sys.stdin.isatty(), sys.stdout.isatty())
+            else None
+        ),
     )
 
 
@@ -1439,6 +1498,12 @@ def _run_upgrade(args: argparse.Namespace) -> int:
         to=args.to,
         edge_ref=args.edge_ref,
         allow_downgrade=bool(args.allow_downgrade),
+        routing_choice=args.routing_choice,
+        input_fn=(
+            input
+            if _wizard_terminal_available(sys.stdin.isatty(), sys.stdout.isatty())
+            else None
+        ),
     )
 
 
@@ -2081,6 +2146,8 @@ def merge_routing_tiers(
     global_: Mapping[str, object],
     measured: Mapping[str, tuple[str, str]],
     measured_provisional: Collection[str] = (),
+    *,
+    route_policy: RoutePolicy = RoutePolicy.UNSELECTED,
 ) -> dict[str, tuple[RoutingTier, tuple[str, str]]]:
     """Walk the routing tiers lowest-first, keeping each key's *last* writer.
 
@@ -2090,6 +2157,9 @@ def merge_routing_tiers(
     (#364). Later-wins per task-type key is the whole precedence rule: a tier
     replaces the entire ``(model, effort)`` pair for a key it names, and keys
     only a lower tier names survive untouched.
+
+    Dynamic policy admits Calibration as evidence, not as a Static pin. Its
+    precedence walk therefore contains only the operator-owned Config tiers.
 
     ``measured_provisional`` names the subset of ``measured`` keys whose record is
     :attr:`~git_loopy.measured_routing.MeasuredStatus.PROVISIONAL` — in force and
@@ -2101,7 +2171,10 @@ def merge_routing_tiers(
     provisional = frozenset(measured_provisional)
     merged: dict[str, tuple[RoutingTier, tuple[str, str]]] = {}
     for tier, table in (
-        (RoutingTier.MEASURED, dict(measured)),
+        (
+            RoutingTier.MEASURED,
+            {} if route_policy is RoutePolicy.DYNAMIC else dict(measured),
+        ),
         (RoutingTier.GLOBAL, settings.table_routing(global_, scope="global")),
         (RoutingTier.PROJECT, settings.table_routing(project, scope="project")),
     ):
@@ -2232,6 +2305,7 @@ def _resolve_routing(
     measured_provisional: Collection[str] = (),
     *,
     warn: Callable[[str], None],
+    route_policy: RoutePolicy = RoutePolicy.UNSELECTED,
 ) -> tuple[dict[str, tuple[str, str]], dict[str, RoutingTier]]:
     """Resolve the effective per-issue routing map (issue #146, #361).
 
@@ -2247,7 +2321,9 @@ def _resolve_routing(
     it forever, with no override flag and no special case, because that is the
     precedence chain that already shipped. A task type nobody configured in
     either scope takes the measured value; one nobody measured either falls
-    through to the run-wide default at resolution time.
+    through to the run-wide default at resolution time. Under Dynamic policy,
+    only authored Config entries participate: Calibration is supporting evidence
+    and uncovered work is assessed at Pickup rather than defaulted.
 
     Returns ``({}, {})`` (routing off, run-wide) when an explicit model/effort
     override is present (:func:`_explicit_model_or_effort_override`) — the
@@ -2265,7 +2341,9 @@ def _resolve_routing(
         _validate_config_routing_keys(global_, scope="global")
         _validate_config_routing_keys(project, scope="project")
         return {}, {}
-    walked = merge_routing_tiers(project, global_, measured, measured_provisional)
+    walked = merge_routing_tiers(
+        project, global_, measured, measured_provisional, route_policy=route_policy
+    )
     merged = {key: pair for key, (_tier, pair) in walked.items()}
     provenance = {key: tier for key, (tier, _pair) in walked.items()}
     off_roster = sorted(
@@ -2397,11 +2475,11 @@ def _resolve_model_and_effort(
     #    default pairs gate identically. The gate owns the *policy*; this call
     #    site owns the *presentation* and its suppression rule.
     #
-    #    A Static route skips it for the reason `config._gate_pair` does (#560,
-    #    ADR-0057): this table is a hardcoded roster, and the selected pair must
+    #    A selected policy skips it for the reason `config._gate_pair` does:
+    #    this table is a hardcoded roster, and a selected Static pair must
     #    survive to be verified against the authenticated harness rather than be
-    #    rescued by a description of some other binary.
-    if route_policy is RoutePolicy.STATIC:
+    #    rescued, including a run-wide override under Dynamic routing.
+    if route_policy is not RoutePolicy.UNSELECTED:
         return base_model, effort
     gated = gate_reasoning_effort(base_model, effort)
     warning = gated.warning
@@ -2479,8 +2557,9 @@ def _resolve_route_policy(
     Absence is the answer that matters. ADR-0057 requires a keep-or-migrate
     decision rather than a guess that a saved recommended value is disposable,
     so an unset key resolves to
-    :attr:`~git_loopy.static_route.RoutePolicy.UNSELECTED` and every existing
-    Config keeps behaving exactly as it did.
+    :attr:`~git_loopy.static_route.RoutePolicy.UNSELECTED`. Local saved Config then
+    requires explicit authority at startup and shared Run/doctor preflight;
+    resolution and readback alone neither choose nor persist a policy.
     """
     sources: tuple[tuple[str | None, str], ...] = (
         (getattr(args, "route_policy", None), "--route-policy"),
@@ -2664,6 +2743,10 @@ def resolve_config(
     without having been measured (#376) — a reporting distinction, not a
     precedence one.
 
+    Under Dynamic policy, the measured tier supplies evidence to the assessment,
+    not Static routing entries. Only operator-owned Config rows can suppress
+    Dynamic selection per Task type.
+
     The model/effort policy (:func:`_resolve_model_and_effort`: suffix-peel +
     per-model capability gate) sits at the *bottom* of the chain, fed the raw
     model/effort resolved across the tiers. A ``model`` / ``reasoning_effort``
@@ -2749,7 +2832,8 @@ def resolve_config(
     )
 
     routing, routing_provenance = _resolve_routing(
-        args, env, project, global_, measured, measured_provisional, warn=warn
+        args, env, project, global_, measured, measured_provisional,
+        warn=warn, route_policy=route_policy,
     )
     suppressed_by = routing_suppressed_by(args, env)
 
@@ -2770,7 +2854,12 @@ def resolve_config(
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
         routing=routing,
         context_tier=context_tier,
+        context_tier_override=(
+            getattr(args, "context_tier", None) is not None
+            or bool(env.get("GIT_LOOPY_CONTEXT_TIER", "").strip())
+        ),
         route_policy=route_policy,
+        saved_config_present=bool(project or global_),
         routing_deadline_seconds=_resolve_dynamic_bound(
             args,
             env,
@@ -3122,6 +3211,12 @@ def main(argv: list[str] | None = None) -> int:
 
     config = resolved.run
 
+    from git_loopy.run_routing_preflight import routing_choice_refusal
+
+    if (refusal := routing_choice_refusal(config)) is not None:
+        print(f"git-loopy: {refusal}", file=sys.stderr)
+        return 1
+
     # One-time Skill-policy migration (#230, ADR-0015): Config that predates
     # `enabled_skills` is not the same as no Config at all — the wizard above
     # never ran for it, so it would otherwise resolve the Minimal Skill policy
@@ -3133,7 +3228,7 @@ def main(argv: list[str] | None = None) -> int:
     # the Run on the Minimal Skill policy without persisting it.
     startup_state = classify_skill_policy_startup(
         config.skill_policy,
-        config_present=bool(tables.project or tables.global_),
+        config_present=config.saved_config_present,
     )
     if _should_migrate_skill_policy(
         startup_state, sys.stdin.isatty()
@@ -3162,6 +3257,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"git-loopy: error: {exc}", file=sys.stderr)
             return 1
         config = resolved.run
+        if (refusal := routing_choice_refusal(config)) is not None:
+            print(f"git-loopy: {refusal}", file=sys.stderr)
+            return 1
     elif startup_state is SkillPolicyStartupState.LEGACY:
         _warn(_LEGACY_SKILL_POLICY_WARNING)
 

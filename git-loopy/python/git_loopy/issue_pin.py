@@ -61,8 +61,8 @@ PIN_REFUSAL_CLOSED: Final[str] = "closed"
 #: The pinned issue does not carry ``ready-for-agent``.
 PIN_REFUSAL_NOT_READY_FOR_AGENT: Final[str] = "not_ready_for_agent"
 
-#: The pinned issue fails the AFK-ready body discriminator. The refusal's
-#: ``detail`` carries which section is missing, from
+#: The pinned issue fails the AFK-ready discriminator. The refusal's
+#: ``detail`` identifies a planning document or missing section, from
 #: :data:`git_loopy.sources.EXCLUSION_REASONS`.
 PIN_REFUSAL_NOT_AFK_READY: Final[str] = "not_afk_ready"
 
@@ -119,8 +119,8 @@ class PinnedIssue:
     """The three fields a pin decision reads off the tracker's record.
 
     Narrower than :class:`git_loopy.gh.Issue` on purpose: a pin asks whether an
-    issue may be *worked*, and the body, title and comments are not part of that
-    question — the body has already been reduced to an AFK-ready verdict by the
+    issue may be *worked*, and the body, title and comments are not needed here
+    — the body and title have already been reduced to an AFK-ready verdict by the
     time it reaches :func:`refuse_pin`.
     """
 
@@ -137,9 +137,9 @@ class PinRefusal:
         issue: The pinned issue number.
         reason: One of :data:`PIN_REFUSALS`.
         detail: For :data:`PIN_REFUSAL_NOT_AFK_READY`, the
-            :data:`git_loopy.sources.EXCLUSION_REASONS` entry naming the absent
-            section. ``None`` for every other reason, which carries its whole
-            meaning in ``reason``.
+            :data:`git_loopy.sources.EXCLUSION_REASONS` entry naming a planning
+            document or absent section. ``None`` for every other reason,
+            which carries its whole meaning in ``reason``.
     """
 
     issue: int
@@ -174,6 +174,11 @@ class PinRefusal:
                 f"`{_LABEL_PARALLEL_SAFE}` label, which a Parallel-mode Lane "
                 "requires"
             )
+        if self.detail == "planning_document":
+            return (
+                f"--issue {self.issue}: {ref} is a planning document "
+                "(PRD: or Spec:), not executable work"
+            )
         sections = _MISSING_SECTIONS.get(self.detail or "", _BOTH_SECTIONS)
         return (
             f"--issue {self.issue}: {ref} is not AFK-ready; its body is missing "
@@ -193,7 +198,7 @@ def refuse_pin(
     Args:
         issue: The tracker's record, or ``None`` when it could not be read.
         afk_exclusion: :func:`git_loopy.sources.afk_ready_exclusion` over the
-            issue body — ``None`` when the body is AFK-ready. Passed in rather
+            issue body and title — ``None`` when AFK-ready. Passed in rather
             than derived, so the discriminator keeps one home.
         number: The pinned number, used only when ``issue`` is ``None`` and
             there is therefore no record to read it off.

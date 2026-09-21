@@ -145,7 +145,7 @@ impl Cursor {
     pub(crate) fn apply(&mut self, key: Key, queue: &[IssueRef]) -> Flow {
         match key {
             Key::Quit => return Flow::Quit,
-            Key::Open => self.screen = Screen::DrillIn,
+            Key::Open => self.open(self.selected.clone()),
             Key::Back => self.screen = Screen::Dashboard,
             Key::First => self.jump(queue.first()),
             Key::Last => self.jump(queue.last()),

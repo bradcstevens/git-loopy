@@ -1591,6 +1591,12 @@ _ALLOWED_UI_IMPORTS: frozenset[str] = frozenset(
         # Deep and pure (stdlib only); summary.py folds its per-Iteration
         # Consumption onto it. Not a shell/CLI/persist coupling.
         "git_loopy.usage",
+        # git_loopy.viewer_zone — the one ambient-environment seam the UI is
+        # allowed (#597, ADR-0058). Showing a person a wall clock requires
+        # knowing whether this machine can state its own, which the UI cannot
+        # answer without reading `TZ`. Keeping that read behind one deep module
+        # is what stops `os` and the filesystem spreading through `ui/`.
+        "git_loopy.viewer_zone",
     }
 )
 
@@ -1869,15 +1875,34 @@ def test_frozen_run_table_renders_unavailable_token_cells_and_footers_as_unknown
     assert table.columns[5].footer == "50"
 
 
-def test_frozen_run_table_footer_is_unknown_when_no_iteration_observed_tokens() -> None:
+@pytest.mark.parametrize("run_only_usage", [False, True])
+def test_frozen_run_table_footer_is_unknown_when_no_iteration_observed_tokens(
+    run_only_usage,
+) -> None:
     """When every completed Iteration declares tokens unavailable, so is the total."""
     renderer, summary, _buf = _make_renderer()
     renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 7})
     renderer.render(_null_telemetry_rollup())
+    if run_only_usage:
+        renderer.render({
+            "type": "usage.tokens", "run_id": "run-1", "iter": None,
+            "input": 100, "output": 20, "credits": 0.5,
+        })
 
     table = summary.build_run_table()
     assert table.columns[4].footer == "—"
     assert table.columns[5].footer == "—"
+    assert summary.totals().observed_tokens is None
+
+
+def test_calibration_billing_is_not_run_only_consumption() -> None:
+    renderer, summary, _ = _make_renderer()
+    renderer.render({
+        "type": "usage.tokens", "run_id": None, "iter": None,
+        "calibration_id": "calibration-1", "trial_id": "trial-1",
+        "input": 100, "output": 20, "credits": 0.5,
+    })
+    assert summary.run_usage_observed is False
 
 
 # ---------------------------------------------------------------------------
@@ -2207,6 +2232,25 @@ def test_run_table_keeps_the_cache_split_out_of_the_summary() -> None:
     assert "Tokens in" in headers
 
 
+def test_unreported_run_only_billing_cannot_be_hidden_by_a_billed_work_row() -> None:
+    renderer, summary, _ = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1})
+    renderer.render({
+        "type": "usage.tokens", "run_id": "run-1", "iter": None, "input": 10, "output": 2,
+        "model": "selector", "credits": None,
+    })
+    renderer.render({
+        "type": "usage.tokens", "iter": 1, "input": 20, "output": 4,
+        "model": "work", "credits": 0.5, "premium_requests": 1,
+    })
+    renderer.render({"type": WRAPPER_ITERATION_END, "iter": 1})
+
+    assert summary.completed[0].credits(summary.denomination) == Decimal("0.5")
+    assert summary.totals().tokens_in == 30
+    assert summary.totals().credits is None
+    assert summary.totals().premium_requests is None
+
+
 def test_run_table_renders_unreported_credits_as_unknown_not_zero() -> None:
     """No billing telemetry is the em dash — a zero would read as free work."""
     renderer, summary, _buf = _make_renderer()
@@ -2377,15 +2421,29 @@ def test_overlapping_contributions_each_reach_the_summary_as_their_own_row() -> 
     assert [snap.issue_num for snap in summary.completed] == [43, 42]
     assert [snap.usage.tokens_in for snap in summary.completed] == [20, 90]
     assert [snap.outcome for snap in summary.completed] == ["advanced", "closed"]
-    assert [snap.normalized_cost_usd for snap in summary.completed] == [
-        Decimal("0.2"),
-        Decimal("0.9"),
-    ]
+    assert all(snap.credits(summary.denomination) is None for snap in summary.completed)
     assert summary.open_contributions == {}
     # Skill adoption still measured per contribution, not dropped in Parallel.
     assert [sorted(snap.skills_consulted) for snap in summary.completed] == [
         ["tdd"], ["tdd"]
     ]
+
+
+@pytest.mark.parametrize("issues", [None, [], [{"issue": 42, "consumption": None}]])
+def test_a_contribution_with_unavailable_billing_stays_unknown(issues) -> None:
+    renderer, summary, _ = _make_renderer()
+    renderer.render({
+        "type": events_module.WRAPPER_CONTRIBUTION_START,
+        "contribution_id": "c-42", "issue": 42,
+    })
+    renderer.render({
+        "type": events_module.WRAPPER_CONTRIBUTION_END,
+        "contribution_id": "c-42", "issue": 42,
+        "summary": _contribution_summary(tokens_in=100, cost_usd=5, closure_outcome="closed"),
+        "issues": issues,
+    })
+    assert summary.completed[0].credits(summary.denomination) is None
+    assert summary.completed[0].tokens_in == 100
 
 
 def test_an_unfinalized_contribution_contributes_no_summary_row() -> None:
@@ -2704,13 +2762,18 @@ def _resolved_event(**payload: Any) -> dict[str, Any]:
     return event
 
 
-def test_a_freshly_validated_reuse_is_distinguishable_from_an_assessment() -> None:
+def test_a_freshly_validated_reuse_is_distinguishable_from_an_assessment(
+    denver_viewer: None,
+) -> None:
     """#565 AC8: the one fact the Pickup line cannot carry.
 
     The pair is already on the Pickup line; what an operator cannot see there
     is whether a selector call was bought for it. Reuse, a first assessment and
     a reassessment of a route that no longer validates are three different
     bills, so they have to read as three different lines.
+
+    The instant it names is read back in the viewing machine's zone (#597),
+    which is why this test pins that zone.
     """
     renderer, _summary, buf = _make_renderer()
 
@@ -2729,7 +2792,10 @@ def test_a_freshly_validated_reuse_is_distinguishable_from_an_assessment() -> No
     assert "01JD00000000000000000000OLD" in out, (
         "a reuse that does not name the decision it reused is not provenance"
     )
-    assert "2026-09-18T20:00:00.000Z" in out
+    assert "2026-09-18T14:00:00-06:00" in out, (
+        "the decided instant must read in the viewer's zone, not raw UTC"
+    )
+    assert "2026-09-18T20:00:00.000Z" not in out
 
 
 def test_a_first_assessment_says_it_had_nothing_to_reuse() -> None:
@@ -2811,7 +2877,9 @@ def test_a_prepared_route_never_reads_as_a_decision() -> None:
     assert "bound" not in out, "a proposal claimed a Lease"
 
 
-def test_a_prepared_route_reads_back_its_rationale_and_provenance() -> None:
+def test_a_prepared_route_reads_back_its_rationale_and_provenance(
+    denver_viewer: None,
+) -> None:
     renderer, _summary, buf = _make_renderer()
 
     renderer.render(
@@ -2835,20 +2903,52 @@ def test_a_prepared_route_reads_back_its_rationale_and_provenance() -> None:
         "strongest verified index for this work",
         "01JD00000000000000000000PRE",
         "9f2c1d6a4b8e",
-        "2026-09-19T09:00:00.000Z",
-        "2026-09-19T09:05:00.000Z",
+        "2026-09-19T03:00:00-06:00",
+        "2026-09-19T03:05:00-06:00",
         "gpt-5.6-terra",
         "long_context",
         "benchmark-index",
         "claude-opus-5@2026-09",
-        "2026-09-19T08:45:00.000Z",
-        "2026-09-19T08:46:00.000Z",
-        "2026-09-18T00:00:00.000Z",
+        "2026-09-19T02:45:00-06:00",
+        "2026-09-19T02:46:00-06:00",
+        "2026-09-17T18:00:00-06:00",
         "swe-bench-verified-2",
         "repository coding",
         "overshot",
     ):
         assert expected in out
+    for raw_utc in (
+        "2026-09-19T09:00:00.000Z",
+        "2026-09-19T09:05:00.000Z",
+        "2026-09-19T08:45:00.000Z",
+        "2026-09-19T08:46:00.000Z",
+        "2026-09-18T00:00:00.000Z",
+    ):
+        assert raw_utc not in out, (
+            f"{raw_utc} reached an operator as raw UTC instead of viewer-local"
+        )
+
+
+def test_an_unresolvable_viewer_zone_labels_the_readback_instead_of_faking_local(
+    zoneless_viewer: None,
+) -> None:
+    """#597 AC9 at the seam an operator actually reads.
+
+    A viewing machine whose zone does not resolve still gets a usable readback.
+    What it must not get is a bare ``+00:00``, because that is exactly what a
+    viewer genuinely in UTC is shown — so an operator six hours out would read
+    a correct-looking wall clock that is six hours wrong, with nothing on the
+    line to say so.
+    """
+    renderer, _summary, buf = _make_renderer()
+
+    renderer.render(_prepared_event(evidence_retrieved_at="2026-09-19T08:45:00.000Z"))
+
+    out = " ".join(buf.getvalue().split())
+    assert "2026-09-19T08:45:00+00:00 UTC (local zone unresolved)" in out, (
+        "an unresolved zone must say so on the line it renders"
+    )
+    assert "2026-09-19T08:45:00.000Z" not in out
 
 
 def test_a_null_prepared_effort_is_not_presented_as_configured() -> None:
@@ -2990,6 +3090,61 @@ def test_run_start_prints_the_readback_block_for_a_run_that_configured_nothing()
     assert "claude-opus-5 @ xhigh" in out
     assert "escalation rung" in out
     assert "claude-opus-5 @ max" in out
+
+
+@pytest.mark.parametrize(
+    ("policy", "suppressed", "routing", "retry"),
+    [
+        (None, False, "every issue runs on the default pair", "a stalled issue is not retried"),
+        ("static", False, "every issue runs on the default pair", "Static retries retain"),
+        ("dynamic", False, "uncovered work awaits Dynamic Pickup", "reselect Dynamic work"),
+        ("dynamic", True, "suppressed run-wide", "Static retries retain"),
+    ],
+)
+def test_run_readback_distinguishes_dynamic_work_from_static_and_historical_runs(
+    policy, suppressed, routing, retry
+) -> None:
+    renderer, _, buf = _make_renderer()
+    event = _readback_event(
+        route_policy=policy,
+        routing_suppressed=suppressed,
+        escalation_rung=None,
+        unconfigured_task_type_keys=["docs"],
+    )
+    if policy is None:
+        event.pop("route_policy")
+
+    renderer.render(event)
+
+    output = buf.getvalue()
+    assert routing in output and retry in output
+    dynamic = policy == "dynamic" and not suppressed
+    assert ("dynamic pending" in output) is dynamic
+    assert ("configured pair" in output) is dynamic
+    assert ("default pair" in output) is not dynamic
+    if dynamic:
+        assert "no table configured" in output
+        assert "Static routes retained" not in output
+
+
+def test_fully_covered_dynamic_readback_does_not_invent_pending_task_types() -> None:
+    from git_loopy.config import RunConfig, TASK_TYPE_KEYS
+    from git_loopy.run_readback import build_run_readback
+    from git_loopy.static_route import RoutePolicy
+
+    renderer, _, buf = _make_renderer()
+    payload = build_run_readback(RunConfig(
+        route_policy=RoutePolicy.DYNAMIC,
+        routing={key: ("gpt-5.6-terra", "high") for key in TASK_TYPE_KEYS},
+    )).as_run_start_payload()
+
+    renderer.render(_readback_event(**payload))
+
+    output = buf.getvalue()
+    assert "Static routes in force" in output
+    assert "uncovered work awaits" not in output
+    assert "dynamic pending" not in output
+    assert "no table configured" not in output
 
 
 def test_the_block_echoes_the_routing_keys_and_never_a_count_of_them() -> None:

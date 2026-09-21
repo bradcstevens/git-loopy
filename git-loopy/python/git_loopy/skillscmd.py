@@ -383,8 +383,8 @@ def _copilot_state(enabled: bool | None) -> str:
 
 
 def _source_label(source_kind: str, plugin_name: str | None) -> str:
-    if source_kind == "plugin" and plugin_name:
-        return f"plugin:{plugin_name}"
+    if source_kind == "plugin":
+        return f"plugin:{plugin_name}" if plugin_name else "plugin (name unavailable)"
     return source_kind
 
 

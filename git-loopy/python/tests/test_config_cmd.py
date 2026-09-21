@@ -911,6 +911,30 @@ def _write_measured(repo_root: Path, **pairs: tuple[str, str]) -> None:
     )
 
 
+@pytest.mark.parametrize("surface", ["get", "list", "routing-list"])
+def test_dynamic_config_readback_does_not_publish_a_measured_pair_as_a_static_route(
+    tmp_path: Path, surface: str
+) -> None:
+    env = _env(tmp_path)
+    _write_measured(tmp_path, docs=("synthetic-cheap-1", "low"))
+    settings.write_config_atomic(
+        settings.project_config_path(tmp_path), {"route_policy": "dynamic"}
+    )
+    out, err = _Sink(), _Sink()
+    kwargs = dict(repo_root=tmp_path, env=env, out=out, err=err)
+
+    if surface == "get":
+        code = configcmd.run_get("task-type:docs", **kwargs)
+    elif surface == "list":
+        code = configcmd.run_list(**kwargs)
+    else:
+        code = configcmd.run_routing_list(**kwargs)
+
+    assert code == 0
+    assert "pending Pickup (dynamic)" in out.text
+    assert "synthetic-cheap-1" not in out.text
+
+
 @pytest.mark.parametrize(
     ("scope_table", "expected"),
     [

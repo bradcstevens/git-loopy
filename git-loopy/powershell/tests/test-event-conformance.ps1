@@ -758,6 +758,43 @@ Assert-True (
     $NativeRunStarts -gt 0
 ) "no native Dashboard case pins a PowerShell Run start"
 
+# #556: skill-consultation.json measures which Skills an Iteration actually
+# *used* (Wrapper contract §17.7), through tool-call arguments a Skill or a
+# SKILL.md read carries. This port declares `skill_consultation: false`
+# because it subscribes to no SDK event stream and sees no tool-call argument
+# at all -- only the harness's printed text on `agent.output`. Exercising the
+# fixture's own cases (an explicit Skill call, replay-derived SKILL.md reads,
+# and an empty consultation) is what proves that declaration holds for the
+# hardest cases the contract defines, not only a synthetic stand-in: no
+# `tool_calls` sequence this fixture pins, however it reads, ever moves this
+# port's rollup off the honest `null` its capability manifest promises.
+$SkillConsultationFixturePath = Join-Path (
+    Split-Path -Parent $PortDir
+) "conformance/skill-consultation.json"
+$SkillConsultationFixture = Get-Content -LiteralPath $SkillConsultationFixturePath -Raw |
+    ConvertFrom-Json -AsHashtable
+$SkillConsultationCases = 0
+foreach ($Case in $SkillConsultationFixture["cases"]) {
+    # This port has no seam that records a `tool_calls` sequence at all, so the
+    # fixture's own inputs are unreachable here; what the fixture's cases prove
+    # is that the declared-false capability stays null no matter which of the
+    # contract's hardest consultation shapes a Run happens to pass through.
+    $Rollup = Get-GitLoopyIterationRollup `
+        -IterationStartedMonotonic 0 `
+        -FinishedMonotonic 0
+    Assert-True (
+        $null -eq $Rollup["summary"]["skill_call_count"] -and
+        $null -eq $Rollup["summary"]["skills_consulted"]
+    ) (
+        "skill-consultation fixture must stay unmeasured for a false " +
+        "capability: $($Case["id"])"
+    )
+    $SkillConsultationCases++
+}
+Assert-True (
+    $SkillConsultationCases -gt 0
+) "no skill-consultation fixture case exercised the PowerShell rollup"
+
 $GeneratedRunId = New-GitLoopyRunId
 Assert-True (
     $GeneratedRunId -cmatch "^[0-9A-HJKMNP-TV-Z]{26}$"

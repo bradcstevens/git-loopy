@@ -11,7 +11,9 @@
 //! decides *where* the frames go.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, IsTerminal, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
+#[cfg(unix)]
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,9 +21,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use git_loopy_tui::{
-    draw_frame, drive_dashboard, project_run_view, Admission, DashboardFrame, DashboardSession,
-    DashboardState, DashboardSurface, Event, Input, InputQueue, IssueRef, Key, Pointer,
-    PointerAction, RunInputs, TerminalCapabilities, Timestamp, ViewContext, Zone,
+    draw_frame, drive_dashboard, project_run_view, zone_from_posix_tz, zone_from_tz_data,
+    Admission, DashboardFrame, DashboardSession, DashboardState, DashboardSurface, Event, Input,
+    InputQueue, IssueRef, Key, Pointer, PointerAction, RunInputs, TerminalCapabilities, Timestamp,
+    ViewContext, Zone,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::{Hide, Show};
@@ -48,6 +51,10 @@ writes the projected semantic Dashboard view as JSON on standard output; with
 Attach mode replays and follows a local trace from its beginning on the
 controlling terminal until wrapper.run.end or control-lock release.
 
+Human-facing instants are shown in the viewing machine's own timezone, read
+from TZ or the system timezone database and applied at each Event's instant
+(ADR-0058). Stored Events stay UTC.
+
 options:
       --attach TRACE            replay and follow this local JSONL trace
       --control CONTROL         the Run control artifact that reports liveness
@@ -56,7 +63,8 @@ options:
                                 (default: the last readable Event's instant)
       --render-at-monotonic S   the monotonic reading of --render-at, so
                                 durations survive a wall-clock adjustment
-      --utc-offset-minutes N    render instants at this offset from UTC
+      --utc-offset-minutes N    render instants at this fixed offset from UTC
+                                instead of the viewing machine's own zone
       --issue REF               drill in on this issue number or path
       --model NAME              the configured model for this Run
       --reasoning-effort LEVEL  the configured reasoning effort for this Run
@@ -88,6 +96,8 @@ struct Options {
     render_at: Option<Timestamp>,
     render_at_monotonic: Option<f64>,
     zone: Zone,
+    /// Why the viewing machine's zone could not be resolved, when it could not.
+    zone_diagnostic: Option<String>,
     drill_in: IssueRef,
     inputs: RunInputs,
     render: bool,
@@ -115,23 +125,13 @@ fn main() -> ExitCode {
             print!("{text}");
             ExitCode::SUCCESS
         }
-        Ok(Invocation::Project(options)) if options.attach.is_some() => match attach(&options) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(message) => {
-                eprintln!("git-loopy-tui: {message}");
-                ExitCode::from(EXIT_NO_TERMINAL)
-            }
-        },
-        Ok(Invocation::Project(options)) if options.render => match render(&options) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(message) => {
-                eprintln!("git-loopy-tui: {message}");
-                ExitCode::from(EXIT_NO_TERMINAL)
-            }
-        },
         Ok(Invocation::Project(options)) => {
-            project(&options);
-            ExitCode::SUCCESS
+            // Said before the terminal is taken, so it survives on the screen
+            // the operator gets back rather than under the alternate one.
+            if let Some(reason) = &options.zone_diagnostic {
+                eprintln!("git-loopy-tui: {reason}");
+            }
+            run(&options)
         }
         Err(message) => {
             eprintln!("git-loopy-tui: {message}");
@@ -141,10 +141,28 @@ fn main() -> ExitCode {
     }
 }
 
+fn run(options: &Options) -> ExitCode {
+    let outcome = if options.attach.is_some() {
+        attach(options)
+    } else if options.render {
+        render(options)
+    } else {
+        project(options);
+        Ok(())
+    };
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("git-loopy-tui: {message}");
+            ExitCode::from(EXIT_NO_TERMINAL)
+        }
+    }
+}
+
 fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> {
     let mut render_at = None;
     let mut render_at_monotonic = None;
-    let mut offset_minutes = 0i32;
+    let mut offset_minutes = None;
     let mut drill_in = None;
     let mut model = None;
     let mut reasoning_effort = None;
@@ -187,9 +205,10 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
             }
             "--utc-offset-minutes" => {
                 let raw = value()?;
-                offset_minutes = raw
-                    .parse::<i32>()
-                    .map_err(|_| format!("--utc-offset-minutes is not a number: {raw}"))?;
+                offset_minutes = Some(
+                    raw.parse::<i32>()
+                        .map_err(|_| format!("--utc-offset-minutes is not a number: {raw}"))?,
+                );
             }
             "--attach" => attach = Some(PathBuf::from(value()?)),
             "--control" => control = Some(PathBuf::from(value()?)),
@@ -217,10 +236,22 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
         (None, Some(_)) => unreachable!("--control without --attach already returned"),
     };
 
+    // An explicit offset is an override, so it is taken exactly as given —
+    // including an explicit zero — and the viewing machine is never consulted.
+    // That is what keeps a fixture deterministic on any host.
+    let (zone, zone_diagnostic) = match offset_minutes {
+        Some(minutes) => (Zone::from_offset_minutes(minutes), None),
+        None => match resolve_viewing_zone() {
+            Ok(zone) => (zone, None),
+            Err(reason) => (Zone::utc_fallback(), Some(reason)),
+        },
+    };
+
     Ok(Invocation::Project(Box::new(Options {
         render_at,
         render_at_monotonic,
-        zone: Zone::from_offset_minutes(offset_minutes),
+        zone,
+        zone_diagnostic,
         drill_in: drill_in.unwrap_or_else(|| IssueRef::parse("")),
         inputs: RunInputs {
             model,
@@ -229,6 +260,306 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Invocation, String> 
         render,
         attach,
     })))
+}
+
+/// The directories a tz database is conventionally installed in.
+///
+/// Searched in order after `TZDIR`, because a host may have more than one and
+/// the first readable copy of a named zone is the one `libc` would have used.
+const TZ_DIRECTORIES: [&str; 5] = [
+    "/usr/share/zoneinfo",
+    "/var/db/timezone/zoneinfo",
+    "/usr/lib/zoneinfo",
+    "/usr/share/lib/zoneinfo",
+    "/etc/zoneinfo",
+];
+
+/// The symlink every Unix host points at its own zone.
+#[cfg(not(windows))]
+const LOCALTIME: &str = "/etc/localtime";
+
+/// The viewing machine's zone rules, or why they could not be read.
+///
+/// This is the whole of the helper's ambient environment where time is
+/// concerned, and it lives in the binary target on purpose (ADR-0013,
+/// ADR-0058): the library is handed rules and never goes looking for them.
+///
+/// `TZ` is honoured first, exactly as `libc` honours it, so an operator can
+/// view a Run in a zone that is not the host's — including an attached viewer
+/// whose Run is executing somewhere else entirely.
+fn resolve_viewing_zone() -> Result<Zone, String> {
+    match std::env::var("TZ") {
+        Ok(raw) => {
+            // POSIX: a leading colon means the rest names a file, and an empty
+            // TZ means UTC. Neither is a failure to resolve.
+            let specification = raw.strip_prefix(':').unwrap_or(&raw);
+            if specification.is_empty() {
+                return Ok(Zone::utc());
+            }
+            if let Some(zone) = named_zone(specification) {
+                return Ok(zone);
+            }
+            zone_from_posix_tz(specification).ok_or_else(|| {
+                format!(
+                    "TZ={raw} names neither a readable timezone nor a POSIX \
+                     timezone specification; times are shown in UTC — set TZ \
+                     to a zone name such as America/Denver, or pass \
+                     --utc-offset-minutes for a fixed offset"
+                )
+            })
+        }
+        Err(std::env::VarError::NotPresent) => system_viewing_zone(),
+        Err(std::env::VarError::NotUnicode(_)) => Err(
+            "TZ is not Unicode; times are shown in UTC -- unset TZ or use a valid timezone"
+                .to_string(),
+        ),
+    }
+}
+
+#[cfg(not(windows))]
+fn system_viewing_zone() -> Result<Zone, String> {
+    let data = std::fs::read(LOCALTIME).map_err(|error| {
+        format!(
+            "the viewing machine's timezone could not be read from \
+             {LOCALTIME} ({error}); times are shown in UTC -- set TZ or \
+             pass --utc-offset-minutes for a fixed offset"
+        )
+    })?;
+    zone_from_tz_data(&data).ok_or_else(|| {
+        format!(
+            "the timezone database at {LOCALTIME} could not be decoded; \
+             times are shown in UTC -- set TZ or pass --utc-offset-minutes"
+        )
+    })
+}
+
+#[cfg(windows)]
+fn system_viewing_zone() -> Result<Zone, String> {
+    use windows_sys::Win32::System::Time::{
+        GetDynamicTimeZoneInformation, DYNAMIC_TIME_ZONE_INFORMATION, TIME_ZONE_ID_INVALID,
+    };
+
+    let load = || -> Result<Zone, String> {
+        let mut information = DYNAMIC_TIME_ZONE_INFORMATION::default();
+        // The API writes the complete, correctly sized structure on success.
+        if unsafe { GetDynamicTimeZoneInformation(&mut information) } == TIME_ZONE_ID_INVALID {
+            return Err(format!(
+                "cannot read the Windows timezone: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        windows_viewing_zone(&information)
+    };
+    load().map_err(|reason| {
+        format!("{reason}; times are shown in UTC -- repair the Windows timezone or pass --utc-offset-minutes")
+    })
+}
+
+#[cfg(windows)]
+fn windows_viewing_zone(
+    information: &windows_sys::Win32::System::Time::DYNAMIC_TIME_ZONE_INFORMATION,
+) -> Result<Zone, String> {
+    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
+    use windows_sys::Win32::System::Time::{
+        GetDynamicTimeZoneInformationEffectiveYears, GetTimeZoneInformationForYear,
+        TIME_ZONE_INFORMATION,
+    };
+    let base = TIME_ZONE_INFORMATION {
+        Bias: information.Bias,
+        StandardBias: information.StandardBias,
+        StandardDate: information.StandardDate,
+        DaylightBias: information.DaylightBias,
+        DaylightDate: information.DaylightDate,
+        ..Default::default()
+    };
+    let base_rule = windows_year_rule(&base)?;
+    if information.DynamicDaylightTimeDisabled || information.TimeZoneKeyName[0] == 0 {
+        return Ok(Zone::from_rules(0, Vec::new(), Some(base_rule)));
+    }
+    let (mut first, mut last) = (0, 0);
+    // All pointers refer to live structures for the duration of this call.
+    let status =
+        unsafe { GetDynamicTimeZoneInformationEffectiveYears(information, &mut first, &mut last) };
+    if status == ERROR_FILE_NOT_FOUND || (status == ERROR_SUCCESS && first == 0 && last == 0) {
+        return Ok(Zone::from_rules(0, Vec::new(), Some(base_rule)));
+    }
+    if status != ERROR_SUCCESS {
+        return Err(format!(
+            "cannot read Windows timezone history: OS error {status}"
+        ));
+    }
+    if first > last || last > 9999 {
+        return Err(format!(
+            "invalid Windows timezone year range {first}..{last}"
+        ));
+    }
+    let mut rules = Vec::new();
+    for year in first..=last {
+        let mut annual = TIME_ZONE_INFORMATION::default();
+        // The year is bounded above, and the API initializes annual on success.
+        if unsafe { GetTimeZoneInformationForYear(year as u16, information, &mut annual) } == 0 {
+            return Err(format!(
+                "cannot read Windows timezone rules for {year}: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        rules.push(windows_year_rule(&annual)?);
+    }
+    Zone::from_year_rules(first as u16, &rules)
+        .ok_or_else(|| "Windows timezone history is not representable".to_string())
+}
+
+#[cfg(windows)]
+fn windows_year_rule(
+    information: &windows_sys::Win32::System::Time::TIME_ZONE_INFORMATION,
+) -> Result<git_loopy_tui::ZoneTailRule, String> {
+    use git_loopy_tui::{ZoneDaylightRule, ZoneRuleDate, ZoneTailRule};
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+
+    let offset = |adjustment: i32| {
+        information
+            .Bias
+            .checked_add(adjustment)
+            .and_then(i32::checked_neg)
+            .filter(|offset| (-1439..=1439).contains(offset))
+            .ok_or_else(|| "invalid Windows timezone offset".to_string())
+    };
+    if information.StandardDate.wMonth == 0 && information.DaylightDate.wMonth == 0 {
+        return Ok(ZoneTailRule::fixed(offset(0)?));
+    }
+    let date = |date: &SYSTEMTIME| -> Result<ZoneRuleDate, String> {
+        if date.wYear != 0
+            || !(1..=12).contains(&date.wMonth)
+            || !(1..=5).contains(&date.wDay)
+            || date.wDayOfWeek > 6
+            || date.wHour > 23
+            || date.wMinute > 59
+            || date.wSecond > 59
+            || date.wMilliseconds != 0
+        {
+            return Err("unsupported Windows timezone transition date".to_string());
+        }
+        Ok(ZoneRuleDate::MonthWeekDay {
+            month: u32::from(date.wMonth),
+            week: u32::from(date.wDay),
+            weekday: u32::from(date.wDayOfWeek),
+            seconds: i64::from(date.wHour) * 3600
+                + i64::from(date.wMinute) * 60
+                + i64::from(date.wSecond),
+        })
+    };
+    Ok(ZoneTailRule::with_daylight(
+        offset(information.StandardBias)?,
+        ZoneDaylightRule::new(
+            offset(information.DaylightBias)?,
+            date(&information.DaylightDate)?,
+            date(&information.StandardDate)?,
+        ),
+    ))
+}
+
+#[cfg(all(test, windows))]
+mod windows_zone_tests {
+    use super::*;
+    use windows_sys::Win32::Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, SYSTEMTIME};
+    use windows_sys::Win32::System::Time::{
+        EnumDynamicTimeZoneInformation, SystemTimeToTzSpecificLocalTimeEx,
+        DYNAMIC_TIME_ZONE_INFORMATION,
+    };
+
+    #[test]
+    fn windows_named_rules_match_native_historical_conversions() {
+        let names = [
+            "Mountain Standard Time",
+            "AUS Eastern Standard Time",
+            "Nepal Standard Time",
+            "UTC",
+        ];
+        let mut found = 0;
+        for index in 0.. {
+            let mut information = DYNAMIC_TIME_ZONE_INFORMATION::default();
+            let status = unsafe { EnumDynamicTimeZoneInformation(index, &mut information) };
+            if status != ERROR_SUCCESS {
+                assert_eq!(status, ERROR_NO_MORE_ITEMS);
+                break;
+            }
+            let end = information
+                .TimeZoneKeyName
+                .iter()
+                .position(|unit| *unit == 0)
+                .unwrap_or(information.TimeZoneKeyName.len());
+            let name = String::from_utf16(&information.TimeZoneKeyName[..end]).expect("zone name");
+            if !names.contains(&name.as_str()) {
+                continue;
+            }
+            found += 1;
+            let zone = windows_viewing_zone(&information).expect("native named zone rules");
+            for (year, month, day, hour) in [
+                (1999, 3, 15, 14),
+                (2006, 3, 15, 14),
+                (2007, 3, 15, 14),
+                (2026, 1, 16, 14),
+                (2026, 7, 1, 0),
+                (2026, 11, 1, 8),
+            ] {
+                let utc = SYSTEMTIME {
+                    wYear: year,
+                    wMonth: month,
+                    wDay: day,
+                    wHour: hour,
+                    ..Default::default()
+                };
+                let mut local = SYSTEMTIME::default();
+                assert_ne!(
+                    unsafe { SystemTimeToTzSpecificLocalTimeEx(&information, &utc, &mut local) },
+                    0
+                );
+                let instant = Timestamp::parse_rfc3339(&format!(
+                    "{year:04}-{month:02}-{day:02}T{hour:02}:00:00Z"
+                ))
+                .expect("UTC instant");
+                let wall = Timestamp::parse_rfc3339(&format!(
+                    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+                    local.wYear,
+                    local.wMonth,
+                    local.wDay,
+                    local.wHour,
+                    local.wMinute,
+                    local.wSecond
+                ))
+                .expect("local wall clock");
+                let expected = (wall.seconds_since(instant) / 60.0) as i32;
+                assert_eq!(
+                    zone.offset_minutes_at(instant),
+                    expected,
+                    "{name}: {instant}"
+                );
+            }
+        }
+        assert_eq!(found, names.len());
+    }
+}
+
+/// The rules for a zone named the way `TZ` names one, if a database has it.
+fn named_zone(name: &str) -> Option<Zone> {
+    let path = Path::new(name);
+    if path.is_absolute() {
+        return zone_from_tz_data(&std::fs::read(path).ok()?);
+    }
+    // A zone name is a path *inside* a database directory, so a name that
+    // climbs out of one is not a zone name at all.
+    if name.is_empty()
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    std::env::var_os("TZDIR")
+        .map(PathBuf::from)
+        .into_iter()
+        .chain(TZ_DIRECTORIES.iter().map(PathBuf::from))
+        .find_map(|directory| zone_from_tz_data(&std::fs::read(directory.join(path)).ok()?))
 }
 
 /// The compatibility answer an Orchestrator gates fullscreen startup on.
@@ -277,7 +608,7 @@ fn project(options: &Options) {
             .or(last_instant)
             .unwrap_or_else(Timestamp::epoch),
         now_monotonic: options.render_at_monotonic.or(last_monotonic),
-        zone: options.zone,
+        zone: options.zone.clone(),
         capabilities: TerminalCapabilities::default(),
     };
     let view = project_run_view(&state, &context, &options.drill_in);
@@ -290,7 +621,7 @@ fn project(options: &Options) {
 fn dashboard_session(options: &Options, capabilities: TerminalCapabilities) -> DashboardSession {
     let mut session = DashboardSession::new(
         options.inputs.clone(),
-        options.zone,
+        options.zone.clone(),
         options.drill_in.clone(),
     )
     .with_capabilities(capabilities);
@@ -318,6 +649,7 @@ const TICK: Duration = Duration::from_millis(500);
 const POLL: Duration = Duration::from_millis(100);
 
 /// How long attach mode waits before checking whether its trace grew.
+#[cfg(unix)]
 const ATTACH_POLL: Duration = Duration::from_millis(100);
 
 /// Draw the live Dashboard on the controlling terminal until end of input.
@@ -916,11 +1248,17 @@ const CONTROLLING_TERMINAL: &str = "CONOUT$";
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::fs;
+    #[cfg(unix)]
     use std::io::Write;
-    use std::path::{Path, PathBuf};
+    #[cfg(unix)]
+    use std::path::Path;
+    use std::path::PathBuf;
+    #[cfg(unix)]
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
+    #[cfg(unix)]
     static UNIQUE: AtomicU64 = AtomicU64::new(0);
 
     #[test]
@@ -998,6 +1336,7 @@ mod tests {
         parse(arguments.iter().map(|argument| argument.to_string())).expect("the arguments parse")
     }
 
+    #[cfg(unix)]
     fn test_artifact_dir(name: &str) -> PathBuf {
         let unique = UNIQUE.fetch_add(1, AtomicOrdering::Relaxed);
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1009,6 +1348,7 @@ mod tests {
         path
     }
 
+    #[cfg(unix)]
     fn append(path: &Path, text: &str) {
         let mut file = OpenOptions::new()
             .create(true)

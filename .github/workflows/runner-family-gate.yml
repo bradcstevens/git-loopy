@@ -101,6 +101,7 @@ jobs:
             git-loopy/shell/git-loopy.sh \
             git-loopy/shell/install.sh \
             git-loopy/shell/lib/events.sh \
+            git-loopy/shell/lib/issue-lease.sh \
             git-loopy/shell/lib/orchestrator.sh \
             git-loopy/shell/lib/release-version.sh \
             git-loopy/shell/lib/tui-install.sh \
@@ -111,9 +112,11 @@ jobs:
           # collapses to nothing (a glob under `nullglob`, say) red instead of green.
           SUITES=(
             git-loopy/shell/tests/test-event-conformance.sh
+            git-loopy/shell/tests/test-issue-lease-conformance.sh
             git-loopy/shell/tests/test-orchestrator-conformance.sh
             git-loopy/shell/tests/test-orchestrator-boundary.sh
             git-loopy/shell/tests/test-release-line-conformance.sh
+            git-loopy/shell/tests/test-repository-identity-conformance.sh
             git-loopy/shell/tests/test-tui-install.sh
           )
           EXECUTED=0
@@ -152,6 +155,29 @@ jobs:
           if ! grep -Eq 'test result: ok\. [1-9][0-9]* passed' \
             "$RUNNER_TEMP/rust-suite.log"; then
             printf 'Rust gate: the suite executed zero assertions\n' >&2
+            exit 1
+          fi
+
+  viewer-local-time-windows:
+    name: Viewer-local time / windows-latest
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the Rust toolchain
+        run: >-
+          rustup toolchain install stable --profile minimal
+          --component rustfmt --component clippy
+      - name: Prove native Windows timezone resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path git-loopy/tui/Cargo.toml --check
+          cargo clippy --manifest-path git-loopy/tui/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path git-loopy/tui/Cargo.toml \
+            --bin git-loopy-tui --test viewer_local_time windows_ \
+            2>&1 | tee "$RUNNER_TEMP/windows-zone.log"
+          if [[ "$(grep -Ec '^test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/windows-zone.log")" != "2" ]]; then
+            printf 'Windows timezone gate: both native test targets must execute assertions\n' >&2
             exit 1
           fi
 
@@ -196,9 +222,11 @@ jobs:
             }
           }
           Invoke-Suite git-loopy/powershell/tests/test-event-conformance.ps1
+          Invoke-Suite git-loopy/powershell/tests/test-issue-lease-conformance.ps1
           Invoke-Suite git-loopy/powershell/tests/test-orchestrator-conformance.ps1
           Invoke-Suite git-loopy/powershell/tests/test-orchestrator-boundary.ps1
           Invoke-Suite git-loopy/powershell/tests/test-release-line-conformance.ps1
+          Invoke-Suite git-loopy/powershell/tests/test-repository-identity-conformance.ps1
           Invoke-Suite git-loopy/powershell/tests/test-tui-install.ps1
 
   run-control:

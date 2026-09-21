@@ -51,6 +51,13 @@ The contract is strictly enforced:
   (e.g., mismatch between requested publication mode and repository policy) fail closed
   before any publication step runs.
 
+The trust policy must exist in the tagged commit and the publication worktree's
+copy must match it. An untracked policy cannot supply
+a promise the tag never made. A source-only Rehearsal forwards its explicit mode
+to that verifier and refuses a committed artifact-bearing policy rather than
+returning a source-only Publication input for it. Unreadable policies, including
+invalid UTF-8, are publication refusals, not implicit defaults.
+
 ### Consuming an older helper from a source-only Runner Release
 
 Source-only describes publication, not Dashboard compatibility. Python maintenance
@@ -59,6 +66,12 @@ Runner's Release version. It verifies the checksum, the helper's resolved Releas
 identity, and its Event-schema compatibility before activation. A newer helper is
 not substituted, and an incompatible older one is not made compatible merely by
 being downloadable (ADR-0052; #591).
+
+A matching machine-local source build is retained when its version and schema
+match the installed Runner, no exact helper is published, and the immutable tag's
+trust policy explicitly declares `source-only`. This preserves a locally built
+Dashboard without inferring publication mode from missing assets. Unreadable
+release history or policy still refuses maintenance.
 
 The shell and PowerShell installers still request the exact declared helper
 Release. Their `--no-tui` / `-NoTui` options skip that download; they do not install
@@ -77,6 +90,24 @@ and ensure the compiled `git-loopy-tui` binary is available on `PATH` or placed 
 
 ## Release target and Promotion
 
+### Releasing a completed batch with `/release`
+
+The user-invoked
+[`/release` skill](https://github.com/bradcstevens/git-loopy-skills/blob/main/docs/release.md)
+operates in the repository where git-loopy completed the work. It groups all
+unreleased, integrated issue completions into one release and follows that
+project's own versioning and publication procedure. Install it in your agent from
+the external skills catalog; this does not change git-loopy's pinned Run catalog
+or add publication authority to an Agent.
+
+For this repository, `/release` promotes the existing Release target through the
+Promotion path below. It does not bump again per issue, invent a milestone, or
+bypass candidate proof. Its stable batch includes the development fragments
+since the previous stable release. Missing prerequisites are reported as blockers,
+and an already-published batch is a no-op.
+
+### Advancing the target
+
 A closed issue's **Bump class** label advances the Release line after
 Integration. The Release target is the ratchet across those labels, while the
 `dev.N` counter records each advance; see [ADR-0052](../adr/0052-the-release-line-advances-per-issue.md).
@@ -85,7 +116,10 @@ An issue's milestone neither selects nor records that target.
 Each member's Release writer advances the two live version expectations in
 `git-loopy/conformance/release-version.json` in the same atomic write as the
 distribution metadata, and includes that fixture in its Release commit.
-All other Conformance fixtures remain unchanged.
+All other Conformance fixtures remain unchanged by version advancement alone.
+Separately reviewed SDK or contract changes may intentionally edit their own
+fixtures, such as the roster's CLI provenance stamp when the SDK pin changes;
+those edits are not made by the Release-version writer.
 
 A `vX.Y.Z` **GitHub milestone** is solely the **Promotion** trigger. Closing it
 starts the unattended Promotion: the matching `dev.N` line becomes stable,

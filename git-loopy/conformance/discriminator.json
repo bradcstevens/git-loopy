@@ -4,9 +4,52 @@
   "exclusion_reasons": [
     "missing_what_to_build",
     "missing_acceptance_criteria",
-    "missing_both_sections"
+    "missing_both_sections",
+    "planning_document"
   ],
   "cases": [
+    {
+      "id": "prd-title-with-task-headings",
+      "title": "PRD: One issue, one run",
+      "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": false,
+      "exclusion_reason": "planning_document"
+    },
+    {
+      "id": "spec-title-with-task-headings",
+      "title": "Spec: Implementation plan",
+      "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": false,
+      "exclusion_reason": "planning_document"
+    },
+    {
+      "id": "planning-title-case-insensitive",
+      "title": "sPeC: Implementation plan",
+      "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": false,
+      "exclusion_reason": "planning_document"
+    },
+    {
+      "id": "planning-title-precedes-missing-headings",
+      "title": "prd: Planning only",
+      "body": "Planning document.",
+      "eligible": false,
+      "exclusion_reason": "planning_document"
+    },
+    {
+      "id": "planning-reference-in-ticket-title",
+      "title": "Implement Spec: title exclusion from PRD: requirements",
+      "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": true,
+      "exclusion_reason": null
+    },
+    {
+      "id": "prefix-requires-colon",
+      "title": "Specification parser",
+      "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": true,
+      "exclusion_reason": null
+    },
     {
       "id": "required-headings-without-parent",
       "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",

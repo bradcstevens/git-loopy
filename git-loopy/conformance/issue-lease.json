@@ -1,0 +1,763 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.8",
+  "scope": "Record inspection and the pure Lease action decision (claim, fence, release, renew). The ref transport that carries them is Python-only pending the shell and PowerShell ports under #390.",
+  "repository": "bradcstevens/git-loopy",
+  "issue": 390,
+  "record": {
+    "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "issue": 390,
+    "repository": "bradcstevens/git-loopy",
+    "claimed_at": 1000,
+    "heartbeat_at": 1000,
+    "ttl_seconds": 300,
+    "host": "laptop",
+    "pid": 42
+  },
+  "cases": [
+    {
+      "id": "absent-ref-is-not-a-lease",
+      "raw": null,
+      "now": 1000,
+      "expected": {
+        "state": "absent",
+        "owner": null,
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "valid-live-record",
+      "now": 1000,
+      "expected": {
+        "state": "live",
+        "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "exact-ttl-is-still-live",
+      "now": 1300,
+      "expected": {
+        "state": "live",
+        "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "one-second-past-ttl-expires",
+      "now": 1301,
+      "expected": {
+        "state": "expired",
+        "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "renewed-quiet-agent-remains-live",
+      "set": {
+        "heartbeat_at": 10000
+      },
+      "now": 10001,
+      "expected": {
+        "state": "live",
+        "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "stored-ttl-not-reader-default",
+      "set": {
+        "ttl_seconds": 600
+      },
+      "now": 1301,
+      "expected": {
+        "state": "live",
+        "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "absent-ref-is-not-malformed",
+      "raw": null,
+      "now": 1000,
+      "expected": {
+        "state": "absent",
+        "owner": null,
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "broken-json-expires-diagnostically",
+      "raw": "{",
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "empty-commit-message-is-not-an-absent-ref",
+      "raw": "",
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "json-null-is-not-an-absent-ref",
+      "raw": "null",
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "array-is-not-a-record",
+      "raw": "[]",
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "wrong-repository",
+      "set": {
+        "repository": "other/project"
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "wrong-issue",
+      "set": {
+        "issue": 391
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "repository-identity-is-case-insensitive",
+      "set": {
+        "repository": "BradCStevens/Git-Loopy"
+      },
+      "now": 1000,
+      "expected": {
+        "state": "live",
+        "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "unknown-fields-do-not-break-a-record",
+      "set": {
+        "future_extension": {
+          "note": "ignored"
+        }
+      },
+      "now": 1000,
+      "expected": {
+        "state": "live",
+        "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "run-id-must-be-a-run-ulid",
+      "set": {
+        "run_id": "not-a-run"
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "run-id-cannot-overflow-128-bits",
+      "set": {
+        "run_id": "81ARZ3NDEKTSV4RRFFQ69G5FAV"
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "run-id-cannot-have-a-trailing-newline",
+      "set": {
+        "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV\n"
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "fields-are-case-sensitive",
+      "remove": [
+        "run_id"
+      ],
+      "set": {
+        "RUN_ID": "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "missing-run-id",
+      "remove": [
+        "run_id"
+      ],
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "missing-issue",
+      "remove": [
+        "issue"
+      ],
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "missing-repository",
+      "remove": [
+        "repository"
+      ],
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "missing-claim-time",
+      "remove": [
+        "claimed_at"
+      ],
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "missing-heartbeat",
+      "remove": [
+        "heartbeat_at"
+      ],
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "missing-ttl-is-not-defaulted",
+      "remove": [
+        "ttl_seconds"
+      ],
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "missing-host",
+      "remove": [
+        "host"
+      ],
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "missing-pid",
+      "remove": [
+        "pid"
+      ],
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "null-heartbeat",
+      "set": {
+        "heartbeat_at": null
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "heartbeat-before-claim",
+      "set": {
+        "heartbeat_at": 999
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "zero-ttl",
+      "set": {
+        "ttl_seconds": 0
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "boolean-is-not-a-duration",
+      "set": {
+        "ttl_seconds": true
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "numeric-string-is-not-a-duration",
+      "set": {
+        "ttl_seconds": "300"
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "fractional-seconds-are-not-in-the-record-grammar",
+      "set": {
+        "ttl_seconds": 300.5
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "integral-json-numbers-are-portable",
+      "set": {
+        "ttl_seconds": 300.0,
+        "pid": 42.0
+      },
+      "now": 1000,
+      "expected": {
+        "state": "live",
+        "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "negative-timestamp",
+      "set": {
+        "claimed_at": -1
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "unsafe-integer-is-not-rounded-into-authority",
+      "set": {
+        "heartbeat_at": 9007199254740992
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "empty-host",
+      "set": {
+        "host": ""
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "zero-pid",
+      "set": {
+        "pid": 0
+      },
+      "now": 1000,
+      "expected": {
+        "state": "expired",
+        "owner": null,
+        "diagnostics": [
+          "malformed_record"
+        ]
+      }
+    },
+    {
+      "id": "future-claim-at-skew-tolerance",
+      "now": 940,
+      "expected": {
+        "state": "live",
+        "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "future-claim-past-tolerance-warns-but-stays-live",
+      "now": 939,
+      "expected": {
+        "state": "live",
+        "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "diagnostics": [
+          "clock_skew"
+        ]
+      }
+    },
+    {
+      "id": "injected-skew-tolerance",
+      "now": 994,
+      "skew_tolerance_seconds": 5,
+      "expected": {
+        "state": "live",
+        "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "diagnostics": [
+          "clock_skew"
+        ]
+      }
+    },
+    {
+      "id": "clock-moving-after-claim-does-not-expire-a-future-heartbeat",
+      "set": {
+        "heartbeat_at": 2000
+      },
+      "now": 1000,
+      "expected": {
+        "state": "live",
+        "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "diagnostics": []
+      }
+    },
+    {
+      "id": "host-and-pid-do-not-decide-expiry",
+      "set": {
+        "host": "another-host",
+        "pid": 999999
+      },
+      "now": 1301,
+      "expected": {
+        "state": "expired",
+        "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "diagnostics": []
+      }
+    }
+  ],
+  "invalid_context_cases": [
+    {
+      "id": "negative-now",
+      "field": "now",
+      "value": -1
+    },
+    {
+      "id": "fractional-now",
+      "field": "now",
+      "value": 1000.5
+    },
+    {
+      "id": "boolean-now",
+      "field": "now",
+      "value": true
+    },
+    {
+      "id": "string-now",
+      "field": "now",
+      "value": "1000"
+    },
+    {
+      "id": "null-now",
+      "field": "now",
+      "value": null
+    },
+    {
+      "id": "unsafe-now",
+      "field": "now",
+      "value": 9007199254740992
+    },
+    {
+      "id": "negative-skew-tolerance",
+      "field": "skew_tolerance_seconds",
+      "value": -1
+    },
+    {
+      "id": "invalid-issue",
+      "field": "issue",
+      "value": 0
+    },
+    {
+      "id": "empty-repository",
+      "field": "repository",
+      "value": ""
+    },
+    {
+      "id": "unqualified-repository",
+      "field": "repository",
+      "value": "git-loopy"
+    }
+  ],
+  "action_cases": [
+    {
+      "id": "claim-takes-an-unheld-issue",
+      "action": "claim",
+      "state": "absent",
+      "owner": null,
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "claim"
+    },
+    {
+      "id": "claim-steals-an-expired-lease",
+      "action": "claim",
+      "state": "expired",
+      "owner": "01BX5ZZKBKACTAV9WEVGEMMVRZ",
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "steal"
+    },
+    {
+      "id": "claim-steals-an-unreadable-record",
+      "action": "claim",
+      "state": "expired",
+      "owner": null,
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "steal"
+    },
+    {
+      "id": "claim-refuses-a-live-lease",
+      "action": "claim",
+      "state": "live",
+      "owner": "01BX5ZZKBKACTAV9WEVGEMMVRZ",
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "refuse"
+    },
+    {
+      "id": "claim-reclaims-its-own-expired-lease",
+      "action": "claim",
+      "state": "expired",
+      "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "steal"
+    },
+    {
+      "id": "claim-refuses-its-own-live-lease",
+      "action": "claim",
+      "state": "live",
+      "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "refuse"
+    },
+    {
+      "id": "fence-holds-while-the-ref-is-ours",
+      "action": "fence",
+      "state": "live",
+      "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "hold"
+    },
+    {
+      "id": "fence-holds-an-expired-lease-still-ours",
+      "action": "fence",
+      "state": "expired",
+      "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "hold"
+    },
+    {
+      "id": "fence-loses-a-stolen-lease",
+      "action": "fence",
+      "state": "live",
+      "owner": "01BX5ZZKBKACTAV9WEVGEMMVRZ",
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "lost"
+    },
+    {
+      "id": "fence-loses-an-expired-rivals-lease",
+      "action": "fence",
+      "state": "expired",
+      "owner": "01BX5ZZKBKACTAV9WEVGEMMVRZ",
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "lost"
+    },
+    {
+      "id": "fence-denies-an-absent-ref",
+      "action": "fence",
+      "state": "absent",
+      "owner": null,
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "lost"
+    },
+    {
+      "id": "fence-denies-an-unreadable-record",
+      "action": "fence",
+      "state": "expired",
+      "owner": null,
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "lost"
+    },
+    {
+      "id": "release-frees-our-own-lease",
+      "action": "release",
+      "state": "live",
+      "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "release"
+    },
+    {
+      "id": "release-frees-our-own-expired-lease",
+      "action": "release",
+      "state": "expired",
+      "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "release"
+    },
+    {
+      "id": "release-is-idempotent-when-absent",
+      "action": "release",
+      "state": "absent",
+      "owner": null,
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "absent"
+    },
+    {
+      "id": "release-refuses-a-stolen-lease",
+      "action": "release",
+      "state": "live",
+      "owner": "01BX5ZZKBKACTAV9WEVGEMMVRZ",
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "not_owned"
+    },
+    {
+      "id": "release-refuses-an-unreadable-record",
+      "action": "release",
+      "state": "expired",
+      "owner": null,
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "expected": "not_owned"
+    }
+  ]
+}

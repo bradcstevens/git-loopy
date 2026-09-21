@@ -10,6 +10,8 @@ Orchestrator's production decision seams rather than reproduce their logic.
 | --- | --- |
 | `discriminator.json` | Required issue headings, optional parent metadata, and the Pool-exclusion reason each rejection carries |
 | `issue-ordering.json` | The **total order** over eligible issues (§3.2): `priority` rank ahead of age, `created_at` ascending, issue number as the tie-break that makes the order total, the narrow timestamp grammar and the `absent`/`malformed` defect an undated issue is reported with, and the head of the order each case selects — plus the **read schedule** (§2.1) the order is computed over: the shared first ask and ceiling, the `complete`/`continue`/`incomplete` decision each page forces, the walk each backlog produces, and the page boundary falling mid-order that a member stopping one page early would select the wrong head from. Eligibility is deliberately absent — that is `discriminator.json`'s decision, and a second home for it is a second place it can drift |
+| `issue-lease.json` | Pure **Lease** record inspection at **Pickup** (ADR-0033): the `absent`/`live`/`expired` verdict a single fetched ref message earns against an injected clock, the record grammar every member parses identically — `run_id` as a Run ULID, case-insensitive repository identity, the bound issue, whole-second timestamps, a stored `ttl_seconds` no reader may default away, and a heartbeat that cannot precede its claim — the `malformed_record` diagnostic an unreadable or ungrammatical message expires with rather than trusting, the `clock_skew` warning a future claim earns *without* authorizing a steal, and the `invalid_context_cases` a member must refuse outright instead of answering, because a broken clock or a misnamed repository cannot be allowed to manufacture expiry. plus the pure **action decision** each member reaches from that verdict — the `claim`/`steal`/`refuse` a Pickup earns, the `hold`/`lost` the **fence** answers before every side effect, and the `release`/`absent`/`not_owned` a release settles on — where only identity confers ownership and an unreadable record is owned by nobody, so it can neither wedge an issue shut nor be mistaken for permission, and an action outside the closed set is refused rather than defaulted. Renewal is deliberately absent because its verdict is the remote's compare-and-swap rather than a local reading, and the ref transport that carries these decisions is Python-only pending the shell and PowerShell ports |
+| `repository-identity.json` | The `owner/repo` a member resolves from its clone's remote URL before it may take a **Lease** (ADR-0033): the canonicalisation every spelling of one repository must agree on — scp-like SSH, `ssh://` with and without a port, `git://`, `http(s)://` with embedded credentials, a trailing slash or `.git` suffix, surrounding whitespace, and an enterprise host — with case preserved rather than folded, because the record parser already compares case-insensitively; and the refusals, where a local path, a Windows drive letter, a `file://` clone, a host root, a bare owner, a deeper path and an ungrammatical name each answer *no identity* rather than a guess, since a member that invented one would contend on a ref belonging to some other repository. Reading the URL is not pinned here: that is a local git config read, not a decision |
 | `close-references.json` | Reference regex, line boundaries, deduplication, Pool whitelist, and issues-only closure |
 | `progress-strikes.json` | Agent commits, closures, Checkpoints, PR advances, and the abort ceiling — forked at fixture schema `2` (#413) by a per-case `distributions` selector, because a member *with* a **Pickup** charges one Strike per issue the Run gives up on (the step-level `issues_skipped` count) while a member without one keeps counting consecutive no-progress Iterations, which is the accounting it actually implements. A case naming no distribution is family-wide; an adapter runs the cases naming its own and no others |
 | `checkpoint-messages.json` | Runner-authored Checkpoint subject/body/trailer per Active issue, its close-keyword freedom, and its detectability |
@@ -34,6 +36,135 @@ Orchestrator's production decision seams rather than reproduce their logic.
 records each member's claimed or waived exercise of every fixture above. The
 Python Integration gate globs the directory and rejects a missing verdict, an
 unexplained waiver, or owed work without its tracking issue.
+
+`repository-identity.json` is exercised by all three Orchestrators: Python's
+`test_repository_identity_fixture`, shell's
+`tests/test-repository-identity-conformance.sh`, and PowerShell's corresponding
+`.ps1` adapter call their production pure resolvers. The cases also distinguish
+raw paths from decoded or normalized ones, ignore URL query/fragment data,
+and cover `git+ssh`, scheme case, IPv6 hosts, and missing-host refusals.
+This discharges only the native identity Fixture claims: shell/PowerShell
+Lease transport, renewal, Pickup and side-effect fencing are still pending.
+
+`routing-resolution.json` also carries the composed `migration_recovery`
+obligation for Python's staged local activation. Its data drives the real CLI
+from an unattended refusal through supplied or recorded authority into serial
+and Lane work, or a fresh readiness refusal. The adapter in
+`python/tests/test_iteration_end_to_end.py` observes actual session settings,
+canonical Pickup, Dashboard readback, unchanged Config, retained Static rows,
+temporary overrides and post-migration access/evidence loss. This is deliberately
+not another pure routing resolver: setup readiness cannot authorize a future
+Pickup. Shell/PowerShell activation is explicitly deferred; the Rust Dashboard
+does not execute migration or create work sessions. Historical fixtures and
+streams retain their interpretation, and Dynamic defaults remain off.
+
+The sibling `first_setup` matrix starts without either Config scope and crosses
+the real `init --routing` CLI and headless Textual keyboard walk, with terminal
+authorization answers and external transports scripted, into a subsequent
+unattended Run. The actual wizard's default Static-route choice is accepted,
+not replaced with a prebuilt answer. Nine cases run for project/global
+setup and serial/Lane work: explicit Dynamic and Static setup, plus refusal and
+recovery for missing access, invalid deadline, exhausted allowance, invalid
+concurrency, no verified candidates, required-evidence outage and unavailable
+authenticated capabilities. Refusal saves no operator choices or tracker labels;
+recovery observes exact session settings, canonical Pickup, Dashboard readback
+and final tracker effects. Static setup buys no assessment or leaderboard read.
+The refusal vocabulary reuses the Dynamic reasons, distinguishing Config input
+coercion from live readiness; a closure assertion pins its declared reasons.
+The Python adapter is
+`test_first_setup_readiness_recovers_into_the_actual_routed_session` in that
+same suite. This does not cover bare init/auto-setup activation or grant other
+Runner members setup support.
+
+The `execution_host_refusal` matrix covers selected policies on the independently
+authenticated GitHub Actions host. Eight cases run through CLI, interactive
+startup and direct Run entry in `python/tests/test_loop_parallel.py`, proving
+refusal before local model listing, Skill migration, detachment, host construction
+or remote green-base dispatch. Saved and temporary authority, model/effort pins
+and context-only controls cannot authorize that placement. Config stays unchanged
+and no work, Lease, Strike or Route publication starts. The existing unselected
+remote execution cases protect the staged compatibility path; this matrix does
+not implement remote capabilities, activate Dynamic defaults or remove native
+member deferrals.
+
+The `publication_recovery` matrix carries an explicit migrate choice through
+init/update over authored unselected Config, then repeats real CLI Runs in serial
+and Lane modes. It reuses the migration matrix's synthetic inputs and checks
+actual sessions, canonical Pickup, Dashboard route readback, fresh source reads
+and original reuse provenance alongside cumulative tracker operations.
+Permission, rate-limit and transient failures stay non-blocking; partial delivery
+does not repeat an accepted comment. Exhausted retries remain exhausted across
+Pickups and restored access, while capability withdrawal requires a new final
+assignment with its own finite retry bound. Replacement failures cover both the
+previous owned association remaining and removal accepted before the new association fails;
+both remain visibly failed rather than claiming tracker agreement. The Python adapter is
+`test_recorded_routing_reuse_preserves_publication_recovery_bounds` in
+`python/tests/test_iteration_end_to_end.py`. These are recorded-authorization
+cases, not another first-wizard claim.
+Shell/PowerShell activation remains deferred; no default, historical stream,
+Subagent or Integration behavior changes.
+
+The `retry_lifecycle` matrix carries a recorded `update --routing migrate`
+choice through actual CLI work in
+`python/tests/test_routing_retry_conformance.py`. Seven cases run in serial and
+Lane modes; the latter's retry is serial fallback, not a second Lane for the
+same issue. Independent expected settings and outcome histories cover
+reselection, explicit Static escalation, advances, infrastructure failure,
+justified repeats through attempt exhaustion, unjustified-repeat refusal and
+allowance exhaustion. Refused retries admit no replacement Dynamic session or
+Strike; eligible Static work still proceeds. Canonical Pickup, Dynamic records,
+CLI/Dashboard readback and idempotent tracker comments/labels agree with actual
+sessions while Config stays unchanged. Selector bills cross the SDK transport
+and remain Run-only Consumption through retry/refusal; CLI Pickup lines are
+compared individually, not against accumulated startup output.
+This extends executable coverage of
+existing section 14.4 rules, not runtime defaults or native-member support.
+
+The `pool_revalidation` matrix carries recorded migration through the real CLI
+in `python/tests/test_routing_pool_conformance.py`. Seven cases run in serial and
+Lane modes, with actual Lane refill rather than serial fallback. Already-bound
+Agents stay open until issue 44 has a proposal, with no Lease, Pickup or tracker
+publication for that proposal. Unchanged inputs reuse it; changed issue text,
+evidence or eligibility require reassessment before work. Newly Blocked or
+unreadable work and required-evidence failure leave retained Static work usable,
+while running Agents finish on their original settings. Initially ineligible
+candidates buy neither classification nor selection. Assertions compare actual
+sessions, canonical records, separate CLI Pickup lines, Dashboard readback,
+SDK-observed Run-only Consumption and complete final publication, with unchanged
+Config and no Strike. Existing Lease timing is preserved: a routing refusal
+releases a Pickup-time Lease; preparation takes none. Rolling readiness filtering
+can precede reservation and therefore does not fabricate a Pickup-skip Event.
+These cases pin existing section 14.6 behavior without changing Event fields,
+historical streams, defaults or member deferrals.
+
+The same adapter drives `pool_priority` through three cases in both modes:
+oldest pending first, Priority ahead of older candidates, and Priority with two
+concurrent selectors for other candidates. Four eligible issues remain behind running
+Agents. The next proposal is recorded before assessment of other candidates starts;
+running Agents then finish while unrelated selectors remain open, and the next
+Pickup advances without joining them. Both bounds leave excess eligible
+candidates unassessed. Cancelled selections retain their bills
+and explicit unavailable preparation records. The adapter compares actual
+sessions, canonical Pickup, CLI/Dashboard readback and tracker publication,
+while pending candidates remain open, unleased and unpublished with unchanged
+labels. Saved Config and the existing ordering/Lease rules remain unchanged.
+This extends section 14.6 Conformance, not final-default activation.
+
+The `in_flight_consumption` matrix is adapted by
+`python/tests/test_saved_routing_consumption.py`. Eight classifier/selector
+completion, cancellation, cleanup-billing and late-result cases run with two
+allowances, recorded init/update authorization and real CLI serial/Lane execution:
+64 combinations. The next candidate is refused while the billed assessment is
+still open. The adapter observes the concurrency ceiling, keeps the strongest
+selector, and compares literal Run-only billing and overshoot with canonical
+records and CLI/Dashboard totals. Already-bound Agents finish on their frozen
+settings; actual sessions, canonical Pickup, each CLI Pickup line, Dashboard
+route readback and final tracker comments/labels agree. Pending candidates
+remain open without final publication, late classification writes no Task-type
+label, and cancellation cleanup retains additional billing exactly once. Config
+stays unchanged and no unstarted work incurs a Strike. Existing helper-level
+malformed-billing cases remain separate; this matrix does not claim them or
+activate final defaults, native members, non-local, Subagent or Integration routing.
 
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent
@@ -488,6 +619,10 @@ producers — so the fixture revision advertised by each distribution's capabili
 manifest deliberately has not moved.
 
 `dashboard-insights.json` is consumed by three ports at two different depths.
+Its Rolling-dispatch ending case finalizes one issue while a sibling remains
+active, pinning the whole Dashboard and drill-in projection in both Python and
+Rust. The contribution's Summary remains a Lane row rather than a synthetic
+serial Iteration, and its ending shares the existing Status cell.
 Python drives the whole case: it replays the normalized Event prefix through the
 production reducer and projection and compares the toolkit-neutral view models.
 The shell and PowerShell Event-schema adapters drive the *producer* half. Each
@@ -504,6 +639,14 @@ not pin a fractional `duration_seconds`, because shell rollup arithmetic is
 integral. The probe's depth is the rollup seam, so it proves a payload is
 producible rather than that today's native Run loop reaches every input the seam
 accepts.
+
+The route projection's required inventory is `model`, `effort`, and `source`.
+`context_tier` and `lifecycle_position` are additive fields declared in
+`optional_projection_fields.route`: Queue and Iteration-breakdown rows preserve
+them when the Pickup recorded them, and omit them for older records rather than
+inventing a tier or a first-attempt claim. A reassessed Dynamic retry may keep
+the same configuration; its lifecycle position must still distinguish it from
+the earlier contribution.
 
 The **Activity** band's sizing gestures — the drag, the click and `shift+↑` / `shift+↓`
 (ADR-0038) — are deliberately **not** in this fixture set, now that both renderers
@@ -600,7 +743,25 @@ question about the merge and `resolve_iteration_model` receives one already-merg
 mapping. Its `static_route_cases` are driven through the
 production `validate_static_route`, the single seam every Static route decision
 passes through, so a fixture verdict and a Run's refusal are the same judgement
-rather than two that agree today. `attempt-lifecycle.json` joins them, driven through the production
+rather than two that agree today. Its `migration_recovery` cases instead drive
+the real CLI into serial and Lane work in
+`python/tests/test_iteration_end_to_end.py`: an unselected saved Config first
+refuses without writes or assessment, then supplied or recorded authority
+reaches the actual session and canonical Pickup. Synthetic harness/evidence
+inputs pin the settings, Routing source, selector calls and authority lifetime,
+including Static recovery without leaderboard access. The sibling `first_setup`
+cases drive explicit guided setup from absent project/global Config through
+readiness refusal and recovery into the same actual-session/readback seam.
+Their input answers are collected, not seeded Config; readiness must pass
+before any operator choice or tracker label is saved. Its `preflight_deadline`
+cases use the same synthetic inputs to consume the routing deadline during
+retained Static validation. No classifier or selector starts afterwards, while
+already-classified Static work still runs on its retained settings; Config and
+Strike accounting remain unchanged. This is the staged Python-local guard,
+not final Dynamic-default activation. Shell/PowerShell migration enforcement
+remains explicitly deferred; historical cases and Event streams keep their
+original interpretation.
+`attempt-lifecycle.json` joins them, driven through the production
 `AttemptLedger` and `EscalationLedger` together: one row of its table asks both
 ledgers about one ending, so the dial that decides whether the pair changes and
 the dial that decides whether the issue is worked again cannot drift apart.

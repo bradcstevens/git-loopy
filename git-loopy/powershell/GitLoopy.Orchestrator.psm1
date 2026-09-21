@@ -618,10 +618,12 @@ function Test-GitLoopyAfkReady {
     [CmdletBinding()]
     param(
         [AllowEmptyString()]
-        [string]$Body
+        [string]$Body,
+        [AllowEmptyString()]
+        [string]$Title = ""
     )
 
-    return $null -eq (Get-GitLoopyAfkReadyExclusion -Body $Body)
+    return $null -eq (Get-GitLoopyAfkReadyExclusion -Body $Body -Title $Title)
 }
 
 # The deep discriminator: names *why* a `ready-for-agent` candidate is not
@@ -631,9 +633,14 @@ function Get-GitLoopyAfkReadyExclusion {
     [CmdletBinding()]
     param(
         [AllowEmptyString()]
-        [string]$Body
+        [string]$Body,
+        [AllowEmptyString()]
+        [string]$Title = ""
     )
 
+    if ($Title -match "^(PRD|Spec):") {
+        return "planning_document"
+    }
     $HasWhat = $Body -cmatch "(?m)^## What to build"
     $HasCriteria = $Body -cmatch "(?m)^## Acceptance criteria"
     if ($HasWhat -and $HasCriteria) {
@@ -726,7 +733,14 @@ function Assert-GitLoopyPinEligible {
     }
 
     $Body = [string]$Issue["body"]
-    $Exclusion = Get-GitLoopyAfkReadyExclusion -Body $Body
+    $Exclusion = Get-GitLoopyAfkReadyExclusion -Body $Body -Title ([string]$Issue["title"])
+    if ($Exclusion -eq "planning_document") {
+        [Console]::Error.WriteLine(
+            "git-loopy: --issue ${Number}: #${Number} is a planning document " +
+            "(PRD: or Spec:), not executable work."
+        )
+        return $false
+    }
     if ($null -ne $Exclusion) {
         [Console]::Error.WriteLine(
             "git-loopy: --issue ${Number}: #${Number} is not AFK-ready; its " +
@@ -1115,6 +1129,166 @@ function ConvertFrom-GitLoopyJsonText {
     finally {
         $Document.Dispose()
     }
+}
+
+function Test-GitLoopyLeaseWholeNumber {
+    param([AllowNull()][object]$Value, [int]$Minimum)
+
+    return (
+        ($Value -is [int] -or $Value -is [long] -or $Value -is [double]) -and
+        $Value -ge $Minimum -and $Value -le 9007199254740991 -and
+        $Value -eq [math]::Floor($Value)
+    )
+}
+
+function Get-GitLoopyRepositoryFromRemoteUrl {
+    # Pure identity only; native Lease transport and activation remain staged.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Url)
+
+    $Candidate = $Url.Trim()
+    if ($Candidate.Contains("://")) {
+        $Candidate = $Candidate -replace "[`t`r`n]", ""
+        if ($Candidate -cnotmatch '\A(?<scheme>[A-Za-z][A-Za-z0-9+.-]*)://(?<authority>[^/?#]*)(?<path>[^?#]*)') {
+            return $null
+        }
+        if ($Matches.scheme.ToLowerInvariant() -cnotin @("ssh", "git", "http", "https", "git+ssh")) {
+            return $null
+        }
+        if ($Matches.authority.Split("@")[-1].Split(":")[0] -ceq "") {
+            return $null
+        }
+        # Keep the raw path: System.Uri would normalize dot segments or escapes,
+        # changing the repository that the reference Orchestrator contends on.
+        $Path = $Matches.path
+    } else {
+        if ($Candidate -cnotmatch '\A(?:[^/@]+@)?[^/:]{2,}:(?<path>[^/].*)\z') {
+            return $null
+        }
+        $Path = $Matches.path
+    }
+
+    $Segments = $Path.Trim("/").Split("/")
+    if ($Segments.Count -ne 2) { return $null }
+    $Owner = $Segments[0]
+    $Repository = $Segments[1] -creplace '\.[gG][iI][tT]\z', ''
+    if ($Owner -cnotmatch '\A[A-Za-z0-9_.-]+\z' -or
+        $Repository -cnotmatch '\A[A-Za-z0-9_.-]+\z') {
+        return $null
+    }
+    return "$Owner/$Repository"
+}
+
+# ADR-0033: this pure seam is staged ahead of transport, Pickup and fencing.
+# Null means no ref; the eventual transport must propagate unreadable fetches.
+function Get-GitLoopyLeaseInspection {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowNull()][AllowEmptyString()][object]$Raw,
+        [Parameter(Mandatory)][AllowNull()][object]$Now,
+        [Parameter(Mandatory)][AllowNull()][AllowEmptyString()][object]$Repository,
+        [Parameter(Mandatory)][AllowNull()][object]$Issue,
+        [AllowNull()][object]$SkewToleranceSeconds = 60
+    )
+
+    if (-not (Test-GitLoopyLeaseWholeNumber $Now 0)) {
+        throw "Lease inspection: invalid now"
+    }
+    if (-not (Test-GitLoopyLeaseWholeNumber $Issue 1)) {
+        throw "Lease inspection: invalid issue"
+    }
+    if (-not (Test-GitLoopyLeaseWholeNumber $SkewToleranceSeconds 0)) {
+        throw "Lease inspection: invalid skew_tolerance_seconds"
+    }
+    $RepositoryPattern = '\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z'
+    if ($Repository -isnot [string] -or $Repository -cnotmatch $RepositoryPattern) {
+        throw "Lease inspection: invalid repository"
+    }
+    if ($null -eq $Raw) {
+        return [ordered]@{ state = "absent"; record = $null; diagnostics = @() }
+    }
+    $Malformed = [ordered]@{
+        state = "expired"; record = $null; diagnostics = @("malformed_record")
+    }
+    if ($Raw -isnot [string]) { throw "Lease inspection: invalid raw" }
+    try { $Document = [System.Text.Json.JsonDocument]::Parse($Raw) }
+    catch [System.Text.Json.JsonException] { return $Malformed }
+    try {
+        if ($Document.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+            return $Malformed
+        }
+        $Record = [ordered]@{}
+        foreach ($Field in @(
+            "run_id", "issue", "repository", "claimed_at", "heartbeat_at",
+            "ttl_seconds", "host", "pid"
+        )) {
+            $Element = [System.Text.Json.JsonElement]::new()
+            # TryGetProperty is case-sensitive; PowerShell hashtables are not.
+            if (-not $Document.RootElement.TryGetProperty($Field, [ref]$Element)) {
+                return $Malformed
+            }
+            $Record[$Field] = ConvertFrom-GitLoopyJsonElement -Element $Element
+        }
+    }
+    finally { $Document.Dispose() }
+
+    if (
+        $Record.run_id -isnot [string] -or
+        $Record.run_id -cnotmatch '\A[0-7][0-9A-HJKMNP-TV-Z]{25}\z' -or
+        $Record.repository -isnot [string] -or
+        $Record.repository -cnotmatch $RepositoryPattern -or
+        -not $Record.repository.Equals($Repository, [StringComparison]::OrdinalIgnoreCase) -or
+        $Record.host -isnot [string] -or $Record.host.Length -eq 0
+    ) { return $Malformed }
+    foreach ($Field in @("issue", "ttl_seconds", "pid", "claimed_at", "heartbeat_at")) {
+        $Minimum = if ($Field -in @("claimed_at", "heartbeat_at")) { 0 } else { 1 }
+        if (-not (Test-GitLoopyLeaseWholeNumber $Record[$Field] $Minimum)) {
+            return $Malformed
+        }
+        $Record[$Field] = [long]$Record[$Field]
+    }
+    if ($Record.issue -ne $Issue -or $Record.heartbeat_at -lt $Record.claimed_at) {
+        return $Malformed
+    }
+    return [ordered]@{
+        state = if ($Now - $Record.heartbeat_at -gt $Record.ttl_seconds) { "expired" } else { "live" }
+        record = $Record
+        diagnostics = @(
+            if ($Record.claimed_at - $Now -gt $SkewToleranceSeconds) { "clock_skew" }
+        )
+    }
+}
+
+function Get-GitLoopyLeaseActionDecision {
+    # ADR-0033: the pure Lease action decision, identical in every member.
+    # Only identity confers ownership, and an unreadable record (a null Owner)
+    # is owned by nobody, so it can neither wedge an issue nor grant permission.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowNull()]$Action,
+        [Parameter(Mandatory)][AllowNull()]$State,
+        [AllowNull()]$Owner,
+        [Parameter(Mandatory)][AllowNull()]$RunId
+    )
+
+    if (@("claim", "release", "fence") -cnotcontains $Action) {
+        throw "Lease action: invalid action $Action"
+    }
+    if (@("absent", "live", "expired") -cnotcontains $State) {
+        throw "Lease action: invalid state $State"
+    }
+    $Ours = ($null -ne $Owner) -and ($Owner -ceq $RunId)
+    if ($Action -ceq "claim") {
+        if ($State -ceq "live") { return "refuse" }
+        if ($State -ceq "absent") { return "claim" }
+        return "steal"
+    }
+    if ($Action -ceq "fence") {
+        if ($Ours) { return "hold" } else { return "lost" }
+    }
+    if ($State -ceq "absent") { return "absent" }
+    if ($Ours) { return "release" }
+    return "not_owned"
 }
 
 function Get-GitLoopyPriorityLabel {
@@ -2380,11 +2554,12 @@ function Get-GitLoopyGitHubPool {
         # Wrapper contract §3.1: a rejected candidate is reported, not dropped
         # silently. The reason comes from the same body the membership decision
         # was made on, and no extra round-trip is paid for it.
-        if (-not (Test-GitLoopyAfkReady -Body $Body)) {
+        $Reason = Get-GitLoopyAfkReadyExclusion -Body $Body -Title ([string]$Candidate["title"])
+        if ($null -ne $Reason) {
             Add-GitLoopyPoolExclusion `
                 -Ref $Number `
                 -Title ([string]$Candidate["title"]) `
-                -Reason (Get-GitLoopyAfkReadyExclusion -Body $Body)
+                -Reason $Reason
             continue
         }
 
@@ -2424,11 +2599,12 @@ function Get-GitLoopyGitHubPool {
         else {
             [string]$Full["body"]
         }
-        if (-not (Test-GitLoopyAfkReady -Body $FullBody)) {
+        $Reason = Get-GitLoopyAfkReadyExclusion -Body $FullBody -Title ([string]$Full["title"])
+        if ($null -ne $Reason) {
             Add-GitLoopyPoolExclusion `
                 -Ref $Number `
                 -Title ([string]$Full["title"]) `
-                -Reason (Get-GitLoopyAfkReadyExclusion -Body $FullBody)
+                -Reason $Reason
             continue
         }
 
@@ -4804,6 +4980,9 @@ Export-ModuleMember -Function @(
     "Assert-GitLoopyReadinessCapability",
     "Get-GitLoopyReadiness",
     "Get-GitLoopyCandidateReadiness",
+    "Get-GitLoopyRepositoryFromRemoteUrl",
+    "Get-GitLoopyLeaseInspection",
+    "Get-GitLoopyLeaseActionDecision",
     "Get-GitLoopyPriorityLabel",
     "Get-GitLoopyAcceptedYearRange",
     "Get-GitLoopyPriorityRank",

@@ -50,6 +50,8 @@ from .run_environment_preflight import (
     RunEnvironmentPreflight,
     resolve_run_environment_preflight,
 )
+from .run_routing_preflight import resolve_run_routing_preflight
+from .static_route import RoutePolicy
 from . import settings
 
 ClientFactory = Callable[[], Any]
@@ -156,6 +158,34 @@ def run_doctor(
             f"{check.message}"
         )
 
+    routing_preflight = asyncio.run(
+        resolve_run_routing_preflight(
+            config, environment, warn=lambda message: output_fn(f"Routing | {message}")
+        )
+    )
+    if not routing_preflight.passed:
+        output_fn(
+            "Routing | failed | "
+            f"{routing_preflight.refusal or routing_preflight.dynamic_refusal}"
+        )
+        output_fn(
+            "Routing scope | doctor evaluates Config and environment, not a "
+            "future Run's --model/--reasoning-effort flags. To check a run-wide "
+            "override here, use its GIT_LOOPY_MODEL/GIT_LOOPY_REASONING_EFFORT "
+            "environment equivalent."
+        )
+    elif config.route_policy is not RoutePolicy.UNSELECTED:
+        output_fn(
+            "Routing readiness | passed | "
+            + (
+                "live evidence and verified candidates are available for new "
+                "assessments; this is not a Pickup or an issue-fit guarantee. "
+                "Proposal and Pickup check fresh inputs again."
+                if routing_preflight.prerequisites is not None
+                else "configured Static routes verified; Pickup checks them again."
+            )
+        )
+
     try:
         prompt = (
             prompt_text if prompt_text is not None else load_prompt(repo_root, environment)
@@ -213,14 +243,23 @@ def run_doctor(
         return 1
 
     if not resolution.blockers:
-        output_fn(
-            "Skill policy is healthy; no changes to apply."
-            if apply
-            else "Skill policy is healthy; a Run would not be blocked."
-        )
+        if routing_preflight.refusal is not None:
+            output_fn("Skill policy is healthy; routing still blocks this Run.")
+        elif routing_preflight.dynamic_refusal is not None:
+            output_fn("Skill policy is healthy; new Dynamic assessments are unavailable.")
+        elif apply:
+            output_fn("Skill policy is healthy; no changes to apply.")
+        elif config.route_policy is RoutePolicy.UNSELECTED:
+            output_fn("Skill policy is healthy; a Run would not be blocked.")
+        else:
+            output_fn("Skill policy is healthy.")
         return (
             0
-            if environment_preflight.passed and install_status.state == "matching"
+            if (
+                environment_preflight.passed
+                and routing_preflight.passed
+                and install_status.state == "matching"
+            )
             else 1
         )
 
@@ -270,7 +309,7 @@ def run_doctor(
     table["enabled_skills"] = list(plan.proposed)
     writer(path, table)
     output_fn(f"Saved repaired {plan.surface.value} Skill policy to {path}")
-    return 0 if environment_preflight.passed else 1
+    return 0 if environment_preflight.passed and routing_preflight.passed else 1
 
 
 def plan_skill_policy_repair(

@@ -79,6 +79,8 @@ pub struct Event {
     pub run_id: Option<String>,
     /// The serial Iteration number, or `None` for Run-scoped Events.
     pub iter: Option<i64>,
+    /// Explicit Run-only Consumption, distinct from a missing historical stamp.
+    pub run_scoped_usage: bool,
     /// The runner-stamped Lane this Event belongs to (issue #66, ADR-0008).
     ///
     /// A stamped Event is attributed explicitly to its Lane instead of through
@@ -133,6 +135,8 @@ pub enum EventPayload {
     Strike(Strike),
     /// `wrapper.iteration.end`
     IterationEnd(Box<IterationEnd>),
+    /// `wrapper.contribution.end`
+    ContributionEnd(Box<ContributionEnd>),
     /// `wrapper.run.end`
     RunEnd(RunEnd),
     /// `wrapper.stop.requested`
@@ -359,6 +363,8 @@ pub struct RoutingResolved {
     /// The original decision a revalidation reused, when there was one.
     #[serde(default)]
     pub reused_proposal_id: Option<String>,
+    #[serde(default)]
+    pub reused_validated_at: Option<String>,
     /// The recorded decision a reassessment replaced, when there was one.
     #[serde(default)]
     pub superseded_proposal_id: Option<String>,
@@ -539,6 +545,29 @@ pub struct IterationEnd {
     /// Per-issue finalized rows.
     #[serde(default, deserialize_with = "lenient_issue_rows")]
     pub issues: Vec<IterationIssue>,
+}
+
+/// One finalized Rolling-dispatch contribution, independent of a serial Iteration.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ContributionEnd {
+    pub issue: IssueRef,
+    #[serde(default)]
+    pub summary: Option<ContributionSummary>,
+    #[serde(default, deserialize_with = "lenient_issue_rows")]
+    pub issues: Vec<IterationIssue>,
+}
+
+/// Contribution vocabulary around the shared finalized measurements.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ContributionSummary {
+    #[serde(default)]
+    pub closure_outcome: Option<String>,
+    #[serde(default)]
+    pub lifecycle_seconds: Option<f64>,
+    #[serde(default)]
+    pub closures: Option<i64>,
+    #[serde(flatten)]
+    pub measurements: IterationSummary,
 }
 
 /// The Iteration's own Summary measurements.
@@ -766,6 +795,11 @@ impl Event {
                 .and_then(Value::as_str)
                 .map(str::to_string),
             iter: object.get("iter").and_then(Value::as_i64),
+            run_scoped_usage: kind == "usage.tokens"
+                && object.get("run_id").and_then(Value::as_str).is_some()
+                && object.get("iter") == Some(&Value::Null)
+                && object.get("lane_issue").map_or(true, Value::is_null)
+                && object.get("contribution_id").map_or(true, Value::is_null),
             lane_issue: object.get("lane_issue").and_then(IssueRef::from_value),
             contribution: ContributionScope {
                 issue: object.get("issue").and_then(IssueRef::from_value),
@@ -842,6 +876,10 @@ fn decode_payload(kind: &str, value: &Value) -> EventPayload {
         },
         "wrapper.strike" => EventPayload::Strike(decode_or_default(value)),
         "wrapper.iteration.end" => EventPayload::IterationEnd(Box::new(decode_or_default(value))),
+        "wrapper.contribution.end" => match serde_json::from_value(value.clone()) {
+            Ok(ended) => EventPayload::ContributionEnd(Box::new(ended)),
+            Err(_) => EventPayload::Other,
+        },
         "wrapper.run.end" => EventPayload::RunEnd(decode_or_default(value)),
         "wrapper.stop.requested" => EventPayload::StopRequested(decode_or_default(value)),
         "wrapper.stop.lifted" => EventPayload::StopLifted(decode_or_default(value)),

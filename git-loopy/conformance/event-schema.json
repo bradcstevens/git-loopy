@@ -141,9 +141,9 @@
       "readback_pair_keys": ["model", "effort", "configured_effort", "gate_warnings"],
       "readback_route_keys": ["key", "model", "effort", "configured_effort", "gate_warnings"],
       "readback_note": "Contract 1.24. The Run readback section 14 obliges of an Orchestrator that routes, published on the Run's own start record rather than on an Event of its own. Every field is optional-when-present: a port that routes nothing emits Run start exactly as before and stays conforming, and a consumer reads their absence as 'this Runner does not route'. The PRODUCER is unconditional -- a Run that configured nothing publishes the readback describing exactly that, because the Run that puzzles an operator is the one where nothing they wrote appeared to take effect.",
-      "readback_keys_not_a_count": "routes carries the keys THEMSELVES, never a count of them. No validator for the [routing] table can exist -- its keys are the operator's vocabulary and its pairs are the vendor's -- so reading back what the kit parsed is the only validation available anywhere, and a count reveals neither a misspelling nor a half-filled table. unconfigured_task_type_keys is the other half: the taxonomy members no entry names, which route to the Default pair and say so nowhere else until a Pickup has already happened.",
-      "readback_two_efforts": "effort is the GATED effort -- what would actually be sent -- and configured_effort is what Config supplied. Both travel because a readback carrying only the gated value reports the outcome and loses the request, and the request is the half an operator can correct. gate_warnings is the verdict, drawn from the same vocabulary wrapper.pickup.bound's gate_warnings carries, and rides every configured pair including the escalation rung, which nothing else gates until an issue has already stalled.",
-      "readback_route_policy": "Contract 2.8. route_policy names the Route policy this Run selected (ADR-0057): `unselected` -- the default, and today's behaviour byte-for-byte -- or `static`, the operator-selected Static route. It travels because under `static` the hardcoded roster is not the authority and every pair above is published UNGATED, which is otherwise indistinguishable from a set of pairs that merely passed the gate. A consumer MUST NOT read an empty gate_warnings under `static` as `the roster approved this`; it means the roster was not asked. It also MUST NOT treat an unrecognised policy name as `unselected`: a Runner that names a policy this consumer does not know is describing a Run whose routing it cannot explain.",
+      "readback_keys_not_a_count": "routes carries the keys THEMSELVES, never a count of them. No validator for the [routing] table can exist -- its keys are the operator's vocabulary and its pairs are the vendor's -- so reading back what the kit parsed is the only validation available anywhere, and a count reveals neither a misspelling nor a half-filled table. unconfigured_task_type_keys is the other half: the taxonomy members no entry names. Under unsuppressed `dynamic` they await Dynamic Pickup, not the Default pair; an explicit run-wide model/effort override remains authoritative. Under `unselected` or `static` they use the Default pair.",
+      "readback_two_efforts": "Under `unselected`, effort is the GATED effort -- what would actually be sent -- and configured_effort is what Config supplied. Both travel because a readback carrying only the gated value reports the outcome and loses the request, and the request is the half an operator can correct. gate_warnings is the legacy verdict, drawn from the same vocabulary wrapper.pickup.bound's gate_warnings carries, including for the escalation rung. Under `static` or `dynamic`, retained Static routes and explicit escalation are echoed unchanged; live preflight and Pickup validate them instead of the offline roster.",
+      "readback_route_policy": "Contract 2.8. route_policy names the Route policy this Run selected (ADR-0057): `unselected` -- the default, preserving historical behaviour -- `static`, or opt-in `dynamic`. It travels because under either selected policy the hardcoded roster is not the authority and every configured pair above is published UNGATED, which is otherwise indistinguishable from a set of pairs that merely passed the gate. A consumer MUST NOT read an empty gate_warnings under `static` or `dynamic` as `the roster approved this`; it means the roster was not asked. An absent fixed escalation rung under `dynamic` does not forbid permitted outcome-aware reselection. A consumer MUST NOT treat an unrecognised policy name as `unselected`: a Runner that names a policy this consumer does not know is describing a Run whose routing it cannot explain.",
       "readback_roster_divergence": "roster_diverged is THREE-valued: true, false, or null for an unreadable harness_version. Reasoning-effort capability is a table hardcoded in the Copilot CLI's own bundle, so the roster is a function of CLI version (ADR-0019) and a Run gating against one version while spawning another has been checking its pairs against a description of some other binary. null is 'nobody knows' and a consumer MUST NOT read it as agreement."
     },
     "wrapper.issue.activated": {
@@ -235,7 +235,8 @@
       "reason_values": [
         "missing_what_to_build",
         "missing_acceptance_criteria",
-        "missing_both_sections"
+        "missing_both_sections",
+        "planning_document"
       ],
       "emitted": "Once per ready-for-agent candidate the AFK-ready discriminator rejected, in source order, before the wrapper.afk_ready.collected it explains. A candidate the source could not read is not an exclusion: it was never discriminated against.",
       "scope": "Run-scoped, not contribution-scoped. It names work that never became a Lane contribution, so it carries the collecting Iteration's iter and no contribution identity."
@@ -1384,7 +1385,8 @@
       "distributions": [
         "python",
         "shell",
-        "powershell"
+        "powershell",
+        "rust"
       ],
       "events": [
         {
@@ -1924,7 +1926,8 @@
       "distributions": [
         "python",
         "shell",
-        "powershell"
+        "powershell",
+        "rust"
       ],
       "events": [
         {
