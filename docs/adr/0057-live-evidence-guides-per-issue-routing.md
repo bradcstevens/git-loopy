@@ -290,6 +290,25 @@ joined worker, retaining the same Skill policy validation and error propagation
 before any scope write. The real wizard's default route choice, rather than a
 test-supplied empty routing table, is what the matrix carries through Save.
 
+Bare init now enters the same routing-aware path when the chosen scope records
+or inherits an explicit Static/Dynamic choice. Previously it could save an
+unready Dynamic scope and overwrite its model, prompt and Skill policy with
+unattended defaults simply because `--routing` was omitted. Recorded authority
+now uses the same consent reader and readiness verdict, not a second policy
+resolver. The fullscreen wizard follows the chosen scope's authority and does
+not seed unvisited Static rows; changing from a legacy custom walk retains
+explicit choices rather than treating its unvisited defaults as authored pins.
+Additive route collection stays additive when switching back to an unselected
+scope, without supplying migration consent. Bare init and `--routing ask` capture
+the Config inputs that establish authority or its absence before collection,
+then refuse byte changes before authorization and saving; concurrent operator
+edits are preserved. Invalid chosen-scope authority is reported with
+the existing no-save and prerequisite-residue diagnostic.
+Serial/Lane cases carry bare setup into actual work settings and canonical
+Pickup, including inherited authority and Static work without leaderboard
+access. This closes a saved-choice bypass; it does not choose a policy for
+unselected setup or activate final Dynamic defaults.
+
 Missing or invalid Dynamic prerequisites at Run preflight now leave retained Static work
 usable rather than refusing the whole Run. The shared verdict still validates
 Static settings and makes setup, migration and doctor refuse an unready Dynamic
@@ -340,7 +359,7 @@ preserving the strongest selector's independent input-fit tier, and participates
 in fresh proposal/Pickup validation and cross-Run reuse. Doctor uses the same
 work-candidate readiness rule. Withdrawal of the requested tier refuses new work;
 changed evidence or eligibility requires reassessment within existing limits.
-Bare init and auto-setup retain their existing behavior.
+Unselected bare init and auto-setup retain their staged behavior.
 The saved-setup Consumption cases now cross the real classifier and selector
 session adapters into SDK billing observations in both serial and Lane modes.
 They exposed Run-only billing being attributed to an open serial Iteration and

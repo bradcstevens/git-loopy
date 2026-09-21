@@ -2,14 +2,234 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 
 import pytest
+from textual.widgets import DataTable
 
 from git_loopy import cli, dynamic_route, init, model_listing, settings
+from git_loopy.interactive.init_wizard_app import InitWizardApp, run_textual_init_wizard
+from git_loopy.skillscmd import SkillSelectionModel
 from tests.test_init import _choice, _packaged, _policy_seams
 from tests.test_routing_migration import _authorized_values, _evidence, _listing
+
+
+@pytest.mark.parametrize("guided", [False, True])
+@pytest.mark.parametrize("scope", ["project", "global", "inherited"])
+def test_bare_setup_cannot_bypass_recorded_dynamic_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, guided, scope
+) -> None:
+    path = (
+        settings.project_config_path(tmp_path)
+        if scope == "project" else settings.global_config_path(os.environ)
+    )
+    settings.write_config_atomic(path, {
+        **_authorized_values(), "route_policy": "dynamic",
+    })
+    original = path.read_bytes()
+    prompt = path.with_name("PROMPT.md")
+    prompt.write_text("operator-owned instructions\n")
+    listings = _listing(monkeypatch)
+    evidence = _evidence(monkeypatch)
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    monkeypatch.setenv("GIT_LOOPY_ROUTE_POLICY", "static")
+    monkeypatch.setenv("GIT_LOOPY_MODEL", "gpt-5.6-terra")
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_make_label_client", lambda: None)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("--yes must never prompt")
+    )
+
+    chosen_scope = "global" if scope == "global" else "project"
+    result = (
+        _guided_init(tmp_path, scope=chosen_scope)
+        if guided else cli.main(["init", "--yes", f"--{chosen_scope}"])
+    )
+    assert result == 1
+
+    assert path.read_bytes() == original
+    assert prompt.read_text() == "operator-owned instructions\n"
+    if scope == "inherited":
+        assert not settings.project_config_path(tmp_path).exists()
+    assert listings == [] and evidence == []
+    assert dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "invalid", ['route_policy = "hybrid"\n', "route_policy = 7\n", "[not valid\n"],
+)
+def test_bare_setup_reports_invalid_inherited_authority_without_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, invalid
+) -> None:
+    path = settings.global_config_path(os.environ)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(invalid)
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_make_label_client", lambda: None)
+
+    assert cli.main(["init", "--yes", "--project"]) == 1
+
+    assert path.read_text() == invalid
+    assert not settings.project_config_path(tmp_path).exists()
+    assert "no Config" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("scope", ["project", "global"])
+def test_recorded_setup_custom_walk_adds_no_unvisited_static_routes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope
+) -> None:
+    path = (
+        settings.project_config_path(tmp_path)
+        if scope == "project" else settings.global_config_path(os.environ)
+    )
+    settings.write_config_atomic(path, {
+        **_authorized_values(), "route_policy": "dynamic",
+    })
+    if scope == "global":
+        project = settings.project_config_path(tmp_path)
+        project.parent.mkdir(parents=True, exist_ok=True)
+        project.write_text('route_policy = "hybrid"\n')
+    _listing(monkeypatch)
+    _evidence(monkeypatch)
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("recorded authority must not prompt")
+    )
+
+    async def drive(app, pilot):
+        if scope == "global":
+            await pilot.press("down")
+        await pilot.press("enter", "enter", "enter")
+        await pilot.press("down", "enter")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        table = app.screen.query_one("#wizard-review", DataTable)
+        rows = {
+            str(table.get_row_at(i)[0]): str(table.get_row_at(i)[1])
+            for i in range(table.row_count)
+        }
+        assert "no new Static routes" in rows["routing"]
+        assert "authorization follows" in rows["routing"]
+        await pilot.press("enter")
+
+    assert _pilot_setup(tmp_path, monkeypatch, drive) == 0
+
+    saved = settings.load_config_table(path)
+    assert saved["route_policy"] == "dynamic"
+    assert saved.get("routing", {}) == {}
+    if scope == "global":
+        assert settings.project_config_path(tmp_path).read_text() == 'route_policy = "hybrid"\n'
+
+
+def _pilot_setup(tmp_path, monkeypatch, drive, *, routing_choice=None):
+    def run(app):
+        async def run_pilot():
+            async with app.run_test() as pilot:
+                await drive(app, pilot)
+        asyncio.run(run_pilot())
+
+    def wizard_runner(
+        *, scope_options, scope_paths, model_choices, default_model, default_effort,
+        rebuild_skill_selection, scope_locked, routing_choice=None, routing_choices=None,
+    ):
+        return run_textual_init_wizard(
+            scope_options=scope_options,
+            scope_paths=scope_paths,
+            model_choices=model_choices,
+            default_model=default_model,
+            default_effort=default_effort,
+            rebuild_skill_selection=rebuild_skill_selection,
+            skill_selection_model=lambda *_args: SkillSelectionModel(rows=(), enabled=()),
+            scope_locked=scope_locked,
+            routing_choice=routing_choice,
+            routing_choices=routing_choices,
+        )
+
+    monkeypatch.setattr(InitWizardApp, "run", run)
+    return init.run_init(
+        scope=None,
+        assume_yes=False,
+        repo_root=tmp_path,
+        env=dict(os.environ),
+        fetch_choices=lambda: [_choice("gpt-5.6-terra", efforts=("high",))],
+        wizard_runner=wizard_runner,
+        routing_choice=routing_choice,
+        **_packaged(tmp_path),
+    )
+
+
+@pytest.mark.parametrize("keep_planning", [False, True])
+@pytest.mark.parametrize("revisit_routes", [False, True])
+def test_switching_out_of_recorded_setup_preserves_destination_static_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep_planning, revisit_routes,
+) -> None:
+    settings.write_config_atomic(settings.project_config_path(tmp_path), {
+        **_authorized_values(), "route_policy": "dynamic",
+    })
+    global_path = settings.global_config_path(os.environ)
+    routes = {"docs": {"model": "gpt-5.6-terra", "effort": "high"}}
+    settings.write_config_atomic(global_path, {
+        "model": "gpt-5.6-terra", "reasoning_effort": "high", "routing": routes,
+    })
+
+    async def drive(_app, pilot):
+        await pilot.press("enter", "enter", "enter")
+        await pilot.press("down", "enter")
+        if keep_planning:
+            await pilot.press("up", "enter")
+        await pilot.press("ctrl+s", "b")
+        await pilot.press("down", "enter")
+        if revisit_routes:
+            await pilot.press("enter", "enter", "enter")
+        await pilot.press("ctrl+s", "enter")
+
+    assert _pilot_setup(tmp_path, monkeypatch, drive) == 0
+
+    saved = settings.load_config_table(global_path)
+    assert saved["routing"] == {
+        **routes,
+        **({"planning": {"model": "claude-opus-5", "effort": "xhigh"}}
+           if keep_planning else {}),
+    }
+    assert "route_policy" not in saved
+
+
+@pytest.mark.parametrize("change", ["added", "removed"])
+@pytest.mark.parametrize("source", ["project", "global"])
+@pytest.mark.parametrize("routing_choice", [None, "ask"])
+def test_routing_authority_edited_while_the_wizard_is_open_is_not_overwritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, change, source, routing_choice,
+) -> None:
+    path = (
+        settings.project_config_path(tmp_path)
+        if source == "project" else settings.global_config_path(os.environ)
+    )
+    values = _authorized_values()
+    before = {**values, **({"route_policy": "dynamic"} if change == "removed" else {})}
+    after = {**values, **({"route_policy": "dynamic"} if change == "added" else {})}
+    settings.write_config_atomic(path, before)
+    listings = _listing(monkeypatch)
+    evidence = _evidence(monkeypatch)
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("changed authority must not prompt")
+    )
+    newer: list[bytes] = []
+
+    async def drive(_app, pilot):
+        await pilot.press("enter", "enter", "enter")
+        await pilot.press("down", "enter", "ctrl+s")
+        settings.write_config_atomic(path, after)
+        newer.append(path.read_bytes())
+        await pilot.press("enter")
+
+    assert _pilot_setup(tmp_path, monkeypatch, drive, routing_choice=routing_choice) == 1
+
+    assert path.read_bytes() == newer[0]
+    assert listings == [] and evidence == []
+    assert "changed during setup" in capsys.readouterr().err
 
 
 def test_first_project_setup_inherits_explicit_dynamic_authorization_without_static_seeds(

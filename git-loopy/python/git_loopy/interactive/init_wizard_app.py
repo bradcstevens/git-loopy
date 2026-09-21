@@ -201,6 +201,7 @@ class _Review:
     scaffold: bool
     skills: SkillSelectionModel
     routing_choice: str | None = None
+    routing_updates_only: bool = False
 
 
 def _describe_routing(routing: Mapping[str, tuple[str, str]] | None) -> str:
@@ -233,11 +234,12 @@ class _ReviewScreen(Screen["tuple[str, str] | object"]):
         super().__init__()
         self._review = review
         routing = _describe_routing(review.routing)
-        if review.routing_choice is not None:
+        if review.routing_updates_only or review.routing_choice is not None:
             if not review.routing:
                 routing = "no new Static routes (existing routes are preserved)"
             else:
                 routing = f"new/updated Static routes: {routing}; other saved rows preserved"
+        if review.routing_choice is not None:
             routing = f"{review.routing_choice}; {routing}; authorization follows"
         #: Each review line as ``(step, label, value)``. ``step`` is what a
         #: ``Back`` resolves to, so the wizard routes on the step the row was
@@ -308,7 +310,11 @@ class _ReviewScreen(Screen["tuple[str, str] | object"]):
 
 
 class InitWizardApp(App["InitAnswers | None"]):
-    """One continuous, prefilled setup flow over the ``WizardRunner`` seam."""
+    """One continuous, prefilled setup flow over the ``WizardRunner`` seam.
+
+    ``routing_choices`` supplies scope-specific presentation when present;
+    ``routing_choice`` is the uniform fallback for older callers.
+    """
 
     TITLE = "git-loopy · setup"
     BINDINGS = [Binding("ctrl+s", "review", "Review", priority=True)]
@@ -327,6 +333,7 @@ class InitWizardApp(App["InitAnswers | None"]):
         ) = None,
         scope_locked: bool = False,
         routing_choice: str | None = None,
+        routing_choices: Mapping[str, str | None] | None = None,
     ) -> None:
         super().__init__()
         self._scope_options = tuple(scope_options)
@@ -337,10 +344,16 @@ class InitWizardApp(App["InitAnswers | None"]):
         self._build_skill_selection = build_skill_selection
         self._rebuild_skill_selection = rebuild_skill_selection
         self._scope_locked = scope_locked
-        self._routing_choice = routing_choice
         self._scope = self._scope_options[0]
+        self._routing_choices = {
+            scope: routing_choice for scope in self._scope_options
+        } if routing_choices is None else dict(routing_choices)
+        self._routing_choice = self._routing_choices.get(self._scope)
         self._selection = self._initial_selection()
         self._routing: dict[str, tuple[str, str]] | None = None
+        # Wizard-created defaults only; saved Config rows are never inferred.
+        self._implicit_routes: set[str] = set()
+        self._routing_updates_only = False
         self._route_index = 0
         self._scaffold = True
         self._skills: SkillSelectionModel | None = None
@@ -435,13 +448,14 @@ class InitWizardApp(App["InitAnswers | None"]):
         )
 
     def _show_routing(self) -> None:
+        self._routing_updates_only |= self._routing_choice is not None
         recommended = dict(RECOMMENDED_ROUTING)
         default = 0 if self._routing == recommended else 1 if self._routing is None else 2
         self.push_screen(
             _ChoiceScreen(
                 (
-                    "Configure explicit Static routes? They override Dynamic choices."
-                    if self._routing_choice is not None
+                    "Configure explicit Static routes? Other saved rows are preserved."
+                    if self._routing_updates_only
                     else "Configure per-task-type routing?"
                 ),
                 (
@@ -449,7 +463,7 @@ class InitWizardApp(App["InitAnswers | None"]):
                     (
                         "disabled",
                         "No new Static routes (preserve existing)"
-                        if self._routing_choice is not None
+                        if self._routing_updates_only
                         else "Do not configure routing",
                     ),
                     ("custom", "Configure each task type"),
@@ -471,7 +485,7 @@ class InitWizardApp(App["InitAnswers | None"]):
                     (
                         "skip",
                         "Keep any saved route; add no new row"
-                        if self._routing_choice is not None
+                        if self._routing_updates_only
                         else "Do not configure this task type",
                     ),
                     ("override", "Choose another model and effort"),
@@ -620,6 +634,7 @@ class InitWizardApp(App["InitAnswers | None"]):
                     scaffold=self._scaffold,
                     skills=self._skills,
                     routing_choice=self._routing_choice,
+                    routing_updates_only=self._routing_updates_only,
                 )
             ),
             self._on_review,
@@ -632,6 +647,12 @@ class InitWizardApp(App["InitAnswers | None"]):
             selected_scope = str(result)
             if selected_scope != self._scope:
                 self._scope = selected_scope
+                self._routing_choice = self._routing_choices.get(self._scope)
+                if self._routing_choice is not None and self._routing is not None:
+                    self._routing_updates_only = True
+                    for key in self._implicit_routes:
+                        self._routing.pop(key, None)
+                    self._implicit_routes.clear()
                 self._skills = None
                 self._selected_enabled = None
                 self._disabled_by_operator = None
@@ -656,13 +677,16 @@ class InitWizardApp(App["InitAnswers | None"]):
             self._show_model()
         elif result == "recommended":
             self._routing = dict(RECOMMENDED_ROUTING)
+            self._implicit_routes.clear()
             self._show_scaffold()
         elif result == "disabled":
             self._routing = None
+            self._implicit_routes.clear()
             self._show_scaffold()
         else:
-            if self._routing_choice is None:
+            if not self._routing_updates_only:
                 self._routing = dict(RECOMMENDED_ROUTING)
+                self._implicit_routes = set(RECOMMENDED_ROUTING)
             elif self._routing is None:
                 self._routing = {}
             self._route_index = 0
@@ -689,6 +713,7 @@ class InitWizardApp(App["InitAnswers | None"]):
         else:
             assert self._routing is not None
             key, recommended = tuple(RECOMMENDED_ROUTING.items())[self._route_index]
+            self._implicit_routes.discard(key)
             if result == "keep":
                 self._routing[key] = recommended
             else:
@@ -705,6 +730,7 @@ class InitWizardApp(App["InitAnswers | None"]):
             assert self._routing is not None
             key = tuple(RECOMMENDED_ROUTING)[self._route_index]
             self._routing[key] = (result.model, result.effort)
+            self._implicit_routes.discard(key)
             self._advance_route()
 
     def _on_scaffold(self, result: object) -> None:
@@ -751,6 +777,7 @@ class InitWizardApp(App["InitAnswers | None"]):
                     routing=self._routing,
                     scaffold=self._scaffold,
                     enabled_skills=self._skills.enabled,
+                    routing_updates_only=self._routing_updates_only,
                 )
             )
             return
@@ -775,6 +802,7 @@ def run_textual_init_wizard(
     skill_selection_model: Callable[[bool, str], SkillSelectionModel],
     scope_locked: bool = False,
     routing_choice: str | None = None,
+    routing_choices: Mapping[str, str | None] | None = None,
 ) -> InitAnswers | None:
     """Run the fullscreen setup wizard and return its answer set."""
 
@@ -795,6 +823,7 @@ def run_textual_init_wizard(
         rebuild_skill_selection=rebuild,
         scope_locked=scope_locked,
         routing_choice=routing_choice,
+        routing_choices=routing_choices,
     )
     app.run()
     return app.outcome()

@@ -798,7 +798,8 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "scope unless --global is given, the built-in default model / "
             "effort, and scaffolds the prompt + skills. Persists the Minimal "
             "Skill policy (only the Required Skills) without contacting the "
-            "machine's Copilot Skill inventory. With --routing, preserves "
+            "machine's Copilot Skill inventory. With --routing or a recorded "
+            "Static/Dynamic policy in the chosen scope, preserves "
             "saved/inherited model, effort, prompt and Skill policy, and requires routing "
             "authorization; live readiness is still checked."
         ),
@@ -814,7 +815,8 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "strict Static policy; migrate makes uncovered work Dynamic. "
             "Ask reuses a recorded choice or asks interactively. Dynamic "
             "requires operator-owned access and explicit finite limits; "
-            "--yes supplies no routing consent or allowance."
+            "--yes supplies no routing consent or allowance. A recorded "
+            "Static/Dynamic choice is checked even without --routing."
         ),
     )
 
@@ -1321,7 +1323,7 @@ def _run_init(args: argparse.Namespace) -> int:
 
     The wizard module (:mod:`git_loopy.init`) is imported lazily so the subcommand
     parser stays SDK-free; the SDK is touched for the wizard's live model list
-    or an explicitly requested routing-readiness check (including ``--yes``).
+    or routing readiness for supplied/recorded authority (including ``--yes``).
     """
     from git_loopy import init as _init
 
