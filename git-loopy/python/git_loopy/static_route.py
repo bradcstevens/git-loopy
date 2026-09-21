@@ -146,8 +146,9 @@ class HarnessModel:
             and that absence is a *capability* fact: such a model must be sent
             no effort argument, which is a different thing from a model whose
             dial accepts the effort **value** ``"none"``.
-        efforts: The efforts the dial accepts, verbatim. Empty exactly when
-            :attr:`effort_configurable` is ``False``.
+        efforts: The efforts the dial accepts, verbatim. Empty when no dial is
+            reported or when an advertised dial supplies no supported values.
+            The latter remains configurable, but offers no Dynamic configuration.
         context_tiers: The root-session tiers the model offers.
     """
 

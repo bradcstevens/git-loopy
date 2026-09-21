@@ -1899,12 +1899,16 @@ the existing opt-in Python flow, not final-default or native-member activation.
 The `effort_semantics` matrix carries recorded migration through actual serial
 and local Lane sessions and subsequent Runs. It distinguishes no effort dial
 from the advertised value `none` in both selector and work requests, canonical
-records, CLI/Dashboard readback and idempotent publication. Unchanged inputs
+records, CLI Pickup wording, raw Dashboard projection and idempotent publication. Unchanged inputs
 permit freshly validated reuse without another selector bill. A changed dial
 that contradicts the association refuses new work even when an earlier local
 assignment and tracker projection exist, without altering Config, charging a
 Strike or buying an assessment. This pins exact Dynamic effort matching, not
 final-default, non-local, native-member or ADR-0060 activation.
+The rendered Rust Dashboard Route cells and preparation text still use legacy
+backend/default wording for null effort; correcting that wording remains a
+composed activation obligation. The raw projection already preserves null
+versus the string `none`; this matrix does not claim the rendered Rust wording.
 
 **The Dynamic route is Python-only today**, for the same reason §14.3 is: the shell and PowerShell
 Orchestrators implement no per-issue routing and read no harness listing, so they have no route to

@@ -169,7 +169,7 @@ activate final defaults, native members, non-local, Subagent or Integration rout
 The `effort_semantics` matrix is adapted by
 `python/tests/test_routing_effort_conformance.py`: seven cases in serial and local
 Lane modes carry recorded migration into exact selector/work-session settings,
-canonical Pickup, CLI/Dashboard readback, Run-only Consumption and idempotent
+canonical Pickup, CLI wording, raw Dashboard projection, Run-only Consumption and idempotent
 tracker publication. A bare Dynamic association means no effort dial, whereas
 `@none` names an advertised effort value; an empty advertised dial supplies
 neither. Unchanged inputs support fresh reuse
@@ -178,6 +178,9 @@ refuses new work, including after a prior final assignment. Refusals preserve
 Config and tracker state and spend no assessment or Strike. Static omission
 semantics, historical streams, current combined labels and all activation
 deferrals remain unchanged.
+Rendered Rust Dashboard cells/preparation still use legacy backend/default
+wording for null effort; that readback correction remains before final
+activation and is not claimed by this Python matrix.
 
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent

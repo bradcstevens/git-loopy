@@ -1408,6 +1408,9 @@ An advertised but empty dial supplies no supported Dynamic effort. CLI Pickup
 and preparation readback call a Dynamic null effort "not configurable", not a
 backend default.
 Deliberately omitted effort in an operator-selected Static route is unchanged.
+The Dashboard's raw projection preserves null versus `none`, but its Rust Route
+cells/preparation text still use legacy backend/default wording. That rendered
+readback correction remains an activation obligation, not a claim of this slice.
 Non-local activation, the remaining composed activation matrix and the remaining
 Wrapper/Conformance activation obligations still precede the final default
 change. Existing Config is not migrated implicitly.
