@@ -1093,7 +1093,7 @@ def _dynamic_effort_phrase(event: dict[str, Any], field: str) -> str:
         return effort
     if field in event and effort is None:
         return "(not configurable)"
-    return "(backend default)"
+    return "backend default"
 
 
 def _routed_pair_phrase(event: dict[str, Any]) -> str:
@@ -1120,7 +1120,10 @@ def _routed_pair_phrase(event: dict[str, Any]) -> str:
         return f"{rendered} @ {effort}"
     if _EFFORT_DROPPED_WARNINGS & set(warnings):
         return f"{rendered} @ (backend default, effort dropped)"
-    if event.get("routing_source") == "dynamic":
+    if (
+        event.get("routing_source") == "dynamic"
+        and "effort" in event and effort is None
+    ):
         return f"{rendered} @ {_dynamic_effort_phrase(event, 'effort')}"
     return f"{rendered} @ (backend default)"
 

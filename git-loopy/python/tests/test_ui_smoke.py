@@ -2648,6 +2648,14 @@ def test_dynamic_no_dial_readback_preserves_static_and_historical_omission() -> 
 
         assert f"@ {expected}" in buf.getvalue()
 
+    renderer, _, buf = _make_renderer()
+    event = _pickup_event(routing_source="dynamic")
+    event.pop("effort")
+
+    renderer.render(event)
+
+    assert "@ (backend default)" in buf.getvalue()
+
 
 def test_the_context_tier_is_silent_until_it_is_worth_saying() -> None:
     """A run-level knob that holds its default on every Run today.
@@ -2982,13 +2990,14 @@ def test_an_unresolvable_viewer_zone_labels_the_readback_instead_of_faking_local
 
 def test_an_absent_prepared_effort_retains_historical_readback() -> None:
     renderer, _summary, buf = _make_renderer()
-    event = _prepared_event()
+    event = _prepared_event(selector_model="synthetic-selector")
     event.pop("effort")
 
     renderer.render(event)
 
-    out = buf.getvalue()
-    assert "backend default" in out
+    out = " ".join(buf.getvalue().split())
+    assert "proposal claude-opus-5 @ backend default" in out
+    assert "selector synthetic-selector @ backend default" in out
     assert "None" not in out
 
 
