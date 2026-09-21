@@ -208,6 +208,47 @@ def test_invalid_streamed_billing_is_refused_without_interrupting_sdk_delivery(i
     assert ledger.snapshot().routing_credits == Decimal("0.25")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["-0.10", "-1", "NaN", "Infinity"])
+async def test_invalid_cleanup_billing_cannot_swallow_routing_cancellation(invalid):
+    from git_loopy.dynamic_route import RoutingAdmissionLedger
+
+    ledger = RoutingAdmissionLedger(
+        deadline_seconds=30, routing_credit_allowance=Decimal("0.25"),
+        selector_concurrency=1,
+    )
+    started = asyncio.Event()
+
+    class CancelledSession(_FakeSession):
+        async def send_and_wait(self, prompt: str, *, timeout: float) -> None:
+            await super().send_and_wait(prompt, timeout=timeout)
+            started.set()
+            await asyncio.Event().wait()
+
+        async def __aexit__(self, *_exc: Any) -> bool:
+            self._observer.observe(_usage_event(Decimal(invalid)))
+            return False
+
+    selector = _selector(
+        None, (_usage_event(Decimal("0.25")),),
+        session_factory=CancelledSession,
+        on_routing_credits=ledger.observe_credits,
+    )
+    task = asyncio.create_task(
+        ledger.run_selector(lambda: selector(_settings(), _request()))
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert task.cancelled()
+    assert ledger.snapshot().routing_credits == Decimal("0.25")
+    assert ledger.snapshot().in_flight == 0
+    assert ledger.snapshot().overshot is False
+    assert ledger.assessment_refusal() is not None
+
+
 def test_the_assessment_carries_the_issue_and_nothing_the_router_withheld() -> None:
     """AC6's inputs, exactly: no repository beyond the bounded context it was given.
 

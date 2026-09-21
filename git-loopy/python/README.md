@@ -1248,7 +1248,8 @@ Saved-setup Consumption cases also compose concurrent classifier/selector billin
 allowance exhaustion and post-paid overshoot with actual work in both modes.
 An open routing session's observed bill closes admission immediately; completion
 and cancellation preserve the charge exactly once, including additional billing
-reported during cancellation cleanup. An assessment returned after the authorized
+reported during cancellation cleanup. Malformed cleanup billing cannot swallow
+cancellation or undo valid charges already observed. An assessment returned after the authorized
 deadline is refused without publishing its classification or proposal; its
 Consumption remains visible, and already-bound work may finish.
 Automatic upgrade/Run migration enforcement, the remaining composed activation matrix, and

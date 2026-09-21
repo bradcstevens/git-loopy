@@ -1027,14 +1027,14 @@ class SelectorCallResult:
 
 
 class RoutingCallCancelled(asyncio.CancelledError):
-    """An interrupted routing call, carrying only credits already reported."""
+    """An interrupted call carrying its observations, even malformed billing."""
 
     def __init__(
         self, routing_credits: Decimal, reported_routing_credits: Decimal = Decimal(0)
     ) -> None:
         super().__init__("routing call cancelled")
-        self.routing_credits = _validate_routing_credits(routing_credits)
-        self.reported_routing_credits = _validate_routing_credits(reported_routing_credits)
+        self.routing_credits = routing_credits
+        self.reported_routing_credits = reported_routing_credits
 
 
 @dataclass(frozen=True)
@@ -1145,10 +1145,15 @@ class RoutingAdmissionLedger:
             try:
                 return await call()
             except RoutingCallCancelled as exc:
+                try:
+                    cost = _validate_routing_credits(exc.routing_credits)
+                    reported = _validate_routing_credits(exc.reported_routing_credits)
+                    remainder = _validate_routing_credits(cost - reported)
+                except ValueError as error:
+                    # Invalid settlement must not convert cancellation to a refusal.
+                    raise exc from error
                 async with self._lock:
-                    self._complete_cost(_validate_routing_credits(
-                        exc.routing_credits - exc.reported_routing_credits
-                    ))
+                    self._complete_cost(remainder)
                 raise
 
         remaining = self._deadline - self._monotonic()

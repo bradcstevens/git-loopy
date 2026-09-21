@@ -261,6 +261,9 @@ bound settings, preserve Config, and refuse further assessment without a Strike
 or a cheaper selector.
 Cancellation cleanup can report additional billing, including a new overshoot;
 it remains visible exactly once before the cancelled preparation is recorded.
+Malformed billing cannot turn cancellation into a normal assessment refusal.
+Valid observations already charged remain charged; invalid settlement preserves
+cancellation and its validation error rather than inventing a replacement bill.
 The saved-setup matrix also exposed late assessment results being accepted
 after the authorized deadline. Shared settlement now retains Consumption but
 refuses the result before it can publish a Task-type label or become a Routing
