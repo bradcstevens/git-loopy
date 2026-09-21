@@ -1392,7 +1392,7 @@ Run-only selector Consumption and final tracker publication. Config and existing
 Pickup-time Lease acquisition/release remain unchanged.
 Shared `pool_priority` cases extend that seam to several eligible pending
 candidates: oldest-first order and explicit Priority determine the next proposal,
-not whichever speculative assessment finishes first. Selector concurrency stays
+not whichever other assessment finishes first. Selector concurrency stays
 within the saved bound of one or two. The next serial Pickup or Lane refill does
 not wait for unrelated open selectors; cancelled assessments keep their Run-only
 Consumption and visible unavailable preparation records. Pending issues remain

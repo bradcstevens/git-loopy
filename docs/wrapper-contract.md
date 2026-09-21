@@ -2080,10 +2080,10 @@ deferred; no non-local, Subagent or Integration routing is claimed.
 
 The companion `pool_priority` matrix carries recorded migration through four
 eligible pending candidates. It preserves oldest-first order and explicit
-**Priority**, prepares the next candidate before speculative selectors start,
-and exercises selector concurrency of one and two with more speculative
+**Priority**, prepares the next candidate before selectors assess other candidates,
+and exercises selector concurrency of one and two with more eligible
 candidates than available slots in either case. Running Agents remain open
-until speculative selectors are in flight; the next actual serial Pickup or
+until those other assessments are in flight; the next actual serial Pickup or
 Lane refill advances without waiting for those unrelated assessments.
 Interrupted selectors retain their SDK-observed Run-only Consumption and an
 explicit unavailable preparation record before Run end. Pending issues keep

@@ -434,9 +434,9 @@ historical Events or the final-default and Runner-member deferrals.
 The companion `pool_priority` matrix closes the multiple-pending-candidate
 coverage gap through the same recorded-migration and real CLI seam. Three
 cases in serial and Lane modes preserve oldest-first order and explicit
-Priority, prepare the next candidate before speculative selectors, and bound
+Priority, prepare the next candidate before assessing other candidates, and bound
 those selectors at one or two with excess candidates left unassessed under
-either bound. Running Agents stay open until speculation is in
+either bound. Running Agents stay open until those other assessments are in
 flight, then the next Pickup advances without waiting for unrelated assessments.
 Cancelled selectors retain their SDK-observed Run-only Consumption and explicit
 unavailable records before Run end; pending issues remain open, unleased and

@@ -130,10 +130,10 @@ historical streams, defaults or member deferrals.
 
 The same adapter drives `pool_priority` through three cases in both modes:
 oldest pending first, Priority ahead of older candidates, and Priority with two
-concurrent speculative selectors. Four eligible issues remain behind running
-Agents. The next proposal is recorded before speculative selection starts;
+concurrent selectors for other candidates. Four eligible issues remain behind running
+Agents. The next proposal is recorded before assessment of other candidates starts;
 running Agents then finish while unrelated selectors remain open, and the next
-Pickup advances without joining them. Both bounds leave excess speculative
+Pickup advances without joining them. Both bounds leave excess eligible
 candidates unassessed. Cancelled selections retain their bills
 and explicit unavailable preparation records. The adapter compares actual
 sessions, canonical Pickup, CLI/Dashboard readback and tracker publication,

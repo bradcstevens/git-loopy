@@ -396,7 +396,7 @@ _PRIORITY = _ROUTING_CONFORMANCE["pool_priority"]
 
 @pytest.mark.parametrize("mode", _PRIORITY["modes"])
 @pytest.mark.parametrize("case", _PRIORITY["cases"], ids=lambda case: case["id"])
-def test_saved_authority_prepares_the_next_pickup_before_bounded_speculation(
+def test_saved_authority_prepares_the_next_pickup_before_other_candidates(
     tmp_path, monkeypatch, mode, case,
 ):
     shared = _ROUTING_CONFORMANCE["migration_recovery"]
@@ -456,7 +456,7 @@ def test_saved_authority_prepares_the_next_pickup_before_bounded_speculation(
     peak_selectors = 0
     cancelled = []
     running_started = asyncio.Event()
-    speculation_started = asyncio.Event()
+    other_assessments_started = asyncio.Event()
     next_started = asyncio.Event()
     observations = []
 
@@ -492,7 +492,7 @@ def test_saved_authority_prepares_the_next_pickup_before_bounded_speculation(
                 assert len(records) == 1
                 observations.append(records[0])
                 if len(active_selectors) == case["selector_concurrency"]:
-                    speculation_started.set()
+                    other_assessments_started.set()
                 await asyncio.Future()
         except asyncio.CancelledError:
             cancelled.append(ref)
@@ -507,7 +507,7 @@ def test_saved_authority_prepares_the_next_pickup_before_bounded_speculation(
         if ref in running:
             if set(running) <= started.keys():
                 running_started.set()
-            await asyncio.wait_for(speculation_started.wait(), timeout=5)
+            await asyncio.wait_for(other_assessments_started.wait(), timeout=5)
             events = _read_events(tmp_path)
             assert next_issue not in started
             assert not any(
@@ -559,9 +559,9 @@ def test_saved_authority_prepares_the_next_pickup_before_bounded_speculation(
     assert not settings.global_config_path(os.environ).exists()
     assert next_started.is_set() and not active_selectors
     assert peak_selectors == case["selector_concurrency"]
-    assert sorted(cancelled) == expected["speculative_issues"]
+    assert sorted(cancelled) == expected["other_assessed_issues"]
     assert assessments[:len(running) + 1] == [*running, next_issue]
-    assert sorted(assessments[len(running) + 1:]) == expected["speculative_issues"]
+    assert sorted(assessments[len(running) + 1:]) == expected["other_assessed_issues"]
     assert set(started) == {*running, next_issue}
     assert len(observations) == case["selector_concurrency"]
     assert spied["evidence"] > evidence_before_run
@@ -596,7 +596,7 @@ def test_saved_authority_prepares_the_next_pickup_before_bounded_speculation(
                 "wrapper.pickup.bound", "wrapper.routing.resolved", "wrapper.routing.delivery",
             } and event["issue"] == ref for event in events
         )
-    for ref in expected["speculative_issues"]:
+    for ref in expected["other_assessed_issues"]:
         (record,) = [
             event for event in events
             if event["type"] == "wrapper.routing.prepared" and event["issue"] == ref
