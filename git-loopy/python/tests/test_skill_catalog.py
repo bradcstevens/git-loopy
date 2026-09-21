@@ -7,9 +7,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from copilot.generated.rpc import Skill, SkillSource
+from copilot.generated.rpc import (
+    ServerSkill,
+    ServerSkillList,
+    Skill,
+    SkillsDiscoverRequest,
+    SkillSource,
+)
 
 from git_loopy.skill_catalog import (
+    SkillCatalogError,
     SdkSkillSurfaceError,
     build_skill_catalog,
     discover_skill_catalog,
@@ -164,8 +171,19 @@ def test_pinned_sdk_skill_surface_guard_rejects_missing_exposure_option() -> Non
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("command_name", "plugin_name"),
+    [
+        ("example:plugin-skill", "example"),
+        ("plugin-skill", None),
+        (None, None),
+        ("example:other-skill", None),
+    ],
+)
 async def test_discovery_uses_typed_metadata_rpc_without_starting_agent_work(
     tmp_path: Path,
+    command_name: str | None,
+    plugin_name: str | None,
 ) -> None:
     installed_skills = tmp_path / "packaged"
     _write_skill(
@@ -177,28 +195,31 @@ async def test_discovery_uses_typed_metadata_rpc_without_starting_agent_work(
 
     class FakeSkillsApi:
         def __init__(self) -> None:
-            self.list_calls = 0
+            self.requests: list[SkillsDiscoverRequest] = []
 
-        async def list(self) -> SimpleNamespace:
-            self.list_calls += 1
-            return SimpleNamespace(skills=[])
-
-    class FakeSession:
-        def __init__(self) -> None:
-            self.rpc = SimpleNamespace(skills=FakeSkillsApi())
-            self.disconnect_calls = 0
-
-        async def disconnect(self) -> None:
-            self.disconnect_calls += 1
+        async def discover(self, request: SkillsDiscoverRequest) -> ServerSkillList:
+            self.requests.append(request)
+            return ServerSkillList(
+                skills=[
+                    ServerSkill(
+                        name="plugin-skill",
+                        description="An enabled plugin Skill",
+                        source=SkillSource.PLUGIN,
+                        enabled=True,
+                        user_invocable=True,
+                        command_name=command_name,
+                        path=str(tmp_path / "plugin" / "SKILL.md"),
+                    )
+                ],
+                errors=[],
+            )
 
     class FakeClient:
         def __init__(self) -> None:
-            self.session = FakeSession()
-            self.create_calls: list[dict[str, object]] = []
+            self.rpc = SimpleNamespace(skills=FakeSkillsApi())
 
-        async def create_session(self, **options: object) -> FakeSession:
-            self.create_calls.append(options)
-            return self.session
+        async def create_session(self, **_options: object) -> None:
+            raise AssertionError("Skill metadata discovery must not create a session")
 
     client = FakeClient()
     discovery_directory = tmp_path / "isolated"
@@ -212,14 +233,27 @@ async def test_discovery_uses_typed_metadata_rpc_without_starting_agent_work(
         validate_surface=False,
     )
 
-    assert tuple(catalog.winners) == ("fallback",)
-    assert client.create_calls == [
-        {
-            "working_directory": str(discovery_directory),
-            "enable_skills": True,
-            "enable_config_discovery": True,
-            "skip_custom_instructions": True,
-        }
+    assert tuple(catalog.winners) == ("fallback", "plugin-skill")
+    assert catalog.winners["plugin-skill"].source_kind == "plugin"
+    assert catalog.winners["plugin-skill"].plugin_name == plugin_name
+    assert catalog.winners["plugin-skill"].path == tmp_path / "plugin" / "SKILL.md"
+    assert [request.to_dict() for request in client.rpc.skills.requests] == [
+        {"projectPaths": []}
     ]
-    assert client.session.rpc.skills.list_calls == 1
-    assert client.session.disconnect_calls == 1
+
+
+async def test_discovery_reports_load_errors_instead_of_a_partial_catalog(
+    tmp_path: Path,
+) -> None:
+    class FailedSkillsApi:
+        async def discover(self, _request: SkillsDiscoverRequest) -> ServerSkillList:
+            return ServerSkillList(skills=[], errors=["invalid plugin Skill metadata"])
+
+    client = SimpleNamespace(rpc=SimpleNamespace(skills=FailedSkillsApi()))
+    with pytest.raises(SkillCatalogError, match="invalid plugin Skill metadata"):
+        await discover_skill_catalog(
+            client,
+            repo_root=tmp_path,
+            installed_skills_dir=tmp_path / "installed",
+            discovery_directory=tmp_path / "discovery",
+        )

@@ -60,6 +60,12 @@ identity, and its Event-schema compatibility before activation. A newer helper i
 not substituted, and an incompatible older one is not made compatible merely by
 being downloadable (ADR-0052; #591).
 
+A matching machine-local source build is retained when its version and schema
+match the installed Runner, no exact helper is published, and the immutable tag's
+trust policy explicitly declares `source-only`. This preserves a locally built
+Dashboard without inferring publication mode from missing assets. Unreadable
+release history or policy still refuses maintenance.
+
 The shell and PowerShell installers still request the exact declared helper
 Release. Their `--no-tui` / `-NoTui` options skip that download; they do not install
 a Dashboard. The built-in **line-printer** remains a diagnostic/plain-output path,
@@ -85,7 +91,10 @@ An issue's milestone neither selects nor records that target.
 Each member's Release writer advances the two live version expectations in
 `git-loopy/conformance/release-version.json` in the same atomic write as the
 distribution metadata, and includes that fixture in its Release commit.
-All other Conformance fixtures remain unchanged.
+All other Conformance fixtures remain unchanged by version advancement alone.
+Separately reviewed SDK or contract changes may intentionally edit their own
+fixtures, such as the roster's CLI provenance stamp when the SDK pin changes;
+those edits are not made by the Release-version writer.
 
 A `vX.Y.Z` **GitHub milestone** is solely the **Promotion** trigger. Closing it
 starts the unattended Promotion: the matching `dev.N` line becomes stable,

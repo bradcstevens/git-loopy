@@ -87,8 +87,8 @@ a fallback. The other prerequisites (`gh` signed in, `git`, `copilot`) are liste
 The bootstrap is per-clone; subsequent invocations of `git-loopy` use
 the cached environment under `git-loopy/python/.venv/`.
 
-The Runner pins `github-copilot-sdk==1.0.14`, which downloads and runs Copilot
-CLI `1.0.85` by default. Updating the separate `copilot` command on `PATH`
+The corporate-compatible Runner pins `github-copilot-sdk==1.0.13`, which runs
+Copilot CLI `1.0.83` by default. Updating the separate `copilot` command on `PATH`
 does not update that harness. The refreshed roster recognizes
 `gpt-6-astra` (including `max` reasoning). The pinned-harness listing did not
 offer Gemini 3.8 on the account used for this upgrade, so no unverified effort
@@ -102,6 +102,8 @@ session, permission, event, and Skill-discovery interfaces. SDK-provided
 Skills normalize to the existing `custom` source kind; a pathless provider
 Skill still cannot enter a Run's isolated Skill exposure unless the
 installed catalog supplies a filesystem-backed winner of the same name.
+Global Skill discovery uses the typed metadata RPC without creating an agent
+session. Discovery errors are reported rather than accepted as a partial catalog.
 
 ---
 
@@ -293,6 +295,11 @@ scope — needs a repository.
 
 Source-only Releases carry no helper assets of their own; they can still consume
 an eligible older helper under the same checksum, identity, and schema checks.
+When no exact helper is published, a machine-local build that reports the installed
+Runner's exact version and compatible Event schema is retained if the immutable
+tag's `release-trust.json` explicitly declares `source-only`. Missing assets alone
+do not establish that mode, and an unreadable index or policy remains an error.
+Otherwise the verified published-helper selection remains unchanged.
 
 That helper is one a Run attaches to. The Python Runner resolves a helper in this
 order, first hit wins:
@@ -1750,7 +1757,7 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `mai-code-1.1-flash`          | `low` `medium` `high`                    |
 | `mai-code-1-flash-picker`     | `low` `medium` `high`                    |
 
-This fallback covers all 19 models returned by the SDK-pinned CLI `1.0.85`
+This fallback covers all 19 models returned by the SDK-pinned CLI `1.0.83`
 on the upgrade account, plus seven retained compatibility entries:
 `claude-sonnet-4.6`, `claude-sonnet-4.5`, `claude-opus-4.6`, all three Gemini
 rows, and `mai-code-1-flash-picker`. Those seven were not offered by that

@@ -92,7 +92,7 @@ def test_update_replaces_an_untouched_prompt_override(tmp_path: Path) -> None:
         _absent_config(config_home),
         "Updated PROMPT.md to Release 1.2.4.",
         skill_install.describe_refresh(catalog),
-        f"Updated TUI helper: {tmp_path / 'git-loopy-tui'}",
+        f"TUI helper ready: {tmp_path / 'git-loopy-tui'}",
     ]
 
 
@@ -337,7 +337,7 @@ def test_update_drives_the_real_refreshers_when_no_seam_is_injected(
     assert installed_with == [("1.2.4", env)]
     assert catalog.short_revision in output[2] and catalog.repository in output[2]
     assert output[3] == (
-        f"Updated TUI helper: {config_home / 'git-loopy' / 'bin' / 'git-loopy-tui'}"
+        f"TUI helper ready: {config_home / 'git-loopy' / 'bin' / 'git-loopy-tui'}"
     )
 
 

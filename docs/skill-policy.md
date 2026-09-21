@@ -26,7 +26,9 @@ its own config home (`$XDG_CONFIG_HOME/git-loopy/skills/`, else
 every Run. That install is git-loopy's own Skill source; the consuming
 repository's `<repo>/.copilot/skills` is **not** read
 ([ADR-0025](adr/0025-installed-skill-catalog.md)). Discovery reads **metadata
-only**: a name, a description, a source, and Copilot's own enabled flag. Being
+only** through the SDK's global discovery RPC, without opening an agent session:
+a name, a description, a source, and Copilot's own enabled flag. A reported load
+error refuses discovery instead of returning a partial catalog. Being
 in the catalog does **not** make a Skill loadable — no instructions, scripts, or
 resources are read for a Skill the policy leaves out. Inspect it with `git-loopy
 skills list`. Where the installed catalog comes from — one external source of
@@ -253,9 +255,16 @@ enabled    enabled      yes       packaged  tdd          Test-driven development
   GIT-LOOPY column.
 - **REQUIRED** — `yes` when the active prompt declares it in `required-skills`.
 - **SOURCE** — the winning source kind: `inherited`, `personal`, `plugin`
-  (rendered `plugin:<name>`), `custom`, `builtin`, or `packaged` — the last
+  (rendered `plugin:<name>` when the SDK identifies its owner, or
+  `plugin (name unavailable)` when it does not), `custom`, `builtin`, or `packaged` — the last
   meaning git-loopy's installed catalog. `project` is a historical value that no
   current Run produces; see [ADR-0025](adr/0025-installed-skill-catalog.md).
+
+Global SDK metadata does not provide a separate plugin-owner field. An explicit
+owner-qualified canonical command preserves that attribution; an unqualified
+command does not. The catalog never guesses an owner from cache paths or creates
+an agent session merely to recover this label. Skill enablement and exposure are
+independent of that display-only availability.
 
 Output is stable and path-free by design, so it is safe to diff between machines
 and to paste into an issue: no absolute home-directory paths appear.
