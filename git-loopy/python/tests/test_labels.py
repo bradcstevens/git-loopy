@@ -20,6 +20,7 @@ import pytest
 
 from git_loopy import labels as labels_module
 from git_loopy.issue_order import LABEL_PRIORITY
+from git_loopy.lease_mirror import LEASE_MIRROR_LABEL
 from git_loopy.release_version import BUMP_CLASS_KEYS, BUMP_CLASS_LABEL_PREFIX
 from git_loopy.skill_source import (
     ACQUIRE_COMMAND,
@@ -62,6 +63,7 @@ def test_vocabulary_includes_the_canonical_task_type_labels(tmp_path: Path) -> N
         "wontfix",
         LABEL_PARALLEL_SAFE,
         LABEL_PRIORITY,
+        LEASE_MIRROR_LABEL,
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",
@@ -112,6 +114,7 @@ def test_vocabulary_follows_the_documented_mapping(tmp_path: Path) -> None:
         "closed:wontfix",
         LABEL_PARALLEL_SAFE,
         LABEL_PRIORITY,
+        LEASE_MIRROR_LABEL,
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",
@@ -132,6 +135,7 @@ def test_vocabulary_follows_the_documented_mapping(tmp_path: Path) -> None:
         "wontfix",
         "parallel-safe",
         "priority",
+        "in-progress",
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",
@@ -228,6 +232,89 @@ def test_the_priority_label_is_not_renameable_by_the_documented_mapping(
     assert "p1" not in [spec.name for spec in vocabulary]
 
 
+def test_the_lease_mirror_label_is_ensured(tmp_path: Path) -> None:
+    """``in-progress`` is provisioned, so the **Lease** has something to mirror onto.
+
+    ADR-0033 §6.1: the label is applied when a Lease is taken and removed when
+    it is released, and ``bootstrap_labels`` is what makes it exist. It sits
+    after the two human assertions because it is the opposite kind of thing —
+    the only label in the vocabulary a human never applies.
+    """
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+
+    names = [spec.name for spec in vocabulary]
+    assert names[names.index(LABEL_PRIORITY) + 1] == LEASE_MIRROR_LABEL
+
+
+def test_the_lease_mirror_label_is_named_by_the_seam_that_writes_it(
+    tmp_path: Path,
+) -> None:
+    """The label created and the label written are one string, from one place.
+
+    Same rule as **Priority**, for the opposite direction of travel: nothing
+    *reads* this label, so drift between the provisioned name and the written
+    one would be invisible until a human noticed two near-identical labels on
+    one issue, one of them never removed.
+    """
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    mirror = next(spec for spec in vocabulary if spec.role == "in-progress")
+
+    assert mirror.name == LEASE_MIRROR_LABEL
+
+
+def test_lease_mirror_description_names_it_runner_written_and_non_authoritative(
+    tmp_path: Path,
+) -> None:
+    """Its prose must stop a human reaching for it, and stop anyone trusting it.
+
+    An operator reads the description in the tracker's label list, not in
+    ADR-0033. Both halves are load-bearing: that the runner writes it (so
+    nobody applies it by hand expecting to reserve an issue), and that it is
+    not authoritative (so nobody reads a leftover one as a live Lease — §6.3,
+    §6.6).
+    """
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    mirror = next(spec for spec in vocabulary if spec.name == LEASE_MIRROR_LABEL)
+
+    description = mirror.description.lower()
+    assert "git-loopy" in description
+    assert "lease" in description
+    assert "not authoritative" in description
+
+
+def test_the_lease_mirror_label_is_not_a_run_precondition(tmp_path: Path) -> None:
+    """A Run must never be refused because ``in-progress`` does not exist yet.
+
+    It is minted on the way in, exactly as the two closed classifier taxonomies
+    are: the mirror creates the label before attaching it, and every mirror
+    failure is non-fatal because no label is worth a **Lease** (§6.5). A
+    preflight that required it would refuse a Run over something the Run itself
+    does not require (ADR-0055).
+    """
+    required = labels_module.read_run_required_vocabulary(tmp_path)
+
+    assert LEASE_MIRROR_LABEL not in [spec.name for spec in required]
+    assert LABEL_PRIORITY in [spec.name for spec in required]
+
+
+def test_the_lease_mirror_label_is_not_renameable_by_the_documented_mapping(
+    tmp_path: Path,
+) -> None:
+    """``in-progress`` is not a triage role, so the mapping cannot move it.
+
+    The mapping's right-hand column renames a role a *human* triages with. The
+    mirror is written by the runner under a name three Orchestrators must agree
+    on, so a tracker that renamed it would provision one label and accumulate
+    another that nothing ever removes.
+    """
+    _write_mapping(tmp_path, "| `in-progress` | `wip` | Being worked |\n")
+
+    names = [spec.name for spec in labels_module.read_tracker_vocabulary(tmp_path)]
+
+    assert names.count(LEASE_MIRROR_LABEL) == 1
+    assert "wip" not in names
+
+
 def test_parallel_safe_description_names_it_a_human_assertion(tmp_path: Path) -> None:
     """The label's own prose has to say the runner never infers it (ADR-0008)."""
     vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
@@ -260,6 +347,7 @@ def test_this_repository_s_own_documented_mapping_parses() -> None:
         "wontfix",
         LABEL_PARALLEL_SAFE,
         LABEL_PRIORITY,
+        LEASE_MIRROR_LABEL,
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",
@@ -312,6 +400,7 @@ def test_bootstrap_creates_only_the_absent_labels(tmp_path: Path) -> None:
         "ready-for-human",
         LABEL_PARALLEL_SAFE,
         LABEL_PRIORITY,
+        LEASE_MIRROR_LABEL,
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",
@@ -330,6 +419,7 @@ def test_bootstrap_creates_only_the_absent_labels(tmp_path: Path) -> None:
         "ready-for-human",
         LABEL_PARALLEL_SAFE,
         LABEL_PRIORITY,
+        LEASE_MIRROR_LABEL,
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",
@@ -608,6 +698,7 @@ def test_the_template_setup_writes_into_a_consumer_repo_parses(tmp_path: Path) -
         "wontfix",
         LABEL_PARALLEL_SAFE,
         LABEL_PRIORITY,
+        LEASE_MIRROR_LABEL,
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",

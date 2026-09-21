@@ -798,8 +798,8 @@ missing priority
   answerable, not just "is anything wrong?".
 - The five roles resolve through
   [`docs/agents/triage-labels.md`](../../docs/agents/triage-labels.md), so a
-  **renamed role is neither missing nor drift**. `parallel-safe`, `priority`, and
-  the `task-type:` labels compare on their literal strings.
+  **renamed role is neither missing nor drift**. `parallel-safe`, `priority`,
+  `in-progress`, and the `task-type:` labels compare on their literal strings.
 - **Additive only.** Labels the tracker carries outside the vocabulary are never
   reported, never edited, and never deleted, and nothing is ever renamed —
   a rename would detach every issue already carrying the label.

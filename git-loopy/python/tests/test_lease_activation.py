@@ -267,3 +267,140 @@ def test_a_force_with_lease_rejection_can_never_turn_leases_off() -> None:
     )
 
     assert is_permanent_lease_write_refusal(rejected) is False
+
+
+# ---------------------------------------------------------------------------
+# The human mirror reaches production too (ADR-0033 §6)
+# ---------------------------------------------------------------------------
+
+
+def test_a_github_backed_run_mirrors_its_leases_onto_the_tracker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The mirror's own activation: §6 is reached by a real Run, not only a fixture.
+
+    Every slice before this one was proved by fixtures alone. Asserting the
+    lifecycle *has* a mirror, and that it is driven through the ``gh`` adapter
+    the loop builds, is what stops §6 shipping as unreachable code.
+    """
+    from git_loopy.lease_mirror import LeaseMirror
+
+    git = _clone(tmp_path, "git@github.com:bradcstevens/git-loopy.git")
+    diag = logging.getLogger("test_lease_activation.mirror")
+    built: list[object] = []
+    monkeypatch.setattr(
+        loop_module,
+        "_make_lease_mirror_client",
+        lambda: built.append("client") or _SilentMirrorTracker(),
+    )
+
+    lifecycle = loop_module._make_lease_lifecycle(
+        RunConfig(), git, run_id=RUN_ID, diag=diag
+    )
+
+    assert isinstance(lifecycle, LeaseLifecycle)
+    assert isinstance(lifecycle._mirror, LeaseMirror)
+    assert built == ["client"]
+
+
+class _SilentMirrorTracker:
+    """A tracker that accepts every mirror write and remembers it."""
+
+    def __init__(self) -> None:
+        self.attached: list[tuple[int, str]] = []
+        self.detached: list[tuple[int, str]] = []
+        self.bodies: list[str] = []
+
+    def attach_label(self, issue: int, label: str) -> None:
+        self.attached.append((issue, label))
+
+    def detach_label(self, issue: int, label: str) -> None:
+        self.detached.append((issue, label))
+
+    def issue_comments(self, issue: int) -> tuple[tuple[int, str], ...]:
+        return ()
+
+    def post_issue_comment(self, issue: int, body: str) -> None:
+        self.bodies.append(body)
+
+    def edit_issue_comment(self, comment_id: int, body: str) -> None:
+        self.bodies.append(body)
+
+
+def test_taking_and_releasing_a_real_lease_writes_both_halves_of_the_mirror(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """End to end through the production factory: label on, label off, one comment.
+
+    The Lease ref is the truth and it is asserted alongside, so this test fails
+    if the mirror were ever to become the thing the Run depends on.
+    """
+    from git_loopy.lease_mirror import LEASE_MIRROR_LABEL
+
+    tracker = _SilentMirrorTracker()
+    git = _clone(tmp_path, "git@github.com:bradcstevens/git-loopy.git")
+    diag = logging.getLogger("test_lease_activation.mirror_end_to_end")
+    monkeypatch.setattr(loop_module, "_make_lease_mirror_client", lambda: tracker)
+
+    lifecycle = loop_module._make_lease_lifecycle(
+        RunConfig(), git, run_id=RUN_ID, diag=diag
+    )
+    with _holding(lifecycle, 390):
+        assert tracker.attached == [(390, LEASE_MIRROR_LABEL)]
+        assert git.probe_remote_ref("origin", lease_ref(390)) is not None
+
+    assert tracker.detached == [(390, LEASE_MIRROR_LABEL)]
+    assert len(tracker.bodies) == 2
+    assert "released" in tracker.bodies[-1].lower()
+    assert git.probe_remote_ref("origin", lease_ref(390)) is None
+
+
+def test_a_tracker_that_refuses_every_write_still_leaves_the_lease_working(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """§6.5 at the activation seam: the mirror cannot take a real Run down.
+
+    A credential with no ``issues: write`` is an ordinary configuration, and it
+    must cost the operator visibility and nothing else.
+    """
+
+    class _RefusingTracker:
+        def attach_label(self, issue: int, label: str) -> None:
+            raise RuntimeError("403 Forbidden")
+
+        def detach_label(self, issue: int, label: str) -> None:
+            raise RuntimeError("403 Forbidden")
+
+        def issue_comments(self, issue: int) -> tuple[tuple[int, str], ...]:
+            raise RuntimeError("403 Forbidden")
+
+        def post_issue_comment(self, issue: int, body: str) -> None:
+            raise RuntimeError("403 Forbidden")
+
+        def edit_issue_comment(self, comment_id: int, body: str) -> None:
+            raise RuntimeError("403 Forbidden")
+
+    git = _clone(tmp_path, "git@github.com:bradcstevens/git-loopy.git")
+    diag = logging.getLogger("test_lease_activation.mirror_refused")
+    monkeypatch.setattr(
+        loop_module, "_make_lease_mirror_client", lambda: _RefusingTracker()
+    )
+
+    lifecycle = loop_module._make_lease_lifecycle(
+        RunConfig(), git, run_id=RUN_ID, diag=diag
+    )
+    with _holding(lifecycle, 390) as held:
+        assert held.held() == (390,)
+        assert held.disabled() is False
+        assert git.probe_remote_ref("origin", lease_ref(390)) is not None
+    assert lifecycle is not None and lifecycle.held() == ()
+
+
+def test_the_prds_backend_mirrors_nothing(tmp_path: Path) -> None:
+    """No Lease, no mirror: local markdown has no tracker issue to label."""
+    git = _clone(tmp_path, "git@github.com:bradcstevens/git-loopy.git")
+    diag = logging.getLogger("test_lease_activation.prds_mirror")
+
+    assert loop_module._make_lease_lifecycle(
+        RunConfig(issue_source="prds"), git, run_id=RUN_ID, diag=diag
+    ) is None

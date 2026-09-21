@@ -9915,3 +9915,96 @@ def test_a_parked_contribution_keeps_its_lease_until_it_is_integrated(
     # And the Lease was still given back once the contribution was done.
     assert _lease_swaps(fake_git, 43), "#43 never took a Lease"
     assert fake_git.probe_remote_ref("origin", lease_ref(43)) is None
+
+
+class _RecordingMirrorTracker:
+    """A tracker that accepts every mirror write and remembers the argv-free facts."""
+
+    def __init__(self) -> None:
+        self.attached: list[tuple[int, str]] = []
+        self.detached: list[tuple[int, str]] = []
+        self.posted: list[tuple[int, str]] = []
+        self.edited: list[tuple[int, str]] = []
+        self._store: dict[int, list[tuple[int, str]]] = {}
+
+    def attach_label(self, issue: int, label: str) -> None:
+        self.attached.append((issue, label))
+
+    def detach_label(self, issue: int, label: str) -> None:
+        self.detached.append((issue, label))
+
+    def issue_comments(self, issue: int) -> tuple[tuple[int, str], ...]:
+        return tuple(self._store.get(issue, ()))
+
+    def post_issue_comment(self, issue: int, body: str) -> None:
+        self.posted.append((issue, body))
+        self._store.setdefault(issue, []).append((900 + len(self.posted), body))
+
+    def edit_issue_comment(self, comment_id: int, body: str) -> None:
+        self.edited.append((comment_id, body))
+        for bodies in self._store.values():
+            for index, (existing, _) in enumerate(bodies):
+                if existing == comment_id:
+                    bodies[index] = (existing, body)
+
+
+def test_a_lane_mirrors_its_lease_onto_the_issue_it_works(
+    tmp_path, monkeypatch
+) -> None:
+    """A **Lane**'s Lease is mirrored too, through the same lifecycle (ADR-0033 §6).
+
+    The Lane path and the embedded serial driver deliberately share one
+    :class:`~git_loopy.lease_lifecycle.LeaseLifecycle`, so the mirror follows
+    from where it was wired rather than from a second call site. That is worth
+    pinning rather than assuming: Parallel mode is the mode a human most needs
+    the tracker to explain, because several issues are in flight at once and
+    the ref namespace is the only other place that says so.
+
+    The label goes on at Lane Pickup and comes off when the Lease is given
+    back, and exactly one comment is written and then updated in place — never
+    a second one.
+    """
+    from git_loopy.lease_mirror import LEASE_MIRROR_LABEL, is_lease_comment
+
+    mirror = _RecordingMirrorTracker()
+    fake_git = _wire_repo(tmp_path)
+    fake_git.remote_urls = {"origin": "git@github.com:bradcstevens/git-loopy.git"}
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    monkeypatch.setattr(loop_module, "_make_lease_mirror_client", lambda: mirror)
+
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(
+            owner="bradcstevens", name="git-loopy", default_branch="main"
+        ),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    assert mirror.attached == [(42, LEASE_MIRROR_LABEL)]
+    assert mirror.detached == [(42, LEASE_MIRROR_LABEL)]
+    assert [issue for issue, _ in mirror.posted] == [42]
+    assert is_lease_comment(mirror.posted[0][1])
+    assert len(mirror.edited) == 1
+    assert "released" in mirror.edited[0][1].lower()
+    # The ref, not the mirror, is what the Run actually depended on.
+    assert fake_git.probe_remote_ref("origin", lease_ref(42)) is None

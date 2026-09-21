@@ -20,6 +20,7 @@ from git_loopy.denomination import BilledCreditsDenomination
 from git_loopy.git import GitError
 from git_loopy.issue_lease import DEFAULT_TTL_SECONDS, LeaseTransport, lease_ref
 from git_loopy.lease_lifecycle import LeaseLifecycle
+from git_loopy.lease_mirror import LEASE_MIRROR_LABEL
 from git_loopy.persist import create_writers
 from git_loopy.serial_pickup import AdmissionRefusal
 from git_loopy.sinks import SinkFanout
@@ -344,3 +345,93 @@ def test_leases_being_off_admits_the_candidate_and_permits_its_writes(
 
     assert lease.disabled() is True
     assert loop._leased(390, "push") is True
+
+
+# ---------------------------------------------------------------------------
+# The mirror is never authoritative (ADR-0033 §6.3, §6.6)
+# ---------------------------------------------------------------------------
+
+
+def test_a_leftover_in_progress_label_with_no_lease_ref_is_still_picked_up(
+    tmp_path: Path,
+) -> None:
+    """§6.6, the specific failure this design must not reproduce.
+
+    A Run killed with ``SIGKILL`` leaves the label behind: release never ran.
+    Its *Lease* expires on its own and its ref is gone, so the issue is free —
+    and it has to be pickable, or the label would have become the thing a
+    naive implementation reserves on and a crashed Run would strand its issues
+    forever, needing the manual cleanup this ADR exists to abolish.
+
+    The candidate carries the label and Pickup admits it, because Pickup asks
+    the ref.
+    """
+    loop, git, _, lease = _build(tmp_path)
+    stranded = AfkReadyItem(
+        ref=390,
+        title="Issue 390",
+        rendered_block="=== Issue #390 ===",
+        labels=("ready-for-agent", LEASE_MIRROR_LABEL),
+    )
+    assert git.probe_remote_ref("origin", lease_ref(390)) is None
+
+    assert loop._take_lease_at_pickup(stranded) is None
+
+    assert lease.held() == (390,)
+
+
+def test_a_missing_in_progress_label_never_admits_a_live_lease(
+    tmp_path: Path,
+) -> None:
+    """The mirror's other direction of drift, which must be just as inert.
+
+    A Run whose tracker credential cannot write labels holds a perfectly valid
+    Lease on an unlabelled issue. A second Run that read the *label* would find
+    nothing and take the issue — two agents, one issue, by the exact route
+    ADR-0033 §6.3 forbids. It asks the ref, so it is refused.
+    """
+    loop, git, _, _ = _build(tmp_path)
+    rival = LeaseTransport(git, remote="origin", repository=REPOSITORY)
+    assert rival.claim(390, run_id=RIVAL, now=1000, host="ci", pid=7) is not None
+    unlabelled = AfkReadyItem(
+        ref=390,
+        title="Issue 390",
+        rendered_block="=== Issue #390 ===",
+        labels=("ready-for-agent",),
+    )
+
+    refusal = loop._take_lease_at_pickup(unlabelled)
+
+    assert refusal is not None
+
+
+def test_no_decision_module_reads_the_mirror_label_or_its_comment() -> None:
+    """§6.3 as a standing guard rather than a claim about today's code.
+
+    "No selection, claim, expiry or fence decision may read the label or the
+    comment" is a property of the *whole* package, and the honest way to hold
+    it is to name the three modules allowed to know the strings at all — the
+    one that writes them, the one that provisions the label, and the one that
+    builds the writer — and fail on any fourth.
+
+    A future author who reaches for ``in-progress`` in a selection path gets a
+    failing test naming the rule, which is the only moment the rule can still
+    be cheap to keep.
+    """
+    from pathlib import Path as _Path
+
+    from git_loopy.lease_mirror import LEASE_COMMENT_MARKER, LEASE_MIRROR_LABEL
+
+    package = _Path(loop_module.__file__).parent
+    permitted = {"lease_mirror.py", "labels.py"}
+    offenders = sorted(
+        module.name
+        for module in package.rglob("*.py")
+        if module.name not in permitted
+        and any(
+            token in module.read_text(encoding="utf-8")
+            for token in (f'"{LEASE_MIRROR_LABEL}"', LEASE_COMMENT_MARKER)
+        )
+    )
+
+    assert offenders == []

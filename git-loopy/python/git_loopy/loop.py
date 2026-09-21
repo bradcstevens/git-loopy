@@ -141,6 +141,7 @@ from git_loopy import gate as gate_module
 from git_loopy import gh as gh_module
 from git_loopy import git as git_module
 from git_loopy import github_actions_host as actions_host_module
+from git_loopy import lease_mirror as lease_mirror_module
 from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
 from git_loopy import session_outcome as session_outcome_module
@@ -578,7 +579,24 @@ def _make_lease_lifecycle(
         run_id=run_id,
         env=os.environ,
         warn=lambda message: diag.warning("%s", message),
+        mirror=lease_mirror_module.LeaseMirror(
+            _make_lease_mirror_client(),
+            warn=lambda message: diag.warning("%s", message),
+        ),
     )
+
+
+def _make_lease_mirror_client() -> gh_module.SubprocessLeaseMirrorClient:
+    """Construct the per-invocation **Lease** mirror writer (#390, ADR-0033 §6).
+
+    Its own factory rather than a reuse of :func:`_make_github_client`, for the
+    reason :class:`~git_loopy.gh.SubprocessLeaseMirrorClient` exists at all:
+    the loop *reads* issues through the GitHub client, and every Pool-collecting
+    fake in the suite is asserted against that seam. Monkeypatchable on the same
+    terms as its neighbours, so a test that drives a whole **Run** can watch the
+    mirror without a tracker.
+    """
+    return gh_module.SubprocessLeaseMirrorClient()
 
 
 def _make_issue_source(

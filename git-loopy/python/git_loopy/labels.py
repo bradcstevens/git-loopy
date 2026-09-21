@@ -62,6 +62,7 @@ from typing import Protocol, Sequence, runtime_checkable
 
 from git_loopy.config import TASK_TYPE_KEYS, TASK_TYPE_LABEL_PREFIX
 from git_loopy.issue_order import LABEL_PRIORITY
+from git_loopy.lease_mirror import LEASE_MIRROR_LABEL
 from git_loopy.release_version import BUMP_CLASS_KEYS, BUMP_CLASS_LABEL_PREFIX
 from git_loopy.sources import LABEL_PARALLEL_SAFE, LABEL_READY_FOR_AGENT
 
@@ -75,6 +76,7 @@ __all__ = [
     "TrackerLabel",
     "TRIAGE_ROLES",
     "SEMVER_LABELS",
+    "LEASE_MIRROR_ROLE",
     "MAPPING_DOC_RELPATH",
     "MAX_DESCRIPTION_LENGTH",
     "bootstrap_labels",
@@ -183,6 +185,26 @@ PRIORITY_ROLE: LabelSpec = LabelSpec(
     ),
 )
 
+#: The **Lease**'s human mirror (ADR-0033 §6.1). Not a triage role and not a
+#: human assertion at all — it is the one label in the vocabulary a *human*
+#: never applies: the runner attaches it when it takes a Lease on an issue and
+#: removes it when it gives the Lease back. Its name comes from
+#: :mod:`git_loopy.lease_mirror`, the module that writes it, for the reason
+#: :data:`PRIORITY_ROLE` takes its name from the module that ranks on it.
+#:
+#: Provisioned here so the label exists with a description that says what it is;
+#: the mirror creates it on the way in too, so a repository that never ran
+#: ``init`` still gets the mirror rather than losing it silently.
+LEASE_MIRROR_ROLE: LabelSpec = LabelSpec(
+    role="in-progress",
+    name=LEASE_MIRROR_LABEL,
+    color="c2e0c6",
+    description=(
+        "git-loopy holds a Lease on this issue. Runner-written, not "
+        "authoritative: the ref is."
+    ),
+)
+
 #: The seven ``task-type:`` labels, one per key of the **closed** taxonomy.
 #:
 #: Derived from :data:`~git_loopy.config.TASK_TYPE_KEYS` — the taxonomy itself —
@@ -248,6 +270,7 @@ def read_tracker_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
         *roles,
         PARALLEL_SAFE_ROLE,
         PRIORITY_ROLE,
+        LEASE_MIRROR_ROLE,
         *TASK_TYPE_LABELS,
         *SEMVER_LABELS,
     )
@@ -268,6 +291,11 @@ def read_run_required_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...
     ``parallel-safe`` and ``priority`` assertions, and — load-bearingly —
     ``ready-for-agent``, the label the **Pool** query filters on.
 
+    The **Lease** mirror is excluded on the same terms and for the same reason:
+    :meth:`~git_loopy.gh.SubprocessLeaseMirrorClient.attach_label` creates it
+    before attaching it and every mirror failure is non-fatal, because the
+    mirror is never authoritative and no label is worth a Lease (ADR-0033 §6.5).
+
     The exclusion is derived from the taxonomies themselves rather than spelled
     out, so a new task type or **Bump class** cannot quietly become a Run
     precondition.
@@ -276,7 +304,10 @@ def read_run_required_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...
         repo_root: Repository root to read the documented triage mapping under,
             or ``None`` when there is no repository.
     """
-    minted = {spec.role for spec in (*TASK_TYPE_LABELS, *SEMVER_LABELS)}
+    minted = {
+        spec.role
+        for spec in (LEASE_MIRROR_ROLE, *TASK_TYPE_LABELS, *SEMVER_LABELS)
+    }
     return tuple(
         spec for spec in read_tracker_vocabulary(repo_root) if spec.role not in minted
     )

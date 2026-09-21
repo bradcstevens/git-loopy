@@ -100,6 +100,23 @@ class HeartbeatLike(Protocol):
         ...
 
 
+class MirrorLike(Protocol):
+    """The **Lease**'s human mirror, as an injectable seam (ADR-0033 §6).
+
+    :class:`~git_loopy.lease_mirror.LeaseMirror` satisfies it structurally.
+    Narrowed to the two writes a lifecycle makes so a fixture can prove *when*
+    they happen — and, more importantly, when they do not — without a tracker.
+    """
+
+    def record(self, hold: LeaseHold) -> None:
+        """Show that this Run holds ``hold``'s issue."""
+        ...
+
+    def clear(self, hold: LeaseHold, *, now: int | None = None) -> None:
+        """Show that this Run has given ``hold``'s issue back at ``now``."""
+        ...
+
+
 @dataclass(frozen=True)
 class LeaseTake:
     """What one attempt to take a Lease at **Pickup** settled."""
@@ -154,6 +171,7 @@ class LeaseLifecycle:
         warn: Callable[[str], None] = lambda _message: None,
         heartbeats: Callable[[LeaseTransport, LeaseHold], HeartbeatLike]
         | None = LeaseHeartbeat,
+        mirror: MirrorLike | None = None,
     ) -> None:
         self._transport = transport
         self._run_id = run_id
@@ -163,6 +181,7 @@ class LeaseLifecycle:
         self._ttl_seconds = ttl_seconds
         self._warn = warn
         self._heartbeats = heartbeats
+        self._mirror = mirror
         self._holds: dict[int, LeaseHold] = {}
         self._beats: dict[int, HeartbeatLike] = {}
         self._lost: set[int] = set()
@@ -273,6 +292,7 @@ class LeaseLifecycle:
                 f"{hold.displaced_run_id or 'unknown'} and had expired; "
                 "taking it over"
             )
+        self._mirror_write(hold, taken=True)
         return LeaseTake(
             "stolen" if hold.stolen else "taken",
             hold=hold,
@@ -380,8 +400,9 @@ class LeaseLifecycle:
         hold = self._holds.pop(issue, None)
         if hold is None:
             return "absent"
+        released_at = self._now()
         try:
-            outcome = self._transport.release(hold, now=self._now())
+            outcome = self._transport.release(hold, now=released_at)
         except GitError as exc:
             self._warn(f"Lease for issue #{issue} could not be released: {exc}")
             return "not_owned"
@@ -397,6 +418,17 @@ class LeaseLifecycle:
                 f"Lease for issue #{issue} was already gone when this Run came "
                 "to release it; abandoning the issue rather than reclaiming it"
             )
+        else:
+            # The mirror is cleared only for a release this Run was actually
+            # granted. ``not_owned`` and ``absent`` both mean some other Run
+            # may hold the issue *now*, and stripping the ``in-progress`` label
+            # off a live Lease — or rewriting its comment to say "released" —
+            # would make the mirror wrong about a Lease that is running. That
+            # is the one failure a non-authoritative mirror still must not
+            # cause, and it is the same rule the delete itself follows (§5.4).
+            # A leftover label blocks nothing (§6.6), so the safe answer costs
+            # only tidiness, and the next Run's take writes over it (§6.4).
+            self._mirror_write(hold, taken=False, now=released_at)
         return outcome
 
     def release_all(self) -> None:
@@ -409,6 +441,30 @@ class LeaseLifecycle:
         beat = self._beats.pop(issue, None)
         if beat is not None:
             beat.stop()
+
+    def _mirror_write(
+        self, hold: LeaseHold, *, taken: bool, now: int | None = None
+    ) -> None:
+        """Put the Lease on the issue for humans, and never let that matter.
+
+        The mirror swallows its own failures, but the lifecycle must not
+        *depend* on it doing so: it is an injected seam, and a Lease that is
+        already taken on the remote cannot be un-taken by a tracker write
+        (§6.5). So the exception is caught here too, and a Run without a mirror
+        behaves exactly as it did before §6.
+        """
+        if self._mirror is None:
+            return
+        try:
+            if taken:
+                self._mirror.record(hold)
+            else:
+                self._mirror.clear(hold, now=now)
+        except Exception as exc:  # noqa: BLE001 - the mirror never fails a Run
+            self._warn(
+                f"The human mirror for issue #{hold.issue}'s Lease could not "
+                f"be written: {exc}. The Lease itself is unaffected."
+            )
 
     def _lose(self, issue: int, action: str) -> None:
         """Record a Lease this Run no longer holds, once and for good.
@@ -458,6 +514,7 @@ def build_lease_lifecycle(
     clock: Callable[[], float] = time.time,
     host: str | None = None,
     pid: int | None = None,
+    mirror: MirrorLike | None = None,
 ) -> LeaseLifecycle | None:
     """Build this Run's :class:`LeaseLifecycle`, or ``None`` if it can hold none.
 
@@ -480,6 +537,12 @@ def build_lease_lifecycle(
     ``host`` and ``pid`` are diagnostic only and are never read by a decision
     (§1.4); they default to this process's own and are injectable so a fixture
     need not depend on the machine it runs on.
+
+    ``mirror`` is the human half (§6) and is optional in the strongest sense: a
+    Run given none takes, fences and releases exactly the same Leases, and a
+    Run given one that fails every write does too. It is built by the caller
+    rather than here because it speaks to the *tracker*, and this function's
+    only input is a clone.
     """
     try:
         url = git.remote_url(remote)
@@ -513,4 +576,5 @@ def build_lease_lifecycle(
         clock=clock,
         ttl_seconds=resolve_lease_ttl_seconds(env),
         warn=warn,
+        mirror=mirror,
     )

@@ -278,6 +278,74 @@ clone cannot take protects nothing, so refusing the work buys nothing.
 
 Live cross-Run exclusivity is now active for a GitHub-backed Python Run's
 **serial** Iterations and its **Lanes** alike, so an issue labelled
-`parallel-safe` is guarded on the path that actually works it. shell/PowerShell
-transport and retry, independent native renewal, the human mirror, and
-Events/Dashboard all remain pending in #390.
+`parallel-safe` is guarded on the path that actually works it. The human mirror
+is delivered with it: a Python Run attaches `in-progress` and one marked comment
+when it takes a Lease, and removes them when it gives that Lease back. shell/
+PowerShell transport and retry, independent native renewal, native mirroring,
+and Events/Dashboard all remain pending in #390.
+
+## The mirror is the one part that is allowed to be wrong
+
+The mirror exists because a ref is invisible: `refs/heads/git-loopy/leases/*`
+answers "who holds this issue" precisely, and no human reading GitHub will ever
+see it. So a Run attaches `in-progress` and posts one comment naming the owning
+Run, when the Lease was taken, and when it expires.
+
+Every rule about it follows from the fact that it is a second copy of a truth
+that already exists, written non-transactionally after the fact:
+
+- **Nothing reads it back.** No selection, claim, expiry, or fence decision may
+  consult the label or the comment, which is what makes the rest of this list
+  affordable. A package-wide test pins it: outside the mirror module and the
+  label vocabulary, the strings do not appear in the source at all.
+- **Its failures are warnings.** An unreachable tracker, a revoked token, or a
+  rejected write costs the mirror, never the Lease and never the work. The
+  inverse — failing a Run because a cosmetic write failed — would make the
+  guarantee *less* reliable than no mirror at all.
+- **It is not fenced on the way in.** The mirror is written immediately after
+  the compare-and-swap that granted the Lease, which is the freshest ownership
+  proof obtainable; re-reading the ref to confirm what the previous line just
+  established would be ceremony. A steal inside that window is exactly the drift
+  that self-heals.
+- **It *is* fenced on the way out.** A release clears the mirror only when the
+  transport reports the ref was actually deleted. If the Lease had been stolen,
+  the label and comment on that issue now describe the Run that holds it, and
+  clearing them would make the mirror wrong about a **live** Lease. The
+  stale-mirror cost of not clearing is nothing, because a leftover label blocks
+  nothing.
+
+That last rule is a gate on the `not_owned` and `absent` doors, not a guarantee
+across time, and the difference is worth stating rather than glossing. Between
+the moment the transport deletes the ref and the moment the tracker writes land
+there are two or three network round trips, and the issue is free for all of
+them. A second Run that takes it inside that window gets its own label and
+comment written, and then this Run's clear removes them. So the mirror *can*
+still describe a live Lease as released — by losing a race, not by consulting a
+stale record. Re-probing the ref before the clear would narrow the window
+without closing it, and would spend a round trip per release to do so. The
+honest position is that the ordering is chosen so the mirror is wrong only when
+it loses a race, that being wrong here costs a human one confusing line on an
+issue, and that the next Run's own `record` corrects it — which is §6.4's
+self-healing doing exactly the job it is there for.
+
+The comment is updated in place through a `<!-- git-loopy-lease:v1 -->` marker,
+following Continuation's convention. The marker carries no Run identity on
+purpose: there is one Lease per issue, so there is one comment per issue, and it
+answers "who holds this *now*". If the comment cannot be read back, the Run
+writes nothing rather than posting a second one — an unreadable tracker is not
+evidence that no comment exists, and two Lease comments disagreeing about the
+owner is worse than one that is briefly stale.
+
+A held Lease's comment states the **renewal rule**, not an expiry instant, and
+that is the one piece of this slice that was got wrong first and corrected. The
+comment is written at `take` and deliberately not rewritten on every 60-second
+renewal — redrawing the issue timeline once a minute would bury the issue's
+actual conversation and spend tracker quota to say nothing new. So any instant
+in it is frozen at the moment of writing: an expiry rendered from `heartbeat_at`
+is accurate for sixty seconds and then becomes a countdown that stopped
+counting, showing a Run two hours into healthy work as two hours overdue. That
+is precisely the "clean up that stuck issue" invitation the comment exists to
+prevent, and rendering from `claimed_at` would be worse still. The TTL and the
+renewal interval are true for as long as the Lease is, so those are what it
+says. The release line does get an instant, because releasing happens once and
+is over — and it is the release clock, not `heartbeat_at`, which trails it.

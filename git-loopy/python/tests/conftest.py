@@ -180,6 +180,52 @@ def _close_the_tracker_label_read(
 
 
 @pytest.fixture(autouse=True)
+def _close_the_lease_mirror_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Close the one wire in the suite that *writes* to a real tracker (#390).
+
+    Since ADR-0033 §6 every github-source Run mirrors each **Lease** it takes
+    onto the issue: an ``in-progress`` label and one marked comment, through
+    :func:`git_loopy.loop._make_lease_mirror_client`. Left alone that runs
+    ``gh`` in the process cwd — this checkout — so any Run test would label and
+    comment on *this repository's real issues*, under whatever number the
+    synthetic Pool happened to use.
+
+    Stricter than :func:`_close_the_tracker_label_read` and deliberately not
+    allow-listed: that one closes a *read*, where the worst case is a test
+    passing for the wrong reason, and a Run module can be trusted with a
+    stocked answer. There is no equivalent case for a write, and no test
+    anywhere has a reason to reach the real mirror, so this is unconditional.
+    The production adapter's own argv is pinned directly in
+    ``test_lease_mirror.py`` with ``subprocess.run`` stubbed, which is the only
+    place that contract needs proving.
+    """
+
+    class _InertMirrorTracker:
+        """Accepts every mirror write and performs none of them."""
+
+        def attach_label(self, issue: int, label: str) -> None:
+            return None
+
+        def detach_label(self, issue: int, label: str) -> None:
+            return None
+
+        def issue_comments(self, issue: int) -> tuple[tuple[int, str], ...]:
+            return ()
+
+        def post_issue_comment(self, issue: int, body: str) -> None:
+            return None
+
+        def edit_issue_comment(self, comment_id: int, body: str) -> None:
+            return None
+
+    monkeypatch.setattr(
+        importlib.import_module("git_loopy.loop"),
+        "_make_lease_mirror_client",
+        _InertMirrorTracker,
+    )
+
+
+@pytest.fixture(autouse=True)
 def installed_skill_catalog(
     _isolate_global_config: None, monkeypatch: pytest.MonkeyPatch
 ) -> "skill_install.InstalledCatalog":

@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.9",
+  "scope": "The Lease's human mirror: the label name, the comment marker, and the exact comment body a member writes when it takes and gives back a Lease (ADR-0033 §6). Pinned across members because the mirror is the one part of the Lease a human reads, and because two members that spelled the label differently would leave one of them permanently attached to an issue nobody holds. Nothing here is authoritative: no selection, claim, expiry or fence decision may read a label or a comment.",
+  "repository": "bradcstevens/git-loopy",
+  "issue": 390,
+  "label": "in-progress",
+  "comment_marker": "<!-- git-loopy-lease:v1 -->",
+  "record": {
+    "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "issue": 390,
+    "repository": "bradcstevens/git-loopy",
+    "claimed_at": 1000,
+    "heartbeat_at": 1000,
+    "ttl_seconds": 300,
+    "host": "laptop",
+    "pid": 42
+  },
+  "ref": "refs/heads/git-loopy/leases/issue-390",
+  "comment_cases": [
+    {
+      "id": "held-states-the-renewal-rule-not-a-countdown",
+      "state": "held",
+      "expected": "<!-- git-loopy-lease:v1 -->\ngit-loopy Run `01ARZ3NDEKTSV4RRFFQ69G5FAV` took a Lease on this issue at 1970-01-01T00:16:40Z.\n\nThe Run renews it about every 60 seconds while it is alive, and it expires on its own 300 seconds after the last renewal — so a Run that dies frees this issue without anyone intervening. This comment is not a countdown and is not rewritten as the Lease is renewed.\n\nThe `in-progress` label and this comment are a mirror for humans and are **not authoritative** — the ref is:\n\n    git ls-remote origin refs/heads/git-loopy/leases/issue-390\n\nA leftover label or a stale comment blocks nothing."
+    },
+    {
+      "id": "a-renewed-lease-renders-the-identical-held-body",
+      "state": "held",
+      "record": {
+        "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "issue": 390,
+        "repository": "bradcstevens/git-loopy",
+        "claimed_at": 1000,
+        "heartbeat_at": 99000,
+        "ttl_seconds": 300,
+        "host": "laptop",
+        "pid": 42
+      },
+      "expected": "<!-- git-loopy-lease:v1 -->\ngit-loopy Run `01ARZ3NDEKTSV4RRFFQ69G5FAV` took a Lease on this issue at 1970-01-01T00:16:40Z.\n\nThe Run renews it about every 60 seconds while it is alive, and it expires on its own 300 seconds after the last renewal — so a Run that dies frees this issue without anyone intervening. This comment is not a countdown and is not rewritten as the Lease is renewed.\n\nThe `in-progress` label and this comment are a mirror for humans and are **not authoritative** — the ref is:\n\n    git ls-remote origin refs/heads/git-loopy/leases/issue-390\n\nA leftover label or a stale comment blocks nothing.",
+      "note": "The comment is written once and never rewritten as the Lease is renewed, so it must carry no instant that renewal would move. A member that rendered an expiry here would publish a countdown that stopped counting, showing a healthy two-hour Run as hours overdue."
+    },
+    {
+      "id": "released-is-dated-by-the-release-clock",
+      "state": "released",
+      "now": 4000,
+      "expected": "<!-- git-loopy-lease:v1 -->\ngit-loopy Run `01ARZ3NDEKTSV4RRFFQ69G5FAV` took a Lease on this issue at 1970-01-01T00:16:40Z.\n\nThe Lease was released at 1970-01-01T01:06:40Z; the issue is free for any Run to take.\n\nThe `in-progress` label and this comment are a mirror for humans and are **not authoritative** — the ref is:\n\n    git ls-remote origin refs/heads/git-loopy/leases/issue-390\n\nA leftover label or a stale comment blocks nothing."
+    },
+    {
+      "id": "released-without-a-clock-invents-no-time",
+      "state": "released",
+      "expected": "<!-- git-loopy-lease:v1 -->\ngit-loopy Run `01ARZ3NDEKTSV4RRFFQ69G5FAV` took a Lease on this issue at 1970-01-01T00:16:40Z.\n\nThe Lease was released; the issue is free for any Run to take.\n\nThe `in-progress` label and this comment are a mirror for humans and are **not authoritative** — the ref is:\n\n    git ls-remote origin refs/heads/git-loopy/leases/issue-390\n\nA leftover label or a stale comment blocks nothing."
+    }
+  ],
+  "recognition_cases": [
+    {
+      "id": "the-mirrors-own-comment",
+      "body": "<!-- git-loopy-lease:v1 -->\ngit-loopy Run `01ARZ3NDEKTSV4RRFFQ69G5FAV` took a Lease on this issue at 1970-01-01T00:16:40Z.",
+      "expected": true
+    },
+    {
+      "id": "a-human-comment",
+      "body": "Taking a look at this one.",
+      "expected": false
+    },
+    {
+      "id": "another-git-loopy-marker-is-not-this-one",
+      "body": "<!-- git-loopy-route:v1:c3e505e1 -->\nRouting resolution.",
+      "expected": false
+    },
+    {
+      "id": "continuations-marker-is-not-this-one",
+      "body": "<!-- git-loopy-continuation:1 -->\nContinuing.",
+      "expected": false
+    },
+    {
+      "id": "a-quoted-marker-still-identifies-the-comment",
+      "body": "Context first.\n\n<!-- git-loopy-lease:v1 -->\ngit-loopy Run `01ARZ3NDEKTSV4RRFFQ69G5FAV` took a Lease on this issue.",
+      "expected": true
+    }
+  ]
+}

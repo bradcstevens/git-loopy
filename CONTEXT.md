@@ -334,7 +334,8 @@ A run's exclusive right to work one issue, taken at **Pickup**, held while its o
 stays alive, and expiring on its own if the owner stops. It names the run that holds
 it, so a run that dies frees its issues without anyone intervening. Leases are what
 let several runs share one tracker: an issue under another run's live Lease is not
-available to this run.
+available to this run. A Lease is a git ref; the `in-progress` label and the marked
+comment a run writes alongside it mirror it for humans and are never authoritative.
 _Avoid_: claim unqualified (a **Fixture claim** is a different fact, about Conformance rather than
 about work), lock, reservation, hold.
 

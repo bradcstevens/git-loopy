@@ -115,6 +115,8 @@ _STDERR_TAIL_LIMIT: Final[int] = 400
 #: Page size for the label listing. ``gh api --paginate`` merges every page's
 #: JSON array into one, so this bounds each request, not the result.
 _LABEL_PAGE_SIZE: Final[int] = 100
+#: Issue comments per REST page when the Lease mirror looks for its own comment.
+_COMMENT_PAGE_SIZE: Final[int] = 100
 
 # Shallow issue-list pagination bounds (#219 §2.8, Wrapper contract §2.1). The
 # first read asks for :data:`LIST_PAGE_LIMIT`; each ambiguous full page doubles
@@ -1534,3 +1536,139 @@ class SubprocessTaskTypeLabelClient:
         except GhError:
             pass
         _run(["issue", "edit", str(number), "--add-label", spec.name])
+
+
+class SubprocessLeaseMirrorClient:
+    """Stateless adapter for the **Lease**'s human mirror (#390, ADR-0033 §6).
+
+    Its own class for the reason :class:`SubprocessTaskTypeLabelClient` has
+    one: the loop *reads* issues through :class:`SubprocessGitHubClient`, and
+    every Pool-collecting fake in the suite is asserted against that seam, so
+    widening it would make a tracker write a requirement of reading one.
+    Satisfies :class:`git_loopy.lease_mirror.LeaseMirrorTracker` structurally,
+    which is why nothing here imports that module.
+
+    Every method raises on failure and none of them retries.
+    :class:`~git_loopy.lease_mirror.LeaseMirror` catches the lot, because the
+    mirror is not authoritative and no tracker write is worth a Lease (§6.5).
+    """
+
+    def attach_label(self, number: int, label: str) -> None:
+        """Ensure ``label`` exists, then attach it, altering no other label.
+
+        The ordering is forced, exactly as it is for a ``task-type:`` label:
+        ``gh issue edit --add-label`` refuses a label the repository does not
+        carry, and ``in-progress`` only exists where ``git-loopy init`` has
+        run. Minting it here is what keeps the label off the list of things a
+        Run requires of a tracker (ADR-0055).
+
+        The create's failure is swallowed and the attach's is not: almost every
+        create failure is "it already exists", which is the ordinary case and
+        not news, while a create that failed for any other reason takes the
+        attach down a line later with the error that names what the operator
+        actually cannot do.
+
+        Raises:
+            GhError: If attaching fails.
+        """
+        # Imported at call time rather than module scope: ``git_loopy.labels``
+        # imports ``git_loopy.sources``, which imports this module.
+        from git_loopy.labels import LEASE_MIRROR_ROLE
+
+        try:
+            _run(
+                [
+                    "label",
+                    "create",
+                    label,
+                    "--color",
+                    LEASE_MIRROR_ROLE.color,
+                    "--description",
+                    LEASE_MIRROR_ROLE.description,
+                ]
+            )
+        except GhError:
+            pass
+        _run(["issue", "edit", str(number), "--add-label", label])
+
+    def detach_label(self, number: int, label: str) -> None:
+        """Remove ``label`` from ``number``, leaving every other label alone.
+
+        Scoped to the one name on purpose: the issue still carries
+        ``ready-for-agent`` and whatever a human applied, and release must not
+        disturb any of it.
+
+        Raises:
+            GhError: If the edit fails.
+        """
+        _run(["issue", "edit", str(number), "--remove-label", label])
+
+    def issue_comments(self, number: int) -> tuple[tuple[int, str], ...]:
+        """Return ``(comment id, body)`` for every comment on ``number``.
+
+        The REST listing rather than ``gh issue view --json comments``, because
+        the update is a REST ``PATCH`` keyed on the comment's *numeric* id and
+        the ``--json`` projection offers a GraphQL node id. One identifier in
+        play beats two.
+
+        Raises:
+            GhError: If the listing fails or returns an unreadable payload.
+        """
+        cmd = [
+            "api",
+            f"repos/{{owner}}/{{repo}}/issues/{number}/comments"
+            f"?per_page={_COMMENT_PAGE_SIZE}",
+            "--paginate",
+        ]
+        parsed = _parse_json(_run(cmd), [_GH_BIN, *cmd])
+        if not isinstance(parsed, list):
+            raise GhError(
+                [_GH_BIN, *cmd],
+                0,
+                f"expected JSON array for the comment listing, got "
+                f"{type(parsed).__name__}",
+            )
+        comments: list[tuple[int, str]] = []
+        for entry in parsed:
+            if (
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("id"), int)
+                or isinstance(entry.get("id"), bool)
+                or not isinstance(entry.get("body"), str)
+            ):
+                raise GhError(
+                    [_GH_BIN, *cmd], 0, f"gh issue comment malformed: {entry!r}"
+                )
+            comments.append((entry["id"], entry["body"]))
+        return tuple(comments)
+
+    def post_issue_comment(self, number: int, body: str) -> None:
+        """Append one new comment to ``number``.
+
+        Raises:
+            GhError: If the comment subprocess fails.
+        """
+        _run(["issue", "comment", str(number), "--body", body])
+
+    def edit_issue_comment(self, comment_id: int, body: str) -> None:
+        """Replace an existing comment's body in place (§6.2: update, never duplicate).
+
+        ``--raw-field`` rather than ``--field``: the body is Markdown the
+        mirror rendered, and ``--field``/``-F`` both coerces types and treats a
+        leading ``@`` as "read this value from a file on disk". A comment body
+        beginning with an ``@`` mention is ordinary; silently substituting a
+        local file for it is not.
+
+        Raises:
+            GhError: If the update fails.
+        """
+        _run(
+            [
+                "api",
+                "--method",
+                "PATCH",
+                f"repos/{{owner}}/{{repo}}/issues/comments/{comment_id}",
+                "--raw-field",
+                f"body={body}",
+            ]
+        )

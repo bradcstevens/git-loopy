@@ -81,6 +81,12 @@
       "powershell": {"kind": "claimed", "reason": "powershell/tests/test-orchestrator-conformance.ps1 drives the production readiness decision with fixture candidates."},
       "rust": {"kind": "waived_out_of_scope", "reason": "Issue readiness is an Orchestrator admission decision; the Dashboard never reads tracker dependencies."}
     },
+    "lease-mirror.json": {
+      "python": {"kind": "claimed", "reason": "python/tests/test_lease_mirror.py drives the production label name, comment marker, comment renderer and marker recognition with every fixture case."},
+      "shell": {"kind": "waived_owed", "reason": "The shell Orchestrator takes no Lease yet, so it mirrors none onto an issue. Pinned ahead of that port deliberately: the mirror is removed by name and recognised by marker, so a member that spelled either differently would leave a label no other member's release ever clears and post a second comment beside the one it failed to find.", "issue": 390},
+      "powershell": {"kind": "waived_owed", "reason": "The PowerShell Orchestrator takes no Lease yet, so it mirrors none onto an issue. Pinned ahead of that port for the same reason as the shell member: a divergent label name or comment marker turns a self-healing mirror into a permanent leftover.", "issue": 390},
+      "rust": {"kind": "waived_out_of_scope", "reason": "The mirror is an Orchestrator tracker write and is explicitly non-authoritative; the Dashboard renders Lease Events and neither writes a label nor reads a comment."}
+    },
     "model-roster.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py compares fixture roster facts with production model-roster constants."},
       "shell": {"kind": "waived_out_of_scope", "reason": "The written contract keeps model-roster resolution Python-only pending Config parity."},

@@ -503,6 +503,17 @@ class FakeGitClient:
         self._ref_shas[(remote, ref)] = sha
         return sha
 
+    def delete_remote_ref(self, remote: str, ref: str) -> None:
+        """Remove ``ref`` from ``remote`` directly, bypassing the compare-and-swap.
+
+        The arrange half of "the ref vanished under a live hold": a thief that
+        stole a Lease and then released it, or an operator's hand delete. Like
+        :meth:`seed_remote_ref` it writes the remote without pretending to be
+        whoever did it.
+        """
+        self._ref_shas.pop((remote, ref), None)
+        self.remote_refs.pop((remote, ref), None)
+
     def write_orphan_commit(self, message: str) -> str:
         """Record ``message`` as a parentless commit and return its SHA."""
         sha = self._next_sha()

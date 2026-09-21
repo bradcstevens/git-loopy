@@ -1536,6 +1536,7 @@ def test_run_init_bootstraps_the_tracker_label_vocabulary(tmp_path: Path) -> Non
         "wontfix",
         "parallel-safe",
         "priority",
+        "in-progress",
         "task-type:planning",
         "task-type:review",
         "task-type:implementation",

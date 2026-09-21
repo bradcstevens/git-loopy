@@ -465,3 +465,246 @@ def test_a_run_never_reclaims_an_issue_it_was_stolen_from(tmp_path: Path) -> Non
     # The issue is free again, but this Run gave up on it and must stay away.
     assert lifecycle.take(390).verdict == "refused"
     assert lifecycle.held() == ()
+
+
+# ---------------------------------------------------------------------------
+# The human mirror (ADR-0033 §6)
+# ---------------------------------------------------------------------------
+
+
+class RecordingMirror:
+    """A mirror that records what it was asked to write, and never fails."""
+
+    def __init__(self) -> None:
+        self.recorded: list[int] = []
+        self.cleared: list[int] = []
+        self.cleared_at: list[int | None] = []
+
+    def record(self, hold) -> None:  # noqa: ANN001 - LeaseHold, structurally
+        self.recorded.append(hold.issue)
+
+    def clear(self, hold, *, now: int | None = None) -> None:  # noqa: ANN001
+        self.cleared.append(hold.issue)
+        self.cleared_at.append(now)
+
+
+def build_mirrored(
+    tmp_path: Path,
+    *,
+    git: FakeGitClient | None = None,
+    run_id: str = OWNER,
+    clock: Clock | None = None,
+) -> tuple[LeaseLifecycle, RecordingMirror, FakeGitClient, list[str]]:
+    git = git if git is not None else FakeGitClient(tmp_path)
+    mirror = RecordingMirror()
+    warnings: list[str] = []
+    lifecycle = LeaseLifecycle(
+        LeaseTransport(git, remote="origin", repository=REPOSITORY),
+        run_id=run_id,
+        host="laptop",
+        pid=42,
+        clock=clock if clock is not None else Clock(),
+        warn=warnings.append,
+        heartbeats=None,
+        mirror=mirror,
+    )
+    return lifecycle, mirror, git, warnings
+
+
+def test_a_granted_lease_is_mirrored_onto_the_issue(tmp_path: Path) -> None:
+    """§6.1: the label and the comment go on when the Lease is taken."""
+    lifecycle, mirror, _, _ = build_mirrored(tmp_path)
+
+    lifecycle.take(390)
+
+    assert mirror.recorded == [390]
+    assert mirror.cleared == []
+
+
+def test_a_refused_lease_writes_nothing_onto_another_runs_issue(
+    tmp_path: Path,
+) -> None:
+    """A Run that lost the race must not touch the winner's issue at all.
+
+    A label write is one of the four side effects the fence exists to gate, and
+    the loser holds no Lease to pass it with. Mirroring a Lease it does not
+    have would also be the most misleading possible write: the issue would name
+    the wrong Run.
+    """
+    git = FakeGitClient(tmp_path)
+    winner, _, _, _ = build_mirrored(tmp_path, git=git)
+    loser, mirror, _, _ = build_mirrored(tmp_path, git=git, run_id=RIVAL)
+    winner.take(390)
+
+    take = loser.take(390)
+
+    assert take.verdict == "refused"
+    assert mirror.recorded == []
+
+
+def test_stealing_an_expired_lease_rewrites_the_dead_runs_mirror(
+    tmp_path: Path,
+) -> None:
+    """§6.4: drift self-heals on the next write.
+
+    The dead Run left its label and a comment naming itself. The stealer writes
+    over both rather than reconciling them, because there is nothing to
+    reconcile: the ref already said whose Lease it is.
+    """
+    git = FakeGitClient(tmp_path)
+    dead = LeaseLifecycle(
+        LeaseTransport(git, remote="origin", repository=REPOSITORY),
+        run_id=RIVAL,
+        host="laptop",
+        pid=43,
+        clock=Clock(),
+        heartbeats=None,
+    )
+    dead.take(390)
+    late = Clock(1000.0 + DEFAULT_TTL_SECONDS + 1)
+    mirror = RecordingMirror()
+    stealer = LeaseLifecycle(
+        LeaseTransport(git, remote="origin", repository=REPOSITORY),
+        run_id=OWNER,
+        host="laptop",
+        pid=44,
+        clock=late,
+        heartbeats=None,
+        mirror=mirror,
+    )
+
+    take = stealer.take(390)
+
+    assert take.verdict == "stolen"
+    assert mirror.recorded == [390]
+
+
+def test_releasing_a_lease_this_run_owned_clears_its_mirror(tmp_path: Path) -> None:
+    """§6.1: the label comes off when the Lease is given back."""
+    lifecycle, mirror, _, _ = build_mirrored(tmp_path)
+    lifecycle.take(390)
+
+    assert lifecycle.release(390) == "released"
+
+    assert mirror.cleared == [390]
+
+
+def test_the_mirror_is_cleared_with_the_instant_the_lease_was_released(
+    tmp_path: Path,
+) -> None:
+    """The comment must date the release, not the claim two hours earlier.
+
+    The hold record is written once, at ``take``, and renewal never refreshes
+    it — so anything rendered from ``heartbeat_at`` would report the release at
+    the moment the *claim* happened. The lifecycle owns the release clock, so
+    it passes it, and this is the assertion that keeps it passing it.
+    """
+    clock = Clock(1000.0)
+    lifecycle, mirror, _, _ = build_mirrored(tmp_path, clock=clock)
+    lifecycle.take(390)
+    clock.now = 8200.0
+
+    assert lifecycle.release(390) == "released"
+
+    assert mirror.cleared_at == [8200]
+
+
+def test_a_stolen_lease_is_never_unmirrored_by_the_run_that_lost_it(
+    tmp_path: Path,
+) -> None:
+    """The decision this slice exists to get right.
+
+    A Run whose Lease was stolen still holds a ``LeaseHold`` and still runs its
+    release in a ``finally``. The transport refuses to *delete* the ref —
+    ``not_owned`` — precisely so it cannot free an issue another Run is now
+    working. Clearing the mirror anyway would do the same damage through the
+    other door: it would strip the thief's ``in-progress`` label off the issue
+    the thief is working, and rewrite its comment to say the Lease was
+    released. The label a human sees would then be wrong about a Lease that is
+    live, which is the one thing a non-authoritative mirror still must not do.
+    """
+    git = FakeGitClient(tmp_path)
+    lifecycle, mirror, _, warnings = build_mirrored(tmp_path, git=git)
+    lifecycle.take(390)
+    thief = LeaseLifecycle(
+        LeaseTransport(git, remote="origin", repository=REPOSITORY),
+        run_id=RIVAL,
+        host="laptop",
+        pid=43,
+        clock=Clock(1000.0 + DEFAULT_TTL_SECONDS + 1),
+        heartbeats=None,
+    )
+    assert thief.take(390).verdict == "stolen"
+
+    assert lifecycle.release(390) == "not_owned"
+
+    assert mirror.cleared == []
+    assert git.probe_remote_ref("origin", lease_ref(390)) is not None
+
+
+def test_a_lease_whose_ref_vanished_is_not_unmirrored_either(
+    tmp_path: Path,
+) -> None:
+    """An absent ref is not proof the issue is free *now*.
+
+    A thief that stole the Lease and released it leaves the ref gone — and a
+    third Run may have taken it since. Clearing on "it looked free" would strip
+    that Run's label. A leftover label blocks nothing (§6.6), so the safe
+    answer costs only tidiness.
+    """
+    git = FakeGitClient(tmp_path)
+    lifecycle, mirror, _, _ = build_mirrored(tmp_path, git=git)
+    lifecycle.take(390)
+    git.delete_remote_ref("origin", lease_ref(390))
+
+    assert lifecycle.release(390) == "absent"
+
+    assert mirror.cleared == []
+
+
+def test_a_mirror_that_raises_never_fails_the_take(tmp_path: Path) -> None:
+    """§6.5 again, at the lifecycle boundary rather than inside the mirror.
+
+    :class:`~git_loopy.lease_mirror.LeaseMirror` swallows its own failures, but
+    the lifecycle must not *depend* on that: a mirror is an injected seam, and
+    a Lease that is already taken cannot be un-taken by a tracker write.
+    """
+
+    class ExplodingMirror:
+        def record(self, hold) -> None:  # noqa: ANN001
+            raise RuntimeError("tracker is on fire")
+
+        def clear(self, hold, *, now: int | None = None) -> None:  # noqa: ANN001
+            raise RuntimeError("tracker is still on fire")
+
+    git = FakeGitClient(tmp_path)
+    warnings: list[str] = []
+    lifecycle = LeaseLifecycle(
+        LeaseTransport(git, remote="origin", repository=REPOSITORY),
+        run_id=OWNER,
+        host="laptop",
+        pid=42,
+        clock=Clock(),
+        warn=warnings.append,
+        heartbeats=None,
+        mirror=ExplodingMirror(),
+    )
+
+    take = lifecycle.take(390)
+
+    assert take.verdict == "taken"
+    assert lifecycle.release(390) == "released"
+    assert any("mirror" in warning.lower() for warning in warnings)
+
+
+def test_no_mirror_is_the_default_and_changes_no_lease_decision(
+    tmp_path: Path,
+) -> None:
+    """A lifecycle built without a mirror behaves exactly as it did before §6."""
+    lifecycle, _, git = build(tmp_path)
+
+    take = lifecycle.take(390)
+
+    assert take.verdict == "taken"
+    assert lifecycle.release(390) == "released"
+    assert git.probe_remote_ref("origin", lease_ref(390)) is None

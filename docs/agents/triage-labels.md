@@ -54,8 +54,8 @@ order. See `CONTEXT.md`, `docs/wrapper-contract.md` §3.2 and
 ## Creating the labels
 
 `git-loopy init`, run inside the repository, creates whichever triage,
-`parallel-safe`, `priority`, and Task-type labels are absent and leaves the ones
-that already exist untouched. Re-running it creates nothing.
+`parallel-safe`, `priority`, `in-progress`, and Task-type labels are absent and
+leaves the ones that already exist untouched. Re-running it creates nothing.
 
 That is *ensure*, not reconcile, and it runs once — at whatever moment `init`
 happened to run. So a label added to the vocabulary afterwards never lands on a
@@ -70,7 +70,8 @@ git-loopy labels --apply    # create what is missing, correct what drifted
 It reports every label in the vocabulary as `missing`, `drifted` (naming the
 attribute that differs), or matched, resolving the five roles through the table
 above so a renamed role is neither missing nor drift. `parallel-safe`,
-`priority`, and the `task-type:` labels are compared on their literal strings.
+`priority`, `in-progress`, and the `task-type:` labels are compared on their
+literal strings.
 Labels the tracker carries outside the vocabulary are never reported, never
 edited, and never deleted; nothing is ever renamed. An unreachable or
 unauthorised tracker warns and exits non-zero.
@@ -110,3 +111,52 @@ The labels differ in blast radius, which is why only one of the three opened: a
 wrong `parallel-safe` guess lets unsafe work run concurrently and a wrong
 `priority` guess reorders somebody's backlog, while a wrong `task-type:` guess
 picks a suboptimal model.
+
+## The `in-progress` label
+
+`in-progress` is the only label in the vocabulary a human should never set, and the
+only one that asserts nothing. It is half of the **Lease** mirror: the runner attaches
+it when it takes a Lease on an issue and removes it when it gives that Lease back, so
+that the GitHub UI shows which issues are being worked and by what. The other half is
+a single comment carrying the `<!-- git-loopy-lease:v1 -->` marker, which names the
+owning Run, when the Lease was taken, and when it expires; it is updated in place
+rather than duplicated.
+
+Like `parallel-safe` and `priority` it is not one of the five canonical triage roles,
+is not in the table above, and is **not renameable** — three Orchestrators must write
+and remove the exact same string, and a member that spelled it differently would leave
+a label no other member's release ever clears.
+
+**It is never authoritative, and that is the whole point.** No selection, claim,
+expiry, or fence decision may read this label or the comment. The Lease is a git ref
+and the ref is the only truth:
+
+```bash
+git ls-remote origin 'refs/heads/git-loopy/leases/*'
+```
+
+Three consequences follow:
+
+- **A leftover `in-progress` blocks nothing.** A Run killed with `SIGKILL` leaves its
+  label attached and its Lease ref behind. The ref expires on its own and the next Run
+  takes the issue *with the stale label still on it*. This is the specific failure the
+  design exists not to reproduce: the naive "claim by label" approach needs a human to
+  clean up after every crash, and this one does not.
+- **Removing the label by hand frees nothing.** The Lease still exists. Delete the ref
+  if you mean it: `git push origin --delete git-loopy/leases/issue-<N>`.
+- **Drift self-heals.** A label with no Lease, or a Lease with no label, is corrected
+  by the next write and is never treated as a conflict. A mirror write that fails —
+  an unreachable tracker, a revoked token — costs the mirror and not the Lease; the
+  Run warns and keeps working.
+
+A Run also never clears a mirror it has stopped owning. If its Lease was stolen while
+it worked, releasing removes nothing: the label and comment on that issue now belong
+to the Run that holds it, and stripping them would make the mirror wrong about a
+*live* Lease — the one error a non-authoritative mirror must not make.
+
+`git-loopy init` creates it like any other vocabulary label, and `git-loopy labels`
+reports it. It is deliberately **not** required at preflight: the runner mints it on
+the way in, so a tracker that has never seen a Lease is not refused a Run over a label
+that Run will create for itself.
+
+See `CONTEXT.md` and `docs/adr/0033-one-issue-one-run-lease.md` §6.

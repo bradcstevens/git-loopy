@@ -232,6 +232,38 @@ mechanism: before every push, comment, label write and issue close, a run re-rea
 its own Lease and abandons the issue if it no longer holds it. A Lease taken from a
 run that was merely slow therefore costs duplicated *effort*, never corrupted state.
 
+### Seeing a Lease without the command line
+
+A ref is precise and invisible, so a run also mirrors its Lease onto the issue
+itself: it attaches the **`in-progress`** label and posts one comment — marked
+`<!-- git-loopy-lease:v1 -->` and updated in place, never duplicated — naming the
+owning run, when the Lease was taken, and the rule by which it expires. Both are
+removed when the run gives the Lease back. The comment is written once and is
+deliberately *not* rewritten on every renewal, so it states the TTL rather than
+a countdown that would be wrong a minute later. `git-loopy init` creates the
+label; `git-loopy labels` reports it.
+
+**Neither is authoritative.** No selection, claim, expiry or fence decision reads
+them; the ref is the only truth. Three things follow that are worth knowing before
+you act on what you see:
+
+- A **leftover `in-progress` blocks nothing.** A crashed run leaves its label behind
+  and the next run takes the issue anyway, stale label and all. You never have to
+  clean one up, which is the entire reason the Lease is not itself a label.
+- **Removing the label frees nothing.** If you actually want the issue back, delete
+  the ref as shown above.
+- A run **never clears a mirror it no longer owns.** If its Lease was stolen while it
+  worked, it leaves the label and comment alone — they now describe the run that
+  holds the issue, and tidying them would make the mirror wrong about a live Lease.
+  There is a narrow exception you may see in the wild: a run that releases cleanly
+  and a second run that claims the freed issue within the same second or two can
+  race, leaving the new owner's issue briefly showing "released". The next write
+  corrects it, and nothing decides anything on it.
+
+A tracker that refuses a mirror write — an unreachable API, a token without issue
+write access — costs you the label and the comment, never the Lease and never the
+work. The run warns and carries on.
+
 ### When Leases are off
 
 A run resolves the repository it contends on from its `origin` URL — a local config
