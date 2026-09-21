@@ -203,14 +203,13 @@ pub struct QueueRow {
 
 /// One issue's **Routing resolution** and the **Routing source** that chose it.
 ///
-/// A `null` half is a *value*: the backend chooses. The record itself is
-/// optional, and its absence is the only "nothing is known here" — an issue no
-/// Pickup has resolved yet, or a Runner that resolves nothing at all, which the
-/// header's `routing` declaration is what tells apart.
+/// A reported null Dynamic effort means no dial; Static and historical nulls
+/// retain the backend placeholder without declaring dial support. Unreported effort serializes as
+/// null for compatibility, but rendering must not infer a dial from its absence.
 #[derive(Clone, Debug, Serialize)]
 pub struct RouteView {
     pub model: Option<String>,
-    pub effort: Option<String>,
+    pub effort: Option<Option<String>>,
     pub source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_tier: Option<String>,
@@ -256,7 +255,7 @@ pub struct PreparationView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
+    pub effort: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_tier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -272,7 +271,7 @@ pub struct PreparationView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selector_model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub selector_effort: Option<String>,
+    pub selector_effort: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selector_context_tier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

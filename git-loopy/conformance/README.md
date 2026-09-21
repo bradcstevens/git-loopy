@@ -193,9 +193,10 @@ refuses new work, including after a prior final assignment. Refusals preserve
 Config and tracker state and spend no assessment or Strike. Static omission
 semantics, historical streams, current combined labels and all activation
 deferrals remain unchanged.
-Rendered Rust Dashboard cells/preparation still use legacy backend/default
-wording for null effort; that readback correction remains before final
-activation and is not claimed by this Python matrix.
+Rendered Rust Dashboard cells/preparation use the same no-dial distinction,
+covered separately by `dashboard-insights.json`'s `effort_readback` matrix.
+This Python matrix observes raw Dashboard projection, not Rust rendering;
+neither matrix alone proves completed activation.
 
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent
@@ -674,6 +675,23 @@ them when the Pickup recorded them, and omit them for older records rather than
 inventing a tier or a first-attempt claim. A reassessed Dynamic retry may keep
 the same configuration; its lifecycle position must still distinguish it from
 the earlier contribution.
+
+The additive `effort_readback` matrix is a **Rust display-adapter** obligation:
+six Pickup cases run through both serial and Lane-stamped contribution replay
+and nine preparation cases run through projection and actual rendered Queue and
+drill-in screens. Explicit Dynamic null effort reads as **not configurable**;
+the advertised value `none`, deliberate Static omission and historical sparse
+records keep their respective readbacks. The Static backend placeholder does
+not distinguish a Static no-dial model from deliberate omission: the Pickup has
+no dial-presence fact to support that inference. Preparation retains explicit nulls without inventing
+missing fields or becoming a final Route, and its full work/selector wording
+survives in the issue Log. Nulls in Static, reusable and unavailable preparation
+mean no proposal, not no dial, and retain their historical omitted projection.
+Its pinned Queue text is Rust presentation, including
+the existing column clipping, not a new cross-toolkit layout requirement.
+The existing semantic snapshots and native producer obligations are unchanged.
+This is not a substitute for the composed actual-work-session routing matrix;
+shell/PowerShell routing activation remains deferred.
 
 The **Activity** band's sizing gestures — the drag, the click and `shift+↑` / `shift+↓`
 (ADR-0038) — are deliberately **not** in this fixture set, now that both renderers

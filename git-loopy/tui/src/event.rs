@@ -293,9 +293,9 @@ pub struct Pickup {
     /// `None` is a Runner that resolved nothing at all.
     #[serde(default, deserialize_with = "reported")]
     pub model: Option<Option<String>>,
-    /// The reasoning effort of that pair, gated. `Some(None)` is the backend's
-    /// own default — either because nobody asked, or because the gate dropped
-    /// an effort the model refuses.
+    /// The reasoning effort of that pair. Dynamic `Some(None)` means no dial;
+    /// Static and historical nulls retain backend wording without declaring dial support. `None`
+    /// means the record did not report an effort.
     #[serde(default, deserialize_with = "reported")]
     pub effort: Option<Option<String>>,
     /// The root-session context tier completing the **Routing resolution**.
@@ -369,9 +369,9 @@ pub struct RoutingPrepared {
     /// The proposed model, present only for `proposed`.
     #[serde(default)]
     pub model: Option<String>,
-    /// The proposed reasoning effort, present only for `proposed`.
-    #[serde(default)]
-    pub effort: Option<String>,
+    /// The proposed effort: explicit null means no dial; absence is historical.
+    #[serde(default, deserialize_with = "reported")]
+    pub effort: Option<Option<String>>,
     #[serde(default)]
     pub context_tier: Option<String>,
     #[serde(default)]
@@ -386,8 +386,8 @@ pub struct RoutingPrepared {
     pub relevant_input_identity: Option<String>,
     #[serde(default)]
     pub selector_model: Option<String>,
-    #[serde(default)]
-    pub selector_effort: Option<String>,
+    #[serde(default, deserialize_with = "reported")]
+    pub selector_effort: Option<Option<String>>,
     #[serde(default)]
     pub selector_context_tier: Option<String>,
     #[serde(default)]

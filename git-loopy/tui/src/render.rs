@@ -621,8 +621,8 @@ fn cost_placeholder<'a>(header: &Header, glyphs: &'a Glyphs) -> &'a str {
 /// common answer while a corpus is unlabelled, and a column repeating it on
 /// every row would cost width to say nothing.
 ///
-/// A null half is the backend choosing, which is a fact rather than a gap, so
-/// it renders as `(backend)` rather than as the unknown placeholder. Any
+/// A null Dynamic effort means the model has no effort dial; Static and historical
+/// null halves retain `(backend)` rather than the unknown placeholder. Any
 /// tracker-delivery state renders as a suffix so publication can fail or lag
 /// without rewriting the pair itself.
 fn route(
@@ -636,32 +636,48 @@ fn route(
         .map(|position| format!(" ({})", position.replace('_', " ")))
         .unwrap_or_default();
     let rendered = match route {
-        Some(route) => match &route.context_tier {
-            Some(context_tier) => format!(
-                "{}@{}/{}",
-                route.model.clone().unwrap_or_else(|| "(backend)".into()),
-                route.effort.clone().unwrap_or_else(|| "(backend)".into()),
-                context_tier,
-            ),
-            None => format!(
-                "{} @ {}",
-                route.model.clone().unwrap_or_else(|| "(backend)".into()),
-                route.effort.clone().unwrap_or_else(|| "(backend)".into()),
-            ),
-        },
+        Some(route) => {
+            let effort = route
+                .effort
+                .as_ref()
+                .and_then(|value| value.as_deref())
+                .unwrap_or(
+                    if route.source.as_deref() == Some("dynamic") && route.effort == Some(None) {
+                        "(not configurable)"
+                    } else {
+                        "(backend)"
+                    },
+                );
+            match &route.context_tier {
+                Some(context_tier) => format!(
+                    "{}@{}/{}",
+                    route.model.as_deref().unwrap_or("(backend)"),
+                    effort,
+                    context_tier,
+                ),
+                None => format!(
+                    "{} @ {}",
+                    route.model.as_deref().unwrap_or("(backend)"),
+                    effort,
+                ),
+            }
+        }
         None => preparation.map_or_else(
             || unknown.to_string(),
             |preparation| match preparation.state.as_str() {
+                // The suffix already says "not binding"; spend that space on
+                // the no-dial fact rather than a redundant "proposed" prefix.
+                "proposed" if preparation.effort == Some(None) => format!(
+                    "{}@not configurable",
+                    preparation.model.as_deref().unwrap_or("(backend)"),
+                ),
                 "proposed" => format!(
                     "proposed {} @ {}",
                     preparation
                         .model
                         .clone()
                         .unwrap_or_else(|| "(backend)".into()),
-                    preparation
-                        .effort
-                        .clone()
-                        .unwrap_or_else(|| "(backend)".into()),
+                    crate::state::preparation_effort_text(&preparation.effort, "(backend)"),
                 ),
                 state => format!("preparation: {state}"),
             },

@@ -392,6 +392,121 @@
       "toolkit_widgets"
     ]
   },
+  "effort_readback": {
+    "note": "Rust Event-replay/display obligations. These cases do not claim work-session routing or native Orchestrator activation. Explicit Dynamic null effort is not configurable, the value none is distinct, and Static and historical missing-field wording is preserved. The Static backend placeholder is not a dial-capability claim: Static Pickups do not distinguish no dial from deliberate omission. Preparation stays nonbinding; ordinary Route-column clipping still applies.",
+    "routes": [
+      {
+        "id": "dynamic-no-dial",
+        "pickup": {"model": "plain", "effort": null, "routing_source": "dynamic"},
+        "expected": {"model": "plain", "effort": null, "source": "dynamic"},
+        "text": "plain @ (not configurable)"
+      },
+      {
+        "id": "dynamic-advertised-none",
+        "pickup": {"model": "plain", "effort": "none", "routing_source": "dynamic"},
+        "expected": {"model": "plain", "effort": "none", "source": "dynamic"},
+        "text": "plain @ none"
+      },
+      {
+        "id": "dynamic-no-dial-long-context",
+        "pickup": {"model": "p", "effort": null, "routing_source": "dynamic", "context_tier": "long_context"},
+        "expected": {"model": "p", "effort": null, "source": "dynamic", "context_tier": "long_context"},
+        "text": "p@(not configurable)/long_context"
+      },
+      {
+        "id": "static-deliberate-omission",
+        "pickup": {"model": "plain", "effort": null, "routing_source": "defaulted_explicit_override"},
+        "expected": {"model": "plain", "effort": null, "source": "defaulted_explicit_override"},
+        "text": "plain @ (backend)"
+      },
+      {
+        "id": "historical-gated-omission",
+        "pickup": {"model": "plain", "effort": null, "routing_source": "routed"},
+        "expected": {"model": "plain", "effort": null, "source": "routed"},
+        "text": "plain @ (backend)"
+      },
+      {
+        "id": "historical-unreported-dynamic-effort",
+        "pickup": {"model": "plain", "routing_source": "dynamic"},
+        "expected": {"model": "plain", "effort": null, "source": "dynamic"},
+        "text": "plain @ (backend)"
+      }
+    ],
+    "preparations": [
+      {
+        "id": "no-dial-work-and-selector",
+        "state": "proposed",
+        "fields": {"effort": null, "selector_effort": null},
+        "expected_fields": {"effort": null, "selector_effort": null},
+        "queue_text": "p@not configurable [not binding]",
+        "text": "Route proposed: p@not configurable (not bound); selector: p@not configurable"
+      },
+      {
+        "id": "advertised-none-work-and-selector",
+        "state": "proposed",
+        "fields": {"effort": "none", "selector_effort": "none"},
+        "expected_fields": {"effort": "none", "selector_effort": "none"},
+        "queue_text": "proposed p @ none [not binding]",
+        "text": "Route proposed: p@none (not bound); selector: p@none"
+      },
+      {
+        "id": "no-dial-work-advertised-none-selector",
+        "state": "proposed",
+        "fields": {"effort": null, "selector_effort": "none"},
+        "expected_fields": {"effort": null, "selector_effort": "none"},
+        "queue_text": "p@not configurable [not binding]",
+        "text": "Route proposed: p@not configurable (not bound); selector: p@none"
+      },
+      {
+        "id": "advertised-none-work-no-dial-selector",
+        "state": "proposed",
+        "fields": {"effort": "none", "selector_effort": null},
+        "expected_fields": {"effort": "none", "selector_effort": null},
+        "queue_text": "proposed p @ none [not binding]",
+        "text": "Route proposed: p@none (not bound); selector: p@not configurable"
+      },
+      {
+        "id": "historical-unreported-efforts",
+        "state": "proposed",
+        "fields": {},
+        "expected_fields": {},
+        "queue_text": "proposed p @ (bac... [not binding]",
+        "text": "Route proposed: p@default (not bound); selector: p@backend default"
+      },
+      {
+        "id": "historical-empty-efforts",
+        "state": "proposed",
+        "fields": {"effort": "", "selector_effort": ""},
+        "expected_fields": {},
+        "queue_text": "proposed p @ (bac... [not binding]",
+        "text": "Route proposed: p@default (not bound); selector: p@backend default"
+      },
+      {
+        "id": "static-preparation-has-no-proposed-effort",
+        "state": "static",
+        "fields": {"effort": null, "selector_effort": null},
+        "expected_fields": {},
+        "queue_text": "[not binding]",
+        "text": "Route preparation: static route applies, no selector call"
+      },
+      {
+        "id": "reusable-preparation-has-no-proposed-effort",
+        "state": "reusable",
+        "fields": {"effort": null, "selector_effort": null},
+        "expected_fields": {},
+        "queue_text": "[not binding]",
+        "text": "Route preparation: an earlier decision is available for Pickup revalidation"
+      },
+      {
+        "id": "unavailable-preparation-has-no-proposed-effort",
+        "state": "unavailable",
+        "fields": {"effort": null, "selector_effort": null},
+        "expected_fields": {},
+        "queue_text": "[not binding]",
+        "text": "Route not prepared; available for Pickup revalidation"
+      }
+    ]
+  },
   "cases": [
     {
       "id": "baseline-closed-iteration",

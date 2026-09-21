@@ -8,9 +8,9 @@
 //! are all injected, so a snapshot stays reproducible forever.
 
 use git_loopy_tui::{
-    draw_dashboard, draw_frame, drive_dashboard, project_run_view, DashboardFrame,
-    DashboardSession, DashboardState, DashboardSurface, Event, Input, IssueRef, RunInputs, RunView,
-    Screen, TerminalCapabilities, Timestamp, ViewContext, Zone,
+    draw_frame, drive_dashboard, project_run_view, DashboardFrame, DashboardSession,
+    DashboardState, DashboardSurface, Event, Input, IssueRef, RunInputs, RunView, Screen,
+    TerminalCapabilities, Timestamp, ViewContext, Zone,
 };
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -111,10 +111,20 @@ fn render_lines(
     rows: u16,
     capabilities: TerminalCapabilities,
 ) -> Vec<String> {
+    render_screen_lines(view, columns, rows, capabilities, Screen::Dashboard)
+}
+
+fn render_screen_lines(
+    view: &RunView,
+    columns: u16,
+    rows: u16,
+    capabilities: TerminalCapabilities,
+    screen: Screen,
+) -> Vec<String> {
     let dashboard = DashboardFrame {
         view: view.clone(),
-        screen: Screen::Dashboard,
-        selected: IssueRef::number(0),
+        screen,
+        selected: IssueRef::number(42),
         activity_band: Default::default(),
         capabilities,
         diagnostics: Default::default(),
@@ -122,7 +132,7 @@ fn render_lines(
     let mut terminal =
         Terminal::new(TestBackend::new(columns, rows)).expect("a headless terminal is constructed");
     terminal
-        .draw(|frame| draw_dashboard(frame, &dashboard))
+        .draw(|frame| draw_frame(frame, &dashboard))
         .expect("the Dashboard draws");
     terminal
         .backend()
@@ -254,6 +264,141 @@ fn the_queue_shows_an_explicit_long_context_route_in_full() {
             .any(|line| line.contains("gpt-5-mini@medium/long_context")),
         "the explicit context tier must not be clipped out of the Route cell"
     );
+}
+
+#[test]
+fn effort_readback_agrees_in_queue_and_contribution_route_cells() {
+    let fixture: Value = serde_json::from_str(DASHBOARD_INSIGHTS).unwrap();
+    let schema: Value = serde_json::from_str(include_str!("../../conformance/event-schema.json"))
+        .expect("shared Event schema decodes");
+    let sources = schema["payload_contracts"]["wrapper.pickup.bound"]["routing_source_values"]
+        .as_array()
+        .expect("the Pickup declares its Routing source vocabulary");
+    for case in fixture["effort_readback"]["routes"].as_array().unwrap() {
+        assert!(
+            sources.contains(&case["pickup"]["routing_source"]),
+            "{}: Pickup uses the closed Routing source vocabulary",
+            case["id"]
+        );
+        for lane in [false, true] {
+            let id = &case["id"];
+            let mut state = DashboardState::new(RunInputs::new("work-model", "high"));
+            let mut pickup = case["pickup"].clone();
+            pickup["type"] = "wrapper.pickup.bound".into();
+            pickup["issue"] = 42.into();
+            pickup["iter"] = 1.into();
+            let mut activation = serde_json::json!({
+                "type": "wrapper.issue.activated", "iter": 1, "issue": 42
+            });
+            if lane {
+                activation["lane_issue"] = 42.into();
+            }
+            for event in [
+                serde_json::json!({"type": "wrapper.iteration.start", "iter": 1}),
+                pickup,
+                activation,
+                serde_json::json!({
+                    "type": "wrapper.iteration.end", "iter": 1,
+                    "outcome": "closed", "duration_seconds": 1.0,
+                    "issues": [{"issue": 42, "status": "closed"}]
+                }),
+            ] {
+                state.apply(&Event::from_json(&event).expect("fixture Event decodes"));
+            }
+            let view = project_run_view(
+                &state,
+                &ViewContext {
+                    now: Timestamp::parse_rfc3339("2026-05-16T00:00:00Z").unwrap(),
+                    now_monotonic: None,
+                    zone: Zone::from_offset_minutes(0),
+                    capabilities: TerminalCapabilities::default(),
+                },
+                &IssueRef::number(42),
+            );
+            let projected = serde_json::to_value(&view).unwrap();
+            assert_eq!(
+                projected["dashboard"]["queue"]["rows"][0]["route"], case["expected"],
+                "{id}, lane={lane}: Queue projection"
+            );
+            let contribution = &projected["drill_in"]["iteration_breakdown"]["rows"][0];
+            assert_eq!(contribution["route"], case["expected"], "{id}, lane={lane}");
+            assert_eq!(
+                contribution["kind"],
+                if lane { "lane" } else { "iteration" }
+            );
+            for screen in [Screen::Dashboard, Screen::DrillIn] {
+                let rendered =
+                    render_screen_lines(&view, 240, 44, TerminalCapabilities::default(), screen)
+                        .join("\n");
+                assert!(
+                    rendered.contains(case["text"].as_str().unwrap()),
+                    "{id}, lane={lane}, screen={screen:?}:\n{rendered}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn effort_readback_keeps_preparation_nonbinding_and_renders_its_log() {
+    let fixture: Value = serde_json::from_str(DASHBOARD_INSIGHTS).unwrap();
+    for case in fixture["effort_readback"]["preparations"]
+        .as_array()
+        .unwrap()
+    {
+        let id = &case["id"];
+        let mut event = case["fields"].clone();
+        let model = if case["state"] == "proposed" {
+            serde_json::json!("p")
+        } else {
+            Value::Null
+        };
+        for (key, value) in [
+            ("type", serde_json::json!("wrapper.routing.prepared")),
+            ("issue", serde_json::json!(42)),
+            ("state", case["state"].clone()),
+            ("model", model.clone()),
+            ("selector_model", model),
+        ] {
+            event[key] = value;
+        }
+        let mut state = DashboardState::new(RunInputs::new("work-model", "high"));
+        state.apply(&Event::from_json(&event).expect("fixture preparation decodes"));
+        let view = project_run_view(
+            &state,
+            &ViewContext {
+                now: Timestamp::parse_rfc3339("2026-05-16T00:00:00Z").unwrap(),
+                now_monotonic: None,
+                zone: Zone::from_offset_minutes(0),
+                capabilities: TerminalCapabilities::default(),
+            },
+            &IssueRef::number(42),
+        );
+        let projected = serde_json::to_value(&view).unwrap();
+        let row = &projected["dashboard"]["queue"]["rows"][0];
+        assert_eq!(row["route"], Value::Null, "{id}: preparation cannot bind");
+        for field in ["effort", "selector_effort"] {
+            assert_eq!(
+                row["preparation"].get(field),
+                case["expected_fields"].get(field),
+                "{id}: {field}"
+            );
+        }
+        let queue = render_lines(&view, 240, 44, TerminalCapabilities::default()).join("\n");
+        assert!(
+            queue.contains(case["queue_text"].as_str().unwrap()),
+            "{id}:\n{queue}"
+        );
+        let log = render_screen_lines(
+            &view,
+            240,
+            44,
+            TerminalCapabilities::default(),
+            Screen::DrillIn,
+        )
+        .join("\n");
+        assert!(log.contains(case["text"].as_str().unwrap()), "{id}:\n{log}");
+    }
 }
 
 #[test]

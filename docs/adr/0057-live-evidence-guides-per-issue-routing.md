@@ -512,7 +512,26 @@ An advertised but empty effort list supplies no runnable Dynamic configuration;
 it is not reinterpreted as an absent dial. CLI Pickup and preparation readback
 now describe a Dynamic null effort as "not configurable", preserving Static
 backend-default wording and historical records with no effort field.
-Rendered Rust Dashboard Route cells and preparation text still describe null
-effort using their legacy backend/default wording. Their raw projection retains
-null versus `none`, but the rendered wording correction remains a composed
-activation obligation; this partial delivery does not claim it.
+
+Rust Dashboard readback now distinguishes explicit Dynamic null effort (not
+configurable) from the advertised value `none` in Queue and contribution Route
+cells. Preparation preserves explicit null work and selector efforts through
+decoding, semantic projection and rendered issue Log; it remains nonbinding.
+Static omission and historical missing/empty preparation fields retain their
+earlier wording, and sparse historical Pickups do not acquire a no-dial claim.
+The shared Dashboard fixture's `effort_readback` matrix covers this display
+boundary, including serial and Lane-stamped contribution replay. It does not
+prove actual work-session settings or activate Dynamic defaults. It is integrated
+with Python's effort-matching, CLI no-dial readback and mandatory local durability;
+the routing and Dashboard matrices retain their separate behavioral seams.
+Executing-host capability authority and remaining composed activation
+obligations remain outstanding. Shell/PowerShell activation and
+Subagent/Integration routing remain deferred.
+The Event-schema declarations distinguish Dynamic/proposed null efforts from
+historical backend placeholders and from non-proposed preparation's nulls (no
+proposal). Static, reusable and unavailable preparations keep those null effort
+keys out of the Dashboard projection rather than acquiring a no-dial claim.
+Static no-dial-specific display remains indistinguishable from deliberate Static
+omission in the recorded Pickup; preserving its historical backend placeholder
+is not a claim that the model has a dial. A future display distinction needs a
+recorded capability fact, not a model-name inference.

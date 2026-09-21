@@ -86,6 +86,19 @@ Capabilities move glyphs and nothing else: a terminal that cannot render Unicode
 gets `-`, `|`, `#` and ASCII borders in place of `—`, `•`, `█` and box drawing,
 and states the identical facts.
 
+Route cells read the recorded Pickup rather than choosing settings. An explicit
+null Dynamic effort displays **not configurable**; the advertised effort `none`
+stays `none`. Static omission and historical records without an effort retain
+their backend wording.
+Static's backend placeholder does not attest dial support; the recorded Pickup
+cannot distinguish a Static no-dial model from deliberately omitting its effort.
+The prepared Route remains marked **not binding**, with
+the full work and selector effort wording in the issue Log when the Queue cell
+needs clipping. Explicit null efforts in a proposal survive in the raw projection;
+other preparation states make no effort-dial claim. Missing historical fields
+remain absent. These displays do not activate routing in the shell or PowerShell
+Orchestrators.
+
 The **Queue** is the Run's whole ledger rather than one Iteration's input, so a
 row outlives the Iteration that opened it and two Events open one for an issue
 nobody has worked yet. `wrapper.afk_ready.collected` carries the authoritative
