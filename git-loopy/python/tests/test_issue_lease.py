@@ -21,8 +21,10 @@ FIXTURE = json.loads(
 @pytest.mark.parametrize("case", FIXTURE["cases"], ids=lambda case: case["id"])
 def test_lease_record_fixture(case: dict) -> None:
     record = FIXTURE["record"] | case.get("set", {})
+    for field in case.get("remove", []):
+        record.pop(field)
     result = inspect_lease(
-        json.dumps(record),
+        case["raw"] if "raw" in case else json.dumps(record),
         now=case["now"],
         repository=FIXTURE["repository"],
         issue=FIXTURE["issue"],

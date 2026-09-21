@@ -39,4 +39,7 @@ def inspect_lease(
 ) -> LeaseInspection:
     """Inspect a fetched record without reading the clock or contacting origin."""
     record = LeaseRecord(**json.loads(raw))
-    return LeaseInspection("live", record)
+    return LeaseInspection(
+        "expired" if now - record.heartbeat_at > record.ttl_seconds else "live",
+        record,
+    )
