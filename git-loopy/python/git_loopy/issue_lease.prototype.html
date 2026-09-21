@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Throwaway Lease decision prototype</title>
+<style>
+body { font: 17px/1.5 system-ui; max-width: 850px; margin: 3rem auto; padding: 0 1rem; color: #243342; }
+h1 { line-height: 1.2; }
+button { font: inherit; padding: .5rem .8rem; margin: .25rem; cursor: pointer; }
+section { background: #f0f5f8; padding: 1rem; margin: 1rem 0; }
+dt { font-weight: bold; } dd { margin: 0 0 .5rem; }
+nav button[aria-selected="true"] { border: 2px solid #0969da; }
+</style>
+<h1>One issue, competing Runs</h1>
+<p><strong>THROWAWAY LOGIC PROTOTYPE.</strong> Can one ref snapshot decide whether a Run
+may take, renew, release or fence a Lease, without mistaking expiry for ownership?
+Time is supplied by buttons, not by a real clock. No network or persistence is used.</p>
+<p>The compare-and-swap must still succeed after a decision. A fence reads ownership
+before a write; it does not make a separate GitHub write atomic with that read.</p>
+<section><h2>Current state</h2><dl id="state"></dl></section>
+<h2>Free play</h2><div id="actions"></div>
+<h2>Guided walkthroughs</h2><nav id="tabs"></nav>
+<p id="description"></p><div id="steps"></div>
+<script id="logic">
+const initial = () => ({
+  now: 0, generation: 0, ref: null, snapshots: { A: null, B: null },
+  held: { A: null, B: null }, result: "No Run owns this issue."
+});
+function transition(current, action) {
+  const s = structuredClone(current);
+  const [verb, run] = action.split(":");
+  if (verb === "reset") return initial();
+  if (verb === "advance") {
+    s.now += Number(run);
+    s.result = `Reader clock advanced to ${s.now} seconds.`;
+    return s;
+  }
+  if (verb === "read") {
+    s.snapshots[run] = structuredClone(s.ref);
+    s.result = `Run ${run} read ${s.ref ? s.ref.sha : "an absent ref"}.`;
+    return s;
+  }
+  const snapshot = s.snapshots[run];
+  const expired = snapshot !== null && s.now - snapshot.heartbeat > 300;
+  const owns = snapshot !== null && snapshot.run === run && snapshot.sha === s.held[run];
+  const sameRef = (snapshot?.sha ?? null) === (s.ref?.sha ?? null);
+  if (verb === "fence") {
+    s.result = owns && !expired
+      ? `Run ${run}'s snapshot permits a write; the write is NOT atomic with this read.`
+      : `Run ${run} must abandon the issue without writing.`;
+    return s;
+  }
+  if (verb === "take" && snapshot && !expired) {
+    s.result = `Run ${run} skips the live Lease.`;
+    return s;
+  }
+  if ((verb === "renew" || verb === "release") && !owns) {
+    s.result = `Run ${run} cannot ${verb} a Lease it does not own.`;
+    return s;
+  }
+  if (verb === "renew" && expired) {
+    s.result = `Run ${run} lost its TTL and cannot renew.`;
+    return s;
+  }
+  if (!sameRef) {
+    s.result = `Run ${run} lost the compare-and-swap. No ref changed.`;
+    return s;
+  }
+  if (verb === "release") {
+    s.ref = null;
+    s.held[run] = null;
+    s.result = `Run ${run} released its Lease.`;
+    return s;
+  }
+  s.ref = { sha: `revision-${++s.generation}`, run, heartbeat: s.now };
+  s.held[run] = s.ref.sha;
+  s.snapshots[run] = structuredClone(s.ref);
+  s.result = `Run ${run} ${verb === "renew" ? "renewed" : expired ? "stole" : "took"} the Lease.`;
+  return s;
+}
+</script>
+<script>
+let state = initial();
+const scenarios = [
+  ["Competing Pickups", "Both Runs read absence. Only one CAS may create the ref.",
+   ["read:A", "read:B", "take:A", "take:B"]],
+  ["Strict expiry", "A Lease at exactly TTL is still live; one second later it can be stolen.",
+   ["read:A", "take:A", "advance:300", "read:B", "take:B", "advance:1", "read:B", "take:B"]],
+  ["A silent Agent", "Renewal depends on its independent clock, not Agent output.",
+   ["read:A", "take:A", "advance:60", "read:A", "renew:A", "advance:250", "read:B", "take:B"]],
+  ["A paused Run returns", "After theft, a fresh fence refuses the former owner's write and release.",
+   ["read:A", "take:A", "advance:301", "read:B", "take:B", "read:A", "fence:A", "release:A"]],
+  ["Competing steals", "Two Runs read the same expired revision. Only one steal can publish.",
+   ["read:A", "take:A", "advance:301", "read:A", "read:B", "take:B", "take:A"]]
+];
+const label = action => {
+  const [verb, run] = action.split(":");
+  if (verb === "reset") return "Reset";
+  if (verb === "advance") return `Advance ${run} seconds`;
+  return `${verb[0].toUpperCase() + verb.slice(1)} - Run ${run}`;
+};
+function button(action, container, after = () => {}) {
+  const b = document.createElement("button");
+  b.textContent = label(action);
+  b.onclick = () => { state = transition(state, action); render(); after(); };
+  container.append(b);
+}
+function render() {
+  const rows = [
+    ["Reader clock", `${state.now} seconds`],
+    ["Remote Lease", state.ref ? `Run ${state.ref.run}, ${state.ref.sha}, heartbeat ${state.ref.heartbeat}` : "Absent"],
+    ...["A", "B"].map(run => [`Run ${run}`, `Held: ${state.held[run] ?? "none"}; read: ${state.snapshots[run]?.sha ?? "absent"}`]),
+    ["Last decision", state.result]
+  ];
+  const panel = document.getElementById("state");
+  panel.replaceChildren();
+  for (const [name, value] of rows) {
+    const dt = document.createElement("dt"), dd = document.createElement("dd");
+    dt.textContent = name; dd.textContent = value; panel.append(dt, dd);
+  }
+}
+for (const action of ["reset", "advance:60", "advance:300", "advance:1",
+  ...["A", "B"].flatMap(run => ["read", "take", "renew", "fence", "release"].map(verb => `${verb}:${run}`))]) {
+  button(action, document.getElementById("actions"));
+}
+scenarios.forEach(([title, description, actions]) => {
+  const tab = document.createElement("button"); tab.textContent = title;
+  tab.onclick = () => {
+    state = initial(); render();
+    for (const sibling of document.getElementById("tabs").children) sibling.setAttribute("aria-selected", "false");
+    tab.setAttribute("aria-selected", "true");
+    document.getElementById("description").textContent = description;
+    const steps = document.getElementById("steps"); steps.replaceChildren();
+    actions.forEach(action => button(action, steps));
+  };
+  document.getElementById("tabs").append(tab);
+});
+render();
+</script>
+</html>
