@@ -6372,8 +6372,9 @@ def test_serial_pickup_rechecks_readiness_instead_of_inheriting_the_preflight(
         assert _bound_pickups(tmp_path)[0]["model"] == "claude-opus-5"
 
 
+@pytest.mark.parametrize("slow_read", ["evidence", "retained_static_listing"])
 def test_run_does_not_restart_the_routing_deadline_after_live_preflight(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, slow_read
 ) -> None:
     elapsed = 0.0
     monkeypatch.setattr(
@@ -6382,15 +6383,28 @@ def test_run_does_not_restart_the_routing_deadline_after_live_preflight(
 
     def rows():
         nonlocal elapsed
-        elapsed += 31
+        if slow_read == "evidence":
+            elapsed += 31
         return (_aa_row("aa-opus", 70.0, 90.0),)
 
+    def listing():
+        nonlocal elapsed
+        if slow_read == "retained_static_listing" and elapsed == 0:
+            elapsed = 31.0
+        return (
+            _listed_model("claude-opus-5", ["high"]),
+            _listed_model("gpt-5.6-terra", ["high"]),
+        )
+
     client, spied, code = _dynamic_run(
-        tmp_path, monkeypatch, rows=rows, routing_deadline_seconds=30
+        tmp_path, monkeypatch, rows=rows, listing=listing,
+        routing={"docs": ("gpt-5.6-terra", "high")},
+        issue_labels=["ready-for-agent", "task-type:implementation"],
+        routing_deadline_seconds=30,
     )
 
     assert code != 0
-    assert spied["evidence"] == 1
+    assert spied["evidence"] == (1 if slow_read == "evidence" else 0)
     assert spied["assessments"] == []
     assert client.create_calls == []
     assert "deadline_exhausted" in capsys.readouterr().err

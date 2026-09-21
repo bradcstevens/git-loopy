@@ -127,6 +127,26 @@ async def resolve_run_routing_preflight(
         except RoutingPrerequisiteError as exc:
             dynamic_refusal = _dynamic_prerequisite_refusal(str(exc))
 
+    ledger = None
+    if (
+        config.route_policy is RoutePolicy.DYNAMIC
+        and not config.routing_suppressed
+        and config.routing_deadline_seconds is not None
+        and config.routing_credit_allowance is not None
+        and config.selector_concurrency is not None
+    ):
+        try:
+            ledger = RoutingAdmissionLedger(
+                deadline_seconds=config.routing_deadline_seconds,
+                routing_credit_allowance=config.routing_credit_allowance,
+                selector_concurrency=config.selector_concurrency,
+            )
+        except ValueError as exc:
+            prerequisites = None
+            dynamic_refusal = _dynamic_prerequisite_refusal(
+                f"Dynamic routing needs valid limits: {exc}"
+            )
+
     async def live_capabilities() -> FreshHarnessCapabilities | None:
         if harness_evidence_fetch is not None:
             return await harness_evidence_fetch()
@@ -153,25 +173,6 @@ async def resolve_run_routing_preflight(
                 return RunRoutingPreflight(
                     refusal=f"the selected Static route was refused: {name}: {exc}"
                 )
-    ledger = None
-    if (
-        config.route_policy is RoutePolicy.DYNAMIC
-        and not config.routing_suppressed
-        and config.routing_deadline_seconds is not None
-        and config.routing_credit_allowance is not None
-        and config.selector_concurrency is not None
-    ):
-        try:
-            ledger = RoutingAdmissionLedger(
-                deadline_seconds=config.routing_deadline_seconds,
-                routing_credit_allowance=config.routing_credit_allowance,
-                selector_concurrency=config.selector_concurrency,
-            )
-        except ValueError as exc:
-            prerequisites = None
-            dynamic_refusal = _dynamic_prerequisite_refusal(
-                f"Dynamic routing needs valid limits: {exc}"
-            )
     if prerequisites is None:
         return RunRoutingPreflight(
             dynamic_refusal=dynamic_refusal, admission_ledger=ledger,
