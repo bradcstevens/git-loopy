@@ -795,7 +795,23 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "scope unless --global is given, the built-in default model / "
             "effort, and scaffolds the prompt + skills. Persists the Minimal "
             "Skill policy (only the Required Skills) without contacting the "
-            "machine's Copilot Skill inventory."
+            "machine's Copilot Skill inventory. With --routing, preserves "
+            "saved/inherited model, effort, prompt and Skill policy, and requires routing "
+            "authorization; live readiness is still checked."
+        ),
+    )
+    init.add_argument(
+        "--routing",
+        dest="routing_choice",
+        nargs="?",
+        const="ask",
+        choices=("keep", "migrate", "ask"),
+        help=(
+            "Opt in to explicit routing setup before saving: keep selects "
+            "strict Static policy; migrate makes uncovered work Dynamic. "
+            "Ask reuses a recorded choice or asks interactively. Dynamic "
+            "requires operator-owned access and explicit finite limits; "
+            "--yes supplies no routing consent or allowance."
         ),
     )
 
@@ -1284,8 +1300,8 @@ def _run_init(args: argparse.Namespace) -> int:
     """Dispatch ``git-loopy init`` to the first-run wizard.
 
     The wizard module (:mod:`git_loopy.init`) is imported lazily so the subcommand
-    parser stays SDK-free; the SDK is only touched when the wizard actually
-    fetches the live model list (never on the ``--yes`` non-interactive path).
+    parser stays SDK-free; the SDK is touched for the wizard's live model list
+    or an explicitly requested routing-readiness check (including ``--yes``).
     """
     from git_loopy import init as _init
 
@@ -1309,6 +1325,7 @@ def _run_init(args: argparse.Namespace) -> int:
         assume_yes=bool(args.assume_yes),
         repo_root=repo_root,
         env=os.environ,
+        routing_choice=args.routing_choice,
         # Labels live in a repository's tracker, so there is nothing to ensure
         # when setup is not running inside one.
         label_client=_make_label_client() if repo_root is not None else None,

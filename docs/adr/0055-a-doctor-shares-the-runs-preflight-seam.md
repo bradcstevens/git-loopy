@@ -104,6 +104,11 @@ proposal and Pickup still read again. This is partial activation work, not the
 final Dynamic default. Explicit `update --routing` now consumes this same verdict
 over the candidate saved scope before committing a keep-or-migrate choice.
 Temporary Run overrides cannot mask an invalid saved route or missing Dynamic
-authorization during that migration. Guided first setup, automatic upgrade/Run
-migration enforcement and the remaining composed activation matrix are still
-outstanding. Existing unselected-policy behavior is unchanged.
+authorization during that migration. Opt-in `init --routing` now consumes the
+same verdict after collecting operator-owned authorization and before any scope
+write. It shares missing-bound and verified-association collection with update,
+not a separate readiness implementation. Composed first-setup serial and Lane
+cases observe actual session settings and fresh refusals after setup.
+Automatic upgrade/Run migration enforcement and the remaining composed
+activation matrix are still outstanding. Existing unselected-policy behavior
+is unchanged.

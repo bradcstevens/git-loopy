@@ -6371,6 +6371,7 @@ def test_a_dynamic_route_reaches_the_serial_work_sessions_own_arguments(
     assert spied["assessments"], "the Route selector was never asked"
 
 
+@pytest.mark.parametrize("entrypoint", ["update", "init"])
 @pytest.mark.parametrize(
     ("choice", "saved_route", "expected_model", "expected_source"),
     [
@@ -6379,11 +6380,12 @@ def test_a_dynamic_route_reaches_the_serial_work_sessions_own_arguments(
         ("migrate", True, "gpt-5.6-terra", "routed"),
     ],
 )
-def test_a_migration_choice_reaches_the_serial_session_and_canonical_pickup(
-    tmp_path, monkeypatch, choice, saved_route, expected_model, expected_source
+def test_a_saved_routing_choice_reaches_the_serial_session_and_canonical_pickup(
+    tmp_path, monkeypatch, entrypoint, choice, saved_route, expected_model, expected_source
 ) -> None:
     from git_loopy import settings
     from tests.test_config_cmd import _write_measured
+    from tests.test_init_routing import _first_setup_for_run
     from tests.test_routing_migration import _listing, _update
 
     client, _ = _wire_single_issue_github(
@@ -6416,11 +6418,19 @@ def test_a_migration_choice_reaches_the_serial_session_and_canonical_pickup(
             "implementation": {"model": "gpt-5.6-terra", "effort": "high"}
         }
     path = settings.project_config_path(tmp_path)
-    settings.write_config_atomic(path, values)
     _write_measured(tmp_path, implementation=("gpt-5.6-terra", "high"))
     artifact = path.with_name("routing.measured.toml")
     measured_before = artifact.read_bytes()
-    assert _update(tmp_path, routing_choice=choice) == 0
+    if entrypoint == "update":
+        settings.write_config_atomic(path, values)
+        assert _update(tmp_path, routing_choice=choice) == 0
+    else:
+        assert not path.exists()
+        assert _first_setup_for_run(
+            tmp_path, monkeypatch, choice=choice, saved_route=saved_route
+        ) == 0
+        if not saved_route:
+            assert "routing" not in settings.load_config_table(path)
     assert client.create_calls == [] and spied["assessments"] == []
     assert artifact.read_bytes() == measured_before
 

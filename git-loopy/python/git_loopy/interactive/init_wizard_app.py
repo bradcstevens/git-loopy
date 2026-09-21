@@ -200,6 +200,7 @@ class _Review:
     routing: Mapping[str, tuple[str, str]] | None
     scaffold: bool
     skills: SkillSelectionModel
+    routing_choice: str | None = None
 
 
 def _describe_routing(routing: Mapping[str, tuple[str, str]] | None) -> str:
@@ -231,6 +232,13 @@ class _ReviewScreen(Screen["tuple[str, str] | object"]):
     def __init__(self, review: _Review) -> None:
         super().__init__()
         self._review = review
+        routing = _describe_routing(review.routing)
+        if review.routing_choice is not None:
+            if not review.routing:
+                routing = "no new Static routes (existing routes are preserved)"
+            else:
+                routing = f"new/updated Static routes: {routing}; other saved rows preserved"
+            routing = f"{review.routing_choice}; {routing}; authorization follows"
         #: Each review line as ``(step, label, value)``. ``step`` is what a
         #: ``Back`` resolves to, so the wizard routes on the step the row was
         #: drawn *for* rather than on the text that happened to be rendered.
@@ -239,7 +247,7 @@ class _ReviewScreen(Screen["tuple[str, str] | object"]):
             ("scope", "config", str(review.config_path)),
             ("model", "model", review.model),
             ("model", "effort", review.effort or "none"),
-            ("routing", "routing", _describe_routing(review.routing)),
+            ("routing", "routing", routing),
             (
                 "scaffold",
                 "scaffold",
@@ -249,7 +257,11 @@ class _ReviewScreen(Screen["tuple[str, str] | object"]):
         )
 
     def compose(self) -> ComposeResult:
-        yield Static("Review setup — nothing is written until you save")
+        yield Static(
+            "Review setup — routing authorization follows; nothing is written yet"
+            if self._review.routing_choice is not None
+            else "Review setup — nothing is written until you save"
+        )
         yield DataTable(id=_REVIEW, cursor_type="row", zebra_stripes=True)
         yield Static("", id=_STATUS)
         yield Button("Save", id="wizard-save", variant="success")
@@ -314,6 +326,7 @@ class InitWizardApp(App["InitAnswers | None"]):
             Callable[[bool, str, tuple[str, ...]], SkillSelectionModel] | None
         ) = None,
         scope_locked: bool = False,
+        routing_choice: str | None = None,
     ) -> None:
         super().__init__()
         self._scope_options = tuple(scope_options)
@@ -324,6 +337,7 @@ class InitWizardApp(App["InitAnswers | None"]):
         self._build_skill_selection = build_skill_selection
         self._rebuild_skill_selection = rebuild_skill_selection
         self._scope_locked = scope_locked
+        self._routing_choice = routing_choice
         self._scope = self._scope_options[0]
         self._selection = self._initial_selection()
         self._routing: dict[str, tuple[str, str]] | None = None
@@ -425,10 +439,19 @@ class InitWizardApp(App["InitAnswers | None"]):
         default = 0 if self._routing == recommended else 1 if self._routing is None else 2
         self.push_screen(
             _ChoiceScreen(
-                "Configure per-task-type routing?",
+                (
+                    "Configure explicit Static routes? They override Dynamic choices."
+                    if self._routing_choice is not None
+                    else "Configure per-task-type routing?"
+                ),
                 (
                     ("recommended", "Use all recommended task-type routes"),
-                    ("disabled", "Do not configure routing"),
+                    (
+                        "disabled",
+                        "No new Static routes (preserve existing)"
+                        if self._routing_choice is not None
+                        else "Do not configure routing",
+                    ),
                     ("custom", "Configure each task type"),
                 ),
                 default=default,
@@ -445,7 +468,12 @@ class InitWizardApp(App["InitAnswers | None"]):
                 f"task-type:{key} ({model} @ {effort}):",
                 (
                     ("keep", "Keep recommended"),
-                    ("skip", "Do not configure this task type"),
+                    (
+                        "skip",
+                        "Keep any saved route; add no new row"
+                        if self._routing_choice is not None
+                        else "Do not configure this task type",
+                    ),
                     ("override", "Choose another model and effort"),
                 ),
                 default=default,
@@ -591,6 +619,7 @@ class InitWizardApp(App["InitAnswers | None"]):
                     routing=self._routing,
                     scaffold=self._scaffold,
                     skills=self._skills,
+                    routing_choice=self._routing_choice,
                 )
             ),
             self._on_review,
@@ -632,7 +661,10 @@ class InitWizardApp(App["InitAnswers | None"]):
             self._routing = None
             self._show_scaffold()
         else:
-            self._routing = dict(RECOMMENDED_ROUTING)
+            if self._routing_choice is None:
+                self._routing = dict(RECOMMENDED_ROUTING)
+            elif self._routing is None:
+                self._routing = {}
             self._route_index = 0
             self._show_route_action()
 
@@ -742,6 +774,7 @@ def run_textual_init_wizard(
     rebuild_skill_selection: SkillSelectionRebuilder,
     skill_selection_model: Callable[[bool, str], SkillSelectionModel],
     scope_locked: bool = False,
+    routing_choice: str | None = None,
 ) -> InitAnswers | None:
     """Run the fullscreen setup wizard and return its answer set."""
 
@@ -761,6 +794,7 @@ def run_textual_init_wizard(
         build_skill_selection=skill_selection_model,
         rebuild_skill_selection=rebuild,
         scope_locked=scope_locked,
+        routing_choice=routing_choice,
     )
     app.run()
     return app.outcome()

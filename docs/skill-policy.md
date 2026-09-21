@@ -458,10 +458,13 @@ proposal and Pickup must check fresh inputs again. A failed Dynamic-readiness ro
 makes doctor nonzero while eligible Static work can still proceed in a Run;
 configuration refusals still stop that Run. The deadline starts at preflight and
 is not reset when the Run constructs its router. The explicit
-`git-loopy update --routing [keep|migrate]` path now calls this same readiness seam
-before writing a migration choice. It preserves authored Static routes and requires
-operator-owned Dynamic access and finite limits; doctor never makes that choice.
-This remains partial #567 work: guided first setup, automatic upgrade/Run migration
+`git-loopy update --routing [keep|migrate]` and `init --routing [keep|migrate]` paths
+call this same readiness seam before saving. Opt-in init collects missing limits
+and explicitly authored associations after the fullscreen review; refusal or
+cancellation saves neither a Skill policy nor any other operator choice.
+They preserve Static route authority and require operator-owned Dynamic access
+and finite limits; doctor never makes that choice.
+This remains partial #567 work: automatic upgrade/Run migration
 enforcement, the remaining composed activation matrix, and final defaults are not
 delivered. Bare update and unselected-policy Runs retain their existing behavior.
 

@@ -211,9 +211,19 @@ pin. Its artifact is preserved; legacy/unselected and Static policies retain the
 Measured routing tier. Config readback reports uncovered Dynamic work as pending
 Pickup rather than inventing a final pair.
 
-The saved migration choices are composed through actual serial and Lane sessions
-and canonical Pickup records, including fresh source outages after migration.
-Guided first setup, automatic upgrade/Run migration enforcement, the remaining
+Opt-in `init --routing` now shares that authorization and readiness seam before
+saving any operator choices. Its fullscreen review hands off to explicit
+terminal authorization questions; missing limits have no defaults and missing
+associations must be authored, not inferred. No Static rows are seeded by
+default; the recommended Static recipe remains an explicit option. Unattended
+routing setup preserves saved/inherited model, effort, prompt and Skill policy and never treats
+`--yes` as consent. Cancellation, readiness failure or detected edits to its
+inputs abort before scope writes. The operator-owned key stays outside Config.
+
+The saved first-setup and migration choices are composed through actual serial
+and Lane sessions and canonical Pickup records, including fresh source outages
+after setup. Bare init and auto-setup retain their existing behavior.
+Automatic upgrade/Run migration enforcement, the remaining
 composed acceptance and Wrapper/Conformance obligations still precede final default
 activation. Dynamic routing remains opt-in; shell/PowerShell activation is deferred,
 and no Subagent or Integration routing support is implied.

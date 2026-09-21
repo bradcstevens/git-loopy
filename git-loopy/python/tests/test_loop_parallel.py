@@ -8116,6 +8116,7 @@ def test_a_dynamic_route_reaches_each_lanes_own_work_session(
     assert len(spied["assessments"]) == 2
 
 
+@pytest.mark.parametrize("entrypoint", ["update", "init"])
 @pytest.mark.parametrize(
     ("choice", "saved_route", "outage", "expected_model", "expected_source"),
     [
@@ -8126,13 +8127,15 @@ def test_a_dynamic_route_reaches_each_lanes_own_work_session(
         ("migrate", True, True, "gpt-5.6-terra", "routed"),
     ],
 )
-def test_a_saved_migration_choice_reaches_lanes_only_after_fresh_readiness(
-    tmp_path, monkeypatch, choice, saved_route, outage, expected_model, expected_source
+def test_a_saved_routing_choice_reaches_lanes_only_after_fresh_readiness(
+    tmp_path, monkeypatch, entrypoint, choice, saved_route, outage,
+    expected_model, expected_source
 ) -> None:
     import os
 
     from git_loopy import cli, settings
     from tests.test_config_cmd import _write_measured
+    from tests.test_init_routing import _first_setup_for_run
     from tests.test_routing_migration import _authorized_values, _listing, _update
 
     fake_git = _wire_repo(tmp_path)
@@ -8167,9 +8170,17 @@ def test_a_saved_migration_choice_reaches_lanes_only_after_fresh_readiness(
             "implementation": {"model": "gpt-5.6-terra", "effort": "high"}
         }
     path = settings.project_config_path(tmp_path)
-    settings.write_config_atomic(path, values)
     _write_measured(tmp_path, implementation=("gpt-5.6-terra", "high"))
-    assert _update(tmp_path, routing_choice=choice) == 0
+    if entrypoint == "update":
+        settings.write_config_atomic(path, values)
+        assert _update(tmp_path, routing_choice=choice) == 0
+    else:
+        assert not path.exists()
+        assert _first_setup_for_run(
+            tmp_path, monkeypatch, choice=choice, saved_route=saved_route
+        ) == 0
+        if not saved_route:
+            assert "routing" not in settings.load_config_table(path)
     assert client.create_calls == [] and spied["assessments"] == []
     saved = path.read_bytes()
     if outage:

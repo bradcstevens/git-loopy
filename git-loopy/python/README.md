@@ -391,8 +391,12 @@ effort/tier correction. Legacy pairs retain their inherited run-level tier, and
 only an explicitly configured `[escalation]` authorizes Static escalation.
 
 Migration needs your own `GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY` outside Config
-and an already verified `[route_associations]` table; no key or model association
-is invented. It collects missing `routing_deadline_seconds`,
+and an explicitly authored, verified `[route_associations]` table; no key or
+model association is invented. When no associations are configured or inherited,
+the interactive path asks for a TOML inline table matching exact benchmark
+identities to the Copilot configurations they scored, not similar display names.
+Unattended use must already have that table in Config.
+It collects missing `routing_deadline_seconds`,
 `routing_credit_allowance`, and `selector_concurrency` on an interactive terminal,
 with **no defaults**. Existing scope/inherited values may supply them; inherited
 values remain inherited rather than being copied into the project.
@@ -556,7 +560,7 @@ The wizard:
 - **Asks the scope first** — **global** (this machine) or **project** (this
   repo). `--global` / `--project` skip the question; outside a git repository
   only **global** is available.
-- **Always writes `config.toml`** to that scope with your chosen `model` /
+- **Writes `config.toml` on successful setup** to that scope with your chosen `model` /
   `reasoning_effort`, seeded from the same live model list the `--select-model`
   picker uses.
 - **Uses one continuous keyboard wizard** for scope, model, effort, routing,
@@ -606,6 +610,49 @@ The wizard:
   tracker label was written. The prerequisite Skill catalog install is
   machine-wide and remains at ~/.config/git-loopy/skills (revision 4f1c2a9e8b03).
   ```
+
+### Explicit routing setup (opt-in)
+
+`git-loopy init --routing [keep|migrate|ask]` composes first setup with the same
+authorization and live routing-readiness verdict as `update --routing`, doctor,
+and a Run. **This is not final default activation:** bare init and auto-setup
+retain their existing behavior.
+
+Choose `migrate` for Dynamic uncovered work or `keep` for strict Static policy.
+Omit the argument (or use `ask`) to inherit a recorded choice or decide at the
+terminal with no default. The fullscreen wizard still collects scope, model,
+optional Static routes, prompt and Skills; its review discloses that terminal
+routing authorization follows before anything is saved. The default routing
+answer adds **no Static rows**. Recommended Static values remain an explicit
+choice, and authored routes still outrank Dynamic work.
+The custom walk adds or replaces only the rows you explicitly choose. Skipped
+and unvisited task types preserve saved rows and acquire no recommended seed;
+remove an unwanted saved row with `config routing unset`, not by skipping it.
+
+Supply your own `GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY` in the environment before
+Dynamic setup. Setup never requests a key in an echoed prompt or saves one.
+Missing deadline, per-Run credit allowance and selector concurrency are collected
+with no invented values. Missing associations are authored as a TOML inline
+table, for example `{"<AA id>" = "<Copilot model>@<scored effort>"}`; verify the
+identity/revision/effort correspondence yourself. A model without an effort dial
+uses its bare identifier. Current scores and authenticated harness eligibility
+must then agree. No selector, classifier or Calibration session is started.
+
+`--yes` never prompts and is **not** routing consent: supply `keep`/`migrate` or
+inherit an explicit recorded choice, plus the required authorization for Dynamic
+work. Saved/inherited model, effort, prompt and Skill policy remain untouched
+on this path; absent model/effort resolve normally, and only unconfigured prompt
+and Skill policy are scaffolded. Inherited limits and associations are not
+copied, while explicitly supplied environment bounds are saved. Keep needs no
+leaderboard credential or routing allowance.
+
+Cancellation, invalid authorization or failed readiness saves no Config, prompt,
+Skill policy, scaffold provenance or tracker labels. Edits detected during the
+live read to the chosen Config, inherited global Config, prompt or Measured
+routing artifact abort rather than being overwritten or approved against stale
+inputs. The prerequisite machine-wide Skill catalog may remain, as described
+above. After successful setup, later Run failures leave those saved choices
+intact; proposal and Pickup must validate fresh inputs, not trust setup readiness.
 
 ### Tracker labels the wizard ensures
 
@@ -1172,10 +1219,11 @@ Run from reaching eligible Static work or recovering on a later fresh check.
 Configuration refusals still stop the Run. The Run carries its deadline ledger
 from preflight into routing; it does not grant a new budget after live reads.
 
-**Activation status (#567): incomplete.** `update --routing` now offers explicit
-keep-or-migrate authorization and this shared readiness verdict, with saved-choice
-serial/Lane cases observing actual session settings and canonical records.
-Guided first setup, automatic upgrade/Run migration enforcement, the remaining
+**Activation status (#567): incomplete.** `init --routing` and `update --routing`
+now offer explicit keep-or-migrate authorization and this shared readiness
+verdict. Composed first-setup and saved-migration serial/Lane cases observe actual
+session settings and canonical records, including fresh outages after setup.
+Automatic upgrade/Run migration enforcement, the remaining
 composed activation matrix, and Wrapper/Conformance obligations still need to
 land before the final default changes. Existing Config is not migrated implicitly.
 Python issue-owning serial and

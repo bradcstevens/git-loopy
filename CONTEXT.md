@@ -736,6 +736,12 @@ later Run precondition refuses stays saved while the Run exits non-zero naming t
 blocker. Cancelling saves no Config, prompt, **Skill policy** or tracker label — a
 narrower claim than "writes nothing", because the catalog install is a machine-wide
 prerequisite that precedes the first question (ADR-0058).
+Opt-in `init --routing` adds explicit keep-or-migrate authorization and the
+shared Run/doctor routing-readiness verdict before saving. Missing bounds and
+verified associations are collected without defaults; the credential stays in
+the operator's environment. New Static rows are optional, not automatic seeds.
+The review discloses this authorization step, and cancelling it abandons every
+operator choice. Bare init and auto-setup do not yet activate Dynamic defaults.
 _Avoid_: setup, bootstrap; install (install is the separate act of putting the `git-loopy` command
 on PATH).
 

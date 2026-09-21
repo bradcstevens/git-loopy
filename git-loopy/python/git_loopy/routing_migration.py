@@ -1,9 +1,10 @@
-"""Collect an explicit Route policy choice before update writes any Config."""
+"""Collect routing authority for init and update before either writes Config."""
 
 from __future__ import annotations
 
 import asyncio
-from typing import Callable, Mapping
+import tomllib
+from typing import Callable, Literal, Mapping
 
 from . import settings
 from .config import TaskTypeError, task_type_refusal
@@ -23,9 +24,9 @@ def _answer(input_fn: Callable[[str], str], prompt: str) -> str:
     try:
         answer = input_fn(prompt).strip()
     except (EOFError, KeyboardInterrupt):
-        raise settings.SettingsError("Routing migration cancelled; Config unchanged.") from None
+        raise settings.SettingsError("Routing configuration cancelled; Config unchanged.") from None
     if answer.lower() in {"", "q", "quit", "cancel"}:
-        raise settings.SettingsError("Routing migration cancelled; Config unchanged.")
+        raise settings.SettingsError("Routing configuration cancelled; Config unchanged.")
     return answer
 
 
@@ -40,6 +41,7 @@ def prepare_migration(
     output_fn: Callable[[str], None],
     input_fn: Callable[[str], str] | None = None,
     dry_run: bool = False,
+    command: Literal["init", "update"] = "update",
 ) -> dict[str, object]:
     """Collect and verify a choice, or describe an offline dry-run candidate."""
     from .cli import build_parser, resolve_config
@@ -79,9 +81,9 @@ def prepare_migration(
             choice = _answer(input_fn, "Routing choice (keep/migrate; no default): ")
     if choice not in _POLICIES:
         raise settings.SettingsError(
-            "Routing migration needs an explicit keep-or-migrate decision. "
-            "Run `git-loopy update --routing keep` or "
-            "`git-loopy update --routing migrate` in the chosen scope "
+            "Routing configuration needs an explicit keep-or-migrate decision. "
+            f"Run `git-loopy {command} --routing keep` or "
+            f"`git-loopy {command} --routing migrate` in the chosen scope "
             "(--project or --global); Config unchanged."
         )
     candidate = dict(table)
@@ -92,8 +94,10 @@ def prepare_migration(
             f"Dynamic access must be operator-owned, supplied via "
             f"{ARTIFICIAL_ANALYSIS_API_KEY_ENV} outside Config "
             "(https://artificialanalysis.ai/api-reference). "
-            "Verified [route_associations] must already be configured; names "
-            "are not inferred. No Calibration is started."
+            "Verified [route_associations] must be authored explicitly; names "
+            "are not inferred. Match the exact model revision and the effort "
+            "that earned the score, not a similar display name. "
+            "No Calibration is started."
         )
         output_fn(
             "Authorize finite assessment time, per-Run routing AI Credits "
@@ -114,7 +118,7 @@ def prepare_migration(
             if raw is None:
                 raise settings.SettingsError(
                     f"Supply {key} in Config or {env_name}, or use "
-                    "`git-loopy update --routing migrate` on an interactive "
+                    f"`git-loopy {command} --routing migrate` on an interactive "
                     "terminal. No allowance is invented; Config unchanged."
                 )
             try:
@@ -125,6 +129,30 @@ def prepare_migration(
                 candidate[key] = value
             verb = "Would use" if dry_run else "Authorized"
             output_fn(f"{verb} {key} = {value}.")
+        if (
+            not candidate.get("route_associations")
+            and not inherited.get("route_associations")
+            and input_fn is not None
+            and not dry_run
+        ):
+            raw = _answer(
+                input_fn,
+                "Verified route_associations (TOML inline table: "
+                '{"<AA id>" = "<Copilot model>@<scored effort>"}; '
+                "bare model for no effort dial; no inferred matches): ",
+            )
+            try:
+                authored = tomllib.loads(f"route_associations = {raw}")
+            except tomllib.TOMLDecodeError:
+                raise settings.SettingsError(
+                    "route_associations must be a TOML inline table of verified "
+                    "identities; Config unchanged."
+                ) from None
+            if set(authored) != {"route_associations"}:
+                raise settings.SettingsError(
+                    "Supply only the route_associations inline table; Config unchanged."
+                )
+            candidate["route_associations"] = authored["route_associations"]
     try:
         config = resolve_config(
             build_parser().parse_args([]),

@@ -35,6 +35,13 @@ Design (mirrors :mod:`git_loopy.settings` being the pure I/O half):
   :func:`git_loopy.interactive.models.to_model_choices` (stdlib + config only, no
   Textual), rendered by the setup wizard.
 
+Opt-in ``--routing`` also collects routing authorization and checks the shared
+Run/doctor readiness verdict before any scope write. Its ``--yes`` path never
+prompts or invents authorization, but does read live model data when authorized.
+Routing's operator-owned credential stays outside Config. The fullscreen review
+discloses the subsequent terminal authorization questions; cancellation there
+abandons the entire candidate, not just its Route policy.
+
 The Skill policy is collected through :func:`git_loopy.skillscmd.collect_skill_policy`,
 the same seam ``git-loopy skills edit`` uses, so both commands share one Skill
 baseline seeding rule, one picker, and one set of Required-Skill and
@@ -494,6 +501,7 @@ def run_init(
     required_skills: Sequence[str] | None = None,
     label_client: Any = None,
     writer: Callable[[Path, Mapping[str, object]], None] = settings.write_config_atomic,
+    routing_choice: str | None = None,
 ) -> int:
     """Run the first-run setup wizard; write Config (and optional assets) and exit.
 
@@ -576,7 +584,16 @@ def run_init(
             model = default_model
             effort = _gate_default_effort(default_model, default_effort)  # type: ignore[arg-type]
             routing = None
-            scaffold = True
+            scaffold = not (
+                routing_choice is not None
+                and (
+                    targets.prompt_path.exists()
+                    or (
+                        resolved_scope == "project"
+                        and settings.global_prompt_path(env).exists()
+                    )
+                )
+            )
             # The Minimal Skill policy: exactly the Required Skills, and never a
             # machine-specific Copilot import (ADR-0015). No client is built.
             enabled_skills = tuple(
@@ -690,6 +707,7 @@ def run_init(
                         for option in scope_options
                     },
                     "skill_selection_model": build_skill_selection_model,
+                    "routing_choice": routing_choice,
                 },
             )
             answers = wizard_runner(
@@ -752,7 +770,34 @@ def run_init(
 
     # Loading an existing Config can fail; do it before invalidating provenance
     # so that a failed re-init leaves a valid record untouched.
-    values: dict[str, object] = dict(settings.load_config_table(targets.config_path))
+    from git_loopy.measured_routing import (
+        MEASURED_ROUTING_FILENAME,
+        load_measured_routing,
+    )
+
+    try:
+        watched_paths = {targets.config_path, targets.prompt_path}
+        if resolved_scope == "project":
+            watched_paths.update((
+                settings.global_config_path(env),
+                settings.global_prompt_path(env),
+                targets.config_path.with_name(MEASURED_ROUTING_FILENAME),
+            ))
+        originals = (
+            {path: path.read_bytes() if path.exists() else None for path in watched_paths}
+            if routing_choice is not None else {}
+        )
+        values: dict[str, object] = dict(settings.load_config_table(targets.config_path))
+        inherited = (
+            settings.load_config_table(settings.global_config_path(env))
+            if routing_choice is not None and resolved_scope == "project"
+            else {}
+        )
+    except (OSError, settings.SettingsError) as exc:
+        if routing_choice is None:
+            raise
+        warn(abandoned(str(exc)))
+        return 1
 
     try:
         release_version = read_runtime_release_version()
@@ -761,23 +806,68 @@ def run_init(
         warn(abandoned(f"cannot record scaffold provenance: {exc}"))
         return 1
 
-    # Commit phase — every decision is in hand, so nothing above wrote anything.
+    # Build the candidate before routing authorization or any scope write.
     # The wizard owns only the keys it collected: everything else in an existing
     # Config at this scope (including a routing table the operator declined to
     # revisit) survives the write untouched.
-    values["model"] = model
-    if effort is not None:
-        values["reasoning_effort"] = effort
-    else:
-        # The wizard owns this key: a model with no reasoning must not inherit
-        # the previous model's effort just because the merge preserved it.
-        values.pop("reasoning_effort", None)
+    if not (assume_yes and routing_choice is not None):
+        values["model"] = model
+        if effort is not None:
+            values["reasoning_effort"] = effort
+        else:
+            # The wizard owns this key: a model with no reasoning must not inherit
+            # the previous model's effort just because the merge preserved it.
+            values.pop("reasoning_effort", None)
     if routing is not None:
-        values["routing"] = {
+        new_routes = {
             key: {"model": route_model, "effort": route_effort}
             for key, (route_model, route_effort) in routing.items()
         }
-    values["enabled_skills"] = list(enabled_skills)
+        if routing_choice is not None:
+            saved_routes = values.get("routing", {})
+            if not isinstance(saved_routes, Mapping):
+                warn(abandoned("routing must be a Config table"))
+                return 1
+            values["routing"] = {**saved_routes, **new_routes}
+        else:
+            values["routing"] = new_routes
+    if not (
+        assume_yes and routing_choice is not None
+        and ("enabled_skills" in values or "enabled_skills" in inherited)
+    ):
+        values["enabled_skills"] = list(enabled_skills)
+
+    if routing_choice is not None:
+        from git_loopy.routing_migration import prepare_migration
+
+        try:
+            values = prepare_migration(
+                routing_choice,
+                scope=resolved_scope,
+                table=values,
+                inherited=inherited,
+                measured=(
+                    load_measured_routing(
+                        targets.config_path.with_name(MEASURED_ROUTING_FILENAME)
+                    ).routing
+                    if resolved_scope == "project"
+                    else {}
+                ),
+                env=env,
+                output_fn=output_fn,
+                input_fn=None if assume_yes else input_fn,
+                command="init",
+            )
+            for path, original in originals.items():
+                current = path.read_bytes() if path.exists() else None
+                if current != original:
+                    raise settings.SettingsError(
+                        f"{path} changed during routing setup; the newer content "
+                        "was not overwritten. Re-run init with your routing choice."
+                    )
+        except (OSError, settings.SettingsError) as exc:
+            warn(abandoned(str(exc)))
+            return 1
 
     if previous_provenance is not None:
         try:
