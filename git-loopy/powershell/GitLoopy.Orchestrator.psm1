@@ -1141,6 +1141,44 @@ function Test-GitLoopyLeaseWholeNumber {
     )
 }
 
+function Get-GitLoopyRepositoryFromRemoteUrl {
+    # Pure identity only; native Lease transport and activation remain staged.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Url)
+
+    $Candidate = $Url.Trim()
+    if ($Candidate.Contains("://")) {
+        $Candidate = $Candidate -replace "[`t`r`n]", ""
+        if ($Candidate -cnotmatch '\A(?<scheme>[A-Za-z][A-Za-z0-9+.-]*)://(?<authority>[^/?#]*)(?<path>[^?#]*)') {
+            return $null
+        }
+        if ($Matches.scheme.ToLowerInvariant() -cnotin @("ssh", "git", "http", "https", "git+ssh")) {
+            return $null
+        }
+        if ($Matches.authority.Split("@")[-1].Split(":")[0] -ceq "") {
+            return $null
+        }
+        # Keep the raw path: System.Uri would normalize dot segments or escapes,
+        # changing the repository that the reference Orchestrator contends on.
+        $Path = $Matches.path
+    } else {
+        if ($Candidate -cnotmatch '\A(?:[^/@]+@)?[^/:]{2,}:(?<path>[^/].*)\z') {
+            return $null
+        }
+        $Path = $Matches.path
+    }
+
+    $Segments = $Path.Trim("/").Split("/")
+    if ($Segments.Count -ne 2) { return $null }
+    $Owner = $Segments[0]
+    $Repository = $Segments[1] -creplace '\.[gG][iI][tT]\z', ''
+    if ($Owner -cnotmatch '\A[A-Za-z0-9_.-]+\z' -or
+        $Repository -cnotmatch '\A[A-Za-z0-9_.-]+\z') {
+        return $null
+    }
+    return "$Owner/$Repository"
+}
+
 # ADR-0033: this pure seam is staged ahead of transport, Pickup and fencing.
 # Null means no ref; the eventual transport must propagate unreadable fetches.
 function Get-GitLoopyLeaseInspection {
@@ -4942,6 +4980,7 @@ Export-ModuleMember -Function @(
     "Assert-GitLoopyReadinessCapability",
     "Get-GitLoopyReadiness",
     "Get-GitLoopyCandidateReadiness",
+    "Get-GitLoopyRepositoryFromRemoteUrl",
     "Get-GitLoopyLeaseInspection",
     "Get-GitLoopyLeaseActionDecision",
     "Get-GitLoopyPriorityLabel",
