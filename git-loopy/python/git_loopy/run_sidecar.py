@@ -104,6 +104,9 @@ def _config_to_payload(config: RunConfig) -> dict[str, Any]:
         ),
         "selector_concurrency": config.selector_concurrency,
         "route_associations": dict(sorted(config.route_associations.items())),
+        "swe_bench_associations": dict(
+            sorted(config.swe_bench_associations.items())
+        ),
         "routing_suppressed": config.routing_suppressed,
         "skill_policy": {
             "project": _skill_input_to_payload(config.skill_policy.project),
@@ -168,6 +171,10 @@ def _config_from_payload(payload: dict[str, Any]) -> RunConfig:
         route_associations={
             str(key): str(value)
             for key, value in dict(payload.get("route_associations", {})).items()
+        },
+        swe_bench_associations={
+            str(key): str(value)
+            for key, value in dict(payload.get("swe_bench_associations", {})).items()
         },
         routing_suppressed=bool(payload.get("routing_suppressed", False)),
         skill_policy=SkillPolicyInputs(

@@ -1865,6 +1865,19 @@ its provenance record by
 [`event-schema.json`](../git-loopy/conformance/event-schema.json)'s `wrapper.routing.resolved`
 contract and the rolling stream that carries one.
 
+Python additionally accepts explicitly associated official SWE-bench Verified
+results as optional supporting evidence for the work-model assessment, never
+as an alternative Route-selector election score. This staged adapter admits
+same-harness-release rows, preserves source/mapping/condition provenance in the
+existing canonical explanation, and reports unavailable or incomparable reads
+without substituting stale optional results. Content or availability changes
+participate in fresh proposal/Pickup and cross-Run validation; retrieval time
+alone is not a changed decision input. No optional mapping means no optional
+source request and no change to historical reusable-input identities. This
+recovery has Python serial/Lane coverage; it adds no shared fixture claim,
+Event field, native-member activation, non-local capability authority, or final
+Dynamic default.
+
 The same routing fixture's `retry_lifecycle` matrix exercises these existing
 rules after Python's explicit saved migration, through the real CLI into serial
 work and a Lane followed by a serial retry. It observes actual session settings,

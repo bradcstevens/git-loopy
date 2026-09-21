@@ -450,6 +450,21 @@ obligations still precede final default
 activation. Dynamic routing remains opt-in; shell/PowerShell activation is
 deferred, and no Subagent or Integration routing support is implied.
 
+The preserved #564 checkpoint had not reached main despite that issue's closure:
+its attempted Lane Integration failed. The #567 reconciliation restores its
+opt-in SWE-bench supporting-source adapter alongside current retry history,
+context-only work-tier authority, shared in-flight source reads and immediate
+Consumption accounting. Artificial Analysis still elects the Route selector.
+Recorded migration now reaches actual serial and Lane work with optional
+evidence, then freshly reuses or reassesses after unchanged reads, changed
+scores, source outage and incompatible rows. Reconciliation exposed retrieval
+timestamps invalidating unchanged evidence; only content and availability enter
+that comparison. Unconfigured support preserves historical input identities.
+Invalid percentages and contradictory published effort are excluded; source,
+mapping and conditions remain in the existing canonical explanation. Tracker
+publication keeps its issue-safe boundary. This recovery is not final Dynamic
+activation, remote capability authority, or ADR-0060 implementation.
+
 The shared `publication_recovery` matrix now carries recorded init/update
 authorization through repeated real CLI Runs in serial and Lane modes. Eight cases
 cover fresh reuse, permission/rate-limit/transient failures, partial delivery,

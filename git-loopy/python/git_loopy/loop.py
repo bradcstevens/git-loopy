@@ -166,6 +166,7 @@ from git_loopy.dynamic_route import (
     DynamicRoutePrerequisites,
     DynamicRouter,
     ReusableRoute,
+    FreshEvidence,
     RoutingAdmissionLedger,
     RoutingCallCancelled,
     RoutingProposal,
@@ -174,7 +175,11 @@ from git_loopy.dynamic_route import (
     RoutingUnavailableReason,
     SelectorCallResult,
     refresh_harness_evidence as _fetch_harness_evidence,
+    SupportingEvidence,
+    SupportingEvidenceSource,
+    SupportingEvidenceStatus,
 )
+from git_loopy.swe_bench import SWEbenchSourceError, SWEbenchVerifiedSource
 from git_loopy.emit import EventEmitter
 from git_loopy.live_read import SharedLiveRead
 from git_loopy.gate import FeedbackLoop, parse_feedback_loops
@@ -1082,8 +1087,68 @@ def _make_dynamic_router(
     source = ArtificialAnalysisSource(
         prerequisites.api_key, associations=prerequisites.associations
     )
+
+    async def evidence_fetch() -> FreshEvidence:
+        """Combine required AA and optional official SWE-bench reads."""
+        artificial_analysis = await source.fetch()
+        if not prerequisites.swe_bench_associations:
+            return FreshEvidence(
+                source_identity=artificial_analysis.source_identity,
+                retrieved_at=artificial_analysis.retrieved_at,
+                records=artificial_analysis.evidence,
+            )
+        try:
+            supporting = await SWEbenchVerifiedSource(
+                associations=prerequisites.swe_bench_associations or {}
+            ).fetch()
+        except SWEbenchSourceError:
+            return FreshEvidence(
+                source_identity=artificial_analysis.source_identity,
+                retrieved_at=artificial_analysis.retrieved_at,
+                records=artificial_analysis.evidence,
+                supporting_sources=(
+                    SupportingEvidenceSource(
+                        source_identity="https://www.swebench.com/",
+                        status=SupportingEvidenceStatus.SOURCE_UNAVAILABLE,
+                        retrieved_at=None,
+                    ),
+                ),
+            )
+        status = (
+            SupportingEvidenceStatus.AVAILABLE
+            if supporting.available
+            else SupportingEvidenceStatus.MISSING_COMPARABLE_ROWS
+        )
+        return FreshEvidence(
+            source_identity=artificial_analysis.source_identity,
+            retrieved_at=artificial_analysis.retrieved_at,
+            records=artificial_analysis.evidence,
+            supporting_sources=(
+                SupportingEvidenceSource(
+                    source_identity=supporting.source_identity,
+                    status=status,
+                    retrieved_at=supporting.retrieved_at,
+                ),
+            ),
+            supporting_records=tuple(
+                SupportingEvidence(
+                    source_identity=record.source_identity,
+                    source_model_identity=record.source_model_identity,
+                    associated_copilot_model=record.associated_copilot_model,
+                    associated_copilot_effort=record.associated_copilot_effort,
+                    association_provenance=record.association_provenance,
+                    score=record.resolved,
+                    benchmark_version=record.benchmark_version,
+                    harness=record.harness,
+                    harness_version=record.harness_version,
+                    conditions=record.conditions,
+                )
+                for record in supporting.records
+            ),
+        )
+
     return DynamicRouter(
-        evidence_fetch=SharedLiveRead(source.fetch),
+        evidence_fetch=SharedLiveRead(evidence_fetch),
         capabilities_fetch=SharedLiveRead(
             lambda: _fetch_harness_evidence(warn=warn)
         ),
