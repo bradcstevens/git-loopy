@@ -174,8 +174,10 @@ def _label_vocabulary_check(
     Two narrowings, both so this row judges only what a Run actually needs
     (ADR-0055). It asks
     :func:`~git_loopy.labels.read_run_required_vocabulary` rather than the whole
-    vocabulary, because the ``task-type:`` and ``semver:`` taxonomies are created
-    on the way in. And it fails on absence alone: a Run reads and writes Labels
+    vocabulary — that function's docstring carries the reasons, which are not
+    one reason: the ``task-type:`` and ``semver:`` taxonomies are created on the
+    way in, while the ``wayfinder:`` labels are never read by a Run at all. And
+    it fails on absence alone: a Run reads and writes Labels
     by name, so a drifted colour or description cannot stop one, and drift stays
     `git-loopy labels`' business.
 

@@ -44,9 +44,13 @@ dependencies enabled, so both use the canonical representation — never a body 
     -F issue_id="$blocker"
   ```
 - **Frontier query**: the map's open children that are unblocked and unclaimed, first in
-  map order. `gh api repos/{owner}/{repo}/issues/<map-number>/sub_issues` lists the
-  children; drop any that are closed, carry an assignee, or report
+  map order. `gh api --paginate repos/{owner}/{repo}/issues/<map-number>/sub_issues` lists
+  the children; drop any that are closed, carry an assignee, or report
   `issue_dependencies_summary.blocked_by > 0` (open blockers only — the live gate).
+  `--paginate` is not optional: the endpoint defaults to 30 per page, and a map big
+  enough to need one is exactly the map that overflows it. Without the flag the frontier
+  silently stops at the 30th child and the map reads as finished while tickets sit
+  unqueried.
 - **Claim**: `gh issue edit <n> --add-assignee @me`, before any work. That assignee *is*
   the claim, so it is the session's first write.
 - **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then
