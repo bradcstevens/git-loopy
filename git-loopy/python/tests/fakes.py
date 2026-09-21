@@ -156,6 +156,12 @@ class FakeGitClient:
         self.branch_deletes: list[str] = []
         self.remote_refs: dict[tuple[str, str], FakeGitClient] = {}
         self.fetch_calls: list[tuple[str, str, str]] = []
+        #: Configured remote URLs, as ``git remote get-url`` would report them.
+        #: Test-settable so a fixture can give this clone a GitHub ``origin``,
+        #: a local one, or none at all, and watch a Run resolve its **Lease**
+        #: repository (or decline to) accordingly.
+        self.remote_urls: dict[str, str] = {}
+        self.remote_url_error: GitError | None = None
         # Lease ref store (#390 / ADR-0033). Models the *remote* side of the
         # compare-and-swap: ``_ref_shas`` is the ref advertisement and
         # ``_objects`` the commit messages behind it, both repo-wide and shared
@@ -477,6 +483,12 @@ class FakeGitClient:
         if branch is not None:
             return branch.head_sha()
         return self._ref_shas.get((remote, ref))
+
+    def remote_url(self, remote: str) -> str | None:
+        """Return the scripted URL for ``remote``, or ``None`` when unconfigured."""
+        if self.remote_url_error is not None:
+            raise self.remote_url_error
+        return self.remote_urls.get(remote)
 
     # -- Lease ref store (#390 / ADR-0033) ---------------------------------- #
 

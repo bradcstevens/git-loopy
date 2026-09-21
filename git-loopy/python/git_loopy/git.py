@@ -291,7 +291,7 @@ def _run_completed(
     return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
 
 
-def _is_stale_lease_rejection(stdout: str | None, stderr: str | None) -> bool:
+def is_stale_lease_rejection(stdout: str | None, stderr: str | None) -> bool:
     """Return whether a push failed because its ``--force-with-lease`` went stale.
 
     The one failure a Lease reads as an *answer* rather than a fault: some
@@ -582,6 +582,18 @@ class GitClient(Protocol):
 
         Transport and authentication failures raise :exc:`GitError`; callers
         must not infer absence from their text.
+        """
+        ...
+
+    def remote_url(self, remote: str) -> str | None:
+        """Return the URL configured for ``remote``, or ``None`` if unconfigured.
+
+        A local config read, never a network call: it is how a Run learns which
+        repository it is about to contend on for **Lease**s (ADR-0033), and it
+        must not put a round trip on the path before the Run has even started.
+        A clone with no such remote answers ``None`` rather than raising,
+        because having no remote is an ordinary state and the caller's only
+        response to it is to hold no Lease.
         """
         ...
 
@@ -1291,6 +1303,18 @@ class SubprocessGitClient:
             return None
         return line.split(maxsplit=1)[0]
 
+    def remote_url(self, remote: str) -> str | None:
+        """Read ``remote``'s configured URL from local config, or ``None``.
+
+        ``git remote get-url`` reads ``.git/config`` and contacts nothing, so
+        resolving the repository this Run contends on costs no round trip.
+        An unconfigured remote exits non-zero, which is an answer rather than
+        a fault: ``check=False`` turns it into ``None`` so a clone with no
+        ``origin`` simply holds no **Lease**.
+        """
+        url = _run(["remote", "get-url", remote], cwd=self._root, check=False).strip()
+        return url or None
+
     def fetch_sha(self, remote: str, sha: str, branch: str) -> None:
         """Fetch ``sha`` into ``refs/heads/branch`` without following its name."""
         _run(
@@ -1396,7 +1420,7 @@ class SubprocessGitClient:
         )
         if completed.returncode == 0:
             return True
-        if _is_stale_lease_rejection(completed.stdout, completed.stderr):
+        if is_stale_lease_rejection(completed.stdout, completed.stderr):
             return False
         raise GitError(
             [_GIT_BIN, "push", remote, refspec],

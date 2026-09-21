@@ -133,6 +133,7 @@ from git_loopy.execution_host import (
 )
 from git_loopy.gate import LoopFailure
 from git_loopy.interactive.state import LiveRunState, issue_detail, queue_rows
+from git_loopy.issue_lease import lease_ref
 from git_loopy.readiness import BlockedByRead, BlockerNode
 from git_loopy.release_version import (
     RELEASE_VERSION_PATHS,
@@ -9350,3 +9351,53 @@ def test_preparation_reserves_nothing_and_opens_no_session(
     # A proposal names no binding: the Pickup's record is the only one that
     # reports a **Routing source**.
     assert all("routing_source" not in event for event in prepared), prepared
+
+
+def test_a_real_run_takes_and_gives_back_the_lease_on_the_issue_it_works(
+    tmp_path, monkeypatch
+) -> None:
+    """Activation (#390, ADR-0033): the Lease is reached by a Run, not a fixture.
+
+    A serial **Iteration** against a clone whose ``origin`` names a GitHub
+    repository must take that issue's Lease ref before the session starts and
+    delete it when the Iteration ends. Asserted at the compare-and-swap seam,
+    because the ref is gone again by the time the Run finishes — a Lease that
+    were never taken and one released correctly both leave no ref behind.
+    """
+    fake_git = _wire_repo(tmp_path)
+    fake_git.remote_urls = {"origin": "git@github.com:bradcstevens/git-loopy.git"}
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="bradcstevens", name="git-loopy",
+                            default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    monkeypatch.setattr(
+        loop_module,
+        "_make_client",
+        lambda: _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_usage_event("claude-opus-4.8-max")],
+            serial_closes=True,
+        ),
+    )
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    cfg = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=1,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+
+    swaps = [call for call in fake_git.push_ref_calls if call[1] == lease_ref(42)]
+    assert [(remote, sha is not None, expected) for remote, _, sha, expected in swaps] == [
+        ("origin", True, None),
+        ("origin", False, swaps[0][2]),
+    ]
+    assert fake_git.probe_remote_ref("origin", lease_ref(42)) is None

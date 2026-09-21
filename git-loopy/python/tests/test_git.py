@@ -1783,3 +1783,26 @@ def test_fetch_commit_message_reads_a_record_only_the_remote_has(
     )
     reader = SubprocessGitClient(other)
     assert reader.fetch_commit_message("origin", sha).strip() == '{"run_id":"remote-only"}'
+
+
+def test_remote_url_reads_the_url_this_clone_contends_on(tmp_path: Path) -> None:
+    """The Lease's repository identity starts here, with no network call."""
+    _init_repo(tmp_path)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "remote", "add", "origin",
+         "git@github.com:bradcstevens/git-loopy.git"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert SubprocessGitClient(tmp_path).remote_url("origin") == (
+        "git@github.com:bradcstevens/git-loopy.git"
+    )
+
+
+def test_remote_url_answers_none_for_a_clone_with_no_such_remote(
+    tmp_path: Path,
+) -> None:
+    """No remote is an ordinary state, so it holds no Lease rather than raising."""
+    _init_repo(tmp_path)
+    assert SubprocessGitClient(tmp_path).remote_url("origin") is None

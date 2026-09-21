@@ -320,3 +320,27 @@ def test_an_unreadable_lease_remote_is_an_unresolved_read_not_a_refusal(
     assert isinstance(refusal, AdmissionRefusal)
     assert refusal.unresolved is True
     assert refusal.waiting_on_blocker is False
+
+
+def test_leases_being_off_admits_the_candidate_and_permits_its_writes(
+    tmp_path: Path,
+) -> None:
+    """A latch the Orchestrator never consults would protect nothing twice over.
+
+    Driven through ``_Loop``'s two seams rather than the lifecycle's, because
+    the regression this guards is entirely in the wiring: a clone that may
+    never write a Lease ref would otherwise refuse every candidate in the Pool
+    and end the Run having worked nothing, and any write it did reach would be
+    fenced away by a Lease it was never allowed to take.
+    """
+    loop, git, _, lease = _build(tmp_path)
+
+    def _refuse(*_args: object, **_kwargs: object) -> bool:
+        raise GitError("git push", 128, "remote: Permission to owner/repo denied")
+
+    git.push_ref = _refuse  # type: ignore[method-assign]
+
+    assert loop._take_lease_at_pickup(_item(390)) is None
+
+    assert lease.disabled() is True
+    assert loop._leased(390, "push") is True

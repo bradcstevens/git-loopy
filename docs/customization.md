@@ -232,6 +232,43 @@ mechanism: before every push, comment, label write and issue close, a run re-rea
 its own Lease and abandons the issue if it no longer holds it. A Lease taken from a
 run that was merely slow therefore costs duplicated *effort*, never corrupted state.
 
+### When Leases are off
+
+A run resolves the repository it contends on from its `origin` URL — a local config
+read, not a network call — and holds no Lease at all when it cannot. Five cases,
+each announced in the run's diagnostics, because a run that has quietly stopped
+guarding its issues looks exactly like one that is guarding them:
+
+- the clone has **no `origin` remote**;
+- `origin` **names no `owner/repo`** — a local path or a `file://` clone;
+- the run uses the legacy **`prds` backend**, whose issues are files in the worktree
+  rather than rows on a shared tracker, so there is nothing for two runs to contend on;
+- the clone **cannot write the Lease refs**, which the run discovers the first time it
+  tries and then stops trying. A read-only `origin` in a fork workflow, a ruleset that
+  forbids creating refs under `refs/heads/**`, or an expired SSO authorization all land
+  here. The run says so loudly and then does its work unguarded — a Lease it is not
+  allowed to take would protect nothing, and refusing the work to protect nothing is
+  worse. Grant the token push access to `refs/heads/git-loopy/leases/*` to restore it;
+- the issue is worked **in a Lane** in Parallel mode (an issue labelled `parallel-safe`).
+  Lane Leases are not implemented yet, so only **serial** iterations are guarded today.
+
+Every URL spelling of one repository resolves to one name, so a clone that fetched
+over SSH and a clone that fetched over HTTPS contend on the same Lease:
+
+```bash
+# Confirm what this clone will contend on:
+git remote get-url origin
+```
+
+An unleased run is not broken — it behaves exactly as every run did before ADR-0033.
+It simply offers no protection against a second run working the same issue.
+
+So: running two runs against one tracker is safe for **serial** iterations on a clone
+whose `origin` names a repository it can push Lease refs to. It is not yet safe for
+issues labelled `parallel-safe`, which are worked in Lanes and take no Lease. Check
+`git remote get-url origin`, then watch the run's first diagnostics for a line saying
+exclusivity is off.
+
 ---
 
 **Next:**

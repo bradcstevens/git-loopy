@@ -14,6 +14,8 @@ Run is holding right now, and the rule that losing one is permanent.
 
 from __future__ import annotations
 
+import os
+import socket
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -24,15 +26,23 @@ from .issue_lease import (
     DEFAULT_TTL_SECONDS,
     RENEW_INTERVAL_SECONDS,
     LeaseHold,
+    LeaseRefPort,
     LeaseTransport,
+    is_permanent_lease_write_refusal,
 )
 from .lease_heartbeat import LeaseHeartbeat
+from .repository_identity import repository_from_remote_url
 
 TakeVerdict = Literal["taken", "stolen", "refused", "unavailable"]
+
+#: The remote a Lease is taken on. Leases contend where the work is published,
+#: so this is the same remote ADR-0004's Checkpoint push targets.
+LEASE_REMOTE: Final[str] = "origin"
 
 #: The env var that overrides :data:`~git_loopy.issue_lease.DEFAULT_TTL_SECONDS`,
 #: following the ``GIT_LOOPY_GATE_TIMEOUT_SECONDS`` precedent (ADR-0033 §4.1).
 LEASE_TTL_ENV_VAR: Final[str] = "GIT_LOOPY_LEASE_TTL_SECONDS"
+
 
 
 def resolve_lease_ttl_seconds(env: Mapping[str, str]) -> int:
@@ -156,10 +166,32 @@ class LeaseLifecycle:
         self._holds: dict[int, LeaseHold] = {}
         self._beats: dict[int, HeartbeatLike] = {}
         self._lost: set[int] = set()
+        self._ever_held = False
+        self._disabled = False
 
     def held(self) -> tuple[int, ...]:
         """The issues this Run currently holds a Lease on, lowest first."""
         return tuple(sorted(self._holds))
+
+    def disabled(self) -> bool:
+        """Whether this clone has been shown it may never write a Lease ref.
+
+        Not a verdict about any one issue: it is the discovery that the Lease
+        mechanism itself is unavailable *here*, so the caller stops asking and
+        works unguarded — exactly as it did before ADR-0033, and as it does
+        when no lifecycle is built at all.
+
+        This exists because the fourth take verdict, ``unavailable``, denies
+        the candidate. That is right for an outage, which passes; it is wrong
+        for a clone that is *never* going to be allowed to write the ref, such
+        as a read-only fork remote, a ruleset that forbids creating
+        ``refs/heads/**``, or an expired SSO authorization. Left undistinguished,
+        that clone refuses every candidate in the Pool on every Iteration and
+        the Run ends having done no work at all, reporting a readiness fault it
+        never had. A Lease this clone cannot take protects nothing, so refusing
+        the work buys nothing either.
+        """
+        return self._disabled
 
     def _now(self) -> int:
         return int(self._clock())
@@ -203,10 +235,28 @@ class LeaseLifecycle:
             )
         except GitError as exc:
             self._warn(f"Lease for issue #{issue} could not be read or taken: {exc}")
+            if not self._ever_held and is_permanent_lease_write_refusal(exc):
+                # Not an outage: this clone may never write the Lease
+                # namespace. Latched only before the first successful write,
+                # so it can only ever describe a clone that has never been
+                # allowed to take a Lease — never a Run whose credentials were
+                # withdrawn mid-flight, which must keep its deny-by-default
+                # fence. Degrading loudly to the unguarded pre-ADR-0033
+                # behaviour beats refusing every candidate forever.
+                self._disabled = True
+                self._warn(
+                    "This clone cannot write the Lease refs on "
+                    f"{LEASE_REMOTE!r} ({exc}); continuing without Leases. "
+                    "Cross-Run exclusivity is OFF for this Run: nothing will "
+                    "stop a second Run working the same issue. Grant this "
+                    "token push access to 'refs/heads/git-loopy/leases/*' to "
+                    "restore it."
+                )
             return LeaseTake("unavailable")
         if hold is None:
             return LeaseTake("refused")
         self._holds[issue] = hold
+        self._ever_held = True
         if self._heartbeats is not None:
             # Renewal starts only after the Lease is actually held, and is
             # driven by the clock alone — never by Agent output, commits or
@@ -382,3 +432,85 @@ class LeaseLifecycle:
             f"Lease for issue #{issue} is gone ({cause}); refusing {action} "
             "and abandoning the issue"
         )
+
+
+class LeaseClonePort(LeaseRefPort, Protocol):
+    """A clone a Lease can be taken in: ref mechanics plus its own identity.
+
+    :class:`~git_loopy.git.GitClient` satisfies it structurally. Deliberately
+    one method wider than :class:`~git_loopy.issue_lease.LeaseRefPort` rather
+    than taking the whole ``GitClient``: constructing a lifecycle needs to know
+    *which* repository this clone contends on, and nothing else about it.
+    """
+
+    def remote_url(self, remote: str) -> str | None:
+        """Return ``remote``'s configured URL, or ``None`` when unconfigured."""
+        ...
+
+
+def build_lease_lifecycle(
+    git: LeaseClonePort,
+    *,
+    run_id: str,
+    env: Mapping[str, str],
+    remote: str = LEASE_REMOTE,
+    warn: Callable[[str], None] = lambda _message: None,
+    clock: Callable[[], float] = time.time,
+    host: str | None = None,
+    pid: int | None = None,
+) -> LeaseLifecycle | None:
+    """Build this Run's :class:`LeaseLifecycle`, or ``None`` if it can hold none.
+
+    The activation seam: everything below it is proved by fixtures, and this is
+    where a real Run reaches it. It resolves the repository the clone contends
+    on from ``remote``'s URL — a local config read, no round trip — and hands
+    that identity to the transport, because a Lease record names the repository
+    it belongs to and two clones must agree on that name or both believe
+    themselves the owner.
+
+    ``None`` means *this Run holds no Lease*, which restores exactly the
+    pre-ADR-0033 behaviour rather than failing the Run. It is the answer for a
+    clone with no such remote and for one whose remote names no
+    ``owner/repo`` — a local path, a ``file://`` clone. That is deliberately
+    the safe direction: a Run that holds no Lease is as exposed as every Run
+    was before this ADR, while a Run that invented an identity would contend on
+    a ref belonging to some *other* repository and could hand one issue to two
+    Runs while appearing to prevent exactly that.
+
+    ``host`` and ``pid`` are diagnostic only and are never read by a decision
+    (§1.4); they default to this process's own and are injectable so a fixture
+    need not depend on the machine it runs on.
+    """
+    try:
+        url = git.remote_url(remote)
+    except GitError as exc:
+        # Not absence: git itself failed. The answer is still no Lease, but the
+        # operator is told, because a Run that silently stops guarding its
+        # issues looks identical to one that is guarding them.
+        warn(
+            f"Leases are off: this clone's '{remote}' URL could not be read, "
+            f"so no repository could be resolved to contend on ({exc})"
+        )
+        return None
+    if url is None:
+        warn(
+            f"Leases are off: this clone has no '{remote}' remote, so there is "
+            "no repository to contend on"
+        )
+        return None
+    repository = repository_from_remote_url(url)
+    if repository is None:
+        warn(
+            f"Leases are off: this clone's '{remote}' remote names no "
+            "owner/repo, so there is no repository to contend on"
+        )
+        return None
+    return LeaseLifecycle(
+        LeaseTransport(git, remote=remote, repository=repository),
+        run_id=run_id,
+        host=socket.gethostname() if host is None else host,
+        pid=os.getpid() if pid is None else pid,
+        clock=clock,
+        ttl_seconds=resolve_lease_ttl_seconds(env),
+        warn=warn,
+    )

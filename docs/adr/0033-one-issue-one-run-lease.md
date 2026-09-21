@@ -198,10 +198,35 @@ false steal §4 exists to bound.
 
 With no Lease in force — the PRDs backend, or a clone with no resolvable GitHub
 repository — every one of these paths answers exactly as it did before this
-ADR. Constructing the lifecycle for a real Run still needs the repository
-identity to be resolved from the remote, so the wiring is proved by fixtures
-but is not yet reached in production.
+ADR. That is now a live decision rather than a hypothetical one: a Run resolves
+the repository it contends on from `origin`'s URL, which is a local config read
+and puts no round trip on the path before a Run has even started, and holds no
+Lease when that names no `owner/repo`. The resolution is pure and canonical —
+every spelling of one repository, scp-like SSH through `https://` with embedded
+credentials, reduces to one name — because two clones that disagreed about the
+name would write records each read as belonging to *another* repository, and
+therefore as expired and stealable. `conformance/repository-identity.json` pins
+that ahead of the shell and PowerShell ports for exactly that reason, owed by
+both rather than left unstated.
 
-Shell/PowerShell transport and retry, independent native renewal, the human
-mirror, and Events/Dashboard remain pending in #390, as does that construction.
-This staging does **not** yet provide live cross-Run exclusivity.
+Refusal is deliberately the safe direction and is always announced: an unleased
+Run is only as exposed as every Run was before this ADR, while a Run that
+invented an identity would contend on some other repository's ref while
+appearing to prevent the very collision it was causing.
+
+One refusal is not safe in that direction, and is handled apart. An unreadable
+Lease remote denies the candidate, which is right for an outage because an
+outage passes; but a clone that may *never* write the ref — a read-only fork
+`origin`, a ruleset forbidding creations under `refs/heads/**`, an expired SSO
+authorization — would refuse every candidate on every Iteration and end the Run
+having done nothing, blaming a readiness fault it never had. That refusal is
+therefore recognised by name and latched once, before any Lease has ever been
+held so it can never describe a Run whose credentials were withdrawn mid-flight,
+and the Run continues unguarded with exclusivity reported OFF. A Lease this
+clone cannot take protects nothing, so refusing the work buys nothing.
+
+Live cross-Run exclusivity is now active for a GitHub-backed Python Run's
+**serial** Iterations. A Lane takes no Lease: `parallel-safe` issues worked in
+Parallel mode remain unguarded, as §8 of #390 still records. Lane Leases,
+shell/PowerShell transport and retry, independent native renewal, the human
+mirror, and Events/Dashboard all remain pending in #390.

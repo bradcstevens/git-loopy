@@ -273,7 +273,7 @@ from git_loopy.skill_run_preflight import (
     resolve_run_skill_preflight,
 )
 from git_loopy.bump_class_pickup import PickupBumpClassifier
-from git_loopy.lease_lifecycle import LeaseLifecycle
+from git_loopy.lease_lifecycle import LeaseLifecycle, build_lease_lifecycle
 from git_loopy.bump_class_session import SessionBumpClassProposer
 from git_loopy.task_type_classifier import ClassifierPair
 from git_loopy.task_type_pickup import (
@@ -544,6 +544,41 @@ def _execution_host_capacity(
             "execution host capacity must be a finite positive integer"
         )
     return capacity
+
+
+def _make_lease_lifecycle(
+    config: RunConfig,
+    git: git_module.GitClient,
+    *,
+    run_id: str,
+    diag: logging.Logger,
+) -> LeaseLifecycle | None:
+    """Construct this Run's **Lease** lifecycle, or ``None`` when it holds none.
+
+    Dispatches on :attr:`RunConfig.issue_source` before anything else, because
+    the ``prds`` backend's issues are files in this worktree: there is no
+    shared remote ref two Runs could contend on, so there is no Lease to take.
+    A ``github`` Run delegates to
+    :func:`~git_loopy.lease_lifecycle.build_lease_lifecycle`, which answers
+    ``None`` for a clone whose remote names no repository.
+
+    ``None`` never fails the Run — it restores exactly the pre-ADR-0033
+    behaviour of one Run, unguarded — but it is always accompanied by a
+    diagnostic, because a Run that has quietly stopped guarding its issues is
+    indistinguishable from one that is guarding them.
+
+    Factored to module scope alongside :func:`_make_issue_source` for the same
+    reason: the composition :func:`run` performs is then a decision a test can
+    reach without standing up a whole Run.
+    """
+    if config.issue_source != "github":
+        return None
+    return build_lease_lifecycle(
+        git,
+        run_id=run_id,
+        env=os.environ,
+        warn=lambda message: diag.warning("%s", message),
+    )
 
 
 def _make_issue_source(
@@ -2979,6 +3014,13 @@ class _Loop:
         take = self._lease.take(item.ref)
         if take.granted:
             return None
+        if self._lease.disabled():
+            # The refusal that proved this clone can never write a Lease ref
+            # also proved a Lease here protects nothing, so refusing the work
+            # buys nothing. The lifecycle has already warned that exclusivity
+            # is off; admit the candidate unguarded rather than end a Run that
+            # would otherwise do every bit of its work.
+            return None
         if take.verdict == "refused":
             # Not a conflict: another Run is working it, which is the mechanism
             # working (ADR-0033 §8.2). Skipped silently rather than warned.
@@ -3026,6 +3068,11 @@ class _Loop:
         """
         if self._lease is None or kind != "issue" or not isinstance(ref, int):
             return True
+        if self._lease.disabled():
+            # Same answer as no lifecycle at all: a Lease this clone was never
+            # allowed to take cannot be lost, so gating writes on one would
+            # discard work to protect nothing.
+            return True
         return self._lease.fence(ref, action)
 
     def _finish_unworked_iteration(
@@ -3065,6 +3112,14 @@ class _Loop:
         """
         assert pickup.skipped
         unresolved = tuple(skip.ref for skip in pickup.skipped if skip.unresolved)
+        # Name the refusals rather than assume them. Readiness is no longer the
+        # only read that can fail to complete: since #390 activated the Lease,
+        # an unreadable Lease remote is unresolved too, and an operator sent to
+        # `gh auth status` over a Lease ref they cannot push has been sent to
+        # the wrong place entirely.
+        unresolved_reasons = tuple(
+            dict.fromkeys(skip.reason for skip in pickup.skipped if skip.unresolved)
+        )
         outcome = unbound_pool_outcome(
             candidates=len(pickup.skipped),
             waiting=sum(1 for skip in pickup.skipped if skip.waiting_on_blocker),
@@ -3072,16 +3127,17 @@ class _Loop:
         )
         if outcome == "preflight_failed":
             self._diag.error(
-                "serial Pickup bound nothing, and the readiness of %d of the %d "
-                "candidate(s) in the Pool could not be read (%s); an unread "
-                "candidate is unknown, not refused, so this Run will not report "
-                "the Pool as one it could take no work from. Check "
-                "`gh auth status`, this host's network path to the tracker, and "
+                "serial Pickup bound nothing, and %d of the %d candidate(s) in "
+                "the Pool could not be read (%s: %s); an unread candidate is "
+                "unknown, not refused, so this Run will not report the Pool as "
+                "one it could take no work from. Check `gh auth status`, this "
+                "host's network path to the tracker and to `origin`, and "
                 "whether those issues' blockers live in a repository this token "
                 "can see, then re-run.",
                 len(unresolved),
                 len(pickup.considered),
                 ", ".join(f"#{ref}" for ref in unresolved),
+                "; ".join(unresolved_reasons),
             )
             self._finish_iteration(iter_num, outcome=outcome)
             # Reported as `preflight_failed`, routed under its own name: see
@@ -3741,6 +3797,7 @@ class _ParallelLoop:
         route_tracker: gh_module.GitHubClient | None = None,
         execution_host: execution_host_module.ExecutionHost | None = None,
         dynamic_routing: "_DynamicRoutingSetup | None" = None,
+        lease: LeaseLifecycle | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -3924,6 +3981,7 @@ class _ParallelLoop:
             task_type_client=task_type_client,
             route_tracker=route_tracker,
             dynamic_routing=dynamic_routing,
+            lease=lease,
         )
 
     def request_stop_drain(self) -> None:
@@ -7102,6 +7160,14 @@ async def run(
         config, staircase, warn=lambda message: diag.warning("%s", message)
     )
     task_type_client = _make_task_type_label_client()
+    # Activation of the **Lease** (#390, ADR-0033). Resolved here, once per
+    # Run, so every Lease this Run holds is held by one lifecycle under one
+    # `run_id`. It reaches the serial driver only: a Lane takes no Lease in
+    # this slice (ADR-0033's remaining work), so `parallel-safe` issues worked
+    # in a Lane are still unguarded. `None` — the PRDs backend, or a clone
+    # whose `origin` names no repository — restores exactly the pre-ADR-0033
+    # behaviour of one Run, unguarded, everywhere.
+    lease = _make_lease_lifecycle(config, git, run_id=writers.run_id, diag=diag)
     loop: _ParallelLoop
     try:
         loop = _ParallelLoop(
@@ -7126,6 +7192,7 @@ async def run(
             route_tracker=github_client,
             execution_host=selected_execution_host,
             dynamic_routing=dynamic_routing,
+            lease=lease,
         )
     except git_module.GitError as exc:
         # Rolling dispatch resolves where its **Lane workspaces** live up front

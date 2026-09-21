@@ -19,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from .git import GitError
+from .git import GitError, is_stale_lease_rejection
 
 
 _log = logging.getLogger(__name__)
@@ -45,6 +45,21 @@ _TRANSIENT_WRITE_FAILURE = re.compile(
     r"empty reply from server|network is unreachable",
     re.IGNORECASE,
 )
+#: The refusals that mean *this clone* may never write a Lease ref, whatever it
+#: retries. Spelled out as the messages git and the forge actually emit — note
+#: GitHub says "Permission to <repo> denied", not "permission denied" — because
+#: this pattern turns the Lease off for a whole Run and must therefore never
+#: match a fault that would have passed.
+_WRITE_REFUSAL = re.compile(
+    r"authentication failed|authentication is not possible|"
+    r"permission denied|permission to .{0,120}? denied|access denied|"
+    r"repository not found|does not appear to be a git repository|"
+    r"protected branch|pre-receive hook declined|push declined|"
+    r"refusing to allow|remote rejected|"
+    r"you are not allowed to push|not authorized|403 forbidden|"
+    r"certificate|host key verification failed",
+    re.IGNORECASE,
+)
 
 
 def is_transient_lease_error(error: GitError) -> bool:
@@ -53,6 +68,33 @@ def is_transient_lease_error(error: GitError) -> bool:
         error.returncode != 127
         and not _PERMANENT_WRITE_FAILURE.search(error.stderr_tail)
         and _TRANSIENT_WRITE_FAILURE.search(error.stderr_tail)
+    )
+
+
+def is_permanent_lease_write_refusal(error: GitError) -> bool:
+    """Recognize a refusal that will not pass: this clone may never write here.
+
+    Narrower than "not transient", and deliberately its own pattern rather than
+    :data:`_PERMANENT_WRITE_FAILURE`. That one answers "should this be retried?",
+    where over-matching merely wastes an attempt; this one answers "should the
+    Lease be turned off for the whole Run?", where over-matching disables the
+    exclusivity. An unrecognized failure therefore stays unclassified on
+    purpose — the caller's deny-by-default is the safe reading of a fault
+    nobody has named — and only refusals git and GitHub state outright answer
+    yes: bad credentials, no permission, no such repository, a rejecting
+    ruleset or hook, an untrusted certificate or host key.
+
+    A ``--force-with-lease`` rejection can never reach here. That is the one
+    failure a Lease reads as another Run's *answer*, and
+    :func:`~git_loopy.git.push_ref` returns ``False`` for it rather than
+    raising, so no raised error carries it. Were it to leak in, this would read
+    "someone holds the Lease" as "Leases do not work here", and turn the
+    mechanism off at exactly the moment it is load-bearing.
+    """
+    return bool(
+        error.returncode != 127
+        and _WRITE_REFUSAL.search(error.stderr_tail)
+        and not is_stale_lease_rejection(None, error.stderr_tail)
     )
 
 
