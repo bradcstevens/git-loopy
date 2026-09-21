@@ -401,7 +401,8 @@
     "scope": "These cases validate ONE route. A Run validates every route its Config holds -- the run-wide default, each [routing] entry, and an explicitly configured escalation rung -- before it picks up any issue, so a route that is never exercised is still refused at the start rather than mid-Run."
   },
   "migration_recovery": {
-    "note": "Every case starts with an unattended local Run refusing the saved Config unchanged, before listing, assessment or work. Supply the declared authority, then drive a real Run into one issue-owning session and compare its settings and canonical Pickup with expected. Static recovery has no leaderboard credential or evidence request. Temporary authority must expire on the next invocation; recorded authority must remain effective without flags or environment. No historical case or Event stream is reinterpreted.",
+    "note": "Every case starts with an unattended local Python Run refusing the saved Config unchanged, before listing, assessment or work. Supply the declared authority, then drive a real Run and compare actual issue-owning session settings, canonical Pickup and Dashboard readback with expected, or assert the declared refusal with no work, final route, publication or Strike. Static policy recovery has no leaderboard credential or evidence request. Temporary authority must expire on the next invocation; recorded authority must remain effective without flags or environment. No historical case or Event stream is reinterpreted. Shell/PowerShell activation is deferred; this is not remote, Subagent or Integration routing support or final default activation.",
+    "inputs": "Case saved_config entries overlay the shared saved_config at top level. A case harness replaces the shared listing; each model's long_context defaults to false and must feed every Static and Dynamic capability read. run_overrides are temporary CLI settings, not saved authority. run_access and run_evidence_available default to true and change only after the authorization step; false respectively removes the operator-owned key or makes the evidence transport fail. proposed_context_tier defaults to default and scripts the selector's work proposal, never the selector's own settings. A missing expected.exit_code means 0 and one work session; a refusal case declares its nonzero exit, named Static/Dynamic refusal and Run outcome (null for refusal before a Run event stream exists). The adapter checks its CLI's diagnostic for that refusal. run_evidence_requests counts only the Run after authorization. The Dashboard retains its historical implicit-default-tier projection.",
     "modes": ["serial", "lane"],
     "saved_config": {
       "model": "synthetic-cheap-1",
@@ -463,6 +464,90 @@
         "id": "inherited-global-dynamic",
         "authority": "global", "policy": "dynamic",
         "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1, "persists_choice": true}
+      },
+      {
+        "id": "migrate-retains-authored-static-pair-and-inherited-tier",
+        "authority": "update", "policy": "dynamic",
+        "harness": [
+          {"model": "synthetic-fancy-9", "efforts": ["high"], "long_context": true},
+          {"model": "synthetic-cheap-1", "efforts": ["high"], "long_context": true}
+        ],
+        "saved_config": {
+          "context_tier": "long_context",
+          "routing": {"implementation": {"model": "synthetic-cheap-1", "effort": "high"}}
+        },
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "long_context", "routing_source": "routed", "selector_calls": 0, "persists_choice": true}
+      },
+      {
+        "id": "migrated-run-wide-pin-needs-no-leaderboard-access",
+        "authority": "update", "policy": "dynamic",
+        "run_overrides": {"model": "synthetic-cheap-1", "reasoning_effort": "high"},
+        "run_access": false,
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "defaulted_explicit_override", "selector_calls": 0, "run_evidence_requests": 0, "persists_choice": true}
+      },
+      {
+        "id": "migration-readiness-does-not-authorize-work-after-access-is-lost",
+        "authority": "update", "policy": "dynamic",
+        "run_access": false,
+        "expected": {"exit_code": 1, "refusal": "prerequisite_missing", "outcome": "all_skipped", "selector_calls": 0, "run_evidence_requests": 0, "persists_choice": true}
+      },
+      {
+        "id": "migration-readiness-does-not-authorize-work-through-a-source-outage",
+        "authority": "update", "policy": "dynamic",
+        "run_evidence_available": false,
+        "expected": {"exit_code": 1, "refusal": "source_unavailable", "outcome": "all_skipped", "selector_calls": 0, "persists_choice": true}
+      },
+      {
+        "id": "keep-retains-authored-static-pair-and-inherited-tier",
+        "authority": "update", "policy": "static",
+        "harness": [
+          {"model": "synthetic-fancy-9", "efforts": ["high"], "long_context": true},
+          {"model": "synthetic-cheap-1", "efforts": ["high"], "long_context": true}
+        ],
+        "saved_config": {
+          "context_tier": "long_context",
+          "routing": {"implementation": {"model": "synthetic-fancy-9", "effort": "high"}}
+        },
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "long_context", "routing_source": "routed", "selector_calls": 0, "run_evidence_requests": 0, "persists_choice": true}
+      },
+      {
+        "id": "migrated-static-work-survives-lost-access",
+        "authority": "update", "policy": "dynamic",
+        "saved_config": {
+          "routing": {"implementation": {"model": "synthetic-cheap-1", "effort": "high"}}
+        },
+        "run_access": false,
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "routed", "selector_calls": 0, "run_evidence_requests": 0, "persists_choice": true}
+      },
+      {
+        "id": "migrated-static-work-survives-a-source-outage",
+        "authority": "update", "policy": "dynamic",
+        "saved_config": {
+          "routing": {"implementation": {"model": "synthetic-cheap-1", "effort": "high"}}
+        },
+        "run_evidence_available": false,
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "routed", "selector_calls": 0, "persists_choice": true}
+      },
+      {
+        "id": "migrated-context-only-control-keeps-the-strongest-selector",
+        "authority": "update", "policy": "dynamic",
+        "harness": [
+          {"model": "synthetic-fancy-9", "efforts": ["high"], "long_context": true},
+          {"model": "synthetic-cheap-1", "efforts": ["high"], "long_context": true}
+        ],
+        "run_overrides": {"context_tier": "long_context"},
+        "proposed_context_tier": "long_context",
+        "expected": {
+          "model": "synthetic-fancy-9", "effort": "high", "context_tier": "long_context",
+          "routing_source": "dynamic", "selector_calls": 1, "persists_choice": true,
+          "selector": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default"}
+        }
+      },
+      {
+        "id": "temporary-static-authority-cannot-authorize-an-unoffered-tier",
+        "authority": "flag", "policy": "static",
+        "run_overrides": {"context_tier": "long_context"},
+        "expected": {"exit_code": 1, "refusal": "unsupported_context_tier", "outcome": null, "selector_calls": 0, "run_evidence_requests": 0, "persists_choice": false}
       }
     ]
   },

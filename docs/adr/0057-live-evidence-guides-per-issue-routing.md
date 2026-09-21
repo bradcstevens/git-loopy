@@ -217,6 +217,12 @@ also suffices. Model/effort overrides alone do not supply migration consent.
 Offline serial/Lane recovery cases exercise both choices into actual work
 settings and canonical Pickup, including Static work without leaderboard access
 and temporary authority expiring at the next invocation.
+These cases now consume `routing-resolution.json`'s shared `migration_recovery`
+inputs through the real CLI, including retained Static pairs and inherited tiers,
+run-wide model/effort pins, context-only controls, and required access/evidence
+lost after migration. They assert actual sessions, canonical Pickup and Dashboard
+readback, or no work, final publication or Strike on refusal. The Wrapper declares
+the same staged local guard and member deferrals; this is not final activation.
 This remains staged activation: empty Config scopes keep the no-Config path.
 Bare setup may save an unselected policy, but the following Run then refuses
 until authority is supplied; `init --routing` authorizes before saving.

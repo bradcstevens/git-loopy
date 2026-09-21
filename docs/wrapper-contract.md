@@ -1593,9 +1593,10 @@ An operator MAY select one. The policy is a single Config key, `route_policy`, r
 family precedence spine (§11) like any other. Three values are in the vocabulary: `unselected` —
 the default, and the absence of a decision — `static` (this section), and `dynamic` (§14.4).
 
-- **Selected, never inherited.** An Orchestrator MUST NOT read the absence of a policy as a choice
+- **Selected, never inferred.** An Orchestrator MUST NOT read the absence of a policy as a choice
   of one, and MUST NOT reinterpret an existing Config as though `static` had always been in force.
-  A Run that names no policy keeps every rule in §14 exactly, gate warnings and all. An
+  Subject to the Python-local migration guard below, a Run that names no policy keeps every rule
+  in §14 exactly, gate warnings and all. An
   Orchestrator MUST refuse a policy name it does not implement rather than falling back to
   `unselected`: a name it silently ignored would run the Run under a policy the operator did not
   ask for and believes is active.
@@ -1650,6 +1651,34 @@ model listing, so they have no route to verify. They declare it unsupported in
 [`fixture-claims.json`](../git-loopy/conformance/fixture-claims.json) rather than by implication.
 The Dashboard needs no policy-aware branch — it renders the verified triple off
 `wrapper.pickup.bound` exactly as it renders any other.
+
+**Staged Python-local migration guard (#567).** A local Python Run with nonempty project or
+global Config MUST supply or inherit an explicit `static`/`dynamic` Route policy before Agent
+work. Absence remains absence, not implicit Static consent: the Runner refuses with an actionable
+`update --routing keep`/`migrate` or temporary `--route-policy`/`GIT_LOOPY_ROUTE_POLICY` remedy,
+without prompting or rewriting Config. A model/effort override alone is not this decision.
+CLI startup checks before Skill migration, listing or detachment, rechecks after a Config reload,
+and carries saved-Config presence through detached startup. Doctor and Run preflight use the
+same authority verdict; live readiness and Pickup validation still apply after authority exists.
+Historical records retain their interpretation. Empty Config scopes and unselected non-local
+Runs retain the legacy path during staged activation; a selected policy still MUST NOT validate
+a remote placement using local eligibility. Shell and PowerShell migration enforcement is
+explicitly deferred and their unchanged behavior remains conforming. This paragraph is the
+member deferral, not final Dynamic-default activation, remote capability support, or Subagent/
+Integration routing support.
+
+`routing-resolution.json`'s `migration_recovery` exercises this guard through the real
+CLI-to-Run-to-work-session seam, in serial and Lane modes. Its cases MUST first refuse
+unselected saved Config unchanged, then supply temporary or recorded authority. The adapter
+MUST compare actual work-session settings, canonical Pickup and Dashboard readback, not merely
+the configuration resolver's answer. Retained Static rows and their inherited tier remain
+authoritative under either choice; a run-wide model/effort pin requires neither leaderboard
+access nor a selector, while a context-only override still uses the strongest selector.
+Migration readiness is not future Pickup authority: loss of required access or evidence MUST
+refuse uncovered Dynamic work without a fallback session, final publication or Strike, while
+eligible Static work remains usable. Runs MUST leave saved Config unchanged; temporary
+authority MUST expire on the next invocation. These executable cases do not claim the
+remaining activation obligations or change the default policy.
 
 ### 14.4 The Dynamic route (contract 2.8)
 

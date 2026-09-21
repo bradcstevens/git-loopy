@@ -36,6 +36,18 @@ records each member's claimed or waived exercise of every fixture above. The
 Python Integration gate globs the directory and rejects a missing verdict, an
 unexplained waiver, or owed work without its tracking issue.
 
+`routing-resolution.json` also carries the composed `migration_recovery`
+obligation for Python's staged local activation. Its data drives the real CLI
+from an unattended refusal through supplied or recorded authority into serial
+and Lane work, or a fresh readiness refusal. The adapter in
+`python/tests/test_iteration_end_to_end.py` observes actual session settings,
+canonical Pickup, Dashboard readback, unchanged Config, retained Static rows,
+temporary overrides and post-migration access/evidence loss. This is deliberately
+not another pure routing resolver: setup readiness cannot authorize a future
+Pickup. Shell/PowerShell activation is explicitly deferred; the Rust Dashboard
+does not execute migration or create work sessions. Historical fixtures and
+streams retain their interpretation, and Dynamic defaults remain off.
+
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent
 from every port's vocabulary, not just the shared fixture and Python reference.
