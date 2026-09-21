@@ -14,8 +14,9 @@ from pathlib import Path
 from typing import Callable, Mapping, Sequence
 from urllib.request import urlopen
 
-from git_loopy import installation
+from git_loopy import installation, settings
 from git_loopy.release_version import read_runtime_release_version
+from git_loopy.routing_migration import choose_migration
 
 #: The published source location every documented install command names. An
 #: installed Runner has no checkout to read it from, so the spelling lives here
@@ -162,6 +163,8 @@ def run_upgrade(
     handoff: Callable[[Sequence[str]], None] | None = None,
     release_version_reader: Callable[[], str] = read_runtime_release_version,
     output_fn: Callable[[str], None] = print,
+    routing_choice: str = "ask",
+    input_fn: Callable[[str], str] | None = None,
 ) -> int:
     """Replace this distribution with a published Release, then chain ``update``."""
     environ = os.environ if env is None else env
@@ -171,6 +174,12 @@ def run_upgrade(
         executable_path=executable,
         release_version_reader=release_version_reader,
     )
+    if routing_choice not in {"ask", "keep", "migrate"}:
+        output_fn(
+            f"Left {inventory.artifact} unchanged: routing choice must be "
+            "keep, migrate or ask; Config unchanged."
+        )
+        return 1
     try:
         target = _resolve_target(
             to=to,
@@ -196,7 +205,6 @@ def run_upgrade(
         )
         return 1
     channel = _channel_move(inventory.install_channel)
-    chain = channel.chain(target, update_executable=inventory.executable)
     if not inventory.install_channel.proven:
         output_fn(
             f"Left {inventory.artifact} at {executable} unchanged: {channel.limit}"
@@ -204,21 +212,16 @@ def run_upgrade(
         for line in channel.instruct(
             target,
             update_executable=inventory.executable,
+            routing_choice=routing_choice,
             windows=bool(environ.get("COMSPEC")),
         ):
             output_fn(line)
         return 1
-    if (
+    already_installed = (
         target.release_version is not None
         and inventory.edge_install is False
         and inventory.release_version == target.release_version
-    ):
-        output_fn(
-            f"Left {inventory.artifact} at {target.describe()} unchanged: it is "
-            "already the Release this move resolved. Run `git-loopy update` to "
-            "refresh the machine-local assets belonging to it."
-        )
-        return 0
+    )
     if (
         target.release_version is not None
         and not allow_downgrade
@@ -232,21 +235,48 @@ def run_upgrade(
             "Pass --allow-downgrade to move there deliberately."
         )
         return 1
-    if not channel.pins or chain is None:
+    if not already_installed and (not channel.pins or channel.steps is None):
         output_fn(
             f"Left {inventory.artifact} at {executable} unchanged: {channel.limit}"
         )
         for line in channel.instruct(
             target,
+            routing_choice=routing_choice,
             windows=bool(environ.get("COMSPEC")),
         ):
             output_fn(line)
         return 1
-    output_fn(
-        f"Moving {inventory.artifact} from {_describe_installed(inventory)} "
-        f"to {target.describe()} through the "
-        f"{inventory.install_channel.name} channel."
-    )
+    try:
+        selected = choose_migration(
+            routing_choice,
+            scope="global",
+            table=settings.load_config_table(settings.global_config_path(environ)),
+            inherited={},
+            output_fn=output_fn,
+            input_fn=input_fn,
+            command="upgrade",
+        )
+    except (OSError, settings.SettingsError) as exc:
+        output_fn(f"Left {inventory.artifact} unchanged: {exc}")
+        return 1
+    handoff_choice = "ask" if selected.recorded_scope is not None else selected.choice
+    if already_installed:
+        chain = ((inventory.executable, "update", "--routing", handoff_choice),)
+        output_fn(
+            f"Left {inventory.artifact} at {target.describe()}: already installed, "
+            "so no reinstallation is needed. Running update with the routing "
+            "choice to validate Config and refresh machine-local assets."
+        )
+    else:
+        chain = channel.chain(
+            target, update_executable=inventory.executable, routing_choice=handoff_choice
+        )
+        assert chain is not None
+        output_fn(
+            f"Moving {inventory.artifact} from {_describe_installed(inventory)} "
+            f"to {target.describe()} through the "
+            f"{inventory.install_channel.name} channel."
+        )
     if target.edge:
         output_fn(
             f"{target.ref} is unreleased, so this is an Edge install: identify "
@@ -256,12 +286,8 @@ def run_upgrade(
         (handoff or replace_process)(_handoff_command(chain, environ))
     except OSError as exc:
         output_fn(f"Could not hand {executable} over to its Install channel: {exc}")
-        for line in channel.instruct(
-            target,
-            update_executable=inventory.executable,
-            windows=bool(environ.get("COMSPEC")),
-        ):
-            output_fn(line)
+        output_fn("Run this command to retry the handoff:")
+        output_fn(f"  {_render(chain, windows=bool(environ.get('COMSPEC')))}")
         return 1
     return 0
 
@@ -286,22 +312,32 @@ class _ChannelMove:
     steps: Callable[[UpgradeTarget], tuple[str, ...]] | None
 
     def chain(
-        self, target: UpgradeTarget, *, update_executable: str = "git-loopy"
+        self,
+        target: UpgradeTarget,
+        *,
+        update_executable: str = "git-loopy",
+        routing_choice: str = "ask",
     ) -> tuple[tuple[str, ...], ...] | None:
         """The move, and the ``update`` that a landed Release makes necessary."""
         if self.steps is None:
             return None
-        return (self.steps(target), (update_executable, "update"))
+        return (
+            self.steps(target),
+            (update_executable, "update", "--routing", routing_choice),
+        )
 
     def instruct(
         self,
         target: UpgradeTarget,
         *,
         update_executable: str = "git-loopy",
+        routing_choice: str = "ask",
         windows: bool = False,
     ) -> tuple[str, ...]:
         """Render the exact command a refused operator can run themselves."""
-        chain = self.chain(target, update_executable=update_executable)
+        chain = self.chain(
+            target, update_executable=update_executable, routing_choice=routing_choice
+        )
         if chain is None:
             return ()
         return (

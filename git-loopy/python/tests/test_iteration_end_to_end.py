@@ -6589,7 +6589,7 @@ def test_saved_dynamic_reuse_keeps_context_authority_in_the_relevant_inputs(
             assert record["selector_attempts"] == 0 and record["routing_credits"] == "0"
 
 
-@pytest.mark.parametrize("entrypoint", ["update", "init"])
+@pytest.mark.parametrize("entrypoint", ["update", "init", "upgrade"])
 @pytest.mark.parametrize(
     ("choice", "saved_route", "expected_model", "expected_source"),
     [
@@ -6606,6 +6606,7 @@ def test_a_saved_routing_choice_reaches_the_serial_session_and_canonical_pickup(
     from tests.test_config_cmd import _write_measured
     from tests.test_init_routing import _first_setup_for_run
     from tests.test_routing_migration import _listing, _update
+    from tests.test_upgrade_routing import _upgrade_and_update
 
     client, _ = _wire_single_issue_github(
         tmp_path, monkeypatch, labels=["ready-for-agent", "task-type:implementation"]
@@ -6640,7 +6641,14 @@ def test_a_saved_routing_choice_reaches_the_serial_session_and_canonical_pickup(
     _write_measured(tmp_path, implementation=("gpt-5.6-terra", "high"))
     artifact = path.with_name("routing.measured.toml")
     measured_before = artifact.read_bytes()
-    if entrypoint == "update":
+    if entrypoint == "upgrade":
+        path = settings.global_config_path(os.environ)
+        settings.write_config_atomic(path, values)
+        if choice == "keep":
+            monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV)
+        assert _upgrade_and_update(tmp_path, choice=choice) == 0
+        assert not settings.project_config_path(tmp_path).exists()
+    elif entrypoint == "update":
         settings.write_config_atomic(path, values)
         assert _update(tmp_path, routing_choice=choice) == 0
     else:
@@ -6652,6 +6660,7 @@ def test_a_saved_routing_choice_reaches_the_serial_session_and_canonical_pickup(
             assert "routing" not in settings.load_config_table(path)
     assert client.create_calls == [] and spied["assessments"] == []
     assert artifact.read_bytes() == measured_before
+    saved = path.read_bytes()
 
     tables = settings.load_configs(tmp_path, os.environ)
     config = cli.resolve_config(
@@ -6663,6 +6672,7 @@ def test_a_saved_routing_choice_reaches_the_serial_session_and_canonical_pickup(
     ).run
     assert asyncio.run(loop_module.run(config)) == 0
 
+    assert path.read_bytes() == saved
     call = client.create_calls[0]
     assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
         expected_model, "high", "default",

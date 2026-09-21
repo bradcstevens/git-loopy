@@ -42,7 +42,7 @@ Choose the command by what changed:
 | Command | What it does | Does not do |
 | --- | --- | --- |
 | `git-loopy update` | Refreshes the machine-local state the installed Release owns: the installed catalog, TUI helper, global prompt override when **Scaffold provenance** proves it untouched, and a Release-retired Config route. | Does not replace the distribution, start a Run, or write to the tracker. |
-| `git-loopy upgrade` | Replaces the executing distribution through its proven **Install channel**, then runs `update`. | Does not guess an Install channel, update a clone it does not own, or replace a second `git-loopy` artifact on `PATH`. |
+| `git-loopy upgrade` | Requires a global keep-or-migrate choice, replaces the executing distribution through its proven **Install channel**, then runs `update --routing`. | Does not guess an Install channel, write Config before handoff, update a clone it does not own, or replace a second `git-loopy` artifact on `PATH`. |
 | `git-loopy uninstall` | Removes the distribution through its proven Install channel and the machine-local state. | Does not edit repository contents by default or remove a live Lane's work. |
 
 An **Edge install** is an explicit `upgrade --edge <ref>` landing on unreleased
@@ -54,7 +54,7 @@ proof that allows a prompt replacement without overwriting operator prose.
 | Command | Flags | Exit behavior | Worked example |
 | --- | --- | --- | --- |
 | `update` | `--global` (default), `--project`, `--dry-run`, `--routing [keep\|migrate\|ask]` | `0` when the chosen Config scope settles and every refreshed asset reaches the installed Release; `1` for an undecided/refused migration, ambiguous or failed repair, or asset refresh failure. | `git-loopy update --project` |
-| `upgrade` | `--to <version>`, `--edge` / `--ref <ref>`, `--allow-downgrade` | `0` when already on the requested Release, or when the channel move and chained `update` both succeed; `1` when the target, direction, or channel cannot be proven, handoff fails, or the chained refresh fails. | `git-loopy upgrade --to 0.10.0` |
+| `upgrade` | `--to <version>`, `--edge` / `--ref <ref>`, `--allow-downgrade`, `--routing [keep\|migrate\|ask]` | `0` when the required move and routing-aware `update` succeed; nonzero when the target, direction, channel, or routing choice is refused, handoff fails, or the chained install/refresh fails. | `git-loopy upgrade --routing keep` |
 | `uninstall` | `--all`, `--yes` / `-y` | `0` only when every planned removal succeeds; `1` for an unconfirmed plan, an unsafe path, a live or unreadable Lane, a channel that cannot be proven, or any incomplete removal. | `git-loopy uninstall --yes` |
 
 The refusals are intentional safeguards, not partial upgrades: a customized or
@@ -375,7 +375,7 @@ passed off as a refresh. It never starts a Run or writes to the tracker;
 `git-loopy labels --apply` remains the only command that changes the **Label
 vocabulary** on GitHub.
 
-### Explicit routing migration (opt-in)
+### Explicit routing migration
 
 ```bash
 # Collect a keep-or-migrate choice; blank input, q, EOF or Ctrl-C cancels.
@@ -435,9 +435,11 @@ If a subsequent asset refresh fails, the successful Config migration stays saved
 was not checked. It requires a supplied or recorded choice.
 
 This option migrates policy, not retired routing keys: repair those separately
-with `update --project` or `update --global` first. Bare `update`, the `update`
-chained by `upgrade`, and existing unselected-policy Runs **do not yet require or
-choose a migration**. This is partial #567 work, not final default activation.
+with the installed Release's `update --project` or `update --global` before
+retrying policy migration. `upgrade` now requires this
+decision and chains the routing-aware update described below. Bare `update`
+and existing unselected-policy Runs **do not yet require or choose a migration**.
+This is partial #567 work, not final default activation.
 
 ---
 
@@ -445,15 +447,19 @@ choose a migration**. This is partial #567 work, not final default activation.
 
 `git-loopy upgrade` replaces the git-loopy artifact it is **itself running from**
 with a published **Release version**, through the **Install channel** that placed
-it, and then runs `git-loopy update` from what the move installed — landing a new
+it, and then runs `git-loopy update --routing` from what the move installed — landing a new
 Release is precisely the event that invalidates the scaffolded assets. It needs
 no repository, and it moves nothing else: a clone-local helper, the shell
 Orchestrator's launcher, and anything else on your `PATH` are other channels'
 artifacts.
 
 ```bash
-# Move to the newest published Release, then refresh machine-local assets.
+# Move to the newest published Release, using a recorded choice or prompting.
 git-loopy upgrade
+
+# Supply the machine-global choice explicitly for unattended use.
+git-loopy upgrade --routing keep
+git-loopy upgrade --routing migrate
 
 # Pin a named published Release, or move deliberately backwards.
 git-loopy upgrade --to 0.9.0
@@ -469,12 +475,41 @@ git-loopy upgrade --edge 0123456789abcdef0123456789abcdef01234567
 | `--to <version>` | That Release version, **verified published** first. A version nobody cut is refused here rather than becoming a failed install, or an **Edge install** you were never told about. |
 | `--edge <ref>` (alias `--ref`) | That commit or ref, reported as an **Edge install**: identify it by the ref, not by the `VERSION` its source reports. A ref spelled like a Release tag is refused and pointed at `--to`. |
 | `--allow-downgrade` | A move that is not provably forward of the installed Release. Required for an older Release, and for one whose direction cannot be established at all. |
+| `--routing [keep\|migrate\|ask]` | Global routing consent, not a target. With no value or no flag, reuse a recorded global policy or ask on an interactive terminal. Otherwise supply the choice explicitly; no unattended default is inferred. |
 
 Already on the Release the move resolved? Nothing is re-installed: `upgrade` says
-so and names `git-loopy update` as the command that refreshes the assets.
+so, but still requires routing consent and runs the routing-aware `update`.
+An outstanding choice cannot be bypassed by the same-Release path.
+
+**Consent precedes the move; readiness precedes the Config write.** An
+unattended upgrade with no recorded or supplied choice exits nonzero before
+handoff, with `upgrade --routing keep` / `upgrade --routing migrate` as the remedy.
+Interactive cancellation also leaves the installation and Config unchanged.
+Upgrade considers only global Config: a project policy or temporary Run override
+does not supply global consent. It discloses retained Static routes, inherited
+tiers, strict validation and the end of implicit Static escalation.
+
+The installed Runner's `update` then collects any missing Dynamic authorization
+on an interactive terminal and uses the shared readiness verdict before saving.
+Keep requires no leaderboard key or selector call. A recorded choice is re-read
+after installation rather than forwarded as a new explicit override of a later
+operator edit. No project Config is written, and no Calibration or work starts.
+Failed readiness leaves Config unchanged, but does **not** roll back a successful
+distribution install. Fix the reported prerequisite and run
+`git-loopy update --routing keep` or `git-loopy update --routing migrate`.
+If the new Release retires a routing key, the chained routing-aware update
+refuses that Config rather than applying the bare update's automatic key
+repair. Config and machine-local assets remain unchanged at that step, while
+the new distribution stays installed. Run `git-loopy update --global` from the
+newly installed Release to perform its disclosed, backed-up key repair, then
+retry `git-loopy update --routing keep` or `git-loopy update --routing migrate`.
+An ambiguous repair still requires the operator to choose which route to keep.
+If a deliberately selected older target lacks `update --routing`, its command
+refusal is likewise nonzero, not a successful migration; upgrade never silently
+falls back to a routing-unaware refresh.
 
 **The move is a process replacement, not a write.** The chain — the channel's
-install command, then `git-loopy update` — replaces the running `git-loopy`, so
+install command, then `git-loopy update --routing` — replaces the running `git-loopy`, so
 the executable Windows holds open is released with the process rather than
 written over while locked, and the chained `update` runs from the artifact the
 move installed.
@@ -1233,8 +1268,8 @@ Run from reaching eligible Static work or recovering on a later fresh check.
 Configuration refusals still stop the Run. The Run carries its deadline ledger
 from preflight into routing; it does not grant a new budget after live reads.
 
-**Activation status (#567): incomplete.** `init --routing` and `update --routing`
-now offer explicit keep-or-migrate authorization and this shared readiness
+**Activation status (#567): incomplete.** `init --routing`, `update --routing`,
+and the update chained by `upgrade` offer explicit keep-or-migrate authorization and this shared readiness
 verdict. Composed first-setup and saved-migration serial/Lane cases observe actual
 session settings and canonical records, including fresh outages after setup.
 They also carry saved choices through outcome-aware retries, attempt/allowance
@@ -1252,7 +1287,10 @@ reported during cancellation cleanup. Malformed cleanup billing cannot swallow
 cancellation or undo valid charges already observed. An assessment returned after the authorized
 deadline is refused without publishing its classification or proposal; its
 Consumption remains visible, and already-bound work may finish.
-Automatic upgrade/Run migration enforcement, the remaining composed activation matrix, and
+Upgrade requires consent before handoff, including when the target is already
+installed. Its saved global choice reaches actual serial/Lane sessions, with
+retained Static routes and fresh post-setup outages covered.
+Automatic Run migration enforcement, the remaining composed activation matrix, and
 Wrapper/Conformance activation obligations still need to
 land before the final default changes. Existing Config is not migrated implicitly.
 Python issue-owning serial and

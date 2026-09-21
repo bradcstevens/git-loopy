@@ -787,6 +787,13 @@ _Avoid_: upgrade, sync, refresh-all.
 **upgrade (subcommand)**:
 Replacing the installed distribution with a different **Release version** through its **install
 channel**, then running **update**. Moves exactly one artifact: the one it is itself running from.
+Python requires an explicit or recorded global keep-or-migrate choice before
+handoff (ADR-0057). The installed Runner's routing-aware update checks readiness
+before writing Config; a same-Release target skips reinstallation, not consent.
+Retired routing keys refuse that update until an explicit bare **update**
+repairs them; the successful distribution install is not rolled back.
+Project Config remains outside this command's scope. This does not yet enforce
+migration on legacy Runs or activate Dynamic defaults.
 _Avoid_: update, self-update, install.
 
 **uninstall (subcommand)**:

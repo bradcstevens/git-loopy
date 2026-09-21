@@ -8132,7 +8132,7 @@ def test_a_dynamic_route_reaches_each_lanes_own_work_session(
     assert len(spied["assessments"]) == 2
 
 
-@pytest.mark.parametrize("entrypoint", ["update", "init"])
+@pytest.mark.parametrize("entrypoint", ["update", "init", "upgrade"])
 @pytest.mark.parametrize(
     ("choice", "saved_route", "outage", "expected_model", "expected_source"),
     [
@@ -8153,6 +8153,7 @@ def test_a_saved_routing_choice_reaches_lanes_only_after_fresh_readiness(
     from tests.test_config_cmd import _write_measured
     from tests.test_init_routing import _first_setup_for_run
     from tests.test_routing_migration import _authorized_values, _listing, _update
+    from tests.test_upgrade_routing import _upgrade_and_update
 
     fake_git = _wire_repo(tmp_path)
     monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
@@ -8187,7 +8188,14 @@ def test_a_saved_routing_choice_reaches_lanes_only_after_fresh_readiness(
         }
     path = settings.project_config_path(tmp_path)
     _write_measured(tmp_path, implementation=("gpt-5.6-terra", "high"))
-    if entrypoint == "update":
+    if entrypoint == "upgrade":
+        path = settings.global_config_path(os.environ)
+        settings.write_config_atomic(path, values)
+        if choice == "keep":
+            monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV)
+        assert _upgrade_and_update(tmp_path, choice=choice) == 0
+        assert not settings.project_config_path(tmp_path).exists()
+    elif entrypoint == "update":
         settings.write_config_atomic(path, values)
         assert _update(tmp_path, routing_choice=choice) == 0
     else:

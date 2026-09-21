@@ -202,9 +202,26 @@ Python's opt-in `update --routing` now collects or reuses an explicit keep-or-mi
 choice, retains every authored Static row, requires operator-owned Dynamic access
 outside Config and explicit finite limits, and uses the shared Run/doctor readiness
 verdict before saving. Unattended use of this option with no recorded or supplied
-choice refuses without prompting. It does not make bare update, upgrade or a legacy
+choice refuses without prompting. It does not make bare update or a legacy
 Run demand that choice yet. Both choices disclose strict validation, inherited-tier
 semantics and the end of implicit Static escalation.
+
+Upgrade now requires a supplied or recorded machine-global choice before
+distribution handoff, prompting only on an interactive terminal. It shares the
+same consent collector as init/update without writing Config or buying an
+assessment. The installed Runner chains `update --routing` to check readiness
+before saving; recorded authority is re-read instead of replayed over a later
+operator edit. A same-Release target skips reinstalling, not the choice or update.
+Readiness failure preserves Config but does not roll back an installed
+distribution. A Release-retired routing key likewise refuses without implicit
+repair or asset refresh: the operator runs the newly installed Release's
+`update --global` repair, then retries `update --routing keep` or
+`update --routing migrate`. This keeps retired-key repair separate from consent
+to preserve authored routes. An older target without the routing-aware update refuses rather
+than silently falling back. Project scope is never inferred or written.
+Composed serial/Lane cases carry this saved global choice into actual work
+settings and canonical Pickup records, including retained Static routes, Keep
+without leaderboard access and fresh source outages after setup.
 
 Under Dynamic policy, Calibration remains evidence rather than an implicit Static
 pin. Its artifact is preserved; legacy/unselected and Static policies retain the
@@ -269,7 +286,7 @@ after the authorized deadline. Shared settlement now retains Consumption but
 refuses the result before it can publish a Task-type label or become a Routing
 proposal. Already-bound Agents still finish on their frozen settings.
 
-Automatic upgrade/Run migration enforcement, the remaining composed acceptance
+Automatic Run migration enforcement, the remaining composed acceptance
 and Wrapper/Conformance activation obligations still precede final default
 activation. Dynamic routing remains opt-in; shell/PowerShell activation is
 deferred, and no Subagent or Integration routing support is implied.

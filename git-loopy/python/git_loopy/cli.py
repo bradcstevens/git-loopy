@@ -975,7 +975,7 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         description=(
             "Replace the git-loopy artifact this command is running from with a "
             "published Release, through the Install channel that placed it, and "
-            "then run `git-loopy update` from what the move installed. With no "
+            "then run `git-loopy update --routing` from what the move installed. With no "
             "flags it resolves the newest published Release. It moves exactly "
             "that one artifact and needs no repository. An Install channel that "
             "cannot be proven from the artifact's own location, or that cannot "
@@ -1009,6 +1009,23 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help=(
             "Permit a move that is not provably forward of the installed "
             "Release."
+        ),
+    )
+    upgrade.add_argument(
+        "--routing",
+        dest="routing_choice",
+        nargs="?",
+        const="ask",
+        default="ask",
+        choices=("keep", "migrate", "ask"),
+        help=(
+            "Choose the machine-global Route policy before moving: keep retains "
+            "Static routing; migrate makes uncovered work Dynamic. By default, "
+            "reuse a recorded global choice or ask on an interactive terminal; "
+            "unattended use with no choice refuses before the move. Both choices "
+            "preserve saved routes, require strict validation, and remove implicit "
+            "Static escalation. The installed Runner checks readiness and saves "
+            "Config through update; project Config is never changed."
         ),
     )
 
@@ -1472,6 +1489,12 @@ def _run_upgrade(args: argparse.Namespace) -> int:
         to=args.to,
         edge_ref=args.edge_ref,
         allow_downgrade=bool(args.allow_downgrade),
+        routing_choice=args.routing_choice,
+        input_fn=(
+            input
+            if _wizard_terminal_available(sys.stdin.isatty(), sys.stdout.isatty())
+            else None
+        ),
     )
 
 

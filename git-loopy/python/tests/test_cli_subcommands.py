@@ -319,10 +319,14 @@ def test_main_upgrade_moves_the_running_artifact_without_starting_the_loop(
     monkeypatch.setattr(
         upgradecmd, "run_upgrade", lambda **kwargs: captured.append(kwargs) or 0
     )
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
     assert cli_module.main(["upgrade", "--to", "1.2.0", "--allow-downgrade"]) == 0
     assert captured == [
-        {"to": "1.2.0", "edge_ref": None, "allow_downgrade": True}
+        {
+            "to": "1.2.0", "edge_ref": None, "allow_downgrade": True,
+            "routing_choice": "ask", "input_fn": None,
+        }
     ]
 
 
