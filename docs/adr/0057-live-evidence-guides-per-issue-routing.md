@@ -131,6 +131,10 @@ permission to spend another task attempt.
 
 ## One record, several projections
 
+The single combined Route label described below is superseded by
+[ADR-0060](0060-route-labels-expose-exact-observational-dimensions.md).
+Its observational authority and durable publication guarantees are unchanged.
+
 The existing Routing resolution remains the final record. Canonical local Run
 events retain proposal, validation, supersession, and binding provenance: chosen
 settings, selector settings, relevant input identity, eligible candidates, evidence

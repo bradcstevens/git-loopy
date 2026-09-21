@@ -967,8 +967,9 @@ _Avoid_: router agent, routing model, meta-model.
 **Route projection**:
 The observational copy of a final **Routing resolution** on the issue that resolution belongs to:
 one idempotent, append-only comment carrying the exact model, reasoning effort and **Context tier**
-plus an issue-safe rationale and provenance references, and one owned **Route label** encoding the
-same triple compactly. Written *after* the canonical local record, never before — a resolution that
+plus an issue-safe rationale and provenance references, and owned **Route labels** describing its
+model, verified context capacity, and applicable effort. Written *after* the canonical local record,
+never before — a resolution that
 could not be recorded locally starts no work and is published nowhere — and non-blocking once that
 record exists, so a permission failure, rate limit or half-delivered pair is retained as *pending*,
 *partial* or *failed* delivery and retried a bounded number of times rather than reported as
@@ -1562,10 +1563,12 @@ evidence and input identity it depends on. It is revalidated or superseded befor
 _Avoid_: Routing resolution (binding), Lease (authority), assignment.
 
 **Route label**:
-The observational tracker label projecting an issue's final **Routing resolution**,
-which may still represent a previous resolution or be absent after failed replacement
-and exhausted delivery retries. The canonical local resolution and delivery status
-describe the current assignment; the label is never authority to choose, override, or pin a route.
+An observational tracker label describing one dimension of an issue's final
+**Routing resolution**: model identity, verified full context capacity for its selected tier,
+or applicable reasoning effort; unavailable dimensions are absent.
+It may still represent a previous resolution or be absent after failed replacement
+and exhausted delivery retries, so the canonical local resolution and delivery status
+describe the current assignment, never the label as authority to choose, override, or pin a route.
 _Avoid_: model pin, routing input.
 
 ## Relationships
