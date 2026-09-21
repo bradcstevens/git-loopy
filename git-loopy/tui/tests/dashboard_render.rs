@@ -269,7 +269,17 @@ fn the_queue_shows_an_explicit_long_context_route_in_full() {
 #[test]
 fn effort_readback_agrees_in_queue_and_contribution_route_cells() {
     let fixture: Value = serde_json::from_str(DASHBOARD_INSIGHTS).unwrap();
+    let schema: Value = serde_json::from_str(include_str!("../../conformance/event-schema.json"))
+        .expect("shared Event schema decodes");
+    let sources = schema["payload_contracts"]["wrapper.pickup.bound"]["routing_source_values"]
+        .as_array()
+        .expect("the Pickup declares its Routing source vocabulary");
     for case in fixture["effort_readback"]["routes"].as_array().unwrap() {
+        assert!(
+            sources.contains(&case["pickup"]["routing_source"]),
+            "{}: Pickup uses the closed Routing source vocabulary",
+            case["id"]
+        );
         for lane in [false, true] {
             let id = &case["id"];
             let mut state = DashboardState::new(RunInputs::new("work-model", "high"));

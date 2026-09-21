@@ -415,8 +415,8 @@
       },
       {
         "id": "static-deliberate-omission",
-        "pickup": {"model": "plain", "effort": null, "routing_source": "static"},
-        "expected": {"model": "plain", "effort": null, "source": "static"},
+        "pickup": {"model": "plain", "effort": null, "routing_source": "defaulted_explicit_override"},
+        "expected": {"model": "plain", "effort": null, "source": "defaulted_explicit_override"},
         "text": "plain @ (backend)"
       },
       {
