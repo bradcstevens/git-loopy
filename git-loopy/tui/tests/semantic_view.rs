@@ -1018,7 +1018,7 @@ fn a_revalidated_route_reads_differently_from_a_fresh_assessment() {
     assert_eq!(
         log_texts(&projected),
         [
-            "Route revalidated: reused decision-1, no new assessment",
+            "Route revalidated: reused decision-1, no new assessment; decided: 2026-05-15T00:00:00+00:00",
             "Pickup: bound #7 (order)"
         ]
     );
@@ -1119,7 +1119,7 @@ fn a_prepared_route_is_a_proposal_and_never_a_binding() {
     assert_eq!(
         log_texts(&projected),
         [
-            "Route proposed: gpt-5-mini@medium (not bound); proposal: proposal-1; rationale: best verified match; prepared: 2026-05-15T23:59:00.000Z; valid until: 2026-05-16T00:05:01.000Z; evidence source: benchmark-index; source model: claude-opus-5@2026-05; evidence retrieved: 2026-05-16T00:00:00.000Z; capabilities retrieved: 2026-05-16T00:00:00.500Z; measured: 2026-05-15T00:00:00.000Z; benchmark: swe-bench-verified-2; conditions: repository coding; selector: gpt-5.6-terra@high/long_context; overshot"
+            "Route proposed: gpt-5-mini@medium (not bound); proposal: proposal-1; rationale: best verified match; prepared: 2026-05-15T23:59:00+00:00; valid until: 2026-05-16T00:05:01+00:00; evidence source: benchmark-index; source model: claude-opus-5@2026-05; evidence retrieved: 2026-05-16T00:00:00+00:00; capabilities retrieved: 2026-05-16T00:00:00.500000+00:00; measured: 2026-05-15T00:00:00+00:00; benchmark: swe-bench-verified-2; conditions: repository coding; selector: gpt-5.6-terra@high/long_context; overshot"
         ]
     );
     assert_eq!(queue_row(&projected, 7)["route"], serde_json::Value::Null);
@@ -1152,19 +1152,19 @@ fn a_prepared_route_is_a_proposal_and_never_a_binding() {
             "context_tier": "default",
             "summary": "best verified match",
             "proposal_id": "proposal-1",
-            "prepared_at": "2026-05-15T23:59:00.000Z",
+            "prepared_at": "2026-05-15T23:59:00+00:00",
             "selector_model": "gpt-5.6-terra",
             "selector_effort": "high",
             "selector_context_tier": "long_context",
             "evidence_source": "benchmark-index",
             "source_model_identity": "claude-opus-5@2026-05",
-            "evidence_retrieved_at": "2026-05-16T00:00:00.000Z",
-            "capabilities_retrieved_at": "2026-05-16T00:00:00.500Z",
-            "measurement_at": "2026-05-15T00:00:00.000Z",
+            "evidence_retrieved_at": "2026-05-16T00:00:00+00:00",
+            "capabilities_retrieved_at": "2026-05-16T00:00:00.500000+00:00",
+            "measurement_at": "2026-05-15T00:00:00+00:00",
             "benchmark_version": "swe-bench-verified-2",
             "conditions": "repository coding",
             "routing_overshot": true,
-            "valid_until": "2026-05-16T00:05:01.000Z"
+            "valid_until": "2026-05-16T00:05:01+00:00"
         })
     );
 }

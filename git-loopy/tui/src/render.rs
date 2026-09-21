@@ -1065,8 +1065,18 @@ const WALL_CLOCK_WIDTH: usize = 11;
 /// lines this helper cannot decode will write many, and a Header that scrolled
 /// their contents would bury the Run it exists to describe. The most recent
 /// line is kept on the session for the operator to ask for.
+///
+/// An unresolved viewing zone is stated in the same slot, and stated as what
+/// it is: the clocks below are UTC, not this machine's local time (ADR-0058).
 fn diagnostic_segment(diagnostics: &Diagnostics) -> Option<String> {
-    (!diagnostics.is_empty()).then(|| format!("input {} unreadable", diagnostics.unreadable_lines))
+    let mut notes = Vec::new();
+    if diagnostics.unreadable_lines > 0 {
+        notes.push(format!("input {} unreadable", diagnostics.unreadable_lines));
+    }
+    if diagnostics.local_zone_unresolved {
+        notes.push("times in UTC — local zone unresolved".to_string());
+    }
+    (!notes.is_empty()).then(|| notes.join("  "))
 }
 
 /// The Header's compact Context-fill slot.

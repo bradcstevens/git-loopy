@@ -195,7 +195,7 @@ def test_migration_dry_run_is_an_offline_plan_not_a_readiness_claim(
     assert not path.with_suffix(".toml.bak").exists()
     assert listings == [] and evidence == []
     text = "\n".join(output)
-    assert "Would record route_policy = dynamic" in text
+    assert "Planned route_policy = dynamic" in text
     assert "readiness not checked" in text
 
 
@@ -420,8 +420,9 @@ def test_unattended_project_migration_can_inherit_a_recorded_global_choice(
     assert "inherited" in "\n".join(output)
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
 def test_global_migration_names_the_correct_retired_key_repair_without_applying_it(
-    tmp_path: Path
+    tmp_path: Path, dry_run: bool
 ) -> None:
     path = settings.global_config_path(os.environ)
     settings.write_config_atomic(path, {
@@ -430,10 +431,11 @@ def test_global_migration_names_the_correct_retired_key_repair_without_applying_
     original = path.read_bytes()
     output: list[str] = []
 
-    assert updatecmd.run_update(
-        env=os.environ, routing_choice="keep", output_fn=output.append
-    ) == 1
+    code = updatecmd.run_update(
+        env=os.environ, routing_choice="keep", dry_run=dry_run, output_fn=output.append
+    )
 
+    assert code == 1
     assert path.read_bytes() == original
     assert not path.with_suffix(".toml.bak").exists()
     assert "git-loopy update --global" in "\n".join(output)
@@ -487,3 +489,37 @@ def test_supplied_environment_bounds_are_saved_but_access_is_not(
         "selector_concurrency": 2,
     }
     assert "private-aa-key" not in path.read_text()
+
+
+@pytest.mark.parametrize("inherited", [False, True])
+def test_dry_run_plans_supplied_bounds_without_claiming_config_will_be_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inherited: bool
+) -> None:
+    path = settings.project_config_path(tmp_path)
+    values = {**_authorized_values(), "route_policy": "dynamic"}
+    settings.write_config_atomic(
+        settings.global_config_path(os.environ) if inherited else path, values
+    )
+    before = path.read_bytes() if path.exists() else None
+    listings = _listing(monkeypatch)
+    evidence = _evidence(monkeypatch)
+    env = {
+        "XDG_CONFIG_HOME": os.environ["XDG_CONFIG_HOME"],
+        "UV_DEFAULT_INDEX": "https://packagefeedproxy.microsoft.io/pypi/simple/",
+        "npm_config_registry": "https://packagefeedproxy.microsoft.io/npm/",
+        dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV: "aa-token",
+        "GIT_LOOPY_ROUTING_DEADLINE_SECONDS": "45",
+    }
+    output: list[str] = []
+
+    assert _update(
+        tmp_path, routing_choice="ask", dry_run=True, env=env, output=output
+    ) == 0
+
+    assert (path.read_bytes() if path.exists() else None) == before
+    assert listings == [] and evidence == []
+    text = "\n".join(output)
+    assert "Would use routing_deadline_seconds = 45.0" in text
+    assert f"{path} unchanged" not in text
+    assert _update(tmp_path, routing_choice="ask", env=env) == 0
+    assert settings.load_config_table(path)["routing_deadline_seconds"] == 45.0

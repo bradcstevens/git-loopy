@@ -185,10 +185,9 @@ def _update_routing_policy(
         dry_run=dry_run,
     )
     if dry_run:
-        if candidate == table:
-            output_fn(f"Would retain the recorded or inherited Route policy; {path} unchanged.")
-        else:
-            output_fn(f"Would record route_policy = {candidate['route_policy']} in {path}.")
+        policy = candidate.get("route_policy")
+        planned = f"route_policy = {policy}" if policy else "inherited Route policy"
+        output_fn(f"Planned {planned} for {path}; no Config was written.")
         return
     current = path.read_bytes() if path.exists() else None
     if current != original:

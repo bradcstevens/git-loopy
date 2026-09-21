@@ -87,9 +87,6 @@ def prepare_migration(
     candidate = dict(table)
     if not keep_inherited:
         candidate["route_policy"] = _POLICIES[choice]
-    if dry_run:
-        output_fn("Dry run: authorization and live readiness not checked.")
-        return candidate
     if choice == "migrate":
         output_fn(
             f"Dynamic access must be operator-owned, supplied via "
@@ -108,9 +105,12 @@ def prepare_migration(
             supplied = env.get(env_name)
             persist = supplied is not None and bool(supplied.strip())
             raw = supplied if persist else candidate.get(key, inherited.get(key))
-            if raw is None and input_fn is not None:
+            if raw is None and input_fn is not None and not dry_run:
                 raw = _answer(input_fn, f"{key} (explicit value; no default): ")
                 persist = True
+            if raw is None and dry_run:
+                output_fn(f"{key} is missing; a real migration requires an explicit value.")
+                continue
             if raw is None:
                 raise settings.SettingsError(
                     f"Supply {key} in Config or {env_name}, or use "
@@ -123,7 +123,8 @@ def prepare_migration(
                 raise settings.SettingsError(str(exc)) from exc
             if persist:
                 candidate[key] = value
-            output_fn(f"Authorized {key} = {value}.")
+            verb = "Would use" if dry_run else "Authorized"
+            output_fn(f"{verb} {key} = {value}.")
     try:
         config = resolve_config(
             build_parser().parse_args([]),
@@ -137,6 +138,9 @@ def prepare_migration(
         raise settings.SettingsError(task_type_refusal(exc)) from exc
     except (ValueError, SystemExit) as exc:
         raise settings.SettingsError(str(exc)) from exc
+    if dry_run:
+        output_fn("Dry run: Config resolved; authorization and live readiness not checked.")
+        return candidate
     verdict = asyncio.run(resolve_run_routing_preflight(config, env, warn=output_fn))
     if (refusal := verdict.refusal or verdict.dynamic_refusal) is not None:
         raise settings.SettingsError(refusal)

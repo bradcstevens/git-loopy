@@ -155,6 +155,29 @@ jobs:
             exit 1
           fi
 
+  viewer-local-time-windows:
+    name: Viewer-local time / windows-latest
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the Rust toolchain
+        run: >-
+          rustup toolchain install stable --profile minimal
+          --component rustfmt --component clippy
+      - name: Prove native Windows timezone resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path git-loopy/tui/Cargo.toml --check
+          cargo clippy --manifest-path git-loopy/tui/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path git-loopy/tui/Cargo.toml \
+            --bin git-loopy-tui --test viewer_local_time windows_ \
+            2>&1 | tee "$RUNNER_TEMP/windows-zone.log"
+          if [[ "$(grep -Ec '^test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/windows-zone.log")" != "2" ]]; then
+            printf 'Windows timezone gate: both native test targets must execute assertions\n' >&2
+            exit 1
+          fi
+
   powershell:
     name: PowerShell / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

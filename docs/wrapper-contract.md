@@ -1108,7 +1108,8 @@ and never emit them.
 The language-neutral
 [`dashboard-insights.json`](../git-loopy/conformance/dashboard-insights.json) fixture is the
 semantic boundary between Orchestrators and live-interface implementations. It supplies normalized
-Event prefixes plus injected render time, local UTC offset, and configured Run facts, then pins the
+Event prefixes plus injected render time, display-zone input (a fixed UTC offset in these
+deterministic fixtures), and configured Run facts, then pins the
 expected toolkit-neutral Dashboard and per-issue drill-in model.
 
 The Dashboard inventory is `Header -> Queue -> Activity -> Summary`. The per-issue drill-in is
@@ -1134,8 +1135,26 @@ An unavailable value projects to an em dash, while observed none remains `0` or 
 capability an Orchestrator declares unavailable at Run start arrives as a `null` normalized
 measurement, and renderers MUST project it as unknown rather than as an observed `0`, `[]`, or a
 substituted configured value — including a contribution whose whole `consumption` record is
-unavailable. Renderers localize UTC timestamps from the supplied display-zone input but preserve
-monotonic durations.
+unavailable. Renderers localize UTC timestamps from the supplied display-zone rules at each
+timestamp's own instant, preserving historical and daylight-saving offsets and monotonic durations.
+The presentation boundary resolves the **Viewing machine**'s **Display zone**, not the Run's
+Execution host: `TZ` takes precedence when supplied, otherwise the platform's native zone
+configuration applies, including Windows historical timezone rules. The pure Dashboard core
+receives those rules and MUST NOT read the environment or host clock.
+
+Every human-facing timestamp follows that same rule, including routing preparation, expiry,
+reuse, and evidence provenance in projected fields and Log text. Detailed provenance retains its
+date and numeric UTC offset; compact clocks keep their existing format. Stored Events, replay
+records, machine-readable Run evidence, durations, ordering, and artifact identities remain
+canonical and unchanged. A display projection may carry localized timestamps without rewriting
+its underlying evidence.
+
+Normal launch and Attach MUST preserve the viewer's timezone environment (`TZ` and `TZDIR`)
+and MUST NOT inject a sampled fixed offset. An explicit fixed-offset override, including zero,
+remains authoritative for an operator or deterministic fixture. If zone resolution fails, the
+interface remains usable but MUST diagnose the failure and label its UTC fallback; UTC MUST NOT
+silently masquerade as local time. These presentation rules add no timezone-bearing Event field.
+
 This rule binds every renderer surface for a Run, not just the live band: the
 per-Iteration frozen artifact and the run-end totals artifact project the same unknowns, and a
 cumulative total is unknown only when every completed Iteration in it declared that measurement

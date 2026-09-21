@@ -86,7 +86,7 @@ fn the_rust_core_matches_every_dashboard_fixture_snapshot() {
             let context = ViewContext {
                 now: instant(&snapshot["render_at_utc"]),
                 now_monotonic: snapshot["render_at_monotonic"].as_f64(),
-                zone,
+                zone: zone.clone(),
                 capabilities: TerminalCapabilities::default(),
             };
             let projected = serde_json::to_value(project_run_view(&state, &context, &drill_in))

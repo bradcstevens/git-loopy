@@ -1116,6 +1116,32 @@ def test_pytest_fails_closed_on_a_suite_that_collects_nothing(tmp_path: Path) ->
     assert completed.returncode != 0, completed.stdout + completed.stderr
 
 
+@pytest.mark.parametrize(
+    ("counts", "accepted"),
+    [((1, 1), True), ((1, 0), False), ((0, 1), False), ((0, 0), False)],
+)
+def test_windows_timezone_census_requires_both_native_targets(
+    tmp_path: Path, counts: tuple[int, int], accepted: bool
+) -> None:
+    job = next(
+        job for _path, name, job in _all_jobs(_loaded_workflows())
+        if name == "viewer-local-time-windows"
+    )
+    guard = _line_containing(_job_run_text(job), RUST_NON_EMPTY_REPORT)
+    assert guard
+    (tmp_path / "windows-zone.log").write_text(
+        "".join(f"test result: ok. {count} passed; 0 failed\n" for count in counts),
+        encoding="utf-8",
+    )
+    completed = _run_script(
+        ["bash"],
+        f'RUNNER_TEMP="$PWD"\n{guard}\nexit 1\nfi\n',
+        ".sh",
+        tmp_path,
+    )
+    assert (completed.returncode == 0) is accepted
+
+
 def test_the_rust_census_rejects_cargos_own_empty_suite_report() -> None:
     """B2 (Rust): ``cargo test`` exits 0 on an empty suite, so read its report."""
     workflows = _loaded_workflows()
