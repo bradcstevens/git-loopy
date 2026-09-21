@@ -2003,6 +2003,23 @@ validation and never a substitute for one.
   cross-Run saving is the **Reusable route** of §14.5's sibling rule, not this
   one.
 
+The shared `routing-resolution.json` `pool_revalidation` matrix composes these
+rules through recorded migration and the real local Python CLI in serial and
+Lane modes. It holds already-bound Agents open until another eligible issue has
+a proposal, then changes issue text, evidence, eligibility or Readiness, or
+withdraws required evidence, before the next Pickup. Unchanged inputs reuse the
+proposal; changed relevant inputs require reassessment. Actual session settings,
+canonical Pickup, CLI/Dashboard readback, SDK-observed Run-only Consumption and
+final tracker publication must agree. Initially Blocked and unreadable candidates
+buy no classification or selection. Preparation takes no Lease or final
+publication; existing Pickup-time Lease acquisition and release remain unchanged.
+Running Agents finish on their frozen settings, while a refused Dynamic candidate
+leaves retained Static work usable without a Strike for unstarted work.
+Rolling may filter newly ineligible candidates on its fresh Pool read before
+reservation, rather than inventing a Pickup skip. This is Python-local composed
+Conformance, not final Dynamic-default activation. Shell/PowerShell activation is
+deferred; no non-local, Subagent or Integration routing is claimed.
+
 ## 15. Release and compatibility identity (MUST)
 
 The **Release version** is product identity, not a compatibility shortcut. `--version` and

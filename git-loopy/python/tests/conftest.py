@@ -45,6 +45,7 @@ _RUN_TEST_MODULES = frozenset(
         "test_loop_parallel.py",
         "test_rate_card_run_start.py",
         "test_recorded_setup_flow.py",
+        "test_routing_pool_conformance.py",
         "test_routing_retry_conformance.py",
         "test_saved_routing_consumption.py",
         "test_sweep_run_start.py",

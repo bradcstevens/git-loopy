@@ -83,6 +83,23 @@ compared individually, not against accumulated startup output.
 This extends executable coverage of
 existing section 14.4 rules, not runtime defaults or native-member support.
 
+The `pool_revalidation` matrix carries recorded migration through the real CLI
+in `python/tests/test_routing_pool_conformance.py`. Seven cases run in serial and
+Lane modes, with actual Lane refill rather than serial fallback. Already-bound
+Agents stay open until issue 44 has a proposal, with no Lease, Pickup or tracker
+publication for that proposal. Unchanged inputs reuse it; changed issue text,
+evidence or eligibility require reassessment before work. Newly Blocked or
+unreadable work and required-evidence failure leave retained Static work usable,
+while running Agents finish on their original settings. Initially ineligible
+candidates buy neither classification nor selection. Assertions compare actual
+sessions, canonical records, separate CLI Pickup lines, Dashboard readback,
+SDK-observed Run-only Consumption and complete final publication, with unchanged
+Config and no Strike. Existing Lease timing is preserved: a routing refusal
+releases a Pickup-time Lease; preparation takes none. Rolling readiness filtering
+can precede reservation and therefore does not fabricate a Pickup-skip Event.
+These cases pin existing section 14.6 behavior without changing Event fields,
+historical streams, defaults or member deferrals.
+
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent
 from every port's vocabulary, not just the shared fixture and Python reference.

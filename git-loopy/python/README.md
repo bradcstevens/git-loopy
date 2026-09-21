@@ -1368,6 +1368,15 @@ reselection, justified and refused repeats, infrastructure failure, advances,
 attempt/allowance exhaustion and explicit Static escalation. Refusal leaves
 later eligible Static work usable and spends no task attempt or Strike. A Lane's
 retry uses existing serial fallback, not a second Lane; Config stays unchanged.
+Shared `pool_revalidation` cases also carry recorded migration through a prepared
+proposal into real serial Pickup or Lane refill. A proposal takes no Lease and
+publishes no final route. Unchanged inputs avoid another selector call; changed
+issue text, evidence or eligibility cause reassessment before work. Required
+evidence loss or newly ineligible work cannot start the proposed Agent, but
+already-running Agents finish on their frozen settings and retained Static work
+continues. Actual settings agree with canonical Pickup, CLI/Dashboard readback,
+Run-only selector Consumption and final tracker publication. Config and existing
+Pickup-time Lease acquisition/release remain unchanged.
 Non-local activation, the remaining composed activation matrix and the remaining
 Wrapper/Conformance activation obligations still precede the final default
 change. Existing Config is not migrated implicitly.

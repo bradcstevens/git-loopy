@@ -391,6 +391,19 @@ after the authorized deadline. Shared settlement now retains Consumption but
 refuses the result before it can publish a Task-type label or become a Routing
 proposal. Already-bound Agents still finish on their frozen settings.
 
+The shared routing fixture's `pool_revalidation` matrix now carries recorded
+migration into a proposal prepared beside running Agents, then through actual
+serial Pickup or Lane refill. Seven cases cover unchanged-input reuse, changed
+issue text/evidence/eligibility, required-evidence failure and newly Blocked or
+unreadable work. Already-running Agents finish with frozen settings; refused
+Dynamic work leaves retained Static work usable. Initially ineligible candidates
+buy no classifier or selector calls. Actual sessions, canonical records, each CLI
+Pickup, Dashboard readback, SDK-observed Run-only Consumption and final tracker
+publication agree. Config is unchanged and preparation takes no Lease; the
+existing Pickup-time acquisition and release semantics are preserved. This
+extends shared section 14.6 Conformance without changing routing behavior,
+historical Events or the final-default and Runner-member deferrals.
+
 Non-local activation, the remaining composed acceptance and Wrapper/Conformance activation
 obligations still precede final default
 activation. Dynamic routing remains opt-in; shell/PowerShell activation is

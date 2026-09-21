@@ -683,6 +683,89 @@
       }
     ]
   },
+  "pool_revalidation": {
+    "note": "Recorded update --routing migrate authorizes a real CLI Run. While the declared issue-owning Agents are still running, issue 44 reaches a nonbinding Routing proposal: it has no Pickup, Lease or tracker publication. Authoritative Pickup then validates current inputs before opening the next actual work session. Initially Blocked issue 40 and unreadable issue 41 buy neither classification nor selection. Config is unchanged throughout the Run. This Python-local obligation does not activate defaults or imply shell/PowerShell, remote-host, Subagent or Integration routing support.",
+    "inputs": "Reuse migration_recovery's saved_config, harness and evidence. Retain a Static docs pair synthetic-cheap-1 @ high with inherited default tier for issue 45. Lane cases mark the whole Pool Parallel-safe, so retained Static work does not trigger serial drain and issue 44's replacement really takes a Lane. Once every running Agent has observed issue 44's proposal, apply change before any running Agent completes: none preserves all inputs; issue changes issue 44's acceptance text; evidence lowers aa-strong's index to 10; eligibility removes synthetic-fancy-9; evidence_outage fails the required-source transport; blocked introduces an open dependency on x/y#99; unreadable makes dependency readiness unprovable. The scripted selector chooses synthetic-cheap-1 after issue/evidence/eligibility changes and otherwise synthetic-fancy-9. Each selector bill is 0.25 Run-only credits. The Run admits one more work session after the running issues, so a refusal of issue 44 must leave retained Static issue 45 usable. Serial readiness refusals emit Pickup skips; Rolling filters newly ineligible candidates during a fresh Pool read before reservation. Required-source failure emits a routing skip in either mode and releases the Lease taken during Pickup. Preparation itself takes no Lease in either mode.",
+    "modes": {
+      "serial": {"running_issues": [42]},
+      "lane": {"running_issues": [42, 43]}
+    },
+    "cases": [
+      {
+        "id": "unchanged-proposal",
+        "change": "none",
+        "expected": {
+          "next_issue": 44, "model": "synthetic-fancy-9",
+          "prepared_issue_assessments": 1,
+          "prepared_issue_selectors": ["synthetic-fancy-9"],
+          "routing_credits": {"serial": "0.50", "lane": "0.75"}
+        }
+      },
+      {
+        "id": "changed-issue-after-preparation",
+        "change": "issue",
+        "expected": {
+          "next_issue": 44, "model": "synthetic-cheap-1",
+          "prepared_issue_assessments": 2,
+          "prepared_issue_selectors": ["synthetic-fancy-9", "synthetic-fancy-9"],
+          "routing_credits": {"serial": "0.75", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "changed-evidence-after-preparation",
+        "change": "evidence",
+        "expected": {
+          "next_issue": 44, "model": "synthetic-cheap-1",
+          "prepared_issue_assessments": 2,
+          "prepared_issue_selectors": ["synthetic-fancy-9", "synthetic-cheap-1"],
+          "routing_credits": {"serial": "0.75", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "withdrawn-eligibility-after-preparation",
+        "change": "eligibility",
+        "expected": {
+          "next_issue": 44, "model": "synthetic-cheap-1",
+          "prepared_issue_assessments": 2,
+          "prepared_issue_selectors": ["synthetic-fancy-9", "synthetic-cheap-1"],
+          "routing_credits": {"serial": "0.75", "lane": "1.00"}
+        }
+      },
+      {
+        "id": "required-evidence-outage-after-preparation",
+        "change": "evidence_outage",
+        "expected": {
+          "next_issue": 45, "model": "synthetic-cheap-1",
+          "prepared_issue_assessments": 1,
+          "prepared_issue_selectors": ["synthetic-fancy-9"],
+          "refusal": "source_unavailable",
+          "routing_credits": {"serial": "0.50", "lane": "0.75"}
+        }
+      },
+      {
+        "id": "blocked-after-preparation",
+        "change": "blocked",
+        "expected": {
+          "next_issue": 45, "model": "synthetic-cheap-1",
+          "prepared_issue_assessments": 1,
+          "prepared_issue_selectors": ["synthetic-fancy-9"],
+          "refusal": "blocked_by_open_dependency",
+          "routing_credits": {"serial": "0.50", "lane": "0.75"}
+        }
+      },
+      {
+        "id": "unreadable-after-preparation",
+        "change": "unreadable",
+        "expected": {
+          "next_issue": 45, "model": "synthetic-cheap-1",
+          "prepared_issue_assessments": 1,
+          "prepared_issue_selectors": ["synthetic-fancy-9"],
+          "refusal": "readiness_unprovable",
+          "routing_credits": {"serial": "0.50", "lane": "0.75"}
+        }
+      }
+    ]
+  },
   "first_setup": {
     "note": "Python-local first setup starts with no project or global Config. The guided init --routing flow collects an operator choice, finite limits and verified associations, checks readiness before saving, and never starts work. A refused setup saves no Config, prompt or Skill policy and writes no tracker labels. Repair the declared input and retry setup, then invoke the real CLI Run without routing overrides. Compare actual serial/Lane session settings, canonical Pickup, Dashboard readback and tracker publication, with unchanged Config and the key outside saved assets. These cases exercise explicit opt-in setup, not bare init, auto-setup or final Dynamic defaults. Shell/PowerShell, non-local, Subagent and Integration activation remain deferred.",
     "inputs": "Use migration_recovery's synthetic saved_config as collected answers, not pre-existing Config, and its harness, evidence and selector_choice as external inputs. Accept the wizard's default Static-route choice rather than supplying a prebuilt answer. Keep collects only model/effort and no Dynamic access or limits. Case initial inputs apply only to the first setup attempt: answers overlays collected Dynamic limits/associations, access controls the outside-Config key, evidence_available controls the evidence transport, and harness_available controls the fresh authenticated readiness listing, not the earlier picker display. Access defaults to true for Migrate and false for Keep; both transports default to available. Repair restores the shared inputs before repeating setup. expected_refusal declares either a Config input error (config_key) or an existing Dynamic routing_reason; prerequisite_missing also names the setting the diagnostic must identify. Its absence means setup succeeds immediately. Both Config scopes start absent; scope selects the only one init may write. The final expected settings are independent literals, not derived from the supplied answers or routing algorithm.",
