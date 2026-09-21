@@ -753,7 +753,11 @@ shared Run/doctor routing-readiness verdict before saving. Missing bounds and
 verified associations are collected without defaults; the credential stays in
 the operator's environment. New Static rows are optional, not automatic seeds.
 The review discloses this authorization step, and cancelling it abandons every
-operator choice. Bare init and auto-setup do not yet activate Dynamic defaults.
+operator choice. A recorded Static/Dynamic policy in the chosen scope (including
+inherited global authority) also enters this path on bare init: omitting
+`--routing` cannot bypass readiness or overwrite unattended saved choices.
+The wizard follows scope changes without promoting unvisited defaults to
+authored Static routes. Unselected init does not yet activate Dynamic defaults.
 _Avoid_: setup, bootstrap; install (install is the separate act of putting the `git-loopy` command
 on PATH).
 

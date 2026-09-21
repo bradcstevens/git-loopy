@@ -39,6 +39,30 @@ class MigrationChoice:
     recorded_scope: str | None = None
 
 
+def recorded_migration(
+    *,
+    scope: str,
+    table: Mapping[str, object],
+    inherited: Mapping[str, object],
+) -> MigrationChoice | None:
+    """Read saved authority without inferring consent from other Config values."""
+    recorded = settings.table_str(table, "route_policy", scope=scope)
+    local_choice = recorded is not None and bool(recorded.strip())
+    if not local_choice:
+        recorded = settings.table_str(inherited, "route_policy", scope="global")
+    if recorded is not None and recorded.strip():
+        try:
+            recorded = coerce_value("route_policy", recorded)
+        except ConfigCommandError as exc:
+            raise settings.SettingsError(str(exc)) from exc
+    if recorded not in _POLICIES.values():
+        return None
+    return MigrationChoice(
+        next(key for key, value in _POLICIES.items() if value == recorded),
+        scope if local_choice else "global",
+    )
+
+
 def choose_migration(
     choice: str,
     *,
@@ -68,20 +92,14 @@ def choose_migration(
     )
     recorded_scope = None
     if choice == "ask":
-        recorded = settings.table_str(table, "route_policy", scope=scope)
-        local_choice = recorded is not None and bool(recorded.strip())
-        if not local_choice:
-            recorded = settings.table_str(inherited, "route_policy", scope="global")
-        if recorded is not None and recorded.strip():
-            try:
-                recorded = coerce_value("route_policy", recorded)
-            except ConfigCommandError as exc:
-                raise settings.SettingsError(str(exc)) from exc
-        if recorded in _POLICIES.values():
-            choice = next(key for key, value in _POLICIES.items() if value == recorded)
-            recorded_scope = scope if local_choice else "global"
-            origin = scope if local_choice else "inherited global"
-            output_fn(f"Using the recorded {recorded} Route policy from {origin} Config.")
+        recorded = recorded_migration(scope=scope, table=table, inherited=inherited)
+        if recorded is not None:
+            choice = recorded.choice
+            recorded_scope = recorded.recorded_scope
+            origin = scope if recorded_scope == scope else "inherited global"
+            output_fn(
+                f"Using the recorded {_POLICIES[choice]} Route policy from {origin} Config."
+            )
         elif input_fn is not None and not dry_run:
             choice = _answer(input_fn, "Routing choice (keep/migrate; no default): ")
     if choice not in _POLICIES:

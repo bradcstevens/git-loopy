@@ -681,8 +681,11 @@ The wizard:
 
 `git-loopy init --routing [keep|migrate|ask]` composes first setup with the same
 authorization and live routing-readiness verdict as `update --routing`, doctor,
-and a Run. **This is not final default activation:** bare init and auto-setup
-retain their existing behavior.
+and a Run. Bare init also uses that path when the chosen scope already records
+or inherits an explicit Static/Dynamic policy; omitting `--routing` does not
+bypass readiness or replace saved choices with unattended defaults.
+**This is not final default activation:** without a supplied or recorded choice,
+bare init and auto-setup retain their staged behavior.
 
 Choose `migrate` for Dynamic uncovered work or `keep` for strict Static policy.
 Omit the argument (or use `ask`) to inherit a recorded choice or decide at the
@@ -694,6 +697,12 @@ choice, and authored routes still outrank Dynamic work.
 The custom walk adds or replaces only the rows you explicitly choose. Skipped
 and unvisited task types preserve saved rows and acquire no recommended seed;
 remove an unwanted saved row with `config routing unset`, not by skipping it.
+Changing scope in the wizard follows that scope's recorded choice. Unvisited
+wizard defaults do not become Static pins when moving into routing-aware setup;
+explicitly chosen rows, including an explicitly chosen recommended recipe, remain.
+Once routes have been collected as additions, switching back to an unselected
+scope cannot turn skipped rows into deletions or silently seed recommendations.
+This preserves rows without recording migration consent in that scope.
 
 Supply your own `GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY` in the environment before
 Dynamic setup. Setup never requests a key in an echoed prompt or saves one.
@@ -716,7 +725,13 @@ Cancellation, invalid authorization or failed readiness saves no Config, prompt,
 Skill policy, scaffold provenance or tracker labels. Edits detected during the
 live read to the chosen Config, inherited global Config, prompt or Measured
 routing artifact abort rather than being overwritten or approved against stale
-inputs. The prerequisite machine-wide Skill catalog may remain, as described
+inputs. Bare init and `--routing ask` also capture Config inputs before opening
+the wizard, including when no policy is yet recorded. Any byte change to those
+chosen-scope inputs aborts before an authorization prompt or readiness request:
+setup preserves the edit and asks you to re-run init, not choose a policy.
+Invalid authority is an
+actionable refusal, not a traceback; an invalid unchosen scope does not prevent
+configuring another scope. The prerequisite machine-wide Skill catalog may remain, as described
 above. After successful setup, later Run failures leave those saved choices
 intact; proposal and Pickup must validate fresh inputs, not trust setup readiness.
 
