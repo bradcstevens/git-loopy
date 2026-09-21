@@ -454,7 +454,7 @@ class InitWizardApp(App["InitAnswers | None"]):
         self.push_screen(
             _ChoiceScreen(
                 (
-                    "Configure explicit Static routes? They override Dynamic choices."
+                    "Configure explicit Static routes? Other saved rows are preserved."
                     if self._routing_updates_only
                     else "Configure per-task-type routing?"
                 ),
