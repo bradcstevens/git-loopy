@@ -473,6 +473,50 @@ def test_doctor_verifies_static_settings_without_leaderboard_access(
         assert not any("a Run would not be blocked" in line for line in output)
 
 
+@pytest.mark.parametrize("supported", [False, True])
+def test_missing_dynamic_access_does_not_skip_doctors_static_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supported: bool
+) -> None:
+    reads: list[str] = []
+
+    async def listing():
+        reads.append("capabilities")
+        return [SimpleNamespace(
+            id="gpt-5.6-terra",
+            policy=SimpleNamespace(state="enabled"),
+            supported_reasoning_efforts=["high"] if supported else ["low"],
+        )]
+
+    async def forbidden_evidence(*_args):
+        pytest.fail("missing access must not start a leaderboard request")
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", listing)
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", forbidden_evidence)
+    config = RunConfig(
+        route_policy=RoutePolicy.DYNAMIC,
+        routing={"implementation": ("gpt-5.6-terra", "high")},
+        routing_deadline_seconds=30,
+        routing_credit_allowance=Decimal("2.5"),
+        selector_concurrency=1,
+        route_associations={"aa-terra": "gpt-5.6-terra@high"},
+    )
+
+    code, output = _run(tmp_path, config=config, catalog=_catalog())
+
+    assert code == 1
+    assert reads == ["capabilities"]
+    text = "\n".join(output)
+    assert "Routing readiness | passed" not in text
+    if supported:
+        assert ARTIFICIAL_ANALYSIS_API_KEY_ENV in text
+        assert "eligible Static work may still proceed" in text
+        assert "new Dynamic assessments are unavailable" in text
+    else:
+        assert "selected Static route was refused" in text
+        assert "does not accept reasoning effort 'high'" in text
+        assert "routing still blocks this Run" in text
+
+
 def test_a_skill_repair_does_not_clear_or_rewrite_a_routing_refusal(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     path = settings.project_config_path(repo)

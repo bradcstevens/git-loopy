@@ -104,6 +104,12 @@ EXPECTED_RELEASE_VERSION = json.loads(
     ).read_text(encoding="utf-8")
 )["expected_release_version"]
 
+_MIGRATION_RECOVERY = json.loads(
+    (
+        Path(__file__).parents[2] / "conformance" / "routing-resolution.json"
+    ).read_text(encoding="utf-8")
+)["migration_recovery"]
+
 
 # ---------------------------------------------------------------------------
 # Fakes — minimal stand-ins for the SDK + git/gh surface the loop touches.
@@ -6593,15 +6599,16 @@ def test_saved_dynamic_reuse_keeps_context_authority_in_the_relevant_inputs(
 
 @pytest.mark.parametrize("entrypoint", ["update", "init", "upgrade"])
 @pytest.mark.parametrize(
-    ("choice", "saved_route", "expected_model", "expected_source"),
+    ("choice", "saved_route", "missing_access", "expected_model", "expected_source"),
     [
-        ("keep", False, "gpt-5.6-terra", "routed"),
-        ("migrate", False, "claude-opus-5", "dynamic"),
-        ("migrate", True, "gpt-5.6-terra", "routed"),
+        ("keep", False, False, "gpt-5.6-terra", "routed"),
+        ("migrate", False, False, "claude-opus-5", "dynamic"),
+        ("migrate", True, False, "gpt-5.6-terra", "routed"),
+        ("migrate", True, True, "gpt-5.6-terra", "routed"),
     ],
 )
 def test_a_saved_routing_choice_reaches_the_serial_session_and_canonical_pickup(
-    tmp_path, monkeypatch, capsys, entrypoint, choice, saved_route,
+    tmp_path, monkeypatch, capsys, entrypoint, choice, saved_route, missing_access,
     expected_model, expected_source
 ) -> None:
     from git_loopy import settings
@@ -6663,6 +6670,8 @@ def test_a_saved_routing_choice_reaches_the_serial_session_and_canonical_pickup(
     assert client.create_calls == [] and spied["assessments"] == []
     assert artifact.read_bytes() == measured_before
     saved = path.read_bytes()
+    if missing_access:
+        monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV)
 
     tables = settings.load_configs(tmp_path, os.environ)
     config = cli.resolve_config(
@@ -6691,6 +6700,101 @@ def test_a_saved_routing_choice_reaches_the_serial_session_and_canonical_pickup(
         assert "every issue runs on the default pair" not in output
         assert "a stalled issue is not retried" not in output
         assert "uncovered work awaits Dynamic Pickup" in output
+
+
+@pytest.mark.parametrize("mode", ["serial", "lane"])
+@pytest.mark.parametrize("task_type_labelled", [False, True])
+@pytest.mark.parametrize("static_work", [False, True])
+def test_saved_dynamic_work_without_access_starts_no_classifier_or_fallback(
+    tmp_path, monkeypatch, capsys, mode, task_type_labelled, static_work
+) -> None:
+    from tests.fakes import FakeGateRunner
+    from tests.test_init_routing import _first_setup_for_run
+    from tests.test_loop_parallel import _ParallelFakeClient
+    from tests.test_routing_migration import _listing
+
+    client, git = _wire_single_issue_github(tmp_path, monkeypatch)
+    issues = [
+        _make_issue(42, labels=[
+            "ready-for-agent",
+            *(["task-type:docs"] if task_type_labelled else []),
+            *(["parallel-safe"] if mode == "lane" else []),
+        ]),
+    ]
+    if static_work:
+        issues.append(_make_issue(43, labels=[
+            "ready-for-agent", "task-type:implementation", "semver:none",
+            *(["parallel-safe"] if mode == "lane" else []),
+        ]))
+    tracker = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"), issues=issues,
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: tracker)
+    if mode == "lane":
+        client = _ParallelFakeClient(fake_git=git, scripted_events=[])
+        monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    _harness(monkeypatch, ("gpt-5.6-terra", ["high"], True))
+    _listing(monkeypatch)
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "setup-only-key")
+    _wire_dynamic_ports(
+        monkeypatch,
+        rows=(_aa_row("aa-terra", 40, 200),),
+        listing=(_listed_model("gpt-5.6-terra", ["high"]),),
+        answer=None,
+        session_selector=True,
+    )
+    assert _first_setup_for_run(
+        tmp_path, monkeypatch, choice="migrate", saved_route=True,
+    ) == 0
+    tables = settings.load_configs(tmp_path, os.environ)
+    config = cli.resolve_config(
+        cli.build_parser().parse_args(["1"]),
+        {
+            "GIT_LOOPY_CLASSIFIER_MODEL": "gpt-5.6-terra",
+            "GIT_LOOPY_CLASSIFIER_REASONING_EFFORT": "high",
+        },
+        project=tables.project, global_=tables.global_, measured=tables.measured,
+    ).run
+    path = settings.project_config_path(tmp_path)
+    saved = path.read_bytes()
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV)
+
+    async def forbidden_evidence(*_args):
+        pytest.fail("missing access must not start a leaderboard request")
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", forbidden_evidence)
+
+    assert asyncio.run(loop_module.run(config)) == (0 if static_work else 1)
+
+    assert len(client.create_calls) == (1 if static_work else 0)
+    assert path.read_bytes() == saved
+    events = _read_events(tmp_path)
+    assert not any(e["type"] in {
+        "wrapper.routing.resolved", "wrapper.strike", "usage.tokens",
+    } for e in events)
+    assert [e["issue"] for e in events if e["type"] == "wrapper.pickup.bound"] == (
+        [43] if static_work else []
+    )
+    assert any(
+        e["type"] == "wrapper.pickup.skipped" and e["issue"] == 42
+        and "prerequisite_missing" in e["reason"]
+        for e in events
+    )
+    assert not any(ref == 42 for ref, _comment in tracker.route_comment_calls)
+    if static_work:
+        (call,) = client.create_calls
+        assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+            "gpt-5.6-terra", "high", "default",
+        )
+        (bound,) = _bound_pickups(tmp_path)
+        assert (bound["model"], bound["effort"], bound["context_tier"]) == (
+            "gpt-5.6-terra", "high", "default",
+        )
+        assert bound["routing_source"] == "routed"
+    else:
+        assert events[-1]["outcome"] == "all_skipped"
+    assert dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("detached", [False, True])
@@ -6745,17 +6849,20 @@ def test_saved_legacy_config_refuses_work_until_a_routing_choice(
     assert "git-loopy update --routing migrate" in error
 
 
-@pytest.mark.parametrize("mode", ["serial", "lane"])
-@pytest.mark.parametrize("authority", ["flag", "environment", "update", "global"])
-@pytest.mark.parametrize("policy", ["static", "dynamic"])
+@pytest.mark.parametrize("mode", _MIGRATION_RECOVERY["modes"])
+@pytest.mark.parametrize(
+    "case", _MIGRATION_RECOVERY["cases"], ids=lambda case: case["id"]
+)
 def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
-    tmp_path, monkeypatch, mode, authority, policy
+    tmp_path, monkeypatch, mode, case
 ) -> None:
-    from git_loopy import settings
+    from git_loopy import model_listing, settings
     from tests.fakes import FakeGateRunner
     from tests.test_loop_parallel import _ParallelFakeClient
-    from tests.test_routing_migration import _authorized_values, _listing, _update
+    from tests.test_routing_migration import _update
 
+    authority, policy = case["authority"], case["policy"]
+    expected = case["expected"]
     client, git = _wire_single_issue_github(
         tmp_path, monkeypatch, labels=[
             "ready-for-agent", "task-type:implementation", "semver:none",
@@ -6772,28 +6879,34 @@ def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
     monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
     for name in ("GIT_LOOPY_MODEL", "GIT_LOOPY_REASONING_EFFORT"):
         monkeypatch.delenv(name, raising=False)
-    _harness(monkeypatch, ("gpt-5.6-terra", ["high"], True))
-    _listing(monkeypatch)
+    listing = tuple(
+        _listed_model(row["model"], row["efforts"])
+        for row in _MIGRATION_RECOVERY["harness"]
+    )
+    _harness(
+        monkeypatch,
+        *((row["model"], row["efforts"], True) for row in _MIGRATION_RECOVERY["harness"]),
+    )
+
+    async def fetch_listing():
+        return list(listing)
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", fetch_listing)
     spied = _wire_dynamic_ports(
         monkeypatch,
-        rows=(_aa_row("aa-opus", 70, 90), _aa_row("aa-terra", 40, 200)),
-        answer=_elects("claude-opus-5"),
-        listing=(
-            _listed_model("claude-opus-5", ["high"]),
-            _listed_model("gpt-5.6-terra", ["high"]),
+        rows=tuple(
+            _aa_row(row["id"], row["intelligence_index"], row["output_tokens_per_second"])
+            for row in _MIGRATION_RECOVERY["evidence"]
         ),
+        answer=_elects(_MIGRATION_RECOVERY["selector_choice"]),
+        listing=listing,
     )
     if policy == "dynamic":
         monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
     else:
         monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
     path = settings.project_config_path(tmp_path)
-    settings.write_config_atomic(path, {
-        **_authorized_values(),
-        "route_associations": {
-            "aa-opus": "claude-opus-5@high", "aa-terra": "gpt-5.6-terra@high",
-        },
-    })
+    settings.write_config_atomic(path, _MIGRATION_RECOVERY["saved_config"])
     original = path.read_bytes()
     assert cli.main(["1"]) == 1
     assert path.read_bytes() == original and client.create_calls == []
@@ -6817,26 +6930,33 @@ def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
 
     assert cli.main(args) == 0
 
-    model = "gpt-5.6-terra" if policy == "static" else "claude-opus-5"
     (call,) = client.create_calls
     assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
-        model, "high", "default",
+        expected["model"], expected["effort"], expected["context_tier"],
     )
     (pickup,) = _bound_pickups(tmp_path)
     assert (pickup["model"], pickup["effort"], pickup["context_tier"]) == (
-        model, "high", "default",
+        expected["model"], expected["effort"], expected["context_tier"],
     )
-    assert len(spied["assessments"]) == (1 if policy == "dynamic" else 0)
+    assert pickup["routing_source"] == expected["routing_source"]
+    assert len(spied["assessments"]) == expected["selector_calls"]
     if policy == "static":
         assert spied["evidence"] == 0
     assert path.read_bytes() == saved
     assert (global_path.read_bytes() if global_path.exists() else None) == global_saved
     if authority != "update":
         assert saved == original and not path.with_suffix(".toml.bak").exists()
-    if authority in {"flag", "environment"}:
+    if not expected["persists_choice"]:
         monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
         assert cli.main(["1"]) == 1
         assert len(client.create_calls) == 1
+    else:
+        tables = settings.load_configs(tmp_path, os.environ)
+        config = cli.resolve_config(
+            cli.build_parser().parse_args(["1"]), {},
+            project=tables.project, global_=tables.global_,
+        ).run
+        assert config.route_policy.value == policy
 
 
 def test_the_dashboard_reads_the_dynamic_route_from_the_pickup_it_bound(

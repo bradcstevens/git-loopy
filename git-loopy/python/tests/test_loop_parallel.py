@@ -8154,11 +8154,13 @@ def test_a_dynamic_route_reaches_each_lanes_own_work_session(
 @pytest.mark.parametrize(
     ("choice", "saved_route", "outage", "expected_model", "expected_source"),
     [
-        ("keep", False, False, "gpt-5.6-terra", "routed"),
-        ("migrate", False, False, "claude-opus-5", "dynamic"),
-        ("migrate", True, False, "gpt-5.6-terra", "routed"),
-        ("migrate", False, True, None, None),
-        ("migrate", True, True, "gpt-5.6-terra", "routed"),
+        ("keep", False, None, "gpt-5.6-terra", "routed"),
+        ("migrate", False, None, "claude-opus-5", "dynamic"),
+        ("migrate", True, None, "gpt-5.6-terra", "routed"),
+        ("migrate", False, "source", None, None),
+        ("migrate", True, "source", "gpt-5.6-terra", "routed"),
+        ("migrate", False, "access", None, None),
+        ("migrate", True, "access", "gpt-5.6-terra", "routed"),
     ],
 )
 def test_a_saved_routing_choice_reaches_lanes_only_after_fresh_readiness(
@@ -8225,10 +8227,17 @@ def test_a_saved_routing_choice_reaches_lanes_only_after_fresh_readiness(
             assert "routing" not in settings.load_config_table(path)
     assert client.create_calls == [] and spied["assessments"] == []
     saved = path.read_bytes()
-    if outage:
+    if outage == "source":
         async def unavailable(*_args):
             raise OSError("source unavailable after migration")
         monkeypatch.setattr(dynamic_route, "_stdlib_fetch", unavailable)
+    elif outage == "access":
+        monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV)
+
+        async def forbidden_evidence(*_args):
+            pytest.fail("missing access must not start a leaderboard request")
+
+        monkeypatch.setattr(dynamic_route, "_stdlib_fetch", forbidden_evidence)
     tables = settings.load_configs(tmp_path, os.environ)
     config = cli.resolve_config(
         cli.build_parser().parse_args(["2"]),

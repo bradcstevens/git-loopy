@@ -175,7 +175,9 @@ A local Python Run with saved Config also refuses before work until a routing ch
 is supplied or recorded. Use `git-loopy update --routing keep` or
 `git-loopy update --routing migrate` with `--project`/`--global`, or select
 `--route-policy static`/`dynamic` for one Run. Config is not rewritten by a Run;
-Static work needs no leaderboard access. Non-local activation remains deferred,
+Retained Static work needs no leaderboard access even when Dynamic prerequisites
+are missing; uncovered Dynamic work is refused, not run on a fallback.
+Non-local activation remains deferred,
 so unselected GitHub Actions Runs retain their legacy path. This migration guard
 is not final Dynamic-default activation; see [routing migration](git-loopy/python/README.md#explicit-routing-migration).
 

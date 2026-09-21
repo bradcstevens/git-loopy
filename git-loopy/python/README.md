@@ -1291,8 +1291,16 @@ A successful readiness row is **not a Pickup or an issue-fit guarantee**: no
 issue context has been assessed, and proposal and Pickup must check fresh inputs
 again. A failed Dynamic-readiness row makes doctor nonzero but does not prevent a
 Run from reaching eligible Static work or recovering on a later fresh check.
-Configuration refusals still stop the Run. The Run carries its deadline ledger
-from preflight into routing; it does not grant a new budget after live reads.
+Missing Dynamic access or prerequisites leave uncovered work unavailable for that
+Run: no Task-type classifier, Route selector, or fallback work session is started
+for it. Retained Static routes still undergo live validation and may proceed
+without a leaderboard credential. Restore the prerequisites before starting a
+new Dynamic Run; unlike a transient source outage, a Run with no authorized
+routing setup cannot recover by inventing it later. Setup and migration still
+refuse to save an unready Dynamic choice, and doctor remains nonzero.
+Outstanding migration authority, unsupported placement, and invalid Static
+settings still stop the Run. The Run carries its deadline ledger from preflight
+into routing; it does not grant a new budget after live reads.
 
 **Activation status (#567): incomplete.** `init --routing`, `update --routing`,
 and the update chained by `upgrade` offer explicit keep-or-migrate authorization and this shared readiness

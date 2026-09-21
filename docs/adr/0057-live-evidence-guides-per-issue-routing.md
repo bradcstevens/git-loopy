@@ -259,6 +259,18 @@ routing setup preserves saved/inherited model, effort, prompt and Skill policy a
 `--yes` as consent. Cancellation, readiness failure or detected edits to its
 inputs abort before scope writes. The operator-owned key stays outside Config.
 
+Missing Dynamic prerequisites at Run preflight now leave retained Static work
+usable rather than refusing the whole Run. The shared verdict still validates
+Static settings and makes setup, migration and doctor refuse an unready Dynamic
+choice. In serial and Lane Pickups, uncovered work without authorized Dynamic
+setup is refused before classification or any fallback work session; later
+eligible Static work can proceed. Saved init/update/upgrade cases remove access
+after authorization and observe actual Static session settings, canonical Pickup,
+unchanged Config, and no leaderboard or selector call. Mixed-Pool cases preserve
+the non-empty-work refusal and charge no Strike for unstarted Dynamic work.
+Missing prerequisites require a new Run after repair; a live-source outage with
+authorized prerequisites retains its existing fresh-Pickup recovery path.
+
 The saved first-setup and migration choices are composed through actual serial
 and Lane sessions and canonical Pickup records, including fresh source outages
 after setup. The composed matrix also carries both saved entrypoints through

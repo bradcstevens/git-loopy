@@ -63,9 +63,11 @@ class RunRoutingPreflight:
     """Configuration authority and live readiness, without a binding route.
 
     Prerequisites contain operator-owned access, so they must not appear in
-    diagnostic representations or public records. A configuration refusal
-    blocks the Run. A Dynamic readiness refusal blocks a new assessment now,
-    not eligible Static work or a later, freshly validated Dynamic Pickup.
+    diagnostic representations or public records. An authority or Static
+    validation refusal blocks the Run. A Dynamic readiness refusal blocks a
+    new assessment now, not eligible Static work. Missing prerequisites leave
+    Dynamic work unavailable for this Run; live-source failures can be retried
+    at a later, freshly validated Dynamic Pickup.
     The Run retains the admission ledger: preflight cannot restart its budget.
     """
 
@@ -118,12 +120,16 @@ async def resolve_run_routing_preflight(
         )
 
     prerequisites = None
+    dynamic_refusal = None
     if config.route_policy is RoutePolicy.DYNAMIC and not config.routing_suppressed:
         try:
             prerequisites = resolve_prerequisites(config, env)
         except RoutingPrerequisiteError as exc:
-            return RunRoutingPreflight(
-                refusal=f"the selected Dynamic route was refused: {exc}"
+            dynamic_refusal = (
+                f"the selected Dynamic route was refused: {exc} "
+                "No Route selector or classifier was called; eligible Static "
+                "work may still proceed. Supply the missing prerequisites "
+                "before starting a new Run for Dynamic work."
             )
 
     async def live_capabilities() -> FreshHarnessCapabilities | None:
@@ -153,7 +159,7 @@ async def resolve_run_routing_preflight(
                     refusal=f"the selected Static route was refused: {name}: {exc}"
                 )
     if prerequisites is None:
-        return RunRoutingPreflight()
+        return RunRoutingPreflight(dynamic_refusal=dynamic_refusal)
     ledger = RoutingAdmissionLedger(
         deadline_seconds=prerequisites.deadline_seconds,
         routing_credit_allowance=prerequisites.routing_credit_allowance,

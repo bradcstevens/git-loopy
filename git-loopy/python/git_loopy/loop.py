@@ -1245,10 +1245,9 @@ class _Loop:
                 tracker=route_tracker,
             )
         )
-        # The **Route selector**'s router, or `None` for every Run that did not
-        # select the policy (#561, ADR-0057) — the same "a `None` makes the
-        # whole object inert" discipline the classifier above keeps, so no
-        # Pickup carries a second copy of "does this Run route dynamically?".
+        # The **Route selector**'s router, or `None` when not selected or its
+        # prerequisites are unavailable. Absence buys no assessment; it is not
+        # authority for uncovered Dynamic work to use the run-wide default.
         #
         # Assembled here for the classifier's reason, doubled. Two of its four
         # ports need things that exist only once this constructor has run: the
@@ -2228,7 +2227,18 @@ class _Loop:
                 time. Classification itself still never raises — a failure to
                 acquire a *label* costs the issue nothing.
         """
-        task_type_labelled = await self._labelled_for_routing(item)
+        if (
+            self._config.route_policy is RoutePolicy.DYNAMIC
+            and not self._config.routing_suppressed
+            and self._dynamic_router is None
+        ):
+            if not static_route_applies(routed):
+                raise DynamicRouteUnavailable(
+                    RoutingUnavailableReason.PREREQUISITE_MISSING.value
+                )
+            task_type_labelled = item
+        else:
+            task_type_labelled = await self._labelled_for_routing(item)
         if isinstance(task_type_labelled, RoutingUnavailable):
             raise DynamicRouteUnavailable(task_type_labelled.reason.value)
         labelled = await self._bump_classifier.labelled(task_type_labelled)
@@ -2386,7 +2396,13 @@ class _Loop:
         something a cache may participate in either.
         """
         router = self._dynamic_router
-        if router is None or static_route_applies(resolution):
+        if static_route_applies(resolution):
+            return resolution
+        if router is None:
+            if self._config.route_policy is RoutePolicy.DYNAMIC:
+                raise DynamicRouteUnavailable(
+                    RoutingUnavailableReason.PREREQUISITE_MISSING.value
+                )
             return resolution
         request = self._routing_request(item, resolution)
         decision = await self._bound_dynamic_decision(item, request, router)
