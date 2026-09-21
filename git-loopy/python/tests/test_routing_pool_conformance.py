@@ -311,6 +311,11 @@ def test_saved_authority_revalidates_prepared_work_at_pickup(
                 event["type"] == "wrapper.pickup.skipped" and event["issue"] == 44
                 and expected["refusal"] in event["reason"] for event in events
             )
+        else:
+            assert not any(
+                event["type"] == "wrapper.pickup.skipped" and event["issue"] == 44
+                for event in events
+            )
     pending = [40, 41, 45 if expected["next_issue"] == 44 else 44]
     for ref in pending:
         assert tracker.issue_view(ref).state == "OPEN"
