@@ -682,7 +682,7 @@ The wizard:
 `git-loopy init --routing [keep|migrate|ask]` composes first setup with the same
 authorization and live routing-readiness verdict as `update --routing`, doctor,
 and a Run. **This is not final default activation:** bare init and auto-setup
-retain their existing behavior.
+retain their existing routing policy.
 
 Choose `migrate` for Dynamic uncovered work or `keep` for strict Static policy.
 Omit the argument (or use `ask`) to inherit a recorded choice or decide at the
@@ -1335,6 +1335,17 @@ flag/environment and recorded project/global recovery exercised by the shared
 `routing-resolution.json` Conformance cases. They observe retained Static rows,
 inherited tiers, run-wide and context-only overrides, and loss of access/evidence
 after migration through actual sessions and canonical/Dashboard readback.
+The shared `first_setup` cases also start without either Config scope, collect
+guided project/global answers through the real Textual `init --routing` walk,
+and carry repaired readiness failures into actual serial/Lane work. Missing access, invalid bounds,
+no verified candidates and unavailable evidence/capabilities save no choices
+or tracker labels; Static setup needs no Dynamic access or limits. Canonical
+Pickup, Dashboard and final tracker comments agree with actual session settings,
+and subsequent Runs preserve the saved Config. These are opt-in setup obligations,
+not evidence that bare init or auto-setup activates Dynamic defaults.
+That walk exposed and fixed Skill discovery trying to nest an event loop inside
+the fullscreen wizard; discovery now completes on its own joined worker before
+the wizard can save, with validation failures still propagated without writes.
 Non-local activation, the remaining composed activation matrix and the remaining
 Wrapper/Conformance activation obligations still precede the final default
 change. Existing Config is not migrated implicitly.

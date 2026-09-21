@@ -110,6 +110,7 @@ _ROUTING_CONFORMANCE = json.loads(
     ).read_text(encoding="utf-8")
 )
 _MIGRATION_RECOVERY = _ROUTING_CONFORMANCE["migration_recovery"]
+_FIRST_SETUP = _ROUTING_CONFORMANCE["first_setup"]
 _PREFLIGHT_DEADLINE = _ROUTING_CONFORMANCE["preflight_deadline"]
 
 
@@ -7177,6 +7178,244 @@ def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
             project=tables.project, global_=tables.global_,
         ).run
         assert config.route_policy.value == policy
+
+
+@pytest.mark.parametrize("mode", _FIRST_SETUP["modes"])
+@pytest.mark.parametrize("scope", _FIRST_SETUP["scopes"])
+@pytest.mark.parametrize("case", _FIRST_SETUP["cases"], ids=lambda case: case["id"])
+def test_first_setup_readiness_recovers_into_the_actual_routed_session(
+    tmp_path, monkeypatch, capsys, mode, scope, case
+) -> None:
+    from textual.widgets import DataTable
+
+    from git_loopy import model_listing, skillscmd
+    from git_loopy.interactive import init_wizard_app, picker
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
+    from git_loopy.prompt import packaged_required_skills
+    from tests.fakes import FakeGateRunner
+    from tests.test_init import _FakeCopilotClient, _FakeLabelClient
+    from tests.test_loop_parallel import _ParallelFakeClient
+
+    assert case["choice"] in {"keep", "migrate"}
+    client, git = _wire_single_issue_github(
+        tmp_path, monkeypatch, labels=[
+            "ready-for-agent", "task-type:implementation", "semver:none",
+            *(["parallel-safe"] if mode == "lane" else []),
+        ],
+    )
+    (tmp_path / "git-loopy" / "prompt.md").unlink()
+    tracker = loop_module._make_github_client()
+    if mode == "lane":
+        client = _ParallelFakeClient(fake_git=git, scripted_events=[])
+        monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+    for name in (
+        "ROUTE_POLICY", "MODEL", "REASONING_EFFORT", "CONTEXT_TIER", "EXECUTION_HOST",
+        "ROUTING_DEADLINE_SECONDS", "ROUTING_CREDIT_ALLOWANCE", "SELECTOR_CONCURRENCY",
+    ):
+        monkeypatch.delenv(f"GIT_LOOPY_{name}", raising=False)
+    setup_tracker = _FakeLabelClient()
+    monkeypatch.setattr(cli, "_make_label_client", lambda: setup_tracker)
+    values = _MIGRATION_RECOVERY["saved_config"]
+    models = tuple(
+        _listed_model(row["model"], row["efforts"])
+        for row in _MIGRATION_RECOVERY["harness"]
+    )
+    initial: dict[str, Any] = {}
+
+    def listing():
+        if not initial.get("harness_available", True):
+            raise OSError("fixture: authenticated listing unavailable")
+        return models
+
+    async def fetch_listing():
+        return list(listing())
+
+    async def picker_listing():
+        return list(models)
+
+    async def static_capabilities(**_kwargs):
+        return static_route.HarnessCapabilities.from_listing(listing())
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", fetch_listing)
+    monkeypatch.setattr(picker, "fetch_live_models", picker_listing)
+    monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", static_capabilities)
+
+    def evidence():
+        if not initial.get("evidence_available", True):
+            raise OSError("fixture: required evidence unavailable")
+        return tuple(
+            _aa_row(row["id"], row["intelligence_index"], row["output_tokens_per_second"])
+            for row in _MIGRATION_RECOVERY["evidence"]
+        )
+
+    spied = _wire_dynamic_ports(
+        monkeypatch, rows=evidence,
+        answer=_elects(_MIGRATION_RECOVERY["selector_choice"]),
+        listing=listing,
+    )
+
+    async def discover(_request):
+        return SimpleNamespace(skills=[], errors=[])
+
+    class CatalogClient(_FakeCopilotClient):
+        rpc = SimpleNamespace(skills=SimpleNamespace(discover=discover))
+
+    catalog_client = CatalogClient()
+    monkeypatch.setattr(skillscmd, "make_copilot_client", lambda **_kwargs: catalog_client)
+    required = packaged_required_skills()
+
+    def wizard(app):
+        async def collect():
+            async with app.run_test() as pilot:
+                table = app.screen.query_one("#picker-models", DataTable)
+                table.move_cursor(row=table.get_row_index(values["model"]))
+                await pilot.press("enter", "enter")  # model and effort
+                await pilot.press("enter")  # accept the real Static-route default
+                await pilot.press("enter", "enter", "enter")  # scaffold, Skills, Save
+
+        asyncio.run(collect())
+
+    monkeypatch.setattr(init_wizard_app.InitWizardApp, "run", wizard)
+    project_path = settings.project_config_path(tmp_path)
+    global_path = settings.global_config_path(os.environ)
+    assert not project_path.exists() and not global_path.exists()
+    paths = (project_path, global_path)
+    assets = [
+        path.with_name(name)
+        for path in paths
+        for name in ("config.toml", "PROMPT.md", "scaffold-provenance.json")
+    ]
+    secret = "fixture-private-aa-key"
+
+    def setup():
+        if initial.get("access", case["choice"] == "migrate"):
+            monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, secret)
+        else:
+            monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+        collected = {**values, **initial.get("answers", {})}
+        answers = iter([
+            str(collected["routing_deadline_seconds"]),
+            str(collected["routing_credit_allowance"]),
+            str(collected["selector_concurrency"]),
+            "{" + ", ".join(
+                f"{json.dumps(key)} = {json.dumps(value)}"
+                for key, value in collected["route_associations"].items()
+            ) + "}",
+        ] if case["choice"] == "migrate" else [])
+
+        def answer(prompt):
+            try:
+                return next(answers)
+            except StopIteration:
+                pytest.fail(f"setup asked an unexpected authorization question: {prompt}")
+
+        monkeypatch.setattr("builtins.input", answer)
+        code = cli.main(["init", f"--{scope}", "--routing", case["choice"]])
+        if code == 0:
+            assert next(answers, None) is None, "setup did not collect explicit authorization"
+        return code
+
+    if "expected_refusal" in case:
+        initial = case["initial"]
+        assert setup() == 1
+        assert all(not path.exists() for path in assets)
+        assert not list((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+        assert setup_tracker.created == []
+        assert client.create_calls == [] and spied["assessments"] == []
+        assert tracker.route_comment_calls == []
+        captured = capsys.readouterr()
+        refusal = case["expected_refusal"]
+        if "config_key" in refusal:
+            assert refusal["config_key"] == "routing_deadline_seconds"
+            assert "routing_deadline_seconds must be finite and > 0" in captured.err
+        elif refusal["routing_reason"] == "prerequisite_missing":
+            assert "the selected Dynamic route was refused" in captured.err
+            assert refusal["setting"] in captured.err
+            if refusal["setting"] == "selector_concurrency":
+                assert "an integer between 1 and 64" in captured.err
+        else:
+            assert refusal["routing_reason"] in captured.err
+        assert secret not in captured.err + captured.out
+        initial = {}
+
+    assert setup() == 0
+    assert client.create_calls == [] and spied["assessments"] == []
+    path = project_path if scope == "project" else global_path
+    other_path = global_path if scope == "project" else project_path
+    saved = path.read_bytes()
+    table = settings.load_config_table(path)
+    policy = "dynamic" if case["choice"] == "migrate" else "static"
+    expected_values = (
+        values if policy == "dynamic"
+        else {key: values[key] for key in ("model", "reasoning_effort")}
+    )
+    assert table == {
+        **expected_values, "route_policy": policy,
+        "enabled_skills": sorted(("setup-agent-skills", *required)),
+    }
+    assert not other_path.exists()
+    assert "routing" not in table and "escalation" not in table
+    assert secret not in "".join(asset.read_text() for asset in assets if asset.exists())
+    assert setup_tracker.created
+    evidence_before_run = spied["evidence"]
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("a saved-choice Run prompted")
+    )
+
+    assert cli.main(["1"]) == 0
+
+    assert path.read_bytes() == saved and not other_path.exists()
+    expected = case["expected"]
+    (call,) = client.create_calls
+    (pickup,) = _bound_pickups(tmp_path)
+    assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+        expected["model"], expected["effort"], expected["context_tier"],
+    )
+    assert {key: pickup[key] for key in (
+        "model", "effort", "context_tier", "routing_source",
+    )} == {key: expected[key] for key in (
+        "model", "effort", "context_tier", "routing_source",
+    )}
+    events = _read_events(tmp_path)
+    dashboard = LiveRunState()
+    for event in events:
+        dashboard.render(event)
+    view = project_run_view(dashboard, RunSummary(), issue=42)
+    (row,) = view["dashboard"]["queue"]["rows"]
+    assert (row["route"]["model"], row["route"]["effort"], row["route"]["source"]) == (
+        expected["model"], expected["effort"], expected["routing_source"],
+    )
+    assert row["route"].get("context_tier", "default") == expected["context_tier"]
+    types = {event["type"] for event in events}
+    assert ("wrapper.contribution.start" in types) == (mode == "lane")
+    assert ("wrapper.iteration.start" in types) == (mode == "serial")
+    assert len(spied["assessments"]) == expected["selector_calls"]
+    if policy == "dynamic":
+        assert spied["evidence"] > evidence_before_run
+    (issue, comment), = tracker.route_comment_calls
+    assert issue == 42
+    for key in ("model", "effort", "context_tier"):
+        assert f'`{json.dumps(expected[key])}`' in comment
+    (label_issue, removed, added), = tracker.route_label_calls
+    assert label_issue == 42 and removed == ()
+    assert added.startswith("git-loopy-route:")
+    assert added in tracker.issue_labels(42)
+    (delivery,) = _delivery_events(tmp_path)
+    assert delivery["label"] == added and delivery["status"] == "published"
+    assert f'<!-- git-loopy-route:v1:{delivery["identity"]} -->' in comment
+    if policy == "static":
+        assert spied["evidence"] == 0
+    captured = capsys.readouterr()
+    assert secret not in (
+        json.dumps(events) + repr(tracker.route_comment_calls) + captured.err + captured.out
+    )
 
 
 def test_the_dashboard_reads_the_dynamic_route_from_the_pickup_it_bound(

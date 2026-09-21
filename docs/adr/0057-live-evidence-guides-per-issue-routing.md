@@ -272,6 +272,23 @@ default; the recommended Static recipe remains an explicit option. Unattended
 routing setup preserves saved/inherited model, effort, prompt and Skill policy and never treats
 `--yes` as consent. Cancellation, readiness failure or detected edits to its
 inputs abort before scope writes. The operator-owned key stays outside Config.
+The shared `routing-resolution.json` `first_setup` matrix now starts with neither
+Config scope present and drives the real guided `init --routing` CLI and Textual
+keyboard walk into unattended serial and Lane Runs for both project and global setup. It covers
+explicit Dynamic and Static setup plus refusal and recovery for missing access,
+invalid deadline/allowance/concurrency, an empty verified intersection and
+unavailable evidence/capabilities. Refusal leaves operator choices and tracker
+labels unwritten; after repair, actual work settings, canonical Pickup,
+Dashboard and final tracker comments agree. The Run preserves Config, Static
+setup requires no leaderboard access or Dynamic limits, and no Static rows are
+seeded. Wrapper 14.3 declares this opt-in first-setup obligation and explicitly
+defers native-member activation; bare init and auto-setup routing defaults remain unchanged.
+This composed walk exposed a setup blocker hidden by prebuilt wizard answers:
+Skill discovery tried to run its async lifecycle on Textual's already-running
+event loop. The synchronous discovery/rebuild callback now uses a dedicated,
+joined worker, retaining the same Skill policy validation and error propagation
+before any scope write. The real wizard's default route choice, rather than a
+test-supplied empty routing table, is what the matrix carries through Save.
 
 Missing or invalid Dynamic prerequisites at Run preflight now leave retained Static work
 usable rather than refusing the whole Run. The shared verdict still validates

@@ -57,6 +57,7 @@ from __future__ import annotations
 import inspect
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -674,23 +675,26 @@ def run_init(
 
                 selected_targets = _resolve_targets(selected_scope, repo_root, env)
                 try:
-                    return skillscmd.discover_skill_policy(
-                        scope=selected_scope,
-                        repo_root=repo_root,
-                        env=env,
-                        client_factory=client_factory,
-                        discoverer=discoverer or skillscmd.discover_skill_catalog,
-                        git=git,
-                        required_skills=_post_setup_required_skills(
+                    # Textual owns this thread's event loop; discovery owns another.
+                    with ThreadPoolExecutor(max_workers=1) as discovery:
+                        return discovery.submit(
+                            skillscmd.discover_skill_policy,
+                            scope=selected_scope,
                             repo_root=repo_root,
                             env=env,
-                            prompt_path=selected_targets.prompt_path,
-                            prompt_source=prompt_source,
-                            scaffold=scaffold_decision,
-                            required_skills=required_skills,
-                        ),
-                        installed_skills_dir=skills_source,
-                    ).model
+                            client_factory=client_factory,
+                            discoverer=discoverer or skillscmd.discover_skill_catalog,
+                            git=git,
+                            required_skills=_post_setup_required_skills(
+                                repo_root=repo_root,
+                                env=env,
+                                prompt_path=selected_targets.prompt_path,
+                                prompt_source=prompt_source,
+                                scaffold=scaffold_decision,
+                                required_skills=required_skills,
+                            ),
+                            installed_skills_dir=skills_source,
+                        ).result().model
                 except skillscmd.SKILL_POLICY_FAILURES as exc:
                     raise _SkillPolicyUnavailable(
                         f"cannot establish a Skill policy: {type(exc).__name__}: {exc}"
