@@ -457,6 +457,11 @@ def test_bootstrap_creates_only_the_absent_labels(tmp_path: Path) -> None:
         "semver:minor",
         "semver:patch",
         "semver:none",
+        "wayfinder:map",
+        "wayfinder:research",
+        "wayfinder:prototype",
+        "wayfinder:grilling",
+        "wayfinder:task",
     ]
     assert result.created == (
         "needs-triage",
@@ -475,6 +480,11 @@ def test_bootstrap_creates_only_the_absent_labels(tmp_path: Path) -> None:
         "semver:minor",
         "semver:patch",
         "semver:none",
+        "wayfinder:map",
+        "wayfinder:research",
+        "wayfinder:prototype",
+        "wayfinder:grilling",
+        "wayfinder:task",
     )
     assert result.existing == (LABEL_READY_FOR_AGENT, "wontfix")
     assert result.unavailable is None
@@ -753,6 +763,11 @@ def test_the_template_setup_writes_into_a_consumer_repo_parses(tmp_path: Path) -
         "semver:minor",
         "semver:patch",
         "semver:none",
+        "wayfinder:map",
+        "wayfinder:research",
+        "wayfinder:prototype",
+        "wayfinder:grilling",
+        "wayfinder:task",
     ]
 
 
