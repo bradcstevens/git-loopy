@@ -47,6 +47,15 @@ _TRANSIENT_WRITE_FAILURE = re.compile(
 )
 
 
+def is_transient_lease_error(error: GitError) -> bool:
+    """Recognize only recoverable transport/rate-limit/server write failures."""
+    return bool(
+        error.returncode != 127
+        and not _PERMANENT_WRITE_FAILURE.search(error.stderr_tail)
+        and _TRANSIENT_WRITE_FAILURE.search(error.stderr_tail)
+    )
+
+
 def lease_ref(issue: int) -> str:
     """Return the ref that *is* the Lease for ``issue``.
 
@@ -360,9 +369,12 @@ class LeaseTransport:
             else lambda interval: random.uniform(interval / 2, interval)
         )
 
-    def _push(self, ref: str, sha: str | None, expected: str | None) -> bool:
+    def _push(
+        self, ref: str, sha: str | None, expected: str | None,
+        *, timeout_seconds: float = _WRITE_BUDGET_SECONDS,
+    ) -> bool:
         """Retry the identical swap, never a fresh observation or a rejected swap."""
-        deadline = self._clock() + _WRITE_BUDGET_SECONDS
+        deadline = self._clock() + min(timeout_seconds, _WRITE_BUDGET_SECONDS)
         for attempt in range(_WRITE_ATTEMPTS):
             try:
                 return self._git.push_ref(
@@ -372,9 +384,7 @@ class LeaseTransport:
             except GitError as exc:
                 if (
                     attempt == _WRITE_ATTEMPTS - 1
-                    or exc.returncode == 127
-                    or _PERMANENT_WRITE_FAILURE.search(exc.stderr_tail)
-                    or not _TRANSIENT_WRITE_FAILURE.search(exc.stderr_tail)
+                    or not is_transient_lease_error(exc)
                 ):
                     raise
                 interval = min(2.0**attempt, 4.0)
@@ -466,8 +476,12 @@ class LeaseTransport:
         expected: str | None,
         stolen: bool = False,
         displaced_run_id: str | None = None,
+        timeout_seconds: float = _WRITE_BUDGET_SECONDS,
     ) -> LeaseHold | None:
         """Swap one fresh orphan record in, returning ``None`` if rejected."""
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("Lease write timeout must be positive and finite")
+        deadline = self._clock() + min(timeout_seconds, _WRITE_BUDGET_SECONDS)
         record = LeaseRecord(
             run_id=run_id,
             issue=issue,
@@ -480,7 +494,10 @@ class LeaseTransport:
         )
         ref = lease_ref(issue)
         sha = self._git.write_orphan_commit(render_record(record))
-        if not self._push(ref, sha, expected):
+        remaining = deadline - self._clock()
+        if remaining <= 0:
+            raise GitError(["git", "push", self._remote], 124, "Operation timed out")
+        if not self._push(ref, sha, expected, timeout_seconds=remaining):
             return None
         return LeaseHold(
             ref=ref,
@@ -492,7 +509,10 @@ class LeaseTransport:
             displaced_run_id=displaced_run_id,
         )
 
-    def renew(self, hold: LeaseHold, *, now: int) -> LeaseHold | None:
+    def renew(
+        self, hold: LeaseHold, *, now: int,
+        timeout_seconds: float = _WRITE_BUDGET_SECONDS,
+    ) -> LeaseHold | None:
         """Refresh ``hold``'s heartbeat, or return ``None`` if it was stolen.
 
         Swaps against the SHA this Run last wrote, so a Lease taken from it
@@ -504,6 +524,10 @@ class LeaseTransport:
         commits or Iteration boundaries — so a slow agent can never be
         mistaken for a dead one (ADR-0033 §3.2). A refusal is final: the Run
         stops work on that issue and does not reclaim (§3.4).
+
+        ``timeout_seconds`` caps the usual write budget to the owner's remaining
+        TTL. Local record creation consumes this budget too; it never grants a
+        fresh retry window after the deadline.
         """
         return self._write(
             issue=hold.issue,
@@ -514,6 +538,7 @@ class LeaseTransport:
             pid=hold.record.pid,
             ttl_seconds=hold.record.ttl_seconds,
             expected=hold.sha,
+            timeout_seconds=timeout_seconds,
         )
 
     def holds(self, hold: LeaseHold, *, now: int) -> bool:
