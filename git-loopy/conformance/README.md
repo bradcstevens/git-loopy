@@ -83,6 +83,22 @@ suite. These are recorded-authorization cases, not another first-wizard claim.
 Shell/PowerShell activation remains deferred; no default, historical stream,
 Subagent or Integration behavior changes.
 
+The `retry_lifecycle` matrix carries a recorded `update --routing migrate`
+choice through actual CLI work in
+`python/tests/test_routing_retry_conformance.py`. Seven cases run in serial and
+Lane modes; the latter's retry is serial fallback, not a second Lane for the
+same issue. Independent expected settings and outcome histories cover
+reselection, explicit Static escalation, advances, infrastructure failure,
+justified repeats through attempt exhaustion, unjustified-repeat refusal and
+allowance exhaustion. Refused retries admit no replacement Dynamic session or
+Strike; eligible Static work still proceeds. Canonical Pickup, Dynamic records,
+CLI/Dashboard readback and idempotent tracker comments/labels agree with actual
+sessions while Config stays unchanged. Selector bills cross the SDK transport
+and remain Run-only Consumption through retry/refusal; CLI Pickup lines are
+compared individually, not against accumulated startup output.
+This extends executable coverage of
+existing section 14.4 rules, not runtime defaults or native-member support.
+
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent
 from every port's vocabulary, not just the shared fixture and Python reference.

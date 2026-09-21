@@ -1361,6 +1361,13 @@ not evidence that bare init or auto-setup activates Dynamic defaults.
 That walk exposed and fixed Skill discovery trying to nest an event loop inside
 the fullscreen wizard; discovery now completes on its own joined worker before
 the wizard can save, with validation failures still propagated without writes.
+Shared `retry_lifecycle` Conformance now carries recorded migration through seven
+serial/Lane retry cases. Actual session settings agree with canonical Pickup,
+outcome history, CLI/Dashboard readback and tracker publication. It covers
+reselection, justified and refused repeats, infrastructure failure, advances,
+attempt/allowance exhaustion and explicit Static escalation. Refusal leaves
+later eligible Static work usable and spends no task attempt or Strike. A Lane's
+retry uses existing serial fallback, not a second Lane; Config stays unchanged.
 Non-local activation, the remaining composed activation matrix and the remaining
 Wrapper/Conformance activation obligations still precede the final default
 change. Existing Config is not migrated implicitly.

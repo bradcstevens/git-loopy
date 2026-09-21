@@ -413,3 +413,17 @@ but before the replacement add succeeds, the tracker can retain the previous own
 association or have no Route label.
 That partial projection has no authority: local failure stays visible and does
 not authorize unbounded repair calls. The matrix covers both outcomes.
+
+The shared routing fixture now carries seven `retry_lifecycle` cases after
+recorded migration, through real CLI serial work and a Lane followed by its
+permitted serial retry. Actual settings, canonical Pickup, recorded outcome
+history, CLI/Dashboard readback and idempotent tracker effects agree. The cases
+cover reselection, explicit Static escalation, advancing work, infrastructure
+failure, justified repetition through attempt exhaustion, unjustified repetition
+and exhausted allowance. Refused retries spend no task attempt or Strike and
+leave eligible Static work usable. Saved Config and the existing one-Lane-per-issue
+rule remain unchanged. This is shared executable coverage of the accepted retry
+policy, not new routing behavior or final activation.
+Review tightened the observation seam: each CLI Pickup line is compared
+independently of startup and earlier output; selector bills now cross the actual
+SDK session adapter into Run-only Consumption, including refused retries.

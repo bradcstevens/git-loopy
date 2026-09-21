@@ -1852,6 +1852,21 @@ its provenance record by
 [`event-schema.json`](../git-loopy/conformance/event-schema.json)'s `wrapper.routing.resolved`
 contract and the rolling stream that carries one.
 
+The same routing fixture's `retry_lifecycle` matrix exercises these existing
+rules after Python's explicit saved migration, through the real CLI into serial
+work and a Lane followed by a serial retry. It observes actual session settings,
+canonical Pickup, outcome history, CLI/Dashboard readback and idempotent tracker
+publication rather than inferring execution from a resolver result. Selector
+bills cross the SDK session transport into Run-only Consumption, including an
+invalid retry that starts no work. Each CLI Pickup line is observed separately
+from startup and earlier Pickups. Its cases
+cover changed and repeated elections, required repeat justification, infrastructure
+failure, advancing work, attempt/allowance exhaustion and explicit Static
+escalation. A refused retry spends no task attempt or Strike, while later
+eligible Static work still runs. Saved Config remains unchanged. The existing
+one-Lane-per-issue rule is preserved; this matrix does not grant a second Lane,
+activate final defaults or extend routing to another Runner member or placement.
+
 **The Dynamic route is Python-only today**, for the same reason §14.3 is: the shell and PowerShell
 Orchestrators implement no per-issue routing and read no harness listing, so they have no route to
 elect. They declare it unsupported in
