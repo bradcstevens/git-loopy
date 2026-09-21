@@ -164,7 +164,7 @@ class FakeGitClient:
         self.remote_url_error: GitError | None = None
         # Lease ref store (#390 / ADR-0033). Models the *remote* side of the
         # compare-and-swap: ``_ref_shas`` is the ref advertisement and
-        # ``_objects`` the commit messages behind it, both repo-wide and shared
+        # ``_objects`` all local commit messages, both repo-wide and shared
         # with every worktree child exactly as ``_branches`` is. Kept separate
         # from ``remote_refs`` above, which maps a ref to a whole clone rather
         # than to a SHA. ``push_ref_calls`` and ``fetched_messages`` are spies
@@ -173,6 +173,8 @@ class FakeGitClient:
             {} if _ref_shas is None else _ref_shas
         )
         self._objects: dict[str, str] = {} if _objects is None else _objects
+        for commit in self._log:
+            self._store_commit_message(commit)
         self.push_ref_calls: list[tuple[str, str, str | None, str | None]] = []
         self.push_ref_timeouts: list[float] = []
         self.fetched_messages: list[tuple[str, str]] = []
@@ -215,6 +217,11 @@ class FakeGitClient:
         return self._root / ".git"
 
     # -- internal helpers --------------------------------------------------
+
+    def _store_commit_message(self, commit: Commit) -> None:
+        self._objects[commit.sha] = (
+            f"{commit.subject}\n\n{commit.body}" if commit.body else commit.subject
+        )
 
     def _next_sha(self) -> str:
         self._sha_counter += 1
@@ -277,6 +284,7 @@ class FakeGitClient:
             date="2026-05-16",
         )
         self._log.append(commit)
+        self._store_commit_message(commit)
         return commit.sha
 
     def commit_paths(self, message: str, paths: Sequence[Path | str]) -> str:
@@ -518,12 +526,12 @@ class FakeGitClient:
 
     def commit_message(self, sha: str) -> str:
         """Read an orphan Lease record or an ordinary local commit's message."""
-        if sha in self._objects:
+        try:
             return self._objects[sha]
-        for commit in self._log:
-            if commit.sha == sha:
-                return commit.message
-        raise GitError(["git", "show", "-s", "--format=%B", sha], 128, "unknown SHA")
+        except KeyError as exc:
+            raise GitError(
+                ["git", "show", "-s", "--format=%B", sha], 128, "unknown SHA"
+            ) from exc
 
     def push_ref(
         self, remote: str, ref: str, sha: str | None, expected: str | None,
@@ -666,6 +674,7 @@ class FakeGitClient:
             date=date,
         )
         self._log.append(commit)
+        self._store_commit_message(commit)
         return commit.sha
 
 
