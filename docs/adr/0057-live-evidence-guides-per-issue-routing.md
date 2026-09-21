@@ -495,3 +495,24 @@ with original decision identity and agreement between actual settings, canonical
 records, individual CLI Pickup lines, Dashboard and idempotent tracker effects.
 These are targeted Event-write failures, not a claim of complete logging through
 a total storage outage. Defaults and all member/placement deferrals are unchanged.
+
+The shared `effort_semantics` matrix carries recorded migration through serial
+and local Lane work and fresh cross-Run reuse. It exposed a bare Dynamic
+association remaining eligible when the harness reports an effort dial:
+the session could silently use an unscored backend default. Candidate election
+now excludes that mismatch, without changing deliberate Static omission.
+Seven cases distinguish absent effort from the advertised value `none` in
+actual selector/work requests, canonical records, CLI wording, raw Dashboard projection and
+tracker publication. Unchanged inputs reuse the original decision without a
+new bill; incompatible dial changes refuse new work even after a prior final
+assignment, without modifying Config or tracker state, buying an assessment or
+charging a Strike. This closes an exact-capability gap, not final activation or
+ADR-0060 implementation; existing member and placement deferrals remain.
+An advertised but empty effort list supplies no runnable Dynamic configuration;
+it is not reinterpreted as an absent dial. CLI Pickup and preparation readback
+now describe a Dynamic null effort as "not configurable", preserving Static
+backend-default wording and historical records with no effort field.
+Rendered Rust Dashboard Route cells and preparation text still describe null
+effort using their legacy backend/default wording. Their raw projection retains
+null versus `none`, but the rendered wording correction remains a composed
+activation obligation; this partial delivery does not claim it.

@@ -1397,6 +1397,20 @@ within the saved bound of one or two. The next serial Pickup or Lane refill does
 not wait for unrelated open selectors; cancelled assessments keep their Run-only
 Consumption and visible unavailable preparation records. Pending issues remain
 open, unleased and unpublished, with unchanged labels and Config.
+Shared `effort_semantics` cases carry recorded migration through actual serial
+and Lane sessions and fresh cross-Run reuse. A bare `[route_associations]` value
+asserts that the model has no effort dial; it does not authorize an unscored
+backend default if the live harness reports a dial. Use `model@none` only when
+`none` is the exact scored and advertised effort value. An incompatible dial
+change refuses new Dynamic work even when an earlier assignment is recorded,
+without a selector bill, Strike, Config edit or new tracker publication.
+An advertised but empty dial supplies no supported Dynamic effort. CLI Pickup
+and preparation readback call a Dynamic null effort "not configurable", not a
+backend default.
+Deliberately omitted effort in an operator-selected Static route is unchanged.
+The Dashboard's raw projection preserves null versus `none`, but its Rust Route
+cells/preparation text still use legacy backend/default wording. That rendered
+readback correction remains an activation obligation, not a claim of this slice.
 Non-local activation, the remaining composed activation matrix and the remaining
 Wrapper/Conformance activation obligations still precede the final default
 change. Existing Config is not migrated implicitly.

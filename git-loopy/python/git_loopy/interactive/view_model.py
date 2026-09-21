@@ -159,8 +159,9 @@ def _declaration(declared: bool | None) -> dict[str, Any]:
 def _route(route: ResolvedRoute | None) -> dict[str, Any] | None:
     """One **Routing resolution**, or ``None`` when nothing resolved one.
 
-    A ``null`` half is a *value* — the backend chooses — so the absence that
-    means "no route" is the absence of the whole record, never an empty pair.
+    A ``null`` half is a *value*, not an absent route. Dynamic null effort
+    records no configurable dial; other sources retain backend-choice semantics.
+    The absence that means "no route" is the absence of the whole record.
     """
     if route is None:
         return None
