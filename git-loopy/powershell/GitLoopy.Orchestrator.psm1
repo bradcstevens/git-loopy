@@ -1117,6 +1117,96 @@ function ConvertFrom-GitLoopyJsonText {
     }
 }
 
+function Test-GitLoopyLeaseWholeNumber {
+    param([AllowNull()][object]$Value, [int]$Minimum)
+
+    return (
+        ($Value -is [int] -or $Value -is [long] -or $Value -is [double]) -and
+        $Value -ge $Minimum -and $Value -le 9007199254740991 -and
+        $Value -eq [math]::Floor($Value)
+    )
+}
+
+# ADR-0033: this pure seam is staged ahead of transport, Pickup and fencing.
+# Null means no ref; the eventual transport must propagate unreadable fetches.
+function Get-GitLoopyLeaseInspection {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowNull()][AllowEmptyString()][object]$Raw,
+        [Parameter(Mandatory)][AllowNull()][object]$Now,
+        [Parameter(Mandatory)][AllowNull()][AllowEmptyString()][object]$Repository,
+        [Parameter(Mandatory)][AllowNull()][object]$Issue,
+        [AllowNull()][object]$SkewToleranceSeconds = 60
+    )
+
+    if (-not (Test-GitLoopyLeaseWholeNumber $Now 0)) {
+        throw "Lease inspection: invalid now"
+    }
+    if (-not (Test-GitLoopyLeaseWholeNumber $Issue 1)) {
+        throw "Lease inspection: invalid issue"
+    }
+    if (-not (Test-GitLoopyLeaseWholeNumber $SkewToleranceSeconds 0)) {
+        throw "Lease inspection: invalid skew_tolerance_seconds"
+    }
+    $RepositoryPattern = '\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z'
+    if ($Repository -isnot [string] -or $Repository -cnotmatch $RepositoryPattern) {
+        throw "Lease inspection: invalid repository"
+    }
+    if ($null -eq $Raw) {
+        return [ordered]@{ state = "absent"; record = $null; diagnostics = @() }
+    }
+    $Malformed = [ordered]@{
+        state = "expired"; record = $null; diagnostics = @("malformed_record")
+    }
+    if ($Raw -isnot [string]) { throw "Lease inspection: invalid raw" }
+    try { $Document = [System.Text.Json.JsonDocument]::Parse($Raw) }
+    catch [System.Text.Json.JsonException] { return $Malformed }
+    try {
+        if ($Document.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+            return $Malformed
+        }
+        $Record = [ordered]@{}
+        foreach ($Field in @(
+            "run_id", "issue", "repository", "claimed_at", "heartbeat_at",
+            "ttl_seconds", "host", "pid"
+        )) {
+            $Element = [System.Text.Json.JsonElement]::new()
+            # TryGetProperty is case-sensitive; PowerShell hashtables are not.
+            if (-not $Document.RootElement.TryGetProperty($Field, [ref]$Element)) {
+                return $Malformed
+            }
+            $Record[$Field] = ConvertFrom-GitLoopyJsonElement -Element $Element
+        }
+    }
+    finally { $Document.Dispose() }
+
+    if (
+        $Record.run_id -isnot [string] -or
+        $Record.run_id -cnotmatch '\A[0-7][0-9A-HJKMNP-TV-Z]{25}\z' -or
+        $Record.repository -isnot [string] -or
+        $Record.repository -cnotmatch $RepositoryPattern -or
+        -not $Record.repository.Equals($Repository, [StringComparison]::OrdinalIgnoreCase) -or
+        $Record.host -isnot [string] -or $Record.host.Length -eq 0
+    ) { return $Malformed }
+    foreach ($Field in @("issue", "ttl_seconds", "pid", "claimed_at", "heartbeat_at")) {
+        $Minimum = if ($Field -in @("claimed_at", "heartbeat_at")) { 0 } else { 1 }
+        if (-not (Test-GitLoopyLeaseWholeNumber $Record[$Field] $Minimum)) {
+            return $Malformed
+        }
+        $Record[$Field] = [long]$Record[$Field]
+    }
+    if ($Record.issue -ne $Issue -or $Record.heartbeat_at -lt $Record.claimed_at) {
+        return $Malformed
+    }
+    return [ordered]@{
+        state = if ($Now - $Record.heartbeat_at -gt $Record.ttl_seconds) { "expired" } else { "live" }
+        record = $Record
+        diagnostics = @(
+            if ($Record.claimed_at - $Now -gt $SkewToleranceSeconds) { "clock_skew" }
+        )
+    }
+}
+
 function Get-GitLoopyPriorityLabel {
     [CmdletBinding()]
     param()
@@ -4804,6 +4894,7 @@ Export-ModuleMember -Function @(
     "Assert-GitLoopyReadinessCapability",
     "Get-GitLoopyReadiness",
     "Get-GitLoopyCandidateReadiness",
+    "Get-GitLoopyLeaseInspection",
     "Get-GitLoopyPriorityLabel",
     "Get-GitLoopyAcceptedYearRange",
     "Get-GitLoopyPriorityRank",

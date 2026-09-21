@@ -20,6 +20,8 @@ source "$_git_loopy_orchestrator_dir/release-version.sh"
 source "$_git_loopy_orchestrator_dir/events.sh"
 # shellcheck disable=SC1091
 source "$_git_loopy_orchestrator_dir/tui.sh"
+# shellcheck disable=SC1091
+source "$_git_loopy_orchestrator_dir/issue-lease.sh"
 
 declare -a GIT_LOOPY_DENY_TOOLS_RESOLVED=()
 declare -a GIT_LOOPY_DENY_SKILLS_RESOLVED=()

@@ -16,6 +16,12 @@
   },
   "cases": [
     {
+      "id": "absent-ref-is-not-a-lease",
+      "raw": null,
+      "now": 1000,
+      "expected": {"state": "absent", "owner": null, "diagnostics": []}
+    },
+    {
       "id": "valid-live-record",
       "now": 1000,
       "expected": {"state": "live", "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "diagnostics": []}
@@ -234,6 +240,46 @@
       "set": {"pid": 0},
       "now": 1000,
       "expected": {"state": "expired", "owner": null, "diagnostics": ["malformed_record"]}
+    },
+    {
+      "id": "future-claim-at-skew-tolerance",
+      "now": 940,
+      "expected": {"state": "live", "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "diagnostics": []}
+    },
+    {
+      "id": "future-claim-past-tolerance-warns-but-stays-live",
+      "now": 939,
+      "expected": {"state": "live", "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "diagnostics": ["clock_skew"]}
+    },
+    {
+      "id": "injected-skew-tolerance",
+      "now": 994,
+      "skew_tolerance_seconds": 5,
+      "expected": {"state": "live", "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "diagnostics": ["clock_skew"]}
+    },
+    {
+      "id": "clock-moving-after-claim-does-not-expire-a-future-heartbeat",
+      "set": {"heartbeat_at": 2000},
+      "now": 1000,
+      "expected": {"state": "live", "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "diagnostics": []}
+    },
+    {
+      "id": "host-and-pid-do-not-decide-expiry",
+      "set": {"host": "another-host", "pid": 999999},
+      "now": 1301,
+      "expected": {"state": "expired", "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "diagnostics": []}
     }
+  ],
+  "invalid_context_cases": [
+    {"id": "negative-now", "field": "now", "value": -1},
+    {"id": "fractional-now", "field": "now", "value": 1000.5},
+    {"id": "boolean-now", "field": "now", "value": true},
+    {"id": "string-now", "field": "now", "value": "1000"},
+    {"id": "null-now", "field": "now", "value": null},
+    {"id": "unsafe-now", "field": "now", "value": 9007199254740992},
+    {"id": "negative-skew-tolerance", "field": "skew_tolerance_seconds", "value": -1},
+    {"id": "invalid-issue", "field": "issue", "value": 0},
+    {"id": "empty-repository", "field": "repository", "value": ""},
+    {"id": "unqualified-repository", "field": "repository", "value": "git-loopy"}
   ]
 }
