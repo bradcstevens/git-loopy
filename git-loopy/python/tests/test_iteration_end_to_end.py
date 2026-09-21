@@ -7617,7 +7617,7 @@ class _BilledRoutingClient:
 
     def __init__(
         self, work_client, *, selector_credits="0.30", classifier_credits="0.20",
-        on_routing=None, on_work=None, on_disconnect=None,
+        on_routing=None, on_work=None, on_disconnect=None, selector_answer=None,
     ):
         self.work_client = work_client
         self.selector_credits = selector_credits
@@ -7625,6 +7625,7 @@ class _BilledRoutingClient:
         self.on_routing = on_routing
         self.on_work = on_work
         self.on_disconnect = on_disconnect
+        self.selector_answer = selector_answer
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
     async def start(self):
@@ -7655,14 +7656,17 @@ class _BilledRoutingClient:
                     credits = owner.classifier_credits
                 elif prompt.startswith("You are the Route selector."):
                     role = "selector"
-                    candidates, _ = json.JSONDecoder().raw_decode(
-                        prompt.split("CANDIDATES (choose exactly one `candidate_identity`):\n")[1]
-                    )
-                    chosen = next(c for c in candidates if c["model"] == "gpt-5.6-terra")
-                    output = json.dumps({
-                        "candidate_identity": chosen["candidate_identity"],
-                        "summary": "forecast from current evidence, not a measurement",
-                    })
+                    if owner.selector_answer is not None:
+                        output = owner.selector_answer(prompt)
+                    else:
+                        candidates, _ = json.JSONDecoder().raw_decode(
+                            prompt.split("CANDIDATES (choose exactly one `candidate_identity`):\n")[1]
+                        )
+                        chosen = next(c for c in candidates if c["model"] == "gpt-5.6-terra")
+                        output = json.dumps({
+                            "candidate_identity": chosen["candidate_identity"],
+                            "summary": "forecast from current evidence, not a measurement",
+                        })
                     credits = owner.selector_credits
                 else:
                     self.role = "work"
