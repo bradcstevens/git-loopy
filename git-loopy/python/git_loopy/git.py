@@ -83,11 +83,15 @@ Design notes:
 
 from __future__ import annotations
 
+import math
+import os
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Iterable, Protocol, Sequence, runtime_checkable
+from typing import Final, Iterable, Mapping, Protocol, Sequence, runtime_checkable
+
+from .process_cleanup import kill_and_release
 
 __all__ = [
     "GitError",
@@ -234,30 +238,60 @@ def _run_completed(
     *,
     cwd: Path | str | None = None,
     input: str | None = None,
+    timeout_seconds: float | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> "subprocess.CompletedProcess[str]":
     """Invoke ``git <args>`` and return the whole result, exit code included.
 
     The raw form, for the one caller that must tell a *refused* command from a
     *broken* one: a compare-and-swap rejection is another Run's answer and is
     never retried, while a transport failure is transient and is (ADR-0033 §7).
+    A bounded call gets a private process session and the same kill/drain
+    cleanup as Integration, so a git transport child cannot keep it waiting.
     """
     cmd = [_GIT_BIN, *args]
     try:
-        return subprocess.run(
+        if timeout_seconds is None:
+            return subprocess.run(
+                cmd,
+                cwd=str(cwd) if cwd is not None else None,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                input=input,
+                env=env,
+            )
+        process = subprocess.Popen(
             cmd,
             cwd=str(cwd) if cwd is not None else None,
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            check=False,
-            input=input,
+            start_new_session=os.name == "posix",
+            env=env,
         )
     except FileNotFoundError as exc:
         raise GitError(cmd, 127, "git not found on PATH") from exc
+    try:
+        stdout, stderr = process.communicate(input=input, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        output = kill_and_release(process)
+        raise GitError(
+            cmd, 124,
+            f"operation timed out after {timeout_seconds:g}s: {_stderr_tail(output)}",
+        ) from exc
+    except BaseException:
+        kill_and_release(process)
+        raise
+    return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
 
 
-def _is_stale_lease_rejection(stdout: str | None, stderr: str | None) -> bool:
+def is_stale_lease_rejection(stdout: str | None, stderr: str | None) -> bool:
     """Return whether a push failed because its ``--force-with-lease`` went stale.
 
     The one failure a Lease reads as an *answer* rather than a fault: some
@@ -551,6 +585,18 @@ class GitClient(Protocol):
         """
         ...
 
+    def remote_url(self, remote: str) -> str | None:
+        """Return the URL configured for ``remote``, or ``None`` if unconfigured.
+
+        A local config read, never a network call: it is how a Run learns which
+        repository it is about to contend on for **Lease**s (ADR-0033), and it
+        must not put a round trip on the path before the Run has even started.
+        A clone with no such remote answers ``None`` rather than raising,
+        because having no remote is an ordinary state and the caller's only
+        response to it is to hold no Lease.
+        """
+        ...
+
     def fetch_sha(self, remote: str, sha: str, branch: str) -> None:
         """Fetch an advertised commit ``sha`` into local ``branch``."""
         ...
@@ -572,7 +618,8 @@ class GitClient(Protocol):
         ...
 
     def push_ref(
-        self, remote: str, ref: str, sha: str | None, expected: str | None
+        self, remote: str, ref: str, sha: str | None, expected: str | None,
+        *, timeout_seconds: float = 15.0,
     ) -> bool:
         """Compare-and-swap ``ref``; ``False`` on refusal, raise on transport."""
         ...
@@ -1256,6 +1303,18 @@ class SubprocessGitClient:
             return None
         return line.split(maxsplit=1)[0]
 
+    def remote_url(self, remote: str) -> str | None:
+        """Read ``remote``'s configured URL from local config, or ``None``.
+
+        ``git remote get-url`` reads ``.git/config`` and contacts nothing, so
+        resolving the repository this Run contends on costs no round trip.
+        An unconfigured remote exits non-zero, which is an answer rather than
+        a fault: ``check=False`` turns it into ``None`` so a clone with no
+        ``origin`` simply holds no **Lease**.
+        """
+        url = _run(["remote", "get-url", remote], cwd=self._root, check=False).strip()
+        return url or None
+
     def fetch_sha(self, remote: str, sha: str, branch: str) -> None:
         """Fetch ``sha`` into ``refs/heads/branch`` without following its name."""
         _run(
@@ -1308,7 +1367,8 @@ class SubprocessGitClient:
         return self.commit_message(sha)
 
     def push_ref(
-        self, remote: str, ref: str, sha: str | None, expected: str | None
+        self, remote: str, ref: str, sha: str | None, expected: str | None,
+        *, timeout_seconds: float = 15.0,
     ) -> bool:
         """Compare-and-swap ``ref`` on ``remote``; ``sha=None`` deletes it.
 
@@ -1321,15 +1381,23 @@ class SubprocessGitClient:
         ``--force-with-lease`` precisely so it cannot depend on ``push.default``
         or on a branch's upstream tracking ref.
 
+        ``timeout_seconds`` bounds this attempt, not a sequence of retries.
+        The caller supplies its remaining budget. Interactive credential
+        prompts are disabled only for this command; stored credentials and
+        all other environment configuration remain inherited.
+
         Returns:
             ``True`` when the swap landed, ``False`` when the remote refused it
             because the ref did not match ``expected``.
 
         Raises:
-            GitError: On transport, authentication or server failure — never
-                for a refusal. The caller retries the former and never the
-                latter (ADR-0033 §7.3).
+            GitError: On transport, timeout, authentication or server failure.
+                Only transient failures are retryable, never authentication
+                errors or a compare-and-swap refusal (ADR-0033 §7.3).
+            ValueError: If the timeout is not finite and positive.
         """
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("Lease push timeout must be finite and positive")
         refspec = f":{ref}" if sha is None else f"{sha}:{ref}"
         completed = _run_completed(
             [
@@ -1340,10 +1408,19 @@ class SubprocessGitClient:
                 refspec,
             ],
             cwd=self._root,
+            timeout_seconds=timeout_seconds,
+            env={
+                **os.environ,
+                "GIT_TERMINAL_PROMPT": "0",
+                "GIT_ASKPASS": "",
+                "GCM_INTERACTIVE": "never",
+                "SSH_ASKPASS_REQUIRE": "never",
+                "LC_ALL": "C",
+            },
         )
         if completed.returncode == 0:
             return True
-        if _is_stale_lease_rejection(completed.stdout, completed.stderr):
+        if is_stale_lease_rejection(completed.stdout, completed.stderr):
             return False
         raise GitError(
             [_GIT_BIN, "push", remote, refspec],

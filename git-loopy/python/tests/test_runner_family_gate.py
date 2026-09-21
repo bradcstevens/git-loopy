@@ -1209,6 +1209,7 @@ def test_the_powershell_gate_reports_a_non_final_suite_failure(tmp_path: Path) -
         POWERSHELL_CONFORMANCE,
         POWERSHELL_BOUNDARY,
         "test-event-conformance.ps1",
+        "test-issue-lease-conformance.ps1",
         "test-tui-install.ps1",
     ):
         body = "exit 3\n" if name == POWERSHELL_CONFORMANCE else "exit 0\n"

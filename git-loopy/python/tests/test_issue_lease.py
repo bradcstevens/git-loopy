@@ -458,3 +458,25 @@ def test_an_unknown_lease_action_is_refused_rather_than_defaulted(
     """A closed set: an unknown action must never fall through to permission."""
     with pytest.raises(ValueError, match="invalid action"):
         decide_lease_action("steal", state="expired", owner=None, run_id=OWNER)
+
+
+def test_a_ref_that_vanished_under_a_first_attempt_rejection_is_not_a_release(
+    tmp_path: Path,
+) -> None:
+    """Only a *replayed* delete may read an absent ref as its own success.
+
+    A swap rejected on attempt one sent nothing before it, so a ref that is
+    gone afterwards was removed by somebody else — news of loss, which
+    ``not_owned`` carries and ``released`` would swallow.
+    """
+    transport, git = _transport(tmp_path)
+    hold = transport.claim(390, run_id=OWNER, now=1000, host="laptop", pid=42)
+    assert hold is not None
+
+    def vanish() -> None:
+        git._ref_shas.pop(("origin", hold.ref), None)
+
+    git.push_ref_interceptor = vanish
+
+    assert transport.release(hold, now=1100) == "not_owned"
+    assert len(git.push_ref_calls) == 2, "one claim, one rejected delete; no replay"

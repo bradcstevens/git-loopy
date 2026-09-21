@@ -71,12 +71,13 @@ from __future__ import annotations
 import math
 import os
 import re
-import signal
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Iterable, Mapping, Protocol, Sequence, runtime_checkable
+
+from .process_cleanup import kill_and_release
 
 __all__ = [
     "GateError",
@@ -380,60 +381,9 @@ class _Completed:
     timed_out: bool
 
 
-def _kill_process_group(process: subprocess.Popen[str]) -> None:
-    """Kill a timed-out loop *and everything it spawned*.
-
-    A loop command is run through the shell, so the process the runner holds is
-    a shell whose children hold the same stdout/stderr pipes. Killing only the
-    shell leaves those children alive and the pipes open, which is how a bounded
-    run still hangs. On POSIX the loop is started in its own session, so one
-    ``killpg`` reaps the whole tree; elsewhere the best available is ``kill``.
-    """
-    if os.name == "posix":
-        try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-            return
-        except (ProcessLookupError, PermissionError, OSError):
-            pass  # fall through to the single-process kill
-    try:
-        process.kill()
-    except ProcessLookupError:
-        pass
-
-
-def _release_after_failed_drain(process: subprocess.Popen[str]) -> None:
-    """Close our pipe ends and reap a killed loop whose drain never finished.
-
-    ``communicate`` normally does both jobs, but it only returns once the pipes
-    reach EOF — and a descendant that put itself in a *new session* escapes the
-    group kill, holds the write ends open, and keeps that from ever happening.
-    Giving up on the output must not mean giving up on the process: **Integration**
-    runs this gate after every Lane merge for the whole life of one Run, so a
-    leaked zombie and two leaked descriptors per timed-out loop grow without bound
-    in exactly the unattended path the bound exists to protect.
-    """
-    for pipe in (process.stdout, process.stderr):
-        if pipe is not None:
-            try:
-                pipe.close()
-            except OSError:
-                pass
-    try:
-        # The direct child already took SIGKILL, so this reaps rather than waits.
-        process.wait(timeout=_DRAIN_GRACE_SECONDS)
-    except (subprocess.TimeoutExpired, OSError):
-        pass
-
-
 def _kill_and_release(process: subprocess.Popen[str]) -> str:
     """Kill a loop's whole tree and settle it, returning whatever it had emitted."""
-    _kill_process_group(process)
-    try:
-        stdout, stderr = process.communicate(timeout=_DRAIN_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        _release_after_failed_drain(process)
-        return ""
-    return (stdout or "") + (stderr or "")
+    return kill_and_release(process, grace_seconds=_DRAIN_GRACE_SECONDS)
 
 
 def _run_bounded(command: str, *, cwd: Path, timeout_seconds: float) -> _Completed:

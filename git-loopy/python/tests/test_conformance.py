@@ -90,6 +90,7 @@ from git_loopy.staircase import Candidate
 from git_loopy.interactive.view_model import project_run_view
 from git_loopy import rolling_scheduler as rolling_scheduler_module
 from git_loopy import serial_pickup
+from git_loopy.repository_identity import repository_from_remote_url
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy import rollup as rollup_module
 from git_loopy.skill_exposure import SkillExposure
@@ -426,6 +427,31 @@ def test_close_reference_fixture(case: dict[str, Any]) -> None:
         wrapper_module.actionable_close_refs(case["commit_messages"], pool)
         == case["actionable_refs"]
     )
+
+
+_REPOSITORY_IDENTITY = _load_fixture("repository-identity.json")
+
+
+@pytest.mark.parametrize(
+    "case",
+    _REPOSITORY_IDENTITY["cases"],
+    ids=lambda case: case["id"],
+)
+def test_repository_identity_fixture(case: dict[str, Any]) -> None:
+    """Drive the production resolver, not a copy of its rules.
+
+    Translation only, per the Conformance README: the fixture supplies the URL
+    a clone's ``origin`` carries and the name every member must reduce it to,
+    and ``null`` is as much an expected answer as a name — a member that
+    guessed one would contend on a **Lease** ref belonging to another
+    repository (ADR-0033).
+    """
+    assert repository_from_remote_url(case["url"]) == case["expected"]
+
+
+def test_repository_identity_fixture_case_ids_are_unique() -> None:
+    ids = [case["id"] for case in _REPOSITORY_IDENTITY["cases"]]
+    assert len(ids) == len(set(ids))
 
 
 _PROGRESS_STRIKES = _load_fixture("progress-strikes.json")
