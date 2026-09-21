@@ -313,6 +313,15 @@ the whole deadline: no classifier or selector starts, no unstarted work charges
 a Strike, and already-classified Static work retains its exact session settings.
 The missing-access case proves classification cannot receive a fresh deadline
 merely because the Route selector is unavailable.
+Wrapper contract 2.9 and Python's declared compatibility identity now version
+these staged obligations and opt-in first setup together with Route publication
+and Routing preparation. The affected `routing-resolution.json`,
+`event-schema.json` and `dashboard-insights.json` provenance stamps now declare
+2.9, including the previously added delivery/preparation Events and Dashboard
+preparation projection. This declaration correction adds no Event fields or
+fixture cases: wire compatibility stays 1.2 and historical streams retain their
+interpretation. Calibration remains at its unchanged 2.5 decision. It does not
+enable final defaults or remove any member or placement deferral.
 
 The saved first-setup and migration choices are composed through actual serial
 and Lane sessions and canonical Pickup records, including fresh source outages
