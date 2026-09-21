@@ -854,7 +854,7 @@ def test_run_init_preserves_provenance_when_config_cannot_be_loaded(
     )
     scope.joinpath("config.toml").write_text("[not valid", encoding="utf-8")
 
-    with pytest.raises(settings.SettingsError):
+    assert (
         init_module.run_init(
             wizard_runner=_runner(out=_Output()),
             scope="project",
@@ -865,6 +865,8 @@ def test_run_init_preserves_provenance_when_config_cannot_be_loaded(
             default_effort="high",
             **_packaged(tmp_path),
         )
+        == 1
+    )
 
     assert (
         scaffold_provenance.scaffold_provenance_path(scope).read_text(encoding="utf-8")

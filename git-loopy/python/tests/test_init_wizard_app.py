@@ -62,6 +62,7 @@ def _app(
     enabled_skills: tuple[str, ...] = ("tdd",),
     scope_locked: bool = False,
     routing_choice: str | None = None,
+    routing_choices: dict[str, str | None] | None = None,
 ) -> InitWizardApp:
     return InitWizardApp(
         scope_options=("project", "global"),
@@ -75,6 +76,7 @@ def _app(
         build_skill_selection=lambda _scaffold, _scope: _skills(enabled_skills),
         scope_locked=scope_locked,
         routing_choice=routing_choice,
+        routing_choices=routing_choices,
     )
 
 
@@ -135,6 +137,55 @@ async def test_partial_custom_dynamic_setup_seeds_no_unvisited_static_routes() -
 
     assert app.return_value is not None
     assert not app.return_value.routing
+
+
+@pytest.mark.parametrize("keep_planning", [False, True])
+async def test_switching_to_recorded_policy_retains_only_authored_custom_routes(
+    keep_planning: bool,
+) -> None:
+    app = _app(routing_choices={"project": None, "global": "ask"})
+    async with app.run_test() as pilot:
+        await pilot.press("enter", "enter", "enter")
+        await pilot.press("down", "enter")
+        if keep_planning:
+            await pilot.press("enter")
+        await pilot.press("ctrl+s", "b")
+        await pilot.press("down", "enter")
+        await pilot.press("ctrl+s", "enter")
+
+    assert app.return_value is not None
+    assert app.return_value.scope == "global"
+    assert app.return_value.routing == (
+        {"planning": RECOMMENDED_ROUTING["planning"]} if keep_planning else {}
+    )
+
+
+async def test_additive_routes_do_not_imply_dynamic_authority_after_switching_scope() -> None:
+    app = _app(routing_choices={"project": "ask", "global": None})
+    async with app.run_test() as pilot:
+        await pilot.press("enter", "enter", "enter")
+        await pilot.press("down", "enter")
+        await pilot.press("ctrl+s", "b")
+        await pilot.press("down", "enter", "enter", "enter")
+        title = str(app.screen.query_one(Static).render())
+        assert "Configure explicit Static routes?" in title
+        assert "Other saved rows are preserved." in title
+        assert "Dynamic choices" not in title
+        await pilot.press("down", "enter", "ctrl+s")
+        await pilot.pause()
+        table = app.screen.query_one("#wizard-review", DataTable)
+        rows = {
+            str(table.get_row_at(i)[0]): str(table.get_row_at(i)[1])
+            for i in range(table.row_count)
+        }
+        assert "existing routes are preserved" in rows["routing"]
+        assert "authorization follows" not in rows["routing"]
+        await pilot.press("enter")
+
+    assert app.return_value is not None
+    assert app.return_value.scope == "global"
+    assert app.return_value.routing == {}
+    assert app.return_value.routing_updates_only
 
 
 async def test_dynamic_setup_keeps_the_recommended_static_recipe_explicitly_available() -> None:

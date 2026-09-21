@@ -1680,6 +1680,21 @@ eligible Static work remains usable. Runs MUST leave saved Config unchanged; tem
 authority MUST expire on the next invocation. These executable cases do not claim the
 remaining activation obligations or change the default policy.
 
+The sibling `first_setup` matrix starts with **neither Config scope present** and
+drives explicit `init --routing` into the same serial/Lane work seam, for project
+and global setup. Dynamic setup MUST collect finite bounds and authored associations
+without seeding Static rows or storing the operator-owned key. Missing access,
+invalid bounds, no verified candidates or unavailable required evidence/capabilities
+MUST refuse before saving operator choices or writing tracker labels. Repairing the
+input and retrying setup MUST allow a later, independently validated Run to use the
+recorded policy without temporary overrides. Keep MUST need neither leaderboard
+access nor Dynamic limits. The actual session, canonical Pickup, Dashboard and
+final tracker comment MUST agree, and the Run MUST preserve both Config scopes.
+This is an executable obligation for Python's explicit opt-in setup, not a change
+to bare init or auto-setup. Shell/PowerShell first-setup activation is deferred;
+historical streams and the non-local, Subagent and Integration boundaries above
+are unchanged.
+
 ### 14.4 The Dynamic route (contract 2.8)
 
 Under `dynamic` the route for one issue is **elected from live public benchmark evidence** rather
