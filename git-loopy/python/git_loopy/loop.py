@@ -117,6 +117,7 @@ import sys
 import time
 from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timezone
+from decimal import Decimal
 from importlib.resources import files
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -1274,6 +1275,7 @@ class _Loop:
                     send_timeout_seconds=config.send_timeout_seconds,
                     skill_exposure=self._skill_exposure,
                     cost_meter=self._session_observer,
+                    on_routing_credits=dynamic_routing.admission_ledger.observe_credits,
                     warn=self._diag.warning,
                 ),
                 recorder=self._record_dynamic_route,
@@ -2281,7 +2283,11 @@ class _Loop:
         self, pair: ClassifierPair, item: AfkReadyItem
     ) -> str | None:
         """Admit and meter each actual classification, never a cached label read."""
-        meter = RoutingCostMeter(self._session_observer)
+        on_credits = (
+            None if self._dynamic_routing is None
+            else self._dynamic_routing.admission_ledger.observe_credits
+        )
+        meter = RoutingCostMeter(self._session_observer, on_routing_credits=on_credits)
         proposer = SessionTaskTypeProposer(
             client=self._client,
             config=self._config,
@@ -2299,8 +2305,15 @@ class _Loop:
             try:
                 output = await proposer(pair, item)
             except asyncio.CancelledError:
-                raise RoutingCallCancelled(meter.drain()) from None
-            return SelectorCallResult(output=output, routing_credits=meter.drain())
+                credits = meter.drain()
+                raise RoutingCallCancelled(
+                    credits, credits if on_credits else Decimal(0),
+                ) from None
+            credits = meter.drain()
+            return SelectorCallResult(
+                output=output, routing_credits=credits,
+                reported_routing_credits=credits if on_credits else Decimal(0),
+            )
 
         router = self._dynamic_router
         if router is None:

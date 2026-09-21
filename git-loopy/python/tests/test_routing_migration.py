@@ -59,6 +59,7 @@ def _saved_routing_config(
     max_iterations=1,
     max_nmt_strikes=3,
     routing_credit_allowance="2.5",
+    selector_concurrency=1,
     run_args=(),
     run_env=None,
 ):
@@ -73,11 +74,13 @@ def _saved_routing_config(
         assert _first_setup_for_run(
             tmp_path, monkeypatch, choice="migrate", saved_route=False,
             routing_credit_allowance=routing_credit_allowance,
+            selector_concurrency=selector_concurrency,
         ) == 0
     elif entrypoint == "update":
         settings.write_config_atomic(path, {
             **_authorized_values(),
             "routing_credit_allowance": str(routing_credit_allowance),
+            "selector_concurrency": selector_concurrency,
             "route_associations": {
                 "aa-opus": "claude-opus-5@high", "aa-terra": "gpt-5.6-terra@high",
             },

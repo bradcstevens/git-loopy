@@ -6878,10 +6878,15 @@ def _billed_routing_usage(model: str, credits: str) -> SessionEvent:
 class _BilledRoutingClient:
     """Script routing at the SDK transport, keeping the real session adapters."""
 
-    def __init__(self, work_client, *, selector_credits="0.30", classifier_credits="0.20"):
+    def __init__(
+        self, work_client, *, selector_credits="0.30", classifier_credits="0.20",
+        on_routing=None, on_work=None,
+    ):
         self.work_client = work_client
         self.selector_credits = selector_credits
         self.classifier_credits = classifier_credits
+        self.on_routing = on_routing
+        self.on_work = on_work
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
     async def start(self):
@@ -6918,9 +6923,13 @@ class _BilledRoutingClient:
                     credits = owner.selector_credits
                 else:
                     owner.calls.append(("work", kwargs))
+                    if owner.on_work is not None:
+                        await owner.on_work(prompt, kwargs)
                     return await work_session.send_and_wait(prompt, **options)
                 owner.calls.append((role, kwargs))
                 kwargs["on_event"](_billed_routing_usage(kwargs["model"], credits))
+                if owner.on_routing is not None:
+                    await owner.on_routing(role, prompt, kwargs)
                 kwargs["on_event"](_sdk_event(
                     SessionEventType.ASSISTANT_MESSAGE,
                     AssistantMessageData(content=output, message_id=str(uuid4())),

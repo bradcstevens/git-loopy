@@ -382,14 +382,15 @@ def test_guided_static_setup_needs_no_leaderboard_access_or_routing_limits(
 
 
 def _first_setup_for_run(
-    tmp_path, monkeypatch, *, choice, saved_route, routing_credit_allowance="2.5"
+    tmp_path, monkeypatch, *, choice, saved_route, routing_credit_allowance="2.5",
+    selector_concurrency=1,
 ):
     """Author first setup through init, retaining the real Run's Skill catalog."""
     from git_loopy.prompt import packaged_required_skills
     from git_loopy.skill_policy import SkillCatalog, SkillCatalogWinner
 
     answers = iter([
-        "30", str(routing_credit_allowance), "1",
+        "30", str(routing_credit_allowance), str(selector_concurrency),
         '{"aa-opus" = "claude-opus-5@high", "aa-terra" = "gpt-5.6-terra@high"}',
     ])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))

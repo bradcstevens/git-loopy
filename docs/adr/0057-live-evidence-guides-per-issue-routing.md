@@ -248,10 +248,19 @@ Lane Summary billing reads the canonical issue Consumption instead of losing
 the bill behind the historical `cost_usd` placeholder. These cases also cover
 classification exhausting the allowance, the strongest selector remaining
 unchanged with a smaller allowance remaining, and post-paid overshoot while
-already-authorized work finishes. They do not yet establish the concurrent
-saved-setup overshoot and cancellation matrix.
+already-authorized work finishes.
+The concurrent saved-setup matrix now covers both classifier and selector bills
+while their sessions remain open, at exact exhaustion and with post-paid
+overshoot. It exposed admission counting only completed calls: another
+assessment could start after the SDK had already reported exhaustion. Each
+observed routing bill now reaches the shared admission ledger immediately;
+completion or cancellation settles only an unreported remainder. Canonical
+preparation records, CLI totals and Dashboard Run-only Consumption retain the
+same bill exactly once. Both modes keep already admitted work running with its
+bound settings, preserve Config, and refuse further assessment without a Strike
+or a cheaper selector.
 Automatic upgrade/Run migration enforcement, the remaining
-composed acceptance (including saved-setup Consumption guarantees) and
+composed acceptance and
 Wrapper/Conformance activation obligations still precede final default
 activation. Dynamic routing remains opt-in; shell/PowerShell activation is deferred,
 and no Subagent or Integration routing support is implied.

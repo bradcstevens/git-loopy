@@ -1244,8 +1244,12 @@ Saved-setup coverage also exercises model/effort overrides without leaderboard
 access and context-only controls in both modes. Work-tier authority survives
 detached startup, fresh proposal/Pickup capability checks, and cross-Run reuse;
 changed evidence or eligibility cannot carry an obsolete proposal into work.
+Saved-setup Consumption cases also compose concurrent classifier/selector billing,
+allowance exhaustion and post-paid overshoot with actual work in both modes.
+An open routing session's observed bill closes admission immediately; completion
+and cancellation preserve the charge exactly once.
 Automatic upgrade/Run migration enforcement, the remaining
-composed activation matrix (including saved-setup Consumption guarantees), and
+composed activation matrix, and
 Wrapper/Conformance activation obligations still need to
 land before the final default changes. Existing Config is not migrated implicitly.
 Python issue-owning serial and
@@ -1304,7 +1308,9 @@ Two properties are worth knowing before you turn it on:
 - **Routing costs credits.** Classification and selector calls count toward
   `routing_credit_allowance` and toward the Run's **Consumption**. Billing
   already in flight when a bound is reached is disclosed rather than hidden, and
-  no further routing call is admitted afterwards.
+  no further routing call is admitted afterwards. Observed credits count
+  immediately, not only when the billed session finishes. Cancellation retains
+  that charge; completion does not charge it again.
   These sessions remain **Run**-only **Consumption**: the CLI includes them in Run
   totals and names their subtotal separately; the **Dashboard** shows that subtotal
   in its **Summary** band. They do not inflate an **Iteration**, **Lane contribution**

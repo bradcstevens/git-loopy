@@ -1022,14 +1022,19 @@ class SelectorCallResult:
 
     output: object
     routing_credits: Decimal
+    reported_routing_credits: Decimal = Decimal(0)
+    """The part already observed by this call's admission ledger."""
 
 
 class RoutingCallCancelled(asyncio.CancelledError):
     """An interrupted routing call, carrying only credits already reported."""
 
-    def __init__(self, routing_credits: Decimal) -> None:
+    def __init__(
+        self, routing_credits: Decimal, reported_routing_credits: Decimal = Decimal(0)
+    ) -> None:
         super().__init__("routing call cancelled")
         self.routing_credits = _validate_routing_credits(routing_credits)
+        self.reported_routing_credits = _validate_routing_credits(reported_routing_credits)
 
 
 @dataclass(frozen=True)
@@ -1113,6 +1118,14 @@ class RoutingAdmissionLedger:
             self._classification_attempts += 1
             self._complete_cost(cost)
 
+    def observe_credits(self, routing_credits: Decimal) -> None:
+        """Charge an SDK observation synchronously on the Run's event loop.
+
+        An in-flight call's reported bill is already spent. Its result must name
+        this reported portion so settlement charges only any unobserved remainder.
+        """
+        self._complete_cost(_validate_routing_credits(routing_credits))
+
     async def run_selector(
         self, call: Callable[[], Awaitable[SelectorCallResult]]
     ) -> tuple[SelectorCallResult | None, _AdmissionRefusal | None]:
@@ -1133,7 +1146,9 @@ class RoutingAdmissionLedger:
                 return await call()
             except RoutingCallCancelled as exc:
                 async with self._lock:
-                    self._complete_cost(exc.routing_credits)
+                    self._complete_cost(_validate_routing_credits(
+                        exc.routing_credits - exc.reported_routing_credits
+                    ))
                 raise
 
         remaining = self._deadline - self._monotonic()
@@ -1172,10 +1187,12 @@ class RoutingAdmissionLedger:
                     self._in_flight -= 1
             try:
                 cost = _validate_routing_credits(result.routing_credits)
+                reported = _validate_routing_credits(result.reported_routing_credits)
+                remainder = _validate_routing_credits(cost - reported)
             except (AttributeError, ValueError):
                 return None, _AdmissionRefusal.SELECTOR
             async with self._lock:
-                self._complete_cost(cost)
+                self._complete_cost(remainder)
             return result, None
         finally:
             self._semaphore.release()
@@ -1204,7 +1221,7 @@ class RoutingAdmissionLedger:
 
     def _complete_cost(self, cost: Decimal) -> None:
         self._credits += cost
-        if self._credits > self._allowance:
+        if cost > 0 and self._credits > self._allowance:
             self._overshoot_count += 1
 
 

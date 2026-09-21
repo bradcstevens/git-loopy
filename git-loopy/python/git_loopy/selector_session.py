@@ -194,12 +194,10 @@ def _candidate_payload(candidate: AssessmentCandidate) -> dict[str, Any]:
 class RoutingCostMeter:
     """Chain a Run's cost meter and total what each routing call spent.
 
-    The **Task-type classifier** is a routing call too (AC10), but unlike the
-    **Route selector** it is not invoked *through* the admission ledger — it is
-    the Pickup's own collaborator, and it runs whether or not this Run routes
-    dynamically. So its billing is read here, off the same ``usage.tokens``
-    payload every other **Consumption** reader parses, and handed to the ledger
-    afterwards.
+    The **Task-type classifier** is a routing call too (AC10). Under Dynamic
+    policy its admission ledger receives each billing observation immediately,
+    before another concurrent assessment can spend a newly available slot.
+    Outside Dynamic policy it still contributes to the Run's Consumption.
 
     A **chain, not a replacement**: the Run's meter still sees every event,
     because a routing call the Run stops counting is a call billed to nobody —
@@ -213,8 +211,12 @@ class RoutingCostMeter:
     allowance would be exhausted by arithmetic rather than by spend.
     """
 
-    def __init__(self, cost_meter: object | None) -> None:
+    def __init__(
+        self, cost_meter: object | None, *,
+        on_routing_credits: Callable[[Decimal], None] | None = None,
+    ) -> None:
         self._cost_meter = cost_meter
+        self._on_routing_credits = on_routing_credits
         self._credits = Decimal(0)
 
     def observe(self, event: Mapping[str, Any]) -> None:
@@ -226,6 +228,8 @@ class RoutingCostMeter:
         sample = BillingSample.from_event(event)
         if sample.credits is not None:
             self._credits += sample.credits
+            if self._on_routing_credits is not None:
+                self._on_routing_credits(sample.credits)
 
     def drain(self) -> Decimal:
         """Total this call's routing credits and start the next one at zero."""
@@ -233,7 +237,7 @@ class RoutingCostMeter:
         return spent
 
 
-class _SelectorCollector:
+class _SelectorCollector(RoutingCostMeter):
     """Fan the selector's answer and its billing out to their readers.
 
     Two readers, because they answer different questions: the Run's cost meter
@@ -243,20 +247,15 @@ class _SelectorCollector:
     make one selector's overshoot look like another's.
     """
 
-    def __init__(self, cost_meter: object | None) -> None:
-        self._cost_meter = cost_meter
+    def __init__(
+        self, cost_meter: object | None, *,
+        on_routing_credits: Callable[[Decimal], None] | None = None,
+    ) -> None:
+        super().__init__(cost_meter, on_routing_credits=on_routing_credits)
         self._messages: list[str] = []
-        self._credits = Decimal(0)
 
     def observe(self, event: Mapping[str, Any]) -> None:
-        if self._cost_meter is not None:
-            try:
-                self._cost_meter.observe(event)  # type: ignore[attr-defined]
-            except Exception:
-                pass
-        sample = BillingSample.from_event(event)
-        if sample.credits is not None:
-            self._credits += sample.credits
+        super().observe(event)
         if event.get("type") != ASSISTANT_MESSAGE:
             return
         content = event.get("content")
@@ -287,6 +286,7 @@ class SessionRouteSelector:
         send_timeout_seconds: float,
         skill_exposure: Any = None,
         cost_meter: Any = None,
+        on_routing_credits: Callable[[Decimal], None] | None = None,
         session_factory: Callable[..., Any] | None = None,
         warn: Callable[[str], None] | None = None,
     ) -> None:
@@ -299,6 +299,7 @@ class SessionRouteSelector:
         self._send_timeout_seconds = send_timeout_seconds
         self._skill_exposure = skill_exposure
         self._cost_meter = cost_meter
+        self._on_routing_credits = on_routing_credits
         self._session_factory = session_factory
         self._warn = warn
 
@@ -315,7 +316,9 @@ class SessionRouteSelector:
         *start* is the other case, and that does raise — there is no usage to
         report and nothing was billed.
         """
-        collector = _SelectorCollector(self._cost_meter)
+        collector = _SelectorCollector(
+            self._cost_meter, on_routing_credits=self._on_routing_credits,
+        )
         factory = self._session_factory
         if factory is None:
             from git_loopy.session import IterationSession
@@ -349,10 +352,16 @@ class SessionRouteSelector:
                         f"the Route selector raised {type(exc).__name__}: {exc}"
                     )
         except asyncio.CancelledError:
-            raise RoutingCallCancelled(collector.routing_credits) from None
+            raise RoutingCallCancelled(
+                collector.routing_credits,
+                collector.routing_credits if self._on_routing_credits else Decimal(0),
+            ) from None
         return SelectorCallResult(
             output=collector.answer,
             routing_credits=collector.routing_credits,
+            reported_routing_credits=(
+                collector.routing_credits if self._on_routing_credits else Decimal(0)
+            ),
         )
 
     def _report(self, message: str) -> None:
