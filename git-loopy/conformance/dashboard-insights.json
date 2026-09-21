@@ -486,7 +486,7 @@
         "state": "static",
         "fields": {"effort": null, "selector_effort": null},
         "expected_fields": {},
-        "queue_text": "[not binding]",
+        "queue_text": "preparation: static [not binding]",
         "text": "Route preparation: static route applies, no selector call"
       },
       {
@@ -494,7 +494,7 @@
         "state": "reusable",
         "fields": {"effort": null, "selector_effort": null},
         "expected_fields": {},
-        "queue_text": "[not binding]",
+        "queue_text": "preparation: reus... [not binding]",
         "text": "Route preparation: an earlier decision is available for Pickup revalidation"
       },
       {
@@ -502,7 +502,7 @@
         "state": "unavailable",
         "fields": {"effort": null, "selector_effort": null},
         "expected_fields": {},
-        "queue_text": "[not binding]",
+        "queue_text": "preparation: unav... [not binding]",
         "text": "Route not prepared; available for Pickup revalidation"
       }
     ]
