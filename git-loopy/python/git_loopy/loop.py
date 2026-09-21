@@ -273,6 +273,7 @@ from git_loopy.skill_run_preflight import (
     resolve_run_skill_preflight,
 )
 from git_loopy.bump_class_pickup import PickupBumpClassifier
+from git_loopy.lease_lifecycle import LeaseLifecycle
 from git_loopy.bump_class_session import SessionBumpClassProposer
 from git_loopy.task_type_classifier import ClassifierPair
 from git_loopy.task_type_pickup import (
@@ -1086,6 +1087,7 @@ class _Loop:
         task_type_client: TaskTypeLabelClient | None = None,
         route_tracker: gh_module.GitHubClient | None = None,
         dynamic_routing: "_DynamicRoutingSetup | None" = None,
+        lease: LeaseLifecycle | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -1103,6 +1105,11 @@ class _Loop:
         self._skill_exposure = skill_preflight.exposure
         self._source = source
         self._diag = diag
+        #: This Run's **Lease**s, or ``None`` when Leases are not in force —
+        #: the PRDs backend has no remote to contend on, and a clone with no
+        #: resolvable GitHub repository cannot address a Lease ref. ``None``
+        #: restores exactly the pre-ADR-0033 behaviour: one Run, unguarded.
+        self._lease = lease
         self._include_prs = include_prs
         self._rollup = IterationRollupAccumulator(denomination=denomination)
         # An extra, Run-scoped Consumption observer (#309). The rollup owns one
@@ -1640,6 +1647,23 @@ class _Loop:
     async def _run_one_iteration(
         self, iter_num: int
     ) -> tuple[str, int, int]:
+        """Run one AFK Iteration and give back every **Lease** it took.
+
+        The release is in a ``finally`` because a Lease must not outlive the
+        Iteration that took it *however* that Iteration ends — returned,
+        raised, or cancelled by a **Wind-down**. Leaving one behind would park
+        its issue for a whole TTL while this Run, still alive, moved on
+        (ADR-0033 §5.3). It cannot be guaranteed against ``SIGKILL``, which is
+        the one case expiry is for.
+        """
+        try:
+            return await self._iterate(iter_num)
+        finally:
+            self._release_all_leases()
+
+    async def _iterate(
+        self, iter_num: int
+    ) -> tuple[str, int, int]:
         """Run a single AFK iteration.
 
         Returns:
@@ -1895,7 +1919,9 @@ class _Loop:
             #    closes the issue via gh; the PRDs backend always returns
             #    [] (the agent owns the `git mv ... done/` step).
             with telemetry.span("git_loopy.enforce_closures"):
-                completions = self._handle_completions_safely(pool, new_commits)
+                completions = self._handle_completions_safely(
+                    pool, new_commits, leased_pool=True
+                )
 
             if issue_binding.active_ref is None:
                 fallback = self._infer_active_binding(
@@ -1967,7 +1993,13 @@ class _Loop:
             #    locally. Non-fatal: a missing remote/upstream, an auth failure,
             #    or a non-fast-forward warns and the loop carries on. Like the
             #    Checkpoint, a push is NOT Strike progress (it creates no commit).
-            self._maybe_push(iter_num, new_commits, checkpoint_sha)
+            self._maybe_push(
+                iter_num,
+                new_commits,
+                checkpoint_sha,
+                active_ref=active.ref,
+                active_kind=active.kind,
+            )
 
             # 10) Strike state machine + emit appropriate events.
             commits_in_iter = len(new_commits)
@@ -2869,7 +2901,14 @@ class _Loop:
             except TaskTypeError as exc:
                 return f"routing refused: {exc}"
             self._routes[item.ref] = resolution
-            return None
+            # **Taking the Lease is the last step of Pickup** (ADR-0033 §2.4).
+            # Last, so a candidate this Run would have passed over anyway never
+            # costs a round trip or a Lease; and *inside* `admit`, because a
+            # Lease another Run holds must behave exactly like every other
+            # refusal here — a recorded skip that moves the ordered walk to the
+            # next candidate (§2.2) — rather than a raise that would end a whole
+            # Run over an issue somebody else is simply already working.
+            return self._take_lease_at_pickup(item)
 
         while True:
             pickup = pick_serial(pool, admit=admit, pin=self._config.issue_pin)
@@ -2884,6 +2923,10 @@ class _Loop:
                 # behind it. The ordered walk remains the only dispatcher.
                 routing_refusals[pickup.item.ref] = f"dynamic route unavailable: {exc}"
                 self._routes.pop(pickup.item.ref, None)
+                # The Lease `admit` took for this candidate must go back, or
+                # the walk would leave a Lease on an issue no Run is working
+                # and park it for a whole TTL (ADR-0033 §2.5).
+                self._release_lease(pickup.item.ref)
                 continue
             self._routes[bound.ref] = resolution
             pickup = dataclass_replace(pickup, item=bound)
@@ -2915,6 +2958,75 @@ class _Loop:
                 resolution=resolution,
             )
         return pickup
+
+    def _take_lease_at_pickup(
+        self, item: AfkReadyItem
+    ) -> str | AdmissionRefusal | None:
+        """Take ``item``'s **Lease**, or say why this **Pickup** may not happen.
+
+        Returns ``None`` to admit the candidate, or the refusal the ordered
+        walk records as a **Pickup skip**.
+
+        A Lease is a GitHub *issue's*. A PR candidate and the PRDs backend
+        pass through unguarded — and the PR is the trap worth naming, because
+        its ``ref`` is an ``int`` exactly like an issue's, so only ``kind``
+        separates them. Leasing on the number alone would put PR #412 and
+        issue #412 on one ``refs/heads/git-loopy/leases/issue-412``, and each
+        would lock the other out of an issue it has nothing to do with.
+        """
+        if self._lease is None or item.kind != "issue" or not isinstance(item.ref, int):
+            return None
+        take = self._lease.take(item.ref)
+        if take.granted:
+            return None
+        if take.verdict == "refused":
+            # Not a conflict: another Run is working it, which is the mechanism
+            # working (ADR-0033 §8.2). Skipped silently rather than warned.
+            return "held by another Run's live Lease"
+        # An unreadable Lease remote is a read that did not happen, not this
+        # candidate refusing work (#542, ADR-0047) — the same distinction the
+        # **Readiness** branch above draws. It matters because a systemic
+        # failure (network down, credentials expired) refuses *every*
+        # candidate this way, and a terminal outcome that called that
+        # `all_skipped` would report a fact about the Pool that nobody ever
+        # established.
+        return AdmissionRefusal(
+            reason="Lease could not be taken (remote unreadable)",
+            unresolved=True,
+        )
+
+    def _release_lease(self, ref: int | str) -> None:
+        """Give back one issue's **Lease**, if this Run holds it.
+
+        Idempotent and never raising: release runs on the success path and on
+        every handled failure path alike, so it must not be able to turn a
+        finished Iteration into a crashed one.
+        """
+        if self._lease is None or not isinstance(ref, int):
+            return
+        self._lease.release(ref)
+
+    def _release_all_leases(self) -> None:
+        """Free every issue this Run still holds, at the end of an Iteration."""
+        if self._lease is not None:
+            self._lease.release_all()
+
+    def _leased(self, ref: int | str, action: str, *, kind: str = "issue") -> bool:
+        """**The fence**: may this Run perform ``action`` on ``ref``? (ADR-0033 §4.4)
+
+        Asked immediately before each *individual* side effect, never once for
+        a batch. With no Lease in force the answer is yes, which is exactly the
+        behaviour that shipped before the Lease existed.
+
+        ``kind`` must be passed for anything that is not a GitHub issue. Only
+        issues are Lease-governed, and a PR's ``ref`` is an ``int`` just like
+        an issue's, so asking about one by number alone would deny it at
+        ``hold is None`` — refusing writes over a Lease that was never its to
+        hold.
+        """
+        if self._lease is None or kind != "issue" or not isinstance(ref, int):
+            return True
+        return self._lease.fence(ref, action)
 
     def _finish_unworked_iteration(
         self, iter_num: int, pickup: SerialPickup
@@ -3069,6 +3181,8 @@ class _Loop:
         iter_num: int,
         new_commits: list[git_module.Commit],
         checkpoint_sha: str | None,
+        active_ref: int | str | None = None,
+        active_kind: str = "issue",
     ) -> bool:
         """Push the current branch to its upstream after an iteration's new commits.
 
@@ -3093,6 +3207,12 @@ class _Loop:
         """
         if not new_commits and checkpoint_sha is None:
             return False
+        if active_ref is not None and not self._leased(
+            active_ref, "push", kind=active_kind
+        ):
+            # **The fence** (ADR-0033 §4.4). A Run that was stolen from must
+            # not push the work it did under a Lease it no longer holds.
+            return False
         try:
             self._git.push()
         except git_module.GitError as exc:
@@ -3108,6 +3228,8 @@ class _Loop:
         self,
         pool: list[AfkReadyItem],
         new_commits: list[git_module.Commit],
+        *,
+        leased_pool: bool = False,
     ) -> list[Any]:
         """Call ``source.handle_completions`` with crash containment.
 
@@ -3115,11 +3237,41 @@ class _Loop:
         abort the iteration — the commit accounting and strike
         bookkeeping still need to run. Returns an empty list on
         failure (logged at WARNING via the diagnostics logger).
+
+        ``leased_pool`` says whether ``pool`` is one this Run took **Leases**
+        over, and only then is **the fence** applied to it (ADR-0033 §4.4).
+        This is the runner's issue *close* and its accompanying *comment*, the
+        two loudest writes it makes, and a Run whose Lease was stolen must
+        make neither: the Run that took the issue over is the one entitled to
+        say it is done. Off by default, because a caller whose pool was never
+        Lease-governed — Parallel-mode Integration, whose Lanes take no Lease
+        in this slice — would have every ref denied at ``hold is None`` and
+        close nothing at all. Deny-by-default is right for the fence and wrong
+        for whether to ask it.
+
+        It is fenced by narrowing the pool rather than by refusing the call,
+        because the pool *is* the whitelist ``_handle_issue_closures`` filters
+        stray closing keywords against (``sources.py``): an issue the fence
+        denies simply is not closable. Gating the whole batch on one ref would
+        be the "never once for a batch" mistake in both directions — it would
+        let a Lease on one issue authorise closing another, and in Parallel
+        mode it would let one Lane's lost Lease suppress every other Lane's
+        completions. Only ``kind == "issue"`` items are asked about: a PR's
+        ``ref`` is an ``int`` too, but no Lease ref names one, and dropping PR
+        items here would hide every PR-head advance from progress detection
+        and earn Strikes for an Iteration that was progressing.
         """
+        guarded = pool
+        if leased_pool:
+            guarded = [
+                item
+                for item in pool
+                if item.kind != "issue" or self._leased(item.ref, "issue close")
+            ]
         try:
             return list(
                 self._source.handle_completions(
-                    pool=pool, new_commits=new_commits
+                    pool=guarded, new_commits=new_commits
                 )
             )
         except Exception as exc:  # pragma: no cover - defensive
