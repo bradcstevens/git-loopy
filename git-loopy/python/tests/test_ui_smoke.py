@@ -2635,6 +2635,20 @@ def test_an_effort_dropped_for_an_incapable_model_reads_as_dropped_too() -> None
     assert "dropped" in buf.getvalue()
 
 
+def test_dynamic_no_dial_readback_preserves_static_and_historical_omission() -> None:
+    for source, expected in (
+        ("dynamic", "(not configurable)"),
+        ("defaulted_no_task_type_label", "(backend default)"),
+        ("routed", "(backend default)"),
+        ("defaulted_explicit_override", "(backend default)"),
+    ):
+        renderer, _, buf = _make_renderer()
+
+        renderer.render(_pickup_event(routing_source=source, effort=None, gate_warnings=[]))
+
+        assert f"@ {expected}" in buf.getvalue()
+
+
 def test_the_context_tier_is_silent_until_it_is_worth_saying() -> None:
     """A run-level knob that holds its default on every Run today.
 
@@ -2927,6 +2941,23 @@ def test_a_prepared_route_reads_back_its_rationale_and_provenance(
         )
 
 
+@pytest.mark.parametrize(
+    ("effort", "expected"), [(None, "(not configurable)"), ("none", "none")],
+)
+def test_preparation_distinguishes_no_dial_for_work_and_selector(effort, expected) -> None:
+    renderer, _, buf = _make_renderer()
+
+    renderer.render(_prepared_event(
+        model="synthetic-work", effort=effort,
+        selector_model="synthetic-selector", selector_effort=effort,
+    ))
+
+    text = " ".join(buf.getvalue().split())
+    assert f"proposal synthetic-work @ {expected}" in text
+    assert f"selector synthetic-selector @ {expected}" in text
+    assert "backend default" not in text
+
+
 def test_an_unresolvable_viewer_zone_labels_the_readback_instead_of_faking_local(
     zoneless_viewer: None,
 ) -> None:
@@ -2949,10 +2980,12 @@ def test_an_unresolvable_viewer_zone_labels_the_readback_instead_of_faking_local
     assert "2026-09-19T08:45:00.000Z" not in out
 
 
-def test_a_null_prepared_effort_is_not_presented_as_configured() -> None:
+def test_an_absent_prepared_effort_retains_historical_readback() -> None:
     renderer, _summary, buf = _make_renderer()
+    event = _prepared_event()
+    event.pop("effort")
 
-    renderer.render(_prepared_event(effort=None))
+    renderer.render(event)
 
     out = buf.getvalue()
     assert "backend default" in out

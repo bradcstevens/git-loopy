@@ -166,6 +166,19 @@ stays unchanged and no unstarted work incurs a Strike. Existing helper-level
 malformed-billing cases remain separate; this matrix does not claim them or
 activate final defaults, native members, non-local, Subagent or Integration routing.
 
+The `effort_semantics` matrix is adapted by
+`python/tests/test_routing_effort_conformance.py`: seven cases in serial and local
+Lane modes carry recorded migration into exact selector/work-session settings,
+canonical Pickup, CLI/Dashboard readback, Run-only Consumption and idempotent
+tracker publication. A bare Dynamic association means no effort dial, whereas
+`@none` names an advertised effort value; an empty advertised dial supplies
+neither. Unchanged inputs support fresh reuse
+without another selector bill; either direction of incompatible dial change
+refuses new work, including after a prior final assignment. Refusals preserve
+Config and tracker state and spend no assessment or Strike. Static omission
+semantics, historical streams, current combined labels and all activation
+deferrals remain unchanged.
+
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent
 from every port's vocabulary, not just the shared fixture and Python reference.

@@ -546,7 +546,11 @@ def _candidate_for(
         return None, CandidateExclusion.UNLISTED_MODEL
     if not capability.eligible:
         return None, CandidateExclusion.INELIGIBLE_MODEL
-    if record.associated_copilot_effort is not None:
+    if record.associated_copilot_effort is None:
+        # A bare Dynamic association means no dial, not an unscored default.
+        if capability.effort_configurable:
+            return None, CandidateExclusion.UNSUPPORTED_EFFORT
+    else:
         if not capability.effort_configurable:
             return None, CandidateExclusion.EFFORT_NOT_CONFIGURABLE
         if record.associated_copilot_effort not in capability.efforts:

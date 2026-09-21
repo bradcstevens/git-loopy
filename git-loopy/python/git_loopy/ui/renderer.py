@@ -647,13 +647,12 @@ class Renderer:
         text.append(f"#{ref}" if isinstance(ref, int) else str(ref))
         if state == ROUTE_PREPARATION_PROPOSED:
             model = event.get("model")
-            effort = event.get("effort")
             tier = event.get("context_tier")
             text.append("  proposal ")
             text.append(
                 f"{model if isinstance(model, str) and model else 'backend default'}"
                 " @ "
-                f"{effort if isinstance(effort, str) and effort else 'backend default'}"
+                f"{_dynamic_effort_phrase(event, 'effort')}"
             )
             if isinstance(tier, str) and tier:
                 text.append(f" ({tier})", style=STYLES["meta"])
@@ -681,12 +680,11 @@ class Renderer:
                         value = viewer_local(value)
                     text.append(f"  {label} {value}", style=STYLES["meta"])
             selector_model = event.get("selector_model")
-            selector_effort = event.get("selector_effort")
             selector_tier = event.get("selector_context_tier")
             if isinstance(selector_model, str) and selector_model:
                 selector = (
                     f"  selector {selector_model} @ "
-                    f"{selector_effort if isinstance(selector_effort, str) and selector_effort else 'backend default'}"
+                    f"{_dynamic_effort_phrase(event, 'selector_effort')}"
                 )
                 if isinstance(selector_tier, str) and selector_tier:
                     selector += f" ({selector_tier})"
@@ -1089,14 +1087,24 @@ _KEY_NAMING_SOURCES: frozenset[str] = frozenset(
 )
 
 
+def _dynamic_effort_phrase(event: dict[str, Any], field: str) -> str:
+    effort = event.get(field)
+    if isinstance(effort, str) and effort:
+        return effort
+    if field in event and effort is None:
+        return "(not configurable)"
+    return "(backend default)"
+
+
 def _routed_pair_phrase(event: dict[str, Any]) -> str:
-    """``model @ effort`` for one Pickup, keeping the three effort states apart.
+    """``model @ effort`` for one Pickup, keeping distinct effort states apart.
 
     An explicit ``none``, a backend-chosen effort, and a backend-chosen effort
     that followed a **dropped** one are three different facts wearing two
     values: the first is a string, and the other two are both ``None``. The
     gate warning beside the null is the entire difference, and saying so here
     is the only place per-issue routing has a gate diagnostic on stdout.
+    Dynamic null effort instead records a verified absence of the dial.
 
     Returns the empty string when the record carries no routing at all — a
     Runner that does not implement §14 emits the binding without it, and the
@@ -1112,6 +1120,8 @@ def _routed_pair_phrase(event: dict[str, Any]) -> str:
         return f"{rendered} @ {effort}"
     if _EFFORT_DROPPED_WARNINGS & set(warnings):
         return f"{rendered} @ (backend default, effort dropped)"
+    if event.get("routing_source") == "dynamic":
+        return f"{rendered} @ {_dynamic_effort_phrase(event, 'effort')}"
     return f"{rendered} @ (backend default)"
 
 

@@ -1751,6 +1751,11 @@ and leaves fixture cases and historical streams' interpretation unchanged.
   input. An exact score tie breaks on comparable published speed and then on stable identity. An
   Orchestrator MUST NOT select the selector with the selector, and MUST NOT downgrade it to a
   cheaper configuration to stay inside a limit — a limit is a refusal, not a discount.
+  A bare Dynamic model association asserts that effort is not configurable. If the live
+  harness reports a dial, that association MUST be excluded rather than borrowing its
+  backend default or substituting the effort value `none`. An explicit `none` association
+  is valid only when the dial advertises that value. This does not change an operator's
+  deliberate omission of effort in a Static route.
 - **A Static route still wins, and the Task type is settled first.** §14.3's routes — a `[routing]`
   entry, an explicit flag or environment pin, a configured **Escalation rung** — are instructions,
   and an Orchestrator MUST NOT spend a selector call to contradict one. A missing **Task type** is
@@ -1890,6 +1895,16 @@ Dashboard Run-only Consumption and final tracker publication. Pending candidates
 remain open without a final assignment or Route projection; no unstarted work
 charges a Strike and Config remains unchanged. These are shared obligations for
 the existing opt-in Python flow, not final-default or native-member activation.
+
+The `effort_semantics` matrix carries recorded migration through actual serial
+and local Lane sessions and subsequent Runs. It distinguishes no effort dial
+from the advertised value `none` in both selector and work requests, canonical
+records, CLI/Dashboard readback and idempotent publication. Unchanged inputs
+permit freshly validated reuse without another selector bill. A changed dial
+that contradicts the association refuses new work even when an earlier local
+assignment and tracker projection exist, without altering Config, charging a
+Strike or buying an assessment. This pins exact Dynamic effort matching, not
+final-default, non-local, native-member or ADR-0060 activation.
 
 **The Dynamic route is Python-only today**, for the same reason §14.3 is: the shell and PowerShell
 Orchestrators implement no per-issue routing and read no harness listing, so they have no route to
