@@ -6,6 +6,7 @@ $Fixture = ConvertFrom-Json -AsHashtable -InputObject (
     Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot "../../conformance/issue-lease.json")
 )
 
+$Cases = 0
 foreach ($Case in $Fixture.cases) {
     $Record = $Fixture.record.Clone()
     if ($Case.Contains("set")) {
@@ -33,8 +34,11 @@ foreach ($Case in $Fixture.cases) {
         (ConvertTo-Json -Compress -InputObject @($Case.expected.diagnostics))) {
         throw "FAIL: Lease record $($Case.id): $(ConvertTo-Json -Compress -Depth 10 $Actual)"
     }
+    $Cases++
 }
+if ($Cases -eq 0) { throw "FAIL: the Lease fixture drove no record case" }
 
+$Cases = 0
 foreach ($Case in $Fixture.invalid_context_cases) {
     $Parameters = @{
         Raw = (ConvertTo-Json -Compress -InputObject $Fixture.record)
@@ -51,6 +55,19 @@ foreach ($Case in $Fixture.invalid_context_cases) {
     catch { $Failure = $_.Exception.Message }
     if ($null -eq $Failure -or -not $Failure.Contains("invalid $($Case.field)")) {
         throw "FAIL: invalid Lease inspection context $($Case.id): $Failure"
+    }
+    $Cases++
+}
+if ($Cases -eq 0) { throw "FAIL: the Lease fixture drove no invalid-context case" }
+
+# A verdict must not quietly rewrite the record it read: the eventual transport
+# renews and fences against these exact fields.
+$Preserved = Get-GitLoopyLeaseInspection -Raw (
+    ConvertTo-Json -Compress -InputObject $Fixture.record
+) -Now 1000 -Repository $Fixture.repository -Issue $Fixture.issue
+foreach ($Field in $Fixture.record.Keys) {
+    if ($Preserved.record[$Field] -cne $Fixture.record[$Field]) {
+        throw "FAIL: Lease inspection changed $Field"
     }
 }
 
