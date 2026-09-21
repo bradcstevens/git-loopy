@@ -1330,9 +1330,14 @@ Consumption remains visible, and already-bound work may finish.
 Upgrade requires consent before handoff, including when the target is already
 installed. Its saved global choice reaches actual serial/Lane sessions, with
 retained Static routes and fresh post-setup outages covered.
-Automatic Run migration enforcement, the remaining composed activation matrix, and
-Wrapper/Conformance activation obligations still need to
-land before the final default changes. Existing Config is not migrated implicitly.
+Local Run migration authority is now enforced before work, with temporary
+flag/environment and recorded project/global recovery exercised by the shared
+`routing-resolution.json` Conformance cases. They observe retained Static rows,
+inherited tiers, run-wide and context-only overrides, and loss of access/evidence
+after migration through actual sessions and canonical/Dashboard readback.
+Non-local activation, the remaining composed activation matrix and the remaining
+Wrapper/Conformance activation obligations still precede the final default
+change. Existing Config is not migrated implicitly.
 Python issue-owning serial and
 Lane sessions are the implementation scope; shell/PowerShell activation remains
 deferred, and this does not add Subagent or Integration routing.

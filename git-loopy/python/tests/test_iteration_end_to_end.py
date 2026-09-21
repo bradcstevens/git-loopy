@@ -6988,9 +6988,11 @@ def test_saved_legacy_config_refuses_work_until_a_routing_choice(
     "case", _MIGRATION_RECOVERY["cases"], ids=lambda case: case["id"]
 )
 def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
-    tmp_path, monkeypatch, mode, case
+    tmp_path, monkeypatch, capsys, mode, case
 ) -> None:
     from git_loopy import model_listing, settings
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
     from tests.fakes import FakeGateRunner
     from tests.test_loop_parallel import _ParallelFakeClient
     from tests.test_routing_migration import _update
@@ -7014,30 +7016,37 @@ def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
         "builtins.input", lambda _prompt: pytest.fail("unattended recovery prompted")
     )
     monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
-    for name in ("GIT_LOOPY_MODEL", "GIT_LOOPY_REASONING_EFFORT"):
+    for name in ("GIT_LOOPY_MODEL", "GIT_LOOPY_REASONING_EFFORT", "GIT_LOOPY_CONTEXT_TIER"):
         monkeypatch.delenv(name, raising=False)
+    harness = case.get("harness", _MIGRATION_RECOVERY["harness"])
     listing = tuple(
-        _listed_model(row["model"], row["efforts"])
-        for row in _MIGRATION_RECOVERY["harness"]
-    )
-    _harness(
-        monkeypatch,
-        *((row["model"], row["efforts"], True) for row in _MIGRATION_RECOVERY["harness"]),
+        _listed_model(
+            row["model"], row["efforts"], long_context=row.get("long_context", False),
+        )
+        for row in harness
     )
     listings: list[str] = []
 
     async def fetch_listing():
-        listings.append("listing")
+        listings.append("models")
         return list(listing)
 
+    async def static_capabilities(**_kwargs):
+        listings.append("static")
+        return static_route.HarnessCapabilities.from_listing(listing)
+
     monkeypatch.setattr(model_listing, "fetch_live_models", fetch_listing)
+    monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", static_capabilities)
     spied = _wire_dynamic_ports(
         monkeypatch,
         rows=tuple(
             _aa_row(row["id"], row["intelligence_index"], row["output_tokens_per_second"])
             for row in _MIGRATION_RECOVERY["evidence"]
         ),
-        answer=_elects(_MIGRATION_RECOVERY["selector_choice"]),
+        answer=_elects(
+            _MIGRATION_RECOVERY["selector_choice"],
+            case.get("proposed_context_tier", "default"),
+        ),
         listing=listing,
     )
     if policy == "dynamic":
@@ -7045,14 +7054,24 @@ def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
     else:
         monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
     path = settings.project_config_path(tmp_path)
-    settings.write_config_atomic(path, _MIGRATION_RECOVERY["saved_config"])
+    saved_config = {
+        **_MIGRATION_RECOVERY["saved_config"], **case.get("saved_config", {}),
+    }
+    settings.write_config_atomic(path, saved_config)
     original = path.read_bytes()
     assert cli.main(["1"]) == 1
     assert path.read_bytes() == original and client.create_calls == []
     assert spied["assessments"] == [] and spied["evidence"] == 0
     assert listings == []
 
-    args = ["1"]
+    args = [
+        "1",
+        *(
+            arg
+            for key, value in case.get("run_overrides", {}).items()
+            for arg in (f"--{key.replace('_', '-')}", value)
+        ),
+    ]
     if authority == "flag":
         args += ["--route-policy", policy]
     elif authority == "environment":
@@ -7065,36 +7084,92 @@ def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
         assert cli.main(["config", "set", "route_policy", policy, "--global"]) == 0
     else:
         pytest.fail(f"unsupported migration authority: {authority}")
+    assert settings.load_config_table(path) == {
+        **saved_config, **({"route_policy": policy} if authority == "update" else {}),
+    }
     saved = path.read_bytes()
     global_path = settings.global_config_path(os.environ)
     global_saved = global_path.read_bytes() if global_path.exists() else None
     assert client.create_calls == [] and spied["assessments"] == []
+    if not case.get("run_access", True):
+        monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    if not case.get("run_evidence_available", True):
+        async def unavailable_evidence(*_args):
+            spied["evidence"] += 1
+            raise OSError("fixture: required evidence unavailable after migration")
 
-    assert cli.main(args) == 0
+        monkeypatch.setattr(dynamic_route, "_stdlib_fetch", unavailable_evidence)
+    evidence_before_run = spied["evidence"]
+    capsys.readouterr()
 
-    (call,) = client.create_calls
-    assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
-        expected["model"], expected["effort"], expected["context_tier"],
-    )
-    (pickup,) = _bound_pickups(tmp_path)
-    assert (pickup["model"], pickup["effort"], pickup["context_tier"]) == (
-        expected["model"], expected["effort"], expected["context_tier"],
-    )
-    assert pickup["routing_source"] == expected["routing_source"]
+    assert cli.main(args) == expected.get("exit_code", 0)
+
+    if expected.get("exit_code", 0) != 0 and expected["outcome"] is None:
+        assert list((tmp_path / ".git-loopy" / "logs").glob("*.jsonl")) == []
+        events = []
+    else:
+        events = _read_events(tmp_path)
+    dashboard = LiveRunState()
+    for event in events:
+        dashboard.render(event)
+    view = project_run_view(dashboard, RunSummary(), issue=42)
+    if expected.get("exit_code", 0) == 0:
+        (row,) = view["dashboard"]["queue"]["rows"]
+        (call,) = client.create_calls
+        assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+            expected["model"], expected["effort"], expected["context_tier"],
+        )
+        (pickup,) = _bound_pickups(tmp_path)
+        assert (pickup["model"], pickup["effort"], pickup["context_tier"]) == (
+            expected["model"], expected["effort"], expected["context_tier"],
+        )
+        assert pickup["routing_source"] == expected["routing_source"]
+        assert (
+            row["route"]["model"], row["route"]["effort"],
+            row["route"]["source"], row["route"]["lifecycle_position"],
+        ) == (expected["model"], expected["effort"], expected["routing_source"], "fresh")
+        # The Dashboard keeps its historical implicit-default-tier projection.
+        assert row["route"].get("context_tier", "default") == expected["context_tier"]
+        types = {event["type"] for event in events}
+        assert ("wrapper.contribution.start" in types) == (mode == "lane")
+        assert ("wrapper.iteration.start" in types) == (mode == "serial")
+    else:
+        assert client.create_calls == []
+        assert all(row["route"] is None for row in view["dashboard"]["queue"]["rows"])
+        assert not any(e["type"] in {
+            "wrapper.routing.resolved", "wrapper.pickup.bound", "wrapper.strike",
+        } for e in events)
+        if expected["outcome"] is not None:
+            assert events[-1]["outcome"] == expected["outcome"]
+        assert loop_module._make_github_client().route_comment_calls == []
+        diagnostic = {
+            "prerequisite_missing": dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV,
+            "source_unavailable": "source_unavailable",
+            "unsupported_context_tier": "does not offer the 'long_context' context tier",
+        }[expected["refusal"]]
+        assert diagnostic in capsys.readouterr().err
     assert len(spied["assessments"]) == expected["selector_calls"]
-    types = [json.loads(raw)["type"] for raw in _log_lines(tmp_path)]
-    assert ("wrapper.contribution.start" in types) == (mode == "lane")
-    assert ("wrapper.iteration.start" in types) == (mode == "serial")
+    if "selector" in expected:
+        (selector, _request), = spied["assessments"]
+        assert (selector.model, selector.reasoning_effort, selector.context_tier) == (
+            expected["selector"]["model"], expected["selector"]["effort"],
+            expected["selector"]["context_tier"],
+        )
     if policy == "static":
         assert spied["evidence"] == 0
+    if "run_evidence_requests" in expected:
+        assert spied["evidence"] - evidence_before_run == expected["run_evidence_requests"]
+    if not case.get("run_evidence_available", True):
+        assert spied["evidence"] > evidence_before_run
     assert path.read_bytes() == saved
     assert (global_path.read_bytes() if global_path.exists() else None) == global_saved
     if authority != "update":
         assert saved == original and not path.with_suffix(".toml.bak").exists()
     if not expected["persists_choice"]:
         monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
+        calls_before_refusal = len(client.create_calls)
         assert cli.main(["1"]) == 1
-        assert len(client.create_calls) == 1
+        assert len(client.create_calls) == calls_before_refusal
     else:
         tables = settings.load_configs(tmp_path, os.environ)
         config = cli.resolve_config(

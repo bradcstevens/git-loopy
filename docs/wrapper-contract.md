@@ -1665,9 +1665,20 @@ Runs retain the legacy path during staged activation; a selected policy still MU
 a remote placement using local eligibility. Shell and PowerShell migration enforcement is
 explicitly deferred and their unchanged behavior remains conforming. This paragraph is the
 member deferral, not final Dynamic-default activation, remote capability support, or Subagent/
-Integration routing support. The scope is also recorded in `routing-resolution.json`'s
-`static_route_notes.migration_activation`; its `migration_recovery` cases cross the CLI into
-actual serial and Lane work sessions rather than substituting the one-route validator.
+Integration routing support.
+
+`routing-resolution.json`'s `migration_recovery` exercises this guard through the real
+CLI-to-Run-to-work-session seam, in serial and Lane modes. Its cases MUST first refuse
+unselected saved Config unchanged, then supply temporary or recorded authority. The adapter
+MUST compare actual work-session settings, canonical Pickup and Dashboard readback, not merely
+the configuration resolver's answer. Retained Static rows and their inherited tier remain
+authoritative under either choice; a run-wide model/effort pin requires neither leaderboard
+access nor a selector, while a context-only override still uses the strongest selector.
+Migration readiness is not future Pickup authority: loss of required access or evidence MUST
+refuse uncovered Dynamic work without a fallback session, final publication or Strike, while
+eligible Static work remains usable. Runs MUST leave saved Config unchanged; temporary
+authority MUST expire on the next invocation. These executable cases do not claim the
+remaining activation obligations or change the default policy.
 
 ### 14.4 The Dynamic route (contract 2.8)
 
