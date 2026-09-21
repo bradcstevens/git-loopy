@@ -58,11 +58,32 @@ It is also orthogonal to **Task type**, which selects a **Routed pair** and neve
 order. See `CONTEXT.md`, `docs/wrapper-contract.md` §3.2 and
 `docs/adr/0032-the-runner-picks-the-oldest-eligible-issue.md`.
 
+## Wayfinder labels
+
+`/wayfinder` charts a large effort as a **map** issue whose children are **decision
+tickets**, and it writes five labels to do it: `wayfinder:map` on the map, and one of
+`wayfinder:research`, `wayfinder:prototype`, `wayfinder:grilling`, or `wayfinder:task` on
+each ticket. The four ticket types are a closed set — the Skill names those and no others.
+
+They are in the vocabulary for exactly the reason `parallel-safe` is: nothing created them,
+so the Skill's first write on a fresh clone (`gh issue create --label wayfinder:map`)
+failed on a label that did not exist. They are **not renameable** — the Skill is authored
+upstream ([ADR-0034](../adr/0034-contract-carrying-skills-are-authored-upstream.md)), so
+the strings it writes cannot follow this repository's mapping table.
+
+What makes them unlike every other row here is that **a Run never reads one**. They are
+provisioned for a planning Skill a human drives, so an absent `wayfinder:` label costs a
+`/wayfinder` session and never an **Iteration** — `git-loopy doctor` and Run preflight
+judge only the labels a Run actually reads, and neither fails on these. See
+[issue-tracker.md](./issue-tracker.md#wayfinding-operations) for how the map, its children,
+and the blocking edges are expressed on this tracker.
+
 ## Creating the labels
 
 `git-loopy init`, run inside the repository, creates whichever triage,
-`parallel-safe`, `priority`, and Task-type labels are absent and leaves the ones
-that already exist untouched. Re-running it creates nothing.
+`parallel-safe`, `priority`, Task-type, Bump-class (`semver:`), and
+`wayfinder:` labels are absent and leaves the ones that already exist
+untouched. Re-running it creates nothing.
 
 That is *ensure*, not reconcile, and it runs once — at whatever moment `init`
 happened to run. So a label added to the vocabulary afterwards never lands on a
@@ -77,7 +98,8 @@ git-loopy labels --apply    # create what is missing, correct what drifted
 It reports every label in the vocabulary as `missing`, `drifted` (naming the
 attribute that differs), or matched, resolving the five roles through the table
 above so a renamed role is neither missing nor drift. `parallel-safe`,
-`priority`, and the `task-type:` labels are compared on their literal strings.
+`priority`, and the `task-type:`, `semver:`, and `wayfinder:` labels are
+compared on their literal strings.
 Labels the tracker carries outside the vocabulary are never reported, never
 edited, and never deleted; nothing is ever renamed. An unreachable or
 unauthorised tracker warns and exits non-zero.

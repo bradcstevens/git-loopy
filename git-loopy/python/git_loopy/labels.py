@@ -85,6 +85,7 @@ __all__ = [
     "TRIAGE_ROLES",
     "SEMVER_LABELS",
     "WAYFINDER_LABELS",
+    "WAYFINDER_LABEL_PREFIX",
     "MAPPING_DOC_RELPATH",
     "MAX_DESCRIPTION_LENGTH",
     "bootstrap_labels",
