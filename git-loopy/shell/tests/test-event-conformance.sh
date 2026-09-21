@@ -12,6 +12,7 @@ port_dir="$(cd "$script_dir/.." && pwd)"
 fixture="$port_dir/../conformance/event-schema.json"
 dashboard_fixture="$port_dir/../conformance/dashboard-insights.json"
 release_fixture="$port_dir/../conformance/release-version.json"
+skill_consultation_fixture="$port_dir/../conformance/skill-consultation.json"
 
 # shellcheck disable=SC1091
 source "$port_dir/lib/orchestrator.sh"
@@ -363,6 +364,43 @@ while IFS= read -r case_json; do
 done < <(
   jq -c '.normalized_rollup_cases[] | select(.orchestrator == "shell")' "$fixture"
 )
+
+# #555: skill-consultation.json measures which Skills an Iteration actually
+# *used* (Wrapper contract §17.7), through tool-call arguments a Skill or a
+# SKILL.md read carries. This port declares `skill_consultation: false` above
+# because it subscribes to no SDK event stream and sees no tool-call argument
+# at all -- only the harness's printed text on `agent.output`. Exercising the
+# fixture's own cases (an explicit Skill call, replay-derived SKILL.md reads,
+# and an empty consultation) is what proves that declaration holds for the
+# hardest cases the contract defines, not only a synthetic stand-in: no
+# `tool_calls` sequence this fixture pins, however it reads, ever moves this
+# port's rollup off the honest `null` its capability manifest promises.
+skill_consultation_cases=0
+TEST_MONOTONIC_NOW=100
+git_loopy_monotonic_seconds() {
+  printf '%s\n' "$TEST_MONOTONIC_NOW"
+}
+_GIT_LOOPY_ITERATION_STARTED_MONOTONIC=0
+_GIT_LOOPY_ACTIVE_REF=""
+_GIT_LOOPY_ACTIVE_STARTED_AT=""
+_GIT_LOOPY_ACTIVE_STARTED_MONOTONIC=0
+_GIT_LOOPY_ACTIVE_CLOSED_AT=""
+_GIT_LOOPY_ACTIVE_CLOSED_MONOTONIC=0
+_GIT_LOOPY_ISSUE_FIRST_STARTED_AT=()
+_GIT_LOOPY_ISSUE_FIRST_STARTED_MONOTONIC=()
+_GIT_LOOPY_ISSUE_CUMULATIVE_ACTIVE=()
+while IFS= read -r case_json; do
+  case_id="$(jq -r '.id' <<<"$case_json")"
+  git_loopy_build_iteration_rollup 0 0 0 0 ""
+  jq -e --argjson rollup "$GIT_LOOPY_ITERATION_ROLLUP_JSON" '
+    $rollup.summary.skill_call_count == null
+    and $rollup.summary.skills_consulted == null
+  ' >/dev/null <<<"$case_json" ||
+    fail "skill-consultation fixture must stay unmeasured for a false capability: $case_id"
+  skill_consultation_cases=$((skill_consultation_cases + 1))
+done < <(jq -c '.cases[]' "$skill_consultation_fixture")
+((skill_consultation_cases > 0)) ||
+  fail "no skill-consultation fixture case exercised the shell rollup"
 
 # The renderer-neutral Dashboard seam is only anti-drift if the native trace it
 # pins is one this port can actually emit. Every native Dashboard case therefore
