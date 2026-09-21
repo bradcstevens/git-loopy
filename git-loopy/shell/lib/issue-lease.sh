@@ -1,5 +1,33 @@
 #!/usr/bin/env bash
 
+# Pure remote URL -> JSON owner/repo or null, staged ahead of native transport.
+git_loopy_repository_from_remote_url() {
+  jq -cn --arg url "$1" '
+    def slug:
+      gsub("\\A/+|/+\\z"; "") | split("/")
+      | if length != 2 then null
+        else .[1] |= sub("\\.[gG][iI][tT]\\z"; "")
+        | if all(.[]; test("\\A[A-Za-z0-9_.-]+\\z"))
+          then join("/") else null end
+        end;
+    $url | gsub("\\A\\s+|\\s+\\z"; "")
+    | if contains("://") then
+        gsub("[\t\r\n]"; "")
+        | [capture("\\A(?<scheme>[A-Za-z][A-Za-z0-9+.-]*)://(?<authority>[^/?#]*)(?<path>[^?#]*)")][0]
+        | if . == null then null
+          elif (.scheme | ascii_downcase) as $scheme
+            | (["ssh", "git", "http", "https", "git+ssh"] | index($scheme)) == null
+            then null
+          elif (.authority | sub(".*@"; "") | test("\\A[^:]") | not)
+            then null
+          else .path | slug end
+      else
+        [capture("\\A(?:[^/@]+@)?[^/:]{2,}:(?<path>[^/].*)\\z")][0]
+        | if . == null then null else .path | slug end
+      end
+  '
+}
+
 # ADR-0033: staged pure inspection, not a Lease transport or a side-effect fence.
 # Input is {raw: nullable JSON message string, now, repository, issue,
 #           skew_tolerance_seconds?: 60}. A failed fetch must never become null.

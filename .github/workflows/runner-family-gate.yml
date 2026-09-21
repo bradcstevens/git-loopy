@@ -116,6 +116,7 @@ jobs:
             git-loopy/shell/tests/test-orchestrator-conformance.sh
             git-loopy/shell/tests/test-orchestrator-boundary.sh
             git-loopy/shell/tests/test-release-line-conformance.sh
+            git-loopy/shell/tests/test-repository-identity-conformance.sh
             git-loopy/shell/tests/test-tui-install.sh
           )
           EXECUTED=0
@@ -225,6 +226,7 @@ jobs:
           Invoke-Suite git-loopy/powershell/tests/test-orchestrator-conformance.ps1
           Invoke-Suite git-loopy/powershell/tests/test-orchestrator-boundary.ps1
           Invoke-Suite git-loopy/powershell/tests/test-release-line-conformance.ps1
+          Invoke-Suite git-loopy/powershell/tests/test-repository-identity-conformance.ps1
           Invoke-Suite git-loopy/powershell/tests/test-tui-install.ps1
 
   run-control:
