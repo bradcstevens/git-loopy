@@ -556,6 +556,11 @@ Cost. Consumption *carries* what was billed; it does not denominate it. Turning 
 Consumption tally into a Cost figure is the **Cost denomination**'s job. A figure no
 sample reported stays unknown, and a total missing one of its terms is unknown too
 rather than an understatement.
+**Task-type classifier** and **Route selector** sessions also carry **Run**-only
+**Consumption**, with `iter: null` and no **Lane contribution**. It contributes
+to Run totals, never to whichever work row or **Active issue** happens to be open.
+The CLI names it separately and the **Dashboard** shows it in the **Summary** band,
+including when routing refuses all work.
 _Avoid_: usage, spend (for the token measure); billing.
 
 **Cost denomination**:

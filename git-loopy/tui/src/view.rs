@@ -348,6 +348,16 @@ pub struct LogLineView {
 #[derive(Clone, Debug, Serialize)]
 pub struct Summary {
     pub rows: Vec<SummaryRow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_consumption: Option<RunConsumption>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RunConsumption {
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    pub credits: Option<f64>,
+    pub premium_requests: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -449,6 +459,12 @@ pub fn project_run_view(
             },
             summary: Summary {
                 rows: state.completed_iterations.iter().map(summary_row).collect(),
+                run_consumption: state.run_usage.as_ref().map(|usage| RunConsumption {
+                    tokens_in: usage.tokens_in,
+                    tokens_out: usage.tokens_out,
+                    credits: usage.credits.value(),
+                    premium_requests: usage.premium_requests.value(),
+                }),
             },
         },
         drill_in: drill_in_view(state, context, drill_in),

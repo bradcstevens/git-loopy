@@ -33,6 +33,55 @@ fn keys(value: &Value) -> Vec<String> {
 }
 
 #[test]
+fn routing_consumption_belongs_to_the_run_not_the_open_work() {
+    let mut state = DashboardState::new(RunInputs::new("work-model", "high"));
+    for raw in [
+        r#"{"type":"wrapper.iteration.start","iter":1}"#,
+        r#"{"type":"usage.tokens","run_id":"run-1","iter":null,"input":100,"output":20,"credits":0.2}"#,
+        r#"{"type":"wrapper.issue.activated","iter":1,"issue":42,"activated_at":"2026-05-16T00:00:00Z","binding_source":"pickup"}"#,
+        r#"{"type":"usage.tokens","iter":1,"input":7,"output":3,"credits":0.1}"#,
+        r#"{"type":"usage.tokens","run_id":"run-1","iter":null,"input":100,"output":20,"credits":0.3}"#,
+    ] {
+        state.apply(&Event::from_jsonl_line(raw).expect("event decodes"));
+    }
+    let projected = view(
+        &state,
+        &context("2026-05-16T00:00:01Z", 0),
+        IssueRef::number(42),
+    );
+    let work = &projected["dashboard"]["queue"]["rows"][0];
+    assert_eq!(work["tokens_in"], 7);
+    assert_eq!(work["credits"], 0.1);
+    let run = &projected["dashboard"]["summary"]["run_consumption"];
+    assert_eq!(run["tokens_in"], 200);
+    assert_eq!(run["tokens_out"], 40);
+    assert_eq!(run["credits"], 0.5);
+    assert!(run["premium_requests"].is_null());
+    assert_eq!(
+        projected["dashboard"]["summary"]["rows"],
+        serde_json::json!([])
+    );
+
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"type":"usage.tokens","run_id":"run-1","iter":null,"input":10,"output":2}"#,
+        )
+        .expect("unbilled event decodes"),
+    );
+    let projected = view(
+        &state,
+        &context("2026-05-16T00:00:02Z", 0),
+        IssueRef::number(42),
+    );
+    assert_eq!(
+        projected["dashboard"]["summary"]["run_consumption"]["tokens_in"],
+        210
+    );
+    assert!(projected["dashboard"]["summary"]["run_consumption"]["credits"].is_null());
+    assert_eq!(projected["dashboard"]["queue"]["rows"][0]["credits"], 0.1);
+}
+
+#[test]
 fn a_run_projects_the_canonical_band_inventory_before_any_event() {
     let state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
     let ctx = context("2026-05-16T00:00:00.000Z", -360);

@@ -57,6 +57,7 @@ import pytest
 from copilot import CopilotClient
 from copilot.generated.session_events import (
     AssistantMessageData,
+    AssistantUsageCopilotUsage,
     AssistantUsageData,
     PermissionRequestCustomTool,
     SessionErrorData,
@@ -5595,6 +5596,7 @@ def _wire_dynamic_ports(
     answer: Callable[[Any], Any] | None,
     listing: tuple[SimpleNamespace, ...] | Callable[[], tuple[SimpleNamespace, ...]],
     evidence_delay: float = 0.0,
+    session_selector: bool = False,
 ) -> dict[str, list[Any]]:
     """Substitute the two ports that reach the network, and nothing else.
 
@@ -5641,6 +5643,8 @@ def _wire_dynamic_ports(
 
     monkeypatch.setattr(dynamic_route, "_stdlib_fetch", _fetch)
     monkeypatch.setattr(loop_module, "_fetch_harness_evidence", _capabilities)
+    if session_selector:
+        return spied
 
     # Unwrap any factory a previous call in this test already installed, so a
     # second Run's assessments are counted against its own spy rather than
@@ -6855,6 +6859,195 @@ def test_a_classification_counts_toward_this_runs_routing_usage(
         event for event in events if event["type"] == "wrapper.routing.resolved"
     ]
     assert record["classification_attempts"] == 1
+
+
+def _billed_routing_usage(model: str, credits: str) -> SessionEvent:
+    return _sdk_event(
+        SessionEventType.ASSISTANT_USAGE,
+        AssistantUsageData(
+            model=model,
+            input_tokens=100,
+            output_tokens=20,
+            copilot_usage=AssistantUsageCopilotUsage(
+                total_nano_aiu=float(Decimal(credits) * 1_000_000_000)
+            ),
+        ),
+    )
+
+
+class _BilledRoutingClient:
+    """Script routing at the SDK transport, keeping the real session adapters."""
+
+    def __init__(self, work_client, *, selector_credits="0.30", classifier_credits="0.20"):
+        self.work_client = work_client
+        self.selector_credits = selector_credits
+        self.classifier_credits = classifier_credits
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def start(self):
+        await self.work_client.start()
+
+    async def stop(self):
+        await self.work_client.stop()
+
+    async def create_session(self, **kwargs):
+        work_session = await self.work_client.create_session(**kwargs)
+        owner = self
+
+        class Session:
+            session_id = work_session.session_id
+
+            async def disconnect(self):
+                await work_session.disconnect()
+
+            async def send_and_wait(self, prompt, **options):
+                if prompt.startswith("Classify the task type"):
+                    role = "classifier"
+                    output = "<task-type>implementation</task-type>"
+                    credits = owner.classifier_credits
+                elif prompt.startswith("You are the Route selector."):
+                    role = "selector"
+                    candidates, _ = json.JSONDecoder().raw_decode(
+                        prompt.split("CANDIDATES (choose exactly one `candidate_identity`):\n")[1]
+                    )
+                    chosen = next(c for c in candidates if c["model"] == "gpt-5.6-terra")
+                    output = json.dumps({
+                        "candidate_identity": chosen["candidate_identity"],
+                        "summary": "forecast from current evidence, not a measurement",
+                    })
+                    credits = owner.selector_credits
+                else:
+                    owner.calls.append(("work", kwargs))
+                    return await work_session.send_and_wait(prompt, **options)
+                owner.calls.append((role, kwargs))
+                kwargs["on_event"](_billed_routing_usage(kwargs["model"], credits))
+                kwargs["on_event"](_sdk_event(
+                    SessionEventType.ASSISTANT_MESSAGE,
+                    AssistantMessageData(content=output, message_id=str(uuid4())),
+                ))
+
+        return Session()
+
+
+@pytest.mark.parametrize("entrypoint", ["init", "update"])
+@pytest.mark.parametrize("mode", ["serial", "lane"])
+@pytest.mark.parametrize("allowance", ["2.5", "0.20", "0.40"])
+def test_saved_setup_attributes_classification_and_selection_to_run_consumption(
+    tmp_path, monkeypatch, entrypoint, mode, allowance
+):
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
+    from tests.test_routing_migration import _saved_routing_config
+    from tests.test_ui_smoke import _make_renderer
+
+    if mode == "serial":
+        _wire_single_issue_github(
+            tmp_path, monkeypatch, labels=["ready-for-agent", "semver:none"]
+        )
+        client = FakeCopilotClient([_billed_routing_usage("gpt-5.6-terra", "0.10")])
+    else:
+        from tests.fakes import FakeGateRunner
+        from tests.test_loop_parallel import _ParallelFakeClient, _wire_repo
+
+        fake_git = _wire_repo(tmp_path)
+        monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+        tracker = FakeGitHubClient(
+            repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+            issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe", "semver:none"])],
+        )
+        monkeypatch.setattr(loop_module, "_make_github_client", lambda: tracker)
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+        client = _ParallelFakeClient(
+            fake_git=fake_git,
+            scripted_events=[_billed_routing_usage("gpt-5.6-terra", "0.10")],
+        )
+    transport = _BilledRoutingClient(client)
+    monkeypatch.setattr(loop_module, "_make_client", lambda: transport)
+    monkeypatch.setattr(
+        loop_module, "_make_task_type_label_client", _RecordingTaskTypeLabelClient
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "setup-only-key")
+    _wire_dynamic_ports(
+        monkeypatch,
+        rows=(_aa_row("aa-opus", 70.0, 90.0), _aa_row("aa-terra", 40.0, 200.0)),
+        listing=(
+            _listed_model("claude-opus-5", ["high"]),
+            _listed_model("gpt-5.6-terra", ["high"]),
+        ),
+        answer=None,
+        session_selector=True,
+    )
+    config = _saved_routing_config(
+        tmp_path, monkeypatch, entrypoint=entrypoint,
+        routing_credit_allowance=allowance,
+        run_env={
+            "GIT_LOOPY_CLASSIFIER_MODEL": "gpt-5.6-terra",
+            "GIT_LOOPY_CLASSIFIER_REASONING_EFFORT": "high",
+        },
+    )
+    assert client.create_calls == []
+    path = settings.project_config_path(tmp_path)
+    saved = path.read_bytes()
+
+    code = asyncio.run(loop_module.run(config))
+
+    assert path.read_bytes() == saved
+    events = _read_events(tmp_path)
+    renderer, summary, output = _make_renderer()
+    dashboard = LiveRunState()
+    for event in events:
+        renderer.render(event)
+        dashboard.render(event)
+        assert all(entry.usage.tokens_in in (0, 100) for entry in dashboard.ledger.values())
+    assert "Run-only Consumption:" in output.getvalue()
+    view = project_run_view(dashboard, summary, issue=42)
+    assert view["dashboard"]["summary"]["run_consumption"] == {
+        "tokens_in": 100 if allowance == "0.20" else 200,
+        "tokens_out": 20 if allowance == "0.20" else 40,
+        "credits": 0.20 if allowance == "0.20" else 0.50,
+        "premium_requests": None,
+    }
+    if allowance == "0.20":
+        assert code != 0
+        assert [role for role, _ in transport.calls] == ["classifier"]
+        assert not any(e["type"] in {
+            "wrapper.pickup.bound", "wrapper.routing.resolved", "wrapper.strike",
+        } for e in events)
+        assert summary.totals().tokens_in == 100
+        assert summary.totals().credits == Decimal("0.20")
+        assert all(row.tokens_in == 0 for row in summary.completed)
+        return
+    assert code == 0
+    assert [role for role, _ in transport.calls] == ["classifier", "selector", "work"]
+    assert [
+        (call["model"], call["reasoning_effort"], call["context_tier"])
+        for _, call in transport.calls
+    ] == [
+        ("gpt-5.6-terra", "high", None),
+        ("claude-opus-5", "high", "default"),
+        ("gpt-5.6-terra", "high", "default"),
+    ]
+    (resolution,) = [e for e in events if e["type"] == "wrapper.routing.resolved"]
+    assert resolution["classification_attempts"] == resolution["selector_attempts"] == 1
+    assert Decimal(resolution["routing_credits"]) == Decimal("0.50")
+    assert resolution["routing_overshot"] is (allowance == "0.40")
+    usage = [e for e in events if e["type"] == "usage.tokens"]
+    assert [Decimal(str(e["credits"])) for e in usage] == [
+        Decimal("0.20"), Decimal("0.30"), Decimal("0.10"),
+    ]
+    assert all(e["iter"] is None and e.get("lane_issue") is None for e in usage[:2])
+    (bound,) = [e for e in events if e["type"] == "wrapper.pickup.bound"]
+    assert (bound["model"], bound["effort"], bound["context_tier"]) == (
+        "gpt-5.6-terra", "high", "default",
+    )
+    ending = "wrapper.iteration.end" if mode == "serial" else "wrapper.contribution.end"
+    (end,) = [e for e in events if e["type"] == ending]
+    assert end["summary"]["tokens_in"] == 100
+    assert end["summary"]["tokens_out"] == 20
+    assert Decimal(str(end["issues"][0]["consumption"]["credits"])) == Decimal("0.10")
+    assert summary.totals().tokens_in == 300
+    assert summary.totals().credits == Decimal("0.60")
+    assert len(summary.completed) == 1 and summary.completed[0].tokens_in == 100
 
 
 # ---------------------------------------------------------------------------

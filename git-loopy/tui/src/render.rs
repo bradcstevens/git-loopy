@@ -26,8 +26,7 @@ use crate::navigation::Screen;
 use crate::session::{DashboardFrame, Diagnostics};
 use crate::view::{
     Activity, ContextFill, ContributionRow, DeliveryView, DetailHeader, DrillIn, Header,
-    LogLineView, PeakContext, PreparationView, QueueRow, RouteView, SummaryRow,
-    TerminalCapabilities,
+    LogLineView, PeakContext, PreparationView, QueueRow, RouteView, Summary, TerminalCapabilities,
 };
 
 /// The placeholder for a value the Run has not measured.
@@ -216,7 +215,7 @@ pub fn draw_dashboard(frame: &mut Frame, dashboard: &DashboardFrame) {
     draw_summary(
         frame,
         bands.summary,
-        &view.dashboard.summary.rows,
+        &view.dashboard.summary,
         cost_placeholder(&view.dashboard.header, &glyphs),
         &glyphs,
     );
@@ -765,12 +764,23 @@ fn grouped(value: i64) -> String {
 ///
 /// Every column is a field of the normalized Iteration rollup, so the band is
 /// an audit of what the Orchestrator reported rather than a second tally.
-fn draw_summary(frame: &mut Frame, area: Rect, rows: &[SummaryRow], cost: &str, glyphs: &Glyphs) {
+fn draw_summary(frame: &mut Frame, area: Rect, summary: &Summary, cost: &str, glyphs: &Glyphs) {
+    let title = summary.run_consumption.as_ref().map_or_else(
+        || " Summary ".to_string(),
+        |usage| {
+            format!(
+                " Summary | Run-only: {} in / {} out / {} credits ",
+                usage.tokens_in,
+                usage.tokens_out,
+                credits(usage.credits, cost),
+            )
+        },
+    );
     draw_table(
         frame,
         area,
         &SUMMARY_COLUMNS,
-        rows.iter().map(|row| {
+        summary.rows.iter().map(|row| {
             vec![
                 row.iteration
                     .map_or_else(|| glyphs.unknown.to_string(), |number| number.to_string()),
@@ -792,7 +802,7 @@ fn draw_summary(frame: &mut Frame, area: Rect, rows: &[SummaryRow], cost: &str, 
                 row.strikes.to_string(),
             ]
         }),
-        " Summary ",
+        &title,
         glyphs,
     );
 }

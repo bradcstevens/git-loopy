@@ -65,6 +65,22 @@ def project_run_view(
 ) -> dict[str, Any]:
     """Project one complete renderer-neutral Dashboard and issue drill-in."""
     denomination = credits_denomination_for(summary)
+    summary_view: dict[str, Any] = {
+        "rows": (
+            [
+                _summary_row(snapshot, denomination=denomination)
+                for snapshot in summary.completed
+            ]
+            if summary is not None else []
+        )
+    }
+    if summary is not None and summary.run_usage_observed:
+        summary_view["run_consumption"] = {
+            "tokens_in": summary.run_usage.tokens_in,
+            "tokens_out": summary.run_usage.tokens_out,
+            "credits": _decimal_float(denomination.cost(summary.run_usage)),
+            "premium_requests": _decimal_float(summary.run_usage.premium_requests),
+        }
     return {
         "dashboard": {
             "header": _header(state),
@@ -79,16 +95,7 @@ def project_run_view(
                 "issue": state.active_ref,
                 "lines": [_log_line(line) for line in state.log()],
             },
-            "summary": {
-                "rows": (
-                    [
-                        _summary_row(snapshot, denomination=denomination)
-                        for snapshot in summary.completed
-                    ]
-                    if summary is not None
-                    else []
-                ),
-            },
+            "summary": summary_view,
         },
         "drill_in": _drill_in(state, issue, denomination=denomination),
     }

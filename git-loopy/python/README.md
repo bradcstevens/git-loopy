@@ -1298,6 +1298,12 @@ Two properties are worth knowing before you turn it on:
   `routing_credit_allowance` and toward the Run's **Consumption**. Billing
   already in flight when a bound is reached is disclosed rather than hidden, and
   no further routing call is admitted afterwards.
+  These sessions remain **Run**-only **Consumption**: the CLI includes them in Run
+  totals and names their subtotal separately; the **Dashboard** shows that subtotal
+  in its **Summary** band. They do not inflate an **Iteration**, **Lane contribution**
+  or issue's work bill, even while Pool preparation runs beside work. A refused
+  route still reports the assessment already billed. Missing billing stays
+  unknown rather than becoming a zero or a complete-looking subtotal.
 
 ### Reusing a route a previous Run already elected
 

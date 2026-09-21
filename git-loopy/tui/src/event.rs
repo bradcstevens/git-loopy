@@ -79,6 +79,8 @@ pub struct Event {
     pub run_id: Option<String>,
     /// The serial Iteration number, or `None` for Run-scoped Events.
     pub iter: Option<i64>,
+    /// Explicit Run-only Consumption, distinct from a missing historical stamp.
+    pub run_scoped_usage: bool,
     /// The runner-stamped Lane this Event belongs to (issue #66, ADR-0008).
     ///
     /// A stamped Event is attributed explicitly to its Lane instead of through
@@ -728,6 +730,11 @@ impl Event {
                 .and_then(Value::as_str)
                 .map(str::to_string),
             iter: object.get("iter").and_then(Value::as_i64),
+            run_scoped_usage: kind == "usage.tokens"
+                && object.get("run_id").and_then(Value::as_str).is_some()
+                && object.get("iter") == Some(&Value::Null)
+                && object.get("lane_issue").map_or(true, Value::is_null)
+                && object.get("contribution_id").map_or(true, Value::is_null),
             lane_issue: object.get("lane_issue").and_then(IssueRef::from_value),
             kind,
             payload,

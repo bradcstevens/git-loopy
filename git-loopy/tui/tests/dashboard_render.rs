@@ -21,6 +21,30 @@ use common::assert_snapshot;
 
 const DASHBOARD_INSIGHTS: &str = include_str!("../../conformance/dashboard-insights.json");
 
+#[test]
+fn run_only_consumption_is_visible_without_inventing_a_work_row() {
+    let mut state = DashboardState::new(RunInputs::new("work-model", "high"));
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"type":"usage.tokens","run_id":"run-1","iter":null,"input":200,"output":40,"credits":0.5}"#,
+        )
+        .expect("routing usage decodes"),
+    );
+    let context = ViewContext {
+        now: Timestamp::parse_rfc3339("2026-05-16T00:00:00Z").unwrap(),
+        now_monotonic: None,
+        zone: Zone::from_offset_minutes(0),
+        capabilities: TerminalCapabilities::default(),
+    };
+    let view = project_run_view(&state, &context, &IssueRef::number(42));
+    assert!(view.dashboard.summary.rows.is_empty());
+    let rendered = render_lines(&view, 160, 35, TerminalCapabilities::default()).join("\n");
+    assert!(
+        rendered.contains("Run-only: 200 in / 40 out / 0.5000 credits"),
+        "{rendered}"
+    );
+}
+
 /// The projected view for one fixture case at its final snapshot.
 fn fixture_view(case_id: &str) -> RunView {
     fixture_view_at(case_id, usize::MAX)

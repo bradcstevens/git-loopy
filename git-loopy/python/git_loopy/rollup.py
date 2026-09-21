@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Iterator, Mapping
 
 from git_loopy.denomination import CostDenomination
-from git_loopy.usage import BillingSample, UsageTally
+from git_loopy.usage import BillingSample, UsageTally, is_run_scoped_usage
 
 __all__ = [
     "RETROACTIVE_BINDING_SOURCES",
@@ -116,6 +116,8 @@ class IterationRollupAccumulator:
         self._first_started: dict[int | str, tuple[str, float]] = {}
 
     def observe(self, event: Mapping[str, Any]) -> None:
+        if is_run_scoped_usage(event):
+            return
         event_type = event.get("type")
         if event_type == _ITERATION_START:
             self._open[None] = _Iteration(

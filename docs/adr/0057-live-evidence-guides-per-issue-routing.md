@@ -238,6 +238,18 @@ in fresh proposal/Pickup validation and cross-Run reuse. Doctor uses the same
 work-candidate readiness rule. Withdrawal of the requested tier refuses new work;
 changed evidence or eligibility requires reassessment within existing limits.
 Bare init and auto-setup retain their existing behavior.
+The saved-setup Consumption cases now cross the real classifier and selector
+session adapters into SDK billing observations in both serial and Lane modes.
+They exposed Run-only billing being attributed to an open serial Iteration and
+lost from CLI totals once kept out of that row. Run-only Consumption now retains
+its existing canonical scope and is shown separately in CLI and Dashboard
+Summary readback, including refusals that bought classification but no work.
+Lane Summary billing reads the canonical issue Consumption instead of losing
+the bill behind the historical `cost_usd` placeholder. These cases also cover
+classification exhausting the allowance, the strongest selector remaining
+unchanged with a smaller allowance remaining, and post-paid overshoot while
+already-authorized work finishes. They do not yet establish the concurrent
+saved-setup overshoot and cancellation matrix.
 Automatic upgrade/Run migration enforcement, the remaining
 composed acceptance (including saved-setup Consumption guarantees) and
 Wrapper/Conformance activation obligations still precede final default

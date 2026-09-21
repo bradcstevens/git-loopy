@@ -1719,6 +1719,11 @@ election an answer an operator can audit rather than a plausible-looking guess.
   their retries count toward routing usage and the Run's **Consumption**. An Orchestrator MUST
   enforce the deadline and the admission allowance, bound selector concurrency, disclose billing
   overshoot already in flight, and admit no further routing calls once either bound is exhausted.
+  Python's **Task-type classifier** and **Route selector** `usage.tokens` records
+  are **Run**-only (`iter: null`, no **Lane contribution**), not **Consumption**
+  of the work that happens to be open. Their billing remains visible in Run
+  totals/readback even when no work is admitted. Historical records without an explicit scope retain their
+  existing interpretation; no new Event field is needed.
 - **Refuse, never fall back.** A required-source failure, quota exhaustion, an empty verified
   intersection, invalid selector output, unavailable eligibility, or a failed local recording each
   yield an explicit *unavailable* decision. An Orchestrator MUST NOT substitute stale evidence, the

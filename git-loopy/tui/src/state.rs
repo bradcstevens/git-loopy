@@ -138,6 +138,14 @@ pub(crate) struct BilledTotal {
     unknown: bool,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RunConsumption {
+    pub(crate) tokens_in: i64,
+    pub(crate) tokens_out: i64,
+    pub(crate) credits: BilledTotal,
+    pub(crate) premium_requests: BilledTotal,
+}
+
 impl BilledTotal {
     /// Fold one reported term in, or latch to unknown when the term is missing.
     fn add(&mut self, sample: Option<f64>) {
@@ -419,6 +427,7 @@ pub struct DashboardState {
     pub(crate) order: Vec<IssueRef>,
     pub(crate) ledger: BTreeMap<IssueRef, IssueLedgerEntry>,
     pub(crate) completed_iterations: Vec<IterationRow>,
+    pub(crate) run_usage: Option<RunConsumption>,
     /// Pool membership for the open Iteration.
     iteration_pool: Vec<IssueRef>,
     /// Output produced before this Iteration named its Active issue.
@@ -471,6 +480,7 @@ impl DashboardState {
             order: Vec::new(),
             ledger: BTreeMap::new(),
             completed_iterations: Vec::new(),
+            run_usage: None,
             iteration_pool: Vec::new(),
             pending_log: Vec::new(),
             pending_usage: (0, 0),
@@ -630,7 +640,17 @@ impl DashboardState {
                     self.context_window = Some(*sample);
                 }
             }
-            EventPayload::UsageTokens(usage) => self.record_usage(usage),
+            EventPayload::UsageTokens(usage) => {
+                if event.run_scoped_usage {
+                    let run = self.run_usage.get_or_insert_with(RunConsumption::default);
+                    run.tokens_in += usage.input.unwrap_or(0).max(0);
+                    run.tokens_out += usage.output.unwrap_or(0).max(0);
+                    run.credits.add(usage.credits);
+                    run.premium_requests.add(usage.premium_requests);
+                } else {
+                    self.record_usage(usage);
+                }
+            }
             EventPayload::CommitRecorded(commit) => {
                 self.append_log_block(LOG_EVENT, &commit_log_text(commit), now)
             }

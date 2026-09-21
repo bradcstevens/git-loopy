@@ -1873,15 +1873,34 @@ def test_frozen_run_table_renders_unavailable_token_cells_and_footers_as_unknown
     assert table.columns[5].footer == "50"
 
 
-def test_frozen_run_table_footer_is_unknown_when_no_iteration_observed_tokens() -> None:
+@pytest.mark.parametrize("run_only_usage", [False, True])
+def test_frozen_run_table_footer_is_unknown_when_no_iteration_observed_tokens(
+    run_only_usage,
+) -> None:
     """When every completed Iteration declares tokens unavailable, so is the total."""
     renderer, summary, _buf = _make_renderer()
     renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1, "issue": 7})
     renderer.render(_null_telemetry_rollup())
+    if run_only_usage:
+        renderer.render({
+            "type": "usage.tokens", "run_id": "run-1", "iter": None,
+            "input": 100, "output": 20, "credits": 0.5,
+        })
 
     table = summary.build_run_table()
     assert table.columns[4].footer == "—"
     assert table.columns[5].footer == "—"
+    assert summary.totals().observed_tokens is None
+
+
+def test_calibration_billing_is_not_run_only_consumption() -> None:
+    renderer, summary, _ = _make_renderer()
+    renderer.render({
+        "type": "usage.tokens", "run_id": None, "iter": None,
+        "calibration_id": "calibration-1", "trial_id": "trial-1",
+        "input": 100, "output": 20, "credits": 0.5,
+    })
+    assert summary.run_usage_observed is False
 
 
 # ---------------------------------------------------------------------------
@@ -2211,6 +2230,25 @@ def test_run_table_keeps_the_cache_split_out_of_the_summary() -> None:
     assert "Tokens in" in headers
 
 
+def test_unreported_run_only_billing_cannot_be_hidden_by_a_billed_work_row() -> None:
+    renderer, summary, _ = _make_renderer()
+    renderer.render({"type": WRAPPER_ITERATION_START, "iter": 1})
+    renderer.render({
+        "type": "usage.tokens", "run_id": "run-1", "iter": None, "input": 10, "output": 2,
+        "model": "selector", "credits": None,
+    })
+    renderer.render({
+        "type": "usage.tokens", "iter": 1, "input": 20, "output": 4,
+        "model": "work", "credits": 0.5, "premium_requests": 1,
+    })
+    renderer.render({"type": WRAPPER_ITERATION_END, "iter": 1})
+
+    assert summary.completed[0].credits(summary.denomination) == Decimal("0.5")
+    assert summary.totals().tokens_in == 30
+    assert summary.totals().credits is None
+    assert summary.totals().premium_requests is None
+
+
 def test_run_table_renders_unreported_credits_as_unknown_not_zero() -> None:
     """No billing telemetry is the em dash — a zero would read as free work."""
     renderer, summary, _buf = _make_renderer()
@@ -2381,15 +2419,29 @@ def test_overlapping_contributions_each_reach_the_summary_as_their_own_row() -> 
     assert [snap.issue_num for snap in summary.completed] == [43, 42]
     assert [snap.usage.tokens_in for snap in summary.completed] == [20, 90]
     assert [snap.outcome for snap in summary.completed] == ["advanced", "closed"]
-    assert [snap.normalized_cost_usd for snap in summary.completed] == [
-        Decimal("0.2"),
-        Decimal("0.9"),
-    ]
+    assert all(snap.credits(summary.denomination) is None for snap in summary.completed)
     assert summary.open_contributions == {}
     # Skill adoption still measured per contribution, not dropped in Parallel.
     assert [sorted(snap.skills_consulted) for snap in summary.completed] == [
         ["tdd"], ["tdd"]
     ]
+
+
+@pytest.mark.parametrize("issues", [None, [], [{"issue": 42, "consumption": None}]])
+def test_a_contribution_with_unavailable_billing_stays_unknown(issues) -> None:
+    renderer, summary, _ = _make_renderer()
+    renderer.render({
+        "type": events_module.WRAPPER_CONTRIBUTION_START,
+        "contribution_id": "c-42", "issue": 42,
+    })
+    renderer.render({
+        "type": events_module.WRAPPER_CONTRIBUTION_END,
+        "contribution_id": "c-42", "issue": 42,
+        "summary": _contribution_summary(tokens_in=100, cost_usd=5, closure_outcome="closed"),
+        "issues": issues,
+    })
+    assert summary.completed[0].credits(summary.denomination) is None
+    assert summary.completed[0].tokens_in == 100
 
 
 def test_an_unfinalized_contribution_contributes_no_summary_row() -> None:

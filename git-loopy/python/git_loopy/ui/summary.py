@@ -355,6 +355,8 @@ class RunSummary:
     cost_reportable: bool = True
     current: Optional[IterationSnapshot] = None
     completed: list[IterationSnapshot] = field(default_factory=list)
+    run_usage: UsageTally = field(default_factory=UsageTally)
+    run_usage_observed: bool = False
     #: Open **Lane contribution** snapshots, keyed by ``contribution_id``
     #: (issue #310). Under **Rolling dispatch** several are open at once and
     #: each outlives the reusable **Lane** slot it started in, so a single
@@ -435,7 +437,6 @@ class RunSummary:
                 "tokens_in",
                 "tokens_out",
                 "observed_tokens",
-                "cost_usd",
                 "tool_count",
                 "skill_call_count",
                 "skills_consulted",
@@ -450,16 +451,25 @@ class RunSummary:
             tokens_in=_rollup_int(summary.get("tokens_in")),
             tokens_out=_rollup_int(summary.get("tokens_out")),
         )
+        # Contribution summaries retain the historical cost_usd placeholder;
+        # their canonical issue rows carry the harness's actual billing.
+        issues = event.get("issues")
+        if isinstance(issues, list):
+            for issue in issues:
+                if isinstance(issue, Mapping):
+                    consumption = issue.get("consumption")
+                    snap.usage.add(
+                        None, 0, 0,
+                        BillingSample.from_event(
+                            consumption if isinstance(consumption, Mapping) else {}
+                        ),
+                    )
         snap.normalized_duration_seconds = _rollup_float(
             summary.get("lifecycle_seconds")
         )
         observed_tokens = summary.get("observed_tokens")
         snap.normalized_observed_tokens = (
             None if observed_tokens is None else _rollup_int(observed_tokens)
-        )
-        cost = summary.get("cost_usd")
-        snap.normalized_cost_usd = (
-            Decimal(str(cost)) if cost is not None else None
         )
         snap.has_normalized_rollup = True
         snap.tool_count = _rollup_int(summary.get("tool_count"))
@@ -586,7 +596,12 @@ class RunSummary:
         tokens_in: int,
         tokens_out: int,
         billing: Optional[BillingSample] = None,
+        run_scoped: bool = False,
     ) -> None:
+        if run_scoped:
+            self.run_usage.add(model, int(tokens_in or 0), int(tokens_out or 0), billing)
+            self.run_usage_observed = True
+            return
         snap = self.current
         if snap is None:
             return
@@ -642,26 +657,28 @@ class RunSummary:
         )
 
     def totals(self) -> RunTotals:
-        """Aggregate counters across :attr:`completed` iterations.
+        """Aggregate completed work and separately observed Run-only Consumption.
 
-        Cost only sums iterations the harness billed — an Iteration it
-        reported nothing for contributes ``None`` and is skipped, so the
-        totals row never silently understates cost by treating unknown as
-        zero.
+        Historical work totals sum reported values and skip unavailable rows.
+        This predates the complete-Consumption invariant: it is compatibility
+        with partial historical displays, not proof of a complete work total.
+        Run-only observations do not make unavailable work tokens observable.
+        An unreported Run-only bill makes the combined bill unknown; its
+        separately named subtotal remains available wherever it was measured.
 
         ``final_strikes`` is the last completed iteration's strike count
         (not the sum) — strikes reset on progress in the wrapper
         contract, so summing would mislead.
         """
-        tokens_in = sum(s.tokens_in for s in self.completed)
-        tokens_out = sum(s.tokens_out for s in self.completed)
+        tokens_in = self.run_usage.tokens_in + sum(s.tokens_in for s in self.completed)
+        tokens_out = self.run_usage.tokens_out + sum(s.tokens_out for s in self.completed)
         observed_snapshots = [
             s
             for s in self.completed
             if "observed_tokens" not in s.unavailable_measurements
         ]
         observed_tokens = (
-            sum(s.context_used for s in observed_snapshots)
+            self.run_usage.total_tokens + sum(s.context_used for s in observed_snapshots)
             if observed_snapshots or not self.completed
             else None
         )
@@ -671,12 +688,20 @@ class RunSummary:
         commits = sum(s.commits for s in self.completed)
         auto_closures = sum(s.auto_closures for s in self.completed)
         pr_advances = sum(s.pr_advances for s in self.completed)
-        credits = _sum_or_unknown(
-            s.credits(self.denomination) for s in self.completed
-        )
-        premium_requests = _sum_or_unknown(
-            s.premium_requests for s in self.completed
-        )
+        run_credits = self.denomination.cost(self.run_usage)
+        credits = _sum_or_unknown([
+            run_credits,
+            *(s.credits(self.denomination) for s in self.completed),
+        ])
+        premium_requests = _sum_or_unknown([
+            self.run_usage.premium_requests,
+            *(s.premium_requests for s in self.completed),
+        ])
+        if self.run_usage_observed:
+            if run_credits is None:
+                credits = None
+            if self.run_usage.premium_requests is None:
+                premium_requests = None
         final_strikes = self.completed[-1].strikes if self.completed else 0
         iterations_with_skill = sum(
             1
@@ -813,15 +838,23 @@ class RunSummary:
         run-level skill adoption readable without widening the table.
         """
         totals = self.totals()
+        caption = (
+            f"Skill adoption: {totals.iterations_with_skill}/{totals.iterations}"
+            f" iterations • Skills: {', '.join(totals.skills_seen) or '—'}"
+        )
+        if self.run_usage_observed:
+            caption += (
+                f"\nRun-only Consumption: in={self.run_usage.tokens_in:,} "
+                f"out={self.run_usage.tokens_out:,}, "
+                f"{_format_credits(self.denomination.cost(self.run_usage))} credits "
+                "(included in totals, not work rows)"
+            )
         table = Table(
             title="[bold]Run summary[/bold]",
             box=SIMPLE,
             header_style=STYLES["table_header"],
-            show_footer=len(self.completed) > 0,
-            caption=(
-                f"Skill adoption: {totals.iterations_with_skill}/{totals.iterations}"
-                f" iterations • Skills: {', '.join(totals.skills_seen) or '—'}"
-            ),
+            show_footer=bool(self.completed) or self.run_usage_observed,
+            caption=caption,
             caption_justify="left",
         )
         table.add_column("Iter", justify="right", footer="totals")
