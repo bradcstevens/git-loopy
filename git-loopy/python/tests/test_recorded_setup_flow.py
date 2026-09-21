@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -135,9 +136,17 @@ def test_bare_setup_preserves_the_recorded_route_into_actual_work(
 
 
 @pytest.mark.parametrize("mode", ["serial", "lane"])
-@pytest.mark.parametrize("change", ["none", "score", "outage", "incompatible"])
+@pytest.mark.parametrize("change", ["none", "score", "outage", "incompatible", "slow"])
+@pytest.mark.parametrize(
+    "selector_summary",
+    [
+        "Forecast from current evidence, not a measurement.",
+        "Forecast from current public evidence, not a measurement. " * 6,
+    ],
+    ids=["short-summary", "long-summary"],
+)
 def test_saved_optional_evidence_revalidates_without_buying_another_assessment(
-    tmp_path, monkeypatch, mode, change,
+    tmp_path, monkeypatch, mode, change, selector_summary,
 ):
     _, git = _wire_single_issue_github(
         tmp_path, monkeypatch, labels=[
@@ -153,8 +162,18 @@ def test_saved_optional_evidence_revalidates_without_buying_another_assessment(
         assert role == "selector"
         assessments.append(prompt)
 
+    def select(prompt):
+        candidates, _ = json.JSONDecoder().raw_decode(
+            prompt.split("CANDIDATES (choose exactly one `candidate_identity`):\n")[1]
+        )
+        chosen = next(row for row in candidates if row["model"] == "gpt-5.6-terra")
+        return json.dumps({
+            "candidate_identity": chosen["candidate_identity"], "summary": selector_summary,
+        })
+
     transport = _BilledRoutingClient(
         client, selector_credits="0.25", on_routing=observe_assessment,
+        selector_answer=select,
     )
     monkeypatch.setattr(loop_module, "_make_client", lambda: transport)
     monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
@@ -187,6 +206,8 @@ def test_saved_optional_evidence_revalidates_without_buying_another_assessment(
         reads.append((method, url, headers))
         if current == "outage":
             raise OSError("fixture: optional leaderboard unavailable")
+        if current == "slow":
+            await asyncio.sleep(10)
         return '<script id="leaderboard-data" type="application/json">' + json.dumps([{
             "name": "Verified",
             "results": [{
@@ -203,6 +224,7 @@ def test_saved_optional_evidence_revalidates_without_buying_another_assessment(
     path = settings.project_config_path(tmp_path)
     settings.write_config_atomic(path, {
         **_authorized_values(),
+        "routing_deadline_seconds": 4 if change == "slow" else 30,
         "route_associations": {
             "aa-opus": "claude-opus-5@high", "aa-terra": "gpt-5.6-terra@high",
         },
@@ -245,7 +267,8 @@ def test_saved_optional_evidence_revalidates_without_buying_another_assessment(
         else:
             assert candidate["supporting_evidence"] == []
             assert (
-                "source_unavailable" if current == "outage" else "missing_comparable_rows"
+                "source_unavailable"
+                if current in {"outage", "slow"} else "missing_comparable_rows"
             ) in assessments[-1]
         if mode == "lane":
             assert Path(work[-1]["working_directory"]).name == "issue-42"
@@ -261,6 +284,7 @@ def test_saved_optional_evidence_revalidates_without_buying_another_assessment(
             "none": "SWE-bench Verified 72.4% via mini-SWE-agent 2.4.1",
             "score": "SWE-bench Verified 74.1% via mini-SWE-agent 2.4.1",
             "outage": "https://www.swebench.com/ source unavailable",
+            "slow": "https://www.swebench.com/ source unavailable",
             "incompatible": "https://www.swebench.com/ missing comparable rows",
         }[current]
         assert expected_summary in record["summary"]

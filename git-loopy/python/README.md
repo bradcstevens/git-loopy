@@ -1482,7 +1482,10 @@ Properties worth knowing before you turn it on:
   comparable. A missing or unreadable optional read is named in the existing
   canonical routing summary and is never cached or promoted into a
   dynamic-routing failure; required Artificial Analysis and eligibility reads
-  retain their blocking behavior. A public resolved rate is benchmark evidence,
+  retain their blocking behavior. Each optional read is bounded to the smaller
+  of five seconds or one quarter of the remaining authorized routing deadline,
+  leaving time for required checks and selection; it does not reset that deadline.
+  A public resolved rate is benchmark evidence,
   not a probability of this issue succeeding. Missing or contradictory published
   effort cannot support an explicitly mapped effort; warned submissions and
   percentages outside 0 through 100 are excluded. The source's `date` is a

@@ -15,6 +15,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
 from typing import Awaitable, Callable, Mapping
+from urllib.parse import urlsplit
 
 __all__ = [
     "SWE_BENCH_VERIFIED_URL",
@@ -91,7 +92,7 @@ class SWEbenchVerifiedSource:
             records = _project_records(
                 _leaderboard_data(payload), self._associations, self._harness_version,
             )
-        except (OSError, http.client.HTTPException, ValueError) as exc:
+        except (OSError, http.client.HTTPException, ValueError, RecursionError) as exc:
             raise SWEbenchSourceError("SWE-bench source unavailable") from exc
         retrieved_at = self._clock()
         if not isinstance(retrieved_at, datetime) or retrieved_at.tzinfo is None:
@@ -107,9 +108,10 @@ async def _stdlib_fetch(method: str, url: str, headers: dict[str, str]) -> objec
     def request() -> bytes:
         if method != "GET" or url != SWE_BENCH_VERIFIED_URL or headers:
             raise ValueError("SWE-bench request target is invalid")
-        connection = http.client.HTTPSConnection("www.swebench.com", timeout=30)
+        target = urlsplit(SWE_BENCH_VERIFIED_URL)
+        connection = http.client.HTTPSConnection(target.netloc, timeout=30)
         try:
-            connection.request("GET", "/")
+            connection.request("GET", target.path or "/")
             response = connection.getresponse()
             if not 200 <= response.status < 300:
                 raise ValueError("SWE-bench returned an unsuccessful response")
@@ -189,7 +191,7 @@ def _project_records(
         if not isinstance(results, list):
             continue
         for row in results:
-            record = _project_row(row, associations, harness_version)
+            record = _project_row(row, associations)
             if record is not None:
                 records.append(record)
     versions = {record.harness_version for record in records}
@@ -201,7 +203,6 @@ def _project_records(
 def _project_row(
     row: object,
     associations: Mapping[str, tuple[str, str | None]],
-    harness_version: str | None,
 ) -> SWEbenchVerifiedRecord | None:
     if not isinstance(row, Mapping):
         return None

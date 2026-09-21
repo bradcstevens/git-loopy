@@ -179,7 +179,11 @@ from git_loopy.dynamic_route import (
     SupportingEvidenceSource,
     SupportingEvidenceStatus,
 )
-from git_loopy.swe_bench import SWEbenchSourceError, SWEbenchVerifiedSource
+from git_loopy.swe_bench import (
+    SWE_BENCH_VERIFIED_URL,
+    SWEbenchSourceError,
+    SWEbenchVerifiedSource,
+)
 from git_loopy.emit import EventEmitter
 from git_loopy.live_read import SharedLiveRead
 from git_loopy.gate import FeedbackLoop, parse_feedback_loops
@@ -1098,17 +1102,21 @@ def _make_dynamic_router(
                 records=artificial_analysis.evidence,
             )
         try:
-            supporting = await SWEbenchVerifiedSource(
-                associations=prerequisites.swe_bench_associations or {}
-            ).fetch()
-        except SWEbenchSourceError:
+            # Optional transport must leave time for required checks and selection.
+            supporting = await asyncio.wait_for(
+                SWEbenchVerifiedSource(
+                    associations=prerequisites.swe_bench_associations,
+                ).fetch(),
+                timeout=min(5.0, max(0.0, admission_ledger.remaining_seconds()) / 4),
+            )
+        except (SWEbenchSourceError, TimeoutError):
             return FreshEvidence(
                 source_identity=artificial_analysis.source_identity,
                 retrieved_at=artificial_analysis.retrieved_at,
                 records=artificial_analysis.evidence,
                 supporting_sources=(
                     SupportingEvidenceSource(
-                        source_identity="https://www.swebench.com/",
+                        source_identity=SWE_BENCH_VERIFIED_URL,
                         status=SupportingEvidenceStatus.SOURCE_UNAVAILABLE,
                         retrieved_at=None,
                     ),

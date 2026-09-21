@@ -464,6 +464,13 @@ Invalid percentages and contradictory published effort are excluded; source,
 mapping and conditions remain in the existing canonical explanation. Tracker
 publication keeps its issue-safe boundary. This recovery is not final Dynamic
 activation, remote capability authority, or ADR-0060 implementation.
+Independent review also exposed canonical provenance being rechecked against
+the selector's 500-character prose bound, and an optional read consuming the
+whole remaining deadline. Reuse now verifies and separates the freshly
+reconstructed provenance suffix before validating selector prose; no Event
+field or selector limit changes. Optional transport has a smaller bound within
+the existing deadline, and malformed nested source data is an unavailable
+optional read rather than a required-evidence refusal.
 
 The shared `publication_recovery` matrix now carries recorded init/update
 authorization through repeated real CLI Runs in serial and Lane modes. Eight cases

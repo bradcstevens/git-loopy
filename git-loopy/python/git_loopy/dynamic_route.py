@@ -418,10 +418,8 @@ class SupportingEvidenceStatus(Enum):
     """Truthful availability of an optional evidence source's current read."""
 
     AVAILABLE = "available"
-    NOT_CONFIGURED = "not_configured"
     MISSING_COMPARABLE_ROWS = "missing_comparable_rows"
     SOURCE_UNAVAILABLE = "source_unavailable"
-    STALE = "stale"
 
 
 @dataclass(frozen=True)
@@ -2119,9 +2117,16 @@ def _verified_reuse(
             assessed.reasoning_effort,
             assessed.context_tier,
         ) == reusable.route.triple:
+            suffix = _canonical_summary(
+                "", assessed.supporting_evidence, evidence.supporting_sources,
+            )
+            if suffix and not reusable.summary.endswith(suffix):
+                return None
+            # Validate selector prose, not the provenance this Runner appended.
+            summary = reusable.summary[:-len(suffix)] if suffix else reusable.summary
             output = {
                 "candidate_identity": assessed.stable_identity,
-                "summary": reusable.summary,
+                "summary": summary,
             }
             if reusable.repeat_justification is not None:
                 output[_REPEAT_JUSTIFICATION_KEY] = reusable.repeat_justification
@@ -2476,13 +2481,19 @@ def _canonical_summary(
                 f"({record.source_identity}; {record.association_provenance}; "
                 f"{record.conditions})"
             )
-            for record in evidence
+            for record in sorted(
+                evidence,
+                key=lambda row: (
+                    row.source_identity, row.source_model_identity, row.harness_version,
+                    row.conditions, row.score,
+                ),
+            )
         )
         return f"{selector_summary} Supporting evidence: {details}."
     if sources:
         details = ", ".join(
             f"{source.source_identity} {source.status.value.replace('_', ' ')}"
-            for source in sources
+            for source in sorted(sources, key=lambda row: (row.source_identity, row.status.value))
         )
         return f"{selector_summary} Supporting evidence: {details}."
     return selector_summary

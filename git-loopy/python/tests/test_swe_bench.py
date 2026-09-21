@@ -134,6 +134,20 @@ def test_official_source_reports_no_result_when_mapped_rows_span_harness_version
     assert result.records == ()
 
 
+def test_optional_decoder_recursion_is_a_source_failure(monkeypatch):
+    async def fetch(_method, _url, _headers):
+        return '<script id="leaderboard-data">[]</script>'
+
+    def decode(_payload):
+        raise RecursionError("fixture: JSON decoder nesting limit")
+
+    monkeypatch.setattr(swe_bench.json, "loads", decode)
+    with pytest.raises(swe_bench.SWEbenchSourceError, match="source unavailable"):
+        asyncio.run(swe_bench.SWEbenchVerifiedSource(
+            associations={"Exact model": "work-model@high"}, fetch=fetch,
+        ).fetch())
+
+
 @pytest.mark.parametrize(
     "patch",
     [
