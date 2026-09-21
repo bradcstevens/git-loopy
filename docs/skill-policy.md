@@ -445,8 +445,12 @@ runnable feedback loop. Every one of them is evaluated in a single pass, so one
 failure never hides the next, and each failing row names the command or operator
 action that owns its remedy.
 
-For a selected Route policy, doctor also uses the Run's
-`resolve_run_routing_preflight` verdict. Static settings are checked against a
+Doctor also uses the Run's `resolve_run_routing_preflight` verdict. A local Run
+with saved Config but no explicit Static/Dynamic choice reports the same
+keep-or-migrate refusal as startup, with `update --routing` and temporary
+`GIT_LOOPY_ROUTE_POLICY` remedies. No policy is invented; empty Config scopes
+and unselected non-local Runs retain their staged legacy path.
+For a selected policy, Static settings are checked against a
 fresh authenticated harness listing; unsuppressed Dynamic routing requires
 operator-owned access and explicit valid limits. An explicit run-wide model or
 effort override needs no leaderboard credential. Routing refusals remain failures

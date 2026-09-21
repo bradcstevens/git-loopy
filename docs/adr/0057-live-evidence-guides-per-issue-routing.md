@@ -227,6 +227,14 @@ retain their legacy path; selected policies still refuse rather than substitutin
 local eligibility. `--route-policy unselected` can explicitly retain that remote
 legacy path even when local Config records a policy, without rewriting Config.
 This compatibility boundary is not completed migration or remote routing support.
+Wrapper contract 14.3 and the Conformance routing-resolution notes now state this
+Python-local guard and explicitly defer shell/PowerShell enforcement. Existing
+one-route cases and historical streams are unchanged. The fixture's
+`migration_recovery` matrix drives temporary flag/environment and saved
+project/inherited-global choices through the real CLI into serial and Lane
+sessions, checking actual settings, canonical Pickup, selector usage, unchanged
+Config and authority lifetime against synthetic configurations. This reconciles
+the staged guard's contract with its existing implementation, not final activation.
 
 Upgrade now requires a supplied or recorded machine-global choice before
 distribution handoff, prompting only on an interactive terminal. It shares the

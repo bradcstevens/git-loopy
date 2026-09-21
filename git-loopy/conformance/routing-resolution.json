@@ -389,7 +389,8 @@
   "static_route_policies": ["unselected", "static", "dynamic"],
   "static_route_refusals": ["unverifiable", "unnamed_model", "unlisted_model", "ineligible_model", "effort_not_configurable", "unsupported_effort", "unsupported_context_tier"],
   "static_route_notes": {
-    "policy": "Contract 2.8. The file-level contract_version above stays at the revision that first described the measured tier; these Static route cases arrived at 2.8 and say so here rather than moving a declaration that belongs to a different decision. The Route policy is SELECTED, never inherited. `unselected` is the absence of a decision and MUST keep every legacy behaviour -- the hardcoded roster gates, the built-in escalation rung, the historical event stream -- byte-for-byte. Only `static` activates the cases below; `dynamic` selects the Dynamic route (contract 14.4), whose election is scored from live evidence rather than pinned here, and whose own record is pinned by event-schema.json's `wrapper.routing.resolved`. A Runner MUST NOT reinterpret an existing Config as though the policy had always been in force, and MUST NOT read the absence of a policy as a choice of one.",
+    "policy": "Contract 2.8. The file-level contract_version above stays at the revision that first described the measured tier; these Static route cases arrived at 2.8 and say so here rather than moving a declaration that belongs to a different decision. The Route policy is SELECTED, never inferred. `unselected` is the absence of a decision and retains legacy routing interpretation -- the hardcoded roster gates, the built-in escalation rung, the historical event stream -- subject to the staged Python-local startup refusal described by migration_activation. Only `static` activates the cases below; `dynamic` selects the Dynamic route (contract 14.4), whose election is scored from live evidence rather than pinned here, and whose own record is pinned by event-schema.json's `wrapper.routing.resolved`. A Runner MUST NOT reinterpret an existing Config as though the policy had always been in force, and MUST NOT read the absence of a policy as a choice of one.",
+    "migration_activation": "Python local Runs with nonempty project or global Config MUST supply or inherit an explicit static/dynamic policy before Agent work. Missing authority refuses without prompting or Config writes, naming update --routing keep/migrate and temporary --route-policy/GIT_LOOPY_ROUTE_POLICY remedies. Model/effort overrides alone are not consent. CLI startup, detached startup and Run/doctor preflight share this authority verdict; selected policies still require live readiness and fresh Pickup validation. Historical records, empty Config scopes and unselected non-local Runs retain their legacy path during staged activation. Shell and PowerShell enforcement is deferred and unchanged members remain conforming. This is not final Dynamic-default activation or remote, Subagent or Integration routing support. The one-route cases below do not model startup; migration_recovery drives the composed CLI/serial/Lane recovery seam.",
     "verifiable_placement": "The harness whose answer counts is the one the WORK SESSION runs under. Where an Execution host opens its sessions on a machine that authenticates as itself, the orchestrator's own listing describes a different installation under a different identity, and a Runner MUST refuse that combination before work rather than report a local read as that placement's verdict. Only a placement whose sessions run under the Run's own authenticated harness is verifiable.",
   "authority": "Under `static` the authority is the AUTHENTICATED HARNESS THIS RUN SPAWNS -- its own model listing, read fresh. A Runner MUST NOT validate a Static route against a hardcoded roster, a published plan or licence catalogue, or another CLI installation, and MUST NOT satisfy the read from a cache held across the Run: a stale answer is the failure this rule exists to prevent, not a cheaper version of it. Reading eligibility MUST NOT rewrite billing provenance already recorded for the Run.",
     "refuse_never_rescue": "Every verdict other than `accepted` ends the Run BEFORE any work, naming the selected settings. A Runner MUST NOT drop an unsupported effort, downgrade an unoffered context tier, or substitute a backend default and call the result a route: a Static route is honoured exactly or not at all.",
@@ -398,6 +399,72 @@
     "static_is_fixed": "A Static route stays fixed for an Agent and across every permitted retry. A Runner MUST NOT promote it to a different model or effort unless the operator explicitly configured an escalation rung: a rung a Runner ships by default is not consent. Attempt and Strike accounting is unchanged either way.",
     "dynamic_precedence": "Under `dynamic` a Static route still wins. A [routing] entry, an explicit flag or environment pin, and a configured escalation rung are instructions, and a Runner MUST NOT spend a Route selector call to contradict one -- they are verified against the harness exactly as under `static`. What the selector elects is the route for every Task type those instructions do not cover; the run-wide default is NOT one of them, because under this policy the selector replaces it and refusing the Run over a pair it will never take would be a refusal about nothing. An explicit pin suppresses routing entirely, which makes the default the route again and therefore verifiable again.",
     "scope": "These cases validate ONE route. A Run validates every route its Config holds -- the run-wide default, each [routing] entry, and an explicitly configured escalation rung -- before it picks up any issue, so a route that is never exercised is still refused at the start rather than mid-Run."
+  },
+  "migration_recovery": {
+    "note": "Every case starts with an unattended local Run refusing the saved Config unchanged, before listing, assessment or work. Supply the declared authority, then drive a real Run into one issue-owning session and compare its settings and canonical Pickup with expected. Static recovery has no leaderboard credential or evidence request. Temporary authority must expire on the next invocation; recorded authority must remain effective without flags or environment. No historical case or Event stream is reinterpreted.",
+    "modes": ["serial", "lane"],
+    "saved_config": {
+      "model": "synthetic-cheap-1",
+      "reasoning_effort": "high",
+      "routing_deadline_seconds": 30,
+      "routing_credit_allowance": "2.5",
+      "selector_concurrency": 1,
+      "route_associations": {
+        "aa-strong": "synthetic-fancy-9@high",
+        "aa-cheap": "synthetic-cheap-1@high"
+      }
+    },
+    "harness": [
+      {"model": "synthetic-fancy-9", "efforts": ["high"]},
+      {"model": "synthetic-cheap-1", "efforts": ["high"]}
+    ],
+    "evidence": [
+      {"id": "aa-strong", "intelligence_index": 70, "output_tokens_per_second": 90},
+      {"id": "aa-cheap", "intelligence_index": 40, "output_tokens_per_second": 200}
+    ],
+    "selector_choice": "synthetic-fancy-9",
+    "cases": [
+      {
+        "id": "temporary-static-flag",
+        "authority": "flag", "policy": "static",
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "defaulted_unknown_task_type_key", "selector_calls": 0, "persists_choice": false}
+      },
+      {
+        "id": "temporary-dynamic-flag",
+        "authority": "flag", "policy": "dynamic",
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1, "persists_choice": false}
+      },
+      {
+        "id": "temporary-static-environment",
+        "authority": "environment", "policy": "static",
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "defaulted_unknown_task_type_key", "selector_calls": 0, "persists_choice": false}
+      },
+      {
+        "id": "temporary-dynamic-environment",
+        "authority": "environment", "policy": "dynamic",
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1, "persists_choice": false}
+      },
+      {
+        "id": "recorded-project-keep",
+        "authority": "update", "policy": "static",
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "defaulted_unknown_task_type_key", "selector_calls": 0, "persists_choice": true}
+      },
+      {
+        "id": "recorded-project-migrate",
+        "authority": "update", "policy": "dynamic",
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1, "persists_choice": true}
+      },
+      {
+        "id": "inherited-global-static",
+        "authority": "global", "policy": "static",
+        "expected": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "defaulted_unknown_task_type_key", "selector_calls": 0, "persists_choice": true}
+      },
+      {
+        "id": "inherited-global-dynamic",
+        "authority": "global", "policy": "dynamic",
+        "expected": {"model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "selector_calls": 1, "persists_choice": true}
+      }
+    ]
   },
   "static_route_cases": [
     {
