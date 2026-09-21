@@ -481,3 +481,17 @@ policy, not new routing behavior or final activation.
 Review tightened the observation seam: each CLI Pickup line is compared
 independently of startup and earlier output; selector bills now cross the actual
 SDK session adapter into Run-only Consumption, including refused retries.
+
+The shared `local_durability` matrix now carries recorded init/update authority
+through mandatory provenance and Pickup write failures, for both new elections
+and cross-Run reuse in serial and Lane modes. It exposed provenance using the
+Event emitter's warn-and-continue default: a failed write still reached a work
+session and tracker publication. Provenance now requests mandatory persistence,
+so the existing recorder refusal stops that binding before either side effect.
+The cases preserve Config and existing tracker projections, retain already-billed
+selector Consumption, release the Pickup-time Lease and charge no Strike.
+After storage repair, fresh reads reuse only successfully persisted provenance,
+with original decision identity and agreement between actual settings, canonical
+records, individual CLI Pickup lines, Dashboard and idempotent tracker effects.
+These are targeted Event-write failures, not a claim of complete logging through
+a total storage outage. Defaults and all member/placement deferrals are unchanged.
