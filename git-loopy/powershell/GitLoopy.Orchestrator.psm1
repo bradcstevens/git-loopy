@@ -618,10 +618,12 @@ function Test-GitLoopyAfkReady {
     [CmdletBinding()]
     param(
         [AllowEmptyString()]
-        [string]$Body
+        [string]$Body,
+        [AllowEmptyString()]
+        [string]$Title = ""
     )
 
-    return $null -eq (Get-GitLoopyAfkReadyExclusion -Body $Body)
+    return $null -eq (Get-GitLoopyAfkReadyExclusion -Body $Body -Title $Title)
 }
 
 # The deep discriminator: names *why* a `ready-for-agent` candidate is not
@@ -631,9 +633,14 @@ function Get-GitLoopyAfkReadyExclusion {
     [CmdletBinding()]
     param(
         [AllowEmptyString()]
-        [string]$Body
+        [string]$Body,
+        [AllowEmptyString()]
+        [string]$Title = ""
     )
 
+    if ($Title -match "^(PRD|Spec):") {
+        return "planning_document"
+    }
     $HasWhat = $Body -cmatch "(?m)^## What to build"
     $HasCriteria = $Body -cmatch "(?m)^## Acceptance criteria"
     if ($HasWhat -and $HasCriteria) {
@@ -726,7 +733,14 @@ function Assert-GitLoopyPinEligible {
     }
 
     $Body = [string]$Issue["body"]
-    $Exclusion = Get-GitLoopyAfkReadyExclusion -Body $Body
+    $Exclusion = Get-GitLoopyAfkReadyExclusion -Body $Body -Title ([string]$Issue["title"])
+    if ($Exclusion -eq "planning_document") {
+        [Console]::Error.WriteLine(
+            "git-loopy: --issue ${Number}: #${Number} is a planning document " +
+            "(PRD: or Spec:), not executable work."
+        )
+        return $false
+    }
     if ($null -ne $Exclusion) {
         [Console]::Error.WriteLine(
             "git-loopy: --issue ${Number}: #${Number} is not AFK-ready; its " +
@@ -2502,11 +2516,12 @@ function Get-GitLoopyGitHubPool {
         # Wrapper contract §3.1: a rejected candidate is reported, not dropped
         # silently. The reason comes from the same body the membership decision
         # was made on, and no extra round-trip is paid for it.
-        if (-not (Test-GitLoopyAfkReady -Body $Body)) {
+        $Reason = Get-GitLoopyAfkReadyExclusion -Body $Body -Title ([string]$Candidate["title"])
+        if ($null -ne $Reason) {
             Add-GitLoopyPoolExclusion `
                 -Ref $Number `
                 -Title ([string]$Candidate["title"]) `
-                -Reason (Get-GitLoopyAfkReadyExclusion -Body $Body)
+                -Reason $Reason
             continue
         }
 
@@ -2546,11 +2561,12 @@ function Get-GitLoopyGitHubPool {
         else {
             [string]$Full["body"]
         }
-        if (-not (Test-GitLoopyAfkReady -Body $FullBody)) {
+        $Reason = Get-GitLoopyAfkReadyExclusion -Body $FullBody -Title ([string]$Full["title"])
+        if ($null -ne $Reason) {
             Add-GitLoopyPoolExclusion `
                 -Ref $Number `
                 -Title ([string]$Full["title"]) `
-                -Reason (Get-GitLoopyAfkReadyExclusion -Body $FullBody)
+                -Reason $Reason
             continue
         }
 

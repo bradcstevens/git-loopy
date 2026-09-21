@@ -138,7 +138,11 @@ The Pool MUST be filtered to issues whose body contains **both** literal section
 - `## Acceptance criteria`
 
 A `## Parent` section is optional. Issues missing either required heading (bare PRDs) MUST be
-skipped. In PR mode a PR is kept only if it carries an `## Agent Brief` (in its body or any
+skipped. GitHub issues whose titles begin with `PRD:` or `Spec:` (case-insensitive)
+MUST also be excluded, even with both headings, `ready-for-agent`, `priority`,
+`parallel-safe`, or an explicit `--issue` pin. They are planning documents, not
+executable tickets. Check the title on both list and authoritative reads.
+In PR mode a PR is kept only if it carries an `## Agent Brief` (in its body or any
 comment) — the PR analogue of the discriminator.
 
 ### 3.1 Pool exclusions (contract 1.5, MUST)
@@ -154,6 +158,7 @@ closed vocabulary:
 | `missing_what_to_build` | `## Acceptance criteria` present, `## What to build` absent |
 | `missing_acceptance_criteria` | `## What to build` present, `## Acceptance criteria` absent |
 | `missing_both_sections` | Neither required heading present |
+| `planning_document` | Issue title begins with `PRD:` or `Spec:`; takes precedence over missing headings |
 
 The reason MUST be derived from the same discriminator pass that decides membership, so the
 reported reason and the membership decision cannot disagree. `discriminator.json` pins the
@@ -165,7 +170,7 @@ fix headings that are probably fine. The existing warn-and-skip path continues t
 
 A candidate that is not **ready** — one carrying an open native `blocked_by` dependency, or one
 whose dependencies could not be read — is likewise NOT an exclusion (contract 2.0). The exclusion
-vocabulary above is **closed at those three reasons**, and readiness MUST NOT be added to it. An
+vocabulary above is **closed at those four reasons**, and readiness MUST NOT be added to it. An
 exclusion is an authoring mistake a human must fix; a blocked candidate is correctly authored work
 whose turn has not come, and it clears itself when its last blocker closes. It MUST remain in the
 **Pool** — the closure whitelist, the collection Event and the emptiness test all still need to
@@ -260,7 +265,7 @@ The pin **bypasses the order and nothing else** (ADR-0032), which is four separa
 3. **It does not bypass eligibility, and an ineligible pin FAILS the invocation.** A pinned issue
    that is closed, missing, unreadable, lacks `ready-for-agent`, or fails the §3.1 AFK-ready
    discriminator MUST end the invocation with the `preflight_failed` exit code, naming what is
-   wrong — and for a discriminator failure, naming the **specific missing section**, so the
+   wrong — and for a discriminator failure, naming the **planning document** or **specific missing section**, so the
    operator can fix the issue rather than guess. It MUST NOT fall back to the head of the order:
    §3.3 makes a candidate the runner cannot take a *skip* precisely because a serial Run merely
    walked past it, whereas a pin is an operator naming an issue, and there is no next candidate

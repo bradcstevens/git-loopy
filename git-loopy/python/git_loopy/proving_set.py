@@ -42,6 +42,7 @@ from git_loopy.sources import (
     EXCLUSION_MISSING_ACCEPTANCE_CRITERIA,
     EXCLUSION_MISSING_BOTH_SECTIONS,
     EXCLUSION_MISSING_WHAT_TO_BUILD,
+    EXCLUSION_PLANNING_DOCUMENT,
     afk_ready_exclusion,
 )
 from git_loopy.task_type_classifier import ClassifierPair, labelled_task_type
@@ -81,7 +82,7 @@ _TEST_FILENAME_RE = re.compile(
 class ExclusionReason(Enum):
     """Why a closed issue is not a **Proving task** candidate.
 
-    A closed vocabulary, in the order mining applies it. The three body reasons
+    A closed vocabulary, in the order mining applies it. The discriminator reasons
     take their values from :data:`~git_loopy.sources.EXCLUSION_REASONS` rather
     than restating them, because "well-formed work" means the same thing here as
     it does at Pool collection and a second spelling of it could only drift.
@@ -95,6 +96,7 @@ class ExclusionReason(Enum):
     MISSING_ACCEPTANCE_CRITERIA = EXCLUSION_MISSING_ACCEPTANCE_CRITERIA
     #: The body lacks both required sections.
     MISSING_BOTH_SECTIONS = EXCLUSION_MISSING_BOTH_SECTIONS
+    PLANNING_DOCUMENT = EXCLUSION_PLANNING_DOCUMENT
     #: No commit reachable from the default branch closes it, so there is no fix
     #: to replay. A fix that landed on a side branch reads as this, correctly:
     #: what did not ship cannot be the commit that shipped.
@@ -120,6 +122,7 @@ _BODY_REASONS: Mapping[str, ExclusionReason] = {
         ExclusionReason.MISSING_ACCEPTANCE_CRITERIA
     ),
     EXCLUSION_MISSING_BOTH_SECTIONS: ExclusionReason.MISSING_BOTH_SECTIONS,
+    EXCLUSION_PLANNING_DOCUMENT: ExclusionReason.PLANNING_DOCUMENT,
 }
 
 
@@ -346,7 +349,7 @@ def _resolve_replay(
     issue. Each rule is *necessary* and none is sufficient (see the module note):
     admission (#380) is the only thing that can establish what these approximate.
     """
-    body_defect = afk_ready_exclusion(issue.body)
+    body_defect = afk_ready_exclusion(issue.body, title=issue.title)
     if body_defect is not None:
         return ProvingExclusion(issue=issue.number, reason=_BODY_REASONS[body_defect])
     shas = closers.get(issue.number, ())

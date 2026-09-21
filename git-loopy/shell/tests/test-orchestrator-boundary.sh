@@ -3201,14 +3201,16 @@ write_pin_view() {
   local state="$2"
   local labels_json="$3"
   local body="$4"
+  local title="${5:-Pinned #$number}"
   jq -n \
     --argjson number "$number" \
     --arg state "$state" \
     --argjson labels "$labels_json" \
     --arg body "$body" \
+    --arg title "$title" \
     '{
       number: $number,
-      title: ("Pinned #" + ($number | tostring)),
+      title: $title,
       body: $body,
       labels: ($labels | map({name: .})),
       state: $state,
@@ -3304,6 +3306,33 @@ assert_pin_refused 45 no-sections \
   'missing `## What to build` and `## Acceptance criteria`'
 
 assert_pin_refused 46 missing "could not be read from the tracker"
+
+write_pin_view 47 "OPEN" '["ready-for-agent"]' "$pin_afk_body" "PRD: Planning document"
+assert_pin_refused 47 prd "is a planning document"
+write_pin_view 48 "OPEN" '["ready-for-agent"]' "$pin_afk_body" "Spec: Planning document"
+assert_pin_refused 48 spec "is a planning document"
+
+# A listed document is never enriched; a ticket renamed during enrichment is
+# excluded from the authoritative title instead.
+jq -s '.[0].title = "PRD: Planning document" | .[1].title = "Executable ticket"' \
+  "$FAKE_GH_VIEW_DIR/47.json" "$FAKE_GH_VIEW_DIR/48.json" >"$FAKE_GH_LIST_JSON"
+: >"$FAKE_GH_LOG"
+run_entrypoint "$pin_repo" "$pin_bin" "$temp_dir/planning.stdout" \
+  "$temp_dir/planning.stderr" 1 ||
+  fail "planning-only Pool did not exit cleanly"
+jq -se '
+  ([.[] | select(.type == "wrapper.pool.excluded") | .issue] == [47, 48])
+  and ([.[] | select(.type == "wrapper.pool.excluded") | .reason]
+    | all(. == "planning_document"))
+  and ([.[] | select(.type == "wrapper.afk_ready.collected") | .issues]
+    | all(. == []))
+' "$temp_dir/planning.stdout" >/dev/null ||
+  fail "planning documents reached the executable Pool"
+if grep -q '^issue view 47 ' "$FAKE_GH_LOG"; then
+  fail "listed planning document was enriched"
+fi
+grep -q '^issue view 48 ' "$FAKE_GH_LOG" ||
+  fail "authoritative title exclusion was not exercised"
 
 # The other half: an eligible pin is worked *instead of* the head of the order,
 # the Pickup Event says `pin` rather than crediting the order or a Priority

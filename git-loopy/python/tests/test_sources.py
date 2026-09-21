@@ -648,7 +648,7 @@ class TestGitHubCollectPoolExclusions:
         exclusion = collection.exclusions[0]
         assert exclusion.ref == 43
         assert exclusion.title == "PRD: something"
-        assert exclusion.reason == sources_module.EXCLUSION_MISSING_WHAT_TO_BUILD
+        assert exclusion.reason == sources_module.EXCLUSION_PLANNING_DOCUMENT
 
     def test_records_every_excluded_candidate_in_source_order(self) -> None:
         impl = GitHubIssueSource(
@@ -1449,6 +1449,7 @@ class TestModuleStructure:
             "EXCLUSION_MISSING_ACCEPTANCE_CRITERIA",
             "EXCLUSION_MISSING_BOTH_SECTIONS",
             "EXCLUSION_MISSING_WHAT_TO_BUILD",
+            "EXCLUSION_PLANNING_DOCUMENT",
             "EXCLUSION_REASONS",
             "PoolCollection",
             "PoolExclusion",
@@ -2624,6 +2625,55 @@ class TestRateLimitReporting:
 # --------------------------------------------------------------------------- #
 # The invocation-scoped pin (#396)                                            #
 # --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("title", ["PRD: One issue, one run", "Spec: A design", "sPeC: Mixed"])
+class TestPlanningDocumentsAreNotWork:
+    def test_list_and_rolling_membership_exclude_planning_documents(self, title: str) -> None:
+        gh = FakeGitHubClient(issues=[
+            _make_issue(390, title=title, labels=["ready-for-agent", "priority", "parallel-safe"]),
+            _make_issue(391),
+        ])
+        source = GitHubIssueSource(_silent_logger(), gh=gh, pin=390)
+        pool = source.collect_pool()
+        assert [item.ref for item in pool.items] == [391]
+        assert [(item.ref, item.reason) for item in pool.exclusions] == [
+            (390, "planning_document")
+        ]
+        assert gh.issue_view_calls == [391]
+        assert [item.ref for item in source.shallow_membership().candidates] == [391]
+
+    def test_authoritative_title_is_checked_again(self, title: str) -> None:
+        gh = FakeGitHubClient(
+            issues=[_make_issue(390)],
+            issue_views={390: _make_issue(390, title=title)},
+        )
+        pool = GitHubIssueSource(_silent_logger(), gh=gh).collect_pool()
+        assert pool.items == ()
+        assert pool.exclusions[0].reason == "planning_document"
+
+    def test_refresh_and_parallel_pickup_reject_renamed_documents(self, title: str) -> None:
+        gh = FakeGitHubClient(issues=[
+            _make_issue(390, labels=["ready-for-agent", "parallel-safe"])
+        ])
+        source = GitHubIssueSource(_silent_logger(), gh=gh)
+        item = source.collect_pool().items[0]
+        source = GitHubIssueSource(
+            _silent_logger(),
+            gh=FakeGitHubClient(issues=[
+                _make_issue(390, title=title, labels=["ready-for-agent", "parallel-safe"])
+            ]),
+        )
+        assert source.refresh_for_preparation(item).outcome == sources_module.PICKUP_STALE
+        assert source.pickup(390).outcome == sources_module.PICKUP_STALE
+
+    def test_pin_refuses_planning_document(self, title: str) -> None:
+        gh = FakeGitHubClient(issues=[_make_issue(390, title=title)])
+        logger = _silent_logger()
+        source = GitHubIssueSource(logger, gh=gh, pin=390)
+        with _capture(logger) as records:
+            assert source.preflight() == 1
+        assert any("planning document" in record.getMessage() for record in records)
 
 
 class TestThePinReachesSelection:

@@ -141,7 +141,11 @@ _DISCRIMINATOR = _load_fixture("discriminator.json")
     ids=lambda case: case["id"],
 )
 def test_discriminator_fixture(case: dict[str, Any]) -> None:
-    assert is_afk_ready(case["body"]) is case["eligible"]
+    from git_loopy.sources import afk_ready_exclusion
+
+    title = case.get("title", "")
+    assert is_afk_ready(case["body"], title=title) is case["eligible"]
+    assert afk_ready_exclusion(case["body"], title=title) == case["exclusion_reason"]
 
 
 _ISSUE_ORDERING = _load_fixture("issue-ordering.json")

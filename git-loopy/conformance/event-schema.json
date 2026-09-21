@@ -234,7 +234,8 @@
       "reason_values": [
         "missing_what_to_build",
         "missing_acceptance_criteria",
-        "missing_both_sections"
+        "missing_both_sections",
+        "planning_document"
       ],
       "emitted": "Once per ready-for-agent candidate the AFK-ready discriminator rejected, in source order, before the wrapper.afk_ready.collected it explains. A candidate the source could not read is not an exclusion: it was never discriminated against.",
       "scope": "Run-scoped, not contribution-scoped. It names work that never became a Lane contribution, so it carries the collecting Iteration's iter and no contribution identity."

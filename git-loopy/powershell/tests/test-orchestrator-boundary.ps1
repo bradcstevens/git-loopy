@@ -4226,12 +4226,13 @@ Start-Sleep -Seconds $Sleep
             [Parameter(Mandatory)][string]$State,
             [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Labels,
             [Parameter(Mandatory)][AllowEmptyString()][string]$Body,
-            [Parameter(Mandatory)][string]$ViewDir
+            [Parameter(Mandatory)][string]$ViewDir,
+            [string]$Title = "Pinned #$Number"
         )
 
         $Payload = [ordered]@{
             number = $Number
-            title = "Pinned #$Number"
+            title = $Title
             body = $Body
             labels = @($Labels | ForEach-Object { [ordered]@{ name = $_ } })
             state = $State
@@ -4349,6 +4350,46 @@ Start-Sleep -Seconds $Sleep
 
     Assert-PinRefused -Number 46 -Label "missing" `
         -Needle "could not be read from the tracker"
+
+    Write-PinView -Number 47 -State "OPEN" -Labels @("ready-for-agent") `
+        -Body $PinAfkBody -ViewDir $PinViews -Title "PRD: Planning document"
+    Assert-PinRefused -Number 47 -Label "prd" -Needle "is a planning document"
+    Write-PinView -Number 48 -State "OPEN" -Labels @("ready-for-agent") `
+        -Body $PinAfkBody -ViewDir $PinViews -Title "Spec: Planning document"
+    Assert-PinRefused -Number 48 -Label "spec" -Needle "is a planning document"
+
+    # Check both the cheap list title and a title changed at enrichment.
+    $PlanningRows = @(
+        Get-Content -LiteralPath (Join-Path $PinViews "47.json") -Raw |
+            ConvertFrom-Json -AsHashtable -DateKind String
+        Get-Content -LiteralPath (Join-Path $PinViews "48.json") -Raw |
+            ConvertFrom-Json -AsHashtable -DateKind String
+    )
+    $PlanningRows[1]["title"] = "Executable ticket"
+    [IO.File]::WriteAllText($PinList, (ConvertTo-Json -InputObject $PlanningRows -Depth 10))
+    $PlanningRun = Invoke-PinRun -Label "planning" -PinArgs @("1")
+    Assert-Equal 0 $PlanningRun.Status "planning-only Pool exits cleanly"
+    $PlanningEvents = @($PlanningRun.Stdout -split "`n" | Where-Object { $_ } |
+        ForEach-Object { $_ | ConvertFrom-Json -AsHashtable })
+    $PlanningExclusions = @($PlanningEvents |
+        Where-Object { $_["type"] -ceq "wrapper.pool.excluded" })
+    Assert-Equal "47,48" (
+        [string]::Join(",", @($PlanningExclusions | ForEach-Object { $_["issue"] }))
+    ) "both title reads exclude planning documents"
+    foreach ($Excluded in $PlanningExclusions) {
+        Assert-Equal "planning_document" $Excluded["reason"] "planning exclusion reason"
+    }
+    foreach ($Collected in @($PlanningEvents |
+        Where-Object { $_["type"] -ceq "wrapper.afk_ready.collected" })) {
+        Assert-Equal 0 @($Collected["issues"]).Count "planning documents never enter Pool"
+    }
+    $PlanningLog = [IO.File]::ReadAllText($env:FAKE_GH_LOG)
+    Assert-True (-not ($PlanningLog -match "(?m)^issue view 47 ")) (
+        "listed planning document was not enriched"
+    )
+    Assert-True ($PlanningLog -match "(?m)^issue view 48 ") (
+        "authoritative title exclusion was exercised"
+    )
 
     # The other half: an eligible pin is worked *instead of* the head of the
     # order, the Pickup record says `pin` rather than crediting the order, and

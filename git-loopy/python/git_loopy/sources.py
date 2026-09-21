@@ -94,6 +94,7 @@ __all__ = [
     "EXCLUSION_MISSING_ACCEPTANCE_CRITERIA",
     "EXCLUSION_MISSING_BOTH_SECTIONS",
     "EXCLUSION_MISSING_WHAT_TO_BUILD",
+    "EXCLUSION_PLANNING_DOCUMENT",
     "EXCLUSION_REASONS",
     "PoolCollection",
     "PoolExclusion",
@@ -118,18 +119,20 @@ PICKUP_STALE: str = "stale"
 PICKUP_UNAVAILABLE: str = "unavailable"
 
 # Pool-exclusion reasons (#303). A ``ready-for-agent`` candidate that fails the
-# AFK-ready body discriminator leaves the **Pool**; these name *which* required
-# section it lacked so a human who deliberately triaged the issue can see why
+# AFK-ready discriminator leaves the **Pool**; these name a planning document
+# or the required section it lacked so a human who triaged the issue can see why
 # the runner is ignoring it rather than watching it vanish.
 EXCLUSION_MISSING_WHAT_TO_BUILD: str = "missing_what_to_build"
 EXCLUSION_MISSING_ACCEPTANCE_CRITERIA: str = "missing_acceptance_criteria"
 EXCLUSION_MISSING_BOTH_SECTIONS: str = "missing_both_sections"
+EXCLUSION_PLANNING_DOCUMENT: str = "planning_document"
 
 # The closed reason vocabulary, in the order a contract reader should read it.
 EXCLUSION_REASONS: tuple[str, ...] = (
     EXCLUSION_MISSING_WHAT_TO_BUILD,
     EXCLUSION_MISSING_ACCEPTANCE_CRITERIA,
     EXCLUSION_MISSING_BOTH_SECTIONS,
+    EXCLUSION_PLANNING_DOCUMENT,
 )
 
 # Shared AFK-ready discriminator regexes (line-anchored, multiline).
@@ -155,14 +158,16 @@ _RE_AGENT_BRIEF: re.Pattern[str] = re.compile(r"^## Agent Brief", re.MULTILINE)
 _RE_PRDS_NAME: re.Pattern[str] = re.compile(r"^\d+-.*\.md$")
 
 
-def is_afk_ready(body: str) -> bool:
-    """Return ``True`` iff the body satisfies the AFK-ready discriminator.
+def is_afk_ready(body: str, *, title: str = "") -> bool:
+    """Return ``True`` iff the title and body satisfy the AFK-ready discriminator.
 
     Args:
         body: Raw markdown body of an issue or local-markdown file.
+        title: Issue title; PRD: and Spec: prefixes exclude planning documents.
 
     Returns:
-        ``True`` if BOTH ``^## What to build`` and ``^## Acceptance
+        ``True`` if the title is not prefixed with PRD: or Spec: and BOTH
+        ``^## What to build`` and ``^## Acceptance
         criteria`` appear as line-anchored section headers in the body.
         ``## Parent`` is optional (a slice without a parent issue omits it
         per the to-issues template) and is intentionally not required, so
@@ -175,24 +180,27 @@ def is_afk_ready(body: str) -> bool:
     cannot drift apart — a candidate is out of the **Pool** exactly when there
     is a reason to report for it.
     """
-    return afk_ready_exclusion(body) is None
+    return afk_ready_exclusion(body, title=title) is None
 
 
-def afk_ready_exclusion(body: str) -> str | None:
-    """Return why ``body`` fails the AFK-ready discriminator, or ``None``.
+def afk_ready_exclusion(body: str, *, title: str = "") -> str | None:
+    """Return why the title or body fails the AFK-ready discriminator, or ``None``.
 
     Args:
         body: Raw markdown body of an issue or local-markdown file.
+        title: Issue title; prefixes are checked case-insensitively.
 
     Returns:
-        ``None`` when the body is AFK-ready, else one of
-        :data:`EXCLUSION_REASONS` naming which required section is absent.
+        ``None`` when the issue is AFK-ready, else one of
+        :data:`EXCLUSION_REASONS` naming a planning document or missing section.
         The "missing both" case is reported as its own reason rather than
         collapsed into either single-section reason, because an issue with
         neither section is usually a specification document rather than a
         slice that lost one heading — a distinction the operator acts on
         differently.
     """
+    if title.lower().startswith(("prd:", "spec:")):
+        return EXCLUSION_PLANNING_DOCUMENT
     has_what = bool(_RE_WHAT_TO_BUILD.search(body))
     has_ac = bool(_RE_AC.search(body))
     if has_what and has_ac:
@@ -938,7 +946,9 @@ class GitHubIssueSource:
                 labels=tuple(issue.labels),
             ),
             afk_exclusion=(
-                None if issue is None else afk_ready_exclusion(issue.body or "")
+                None
+                if issue is None
+                else afk_ready_exclusion(issue.body or "", title=issue.title)
             ),
             number=self._pin,
             require_parallel_safe=self._pin_requires_parallel_safe,
@@ -988,7 +998,7 @@ class GitHubIssueSource:
         exclusions: list[PoolExclusion] = []
         ready_candidates = []
         for issue in candidates:
-            reason = afk_ready_exclusion(issue.body or "")
+            reason = afk_ready_exclusion(issue.body or "", title=issue.title)
             if reason is None:
                 ready_candidates.append(issue)
             else:
@@ -1027,7 +1037,7 @@ class GitHubIssueSource:
             # Re-verify against the authoritative body — and report *its*
             # reason, not the cheaper list body's, since this is the read the
             # decision was actually made on.
-            reason = afk_ready_exclusion(full.body or "")
+            reason = afk_ready_exclusion(full.body or "", title=full.title)
             if reason is not None:
                 exclusions.append(
                     PoolExclusion(ref=full.number, title=full.title, reason=reason)
@@ -1084,7 +1094,10 @@ class GitHubIssueSource:
             return MembershipSnapshot(candidates=(), complete=False)
 
         ordered, undated = in_selection_order(
-            [issue for issue in page.issues if is_afk_ready(issue.body or "")],
+            [
+                issue for issue in page.issues
+                if is_afk_ready(issue.body or "", title=issue.title)
+            ],
             pin=self._pin,
         )
         self._report_undated(undated)
@@ -1157,7 +1170,7 @@ class GitHubIssueSource:
         if (
             full.state.upper() != "OPEN"
             or LABEL_READY_FOR_AGENT not in labels
-            or not is_afk_ready(full.body or "")
+            or not is_afk_ready(full.body or "", title=full.title)
             or not readiness.admissible
         ):
             return Pickup(outcome=PICKUP_STALE)
@@ -1241,7 +1254,7 @@ class GitHubIssueSource:
             full.state.upper() != "OPEN"
             or LABEL_READY_FOR_AGENT not in labels
             or LABEL_PARALLEL_SAFE not in labels
-            or not is_afk_ready(full.body or "")
+            or not is_afk_ready(full.body or "", title=full.title)
             or not decide_readiness(full.blocked_by).admissible
         ):
             return Pickup(outcome=PICKUP_STALE)

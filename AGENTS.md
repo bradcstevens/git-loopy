@@ -105,6 +105,10 @@ All five canonical triage roles use their default label strings (`needs-triage`,
 `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See
 `docs/agents/triage-labels.md`.
 
+Issues whose titles begin with `PRD:` or `Spec:` (case-insensitive) are planning
+documents, not executable tickets. Never apply `ready-for-agent` to them; remove
+that label if present. Work their implementation tickets instead.
+
 ### Release milestones
 
 A `vX.Y.Z` GitHub milestone is solely the **Promotion** trigger: closing it

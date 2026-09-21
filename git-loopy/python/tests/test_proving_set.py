@@ -623,6 +623,7 @@ def test_the_body_reasons_are_the_pool_exclusion_vocabulary() -> None:
             ExclusionReason.MISSING_WHAT_TO_BUILD,
             ExclusionReason.MISSING_ACCEPTANCE_CRITERIA,
             ExclusionReason.MISSING_BOTH_SECTIONS,
+            ExclusionReason.PLANNING_DOCUMENT,
         )
     } == set(EXCLUSION_REASONS)
 
