@@ -434,7 +434,13 @@ def test_skills_edit_cancellation_writes_nothing(tmp_path: Path) -> None:
     ]
 
 
-def test_skills_list_prints_stable_path_free_policy_rows(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("plugin_name", "source_label"),
+    [("example", "plugin:example"), (None, "plugin (name unavailable)")],
+)
+def test_skills_list_prints_stable_path_free_policy_rows(
+    tmp_path: Path, plugin_name: str | None, source_label: str
+) -> None:
     catalog = SkillCatalog(
         winners={
             "beta": SkillCatalogWinner(
@@ -442,7 +448,7 @@ def test_skills_list_prints_stable_path_free_policy_rows(tmp_path: Path) -> None
                 "plugin",
                 description="Plugin beta",
                 copilot_enabled=True,
-                plugin_name="example",
+                plugin_name=plugin_name,
                 path=tmp_path / "secret" / "beta" / "SKILL.md",
             ),
             "alpha": SkillCatalogWinner(
@@ -500,7 +506,7 @@ def test_skills_list_prints_stable_path_free_policy_rows(tmp_path: Path) -> None
     assert output == [
         "GIT-LOOPY\tCOPILOT\tREQUIRED\tSOURCE\tNAME\tDESCRIPTION",
         "enabled\tdisabled\tno\tproject\talpha\tProject alpha",
-        "disabled\tenabled\tyes\tplugin:example\tbeta\tPlugin beta",
+        f"disabled\tenabled\tyes\t{source_label}\tbeta\tPlugin beta",
         "disabled\tunavailable\tno\tpackaged\tgamma\tPackaged gamma",
     ]
     assert str(tmp_path) not in "\n".join(output)

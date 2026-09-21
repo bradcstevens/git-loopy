@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "contract_version": "1.18",
-  "cli_version": "1.0.85",
+  "cli_version": "1.0.83",
   "context_tiers": {},
   "roster": {
     "auto": [],

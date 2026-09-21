@@ -126,7 +126,7 @@ def run_update(
     refresh_helper = helper_refresh or tui_release.refresh_machine_local_helper
     try:
         helper = refresh_helper(release_version, environ)
-        output_fn(f"Updated TUI helper: {helper}")
+        output_fn(f"TUI helper ready: {helper}")
         helper_settled = True
     except (OSError, tui_release.TuiReleaseError) as exc:
         output_fn(f"Could not refresh the TUI helper: {exc}")

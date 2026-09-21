@@ -30,7 +30,7 @@ _SDK_SKILL_FIELDS = frozenset(
         "source",
         "user_invocable",
         "path",
-        "plugin_name",
+        "command_name",
     }
 )
 
@@ -157,13 +157,21 @@ def _copilot_winners(skills: Iterable[Any]) -> dict[str, SkillCatalogWinner]:
             raise SkillCatalogError(f"duplicate Copilot Skill winner: {name!r}")
         source = _source_value(skill.source)
         raw_path = getattr(skill, "path", None)
+        plugin_name = getattr(skill, "plugin_name", None)
+        if source == "plugin" and not plugin_name:
+            command_name = getattr(skill, "command_name", None)
+            # Global metadata names the owner through its canonical plugin:skill command.
+            if isinstance(command_name, str):
+                owner, separator, command_skill = command_name.rpartition(":")
+                if owner and separator and command_skill == name:
+                    plugin_name = owner
         winners[name] = SkillCatalogWinner(
             name=name,
             source_kind=_SOURCE_KINDS[source],
             description=skill.description,
             copilot_enabled=skill.enabled,
             user_invocable=skill.user_invocable,
-            plugin_name=getattr(skill, "plugin_name", None),
+            plugin_name=plugin_name,
             path=Path(raw_path) if raw_path else None,
         )
     return winners
@@ -189,13 +197,18 @@ def validate_sdk_skill_surface(
         )
     ):
         from copilot import CopilotClient
-        from copilot.generated.rpc import Skill, SkillList, SkillsApi, SkillSource
+        from copilot.generated.rpc import (
+            ServerSkill,
+            ServerSkillList,
+            ServerSkillsApi,
+            SkillSource,
+        )
 
         client_type = client_type or CopilotClient
-        skill_type = skill_type or Skill
+        skill_type = skill_type or ServerSkill
         source_type = source_type or SkillSource
-        skills_api_type = skills_api_type or SkillsApi
-        skill_list_type = skill_list_type or SkillList
+        skills_api_type = skills_api_type or ServerSkillsApi
+        skill_list_type = skill_list_type or ServerSkillList
 
     assert client_type is not None
     assert skill_type is not None
@@ -209,8 +222,10 @@ def validate_sdk_skill_surface(
             raise SdkSkillSurfaceError(
                 f"CopilotClient.create_session no longer exposes {option}"
             )
-    if not hasattr(skills_api_type, "list"):
-        raise SdkSkillSurfaceError("typed SkillsApi.list discovery RPC is unavailable")
+    if not hasattr(skills_api_type, "discover"):
+        raise SdkSkillSurfaceError(
+            "typed ServerSkillsApi.discover metadata RPC is unavailable"
+        )
     source_values = frozenset(member.value for member in source_type)
     if source_values != _SDK_SKILL_SOURCES:
         raise SdkSkillSurfaceError(
@@ -224,8 +239,10 @@ def validate_sdk_skill_surface(
             f"Copilot Skill response fields drifted: missing {sorted(missing_fields)}"
         )
     list_fields = frozenset(field.name for field in fields(skill_list_type))
-    if "skills" not in list_fields:
-        raise SdkSkillSurfaceError("Copilot SkillList response no longer contains skills")
+    if not {"skills", "errors"} <= list_fields:
+        raise SdkSkillSurfaceError(
+            "Copilot ServerSkillList response no longer contains skills and errors"
+        )
 
 
 def build_skill_catalog(
@@ -281,7 +298,9 @@ async def discover_skill_catalog(
     discovery_directory: Path,
     validate_surface: bool = True,
 ) -> SkillCatalog:
-    """Discover Copilot metadata through its typed RPC and resolve all winners."""
+    """Discover global Skill metadata without creating an extension-hosting session."""
+    from copilot.generated.rpc import SkillsDiscoverRequest
+
     if validate_surface:
         validate_sdk_skill_surface()
     isolated_directory = discovery_directory.resolve()
@@ -289,18 +308,13 @@ async def discover_skill_catalog(
         raise SkillCatalogError(
             "Copilot catalog discovery requires an isolated working directory"
         )
-    session = await client.create_session(
-        working_directory=str(isolated_directory),
-        enable_skills=True,
-        enable_config_discovery=True,
-        skip_custom_instructions=True,
-    )
-    try:
-        result = await session.rpc.skills.list()
-        return build_skill_catalog(
-            result.skills,
-            repo_root=repo_root,
-            installed_skills_dir=installed_skills_dir,
+    result = await client.rpc.skills.discover(SkillsDiscoverRequest(project_paths=[]))
+    if result.errors:
+        raise SkillCatalogError(
+            "Copilot Skill discovery failed: " + "; ".join(result.errors)
         )
-    finally:
-        await session.disconnect()
+    return build_skill_catalog(
+        result.skills,
+        repo_root=repo_root,
+        installed_skills_dir=installed_skills_dir,
+    )
