@@ -1547,6 +1547,11 @@ def test_run_init_bootstraps_the_tracker_label_vocabulary(tmp_path: Path) -> Non
         "semver:minor",
         "semver:patch",
         "semver:none",
+        "wayfinder:map",
+        "wayfinder:research",
+        "wayfinder:prototype",
+        "wayfinder:grilling",
+        "wayfinder:task",
     ]
     assert "parallel-safe" in out.text
 

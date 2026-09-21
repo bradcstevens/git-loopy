@@ -73,6 +73,11 @@ def test_vocabulary_includes_the_canonical_task_type_labels(tmp_path: Path) -> N
         "semver:minor",
         "semver:patch",
         "semver:none",
+        "wayfinder:map",
+        "wayfinder:research",
+        "wayfinder:prototype",
+        "wayfinder:grilling",
+        "wayfinder:task",
     ]
 
 
@@ -123,6 +128,11 @@ def test_vocabulary_follows_the_documented_mapping(tmp_path: Path) -> None:
         "semver:minor",
         "semver:patch",
         "semver:none",
+        "wayfinder:map",
+        "wayfinder:research",
+        "wayfinder:prototype",
+        "wayfinder:grilling",
+        "wayfinder:task",
     ]
     assert [spec.role for spec in vocabulary] == [
         "needs-triage",
@@ -143,6 +153,11 @@ def test_vocabulary_follows_the_documented_mapping(tmp_path: Path) -> None:
         "semver:minor",
         "semver:patch",
         "semver:none",
+        "wayfinder:map",
+        "wayfinder:research",
+        "wayfinder:prototype",
+        "wayfinder:grilling",
+        "wayfinder:task",
     ]
 
 
@@ -271,6 +286,125 @@ def test_this_repository_s_own_documented_mapping_parses() -> None:
         "semver:minor",
         "semver:patch",
         "semver:none",
+        "wayfinder:map",
+        "wayfinder:research",
+        "wayfinder:prototype",
+        "wayfinder:grilling",
+        "wayfinder:task",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# The ``wayfinder:`` labels
+# ---------------------------------------------------------------------------
+
+
+def test_vocabulary_provisions_every_label_wayfinder_writes(tmp_path: Path) -> None:
+    """``/wayfinder``'s five strings are tracker vocabulary, so ``init`` creates them.
+
+    The Skill's very first write when charting a map is ``gh issue create
+    --label wayfinder:map``. Nothing in git-loopy created that label, so on a
+    fresh clone the write failed on a label that did not exist and the operator
+    had to read the string out of the Skill by hand — the identical gap this
+    module already closes for ``parallel-safe`` (#618).
+    """
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+
+    assert [spec.name for spec in vocabulary if spec.name.startswith("wayfinder:")] == [
+        "wayfinder:map",
+        "wayfinder:research",
+        "wayfinder:prototype",
+        "wayfinder:grilling",
+        "wayfinder:task",
+    ]
+
+
+def test_the_wayfinder_ticket_types_are_a_closed_set(tmp_path: Path) -> None:
+    """One map label plus exactly the four ticket types the Skill names.
+
+    ``/wayfinder`` types a ticket ``research``, ``prototype``, ``grilling`` or
+    ``task`` and nothing else, so a fifth type provisioned here would be a label
+    no session ever applies, and a missing one a label a session cannot apply.
+    """
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    prefix = labels_module.WAYFINDER_LABEL_PREFIX
+
+    assert {
+        spec.name.removeprefix(prefix)
+        for spec in vocabulary
+        if spec.name.startswith(prefix)
+    } == {"map", "research", "prototype", "grilling", "task"}
+
+
+def test_each_wayfinder_ticket_type_says_who_drives_it(tmp_path: Path) -> None:
+    """HITL or AFK is the fact a human picking off the frontier needs.
+
+    A ``research`` ticket a session may resolve alone and a ``grilling`` ticket
+    that only resolves through live conversation are the same shape in the
+    tracker's list; the description is the one place that difference is read.
+    """
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    driver = {
+        spec.name: spec.description
+        for spec in vocabulary
+        if spec.name.startswith(labels_module.WAYFINDER_LABEL_PREFIX)
+    }
+
+    assert "AFK" in driver["wayfinder:research"]
+    assert "HITL" in driver["wayfinder:prototype"]
+    assert "HITL" in driver["wayfinder:grilling"]
+
+
+def test_the_wayfinder_labels_are_not_renameable_by_the_documented_mapping(
+    tmp_path: Path,
+) -> None:
+    """The mapping renames a *triage role*; these are the Skill's literal strings.
+
+    A tracker that renamed one would provision a label ``/wayfinder`` never
+    applies while the Skill kept writing the string it was authored with —
+    and the Skill is authored upstream (ADR-0034), so nothing here can follow it.
+    """
+    _write_mapping(tmp_path, "| `wayfinder:map` | `map` | An effort's map |\n")
+
+    names = [spec.name for spec in labels_module.read_tracker_vocabulary(tmp_path)]
+
+    assert names.count("wayfinder:map") == 1
+    assert "map" not in names
+
+
+def test_a_run_never_requires_the_wayfinder_labels(tmp_path: Path) -> None:
+    """An absent ``wayfinder:`` label costs a planning session, never an Iteration.
+
+    The Run-required vocabulary is what ``git-loopy doctor`` and Run preflight
+    refuse on. A Run reads ``ready-for-agent``, ``parallel-safe`` and
+    ``priority``; it never reads a ``wayfinder:`` label at all, so failing a
+    loop over one would be judging something the loop does not do (ADR-0055).
+    """
+    required = labels_module.read_run_required_vocabulary(tmp_path)
+
+    names = [spec.name for spec in required]
+    assert not [name for name in names if name.startswith("wayfinder:")]
+    assert LABEL_READY_FOR_AGENT in names
+    assert LABEL_PARALLEL_SAFE in names
+    assert LABEL_PRIORITY in names
+
+
+def test_the_run_required_vocabulary_is_the_vocabulary_minus_the_taxonomies(
+    tmp_path: Path,
+) -> None:
+    """Every exclusion is derived, so a new key cannot become a Run precondition.
+
+    ``task-type:`` and ``semver:`` are minted on the way in and ``wayfinder:``
+    is never read by a Run; what is left is exactly the labels a human triages
+    with plus the two assertions selection reads.
+    """
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    required = labels_module.read_run_required_vocabulary(tmp_path)
+
+    assert [spec.name for spec in required] == [
+        spec.name
+        for spec in vocabulary
+        if not spec.name.startswith(("task-type:", "semver:", "wayfinder:"))
     ]
 
 

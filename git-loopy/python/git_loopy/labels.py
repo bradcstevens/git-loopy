@@ -41,6 +41,15 @@ Design:
   :data:`~git_loopy.release_version.BUMP_CLASS_KEYS`, the production decision
   seam that reads them. Provisioning from those keys keeps the labels an agent
   may infer aligned with the Release-version classes an Orchestrator accepts.
+* **The ``wayfinder:`` taxonomy is provisioned for a Skill, not for the loop.**
+  ``/wayfinder`` charts a planning **map** as an issue labelled ``wayfinder:map``
+  whose child **decision tickets** each carry a ``wayfinder:<type>`` label, so
+  those five strings are tracker vocabulary the same way ``parallel-safe`` is —
+  and nothing created them either, which left the Skill's very first write on a
+  fresh clone failing on a label that did not exist (#618). They are declared
+  here rather than derived from a reader because git-loopy has none: the
+  contract that fixes the five strings is the Skill's, authored upstream
+  (ADR-0034), and the loop only ever provisions them.
 * **Ensure, never reconcile — at ``init``.** :func:`bootstrap_labels` creates what
   is absent and leaves what exists exactly as it is — colour and description
   included. An operator who recoloured ``ready-for-agent`` keeps their colour, and
@@ -75,6 +84,7 @@ __all__ = [
     "TrackerLabel",
     "TRIAGE_ROLES",
     "SEMVER_LABELS",
+    "WAYFINDER_LABELS",
     "MAPPING_DOC_RELPATH",
     "MAX_DESCRIPTION_LENGTH",
     "bootstrap_labels",
@@ -219,6 +229,57 @@ SEMVER_LABELS: tuple[LabelSpec, ...] = tuple(
     for key in BUMP_CLASS_KEYS
 )
 
+#: The prefix every ``/wayfinder`` label carries. The map and the four ticket
+#: types share it so a tracker's label list groups the whole effort together.
+WAYFINDER_LABEL_PREFIX: str = "wayfinder:"
+
+#: The five labels ``/wayfinder`` writes: one for the **map** issue and one per
+#: **ticket type**.
+#:
+#: Unlike every other closed taxonomy here these keys are declared rather than
+#: derived, because git-loopy has no module that reads them — the Skill does,
+#: and it is authored upstream (ADR-0034). Declaring them is therefore not a
+#: mirror of an in-repo constant that could drift from this one; it is the only
+#: in-repo statement of the strings, and the Skill's ``wayfinder:<type>``
+#: contract is what closes the set at ``research``/``prototype``/``grilling``/
+#: ``task``.
+#:
+#: Each description names whether the type is **HITL** or **AFK** and which
+#: Skill resolves it, because that is what a human reading the tracker's label
+#: list needs in order to pick a ticket off the frontier.
+WAYFINDER_LABELS: tuple[LabelSpec, ...] = (
+    LabelSpec(
+        role=f"{WAYFINDER_LABEL_PREFIX}map",
+        name=f"{WAYFINDER_LABEL_PREFIX}map",
+        color="5319e7",
+        description="Wayfinder map: index of an effort's decision tickets",
+    ),
+    LabelSpec(
+        role=f"{WAYFINDER_LABEL_PREFIX}research",
+        name=f"{WAYFINDER_LABEL_PREFIX}research",
+        color="1d76db",
+        description="Wayfinder research ticket (AFK, /research)",
+    ),
+    LabelSpec(
+        role=f"{WAYFINDER_LABEL_PREFIX}prototype",
+        name=f"{WAYFINDER_LABEL_PREFIX}prototype",
+        color="fbca04",
+        description="Wayfinder prototype ticket (HITL, /prototype)",
+    ),
+    LabelSpec(
+        role=f"{WAYFINDER_LABEL_PREFIX}grilling",
+        name=f"{WAYFINDER_LABEL_PREFIX}grilling",
+        color="d93f0b",
+        description="Wayfinder grilling ticket (HITL, /grilling)",
+    ),
+    LabelSpec(
+        role=f"{WAYFINDER_LABEL_PREFIX}task",
+        name=f"{WAYFINDER_LABEL_PREFIX}task",
+        color="0e8a16",
+        description="Wayfinder task ticket (manual work unblocking a decision)",
+    ),
+)
+
 
 def read_tracker_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
     """Return the labels a Run needs, in the order ``init`` should ensure them.
@@ -226,7 +287,8 @@ def read_tracker_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
     The five triage roles are read from the repository's documented mapping so
     the vocabulary ``init`` writes is the vocabulary the skills actually apply.
     ``parallel-safe`` and ``priority`` are appended from the runner's own
-    constants, followed by the closed task-type and Bump-class labels.
+    constants, followed by the closed task-type and Bump-class labels and the
+    five ``wayfinder:`` labels ``/wayfinder`` writes.
 
     Args:
         repo_root: Repository root to look for the documented mapping under, or
@@ -250,35 +312,47 @@ def read_tracker_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
         PRIORITY_ROLE,
         *TASK_TYPE_LABELS,
         *SEMVER_LABELS,
+        *WAYFINDER_LABELS,
     )
 
 
 def read_run_required_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...]:
     """Return the labels a Run needs the tracker to **already** carry.
 
-    The vocabulary minus the two closed classifier taxonomies, because those are
-    minted on the way in:
+    The vocabulary minus what a Run does not depend on, for two distinct
+    reasons.
+
+    The two closed classifier taxonomies are excluded because they are minted on
+    the way in:
     :meth:`~git_loopy.gh.SubprocessTaskTypeLabelClient.apply_issue_label` creates
     the label before it attaches it, and both writers treat a failure as
     non-fatal — no label is worth an **Iteration**. A Run therefore never needs a
     ``task-type:`` or ``semver:`` label to pre-exist, and a preflight that
     refused one would be judging something the Run does not (ADR-0055).
 
+    The ``wayfinder:`` labels are excluded because a Run never touches them at
+    all: they belong to a planning Skill a human drives, so an absent one costs
+    a ``/wayfinder`` session and not an **Iteration**. Failing preflight on one
+    would stop a loop over a label the loop does not read.
+
     What is left is what a Run only ever *reads*: the triage roles, the
     ``parallel-safe`` and ``priority`` assertions, and — load-bearingly —
     ``ready-for-agent``, the label the **Pool** query filters on.
 
-    The exclusion is derived from the taxonomies themselves rather than spelled
-    out, so a new task type or **Bump class** cannot quietly become a Run
-    precondition.
+    Both exclusions are derived from the taxonomies themselves rather than
+    spelled out, so a new task type, **Bump class**, or Wayfinder ticket type
+    cannot quietly become a Run precondition.
 
     Args:
         repo_root: Repository root to read the documented triage mapping under,
             or ``None`` when there is no repository.
     """
-    minted = {spec.role for spec in (*TASK_TYPE_LABELS, *SEMVER_LABELS)}
+    excluded = {
+        spec.role
+        for spec in (*TASK_TYPE_LABELS, *SEMVER_LABELS, *WAYFINDER_LABELS)
+    }
     return tuple(
-        spec for spec in read_tracker_vocabulary(repo_root) if spec.role not in minted
+        spec for spec in read_tracker_vocabulary(repo_root) if spec.role not in excluded
     )
 
 
