@@ -3904,36 +3904,29 @@ def test_the_contract_states_a_task_type_labels_origin_is_unobservable() -> None
     assert "Task-type classifier" in section
 
 
-#: The contract revision whose text first described the **measured tier** — the
-#: one the two fixtures below pin their decisions against (§18). A literal
-#: rather than `_written_contract_version()`, because a later revision that
-#: changes something else entirely (2.6's unread-Pool rule, §2.2) leaves the
-#: measured tier exactly where it was, and a fixture that re-declared itself at
-#: every bump would claim a decision moved when nothing did.
-_MEASURED_TIER_CONTRACT_VERSION = "2.5"
+@pytest.mark.parametrize(("fixture", "expected"), [
+    ("routing-resolution.json", "2.9"),
+    ("calibration-search.json", "2.5"),
+])
+def test_routing_and_calibration_fixtures_pin_the_contracts_that_changed_them(
+    fixture: str, expected: str,
+) -> None:
+    """Only an affected fixture advances with its decision (§18).
 
-
-def test_the_measured_tier_fixtures_pin_the_contract_that_records_them() -> None:
-    """The decision and its fixtures move as one change (§18).
-
-    ``routing-resolution.json`` gained the measured-tier precedence cases and
-    ``calibration-search.json`` is the search fixture; until the contract
-    described the tier, both pinned behaviour no written contract stated. Now
-    that it does, they declare the version whose text explains them — and keep
-    declaring *that* version, not whichever one the contract has since reached.
+    Both gained measured-tier obligations at 2.5. Routing now also owns 2.9's
+    staged migration and preflight deadlines; Calibration has not changed.
+    Pin each decision's revision, not whichever version the header later reaches.
     """
     written = _written_contract_version()
     declared = _declared_fixture_contract_versions()
 
     # Non-vacuity: the revision these fixtures name is one the contract reached.
-    assert tuple(int(p) for p in _MEASURED_TIER_CONTRACT_VERSION.split(".")) <= tuple(
+    assert tuple(int(p) for p in expected.split(".")) <= tuple(
         int(p) for p in written.split(".")
     )
-    for fixture in ("routing-resolution.json", "calibration-search.json"):
-        assert declared[fixture] == _MEASURED_TIER_CONTRACT_VERSION, (
-            f"{fixture} pins the measured tier but declares contract "
-            f"{declared[fixture]}, not {_MEASURED_TIER_CONTRACT_VERSION}"
-        )
+    assert declared[fixture] == expected, (
+        f"{fixture} declares contract {declared[fixture]}, not {expected}"
+    )
 
 
 _TASK_TYPE_TAXONOMY = _ROUTING_RESOLUTION["task_type_taxonomy"]
