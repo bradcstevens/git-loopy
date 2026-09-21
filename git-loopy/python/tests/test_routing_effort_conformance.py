@@ -15,6 +15,7 @@ from git_loopy import gh as gh_module
 from git_loopy import loop as loop_module
 from git_loopy.interactive.state import LiveRunState
 from git_loopy.interactive.view_model import project_run_view
+from git_loopy.model_listing import fetch_live_models
 from tests.fakes import FakeGateRunner, FakeGitHubClient
 from tests.test_iteration_end_to_end import (
     _BilledRoutingClient,
@@ -41,7 +42,11 @@ _EFFORT = _ROUTING_CONFORMANCE["effort_semantics"]
 def test_saved_dynamic_authority_preserves_exact_effort_semantics(
     tmp_path, monkeypatch, capsys, mode, case,
 ):
+    make_client = loop_module._make_client
     _, git = _wire_single_issue_github(tmp_path, monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    copilot_home = tmp_path / "copilot-state"
+    monkeypatch.setenv("COPILOT_HOME", str(copilot_home))
     labels = ["ready-for-agent", "task-type:implementation", "semver:none"]
     if mode == "lane":
         labels.append("parallel-safe")
@@ -69,14 +74,11 @@ def test_saved_dynamic_authority_preserves_exact_effort_semantics(
     def listing():
         return (_listed_model(case["model"], efforts),)
 
-    def dynamic_listing():
+    async def dynamic_listing(*, warn=None):
         capability_reads.append(efforts)
-        return listing()
+        return await dynamic_route.refresh_harness_evidence(warn=warn)
 
-    async def fetch_listing():
-        return list(listing())
-
-    monkeypatch.setattr(model_listing, "fetch_live_models", fetch_listing)
+    monkeypatch.setattr(model_listing, "fetch_live_models", fetch_live_models)
 
     def assess(prompt):
         candidates, _ = json.JSONDecoder().raw_decode(
@@ -90,20 +92,58 @@ def test_saved_dynamic_authority_preserves_exact_effort_semantics(
 
     client = _ParallelFakeClient(fake_git=git, scripted_events=[], serial_closes=True)
     transport = _BilledRoutingClient(client, selector_answer=assess)
-    monkeypatch.setattr(loop_module, "_make_client", lambda: transport)
+    clients = []
+
+    class Client:
+        def __init__(self, **options):
+            self.options = options
+            self.listed = False
+            self.stopped = False
+            clients.append(self)
+
+        async def start(self):
+            assert self.options["base_directory"] == str(copilot_home)
+            assert self.options["working_directory"] == str(tmp_path)
+            await transport.start()
+
+        async def stop(self):
+            self.stopped = True
+            await transport.stop()
+
+        async def __aenter__(self):
+            await self.start()
+            return self
+
+        async def __aexit__(self, *args):
+            await self.stop()
+
+        async def list_models(self):
+            assert not self.listed, "fresh capability reads need a new connection"
+            self.listed = True
+            return list(listing())
+
+        async def create_session(self, **kwargs):
+            assert not self.listed, "work must not share the discovery client"
+            assert not self.stopped
+            return await transport.create_session(**kwargs)
+
+    monkeypatch.setattr("copilot.CopilotClient", Client)
+    monkeypatch.setattr(loop_module, "_make_client", make_client)
     spied = _wire_dynamic_ports(
         monkeypatch, rows=(_aa_row(
             _EFFORT["evidence"]["id"], _EFFORT["evidence"]["intelligence_index"],
             _EFFORT["evidence"]["output_tokens_per_second"],
         ),),
-        listing=dynamic_listing, answer=None, session_selector=True,
+        listing=listing, answer=None, session_selector=True,
     )
+    monkeypatch.setattr(loop_module, "_fetch_harness_evidence", dynamic_listing)
     path = settings.project_config_path(tmp_path)
     settings.write_config_atomic(path, {
         **_EFFORT["saved_config"],
         "route_associations": {_EFFORT["evidence"]["id"]: case["association"]},
     })
     assert _update(tmp_path, routing_choice="migrate") == 0
+    assert clients and all(client.stopped for client in clients)
     saved = path.read_bytes()
     assert transport.calls == []
     original_decision = None
@@ -120,6 +160,7 @@ def test_saved_dynamic_authority_preserves_exact_effort_semantics(
         capsys.readouterr()
 
         assert cli.main(["1"]) == step["exit_code"]
+        assert all(client.stopped for client in clients)
 
         (log,) = set((tmp_path / ".git-loopy" / "logs").glob("*.jsonl")) - logs
         events = [json.loads(line) for line in log.read_text().splitlines()]

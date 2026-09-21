@@ -15,6 +15,7 @@ from git_loopy.copilot_client import (
     make_copilot_client,
     resolve_copilot_base_directory,
 )
+from git_loopy.model_listing import fetch_live_models
 from git_loopy.persist import EventLogWriter
 from git_loopy.session import IterationSession
 from git_loopy.sinks import SinkFanout
@@ -58,6 +59,50 @@ def test_shared_factory_applies_runtime_base_working_directory_and_telemetry(
             "telemetry": telemetry,
         }
     ]
+
+
+@pytest.mark.parametrize("explicit_home", [False, True])
+async def test_model_discovery_uses_the_work_clients_runtime_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, explicit_home: bool,
+) -> None:
+    home = tmp_path / "home"
+    base = tmp_path / "copilot-state" if explicit_home else home / ".copilot"
+    monkeypatch.setenv("HOME", str(home))
+    if explicit_home:
+        monkeypatch.setenv("COPILOT_HOME", str(base))
+    else:
+        monkeypatch.delenv("COPILOT_HOME", raising=False)
+    monkeypatch.chdir(tmp_path)
+    clients = []
+    lifecycle = []
+
+    class Client:
+        def __init__(self, **options: object) -> None:
+            self.options = options
+            clients.append(self)
+
+        async def __aenter__(self):
+            lifecycle.append("connect")
+            return self
+
+        async def list_models(self):
+            lifecycle.append("list")
+            return ["eligible-model"]
+
+        async def __aexit__(self, *args):
+            lifecycle.append("stop")
+
+    monkeypatch.setattr("copilot.CopilotClient", Client)
+    work = make_copilot_client()
+    assert await fetch_live_models() == ["eligible-model"]
+    assert await fetch_live_models() == ["eligible-model"]
+
+    assert len(clients) == 3
+    assert lifecycle == ["connect", "list", "stop"] * 2
+    for client in clients:
+        assert client.options["base_directory"] == str(base)
+        assert client.options["working_directory"] == str(tmp_path)
+        assert client.options["telemetry"] == work.options["telemetry"]
 
 
 @pytest.mark.parametrize("telemetry", [None, {}, {"otlp_endpoint": "http://localhost:4318"}])

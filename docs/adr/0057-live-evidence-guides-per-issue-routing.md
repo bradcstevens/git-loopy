@@ -535,3 +535,15 @@ Static no-dial-specific display remains indistinguishable from deliberate Static
 omission in the recorded Pickup; preserving its historical backend placeholder
 is not a claim that the model has a dial. A future display distinction needs a
 recorded capability fact, not a model-name inference.
+
+Local model discovery now uses the existing shared Copilot client construction
+instead of a bare SDK constructor. Fresh capability reads and work sessions
+therefore receive the same resolved Copilot data root, working directory and
+telemetry configuration. Separate connect-list-stop clients preserve genuine
+refreshes without changing the Run's memoized Rate card or billing provenance.
+The existing fourteen serial/Lane effort cases now exercise that construction
+through the SDK transport, from recorded migration to actual selector/work
+sessions, fresh reuse and changed-dial refusal. This closes a local construction
+split, not the executing-host authority obligation for non-local placement.
+Final defaults, Static dial-presence readback and all remaining activation
+deferrals are unchanged.
