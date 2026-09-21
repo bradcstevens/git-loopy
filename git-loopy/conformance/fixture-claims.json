@@ -113,8 +113,8 @@
     },
     "repository-identity.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py drives every fixture URL through the production repository_from_remote_url resolver."},
-      "shell": {"kind": "waived_owed", "reason": "The shell Orchestrator takes no Lease yet, so it resolves no repository identity to contend on. Pinned ahead of that port deliberately: a member that canonicalises a remote URL differently writes a record every other member reads as belonging to another repository, and therefore as stealable, which is the two-agents-one-issue outcome the Lease exists to prevent.", "issue": 390},
-      "powershell": {"kind": "waived_owed", "reason": "The PowerShell Orchestrator takes no Lease yet, so it resolves no repository identity to contend on. Pinned ahead of that port for the same reason as the shell member: divergent canonicalisation makes one Run's live Lease look like another repository's record, and therefore expired.", "issue": 390},
+      "shell": {"kind": "claimed", "reason": "shell/tests/test-repository-identity-conformance.sh drives every fixture URL through the production git_loopy_repository_from_remote_url resolver. This pure identity seam does not activate native Lease transport or Pickup."},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-repository-identity-conformance.ps1 drives every fixture URL through the production Get-GitLoopyRepositoryFromRemoteUrl resolver. This pure identity seam does not activate native Lease transport or Pickup."},
       "rust": {"kind": "waived_out_of_scope", "reason": "The Dashboard renders Run facts an Orchestrator emits and neither reads a git remote nor takes a Lease."}
     },
     "routing-resolution.json": {

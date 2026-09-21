@@ -133,6 +133,71 @@
       "id": "bare-git-suffix-leaves-no-name",
       "url": "https://github.com/bradcstevens/.git",
       "expected": null
+    },
+    {
+      "id": "git-plus-ssh-preserves-name-case",
+      "url": "git+ssh://git@github.com/Owner/Repo.GiT",
+      "expected": "Owner/Repo"
+    },
+    {
+      "id": "uppercase-hosted-scheme",
+      "url": "HTTPS://github.com/Owner/Repo.git",
+      "expected": "Owner/Repo"
+    },
+    {
+      "id": "scp-like-host-without-user",
+      "url": "github.com:Owner/Repo.git",
+      "expected": "Owner/Repo"
+    },
+    {
+      "id": "query-and-fragment-are-not-the-repository",
+      "url": "https://github.com/Owner/Repo.git?path=/Other/Repository#fragment",
+      "expected": "Owner/Repo"
+    },
+    {
+      "id": "ipv6-host-with-port",
+      "url": "ssh://git@[2001:db8::1]:22/Owner/Repo.git",
+      "expected": "Owner/Repo"
+    },
+    {
+      "id": "missing-host-is-not-a-hosted-repository",
+      "url": "https:///Owner/Repo.git",
+      "expected": null
+    },
+    {
+      "id": "port-without-host-is-not-a-hosted-repository",
+      "url": "ssh://git@:22/Owner/Repo.git",
+      "expected": null
+    },
+    {
+      "id": "unsupported-transport-is-not-guessed",
+      "url": "ftp://github.com/Owner/Repo.git",
+      "expected": null
+    },
+    {
+      "id": "escaped-path-is-not-decoded-into-a-name",
+      "url": "https://github.com/Owner/%52epo.git",
+      "expected": null
+    },
+    {
+      "id": "dot-segment-does-not-normalize-a-deeper-path",
+      "url": "https://github.com/Other/../Owner/Repo.git",
+      "expected": null
+    },
+    {
+      "id": "duplicate-inner-slash-is-not-collapsed",
+      "url": "https://github.com/Owner//Repo.git",
+      "expected": null
+    },
+    {
+      "id": "git-suffix-is-stripped-only-once",
+      "url": "https://github.com/Owner/Repo.git.git",
+      "expected": "Owner/Repo.git"
+    },
+    {
+      "id": "scp-like-trailing-newlines-are-not-part-of-the-name",
+      "url": "git@github.com:Owner/Repo.git\n\n",
+      "expected": "Owner/Repo"
     }
   ]
 }

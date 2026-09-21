@@ -37,6 +37,15 @@ records each member's claimed or waived exercise of every fixture above. The
 Python Integration gate globs the directory and rejects a missing verdict, an
 unexplained waiver, or owed work without its tracking issue.
 
+`repository-identity.json` is exercised by all three Orchestrators: Python's
+`test_repository_identity_fixture`, shell's
+`tests/test-repository-identity-conformance.sh`, and PowerShell's corresponding
+`.ps1` adapter call their production pure resolvers. The cases also distinguish
+raw paths from decoded or normalized ones, ignore URL query/fragment data,
+and cover `git+ssh`, scheme case, IPv6 hosts, and missing-host refusals.
+This discharges only the native identity Fixture claims: shell/PowerShell
+Lease transport, renewal, Pickup and side-effect fencing are still pending.
+
 `routing-resolution.json` also carries the composed `migration_recovery`
 obligation for Python's staged local activation. Its data drives the real CLI
 from an unattended refusal through supplied or recorded authority into serial

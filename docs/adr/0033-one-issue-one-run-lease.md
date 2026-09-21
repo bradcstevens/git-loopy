@@ -257,8 +257,14 @@ every spelling of one repository, scp-like SSH through `https://` with embedded
 credentials, reduces to one name — because two clones that disagreed about the
 name would write records each read as belonging to *another* repository, and
 therefore as expired and stealable. `conformance/repository-identity.json` pins
-that ahead of the shell and PowerShell ports for exactly that reason, owed by
-both rather than left unstated.
+that decision in all three Orchestrators for exactly that reason. The shell
+and PowerShell pure resolvers now exercise every case through their own
+Conformance adapters; their ref transport and activation remain pending.
+The ports keep the raw path rather than using a URL helper that decodes
+escapes or normalizes dot segments, because either transformation can invent
+a repository identity the reference Orchestrator would refuse. Only the
+repository-identity Owed waivers are discharged by this slice; resolving a
+name alone neither takes a Lease nor protects native Pickup.
 
 Refusal is deliberately the safe direction and is always announced: an unleased
 Run is only as exposed as every Run was before this ADR, while a Run that
