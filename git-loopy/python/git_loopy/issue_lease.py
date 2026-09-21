@@ -500,9 +500,10 @@ class LeaseTransport:
             owner=observation.owner,
             run_id=hold.run_id,
         )
+        if verdict == "absent" or observation.sha is None:
+            return "absent"
         if verdict != "release":
-            return "absent" if verdict == "absent" else "not_owned"
-        assert observation.sha is not None
+            return "not_owned"
         if not self._git.push_ref(self._remote, hold.ref, None, observation.sha):
             return "not_owned"
         return "released"
