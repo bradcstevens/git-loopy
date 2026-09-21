@@ -116,8 +116,8 @@ It fetches the pinned commit SHA itself — not a ref that points at it today �
 unless it proves out. On success:
 
 ```
-acquired bradcstevens/git-loopy-skills @ f16cc17… into .git-loopy/skill-source
-36 Skills, licence MIT (LICENSE), provenance README.md
+acquired bradcstevens/git-loopy-skills @ 20fcf612eee4d2bee2ef88fdee4cba7ae51b4392 into .git-loopy/skill-source
+43 Skills, licence MIT (LICENSE), provenance README.md
 ```
 
 | Flag | Use |
@@ -151,11 +151,41 @@ you were working in would otherwise discard your work.
 2. **Review the revision you intend to adopt**: `uv run --project
    git-loopy/python python -m git_loopy.skill_source --into /tmp/skill-review`
    after setting `revision` to it.
-3. **Move the pin.** Edit `revision` in `git_loopy/skill_source.json` and commit
-   that one-line change.
+3. **Reconcile the pin's consumers.** Update the offline revision and Skill-name
+   snapshot in `tests/test_prompt.py`, the README's catalog table, and both
+   `PROMPT.md` copies when a Skill is added, renamed, or retired. Decide explicitly
+   whether new Skills belong in an autonomous Iteration; user-invoked operations
+   must not become implicit follow-up work. Keep the Required Skills unchanged
+   unless the Run contract itself is changing.
+4. **Prove and commit the upgrade together.** Acquire the new revision locally so
+   the live-catalog guards run rather than skip, then run the Python feedback
+   loop from `AGENTS.md`. Commit the pin, snapshots, prompt changes, and related
+   documentation as one change.
 
-Every operator picks the new catalog up on their next Run. Nothing else in this
-repository needs to change, which is the point: the claim in
+Every operator picks the new catalog up on their next Run. There is no vendored
+catalog to regenerate: the claim in
 [`THIRD_PARTY_LICENSES.txt`](../git-loopy/python/git_loopy/THIRD_PARTY_LICENSES.txt)
 names this pin rather than repeating a revision that could drift away from it.
 
+### Upgrading existing policies
+
+The current catalog includes 43 Skills, adding `build-iterated-agentic-loop`,
+`design-control-loop`, `loose-ends`, `model-fit`, `narrow-react-prop-types`,
+`release`, and `show-me`, and retiring `writing-great-skills` in favor of
+`writing-for-agents`. Its workflow guidance also updates `/next`, `/handoff`,
+and related planning Skills; an upgrade adopts those upstream instructions,
+not just the new names.
+
+The installed catalog is replaced wholesale, but saved Skill policies are not
+rewritten. If a policy still enables `writing-great-skills`, use
+`git-loopy skills edit --project` or `--global` for that scope to remove the
+retired name and select `writing-for-agents` only if wanted. Check custom
+`PROMPT.md` files for the retired name too. See
+[Skill-policy troubleshooting](skill-policy.md#troubleshooting) for missing-name
+diagnostics.
+
+New catalog members do not automatically enter an existing allowlist. The
+packaged Required Skills remain unchanged, and the packaged prompt keeps
+`release`, `loose-ends`, and `model-fit` out of autonomous Iterations. Install
+the catalog into your agent client separately to invoke these yourself; doing
+so neither changes git-loopy's saved policy nor authorizes a release.

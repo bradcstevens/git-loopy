@@ -58,14 +58,21 @@ Many skills in the installed catalog exist for **human-driven sessions or upstre
 - `/grill-me`, `/batch-grill-me`, `/grill-with-docs`, `/grilling` — interrogate a human about a plan or decision.
 - `/improve-codebase-architecture` — a human-driven architecture review; for autonomous refactors use `/codebase-design` instead.
 - `/teach` — walks a human through an area of the code.
+- `/design-control-loop` — interviews an operator before designing and building a new control loop.
+
+**User-invoked operations beyond the bound issue** — catalog membership does not authorize a batch release, a tracker-wide survey, or changes to the operator's model configuration:
+
+- `/release` — publishes a completed batch only when the user requests a release, never as a side effect of completing one issue.
+- `/loose-ends` — surveys the issue tracker for a human, rather than working the issue already selected.
+- `/model-fit` — recalibrates models and updates operator configuration only on explicit user invocation.
 
 **Session-management, setup & authoring** — irrelevant to a fresh one-shot `copilot -p` iteration:
 
-- `/handoff` — pointless here because each iteration is a fresh one-shot invocation; persistence happens via commits and (sparingly) issue comments, not handoff docs.
+- `/handoff` — launches and watches another agent for a `/next` recommendation; the runner already owns the bound issue's execution, so this would nest another driver.
 - `/implement` — a human-driven "implement this spec end-to-end" orchestrator; this loop already *is* that orchestration (it picks one task, drives `/tdd`, and commits), so invoking it would just nest a second driver.
 - `/next` — a router whose route table hands work straight to `/implement`, so it nests that same second driver; and the runner has already bound your issue, so its selection role contradicts the binding rather than merely duplicating it.
 - `/loop-me` — starts a loop of its own, which inside a loop iteration is the nesting above one level worse.
-- `/setup-git-loopy-skills`, `/writing-for-agents`, `/writing-great-skills` — install skills or author the documents agents read, not loop work.
+- `/setup-git-loopy-skills`, `/writing-for-agents`, `/build-iterated-agentic-loop` — install skills, author the documents agents read, or scaffold another agent workflow, not loop work.
 
 The guidance the excluded and now-removed skills used to carry still holds and is already inlined above: favour reviewable output over token compression while running unattended, go up a layer to map an unfamiliar area before drilling in, stress-test plans against the domain docs, and reach for deep-module design via `/codebase-design`.
 
