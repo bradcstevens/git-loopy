@@ -233,6 +233,18 @@ retain their legacy path; selected policies still refuse rather than substitutin
 local eligibility. `--route-policy unselected` can explicitly retain that remote
 legacy path even when local Config records a policy, without rewriting Config.
 This compatibility boundary is not completed migration or remote routing support.
+The shared no-I/O authority verdict now rejects selected non-local placement at
+CLI startup and direct Run entry, before local model listing, Skill migration,
+interactive detachment or remote host construction and green-base dispatch.
+Previously only the later live routing preflight applied this refusal, so a
+known-unverifiable placement still dispatched a remote job first and an unrelated
+host-preparation failure could hide the actionable routing diagnostic. The shared
+`execution_host_refusal` matrix carries recorded, inherited and temporary choices,
+including run-wide pins and context-only controls, through those startup paths
+without Config edits, work, Lease, Strike or Route publication. The explicitly
+unselected remote compatibility path remains usable. This closes the premature
+dispatch defect; it does not supply the executing host's capabilities or settle
+the remaining non-local activation obligations.
 Wrapper contract 14.3 and the Conformance routing-resolution notes now state this
 Python-local guard and explicitly defer shell/PowerShell enforcement. Existing
 one-route cases and historical streams are unchanged. The fixture's
@@ -395,3 +407,35 @@ Non-local activation, the remaining composed acceptance and Wrapper/Conformance 
 obligations still precede final default
 activation. Dynamic routing remains opt-in; shell/PowerShell activation is
 deferred, and no Subagent or Integration routing support is implied.
+
+The shared `publication_recovery` matrix now carries recorded init/update
+authorization through repeated real CLI Runs in serial and Lane modes. Eight cases
+cover fresh reuse, permission/rate-limit/transient failures, partial delivery,
+exhausted retries and capability withdrawal requiring a changed assignment.
+The composed seam exposed a publication retry-bound bypass: restart retries excluded
+terminal delivery, but a later Pickup of the same assignment tried again.
+The shared delivery path now respects that terminal state before any tracker I/O,
+retains its original failure, and leaves locally recorded work unblocked. Restored
+access does not silently renew exhausted retries; a changed final assignment
+gets its own delivery. Actual sessions, canonical Pickup and Dashboard route
+readback agree, with original reuse provenance, unchanged Config and idempotent
+tracker effects. This closes that bounded-publication gap, not final activation.
+If replacement exhausts while an old association remains, or after its removal
+but before the replacement add succeeds, the tracker can retain the previous owned
+association or have no Route label.
+That partial projection has no authority: local failure stays visible and does
+not authorize unbounded repair calls. The matrix covers both outcomes.
+
+The shared routing fixture now carries seven `retry_lifecycle` cases after
+recorded migration, through real CLI serial work and a Lane followed by its
+permitted serial retry. Actual settings, canonical Pickup, recorded outcome
+history, CLI/Dashboard readback and idempotent tracker effects agree. The cases
+cover reselection, explicit Static escalation, advancing work, infrastructure
+failure, justified repetition through attempt exhaustion, unjustified repetition
+and exhausted allowance. Refused retries spend no task attempt or Strike and
+leave eligible Static work usable. Saved Config and the existing one-Lane-per-issue
+rule remain unchanged. This is shared executable coverage of the accepted retry
+policy, not new routing behavior or final activation.
+Review tightened the observation seam: each CLI Pickup line is compared
+independently of startup and earlier output; selector bills now cross the actual
+SDK session adapter into Run-only Consumption, including refused retries.

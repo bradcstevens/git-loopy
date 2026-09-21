@@ -25,6 +25,57 @@ def test_fake_git_client_satisfies_gitclient_protocol(tmp_path: Path) -> None:
     assert not isinstance(object(), GitClient)
 
 
+def test_local_orphan_messages_are_shared_without_fetch_or_head_movement(
+    tmp_path: Path,
+) -> None:
+    git = FakeGitClient(tmp_path)
+    head = git.head_sha()
+    lane = git.add_worktree(tmp_path / "lane", branch="lane", base="main")
+    parent_record = git.write_orphan_commit('{"run_id":"parent"}')
+    lane_record = lane.write_orphan_commit('{"run_id":"lane"}')
+
+    assert git.commit_message(parent_record) == '{"run_id":"parent"}'
+    assert lane.commit_message(parent_record) == '{"run_id":"parent"}'
+    assert git.commit_message(lane_record) == '{"run_id":"lane"}'
+    assert lane.commit_message(lane_record) == '{"run_id":"lane"}'
+    assert git.head_sha() == lane.head_sha() == head
+    assert git.fetched_messages == lane.fetched_messages == []
+
+
+def test_local_commit_messages_outlive_worktrees_without_merging_their_logs(
+    tmp_path: Path,
+) -> None:
+    git = FakeGitClient(
+        tmp_path, commits=[Commit(sha="base", subject="root", body="seed body")]
+    )
+    lane = git.add_worktree(tmp_path / "lane", branch="lane", base="main")
+    agent = git.simulate_agent_commit(subject="agent work", body="Refs #567")
+    checkpoint = lane.commit("checkpoint\n\nretained work")
+
+    assert lane.commit_message("base") == "root\n\nseed body"
+    assert lane.commit_message(agent) == "agent work\n\nRefs #567"
+    assert git.commit_message(checkpoint) == "checkpoint\n\nretained work"
+
+    git.remove_worktree(lane.root)
+    git.delete_branch("lane")
+
+    assert git.commit_message(checkpoint) == "checkpoint\n\nretained work"
+    assert git.head_sha() == agent
+    assert [commit.sha for commit in git.recent_commits(10)] == [agent, "base"]
+    assert git.fetched_messages == lane.fetched_messages == []
+
+
+def test_local_commit_message_refuses_unknown_sha_without_fetch(tmp_path: Path) -> None:
+    git = FakeGitClient(tmp_path)
+    head = git.head_sha()
+
+    with pytest.raises(GitError, match="unknown SHA"):
+        git.commit_message("missing")
+
+    assert git.head_sha() == head
+    assert git.fetched_messages == []
+
+
 def test_mining_reads_mirror_the_linear_log(tmp_path: Path) -> None:
     """The **Proving set**'s three reads stay consistent with the fake's log.
 
@@ -572,4 +623,3 @@ def test_fake_gate_runner_per_worktree_queue(tmp_path: Path) -> None:
     assert gate.run(green_wt).passed is True
     assert gate.run(red_wt).passed is False
     assert gate.calls == [green_wt, red_wt]
-

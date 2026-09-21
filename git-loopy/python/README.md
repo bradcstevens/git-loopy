@@ -463,7 +463,12 @@ forced into an unusable choice. Selected Static/Dynamic policies still refuse
 that placement: use `--execution-host local`, or `--route-policy unselected`
 (`GIT_LOOPY_ROUTE_POLICY=unselected` for doctor) to retain remote legacy behavior.
 The latter is not strict routing or completed migration. No remote capability
-support is implied by the local migration guard.
+support is implied by the local migration guard. The refusal happens before
+local model listing, Skill migration, interactive detachment or any remote host
+preparation, including its green-base workflow dispatch. An explicit model,
+effort or context-only override does not authorize the remote placement. Config
+remains unchanged; a remote environment error cannot hide this known routing
+refusal behind an unnecessary preflight job.
 
 ---
 
@@ -1361,6 +1366,13 @@ not evidence that bare init or auto-setup activates Dynamic defaults.
 That walk exposed and fixed Skill discovery trying to nest an event loop inside
 the fullscreen wizard; discovery now completes on its own joined worker before
 the wizard can save, with validation failures still propagated without writes.
+Shared `retry_lifecycle` Conformance now carries recorded migration through seven
+serial/Lane retry cases. Actual session settings agree with canonical Pickup,
+outcome history, CLI/Dashboard readback and tracker publication. It covers
+reselection, justified and refused repeats, infrastructure failure, advances,
+attempt/allowance exhaustion and explicit Static escalation. Refusal leaves
+later eligible Static work usable and spends no task attempt or Strike. A Lane's
+retry uses existing serial fallback, not a second Lane; Config stays unchanged.
 Non-local activation, the remaining composed activation matrix and the remaining
 Wrapper/Conformance activation obligations still precede the final default
 change. Existing Config is not migrated implicitly.
@@ -1544,8 +1556,25 @@ These tracker writes are observational. They never become Routing input, never
 change a Task type, and never override Config. A failed comment or label write
 does not stop the already-recorded work: its local delivery state remains
 pending or failed, is retried finitely on a later Run, and appears separately in
-the Dashboard. A failed local final-resolution record is different and starts no
-work.
+the Dashboard. The three failed delivery attempts are shared across startup
+retries and later Pickups of the same assignment. Once exhausted, that assignment
+stays visibly failed without contacting the tracker again; restarting or restoring
+tracker access does not renew exhausted retries. A materially changed final assignment
+has its own finite retry bound. Neither state blocks locally recorded work. A failed local
+final-resolution record is different and starts no work.
+An exhausted label replacement may leave the previous Route label, or no Route label
+if its removal succeeded before the replacement failed. Read the canonical local
+Route and delivery status, not that incomplete tracker projection. Correcting an
+association on the tracker does not change routing authority or renew retries.
+
+The shared `publication_recovery` Conformance cases carry explicit init/update
+authorization through repeated offline CLI Runs in serial and Lane modes. They
+cover fresh reuse without another selector call, permission/rate-limit/transient
+failures, partial delivery without duplicate comments, exhausted retries, and
+previous or missing owned associations after replacement failure. Capability withdrawal
+requires a new final assignment. Session settings,
+canonical Pickup, Dashboard route readback and tracker effects agree; Config is
+unchanged. This does not enable the final Dynamic default or remote-host routing.
 
 ### What a later attempt is told
 

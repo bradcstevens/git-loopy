@@ -1,6 +1,152 @@
 {
   "schema_version": 1,
   "contract_version": "2.9",
+  "publication_recovery": {
+    "note": "Recorded Dynamic authorization, fresh cross-Run reuse and bounded tracker delivery through actual serial/Lane sessions. Uses migration_recovery's saved_config, harness, evidence and selector_choice. Each case starts with explicit migrate through init or update over authored unselected Config; later Runs use only the saved policy. Counts are cumulative external tracker writes, including refused calls. Delivery lists are the current Run's canonical statuses, not guessed from tracker state. A Run may retry pending delivery at startup and publish at Pickup, but those paths share the same finite bound per assignment. withdraw_models removes named configurations only for that Run's fresh routing reads; selector_choice scripts a new answer and route declares its independently expected work settings. Neither a new Run nor repaired tracker access renews an assignment's exhausted retries; a changed final assignment gets its own delivery. remove_before_failure models a tracker accepting owned-label removal but refusing the replacement add. On non-published steps, owned_label is absent by default or previous when the previous owned association remains; the canonical failure remains authoritative.",
+    "modes": ["serial", "lane"],
+    "entrypoints": ["init", "update"],
+    "route": {
+      "model": "synthetic-fancy-9", "effort": "high",
+      "context_tier": "default", "routing_source": "dynamic"
+    },
+    "cases": [
+      {
+        "id": "exhausted-replacement-leaves-the-previous-owned-association",
+        "operation": "label", "fault": "HTTP 403",
+        "runs": [
+          {"tracker_unavailable": false, "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 1, "label": 1}, "comments": 1},
+          {
+            "tracker_unavailable": true, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1", "owned_label": "previous",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "elected", "selector_calls": 1, "delivery": ["partial"], "attempts": {"comment": 2, "label": 2}, "comments": 2
+          },
+          {
+            "tracker_unavailable": true, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1", "owned_label": "previous",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["partial", "failed"], "attempts": {"comment": 2, "label": 4}, "comments": 2
+          },
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1", "owned_label": "previous",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 2, "label": 4}, "comments": 2
+          }
+        ]
+      },
+      {
+        "id": "exhausted-remove-then-add-leaves-a-visible-missing-association",
+        "operation": "label", "fault": "HTTP 503", "remove_before_failure": true,
+        "runs": [
+          {"tracker_unavailable": false, "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 1, "label": 1}, "comments": 1},
+          {
+            "tracker_unavailable": true, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "elected", "selector_calls": 1, "delivery": ["partial"], "attempts": {"comment": 2, "label": 2}, "comments": 2
+          },
+          {
+            "tracker_unavailable": true, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["partial", "failed"], "attempts": {"comment": 2, "label": 4}, "comments": 2
+          },
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 2, "label": 4}, "comments": 2
+          }
+        ]
+      },
+      {
+        "id": "permanent-comment-failure-remains-bounded-across-pickups",
+        "operation": "comment", "fault": "HTTP 403",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["pending"], "attempts": {"comment": 1, "label": 0}, "comments": 0},
+          {"tracker_unavailable": true, "reuse": "revalidated", "selector_calls": 0, "delivery": ["pending", "failed"], "attempts": {"comment": 3, "label": 0}, "comments": 0},
+          {"tracker_unavailable": true, "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 3, "label": 0}, "comments": 0},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 3, "label": 0}, "comments": 0},
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 4, "label": 1}, "comments": 1
+          },
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["published"], "attempts": {"comment": 4, "label": 1}, "comments": 1
+          }
+        ]
+      },
+      {
+        "id": "exhausted-partial-delivery-does-not-repeat-the-accepted-comment",
+        "operation": "label", "fault": "HTTP 403",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["partial"], "attempts": {"comment": 1, "label": 1}, "comments": 1},
+          {"tracker_unavailable": true, "reuse": "revalidated", "selector_calls": 0, "delivery": ["partial", "failed"], "attempts": {"comment": 1, "label": 3}, "comments": 1},
+          {"tracker_unavailable": true, "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 1, "label": 3}, "comments": 1},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["failed"], "attempts": {"comment": 1, "label": 3}, "comments": 1},
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 2, "label": 4}, "comments": 2
+          }
+        ]
+      },
+      {
+        "id": "permission-repair-publishes-once-before-exhaustion",
+        "operation": "comment", "fault": "HTTP 403",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["pending"], "attempts": {"comment": 1, "label": 0}, "comments": 0},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published", "published"], "attempts": {"comment": 2, "label": 1}, "comments": 1},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published"], "attempts": {"comment": 2, "label": 1}, "comments": 1}
+        ]
+      },
+      {
+        "id": "rate-limit-recovery-does-not-buy-another-selector",
+        "operation": "comment", "fault": "HTTP 429",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["pending"], "attempts": {"comment": 1, "label": 0}, "comments": 0},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published", "published"], "attempts": {"comment": 2, "label": 1}, "comments": 1},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published"], "attempts": {"comment": 2, "label": 1}, "comments": 1}
+        ]
+      },
+      {
+        "id": "transient-tracker-failure-does-not-block-recorded-work",
+        "operation": "comment", "fault": "HTTP 503",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["pending"], "attempts": {"comment": 1, "label": 0}, "comments": 0},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published", "published"], "attempts": {"comment": 2, "label": 1}, "comments": 1},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published"], "attempts": {"comment": 2, "label": 1}, "comments": 1}
+        ]
+      },
+      {
+        "id": "partial-delivery-recovers-without-duplicating-the-comment",
+        "operation": "label", "fault": "HTTP 429",
+        "runs": [
+          {"tracker_unavailable": true, "reuse": "elected", "selector_calls": 1, "delivery": ["partial"], "attempts": {"comment": 1, "label": 1}, "comments": 1},
+          {"tracker_unavailable": false, "reuse": "revalidated", "selector_calls": 0, "delivery": ["published", "published"], "attempts": {"comment": 1, "label": 2}, "comments": 1},
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 2, "label": 3}, "comments": 2
+          },
+          {
+            "tracker_unavailable": false, "withdraw_models": ["synthetic-fancy-9"],
+            "selector_choice": "synthetic-cheap-1",
+            "route": {"model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic"},
+            "reuse": "revalidated", "selector_calls": 0, "delivery": ["published"], "attempts": {"comment": 2, "label": 3}, "comments": 2
+          }
+        ]
+      }
+    ]
+  },
   "task_type_taxonomy": [
     "planning",
     "review",
@@ -400,6 +546,30 @@
     "dynamic_precedence": "Under `dynamic` a Static route still wins. A [routing] entry, an explicit flag or environment pin, and a configured escalation rung are instructions, and a Runner MUST NOT spend a Route selector call to contradict one -- they are verified against the harness exactly as under `static`. What the selector elects is the route for every Task type those instructions do not cover; the run-wide default is NOT one of them, because under this policy the selector replaces it and refusing the Run over a pair it will never take would be a refusal about nothing. An explicit pin suppresses routing entirely, which makes the default the route again and therefore verifiable again.",
     "scope": "These cases validate ONE route. A Run validates every route its Config holds -- the run-wide default, each [routing] entry, and an explicitly configured escalation rung -- before it picks up any issue, so a route that is never exercised is still refused at the start rather than mid-Run."
   },
+  "execution_host_refusal": {
+    "note": "Python selected Static/Dynamic policies cannot authorize the independently authenticated GitHub Actions host from a local capability listing. Refuse before local model listing, Skill migration, interactive detachment, host construction or remote green-base dispatch. A run-wide model/effort pin suppresses selection, not this placement rule. Config remains unchanged and no work, Lease, Strike or Route publication occurs. The same no-I/O verdict is used by CLI startup, direct Run and live routing preflight. This does not provide remote routing support or activate final defaults; an explicitly unselected remote Run retains its legacy path. Shell/PowerShell routing remains deferred.",
+    "entrypoints": ["cli", "interactive", "run"],
+    "saved_config": {"model": "synthetic-work", "reasoning_effort": "high"},
+    "environment": {"GIT_LOOPY_EXECUTION_HOST": "github-actions"},
+    "expected": {
+      "exit_code": 1,
+      "diagnostics": [
+        "this machine's model listing is not the listing",
+        "--execution-host local",
+        "--route-policy unselected"
+      ]
+    },
+    "cases": [
+      {"id": "recorded-project-static", "project": {"route_policy": "static"}},
+      {"id": "inherited-global-dynamic", "global": {"route_policy": "dynamic"}},
+      {"id": "temporary-static-flag", "args": ["--route-policy", "static"]},
+      {"id": "temporary-dynamic-environment", "environment": {"GIT_LOOPY_ROUTE_POLICY": "dynamic"}},
+      {"id": "dynamic-model-pin-is-not-remote-authority", "project": {"route_policy": "dynamic"}, "args": ["--model", "synthetic-work"]},
+      {"id": "dynamic-effort-pin-is-not-remote-authority", "project": {"route_policy": "dynamic"}, "environment": {"GIT_LOOPY_REASONING_EFFORT": "high"}},
+      {"id": "dynamic-context-only-is-not-remote-authority", "project": {"route_policy": "dynamic"}, "args": ["--context-tier", "long_context"]},
+      {"id": "static-flag-overrides-inherited-dynamic", "global": {"route_policy": "dynamic"}, "args": ["--route-policy", "static", "--execution-host", "github-actions"]}
+    ]
+  },
   "migration_recovery": {
     "note": "Every case starts with an unattended local Python Run refusing the saved Config unchanged, before listing, assessment or work. Supply the declared authority, then drive a real Run and compare actual issue-owning session settings, canonical Pickup and Dashboard readback with expected, or assert the declared refusal with no work, final route, publication or Strike. Static policy recovery has no leaderboard credential or evidence request. Temporary authority must expire on the next invocation; recorded authority must remain effective without flags or environment. No historical case or Event stream is reinterpreted. Shell/PowerShell activation is deferred; this is not remote, Subagent or Integration routing support or final default activation.",
     "inputs": "Case saved_config entries overlay the shared saved_config at top level. A case harness replaces the shared listing; each model's long_context defaults to false and must feed every Static and Dynamic capability read. run_overrides are temporary CLI settings, not saved authority. run_access and run_evidence_available default to true and change only after the authorization step; false respectively removes the operator-owned key or makes the evidence transport fail. proposed_context_tier defaults to default and scripts the selector's work proposal, never the selector's own settings. A missing expected.exit_code means 0 and one work session; a refusal case declares its nonzero exit, named Static/Dynamic refusal and Run outcome (null for refusal before a Run event stream exists). The adapter checks its CLI's diagnostic for that refusal. run_evidence_requests counts only the Run after authorization. The Dashboard retains its historical implicit-default-tier projection.",
@@ -548,6 +718,138 @@
         "authority": "flag", "policy": "static",
         "run_overrides": {"context_tier": "long_context"},
         "expected": {"exit_code": 1, "refusal": "unsupported_context_tier", "outcome": null, "selector_calls": 0, "run_evidence_requests": 0, "persists_choice": false}
+      }
+    ]
+  },
+  "retry_lifecycle": {
+    "note": "Python-local recorded Dynamic authority is saved by update --routing migrate before an unattended CLI Run. Synthetic inputs come from migration_recovery; retained_routes remain authoritative. Both modes start issue 42 while serial-required Static issue 43 remains in the Pool. Lane mode starts 42 in a Lane, then exercises its permitted retry through serial fallback. The existing one-Lane-per-issue rule is unchanged. Actual work sessions, canonical Pickup, Dynamic records, CLI/Dashboard readback, tracker comments and unchanged Config must agree. Shell/PowerShell, non-local, Subagent and Integration routing remain deferred; this is not final default activation.",
+    "inputs": "session_outcomes scripts actual work transport endings. selector_models scripts assessment replies in order through the SDK session transport; every selector call reports 0.25 routing credits there. justify_repeat defaults to false; true supplies justification on a later assessment. saved_config overlays migration_recovery.saved_config and retained_routes before migration. Expected Pickups and assessment histories are independent literals; published_pickups names zero-based positions in expected.pickups whose final choices require a comment. Expected routing_credits is total Run Consumption (the work transport reports no usage). The Dashboard retains its historical implicit-default-tier projection; actual session and Pickup records carry the explicit default tier. A refused election starts no work and spends no task attempt.",
+    "modes": ["serial", "lane"],
+    "retained_routes": {"docs": {"model": "synthetic-cheap-1", "effort": "high"}},
+    "cases": [
+      {
+        "id": "permitted-retry-reselects-after-no-progress",
+        "max_iterations": 2, "max_strikes": 9,
+        "session_outcomes": ["no_progress", "no_progress"],
+        "selector_models": ["synthetic-fancy-9", "synthetic-cheap-1"],
+        "expected": {
+          "exit_code": 0, "run_outcome": "iteration_cap", "strikes": 1,
+          "selector_calls": 2, "routing_credits": "0.50", "published_pickups": [0, 1],
+          "assessment_history": [[], ["did_not_solve"]],
+          "capability_history": [[], [true]],
+          "repeat_justified": [false, false],
+          "pickups": [
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 1, "lifecycle_position": "fresh"},
+            {"issue": 42, "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 2, "lifecycle_position": "retrying"}
+          ]
+        }
+      },
+      {
+        "id": "explicit-static-rung-overrules-dynamic-reselection",
+        "max_iterations": 2, "max_strikes": 9,
+        "saved_config": {
+          "escalation": {"enabled": true, "model": "synthetic-cheap-1", "effort": "high"}
+        },
+        "session_outcomes": ["no_progress", "no_progress"],
+        "selector_models": ["synthetic-fancy-9"],
+        "expected": {
+          "exit_code": 0, "run_outcome": "iteration_cap", "strikes": 1,
+          "selector_calls": 1, "routing_credits": "0.25", "published_pickups": [0, 1],
+          "assessment_history": [[]], "capability_history": [[]],
+          "repeat_justified": [false],
+          "pickups": [
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 1, "lifecycle_position": "fresh"},
+            {"issue": 42, "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "escalated", "lifecycle_position": "retrying"}
+          ]
+        }
+      },
+      {
+        "id": "advance-preserves-history-without-inventing-a-failed-attempt",
+        "max_iterations": 2, "max_strikes": 9,
+        "session_outcomes": ["advanced", "no_progress"],
+        "selector_models": ["synthetic-fancy-9", "synthetic-fancy-9"],
+        "expected": {
+          "exit_code": 0, "run_outcome": "iteration_cap", "strikes": 0,
+          "selector_calls": 2, "routing_credits": "0.50", "published_pickups": [0],
+          "assessment_history": [[], ["advanced"]],
+          "capability_history": [[], [false]],
+          "repeat_justified": [false, false],
+          "pickups": [
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 1, "lifecycle_position": "fresh"},
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 2, "lifecycle_position": "fresh"}
+          ]
+        }
+      },
+      {
+        "id": "justified-repeat-exhausts-attempts-with-no-third-assessment",
+        "max_iterations": 3, "max_strikes": 9,
+        "justify_repeat": true,
+        "session_outcomes": ["no_progress", "no_progress", "no_progress"],
+        "selector_models": ["synthetic-fancy-9", "synthetic-fancy-9"],
+        "expected": {
+          "exit_code": 0, "run_outcome": "iteration_cap", "strikes": 1,
+          "selector_calls": 2, "routing_credits": "0.50", "published_pickups": [0, 2],
+          "assessment_history": [[], ["did_not_solve"]],
+          "capability_history": [[], [true]],
+          "repeat_justified": [false, true],
+          "pickups": [
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 1, "lifecycle_position": "fresh"},
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 2, "lifecycle_position": "retrying"},
+            {"issue": 43, "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "routed", "lifecycle_position": "fresh"}
+          ]
+        }
+      },
+      {
+        "id": "infrastructure-failure-does-not-demand-repeat-justification",
+        "max_iterations": 2, "max_strikes": 9,
+        "session_outcomes": ["crash", "no_progress"],
+        "selector_models": ["synthetic-fancy-9", "synthetic-fancy-9"],
+        "expected": {
+          "exit_code": 0, "run_outcome": "iteration_cap", "strikes": 1,
+          "selector_calls": 2, "routing_credits": "0.50", "published_pickups": [0],
+          "assessment_history": [[], ["infrastructure_failure"]],
+          "capability_history": [[], [false]],
+          "repeat_justified": [false, false],
+          "pickups": [
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 1, "lifecycle_position": "fresh"},
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 2, "lifecycle_position": "retrying"}
+          ]
+        }
+      },
+      {
+        "id": "unjustified-repeat-cannot-start-a-retry",
+        "max_iterations": 2, "max_strikes": 9,
+        "justify_repeat": false,
+        "session_outcomes": ["no_progress", "no_progress"],
+        "selector_models": ["synthetic-fancy-9", "synthetic-fancy-9"],
+        "expected": {
+          "exit_code": 0, "run_outcome": "iteration_cap", "strikes": 0,
+          "selector_calls": 2, "routing_credits": "0.50", "published_pickups": [0, 1],
+          "assessment_history": [[], ["did_not_solve"]],
+          "capability_history": [[], [true]],
+          "repeat_justified": [false], "refusal": "invalid_selector_output",
+          "pickups": [
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 1, "lifecycle_position": "fresh"},
+            {"issue": 43, "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "routed", "lifecycle_position": "fresh"}
+          ]
+        }
+      },
+      {
+        "id": "allowance-exhaustion-refuses-retry-but-keeps-static-work",
+        "max_iterations": 2, "max_strikes": 9,
+        "saved_config": {"routing_credit_allowance": "0.25"},
+        "session_outcomes": ["no_progress", "no_progress"],
+        "selector_models": ["synthetic-fancy-9"],
+        "expected": {
+          "exit_code": 0, "run_outcome": "iteration_cap", "strikes": 0,
+          "selector_calls": 1, "routing_credits": "0.25", "published_pickups": [0, 1],
+          "assessment_history": [[]], "capability_history": [[]],
+          "repeat_justified": [false], "refusal": "quota_exhausted",
+          "pickups": [
+            {"issue": 42, "model": "synthetic-fancy-9", "effort": "high", "context_tier": "default", "routing_source": "dynamic", "attempt": 1, "lifecycle_position": "fresh"},
+            {"issue": 43, "model": "synthetic-cheap-1", "effort": "high", "context_tier": "default", "routing_source": "routed", "lifecycle_position": "fresh"}
+          ]
+        }
       }
     ]
   },

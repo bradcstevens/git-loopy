@@ -1192,7 +1192,13 @@ def test_the_powershell_gate_refuses_an_empty_suite_tree(tmp_path: Path) -> None
     assert POWERSHELL_CONFORMANCE not in output
 
 
-def test_the_powershell_gate_reports_a_non_final_suite_failure(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "failing_suite",
+    [POWERSHELL_CONFORMANCE, "test-issue-lease-conformance.ps1"],
+)
+def test_the_powershell_gate_reports_a_non_final_suite_failure(
+    tmp_path: Path, failing_suite: str,
+) -> None:
     """B1: ``shell: pwsh`` returns only the *last* native command's exit code.
 
     Five suites invoked back to back therefore reported the fifth one's status
@@ -1210,9 +1216,10 @@ def test_the_powershell_gate_reports_a_non_final_suite_failure(tmp_path: Path) -
         POWERSHELL_BOUNDARY,
         "test-event-conformance.ps1",
         "test-issue-lease-conformance.ps1",
+        "test-release-line-conformance.ps1",
         "test-tui-install.ps1",
     ):
-        body = "exit 3\n" if name == POWERSHELL_CONFORMANCE else "exit 0\n"
+        body = "exit 3\n" if name == failing_suite else "exit 0\n"
         (suites / name).write_text(body, encoding="utf-8")
 
     script = "$ErrorActionPreference = 'stop'\n" + _gate_step_run(
@@ -1222,7 +1229,7 @@ def test_the_powershell_gate_reports_a_non_final_suite_failure(tmp_path: Path) -
         [pwsh, "-NoLogo", "-NoProfile", "-File"], script, ".ps1", tmp_path
     )
     assert completed.returncode != 0, completed.stdout + completed.stderr
-    assert POWERSHELL_CONFORMANCE in completed.stdout + completed.stderr
+    assert failing_suite in completed.stdout + completed.stderr
 
 
 def test_a_census_that_only_prints_is_not_a_census() -> None:

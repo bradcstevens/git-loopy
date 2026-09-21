@@ -1618,6 +1618,14 @@ the default, and the absence of a decision — `static` (this section), and `dyn
   placement's verdict is exactly the substitution the rule above forbids. An Orchestrator MUST
   refuse the combination before work rather than verify the wrong harness. Only a placement whose
   sessions run under the Run's own authenticated harness is verifiable today.
+  Python's no-I/O placement refusal precedes local model listing, Skill migration, interactive
+  detachment and remote host preparation, including the green-base preflight dispatch. It shares
+  the routing authority verdict used by setup, doctor and Run preflight; a run-wide model/effort
+  override does not waive it. The `execution_host_refusal` cases in `routing-resolution.json`
+  exercise recorded and temporary authority through CLI, interactive startup and direct Run,
+  preserving Config and starting no work, Lease, Strike or Route publication. An explicitly
+  unselected remote Run retains its staged legacy path, not strict routing support. This
+  refusal does not complete non-local activation or change shell/PowerShell's routing deferral.
 - **Refuse, never rescue.** §14's *gate and fall back* rule does not apply to a Static route and
   MUST NOT be reached for: an effort the model does not accept, a tier it does not offer, a model
   this account may not use, a model the harness never listed, and a listing that could not be read
@@ -1852,6 +1860,21 @@ its provenance record by
 [`event-schema.json`](../git-loopy/conformance/event-schema.json)'s `wrapper.routing.resolved`
 contract and the rolling stream that carries one.
 
+The same routing fixture's `retry_lifecycle` matrix exercises these existing
+rules after Python's explicit saved migration, through the real CLI into serial
+work and a Lane followed by a serial retry. It observes actual session settings,
+canonical Pickup, outcome history, CLI/Dashboard readback and idempotent tracker
+publication rather than inferring execution from a resolver result. Selector
+bills cross the SDK session transport into Run-only Consumption, including an
+invalid retry that starts no work. Each CLI Pickup line is observed separately
+from startup and earlier Pickups. Its cases
+cover changed and repeated elections, required repeat justification, infrastructure
+failure, advancing work, attempt/allowance exhaustion and explicit Static
+escalation. A refused retry spends no task attempt or Strike, while later
+eligible Static work still runs. Saved Config remains unchanged. The existing
+one-Lane-per-issue rule is preserved; this matrix does not grant a second Lane,
+activate final defaults or extend routing to another Runner member or placement.
+
 **The Dynamic route is Python-only today**, for the same reason §14.3 is: the shell and PowerShell
 Orchestrators implement no per-issue routing and read no harness listing, so they have no route to
 elect. They declare it unsupported in
@@ -1916,10 +1939,30 @@ resolution.
 - **Retry without time travel.** Pending delivery MUST survive restart and retry
   within a finite bound using the comment identity. A retry must not duplicate a
   comment already accepted by the tracker, and an obsolete delivery MUST NOT
-  overwrite a newer Route label. Delivery state is published separately from the
-  Routing resolution so the CLI and Dashboard distinguish an undecided Route or
+  overwrite a newer Route label. Startup retries and subsequent Pickups of the
+  same assignment MUST share that bound: an exhausted assignment remains visibly
+  failed without further tracker I/O, even after restart or restored access.
+  A materially changed final assignment has its own finite retry bound; publication
+  exhaustion MUST NOT prevent its delivery or block locally recorded work.
+  A failed replacement can leave the previous owned association in place, or no
+  association if removal succeeded before the add failed. Neither is a current
+  Routing resolution: local delivery MUST remain failed, not published, and the
+  tracker projection MUST NOT authorize work or unbounded repair calls.
+  Delivery state is published separately from the Routing resolution so the CLI
+  and Dashboard distinguish an undecided Route or
   failed Agent from an already-decided Route whose tracker projection is pending
   or failed.
+
+The `publication_recovery` matrix in `routing-resolution.json` exercises recorded
+Python-local init/update authorization through repeated real CLI Runs and actual
+serial/Lane sessions. It pins fresh reuse and its original provenance, permission,
+rate-limit and transient failures, idempotent partial recovery, exhausted delivery
+across Pickups (including a previous or missing owned association), and a changed assignment
+after capability withdrawal. Actual work
+settings, canonical Pickup and Dashboard route readback must agree while Config
+and unrelated labels remain unchanged. This is a Python activation obligation;
+shell/PowerShell implementation remains deferred, and historical streams,
+Subagent and Integration settings are unchanged.
 
 ### 14.6 Routing preparation (contract 2.9)
 

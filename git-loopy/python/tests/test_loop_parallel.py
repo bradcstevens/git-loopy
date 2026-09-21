@@ -181,6 +181,12 @@ EXPECTED_RELEASE_VERSION = json.loads(
     ).read_text(encoding="utf-8")
 )["expected_release_version"]
 
+_EXECUTION_HOST_REFUSAL = json.loads(
+    (Path(__file__).parents[2] / "conformance" / "routing-resolution.json").read_text(
+        encoding="utf-8"
+    )
+)["execution_host_refusal"]
+
 
 # ---------------------------------------------------------------------------
 # Parallel-aware SDK fakes — record working_directory + route per-Lane commits.
@@ -7568,6 +7574,95 @@ def test_the_run_builds_the_github_actions_host_the_operator_named(
         for event in _logged_events(tmp_path)
         if event["type"] == "wrapper.contribution.start"
     )
+
+
+@pytest.mark.parametrize("entrypoint", _EXECUTION_HOST_REFUSAL["entrypoints"])
+@pytest.mark.parametrize(
+    "case", _EXECUTION_HOST_REFUSAL["cases"], ids=lambda case: case["id"],
+)
+def test_selected_remote_routing_refuses_before_local_listing_or_host_dispatch(
+    tmp_path, monkeypatch, capsys, entrypoint, case,
+) -> None:
+    import os
+
+    from git_loopy import model_listing, settings, skillscmd
+
+    fixture = _EXECUTION_HOST_REFUSAL
+    fake_git, fake_gh, fake_client, _cfg = _wire_two_lane_rolling(tmp_path, monkeypatch)
+    host = _RemoteBranchExecutionHost(fake_git)
+    builds = []
+
+    def host_factory(placement, **_kwargs):
+        builds.append(placement)
+        return host
+
+    monkeypatch.setattr(loop_module, "_make_execution_host", host_factory)
+    listings = []
+
+    async def local_listing():
+        listings.append("local")
+        return []
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", local_listing)
+
+    async def forbidden_assessment(*_args, **_kwargs):
+        pytest.fail("an unverifiable placement must not request Dynamic evidence")
+
+    monkeypatch.setattr(dynamic_route.ArtificialAnalysisSource, "fetch", forbidden_assessment)
+    monkeypatch.setattr(
+        skillscmd, "run_skill_policy_migration",
+        lambda **_kwargs: pytest.fail("routing refusal must precede Skill migration"),
+    )
+
+    async def forbidden_detachment(*_args, **_kwargs):
+        pytest.fail("routing refusal must precede interactive detachment")
+
+    monkeypatch.setattr(cli_module, "_drive_interactive", forbidden_detachment)
+    for name in (
+        "GIT_LOOPY_ROUTE_POLICY", "GIT_LOOPY_MODEL", "GIT_LOOPY_REASONING_EFFORT",
+        "GIT_LOOPY_CONTEXT_TIER",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in {**fixture["environment"], **case.get("environment", {})}.items():
+        monkeypatch.setenv(name, value)
+    path = settings.project_config_path(tmp_path)
+    settings.write_config_atomic(path, {
+        **fixture["saved_config"], **case.get("project", {}),
+    })
+    global_path = settings.global_config_path(os.environ)
+    if "global" in case:
+        settings.write_config_atomic(global_path, case["global"])
+    original = {
+        candidate: candidate.read_bytes() if candidate.exists() else None
+        for candidate in (path, global_path)
+    }
+    args = ["2", *case.get("args", [])]
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: entrypoint == "interactive")
+    monkeypatch.setattr("sys.stdout.isatty", lambda: entrypoint == "interactive")
+    if entrypoint != "run":
+        code = cli_module.main(args)
+    else:
+        tables = settings.load_configs(tmp_path, os.environ)
+        config = cli_module.resolve_config(
+            cli_module.build_parser().parse_args(args), os.environ,
+            project=tables.project, global_=tables.global_,
+        ).run
+        code = asyncio.run(loop_module.run(config))
+
+    assert code == fixture["expected"]["exit_code"]
+    error = capsys.readouterr().err
+    for diagnostic in fixture["expected"]["diagnostics"]:
+        assert diagnostic in error
+    assert builds == [] and host.preflight_calls == []
+    assert listings == []
+    assert fake_client.create_calls == []
+    assert fake_gh.issue_close_calls == [] and fake_gh.issue_comment_calls == []
+    assert fake_gh.route_comment_calls == [] and fake_gh.route_label_calls == []
+    assert fake_git.worktree_adds == [] and fake_git.push_ref_calls == []
+    assert list((tmp_path / ".git-loopy" / "logs").glob("*.jsonl")) == []
+    for candidate, content in original.items():
+        assert (candidate.read_bytes() if candidate.exists() else None) == content
 
 
 def test_a_failed_remote_green_base_preflight_starts_no_lane_or_strike(

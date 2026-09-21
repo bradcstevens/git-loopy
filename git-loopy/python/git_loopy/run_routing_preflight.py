@@ -37,7 +37,7 @@ CapabilitiesFetch = Callable[[], Awaitable[HarnessCapabilities | None]]
 
 
 def routing_choice_refusal(config: RunConfig) -> str | None:
-    """The no-I/O authority check shared by CLI startup and live preflight."""
+    """Refuse missing authority or an unverifiable placement without I/O."""
     if (
         config.saved_config_present
         and config.route_policy is RoutePolicy.UNSELECTED
@@ -54,6 +54,23 @@ def routing_choice_refusal(config: RunConfig) -> str | None:
             "only explicit [escalation] authorizes Static escalation. Migrate "
             "keeps authored Static rows; only uncovered work becomes Dynamic "
             "and needs operator-owned access and explicit limits. Config unchanged."
+        )
+    if (
+        config.route_policy is not RoutePolicy.UNSELECTED
+        and config.execution_host != LOCAL_EXECUTION_HOST_PLACEMENT
+    ):
+        return (
+            f"the {config.execution_host!r} Execution host opens its work "
+            "sessions on a machine that authenticates as itself, so this "
+            "machine's model listing is not the listing that would run them. "
+            "A selected route can only be verified for the "
+            f"{LOCAL_EXECUTION_HOST_PLACEMENT!r} placement. Run with "
+            f"--execution-host {LOCAL_EXECUTION_HOST_PLACEMENT} "
+            f"(GIT_LOOPY_EXECUTION_HOST={LOCAL_EXECUTION_HOST_PLACEMENT} "
+            "for doctor). Routing activation for non-local placements is "
+            "deferred; --route-policy unselected "
+            "(GIT_LOOPY_ROUTE_POLICY=unselected for doctor) retains their "
+            "legacy path, not strict Static or Dynamic validation."
         )
     return None
 
@@ -102,22 +119,6 @@ async def resolve_run_routing_preflight(
         return RunRoutingPreflight(refusal=refusal)
     if config.route_policy is RoutePolicy.UNSELECTED:
         return RunRoutingPreflight()
-    if config.execution_host != LOCAL_EXECUTION_HOST_PLACEMENT:
-        return RunRoutingPreflight(
-            refusal=(
-                f"the {config.execution_host!r} Execution host opens its work "
-                "sessions on a machine that authenticates as itself, so this "
-                "machine's model listing is not the listing that would run them. "
-                "A selected route can only be verified for the "
-                f"{LOCAL_EXECUTION_HOST_PLACEMENT!r} placement. Run with "
-                f"--execution-host {LOCAL_EXECUTION_HOST_PLACEMENT} "
-                f"(GIT_LOOPY_EXECUTION_HOST={LOCAL_EXECUTION_HOST_PLACEMENT} "
-                "for doctor). Routing activation for non-local placements is "
-                "deferred; --route-policy unselected "
-                "(GIT_LOOPY_ROUTE_POLICY=unselected for doctor) retains their "
-                "legacy path, not strict Static or Dynamic validation."
-            )
-        )
 
     prerequisites = None
     dynamic_refusal = None

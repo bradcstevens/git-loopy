@@ -67,6 +67,50 @@ The Python adapter is
 same suite. This does not cover bare init/auto-setup activation or grant other
 Runner members setup support.
 
+The `execution_host_refusal` matrix covers selected policies on the independently
+authenticated GitHub Actions host. Eight cases run through CLI, interactive
+startup and direct Run entry in `python/tests/test_loop_parallel.py`, proving
+refusal before local model listing, Skill migration, detachment, host construction
+or remote green-base dispatch. Saved and temporary authority, model/effort pins
+and context-only controls cannot authorize that placement. Config stays unchanged
+and no work, Lease, Strike or Route publication starts. The existing unselected
+remote execution cases protect the staged compatibility path; this matrix does
+not implement remote capabilities, activate Dynamic defaults or remove native
+member deferrals.
+
+The `publication_recovery` matrix carries an explicit migrate choice through
+init/update over authored unselected Config, then repeats real CLI Runs in serial
+and Lane modes. It reuses the migration matrix's synthetic inputs and checks
+actual sessions, canonical Pickup, Dashboard route readback, fresh source reads
+and original reuse provenance alongside cumulative tracker operations.
+Permission, rate-limit and transient failures stay non-blocking; partial delivery
+does not repeat an accepted comment. Exhausted retries remain exhausted across
+Pickups and restored access, while capability withdrawal requires a new final
+assignment with its own finite retry bound. Replacement failures cover both the
+previous owned association remaining and removal accepted before the new association fails;
+both remain visibly failed rather than claiming tracker agreement. The Python adapter is
+`test_recorded_routing_reuse_preserves_publication_recovery_bounds` in
+`python/tests/test_iteration_end_to_end.py`. These are recorded-authorization
+cases, not another first-wizard claim.
+Shell/PowerShell activation remains deferred; no default, historical stream,
+Subagent or Integration behavior changes.
+
+The `retry_lifecycle` matrix carries a recorded `update --routing migrate`
+choice through actual CLI work in
+`python/tests/test_routing_retry_conformance.py`. Seven cases run in serial and
+Lane modes; the latter's retry is serial fallback, not a second Lane for the
+same issue. Independent expected settings and outcome histories cover
+reselection, explicit Static escalation, advances, infrastructure failure,
+justified repeats through attempt exhaustion, unjustified-repeat refusal and
+allowance exhaustion. Refused retries admit no replacement Dynamic session or
+Strike; eligible Static work still proceeds. Canonical Pickup, Dynamic records,
+CLI/Dashboard readback and idempotent tracker comments/labels agree with actual
+sessions while Config stays unchanged. Selector bills cross the SDK transport
+and remain Run-only Consumption through retry/refusal; CLI Pickup lines are
+compared individually, not against accumulated startup output.
+This extends executable coverage of
+existing section 14.4 rules, not runtime defaults or native-member support.
+
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent
 from every port's vocabulary, not just the shared fixture and Python reference.
