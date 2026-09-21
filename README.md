@@ -222,6 +222,8 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 | [`/to-questionnaire`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/to-questionnaire) | Turn unresolved decisions into a questionnaire for the person who can answer them. |
 | [`/skill-router`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/skill-router) | Ask which skill or flow fits the situation in front of you. |
 | [`/mermaid-diagrams`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/mermaid-diagrams) | Draw software diagrams — flow, sequence, class, ERD, C4, state — in Mermaid syntax. |
+| [`/show-me`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/show-me) | Explain the current topic with concise diagrams, code-shape sketches, or focused HTML artifacts. |
+| [`/loose-ends`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/loose-ends) | On explicit invocation, audit unfinished issue-tracker workflows and open a read-only HTML report. |
 
 ### Turn intent into delivered work
 
@@ -234,6 +236,7 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 | [`/tdd`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/tdd) | Build one behavior at a time with a red-to-green vertical slice at a public seam. |
 | [`/diagnosing-bugs`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/diagnosing-bugs) | Reproduce, minimize, hypothesize, instrument, fix, and regression-test a difficult bug. |
 | [`/codebase-design`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/codebase-design) | Design deep modules with small interfaces at clean, testable seams. |
+| [`/narrow-react-prop-types`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/narrow-react-prop-types) | Narrow React component props to states used by live call sites, then adapt stories, tests, and mocks. |
 | [`/improve-codebase-architecture`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/improve-codebase-architecture) | Find module-deepening opportunities and grill through a selected architectural change. |
 | [`/code-review`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/code-review) | Review a diff in fresh contexts against both repository standards and the originating spec. |
 | [`/codebase-audit`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/codebase-audit) | Audit a codebase line by line for junk files, dead code, and security holes before a push. |
@@ -246,12 +249,14 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 | Skill | Purpose |
 | --- | --- |
 | [`/setup-git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/setup-git-loopy-skills) | Configure the repository's issue tracker, triage labels, and domain-document layout. |
+| [`/build-iterated-agentic-loop`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/build-iterated-agentic-loop) | Build a repository-local skill and matching iterative coding-agent workflow, prompt, memory, and reference templates. |
+| [`/design-control-loop`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/design-control-loop) | Interview an operator, design a codebase control loop, and build its local commands and scheduled workflow. |
+| [`/model-fit`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/model-fit) | On explicit invocation, research available Copilot models and align model, effort, context, and enforcement settings with git-loopy routing. |
 | [`/wizard`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/wizard) | Generate an interactive bash wizard for a manual procedure only a human can carry out. |
 | [`/next`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/next) | Route to the one action to take now, from the live state of the work. |
 | [`/teach`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/teach) | Teach a concept over multiple sessions using the repository as a stateful workspace. |
 | [`/create-readme`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/create-readme) | Write a project README from what the repository actually contains. |
 | [`/writing-for-agents`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/writing-for-agents) | Write documents agents read — skills, `AGENTS.md`, and their siblings. |
-| [`/writing-great-skills`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/writing-great-skills) | Apply the vocabulary and design principles that make skills predictable. |
 | [`/playwright-cli`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/playwright-cli) | Exercise browser behavior, capture screenshots, and automate web interactions. |
 | [`/microsoft-docs`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/microsoft-docs) | Ground Microsoft technology questions in official documentation. |
 | [`/microsoft-code-reference`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/microsoft-code-reference) | Look up Microsoft API references and verify SDK code against working samples. |
@@ -259,6 +264,12 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 
 The GitHub Copilot CLI marketplace carries additional skills for work outside
 this catalog; `npx skills find <query>` searches it.
+
+The pinned catalog includes `/release`, but a Run does not invoke it: publishing
+a completed batch requires a separate user invocation. The catalog also retires
+`writing-great-skills` in favor of `/writing-for-agents`; see
+[catalog upgrade guidance](docs/skill-catalog-source.md#upgrading-existing-policies)
+if a saved Skill policy still enables the retired name.
 
 ## The complete workflow, start to finish
 

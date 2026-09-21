@@ -178,7 +178,7 @@ def test_packaged_prompt_makes_genuine_issue_blockers_native_dependencies() -> N
 #: The external Skill catalog revision the name set below was read at. Asserted
 #: against ``git_loopy/skill_source.json`` so that moving the pin has to walk
 #: *through* this list rather than around it.
-_PINNED_CATALOG_REVISION = "3be91eb4a235365a9e9c6bc9360bba0f62f28c2d"
+_PINNED_CATALOG_REVISION = "20fcf612eee4d2bee2ef88fdee4cba7ae51b4392"
 
 #: Every canonical Skill name in the **installed catalog** at that revision.
 #:
@@ -189,10 +189,12 @@ _PINNED_CATALOG_REVISION = "3be91eb4a235365a9e9c6bc9360bba0f62f28c2d"
 _PINNED_CATALOG_SKILLS: frozenset[str] = frozenset(
     {
         "batch-grill-me",
+        "build-iterated-agentic-loop",
         "code-review",
         "codebase-audit",
         "codebase-design",
         "create-readme",
+        "design-control-loop",
         "diagnosing-bugs",
         "domain-modeling",
         "grill-me",
@@ -202,17 +204,22 @@ _PINNED_CATALOG_SKILLS: frozenset[str] = frozenset(
         "implement",
         "improve-codebase-architecture",
         "loop-me",
+        "loose-ends",
         "mermaid-diagrams",
         "microsoft-code-reference",
         "microsoft-docs",
         "microsoft-foundry",
+        "model-fit",
+        "narrow-react-prop-types",
         "next",
         "playwright-cli",
         "prototype",
         "push",
+        "release",
         "research",
         "resolving-merge-conflicts",
         "setup-git-loopy-skills",
+        "show-me",
         "skill-router",
         "tdd",
         "teach",
@@ -224,7 +231,6 @@ _PINNED_CATALOG_SKILLS: frozenset[str] = frozenset(
         "wayfinder",
         "wizard",
         "writing-for-agents",
-        "writing-great-skills",
     }
 )
 
@@ -242,6 +248,7 @@ _EXPECTED_EXCLUSIONS: frozenset[str] = frozenset(
         "batch-grill-me",
         "grill-with-docs",
         "grilling",
+        "design-control-loop",
         "improve-codebase-architecture",
         "teach",
         "handoff",
@@ -249,8 +256,11 @@ _EXPECTED_EXCLUSIONS: frozenset[str] = frozenset(
         "next",
         "loop-me",
         "setup-git-loopy-skills",
+        "build-iterated-agentic-loop",
+        "loose-ends",
+        "model-fit",
+        "release",
         "writing-for-agents",
-        "writing-great-skills",
     }
 )
 
@@ -286,6 +296,18 @@ def test_the_pinned_catalog_revision_is_the_one_this_repository_pins() -> None:
         "and update _PINNED_CATALOG_REVISION, _PINNED_CATALOG_SKILLS, and any "
         "exclusion in PROMPT.md the move renamed or retired"
     )
+
+
+def test_documented_skills_match_the_pinned_catalog_offline() -> None:
+    """Keep the front door honest even without an acquired catalog in CI."""
+    readme = Path(__file__).resolve().parents[3] / "README.md"
+    documented = {
+        name
+        for line in readme.read_text(encoding="utf-8").splitlines()
+        if line.startswith("| [`/")
+        for name in _SKILL_REFERENCE.findall(line.split("|")[1])
+    }
+    assert documented == _PINNED_CATALOG_SKILLS
 
 
 def test_every_skill_the_exclusion_section_names_is_in_the_catalog() -> None:
@@ -330,6 +352,12 @@ def test_the_prompt_excludes_the_orchestrators_that_would_nest() -> None:
         assert name in excluded, (
             f"/{name} drives or selects work and must stay out of an iteration"
         )
+
+
+@pytest.mark.parametrize("name", ["loose-ends", "model-fit", "release"])
+def test_the_prompt_excludes_user_invoked_batch_operations(name: str) -> None:
+    """A catalog upgrade cannot authorize work beyond the bound issue."""
+    assert name in _excluded_skills()
 
 
 # ---------------------------------------------------------------------------
