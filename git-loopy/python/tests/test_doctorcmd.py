@@ -192,6 +192,39 @@ def test_doctor_refuses_the_same_missing_routing_access_as_a_run(tmp_path: Path)
     assert any("--model/--reasoning-effort" in line for line in output)
 
 
+@pytest.mark.parametrize("scope", ["project", "global"])
+def test_doctor_reports_legacy_routing_authority_without_changing_config(
+    tmp_path: Path, scope: str
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = _pinned_scope(tmp_path)
+    path = (
+        settings.project_config_path(repo)
+        if scope == "project" else settings.global_config_path(env)
+    )
+    settings.write_config_atomic(path, {"model": "gpt-5.6-terra"})
+    saved = path.read_bytes()
+    tables = settings.load_configs(repo, env)
+    config = cli_module.resolve_config(
+        cli_module.build_parser().parse_args([]), env,
+        project=tables.project, global_=tables.global_,
+    ).run
+
+    code, output = _run(tmp_path, config=config, catalog=_catalog(), env=env)
+
+    assert code == 1
+    text = "\n".join(output)
+    assert "Routing | failed |" in text
+    assert "explicit keep-or-migrate decision" in text
+    assert "git-loopy update --routing keep" in text
+    assert "git-loopy update --routing migrate" in text
+    assert "GIT_LOOPY_ROUTE_POLICY" in text
+    assert "a Run would not be blocked" not in text
+    assert path.read_bytes() == saved
+    assert not path.with_suffix(".toml.bak").exists()
+
+
 def test_doctor_refuses_unavailable_live_routing_evidence_without_assessing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -971,13 +1004,19 @@ def _config_from_disk(repo: Path, env: dict[str, str]) -> RunConfig:
 
 
 def test_doctor_is_clean_and_idempotent_after_an_applied_repair(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from tests.test_routing_migration import _listing
+
+    _listing(monkeypatch)
     repo = tmp_path / "repo"
     repo.mkdir()
     env = _pinned_scope(tmp_path)
     config_path = repo / "git-loopy" / "config.toml"
-    settings.write_config(config_path, {"enabled_skills": ["ghost"]})
+    settings.write_config(config_path, {
+        "enabled_skills": ["ghost"], "route_policy": "static",
+        "model": "gpt-5.6-terra", "reasoning_effort": "high",
+    })
     written: list[Path] = []
 
     async def discoverer(_client: object, **_kwargs: object) -> SkillCatalog:
@@ -1007,14 +1046,20 @@ def test_doctor_is_clean_and_idempotent_after_an_applied_repair(
 
     report: list[str] = []
     assert doctor(apply=False, output=report) == 0
+    routing_row = (
+        "Routing readiness | passed | configured Static routes verified; "
+        "Pickup checks them again."
+    )
     assert report == [
+        routing_row,
         _matching_row(),
-        "Skill policy is healthy; a Run would not be blocked.",
+        "Skill policy is healthy.",
     ]
 
     again: list[str] = []
     assert doctor(apply=True, output=again) == 0
     assert again == [
+        routing_row,
         _matching_row(),
         "Skill policy is healthy; no changes to apply.",
     ]

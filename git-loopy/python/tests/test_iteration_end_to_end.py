@@ -2355,6 +2355,7 @@ def _persisted_policy_repo(tmp_path: Path) -> tuple[Path, Path]:
     )
     (tmp_path / "git-loopy" / "config.toml").write_text(
         'model = "claude-opus-4.7-xhigh"\n'
+        'route_policy = "static"\n'
         'issue_source = "github"\n'
         'enabled_skills = ["team-review", "tdd"]\n',
         encoding="utf-8",
@@ -2392,6 +2393,7 @@ def _wire_persisted_policy_run(
     )
     fake_client = _SkillExposureRecordingClient(scripted_events=[])
     monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    _harness(monkeypatch, ("claude-opus-4.7", ["xhigh"], False))
     return fake_client
 
 
@@ -6689,6 +6691,152 @@ def test_a_saved_routing_choice_reaches_the_serial_session_and_canonical_pickup(
         assert "every issue runs on the default pair" not in output
         assert "a stalled issue is not retried" not in output
         assert "uncovered work awaits Dynamic Pickup" in output
+
+
+@pytest.mark.parametrize("detached", [False, True])
+@pytest.mark.parametrize("mode", ["serial", "lane"])
+def test_saved_legacy_config_refuses_work_until_a_routing_choice(
+    tmp_path, monkeypatch, capsys, detached, mode
+) -> None:
+    from git_loopy import run_sidecar, settings
+    from tests.fakes import FakeGateRunner
+    from tests.test_loop_parallel import _ParallelFakeClient
+
+    client, git = _wire_single_issue_github(
+        tmp_path, monkeypatch, labels=[
+            "ready-for-agent", "task-type:implementation",
+            *(["parallel-safe"] if mode == "lane" else []),
+        ],
+    )
+    if mode == "lane":
+        client = _ParallelFakeClient(fake_git=git, scripted_events=[])
+        monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    path = settings.project_config_path(tmp_path)
+    settings.write_config_atomic(path, {
+        "model": "gpt-5.6-terra",
+        "reasoning_effort": "high",
+        "routing": {"implementation": {"model": "gpt-5.6-terra", "effort": "high"}},
+    })
+    saved = path.read_bytes()
+    tables = settings.load_configs(tmp_path, os.environ)
+    config = cli.resolve_config(
+        cli.build_parser().parse_args(["1"]), {},
+        project=tables.project, global_=tables.global_,
+    ).run
+    if detached:
+        spec = run_sidecar.DetachedRunSpec(
+            config=config, run_id="01K3CQ7VJ1GWQ9H8Q6SE2V1D5A",
+            started_at_epoch_ms=1_780_000_123_456,
+        )
+        config = run_sidecar.decode_detached_run_spec(
+            run_sidecar.encode_detached_run_spec(spec)
+        ).config
+
+    assert asyncio.run(loop_module.run(config)) == 1
+
+    assert client.create_calls == []
+    assert not list((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+    assert path.read_bytes() == saved
+    assert not path.with_suffix(".toml.bak").exists()
+    error = capsys.readouterr().err
+    assert "explicit keep-or-migrate decision" in error
+    assert "git-loopy update --routing keep" in error
+    assert "git-loopy update --routing migrate" in error
+
+
+@pytest.mark.parametrize("mode", ["serial", "lane"])
+@pytest.mark.parametrize("authority", ["flag", "environment", "update", "global"])
+@pytest.mark.parametrize("policy", ["static", "dynamic"])
+def test_legacy_run_recovery_uses_supplied_or_recorded_routing_authority(
+    tmp_path, monkeypatch, mode, authority, policy
+) -> None:
+    from git_loopy import settings
+    from tests.fakes import FakeGateRunner
+    from tests.test_loop_parallel import _ParallelFakeClient
+    from tests.test_routing_migration import _authorized_values, _listing, _update
+
+    client, git = _wire_single_issue_github(
+        tmp_path, monkeypatch, labels=[
+            "ready-for-agent", "task-type:implementation", "semver:none",
+            *(["parallel-safe"] if mode == "lane" else []),
+        ],
+    )
+    if mode == "lane":
+        client = _ParallelFakeClient(fake_git=git, scripted_events=[])
+        monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
+    for name in ("GIT_LOOPY_MODEL", "GIT_LOOPY_REASONING_EFFORT"):
+        monkeypatch.delenv(name, raising=False)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["high"], True))
+    _listing(monkeypatch)
+    spied = _wire_dynamic_ports(
+        monkeypatch,
+        rows=(_aa_row("aa-opus", 70, 90), _aa_row("aa-terra", 40, 200)),
+        answer=_elects("claude-opus-5"),
+        listing=(
+            _listed_model("claude-opus-5", ["high"]),
+            _listed_model("gpt-5.6-terra", ["high"]),
+        ),
+    )
+    if policy == "dynamic":
+        monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "aa-token")
+    else:
+        monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    path = settings.project_config_path(tmp_path)
+    settings.write_config_atomic(path, {
+        **_authorized_values(),
+        "route_associations": {
+            "aa-opus": "claude-opus-5@high", "aa-terra": "gpt-5.6-terra@high",
+        },
+    })
+    original = path.read_bytes()
+    assert cli.main(["1"]) == 1
+    assert path.read_bytes() == original and client.create_calls == []
+    assert spied["assessments"] == [] and spied["evidence"] == 0
+
+    args = ["1"]
+    if authority == "flag":
+        args += ["--route-policy", policy]
+    elif authority == "environment":
+        monkeypatch.setenv("GIT_LOOPY_ROUTE_POLICY", policy)
+    elif authority == "update":
+        assert _update(
+            tmp_path, routing_choice="keep" if policy == "static" else "migrate",
+        ) == 0
+    else:
+        assert cli.main(["config", "set", "route_policy", policy, "--global"]) == 0
+    saved = path.read_bytes()
+    global_path = settings.global_config_path(os.environ)
+    global_saved = global_path.read_bytes() if global_path.exists() else None
+    assert client.create_calls == [] and spied["assessments"] == []
+
+    assert cli.main(args) == 0
+
+    model = "gpt-5.6-terra" if policy == "static" else "claude-opus-5"
+    (call,) = client.create_calls
+    assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+        model, "high", "default",
+    )
+    (pickup,) = _bound_pickups(tmp_path)
+    assert (pickup["model"], pickup["effort"], pickup["context_tier"]) == (
+        model, "high", "default",
+    )
+    assert len(spied["assessments"]) == (1 if policy == "dynamic" else 0)
+    if policy == "static":
+        assert spied["evidence"] == 0
+    assert path.read_bytes() == saved
+    assert (global_path.read_bytes() if global_path.exists() else None) == global_saved
+    if authority != "update":
+        assert saved == original and not path.with_suffix(".toml.bak").exists()
+    if authority in {"flag", "environment"}:
+        monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
+        assert cli.main(["1"]) == 1
+        assert len(client.create_calls) == 1
 
 
 def test_the_dashboard_reads_the_dynamic_route_from_the_pickup_it_bound(

@@ -202,9 +202,35 @@ Python's opt-in `update --routing` now collects or reuses an explicit keep-or-mi
 choice, retains every authored Static row, requires operator-owned Dynamic access
 outside Config and explicit finite limits, and uses the shared Run/doctor readiness
 verdict before saving. Unattended use of this option with no recorded or supplied
-choice refuses without prompting. It does not make bare update or a legacy
-Run demand that choice yet. Both choices disclose strict validation, inherited-tier
+choice refuses without prompting. Bare update does not choose a policy.
+Both choices disclose strict validation, inherited-tier
 semantics and the end of implicit Static escalation.
+
+Local Python Runs now refuse saved Config without an effective Static/Dynamic choice,
+using one no-I/O authority verdict at CLI startup and shared Run/doctor
+preflight. The CLI refuses before Skill migration, listing or detachment, and
+rechecks authority if Skill migration reloads Config. Run-local Config presence
+survives detached transport; it is not a new persisted Config key or Event field.
+Refusal starts no Agent and writes no Config. Explicit policy flags/environment
+may supply authority temporarily; a recorded project or inherited global choice
+also suffices. Model/effort overrides alone do not supply migration consent.
+Offline serial/Lane recovery cases exercise both choices into actual work
+settings and canonical Pickup, including Static work without leaderboard access
+and temporary authority expiring at the next invocation.
+This remains staged activation: empty Config scopes keep the no-Config path.
+Bare setup may save an unselected policy, but the following Run then refuses
+until authority is supplied; `init --routing` authorizes before saving.
+Non-local activation is explicitly deferred: applying this guard to the shipped
+GitHub Actions host would leave saved Config with no runnable policy, because
+its capabilities cannot be validated from this machine. Unselected remote Runs
+retain their legacy path; selected policies still refuse rather than substituting
+local eligibility. `--route-policy unselected` can explicitly retain that remote
+legacy path even when local Config records a policy, without rewriting Config.
+This compatibility boundary is not completed migration or remote routing support.
+Wrapper contract 14.3 and the Conformance routing-resolution notes now state this
+Python-local guard and explicitly defer shell/PowerShell enforcement. Existing
+one-route cases and historical streams are unchanged; the composed startup/Run
+cases supply the guard's behavioral proof, not a claim of final activation.
 
 Upgrade now requires a supplied or recorded machine-global choice before
 distribution handoff, prompting only on an interactive terminal. It shares the
@@ -286,7 +312,7 @@ after the authorized deadline. Shared settlement now retains Consumption but
 refuses the result before it can publish a Task-type label or become a Routing
 proposal. Already-bound Agents still finish on their frozen settings.
 
-Automatic Run migration enforcement, the remaining composed acceptance
-and Wrapper/Conformance activation obligations still precede final default
+Non-local activation, the remaining composed acceptance and Wrapper/Conformance activation
+obligations still precede final default
 activation. Dynamic routing remains opt-in; shell/PowerShell activation is
 deferred, and no Subagent or Integration routing support is implied.

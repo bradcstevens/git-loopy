@@ -171,6 +171,14 @@ cannot pin to one Release, changes nothing and prints the exact command instead
 — see
 [moving between Releases](git-loopy/python/README.md#moving-between-releases-git-loopy-upgrade).
 
+A local Python Run with saved Config also refuses before work until a routing choice
+is supplied or recorded. Use `git-loopy update --routing keep` or
+`git-loopy update --routing migrate` with `--project`/`--global`, or select
+`--route-policy static`/`dynamic` for one Run. Config is not rewritten by a Run;
+Static work needs no leaderboard access. Non-local activation remains deferred,
+so unselected GitHub Actions Runs retain their legacy path. This migration guard
+is not final Dynamic-default activation; see [routing migration](git-loopy/python/README.md#explicit-routing-migration).
+
 `git-loopy uninstall` takes the same installation back off the machine through
 the same proven channel, together with the global config-home, the installed
 Skill catalog and the TUI helper. It prints the whole plan and waits for you to

@@ -7496,8 +7496,9 @@ def test_a_remote_contributions_duration_is_never_rendered_as_near_zero(
     assert [end["summary"]["agent_seconds"] for end in ends] == [6 * 60 * 60.0] * 2
 
 
+@pytest.mark.parametrize("saved_config", [None, "legacy", "selected"])
 def test_the_run_builds_the_github_actions_host_the_operator_named(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, saved_config
 ) -> None:
     """A declared placement is *constructed*, never merely tolerated at preflight."""
     built: list[tuple[str, int]] = []
@@ -7526,7 +7527,24 @@ def test_the_run_builds_the_github_actions_host_the_operator_named(
     cfg = dataclass_replace(cfg, execution_host="github-actions")
     monkeypatch.setattr(loop_module, "_make_execution_host", _fake_factory)
 
-    assert asyncio.run(loop_module.run(cfg)) == 0
+    if saved_config:
+        from git_loopy import cli, settings
+
+        settings.write_config_atomic(settings.project_config_path(tmp_path), {
+            "model": "claude-opus-4.8", "reasoning_effort": "max",
+            **({"route_policy": "static"} if saved_config == "selected" else {}),
+        })
+        monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
+        monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+        monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        args = ["2", "--execution-host", "github-actions"]
+        if saved_config == "selected":
+            args += ["--route-policy", "unselected"]
+        code = cli.main(args)
+    else:
+        code = asyncio.run(loop_module.run(cfg))
+    assert code == 0
 
     assert built == [("github-actions", 4)]
     assert timeouts == [cfg.send_timeout_seconds]

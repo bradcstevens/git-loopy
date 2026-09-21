@@ -2,7 +2,7 @@
 
 This verdict authorizes no Pickup. Dynamic evidence and capabilities are read
 here and freshly again for every proposal and binding. Static routes are
-verified again at Pickup. Historical, unselected policies retain their path.
+verified again at Pickup. Saved Config needs explicit migration authority.
 """
 
 from __future__ import annotations
@@ -34,6 +34,28 @@ from .static_route import (
 )
 
 CapabilitiesFetch = Callable[[], Awaitable[HarnessCapabilities | None]]
+
+
+def routing_choice_refusal(config: RunConfig) -> str | None:
+    """The no-I/O authority check shared by CLI startup and live preflight."""
+    if (
+        config.saved_config_present
+        and config.route_policy is RoutePolicy.UNSELECTED
+        and config.execution_host == LOCAL_EXECUTION_HOST_PLACEMENT
+    ):
+        return (
+            "Saved Config needs an explicit keep-or-migrate decision before "
+            "agent work. Run `git-loopy update --routing keep` or "
+            "`git-loopy update --routing migrate` with --project or --global "
+            "to record the choice. For this Run only, supply --route-policy "
+            "static or --route-policy dynamic (GIT_LOOPY_ROUTE_POLICY for "
+            "doctor or unattended use). Both choices require strict live route "
+            "validation; retained Static pairs inherit the run-level tier, and "
+            "only explicit [escalation] authorizes Static escalation. Migrate "
+            "keeps authored Static rows; only uncovered work becomes Dynamic "
+            "and needs operator-owned access and explicit limits. Config unchanged."
+        )
+    return None
 
 
 @dataclass(frozen=True)
@@ -74,6 +96,8 @@ async def resolve_run_routing_preflight(
     intersection, not whether a particular issue will fit or whether these
     inputs will still be current at Pickup.
     """
+    if (refusal := routing_choice_refusal(config)) is not None:
+        return RunRoutingPreflight(refusal=refusal)
     if config.route_policy is RoutePolicy.UNSELECTED:
         return RunRoutingPreflight()
     if config.execution_host != LOCAL_EXECUTION_HOST_PLACEMENT:
@@ -86,7 +110,10 @@ async def resolve_run_routing_preflight(
                 f"{LOCAL_EXECUTION_HOST_PLACEMENT!r} placement. Run with "
                 f"--execution-host {LOCAL_EXECUTION_HOST_PLACEMENT} "
                 f"(GIT_LOOPY_EXECUTION_HOST={LOCAL_EXECUTION_HOST_PLACEMENT} "
-                "for doctor), or leave route_policy unset for legacy behavior."
+                "for doctor). Routing activation for non-local placements is "
+                "deferred; --route-policy unselected "
+                "(GIT_LOOPY_ROUTE_POLICY=unselected for doctor) retains their "
+                "legacy path, not strict Static or Dynamic validation."
             )
         )
 

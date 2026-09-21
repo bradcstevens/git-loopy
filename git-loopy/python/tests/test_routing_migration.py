@@ -223,6 +223,55 @@ def test_unattended_cli_refuses_an_outstanding_migration_choice_without_writes(
     assert "Config unchanged" in text
 
 
+@pytest.mark.parametrize("scope", ["project", "global"])
+@pytest.mark.parametrize("interactive", [False, True])
+@pytest.mark.parametrize("override", [[], ["--model", "gpt-5.6-terra"]])
+def test_legacy_cli_run_refuses_before_prompts_listing_or_detachment(
+    tmp_path, monkeypatch, capsys, scope, interactive, override
+) -> None:
+    from git_loopy import cli, run_sidecar, skillscmd
+    from git_loopy import loop as loop_module
+    from tests.fakes import FakeGitClient
+
+    path = (
+        settings.project_config_path(tmp_path)
+        if scope == "project" else settings.global_config_path(os.environ)
+    )
+    settings.write_config_atomic(path, {
+        "model": "gpt-5.6-terra", "reasoning_effort": "high",
+    })
+    saved = path.read_bytes()
+    monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: FakeGitClient(tmp_path))
+    monkeypatch.setattr("sys.stdin.isatty", lambda: interactive)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: interactive)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("Run prompted before consent")
+    )
+    monkeypatch.setattr(
+        skillscmd, "run_skill_policy_migration",
+        lambda **_kwargs: pytest.fail("Skill migration started before routing consent"),
+    )
+    monkeypatch.setattr(
+        run_sidecar, "spawn_detached_child",
+        lambda *_args, **_kwargs: pytest.fail("Run detached without routing consent"),
+    )
+    listings = _listing(monkeypatch)
+
+    assert cli.main(["1", *override]) == 1
+
+    assert listings == []
+    assert path.read_bytes() == saved
+    assert not path.with_suffix(".toml.bak").exists()
+    assert not (tmp_path / ".git-loopy" / "logs").exists()
+    error = capsys.readouterr().err
+    assert "explicit keep-or-migrate decision" in error
+    assert "--route-policy static" in error
+    assert "--route-policy dynamic" in error
+    assert "strict" in error and "escalation" in error
+
+
 def test_migration_dry_run_is_an_offline_plan_not_a_readiness_claim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
