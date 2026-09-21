@@ -143,6 +143,7 @@ from git_loopy import git as git_module
 from git_loopy import github_actions_host as actions_host_module
 from git_loopy import rolling_pressure
 from git_loopy import rolling_scheduler
+from git_loopy import sources as sources_module
 from git_loopy import session_outcome as session_outcome_module
 from git_loopy import sweep as sweep_module
 from git_loopy.staircase import PriceStaircase, StaircaseRefusal
@@ -166,6 +167,7 @@ from git_loopy.dynamic_route import (
     DynamicRoutePrerequisites,
     DynamicRouter,
     ReusableRoute,
+    FreshEvidence,
     RoutingAdmissionLedger,
     RoutingCallCancelled,
     RoutingProposal,
@@ -174,7 +176,11 @@ from git_loopy.dynamic_route import (
     RoutingUnavailableReason,
     SelectorCallResult,
     refresh_harness_evidence as _fetch_harness_evidence,
+    SupportingEvidence,
+    SupportingEvidenceSource,
+    SupportingEvidenceStatus,
 )
+from git_loopy.swe_bench import SWE_BENCH_VERIFIED_URL, SWEbenchVerifiedSource
 from git_loopy.emit import EventEmitter
 from git_loopy.live_read import SharedLiveRead
 from git_loopy.gate import FeedbackLoop, parse_feedback_loops
@@ -245,6 +251,7 @@ from git_loopy.skill_install import (
 from git_loopy.rolling_pool import RollingPool, is_parallel_safe
 from git_loopy.rollup import IterationRollupAccumulator
 from git_loopy.run_readback import run_start_payload
+from git_loopy.run_start_disclosures import run_start_disclosures
 from git_loopy.serial_pickup import (
     AdmissionRefusal,
     SerialPickup,
@@ -630,6 +637,18 @@ def _make_issue_source(
         f"unknown issue_source {config.issue_source!r}; expected "
         f"'github' or 'prds'"
     )
+
+
+def _repository_visibility(source: IssueSource) -> str | None:
+    """Read the visibility already captured by a source's successful preflight."""
+    if isinstance(source, sources_module.RepositoryVisibilityReporting):
+        return source.repository_visibility
+    return None
+
+
+def _publishing_from_ci(env: Mapping[str, str]) -> bool:
+    """Whether this GitHub Actions deployment uses its non-triggering job identity."""
+    return env.get("GITHUB_ACTIONS", "").lower() == "true"
 
 
 # Matches the PR-surface flag ``/setup-git-loopy-skills`` writes into
@@ -1082,8 +1101,75 @@ def _make_dynamic_router(
     source = ArtificialAnalysisSource(
         prerequisites.api_key, associations=prerequisites.associations
     )
+
+    async def evidence_fetch() -> FreshEvidence:
+        """Combine required AA and optional official SWE-bench reads."""
+        artificial_analysis = await source.fetch()
+        if not prerequisites.swe_bench_associations:
+            return FreshEvidence(
+                source_identity=artificial_analysis.source_identity,
+                retrieved_at=artificial_analysis.retrieved_at,
+                records=artificial_analysis.evidence,
+                supporting_sources=(
+                    SupportingEvidenceSource(
+                        source_identity=SWE_BENCH_VERIFIED_URL,
+                        status=SupportingEvidenceStatus.NOT_CONFIGURED,
+                        retrieved_at=None,
+                    ),
+                ),
+            )
+        try:
+            supporting = await SWEbenchVerifiedSource(
+                associations=prerequisites.swe_bench_associations or {}
+            ).fetch()
+        except Exception:
+            return FreshEvidence(
+                source_identity=artificial_analysis.source_identity,
+                retrieved_at=artificial_analysis.retrieved_at,
+                records=artificial_analysis.evidence,
+                supporting_sources=(
+                    SupportingEvidenceSource(
+                        source_identity=SWE_BENCH_VERIFIED_URL,
+                        status=SupportingEvidenceStatus.SOURCE_UNAVAILABLE,
+                        retrieved_at=None,
+                    ),
+                ),
+            )
+        status = (
+            SupportingEvidenceStatus.AVAILABLE
+            if supporting.available
+            else SupportingEvidenceStatus.MISSING_COMPARABLE_ROWS
+        )
+        return FreshEvidence(
+            source_identity=artificial_analysis.source_identity,
+            retrieved_at=artificial_analysis.retrieved_at,
+            records=artificial_analysis.evidence,
+            supporting_sources=(
+                SupportingEvidenceSource(
+                    source_identity=supporting.source_identity,
+                    status=status,
+                    retrieved_at=supporting.retrieved_at,
+                ),
+            ),
+            supporting_records=tuple(
+                SupportingEvidence(
+                    source_identity=record.source_identity,
+                    source_model_identity=record.source_model_identity,
+                    associated_copilot_model=record.associated_copilot_model,
+                    associated_copilot_effort=record.associated_copilot_effort,
+                    association_provenance=record.association_provenance,
+                    score=record.resolved,
+                    benchmark_version=record.benchmark_version,
+                    harness=record.harness,
+                    harness_version=record.harness_version,
+                    conditions=record.conditions,
+                )
+                for record in supporting.records
+            ),
+        )
+
     return DynamicRouter(
-        evidence_fetch=SharedLiveRead(source.fetch),
+        evidence_fetch=SharedLiveRead(evidence_fetch),
         capabilities_fetch=SharedLiveRead(
             lambda: _fetch_harness_evidence(warn=warn)
         ),
@@ -3533,6 +3619,11 @@ class _Loop:
             parallel_capabilities=events_module.python_parallel_capabilities(),
             max_iterations=self._config.max_iterations,
             max_nmt_strikes=self._config.max_nmt_strikes,
+            **run_start_disclosures(
+                host_placement=execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT,
+                repository_visibility=_repository_visibility(self._source),
+                inside_ci=_publishing_from_ci(os.environ),
+            ),
             # #410: what this Run parsed, gate-checked.
             **run_start_payload(self._config),
         )
@@ -4228,7 +4319,22 @@ class _ParallelLoop:
             ),
         }
         if self._rolling_capable:
-            start_payload["execution_host"] = self._execution_host_payload()
+            execution_host_payload = self._execution_host_payload()
+            start_payload["execution_host"] = execution_host_payload
+            host_placement = (
+                execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT
+                if self._execution_host is None
+                else self._execution_host.placement
+            )
+        else:
+            host_placement = execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT
+        start_payload.update(
+            run_start_disclosures(
+                host_placement=host_placement,
+                repository_visibility=_repository_visibility(self._source),
+                inside_ci=_publishing_from_ci(os.environ),
+            )
+        )
         self._serial._emit(
             events_module.WRAPPER_RUN_START,
             iter_num=None,
@@ -7121,6 +7227,27 @@ async def run(
             control.close()
             return exit_code_for("preflight_failed")
 
+    github_client = (
+        _make_github_client() if config.issue_source == "github" else None
+    )
+    environment_preflight = resolve_run_environment_preflight(
+        repo_root=repo_root,
+        issue_source=config.issue_source,
+        github_client=github_client,
+        label_client=(
+            _make_label_client() if config.issue_source == "github" else None
+        ),
+    )
+    if not environment_preflight.passed:
+        for failure in environment_preflight.failures:
+            diag.error("%s", failure.message)
+        try:
+            writers.run_summary.flush()
+        except Exception as flush_exc:
+            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
+        control.close()
+        return exit_code_for("preflight_failed")
+
     # A selected route is verified against the authenticated harness *here*:
     # after the host is known to be usable and before a single session is
     # opened, so an unsupported or unverifiable selection costs no work at all
@@ -7231,26 +7358,6 @@ async def run(
     #    doesn't recognise — surface a clean exit 1 rather than letting
     #    the exception escape.
     include_prs = _resolve_include_prs(config, repo_root)
-    github_client = (
-        _make_github_client() if config.issue_source == "github" else None
-    )
-    environment_preflight = resolve_run_environment_preflight(
-        repo_root=repo_root,
-        issue_source=config.issue_source,
-        github_client=github_client,
-        label_client=(
-            _make_label_client() if config.issue_source == "github" else None
-        ),
-    )
-    if not environment_preflight.passed:
-        for failure in environment_preflight.failures:
-            diag.error("%s", failure.message)
-        try:
-            writers.run_summary.flush()
-        except Exception as flush_exc:
-            diag.warning("RunSummaryWriter.flush() failed: %s", flush_exc)
-        control.close()
-        return exit_code_for("preflight_failed")
     try:
         source = _make_issue_source(
             config,

@@ -114,8 +114,8 @@ did name rather than reporting nothing.
 
 ### Navigation
 
-`Screen`, `Key`, `Pointer` and `DashboardSession` own navigation; `main.rs`
-only translates terminal key and mouse reports into those inputs.
+`DashboardSession` owns selection, pointer hit-testing, and view positions.
+`main.rs` only maps terminal reports to `Key` and `Pointer` inputs.
 
 | Intent | Controls |
 | --- | --- |
@@ -123,6 +123,9 @@ only translates terminal key and mouse reports into those inputs.
 | Open the selected issue | `Enter`, `→`, `l` |
 | Open a visible issue | Click anywhere inside its Queue row |
 | Back to the Dashboard | `Esc`, `Backspace`, `←`, `h` |
+| Scroll the Queue or open Log by a page | `PageUp`, `PageDown` |
+| Scroll the Activity tail without changing focus | `Ctrl-PageUp`, `Ctrl-PageDown` |
+| Resume following the Log and Activity tails | `f` |
 | Quit | `q`, `Ctrl-C`, `Ctrl-D` |
 
 The cursor holds an **issue, not a row**. The Queue groups active before queued
@@ -133,6 +136,38 @@ A Queue click opens the issue's Log on release, provided the pointer has not
 dragged and the same issue is still under it. Borders, column headings and
 empty rows are not click targets. Activity-header clicks still collapse or
 restore the band, and dragging that header only resizes it.
+Back returns to the Dashboard. No double-click timer or host clock is involved.
+Activity window headers display facts; they are not navigation targets.
+
+The wheel scrolls the **Queue**, **Log**, or **Activity** tail under the pointer
+without changing the selected issue or any Run facts. Log and Activity positions
+are independent: scrolling away from the bottom pauses following, and reaching
+the bottom resumes it. `f` restores following without needing a mouse.
+`Ctrl-PageUp`/`Ctrl-PageDown` also reach output before an Active issue is named,
+when there is no issue Log to open. Existing
+arrow/Home/End bindings still select issues, including while a Log is open.
+
+The Activity band's header still owns drag-to-resize and click-to-collapse; wheel input
+never resizes it or steals a held handle. `a` and `Shift-Up`/`Shift-Down` keep the
+same controls available without mouse reporting.
+
+Each **Activity window** names its Agent's issue, **Task type**, **Routed pair**,
+**Context fill** (the ten-cell bar and any non-default context tier), and live
+**Subagent** count. These are observations from Pickup and that Agent's events,
+not the Run's configured defaults. An observed empty Task-type list says
+`unlabelled`; an unread or unpublished value says `—` (`-` in ASCII). In
+particular, a member that publishes no Subagent lifecycle reports `—`, not zero.
+The consumer accepts additive lifecycle observations without introducing a new
+producer.
+
+Lane windows stay in slot order and re-label on refill, resetting the new
+Agent's measurements and follow position without disturbing its siblings. A
+finished tail lingers dimmed; Integration recovery has a separate, last window
+and never borrows the Lane's Routed pair. Wheel scrolling is window-local, while
+`f` resumes every tail. Fact segments wrap at 80 columns before dropping a value;
+when the operator reduces the band's height, tails give way to headers, then to
+`+N more Lanes`. **Collapsed** keeps the Active issue and its pair in the band's
+one-row handle. None of this changes the Queue's columns or drop order.
 
 ### Narrow terminals
 
@@ -243,10 +278,10 @@ before committing a trace to it:
 ```json
 {
   "name": "git-loopy-tui",
-  "version": "0.11.0-dev.5",
+  "version": "0.11.0-dev.6",
   "min_event_schema_version": 1,
   "max_event_schema_version": 1,
-  "wrapper_contract_version": "1.4"
+  "wrapper_contract_version": "2.9"
 }
 ```
 

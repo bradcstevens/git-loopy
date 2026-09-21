@@ -73,8 +73,12 @@ trust policy explicitly declares `source-only`. This preserves a locally built
 Dashboard without inferring publication mode from missing assets. Unreadable
 release history or policy still refuses maintenance.
 
-The shell and PowerShell installers still request the exact declared helper
-Release. Their `--no-tui` / `-NoTui` options skip that download; they do not install
+The shell and PowerShell installers also resolve the newest non-draft helper
+Release at or below the declared version, requiring the host's archive and
+checksum. They verify the resolved identity and retain its install record beside
+the helper; failed activation restores the previous helper and record together
+(#492). Like Python, each resolver reads at most ten pages and explicitly refuses
+an incomplete index at that limit. Their `--no-tui` / `-NoTui` options skip that download; they do not install
 a Dashboard. The built-in **line-printer** remains a diagnostic/plain-output path,
 not a replacement for the Python Runner's required terminal interface (ADR-0053).
 

@@ -513,11 +513,13 @@ class Repo:
         owner: GitHub login of the repo owner (user or org).
         name: Repository name (the ``name`` half of ``owner/name``).
         default_branch: Name of the repo's default branch (e.g. ``"main"``).
+        visibility: GitHub's repository visibility, used for host metering.
     """
 
     owner: str
     name: str
     default_branch: str
+    visibility: str = "PRIVATE"
 
     @property
     def nwo(self) -> str:
@@ -1009,7 +1011,7 @@ class SubprocessGitHubClient:
             GhError: If ``gh repo view`` fails (e.g. cwd is not a GitHub remote)
                 or returns a payload the parser cannot understand.
         """
-        cmd = ["repo", "view", "--json", "owner,name,defaultBranchRef"]
+        cmd = ["repo", "view", "--json", "owner,name,defaultBranchRef,visibility"]
         raw = self._checked(cmd)
         data = _parse_json(raw, [_GH_BIN, *cmd])
         if not isinstance(data, dict):
@@ -1023,6 +1025,7 @@ class SubprocessGitHubClient:
                 owner=str(data["owner"]["login"]),
                 name=str(data["name"]),
                 default_branch=str(data["defaultBranchRef"]["name"]),
+                visibility=str(data["visibility"]),
             )
         except (KeyError, TypeError) as exc:
             raise GhError(

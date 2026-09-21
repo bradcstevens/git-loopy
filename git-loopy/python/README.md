@@ -1272,6 +1272,11 @@ selector_concurrency = 2                # or --selector-concurrency
 [route_associations]
 # benchmark identity -> the Copilot configuration you have verified it names
 "gpt-5.6-terra" = "gpt-5.6-terra@high"
+
+# Optional: exact official SWE-bench Verified model identity -> the same
+# Copilot configuration. This informs the work-model assessment only.
+[swe_bench_associations]
+"GPT Test (20260901)" = "gpt-5.6-terra@high"
 ```
 
 and `GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY` in the environment. The key is read from the
@@ -1443,8 +1448,10 @@ What happens per issue:
    its matched effort, in the smallest context tier that fits the input.
 4. **A bounded, read-only assessment** sees the issue, its acceptance criteria,
    the task type, your declared **Feedback loops**, and any *measured* rows from
-   `measured-routing.json`. It does not read your tree, run Trials, or do the
-   work.
+   `measured-routing.json`. When `[swe_bench_associations]` is configured, it
+   also sees matching public official **SWE-bench Verified** results from the
+   same `mini-SWE-agent` harness version. It does not read your tree, run
+   Trials, or do the work.
 5. **Revalidation at Pickup.** Evidence and eligibility are re-read before the
    work session opens. Unchanged inputs do not buy a second selector call; a
    candidate that changed or became ineligible does not start on its old route.
@@ -1482,6 +1489,18 @@ Two properties are worth knowing before you turn it on:
   or issue's work bill, even while Pool preparation runs beside work. A refused
   route still reports the assessment already billed. Missing billing stays
   unknown rather than becoming a zero or a complete-looking subtotal.
+- **SWE-bench is supporting evidence, not an election score.** Artificial
+  Analysis Intelligence Index remains the deterministic selector-election
+  authority. The Runner reads only the public official leaderboard page and
+  sends it no issue, repository, credential, or assessment material. It admits
+  exact configured mappings from `mini-SWE-agent` rows only, and only when all
+  mapped rows share one harness release; arbitrary agent systems, unknown model
+  identities, and incompatible releases are excluded rather than treated as
+  comparable. A missing or unreadable optional read is named in the existing
+  canonical routing summary and is never cached or promoted into a
+  dynamic-routing failure; required Artificial Analysis and eligibility reads
+  retain their blocking behavior. A public resolved rate is benchmark evidence,
+  not a probability of this issue succeeding.
 
 ### Reusing a route a previous Run already elected
 

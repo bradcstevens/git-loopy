@@ -98,6 +98,24 @@ fn successive_render_only_deltas_coalesce_to_the_newest() {
 }
 
 #[test]
+fn context_samples_never_displace_another_agents_last_observation() {
+    let mut queue = InputQueue::with_capacity(8);
+    let lane_sample = |issue, tokens| {
+        Input::Trace(format!(
+            r#"{{"type":"usage.context_window","lane_issue":{issue},"current_tokens":{tokens}}}"#
+        ))
+    };
+    queue.push(lane_sample(605, 100));
+    assert_eq!(queue.push(lane_sample(606, 200)), Admission::Admitted);
+    assert_eq!(queue.push(lane_sample(605, 300)), Admission::Coalesced);
+    queue.push(Input::Trace(
+        r#"{"type":"wrapper.contribution.work_finished","issue":605}"#.into(),
+    ));
+    assert_eq!(queue.push(lane_sample(605, 400)), Admission::Admitted);
+    assert_eq!(queue.len(), 4, "the finished Agent keeps its final sample");
+}
+
+#[test]
 fn a_render_only_delta_never_displaces_a_structural_one() {
     let mut queue = InputQueue::with_capacity(8);
     queue.push(output("before"));

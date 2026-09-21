@@ -299,6 +299,28 @@ def test_the_association_table_is_config_only_and_read_per_scope() -> None:
         "aa/opus": "claude-opus-4.8@max",
         "aa/mini": "gpt-5-mini@medium",
     }
+    assert dict(resolved.run.swe_bench_associations) == {}
+
+
+def test_swe_bench_associations_merge_per_official_model_identity() -> None:
+    resolved = _resolve(
+        project={
+            "swe_bench_associations": {
+                "GPT Test (20260901)": "gpt-test@high",
+            }
+        },
+        global_={
+            "swe_bench_associations": {
+                "GPT Test (20260901)": "older@high",
+                "Claude Test": "claude-test@high",
+            }
+        },
+    )
+
+    assert dict(resolved.run.swe_bench_associations) == {
+        "GPT Test (20260901)": "gpt-test@high",
+        "Claude Test": "claude-test@high",
+    }
 
 
 # ---------------------------------------------------------------------------

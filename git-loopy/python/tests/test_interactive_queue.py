@@ -379,6 +379,7 @@ def test_normalized_iteration_end_projects_closed_issue_contribution() -> None:
     assert detail.contributions == (
         state_module.IssueContribution(
             kind="iteration",
+            contribution_id="",
             iteration=1,
             lane=None,
             outcome="closed",

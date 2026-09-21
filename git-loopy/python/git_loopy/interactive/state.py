@@ -67,6 +67,7 @@ __all__ = [
     "IssueLedgerEntry",
     "IssueContribution",
     "ContextWindowSnapshot",
+    "ActivityWindow",
     "QueueRow",
     "LogLine",
     "LogLineView",
@@ -137,6 +138,9 @@ _ITERATION_END = "wrapper.iteration.end"
 #: contribution identity triple and a null ``iter``.
 _CONTRIBUTION_START = "wrapper.contribution.start"
 _CONTRIBUTION_END = "wrapper.contribution.end"
+_CONTRIBUTION_WORK_FINISHED = "wrapper.contribution.work_finished"
+_INTEGRATION_RECOVERY_STARTED = "wrapper.integration.recovery_started"
+_INTEGRATION_PUBLISHED = "wrapper.integration.published"
 # The agent's final assistant message — a fallback marker source for when
 # streaming deltas are unavailable (the live path taps ``stream_message``).
 _ASSISTANT_MESSAGE = "assistant.message"
@@ -154,6 +158,9 @@ _TOOL_CALL = "tool.call"
 #: SDK) and kept in lockstep by the parity test.
 _USAGE_TOKENS = "usage.tokens"
 _USAGE_CONTEXT_WINDOW = "usage.context_window"
+_SUBAGENT_STARTED = "subagent.started"
+_SUBAGENT_COMPLETED = "subagent.completed"
+_SUBAGENT_FAILED = "subagent.failed"
 
 # Historical schema-1 traces predate ``wrapper.issue.activated``. Keep their
 # marker projection readable, but disable it as soon as the authoritative event
@@ -380,11 +387,34 @@ class ResolvedRoute:
     lifecycle_position: str | None = None
 
 
+@dataclass
+class ActivityWindow:
+    """The actual facts of one **Agent** shown in the Activity band."""
+
+    kind: str
+    lane: int | str | None
+    issue: int | str
+    task_type: list[str] | None
+    route: ResolvedRoute | None
+    contribution_id: str | None = None
+    context_window: ContextWindowSnapshot | None = None
+    subagent_ids: set[str] = field(default_factory=set)
+    subagents_observed: bool = False
+    live: bool = True
+
+
+@dataclass(frozen=True)
+class _PickupFacts:
+    task_type: list[str] | None
+    route: ResolvedRoute | None
+
+
 @dataclass(frozen=True)
 class IssueContribution:
     """One finalized Iteration or Lane contribution for an Active issue."""
 
     kind: str
+    contribution_id: str
     iteration: int | None
     lane: int | str | None
     outcome: str | None
@@ -521,6 +551,7 @@ class LiveRunState:
         self.strikes = 0
         self.ended = False
         self.context_window_available: bool | None = None
+        self.subagents_available: bool | None = None
         #: What this Orchestrator declared about Cost and about *this* Run's
         #: **Rate card** (ADR-0026). ``None`` is silence, which is neither a
         #: refusal nor a promise: a run-scoped capability is required of no
@@ -617,6 +648,19 @@ class LiveRunState:
         #: Run and for a replayed Wave-era log, where the round owned the only
         #: boundary, so both paths are unchanged.
         self._open_contributions: set[int | str] = set()
+        # -- Activity windows ------------------------------------------------
+        # Pickup facts are deliberately pending until the authoritative
+        # activation. A Pickup names an intended Agent; it does not itself open
+        # one, and a retry without a new Pickup must therefore start unknown.
+        self._pending_serial_pickups: dict[int | str, _PickupFacts] = {}
+        self._pending_lane_pickups: dict[int | str, _PickupFacts] = {}
+        self._activity_serial: ActivityWindow | None = None
+        self._activity_lanes: dict[int | str, ActivityWindow] = {}
+        self._activity_legacy_lanes: dict[int | str, ActivityWindow] = {}
+        self._activity_integration: ActivityWindow | None = None
+        self._activity_contributions: dict[str, ActivityWindow] = {}
+        self._activity_starts: dict[str, tuple[int | str, int | str | None]] = {}
+        self._activity_contribution_pickups: dict[str, _PickupFacts] = {}
 
     # -- EventSink protocol -------------------------------------------------
 
@@ -655,25 +699,31 @@ class LiveRunState:
             if ref is None:
                 return
             self._authoritative_binding = True
+            key = self._normalize_ref(ref)
             if lane_issue is not None:
                 self._lane_touch(
-                    self._normalize_ref(ref),
+                    key,
                     now,
                     started_wall=self._local_timestamp(event.get("activated_at")),
                 )
-            elif self.active_ref is None:
-                source = event.get("binding_source")
-                since = (
-                    self._iter_started_monotonic
-                    if source in RETROACTIVE_BINDING_SOURCES
-                    and self._iter_started_monotonic is not None
-                    else now
-                )
-                self._activate(
-                    ref,
-                    since=since,
-                    started_wall=self._local_timestamp(event.get("activated_at")),
-                )
+            else:
+                if self.active_ref is None:
+                    source = event.get("binding_source")
+                    since = (
+                        self._iter_started_monotonic
+                        if source in RETROACTIVE_BINDING_SOURCES
+                        and self._iter_started_monotonic is not None
+                        else now
+                    )
+                    self._activate(
+                        ref,
+                        since=since,
+                        started_wall=self._local_timestamp(event.get("activated_at")),
+                    )
+            if lane_issue is not None or key in self._open_contributions:
+                self._activate_lane_window(key, event)
+            elif self._activity_serial is None or not self._activity_serial.live:
+                self._activate_serial_window(key)
             return
         if lane_issue is not None and etype in _LANE_EVENTS:
             self._render_lane_event(str(etype), lane_issue, event, now)
@@ -688,21 +738,33 @@ class LiveRunState:
             issue = event.get("issue")
             if issue is None:
                 return
+            key = self._normalize_ref(issue)
             contribution_id = event.get("contribution_id")
+            lane = _activity_lane(event.get("lane_id"))
             if isinstance(contribution_id, str):
                 host = event.get("host")
                 self._contribution_hosts[contribution_id] = (
                     host if isinstance(host, str) else "unknown"
                 )
+                self._activity_starts[contribution_id] = (key, lane)
+            self._upgrade_activity_window_from_start(key, lane, contribution_id)
+            self._move_pending_pickup_to_lane(key)
             self._mark_started()
             self.status = _STATUS_RUNNING
-            self._begin_contribution(self._normalize_ref(issue), now)
+            self._begin_contribution(key, now)
             return
         if etype == _CONTRIBUTION_END:
             issue = event.get("issue")
             if issue is None:
                 return
-            self._finalize_contribution(self._normalize_ref(issue), event, now)
+            key = self._normalize_ref(issue)
+            self._finish_activity_contribution(key, event)
+            self._finalize_contribution(key, event, now)
+            contribution_id = event.get("contribution_id")
+            if isinstance(contribution_id, str):
+                self._activity_contribution_pickups.pop(contribution_id, None)
+                self._activity_starts.pop(contribution_id, None)
+                self._activity_contributions.pop(contribution_id, None)
             return
         if etype == _RUN_START:
             self._mark_started()
@@ -722,6 +784,9 @@ class LiveRunState:
                 declared_routing = capabilities.get("routing")
                 if isinstance(declared_routing, bool):
                     self.routing_available = declared_routing
+                declared_subagents = capabilities.get("subagents")
+                if isinstance(declared_subagents, bool):
+                    self.subagents_available = declared_subagents
             max_strikes = event.get("max_nmt_strikes")
             if max_strikes is not None:
                 self.max_strikes = _coerce_int(max_strikes, self.max_strikes)
@@ -771,6 +836,7 @@ class LiveRunState:
                 event.get("issue"), _log_pickup_bound_text(event), now
             )
             self._record_route(event.get("issue"), _pickup_route(event))
+            self._record_activity_pickup(event)
         elif etype == _PICKUP_SKIPPED:
             self._record_pickup_line(
                 event.get("issue"), _log_pickup_skipped_text(event), now
@@ -797,6 +863,11 @@ class LiveRunState:
         elif etype == _ITERATION_END:
             self._finalize_iteration(now)
             self._record_normalized_contributions(event)
+            if self._activity_serial is not None:
+                self._finish_activity_window(self._activity_serial)
+            for window in self.activity_windows():
+                if window.kind == "lane" and window.contribution_id is None:
+                    self._finish_activity_window(window)
         elif etype == _ASSISTANT_REASONING:
             self._finalize_reasoning(event.get("content"))
         elif etype == _ASSISTANT_MESSAGE:
@@ -816,16 +887,38 @@ class LiveRunState:
             snapshot = _context_window_snapshot(event)
             if snapshot is not None:
                 self.context_window_available = True
-                self.context_window = snapshot
-                if (
-                    self.peak_context_window is None
-                    or snapshot.current_tokens > self.peak_context_window.current_tokens
-                ):
-                    self.peak_context_window = snapshot
+                self._set_activity_context(event, snapshot)
+                if event.get("lane_issue") is None:
+                    self.context_window = snapshot
+                    if (
+                        self.peak_context_window is None
+                        or snapshot.current_tokens > self.peak_context_window.current_tokens
+                    ):
+                        self.peak_context_window = snapshot
+        elif etype in {_SUBAGENT_STARTED, _SUBAGENT_COMPLETED, _SUBAGENT_FAILED}:
+            self._record_activity_subagent(str(etype), event)
+        elif etype == _CONTRIBUTION_WORK_FINISHED:
+            issue = event.get("issue")
+            if issue is not None:
+                self._finish_activity_contribution(self._normalize_ref(issue), event)
+        elif etype == _INTEGRATION_RECOVERY_STARTED:
+            self._start_integration_window(event)
+        elif etype == _INTEGRATION_PUBLISHED:
+            window = self._activity_integration
+            issue = event.get("issue")
+            if (
+                window is not None
+                and issue is not None
+                and window.issue == self._normalize_ref(issue)
+                and window.contribution_id == event.get("contribution_id")
+            ):
+                self._finish_activity_window(window)
         elif etype == _RUN_END:
             outcome = event.get("outcome")
             self.status = str(outcome) if outcome is not None else "ended"
             self._mark_ended()
+            for window in self.activity_windows():
+                self._finish_activity_window(window)
 
     def stream_reasoning(self, delta: str, issue: int | str | None = None) -> None:
         """Fold a reasoning delta into the right issue's Log (issues #34/#66).
@@ -1410,6 +1503,207 @@ class LiveRunState:
                 entry.active_duration += max(0.0, at - entry.active_since)
                 entry.active_since = None
 
+    # -- Activity windows ---------------------------------------------------
+
+    def activity_windows(self) -> list[ActivityWindow]:
+        """Return Agent windows in the Activity band's stable slot order."""
+        windows: list[ActivityWindow] = []
+        if self._activity_serial is not None:
+            windows.append(self._activity_serial)
+        windows.extend(
+            self._activity_lanes[lane]
+            for lane in sorted(self._activity_lanes, key=_activity_lane_sort_key)
+        )
+        windows.extend(
+            self._activity_legacy_lanes[issue]
+            for issue in sorted(self._activity_legacy_lanes, key=_activity_issue_sort_key)
+        )
+        if self._activity_integration is not None:
+            windows.append(self._activity_integration)
+        return windows
+
+    def _record_activity_pickup(self, event: Mapping[str, Any]) -> None:
+        issue = event.get("issue")
+        if issue is None:
+            return
+        key = self._normalize_ref(issue)
+        task_type = _task_type_keys(event.get("task_type_keys"))
+        facts = _PickupFacts(task_type=task_type, route=_pickup_route(event))
+        if key in self._open_contributions:
+            self._pending_lane_pickups[key] = facts
+        else:
+            self._pending_serial_pickups[key] = facts
+
+    def _move_pending_pickup_to_lane(self, key: int | str) -> None:
+        facts = self._pending_serial_pickups.pop(key, None)
+        if facts is not None:
+            self._pending_lane_pickups[key] = facts
+
+    def _upgrade_activity_window_from_start(
+        self, key: int | str, lane: int | str | None, contribution_id: Any
+    ) -> None:
+        """Attach late slot metadata to an already-active fallback Lane."""
+        window = self._activity_legacy_lanes.get(key)
+        if window is None or not window.live or window.contribution_id is not None:
+            return
+        del self._activity_legacy_lanes[key]
+        window.lane = lane
+        window.contribution_id = (
+            contribution_id if isinstance(contribution_id, str) else None
+        )
+        if lane is None:
+            self._activity_legacy_lanes[key] = window
+        else:
+            self._activity_lanes[lane] = window
+        if window.contribution_id is not None:
+            self._activity_contributions[window.contribution_id] = window
+            self._activity_contribution_pickups[window.contribution_id] = _PickupFacts(
+                task_type=window.task_type,
+                route=window.route,
+            )
+
+    def _activate_serial_window(self, key: int | str) -> None:
+        facts = self._pending_serial_pickups.pop(key, None)
+        self._activity_serial = ActivityWindow(
+            kind="serial",
+            lane=None,
+            issue=key,
+            task_type=facts.task_type if facts is not None else None,
+            route=facts.route if facts is not None else None,
+            subagents_observed=self.subagents_available is True,
+        )
+
+    def _activate_lane_window(
+        self, key: int | str, event: Mapping[str, Any]
+    ) -> None:
+        contribution_id = event.get("contribution_id")
+        known_contribution_id = (
+            contribution_id if isinstance(contribution_id, str) else None
+        )
+        start = self._activity_starts.get(known_contribution_id)
+        if start is None:
+            known_contribution_id, start = next(
+                (
+                    (identifier, value)
+                    for identifier, value in reversed(list(self._activity_starts.items()))
+                    if value[0] == key
+                ),
+                (None, (key, _activity_lane(event.get("lane_id")))),
+            )
+        _, lane = start
+        existing = (
+            self._activity_legacy_lanes.get(key)
+            if lane is None
+            else self._activity_lanes.get(lane)
+        )
+        if (
+            existing is not None
+            and existing.live
+            and existing.issue == key
+            and existing.contribution_id == known_contribution_id
+        ):
+            return
+        facts = self._pending_lane_pickups.pop(key, None)
+        if facts is None:
+            facts = self._pending_serial_pickups.pop(key, None)
+        window = ActivityWindow(
+            kind="lane",
+            lane=lane,
+            issue=key,
+            task_type=facts.task_type if facts is not None else None,
+            route=facts.route if facts is not None else None,
+            contribution_id=known_contribution_id,
+            subagents_observed=self.subagents_available is True,
+        )
+        if lane is None:
+            self._activity_legacy_lanes[key] = window
+        else:
+            self._activity_lanes[lane] = window
+        if window.contribution_id is not None:
+            self._activity_contributions[window.contribution_id] = window
+            if facts is not None:
+                self._activity_contribution_pickups[window.contribution_id] = facts
+
+    def _finish_activity_contribution(
+        self, key: int | str, event: Mapping[str, Any]
+    ) -> None:
+        contribution_id = event.get("contribution_id")
+        for window in self.activity_windows():
+            if window.issue == key and (
+                contribution_id is None or window.contribution_id == contribution_id
+            ):
+                self._finish_activity_window(window)
+
+    def _finish_activity_window(self, window: ActivityWindow) -> None:
+        window.live = False
+        if window.subagents_observed:
+            window.subagent_ids.clear()
+
+    def _set_activity_context(
+        self, event: Mapping[str, Any], snapshot: ContextWindowSnapshot
+    ) -> bool:
+        issue = event.get("lane_issue")
+        if issue is not None:
+            key = self._normalize_ref(issue)
+            candidates = [
+                window
+                for window in self.activity_windows()
+                if window.live and window.issue == key
+            ]
+            if candidates:
+                candidates[-1].context_window = snapshot
+                return True
+            return False
+        if self._activity_serial is not None and self._activity_serial.live:
+            self._activity_serial.context_window = snapshot
+            return True
+        return False
+
+    def _record_activity_subagent(
+        self, etype: str, event: Mapping[str, Any]
+    ) -> None:
+        identity = event.get("tool_call_id")
+        if not isinstance(identity, str) or not identity:
+            return
+        issue = event.get("lane_issue")
+        if issue is None:
+            window = self._activity_serial
+        else:
+            key = self._normalize_ref(issue)
+            matches = [
+                current
+                for current in self.activity_windows()
+                if current.live and current.issue == key
+            ]
+            window = matches[-1] if matches else None
+        if window is None or not window.live:
+            return
+        window.subagents_observed = True
+        if etype == _SUBAGENT_STARTED:
+            window.subagent_ids.add(identity)
+        elif identity in window.subagent_ids:
+            window.subagent_ids.discard(identity)
+
+    def _start_integration_window(self, event: Mapping[str, Any]) -> None:
+        issue = event.get("issue")
+        if issue is None:
+            return
+        contribution_id = event.get("contribution_id")
+        facts = (
+            self._activity_contribution_pickups.get(contribution_id)
+            if isinstance(contribution_id, str)
+            else None
+        )
+        self._activity_integration = ActivityWindow(
+            kind="integration",
+            lane=None,
+            issue=self._normalize_ref(issue),
+            task_type=facts.task_type if facts is not None else None,
+            route=None,
+            contribution_id=contribution_id if isinstance(contribution_id, str) else None,
+            subagents_observed=self.subagents_available is True,
+        )
+
     # -- ledger (issue #25) -------------------------------------------------
 
     def _begin_iteration(self, now: float) -> None:
@@ -1421,6 +1715,9 @@ class LiveRunState:
         """
         if self.active_ref is not None:
             self._deactivate(self.active_ref, at=now)
+        for window in self.activity_windows():
+            if window.contribution_id is None:
+                self._finish_activity_window(window)
         self._iter_started_monotonic = now
         self._iter_pool = []
         self._iter_commits = 0
@@ -1445,6 +1742,7 @@ class LiveRunState:
         self._lane_commits = {}
         self._iter_lane_refs = set()
         self._iter_routes = {}
+        self._pending_serial_pickups = {}
 
     def _record_pickup_line(self, ref: Any, text: str, now: float) -> None:
         """Attribute one **Pickup** record to the issue it names (#397).
@@ -1835,6 +2133,7 @@ class LiveRunState:
             route = self._iter_routes.get(key)
             contribution = IssueContribution(
                 kind="lane" if is_lane else "iteration",
+                contribution_id="",
                 iteration=None if is_lane else iter_num,
                 lane=key if is_lane else None,
                 outcome=outcome,
@@ -1913,6 +2212,32 @@ def _context_window_snapshot(
             event.get("effective_ceiling_tokens")
         ),
     )
+
+
+def _task_type_keys(value: Any) -> list[str] | None:
+    """Keep an observed empty Task type distinct from an absent one."""
+    if not isinstance(value, list) or not all(isinstance(key, str) for key in value):
+        return None
+    return list(value)
+
+
+def _activity_lane(value: Any) -> int | str | None:
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, (int, str)) else None
+
+
+def _activity_lane_sort_key(lane: int | str) -> tuple[int, int | str]:
+    if isinstance(lane, int):
+        return (0, lane)
+    try:
+        return (0, int(lane))
+    except ValueError:
+        return (1, lane)
+
+
+def _activity_issue_sort_key(issue: int | str) -> tuple[int, int | str]:
+    return _activity_lane_sort_key(issue)
 
 
 def _parse_utc_timestamp(value: Any) -> datetime | None:

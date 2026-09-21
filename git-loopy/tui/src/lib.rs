@@ -11,6 +11,7 @@
 //! helper and the future in-process Rust Orchestrator embed the same core
 //! rather than forking its behaviour (ADR-0013).
 
+mod activity;
 mod band;
 mod event;
 mod input;
@@ -26,9 +27,9 @@ pub use band::{
     ActivityBand, ACTIVITY_BAND_COLLAPSED_HEIGHT, ACTIVITY_BAND_HEIGHT, ACTIVITY_BAND_MIN_HEIGHT,
     QUEUE_MIN_HEIGHT,
 };
-pub use event::{Event, EventPayload, InsightCapabilities, IssueRef};
+pub use event::{Event, EventPayload, InsightCapabilities, IssueRef, LaneSlot};
 pub use input::{Admission, Input, InputQueue, Pointer, PointerAction};
-pub use navigation::{Flow, Key, Screen};
+pub use navigation::{Flow, Key, LogPosition, Screen};
 pub use render::{
     activity_ceiling, dashboard_bands, draw_dashboard, draw_drill_in, draw_frame, DashboardBands,
 };
@@ -40,10 +41,10 @@ pub use timestamp::{
     Timestamp, Zone, ZoneDaylightRule, ZoneRuleDate, ZoneTailRule, ZoneTransition,
 };
 pub use view::{
-    project_run_view, Activity, ConsumptionView, ContextFill, ContributionRow, Dashboard,
-    DeliveryView, DetailHeader, DrillIn, Header, IssueLog, IterationBreakdown, LogLineView,
-    PeakContext, Queue, QueueRow, RunView, Strikes, Summary, SummaryRow, TerminalCapabilities,
-    ViewContext,
+    project_run_view, Activity, ActivityWindow, ConsumptionView, ContextFill, ContributionRow,
+    Dashboard, DeliveryView, DetailHeader, DrillIn, Header, IssueLog, IterationBreakdown,
+    LogLineView, ParallelDeclaration, PeakContext, Queue, QueueRow, RunView, Strikes, Summary,
+    SummaryRow, TerminalCapabilities, ViewContext,
 };
 pub use zoneinfo::{zone_from_posix_tz, zone_from_tz_data};
 
@@ -51,4 +52,10 @@ pub use zoneinfo::{zone_from_posix_tz, zone_from_tz_data};
 pub const SUPPORTED_EVENT_SCHEMA_VERSION: u32 = 1;
 
 /// The Wrapper-contract version whose Dashboard seam this core implements.
-pub const WRAPPER_CONTRACT_VERSION: &str = "2.4";
+///
+/// Derived from `git-loopy/conformance/dashboard-insights.json`'s
+/// `wrapper_contract_version` and gated against it
+/// (`tests/wrapper_contract_version.rs`, ADR-0044): the Wrapper contract went
+/// to 2.0 when Continuation was decommissioned (ADR-0046), a breaking change
+/// no minor bump could honestly encode.
+pub const WRAPPER_CONTRACT_VERSION: &str = "2.9";
