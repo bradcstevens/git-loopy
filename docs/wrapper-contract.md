@@ -1662,8 +1662,19 @@ and its `static_route_notes`.
 reason: the shell and PowerShell Orchestrators implement no per-issue routing and read no harness
 model listing, so they have no route to verify. They declare it unsupported in
 [`fixture-claims.json`](../git-loopy/conformance/fixture-claims.json) rather than by implication.
-The Dashboard needs no policy-aware branch — it renders the verified triple off
-`wrapper.pickup.bound` exactly as it renders any other.
+The Dashboard renders the verified triple off `wrapper.pickup.bound`; it does
+not elect or validate a route. An explicitly null effort with Routing source
+`dynamic` means **not configurable**, not a backend default or the value `none`.
+Rust preserves that distinction in Queue and contribution Route cells. Static
+nulls and historical missing effort fields retain their existing backend wording.
+For `wrapper.routing.prepared`, explicit null work/selector efforts likewise mean
+not configurable and remain explicit nulls in the semantic projection; missing
+or historically empty fields retain their previous readback. Preparation remains
+nonbinding, including when its Route cell is clipped; the issue Log retains its
+full work and selector wording. The shared `dashboard-insights.json`
+`effort_readback` matrix pins this Rust Event-replay/display boundary, not actual
+work-session creation or native-member routing. No Event fields or wire version
+are added.
 
 **Staged Python-local migration guard (contract 2.9, #567).** A local Python Run with nonempty project or
 global Config MUST supply or inherit an explicit `static`/`dynamic` Route policy before Agent

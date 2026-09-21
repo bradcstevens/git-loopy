@@ -644,6 +644,19 @@ inventing a tier or a first-attempt claim. A reassessed Dynamic retry may keep
 the same configuration; its lifecycle position must still distinguish it from
 the earlier contribution.
 
+The additive `effort_readback` matrix is a **Rust display-adapter** obligation:
+six Pickup cases run through both serial and Lane-stamped contribution replay
+and six preparation cases run through projection and actual rendered Queue and
+drill-in screens. Explicit Dynamic null effort reads as **not configurable**;
+the advertised value `none`, deliberate Static omission and historical sparse
+records stay distinct. Preparation retains explicit nulls without inventing
+missing fields or becoming a final Route, and its full work/selector wording
+survives in the issue Log. Its pinned Queue text is Rust presentation, including
+the existing column clipping, not a new cross-toolkit layout requirement.
+The existing semantic snapshots and native producer obligations are unchanged.
+This is not a substitute for the composed actual-work-session routing matrix;
+shell/PowerShell routing activation remains deferred.
+
 The **Activity** band's sizing gestures — the drag, the click and `shift+↑` / `shift+↓`
 (ADR-0038) — are deliberately **not** in this fixture set, now that both renderers
 implement them. A drag is not an Event, so nothing about it reaches the Event schema, and

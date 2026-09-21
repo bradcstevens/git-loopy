@@ -182,14 +182,12 @@ impl BilledTotal {
 /// The **Routing resolution** one **Pickup** reached, as the Dashboard reads
 /// it: the gated pair, context tier, and **Routing source** that chose it.
 ///
-/// `model` and `effort` are nullable *values* rather than absences — a
-/// resolution that named neither is the backend being left to choose — which is
-/// why the whole record is optional and its halves are not: `None` here is
-/// "this Runner resolved nothing", and that is the only absence.
+/// A reported null Dynamic effort means no dial. Keep it distinct from an
+/// unreported effort so historical sparse records retain their interpretation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ResolvedRoute {
     pub(crate) model: Option<String>,
-    pub(crate) effort: Option<String>,
+    pub(crate) effort: Option<Option<String>>,
     pub(crate) context_tier: Option<String>,
     pub(crate) source: Option<String>,
     pub(crate) lifecycle_position: Option<String>,
@@ -212,7 +210,7 @@ impl ResolvedRoute {
         }
         Some(Self {
             model: pickup.model.clone().flatten(),
-            effort: pickup.effort.clone().flatten(),
+            effort: pickup.effort.clone(),
             // `default` was historically implicit in the Dashboard. Retain that
             // compact projection while making an explicit non-default tier visible.
             context_tier: pickup
@@ -247,7 +245,7 @@ impl RouteDelivery {
 pub(crate) struct RoutePreparation {
     pub(crate) state: String,
     pub(crate) model: Option<String>,
-    pub(crate) effort: Option<String>,
+    pub(crate) effort: Option<Option<String>>,
     pub(crate) context_tier: Option<String>,
     pub(crate) summary: Option<String>,
     pub(crate) proposal_id: Option<String>,
@@ -255,7 +253,7 @@ pub(crate) struct RoutePreparation {
     pub(crate) valid_until: Option<String>,
     pub(crate) relevant_input_identity: Option<String>,
     pub(crate) selector_model: Option<String>,
-    pub(crate) selector_effort: Option<String>,
+    pub(crate) selector_effort: Option<Option<String>>,
     pub(crate) selector_context_tier: Option<String>,
     pub(crate) evidence_source: Option<String>,
     pub(crate) source_model_identity: Option<String>,
@@ -274,7 +272,7 @@ impl RoutePreparation {
         Some(Self {
             state: non_empty(prepared.state.as_deref())?,
             model: non_empty(prepared.model.as_deref()),
-            effort: non_empty(prepared.effort.as_deref()),
+            effort: non_empty_reported(&prepared.effort),
             context_tier: non_empty(prepared.context_tier.as_deref()),
             summary: non_empty(prepared.summary.as_deref()),
             proposal_id: non_empty(prepared.proposal_id.as_deref()),
@@ -282,7 +280,7 @@ impl RoutePreparation {
             valid_until: non_empty(prepared.valid_until.as_deref()),
             relevant_input_identity: non_empty(prepared.relevant_input_identity.as_deref()),
             selector_model: non_empty(prepared.selector_model.as_deref()),
-            selector_effort: non_empty(prepared.selector_effort.as_deref()),
+            selector_effort: non_empty_reported(&prepared.selector_effort),
             selector_context_tier: non_empty(prepared.selector_context_tier.as_deref()),
             evidence_source: non_empty(prepared.evidence_source.as_deref()),
             source_model_identity: non_empty(prepared.source_model_identity.as_deref()),
@@ -1308,12 +1306,26 @@ pub(crate) fn routing_resolution_text(resolved: &RoutingResolved) -> Option<Stri
     }
 }
 
+fn non_empty_reported(value: &Option<Option<String>>) -> Option<Option<String>> {
+    match value {
+        Some(Some(value)) => non_empty(Some(value)).map(Some),
+        value => value.clone(),
+    }
+}
+
+pub(crate) fn preparation_effort_text(effort: &Option<Option<String>>, missing: &str) -> String {
+    match non_empty_reported(effort) {
+        Some(Some(effort)) => effort,
+        Some(None) => "not configurable".to_string(),
+        None => missing.to_string(),
+    }
+}
+
 pub(crate) fn routing_preparation_text(prepared: &RoutingPrepared) -> Option<String> {
     match prepared.state.as_deref()? {
         ROUTE_PREPARATION_PROPOSED => {
             let model = non_empty(prepared.model.as_deref())?;
-            let effort =
-                non_empty(prepared.effort.as_deref()).unwrap_or_else(|| "default".to_string());
+            let effort = preparation_effort_text(&prepared.effort, "default");
             // "not bound" is carried in the line itself rather than left to the
             // reader: this is the one Dashboard phrase that could be mistaken
             // for a Pickup, and the Queue row it must not have written is the
@@ -1356,8 +1368,7 @@ pub(crate) fn routing_preparation_text(prepared: &RoutingPrepared) -> Option<Str
                 }
             }
             if let Some(model) = non_empty(prepared.selector_model.as_deref()) {
-                let effort = non_empty(prepared.selector_effort.as_deref())
-                    .unwrap_or_else(|| "backend default".to_string());
+                let effort = preparation_effort_text(&prepared.selector_effort, "backend default");
                 text.push_str(&format!("; selector: {model}@{effort}"));
                 if let Some(tier) = non_empty(prepared.selector_context_tier.as_deref()) {
                     text.push_str(&format!("/{tier}"));

@@ -481,3 +481,17 @@ policy, not new routing behavior or final activation.
 Review tightened the observation seam: each CLI Pickup line is compared
 independently of startup and earlier output; selector bills now cross the actual
 SDK session adapter into Run-only Consumption, including refused retries.
+
+Rust Dashboard readback now distinguishes explicit Dynamic null effort (not
+configurable) from the advertised value `none` in Queue and contribution Route
+cells. Preparation preserves explicit null work and selector efforts through
+decoding, semantic projection and rendered issue Log; it remains nonbinding.
+Static omission and historical missing/empty preparation fields retain their
+earlier wording, and sparse historical Pickups do not acquire a no-dial claim.
+The shared Dashboard fixture's `effort_readback` matrix covers this display
+boundary, including serial and Lane-stamped contribution replay. It does not
+prove actual work-session settings or activate Dynamic defaults. The separately
+published Python effort-matching and local-durability deliveries still require
+integration, and executing-host capability authority and remaining composed
+activation obligations remain outstanding. Shell/PowerShell activation and
+Subagent/Integration routing remain deferred.
