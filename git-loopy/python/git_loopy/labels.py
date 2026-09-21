@@ -86,6 +86,7 @@ __all__ = [
     "SEMVER_LABELS",
     "WAYFINDER_LABELS",
     "WAYFINDER_LABEL_PREFIX",
+    "WAYFINDER_LABEL_COLOR",
     "MAPPING_DOC_RELPATH",
     "MAX_DESCRIPTION_LENGTH",
     "bootstrap_labels",
@@ -234,6 +235,21 @@ SEMVER_LABELS: tuple[LabelSpec, ...] = tuple(
 #: types share it so a tracker's label list groups the whole effort together.
 WAYFINDER_LABEL_PREFIX: str = "wayfinder:"
 
+#: One colour for the whole ``wayfinder:`` family, the way ``task-type:`` shares
+#: ``1d76db`` and ``semver:`` shares ``fbca04``: a closed taxonomy reads as one
+#: family in the tracker's list.
+#:
+#: Teal is picked because nothing else in the vocabulary uses it. The five
+#: labels first reached this tracker ad hoc, before there was a vocabulary to
+#: consult, and they landed on four colours already spoken for — two of which
+#: read *backwards*: ``wayfinder:task`` wore ``ready-for-agent``'s green while
+#: meaning manual human work, and ``wayfinder:research`` wore
+#: ``ready-for-human``'s blue while being the one AFK type. Nothing reads a
+#: colour, so this is legibility rather than behaviour, which is why it is a
+#: :func:`reconcile_labels` correction an operator opts into and never something
+#: :func:`bootstrap_labels` imposes.
+WAYFINDER_LABEL_COLOR: str = "006b75"
+
 #: The five labels ``/wayfinder`` writes: one for the **map** issue and one per
 #: **ticket type**.
 #:
@@ -252,31 +268,31 @@ WAYFINDER_LABELS: tuple[LabelSpec, ...] = (
     LabelSpec(
         role=f"{WAYFINDER_LABEL_PREFIX}map",
         name=f"{WAYFINDER_LABEL_PREFIX}map",
-        color="5319e7",
+        color=WAYFINDER_LABEL_COLOR,
         description="Wayfinder map: index of an effort's decision tickets",
     ),
     LabelSpec(
         role=f"{WAYFINDER_LABEL_PREFIX}research",
         name=f"{WAYFINDER_LABEL_PREFIX}research",
-        color="1d76db",
+        color=WAYFINDER_LABEL_COLOR,
         description="Wayfinder research ticket (AFK, /research)",
     ),
     LabelSpec(
         role=f"{WAYFINDER_LABEL_PREFIX}prototype",
         name=f"{WAYFINDER_LABEL_PREFIX}prototype",
-        color="fbca04",
+        color=WAYFINDER_LABEL_COLOR,
         description="Wayfinder prototype ticket (HITL, /prototype)",
     ),
     LabelSpec(
         role=f"{WAYFINDER_LABEL_PREFIX}grilling",
         name=f"{WAYFINDER_LABEL_PREFIX}grilling",
-        color="d93f0b",
+        color=WAYFINDER_LABEL_COLOR,
         description="Wayfinder grilling ticket (HITL, /grilling)",
     ),
     LabelSpec(
         role=f"{WAYFINDER_LABEL_PREFIX}task",
         name=f"{WAYFINDER_LABEL_PREFIX}task",
-        color="0e8a16",
+        color=WAYFINDER_LABEL_COLOR,
         description="Wayfinder task ticket (manual work unblocking a decision)",
     ),
 )

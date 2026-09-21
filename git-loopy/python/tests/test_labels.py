@@ -372,6 +372,33 @@ def test_the_wayfinder_labels_are_not_renameable_by_the_documented_mapping(
     assert "map" not in names
 
 
+def test_the_wayfinder_labels_share_one_colour_like_every_closed_taxonomy(
+    tmp_path: Path,
+) -> None:
+    """A closed taxonomy reads as one family, and this one owns its colour alone.
+
+    ``task-type:`` shares one blue and ``semver:`` one yellow; ``wayfinder:``
+    shares one teal for the same reason. The five reached this tracker ad hoc
+    before a vocabulary existed to consult, so they landed on four colours
+    already spoken for — and two read *backwards*: ``wayfinder:task`` wore
+    ``ready-for-agent``'s green while meaning manual human work, and
+    ``wayfinder:research`` wore ``ready-for-human``'s blue while being the one
+    AFK type. Asserting the colour is unshared is what stops the family drifting
+    back apart one label at a time.
+    """
+    vocabulary = labels_module.read_tracker_vocabulary(tmp_path)
+    prefix = labels_module.WAYFINDER_LABEL_PREFIX
+
+    wayfinder = [spec for spec in vocabulary if spec.name.startswith(prefix)]
+    assert {spec.color for spec in wayfinder} == {labels_module.WAYFINDER_LABEL_COLOR}
+    assert not [
+        spec
+        for spec in vocabulary
+        if not spec.name.startswith(prefix)
+        and spec.color == labels_module.WAYFINDER_LABEL_COLOR
+    ]
+
+
 def test_a_run_never_requires_the_wayfinder_labels(tmp_path: Path) -> None:
     """An absent ``wayfinder:`` label costs a planning session, never an Iteration.
 
