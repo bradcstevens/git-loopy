@@ -171,12 +171,13 @@ cannot pin to one Release, changes nothing and prints the exact command instead
 — see
 [moving between Releases](git-loopy/python/README.md#moving-between-releases-git-loopy-upgrade).
 
-A Python Run with saved Config also refuses before work until a routing choice
+A local Python Run with saved Config also refuses before work until a routing choice
 is supplied or recorded. Use `git-loopy update --routing keep` or
 `git-loopy update --routing migrate` with `--project`/`--global`, or select
 `--route-policy static`/`dynamic` for one Run. Config is not rewritten by a Run;
-Static work needs no leaderboard access. This migration guard is not final
-Dynamic-default activation; see [routing migration](git-loopy/python/README.md#explicit-routing-migration).
+Static work needs no leaderboard access. Non-local activation remains deferred,
+so unselected GitHub Actions Runs retain their legacy path. This migration guard
+is not final Dynamic-default activation; see [routing migration](git-loopy/python/README.md#explicit-routing-migration).
 
 `git-loopy uninstall` takes the same installation back off the machine through
 the same proven channel, together with the global config-home, the installed
@@ -236,6 +237,7 @@ CLI — see [`docs/skills-setup.md`](docs/skills-setup.md#13-also-give-copilot-c
 | [`/codebase-audit`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/codebase-audit) | Audit a codebase line by line for junk files, dead code, and security holes before a push. |
 | [`/resolving-merge-conflicts`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/resolving-merge-conflicts) | Resolve merge or rebase conflicts hunk by hunk from each side's documented intent. |
 | [`/push`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/push) | Publish finished work: stage the intended changes, commit, push, and open a pull request when one is needed. |
+| [`/release`](https://github.com/bradcstevens/git-loopy-skills/tree/main/skills/release) | Publish one release for all unreleased issues git-loopy completed, using the target project's versioning and release gates. Install this user-invoked skill separately in your agent; it is not a Required Skill in a Run. |
 
 ### Set up and extend the workflow
 

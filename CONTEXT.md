@@ -792,7 +792,7 @@ handoff (ADR-0057). The installed Runner's routing-aware update checks readiness
 before writing Config; a same-Release target skips reinstallation, not consent.
 Retired routing keys refuse that update until an explicit bare **update**
 repairs them; the successful distribution install is not rolled back.
-Project Config remains outside this command's scope. Runs with saved Config now
+Project Config remains outside this command's scope. Local Runs with saved Config now
 independently require a supplied or recorded routing choice before work; this
 does not activate Dynamic defaults.
 _Avoid_: update, self-update, install.
@@ -894,13 +894,14 @@ _Avoid_: global default (ambiguous — **Config** has global scope), fallback mo
 
 **Route policy**:
 Which rule this **Run** decides a **Routing resolution** by. Selected, never inferred: *unselected*
-is the absence of a decision. Python refuses saved Config with no effective choice
+is the absence of a decision. Local Python refuses saved Config with no effective choice
 before work; flag/environment authority may supply it temporarily, while
 `update --routing` records it in Config. The same no-write verdict is used by
 CLI startup, doctor and Run preflight, including detached startup. A model/effort
 override alone does not answer the migration question. Historical streams and
-the staged no-Config path retain their legacy semantics until final default
-activation. *Static* selects the **Static route**;
+staged no-Config/non-local paths retain their legacy semantics. Non-local
+activation awaits the executing host's actual capabilities; a local model
+listing cannot authorize its selected routes. *Static* selects the **Static route**;
 *dynamic* selects the **Dynamic route**.
 A name the kit does not implement is refused rather than absorbed, because a policy silently
 ignored runs the **Run** under one the operator did not ask for and believes is active. It is one

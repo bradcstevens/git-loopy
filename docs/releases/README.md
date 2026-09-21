@@ -83,6 +83,24 @@ and ensure the compiled `git-loopy-tui` binary is available on `PATH` or placed 
 
 ## Release target and Promotion
 
+### Releasing a completed batch with `/release`
+
+The user-invoked
+[`/release` skill](https://github.com/bradcstevens/git-loopy-skills/blob/main/docs/release.md)
+operates in the repository where git-loopy completed the work. It groups all
+unreleased, integrated issue completions into one release and follows that
+project's own versioning and publication procedure. Install it in your agent from
+the external skills catalog; this does not change git-loopy's pinned Run catalog
+or add publication authority to an Agent.
+
+For this repository, `/release` promotes the existing Release target through the
+Promotion path below. It does not bump again per issue, invent a milestone, or
+bypass candidate proof. Its stable batch includes the development fragments
+since the previous stable release. Missing prerequisites are reported as blockers,
+and an already-published batch is a no-op.
+
+### Advancing the target
+
 A closed issue's **Bump class** label advances the Release line after
 Integration. The Release target is the ratchet across those labels, while the
 `dev.N` counter records each advance; see [ADR-0052](../adr/0052-the-release-line-advances-per-issue.md).

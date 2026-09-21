@@ -38,7 +38,11 @@ CapabilitiesFetch = Callable[[], Awaitable[HarnessCapabilities | None]]
 
 def routing_choice_refusal(config: RunConfig) -> str | None:
     """The no-I/O authority check shared by CLI startup and live preflight."""
-    if config.saved_config_present and config.route_policy is RoutePolicy.UNSELECTED:
+    if (
+        config.saved_config_present
+        and config.route_policy is RoutePolicy.UNSELECTED
+        and config.execution_host == LOCAL_EXECUTION_HOST_PLACEMENT
+    ):
         return (
             "Saved Config needs an explicit keep-or-migrate decision before "
             "agent work. Run `git-loopy update --routing keep` or "
@@ -106,7 +110,10 @@ async def resolve_run_routing_preflight(
                 f"{LOCAL_EXECUTION_HOST_PLACEMENT!r} placement. Run with "
                 f"--execution-host {LOCAL_EXECUTION_HOST_PLACEMENT} "
                 f"(GIT_LOOPY_EXECUTION_HOST={LOCAL_EXECUTION_HOST_PLACEMENT} "
-                "for doctor). Leaving route_policy unset is not migration consent."
+                "for doctor). Routing activation for non-local placements is "
+                "deferred; --route-policy unselected "
+                "(GIT_LOOPY_ROUTE_POLICY=unselected for doctor) retains their "
+                "legacy path, not strict Static or Dynamic validation."
             )
         )
 

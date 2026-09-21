@@ -22,7 +22,7 @@ Three ideas, one per section below.
 decision rather than a guess that a saved recommended value is disposable, so
 :class:`RoutePolicy` has an ``UNSELECTED`` member and it is the default. Every
 behaviour in this module is conditional on ``STATIC``. Shared preflight refuses
-saved Config without a selected policy; historical unselected records and the
+local saved Config without a selected policy; historical unselected records and the
 staged no-Config path retain their legacy interpretation.
 
 **The authenticated harness is the authority.** :class:`HarnessCapabilities`
@@ -83,9 +83,9 @@ class RoutePolicy(Enum):
     ``UNSELECTED`` is not "static by default". It is the *absence* of a
     decision, and it is load-bearing: ADR-0057 forbids reinterpreting an
     existing Config as though the new policy had always been in force, so a
-    saved Config without a choice is refused by shared preflight. Historical
-    unselected records keep their legacy interpretation; the no-Config path
-    remains staged until final default activation.
+    local saved Config without a choice is refused by shared preflight. Historical
+    unselected records keep their legacy interpretation; no-Config and non-local
+    paths remain staged until their activation.
 
     ``DYNAMIC`` is the opt-in policy :mod:`git_loopy.dynamic_route` implements
     (#561). It lives here beside ``STATIC`` because the two are one closed
@@ -116,7 +116,7 @@ class RoutePolicy(Enum):
                 return policy
         raise RoutePolicyError(
             f"route_policy must be 'static' or 'dynamic' (got {raw!r}); leave "
-            "it unset to keep the current behaviour."
+            "it unset only for staged no-Config or non-local legacy behavior."
         )
 
 

@@ -525,7 +525,7 @@ def build_parser() -> argparse.ArgumentParser:
             "the Route selector choose an unpinned issue's route from live "
             "Artificial Analysis evidence, and needs "
             "GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY plus the three bounds below. "
-            "Saved Config requires an explicit static/dynamic choice, here, "
+            "Local Runs with saved Config require an explicit static/dynamic choice, here, "
             "in GIT_LOOPY_ROUTE_POLICY, or recorded with update --routing "
             "keep/migrate. Both choices preserve authored Static rows and "
             "require explicit [escalation] for Static retries."
@@ -2501,7 +2501,7 @@ def _resolve_route_policy(
     Absence is the answer that matters. ADR-0057 requires a keep-or-migrate
     decision rather than a guess that a saved recommended value is disposable,
     so an unset key resolves to
-    :attr:`~git_loopy.static_route.RoutePolicy.UNSELECTED`. Saved Config then
+    :attr:`~git_loopy.static_route.RoutePolicy.UNSELECTED`. Local saved Config then
     requires explicit authority at startup and shared Run/doctor preflight;
     resolution and readback alone neither choose nor persist a policy.
     """
@@ -3169,7 +3169,7 @@ def main(argv: list[str] | None = None) -> int:
     # the Run on the Minimal Skill policy without persisting it.
     startup_state = classify_skill_policy_startup(
         config.skill_policy,
-        config_present=bool(tables.project or tables.global_),
+        config_present=config.saved_config_present,
     )
     if _should_migrate_skill_policy(
         startup_state, sys.stdin.isatty()

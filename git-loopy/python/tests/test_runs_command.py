@@ -313,6 +313,7 @@ def test_a_real_worker_that_died_before_its_first_event_is_listed_dead(
     monkeypatch.setattr(cli_module, "_make_label_client", lambda: None)
     assert cli_module.main(["init", "--yes", "--project"]) == 0
 
+    monkeypatch.setenv("GIT_LOOPY_ROUTE_POLICY", "static")
     monkeypatch.setenv("PATH", _path_with_git_alone(tmp_path))
     monkeypatch.chdir(repo)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: True)

@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "contract_version": "2.8",
+  "scope": "Staged record inspection only; live Lease enforcement remains pending under #390.",
+  "repository": "bradcstevens/git-loopy",
+  "issue": 390,
+  "record": {
+    "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "issue": 390,
+    "repository": "bradcstevens/git-loopy",
+    "claimed_at": 1000,
+    "heartbeat_at": 1000,
+    "ttl_seconds": 300,
+    "host": "laptop",
+    "pid": 42
+  },
+  "cases": [
+    {
+      "id": "valid-live-record",
+      "now": 1000,
+      "expected": {
+        "state": "live",
+        "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "diagnostics": []
+      },
+      {
+        "id": "exact-ttl-is-still-live",
+        "now": 1300,
+        "expected": {"state": "live", "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "diagnostics": []}
+      },
+      {
+        "id": "one-second-past-ttl-expires",
+        "now": 1301,
+        "expected": {"state": "expired", "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "diagnostics": []}
+      },
+      {
+        "id": "renewed-quiet-agent-remains-live",
+        "set": {"heartbeat_at": 10000},
+        "now": 10001,
+        "expected": {"state": "live", "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "diagnostics": []}
+      },
+      {
+        "id": "stored-ttl-not-reader-default",
+        "set": {"ttl_seconds": 600},
+        "now": 1301,
+        "expected": {"state": "live", "owner": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "diagnostics": []}
+      }
+    }
+  ]
+}
