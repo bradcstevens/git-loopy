@@ -408,6 +408,24 @@ obligations still precede final default
 activation. Dynamic routing remains opt-in; shell/PowerShell activation is
 deferred, and no Subagent or Integration routing support is implied.
 
+The shared `publication_recovery` matrix now carries recorded init/update
+authorization through repeated real CLI Runs in serial and Lane modes. Eight cases
+cover fresh reuse, permission/rate-limit/transient failures, partial delivery,
+exhausted retries and capability withdrawal requiring a changed assignment.
+The composed seam exposed a publication retry-bound bypass: restart retries excluded
+terminal delivery, but a later Pickup of the same assignment tried again.
+The shared delivery path now respects that terminal state before any tracker I/O,
+retains its original failure, and leaves locally recorded work unblocked. Restored
+access does not silently renew exhausted retries; a changed final assignment
+gets its own delivery. Actual sessions, canonical Pickup and Dashboard route
+readback agree, with original reuse provenance, unchanged Config and idempotent
+tracker effects. This closes that bounded-publication gap, not final activation.
+If replacement exhausts while an old association remains, or after its removal
+but before the replacement add succeeds, the tracker can retain the previous owned
+association or have no Route label.
+That partial projection has no authority: local failure stays visible and does
+not authorize unbounded repair calls. The matrix covers both outcomes.
+
 The shared routing fixture now carries seven `retry_lifecycle` cases after
 recorded migration, through real CLI serial work and a Lane followed by its
 permitted serial retry. Actual settings, canonical Pickup, recorded outcome

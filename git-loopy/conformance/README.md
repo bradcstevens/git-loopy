@@ -78,6 +78,22 @@ remote execution cases protect the staged compatibility path; this matrix does
 not implement remote capabilities, activate Dynamic defaults or remove native
 member deferrals.
 
+The `publication_recovery` matrix carries an explicit migrate choice through
+init/update over authored unselected Config, then repeats real CLI Runs in serial
+and Lane modes. It reuses the migration matrix's synthetic inputs and checks
+actual sessions, canonical Pickup, Dashboard route readback, fresh source reads
+and original reuse provenance alongside cumulative tracker operations.
+Permission, rate-limit and transient failures stay non-blocking; partial delivery
+does not repeat an accepted comment. Exhausted retries remain exhausted across
+Pickups and restored access, while capability withdrawal requires a new final
+assignment with its own finite retry bound. Replacement failures cover both the
+previous owned association remaining and removal accepted before the new association fails;
+both remain visibly failed rather than claiming tracker agreement. The Python adapter is
+`test_recorded_routing_reuse_preserves_publication_recovery_bounds` in the same
+suite. These are recorded-authorization cases, not another first-wizard claim.
+Shell/PowerShell activation remains deferred; no default, historical stream,
+Subagent or Integration behavior changes.
+
 The `retry_lifecycle` matrix carries a recorded `update --routing migrate`
 choice through actual CLI work in
 `python/tests/test_routing_retry_conformance.py`. Seven cases run in serial and

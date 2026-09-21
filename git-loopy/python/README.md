@@ -1556,8 +1556,25 @@ These tracker writes are observational. They never become Routing input, never
 change a Task type, and never override Config. A failed comment or label write
 does not stop the already-recorded work: its local delivery state remains
 pending or failed, is retried finitely on a later Run, and appears separately in
-the Dashboard. A failed local final-resolution record is different and starts no
-work.
+the Dashboard. The three failed delivery attempts are shared across startup
+retries and later Pickups of the same assignment. Once exhausted, that assignment
+stays visibly failed without contacting the tracker again; restarting or restoring
+tracker access does not renew exhausted retries. A materially changed final assignment
+has its own finite retry bound. Neither state blocks locally recorded work. A failed local
+final-resolution record is different and starts no work.
+An exhausted label replacement may leave the previous Route label, or no Route label
+if its removal succeeded before the replacement failed. Read the canonical local
+Route and delivery status, not that incomplete tracker projection. Correcting an
+association on the tracker does not change routing authority or renew retries.
+
+The shared `publication_recovery` Conformance cases carry explicit init/update
+authorization through repeated offline CLI Runs in serial and Lane modes. They
+cover fresh reuse without another selector call, permission/rate-limit/transient
+failures, partial delivery without duplicate comments, exhausted retries, and
+previous or missing owned associations after replacement failure. Capability withdrawal
+requires a new final assignment. Session settings,
+canonical Pickup, Dashboard route readback and tracker effects agree; Config is
+unchanged. This does not enable the final Dynamic default or remote-host routing.
 
 ### What a later attempt is told
 

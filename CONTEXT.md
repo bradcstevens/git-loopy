@@ -972,7 +972,8 @@ same triple compactly. Written *after* the canonical local record, never before 
 could not be recorded locally starts no work and is published nowhere — and non-blocking once that
 record exists, so a permission failure, rate limit or half-delivered pair is retained as *pending*,
 *partial* or *failed* delivery and retried a bounded number of times rather than reported as
-published. It is strictly an output: a comment or label cannot pin, select or validate a route, the
+published. Exhausted delivery remains *failed*, not renewed by a later Run or restored access.
+It is strictly an output: a comment or label cannot pin, select or validate a route, the
 Runner keeps its own projection out of the issue block it reads back so publishing cannot invalidate
 the assessment that produced it, and a projection a newer resolution has overtaken is *stale* and is
 dropped rather than delivered late over the current label. Only a materially changed final
@@ -1561,8 +1562,10 @@ evidence and input identity it depends on. It is revalidated or superseded befor
 _Avoid_: Routing resolution (binding), Lease (authority), assignment.
 
 **Route label**:
-The observational tracker label representing an issue's latest final **Routing
-resolution**. It is a projection, never authority to choose, override, or pin a route.
+The observational tracker label projecting an issue's final **Routing resolution**,
+which may still represent a previous resolution or be absent after failed replacement
+and exhausted delivery retries. The canonical local resolution and delivery status
+describe the current assignment; the label is never authority to choose, override, or pin a route.
 _Avoid_: model pin, routing input.
 
 ## Relationships
