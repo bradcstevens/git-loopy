@@ -374,13 +374,29 @@ class LeaseTransport:
         *, timeout_seconds: float = _WRITE_BUDGET_SECONDS,
     ) -> bool:
         """Retry the identical swap, never a fresh observation or a rejected swap."""
+        accepted, _ = self._push_counted(
+            ref, sha, expected, timeout_seconds=timeout_seconds
+        )
+        return accepted
+
+    def _push_counted(
+        self, ref: str, sha: str | None, expected: str | None,
+        *, timeout_seconds: float = _WRITE_BUDGET_SECONDS,
+    ) -> tuple[bool, int]:
+        """As :meth:`_push`, also reporting how many attempts it took.
+
+        The count is what tells a *replayed* write from a first one, and only
+        a replay can have landed before its acknowledgement went missing. A
+        swap rejected on attempt one sent nothing before it, so a ref that is
+        gone afterwards was removed by somebody else.
+        """
         deadline = self._clock() + min(timeout_seconds, _WRITE_BUDGET_SECONDS)
         for attempt in range(_WRITE_ATTEMPTS):
             try:
                 return self._git.push_ref(
                     self._remote, ref, sha, expected,
                     timeout_seconds=deadline - self._clock(),
-                )
+                ), attempt + 1
             except GitError as exc:
                 if (
                     attempt == _WRITE_ATTEMPTS - 1
@@ -590,6 +606,15 @@ class LeaseTransport:
         read (``not_owned``) or between the read and the swap (a rejection,
         reported the same way). Renewal must be stopped before release, or a
         Run's own heartbeat will race its delete (ADR-0033 §3.6).
+
+        ``absent`` means only one thing: the ref was *already* gone when this
+        call looked, so this call removed nothing. A delete whose
+        acknowledgement was lost answers ``released``, because it is one — the
+        ref was read as this Run's, a delete was pushed, and its absence
+        confirmed. Keeping those two apart matters to the caller: a live hold
+        answered ``absent`` is a Lease that ended without its owner's
+        knowledge, which is evidence of loss, while a lost acknowledgement is
+        an ordinary success.
         """
         observation = self.observe(hold.issue, now=now)
         verdict = decide_lease_action(
@@ -602,10 +627,15 @@ class LeaseTransport:
             return "absent"
         if verdict != "release":
             return "not_owned"
-        if not self._push(hold.ref, None, observation.sha):
-            # A delete may have landed before its acknowledgement was lost.
-            # Re-reading can confirm absence, but never authorizes another write.
-            if self.observe(hold.issue, now=now).state == "absent":
-                return "absent"
+        accepted, attempts = self._push_counted(hold.ref, None, observation.sha)
+        if not accepted:
+            # A delete may have landed before its acknowledgement was lost —
+            # but only a *replayed* one can have. A swap rejected on the first
+            # attempt sent nothing before it, so a ref that is gone afterwards
+            # was removed by somebody else, which is news of loss and not a
+            # release. Re-reading can confirm absence, never authorize another
+            # write.
+            if attempts > 1 and self.observe(hold.issue, now=now).state == "absent":
+                return "released"
             return "not_owned"
         return "released"

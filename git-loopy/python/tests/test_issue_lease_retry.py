@@ -271,7 +271,10 @@ def test_retry_recognizes_a_write_whose_acknowledgement_was_lost(
         assert transport.renew(previous, now=1060)
     else:
         assert previous is not None
-        assert transport.release(previous, now=1060) == "absent"
+        # A delete whose acknowledgement was lost still landed, so it is a
+        # release, not an absence: the caller must be able to tell "I removed
+        # it" from "it was gone before I looked".
+        assert transport.release(previous, now=1060) == "released"
     assert clock.waits == [1.0]
     assert len(git.push_ref_calls) == 2
     assert git.push_ref_calls[0] == git.push_ref_calls[1]
