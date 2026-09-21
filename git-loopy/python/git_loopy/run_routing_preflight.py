@@ -158,13 +158,27 @@ async def resolve_run_routing_preflight(
                 return RunRoutingPreflight(
                     refusal=f"the selected Static route was refused: {name}: {exc}"
                 )
+    ledger = None
+    if (
+        config.route_policy is RoutePolicy.DYNAMIC
+        and not config.routing_suppressed
+        and config.routing_deadline_seconds is not None
+        and config.routing_credit_allowance is not None
+        and config.selector_concurrency is not None
+    ):
+        try:
+            ledger = RoutingAdmissionLedger(
+                deadline_seconds=config.routing_deadline_seconds,
+                routing_credit_allowance=config.routing_credit_allowance,
+                selector_concurrency=config.selector_concurrency,
+            )
+        except ValueError as exc:
+            return RunRoutingPreflight(refusal=f"Dynamic routing needs valid limits: {exc}")
     if prerequisites is None:
-        return RunRoutingPreflight(dynamic_refusal=dynamic_refusal)
-    ledger = RoutingAdmissionLedger(
-        deadline_seconds=prerequisites.deadline_seconds,
-        routing_credit_allowance=prerequisites.routing_credit_allowance,
-        selector_concurrency=prerequisites.selector_concurrency,
-    )
+        return RunRoutingPreflight(
+            dynamic_refusal=dynamic_refusal, admission_ledger=ledger,
+        )
+    assert ledger is not None
     source = ArtificialAnalysisSource(
         prerequisites.api_key, associations=prerequisites.associations
     )

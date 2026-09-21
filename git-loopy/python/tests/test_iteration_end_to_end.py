@@ -6753,6 +6753,7 @@ def test_saved_dynamic_work_without_access_starts_no_classifier_or_fallback(
         {
             "GIT_LOOPY_CLASSIFIER_MODEL": "gpt-5.6-terra",
             "GIT_LOOPY_CLASSIFIER_REASONING_EFFORT": "high",
+            "GIT_LOOPY_ROUTING_CREDIT_ALLOWANCE": "0",
         },
         project=tables.project, global_=tables.global_, measured=tables.measured,
     ).run
@@ -6778,7 +6779,10 @@ def test_saved_dynamic_work_without_access_starts_no_classifier_or_fallback(
     )
     assert any(
         e["type"] == "wrapper.pickup.skipped" and e["issue"] == 42
-        and "prerequisite_missing" in e["reason"]
+        and (
+            "prerequisite_missing" in e["reason"]
+            or "quota_exhausted" in e["reason"]
+        )
         for e in events
     )
     assert not any(ref == 42 for ref, _comment in tracker.route_comment_calls)

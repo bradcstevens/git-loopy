@@ -968,16 +968,14 @@ def _assessed_task_type(resolution: RoutingResolution) -> str:
 
 @dataclass(frozen=True)
 class _DynamicRoutingSetup:
-    """Everything one Run needs to route dynamically, resolved once at preflight.
+    """The Run's authorized routing budget and any complete selector prerequisites.
 
-    One object rather than three constructor parameters because the three are
-    never individually meaningful: a Run either selected the policy and has all
-    of them, or did not and has none. It also keeps the "did this Run select
-    the policy?" question answerable by a single ``is None``, the way the
-    **Task-type classifier**'s pair already is.
+    Classification may discover a Static route without leaderboard access. It
+    still needs explicit limits and shares their ledger with any Route selector.
+    Missing prerequisites permit no selector, not an unmetered classifier.
     """
 
-    prerequisites: DynamicRoutePrerequisites
+    prerequisites: DynamicRoutePrerequisites | None
     admission_ledger: RoutingAdmissionLedger
     feedback_loops: tuple[FeedbackLoop, ...]
     measured: MeasuredRouting | None
@@ -1257,7 +1255,7 @@ class _Loop:
         # AC9 requires before work is an Event on this Run's own log.
         self._dynamic_router = (
             None
-            if dynamic_routing is None
+            if dynamic_routing is None or dynamic_routing.prerequisites is None
             else _make_dynamic_router(
                 dynamic_routing.prerequisites,
                 selector_assess=SessionRouteSelector(
@@ -2219,8 +2217,9 @@ class _Loop:
 
         Raises:
             DynamicRouteUnavailable: When this Run selected the **Dynamic
-                route**, no Static route applies to the settled **Task type**,
-                and the route could not be elected (#561). Raised rather than
+                route** and no Static route can be established within the
+                authorized classification limits, or the required selector
+                cannot elect a route (#561). Raised rather than
                 returned because there is no second answer to return: AC11
                 forbids the stale, default and cheaper-selector fallbacks, so
                 the only honest outcome is that this issue is not worked this
@@ -2230,43 +2229,50 @@ class _Loop:
         if (
             self._config.route_policy is RoutePolicy.DYNAMIC
             and not self._config.routing_suppressed
-            and self._dynamic_router is None
+            and self._dynamic_routing is None
         ):
-            if not static_route_applies(routed):
-                raise DynamicRouteUnavailable(
-                    RoutingUnavailableReason.PREREQUISITE_MISSING.value
-                )
             task_type_labelled = item
         else:
             task_type_labelled = await self._labelled_for_routing(item)
         if isinstance(task_type_labelled, RoutingUnavailable):
             raise DynamicRouteUnavailable(task_type_labelled.reason.value)
+        resolution = routed
+        if task_type_labelled is not item:
+            try:
+                resolution = self._resolve_route(
+                    task_type_labelled, warn=lambda _message: None
+                )
+            except TaskTypeError as exc:
+                self._diag.warning(
+                    "issue #%s: inferred task type did not re-route (%s); keeping "
+                    "the pair its Pickup admitted it on",
+                    item.ref,
+                    exc,
+                )
+                task_type_labelled = item
+            else:
+                self._diag.info(
+                    "issue #%s classified as %s; routed to %s @ %s",
+                    task_type_labelled.ref,
+                    ", ".join(resolution.task_type_keys) or "nothing",
+                    resolution.model,
+                    resolution.reasoning_effort,
+                )
+        self._require_route_selector(resolution)
         labelled = await self._bump_classifier.labelled(task_type_labelled)
-        if task_type_labelled is item:
-            return labelled, await self._bound_route(labelled, routed)
-        try:
-            resolution = self._resolve_route(labelled, warn=lambda _message: None)
-        except TaskTypeError as exc:
-            # Unreachable while the classifier writes only closed-taxonomy keys,
-            # and handled anyway: by this point the issue is *bound*, so the
-            # refusal that would have been a skip at admission has nowhere to go
-            # but the Iteration. Keeping the admitted pair loses the inference
-            # and nothing else.
-            self._diag.warning(
-                "issue #%s: inferred task type did not re-route (%s); keeping "
-                "the pair its Pickup admitted it on",
-                item.ref,
-                exc,
-            )
-            return item, await self._bound_route(item, routed)
-        self._diag.info(
-            "issue #%s classified as %s; routed to %s @ %s",
-            labelled.ref,
-            ", ".join(resolution.task_type_keys) or "nothing",
-            resolution.model,
-            resolution.reasoning_effort,
-        )
         return labelled, await self._bound_route(labelled, resolution)
+
+    def _require_route_selector(self, resolution: RoutingResolution) -> None:
+        """Uncovered Dynamic work needs a selector, never a placeholder default."""
+        if (
+            self._config.route_policy is RoutePolicy.DYNAMIC
+            and not self._config.routing_suppressed
+            and self._dynamic_router is None
+            and not static_route_applies(resolution)
+        ):
+            raise DynamicRouteUnavailable(
+                RoutingUnavailableReason.PREREQUISITE_MISSING.value
+            )
 
     async def _bound_route(
         self, item: AfkReadyItem, resolution: RoutingResolution
@@ -2326,10 +2332,9 @@ class _Loop:
                 reported_routing_credits=reported,
             )
 
-        router = self._dynamic_router
-        if router is None:
+        if self._dynamic_routing is None:
             return await proposer(pair, item)
-        result = await router.classify(call)
+        result = await self._dynamic_routing.admission_ledger.classify(call)
         if isinstance(result, RoutingUnavailable):
             self._classification_denials[item.ref] = result
             return None
@@ -2396,13 +2401,8 @@ class _Loop:
         something a cache may participate in either.
         """
         router = self._dynamic_router
-        if static_route_applies(resolution):
-            return resolution
-        if router is None:
-            if self._config.route_policy is RoutePolicy.DYNAMIC:
-                raise DynamicRouteUnavailable(
-                    RoutingUnavailableReason.PREREQUISITE_MISSING.value
-                )
+        self._require_route_selector(resolution)
+        if router is None or static_route_applies(resolution):
             return resolution
         request = self._routing_request(item, resolution)
         decision = await self._bound_dynamic_decision(item, request, router)
@@ -6698,8 +6698,7 @@ async def run(
     if routing_preflight.dynamic_refusal is not None:
         print(f"git-loopy: {routing_preflight.dynamic_refusal}", file=sys.stderr)
     dynamic_routing = None
-    if routing_preflight.prerequisites is not None:
-        assert routing_preflight.admission_ledger is not None
+    if routing_preflight.admission_ledger is not None:
         dynamic_routing = _DynamicRoutingSetup(
             prerequisites=routing_preflight.prerequisites,
             admission_ledger=routing_preflight.admission_ledger,

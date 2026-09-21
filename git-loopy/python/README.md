@@ -1292,9 +1292,12 @@ issue context has been assessed, and proposal and Pickup must check fresh inputs
 again. A failed Dynamic-readiness row makes doctor nonzero but does not prevent a
 Run from reaching eligible Static work or recovering on a later fresh check.
 Missing Dynamic access or prerequisites leave uncovered work unavailable for that
-Run: no Task-type classifier, Route selector, or fallback work session is started
-for it. Retained Static routes still undergo live validation and may proceed
-without a leaderboard credential. Restore the prerequisites before starting a
+Run: no Route selector or fallback work session is started for it. A Task-type
+classifier may still discover a retained Static route without leaderboard access,
+but only within the explicitly authorized routing deadline, allowance and
+concurrency. Its usage remains Run Consumption; missing or exhausted limits admit
+no classification. Retained Static routes still undergo live validation.
+Restore the prerequisites before starting a
 new Dynamic Run; unlike a transient source outage, a Run with no authorized
 routing setup cannot recover by inventing it later. Setup and migration still
 refuse to save an unready Dynamic choice, and doctor remains nonzero.

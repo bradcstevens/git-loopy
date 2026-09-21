@@ -262,8 +262,11 @@ inputs abort before scope writes. The operator-owned key stays outside Config.
 Missing Dynamic prerequisites at Run preflight now leave retained Static work
 usable rather than refusing the whole Run. The shared verdict still validates
 Static settings and makes setup, migration and doctor refuse an unready Dynamic
-choice. In serial and Lane Pickups, uncovered work without authorized Dynamic
-setup is refused before classification or any fallback work session; later
+choice. Classification keeps its existing order: explicit routing limits can
+authorize it to discover a retained Static route without leaderboard access,
+and its usage still consumes the same Run allowance. Missing or exhausted limits
+admit no classification. In serial and Lane Pickups, work still uncovered after
+classification is refused before a Bump-class or fallback work session; later
 eligible Static work can proceed. Saved init/update/upgrade cases remove access
 after authorization and observe actual Static session settings, canonical Pickup,
 unchanged Config, and no leaderboard or selector call. Mixed-Pool cases preserve

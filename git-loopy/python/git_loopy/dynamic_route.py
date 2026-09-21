@@ -1138,6 +1138,21 @@ class RoutingAdmissionLedger:
         """Classification shares the selector's admission limits, not its count."""
         return await self._run_call(call, classification=True)
 
+    async def classify(
+        self, call: Callable[[], Awaitable[SelectorCallResult]]
+    ) -> SelectorCallResult | RoutingUnavailable:
+        """Admit classification independently of leaderboard access or evidence."""
+        result, refusal = await self.run_classification(call)
+        if refusal is _AdmissionRefusal.QUOTA:
+            reason = RoutingUnavailableReason.QUOTA_EXHAUSTED
+        elif refusal is _AdmissionRefusal.DEADLINE:
+            reason = RoutingUnavailableReason.DEADLINE_EXHAUSTED
+        elif result is None:
+            reason = RoutingUnavailableReason.SELECTOR_UNAVAILABLE
+        else:
+            return result
+        return RoutingUnavailable(reason=reason, usage=self.snapshot())
+
     async def _run_call(
         self, call: Callable[[], Awaitable[SelectorCallResult]], *, classification: bool
     ) -> tuple[SelectorCallResult | None, _AdmissionRefusal | None]:
@@ -1899,14 +1914,7 @@ class DynamicRouter:
         self, call: Callable[[], Awaitable[SelectorCallResult]]
     ) -> SelectorCallResult | RoutingUnavailable:
         """Admit a missing Task-type classification under the Run's limits."""
-        result, refusal = await self._ledger.run_classification(call)
-        if refusal is _AdmissionRefusal.QUOTA:
-            return self._unavailable(RoutingUnavailableReason.QUOTA_EXHAUSTED)
-        if refusal is _AdmissionRefusal.DEADLINE:
-            return self._unavailable(RoutingUnavailableReason.DEADLINE_EXHAUSTED)
-        if result is None:
-            return self._unavailable(RoutingUnavailableReason.SELECTOR_UNAVAILABLE)
-        return result
+        return await self._ledger.classify(call)
 
     def _discard_expired_proposals(self) -> None:
         now = self._aware_now()

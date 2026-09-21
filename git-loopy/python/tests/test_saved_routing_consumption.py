@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 
-from git_loopy import dynamic_route, settings
+from git_loopy import cli, dynamic_route, settings
 from git_loopy import gh as gh_module
 from git_loopy import loop as loop_module
 from git_loopy.interactive.state import LiveRunState
@@ -45,6 +46,91 @@ async def _wait_for_preparation(tmp_path, ref):
             await asyncio.sleep(0)
 
     await asyncio.wait_for(prepared(), timeout=5)
+
+
+@pytest.mark.parametrize("mode", ["serial", "lane"])
+@pytest.mark.parametrize("allowance", ["0", "0.20"])
+@pytest.mark.parametrize("saved_route", [False, True])
+def test_classification_can_discover_a_saved_static_route_without_leaderboard_access(
+    tmp_path, monkeypatch, mode, allowance, saved_route,
+):
+    from tests.test_init_routing import _first_setup_for_run
+    from tests.test_iteration_end_to_end import _harness
+    from tests.test_routing_migration import _listing
+
+    client, fake_git = _wire_single_issue_github(
+        tmp_path, monkeypatch, labels=[
+            "ready-for-agent", "semver:none",
+            *(["parallel-safe"] if mode == "lane" else []),
+        ],
+    )
+    if mode == "lane":
+        client = _ParallelFakeClient(fake_git=fake_git, scripted_events=[])
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    transport = _BilledRoutingClient(client)
+    monkeypatch.setattr(loop_module, "_make_client", lambda: transport)
+    labels = _RecordingTaskTypeLabelClient()
+    monkeypatch.setattr(loop_module, "_make_task_type_label_client", lambda: labels)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["high"], True))
+    _listing(monkeypatch)
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "setup-only-key")
+    _wire_dynamic_ports(
+        monkeypatch, rows=(_aa_row("aa-terra", 40, 200),),
+        listing=(_listed_model("gpt-5.6-terra", ["high"]),),
+        answer=None, session_selector=True,
+    )
+    assert _first_setup_for_run(
+        tmp_path, monkeypatch, choice="migrate", saved_route=saved_route,
+    ) == 0
+    tables = settings.load_configs(tmp_path, os.environ)
+    config = cli.resolve_config(
+        cli.build_parser().parse_args(["1"]),
+        {
+            "GIT_LOOPY_CLASSIFIER_MODEL": "gpt-5.6-terra",
+            "GIT_LOOPY_CLASSIFIER_REASONING_EFFORT": "high",
+            "GIT_LOOPY_ROUTING_CREDIT_ALLOWANCE": allowance,
+        },
+        project=tables.project, global_=tables.global_, measured=tables.measured,
+    ).run
+    path = settings.project_config_path(tmp_path)
+    saved = path.read_bytes()
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV)
+
+    async def forbidden_evidence(*_args):
+        pytest.fail("Static classification must need no leaderboard request")
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", forbidden_evidence)
+    code = asyncio.run(loop_module.run(config))
+
+    assert path.read_bytes() == saved
+    events = _read_events(tmp_path)
+    bound = [e for e in events if e["type"] == "wrapper.pickup.bound"]
+    assert not any(e["type"] == "wrapper.strike" for e in events)
+    if allowance == "0":
+        assert code == 1
+        assert client.create_calls == [] and bound == [] and labels.applied == []
+        return
+    assert code == (0 if saved_route else 1)
+    assert [role for role, _call in transport.calls] == (
+        ["classifier", "work"] if saved_route else ["classifier"]
+    )
+    assert labels.applied == [(42, "task-type:implementation")]
+    (usage,) = [e for e in events if e["type"] == "usage.tokens"]
+    assert usage["iter"] is None and usage.get("lane_issue") is None
+    assert Decimal(str(usage["credits"])) == Decimal("0.20")
+    if not saved_route:
+        assert bound == []
+        assert events[-1]["outcome"] == "all_skipped"
+        return
+    work = transport.calls[-1][1]
+    assert (work["model"], work["reasoning_effort"], work["context_tier"]) == (
+        "gpt-5.6-terra", "high", "default",
+    )
+    (pickup,) = bound
+    assert (pickup["model"], pickup["effort"], pickup["context_tier"]) == (
+        "gpt-5.6-terra", "high", "default",
+    )
+    assert pickup["routing_source"] == "routed"
 
 
 @pytest.mark.parametrize("entrypoint", ["init", "update"])
