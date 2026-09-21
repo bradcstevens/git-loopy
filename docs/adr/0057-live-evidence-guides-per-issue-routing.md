@@ -416,6 +416,19 @@ existing Pickup-time acquisition and release semantics are preserved. This
 extends shared section 14.6 Conformance without changing routing behavior,
 historical Events or the final-default and Runner-member deferrals.
 
+The companion `pool_priority` matrix closes the multiple-pending-candidate
+coverage gap through the same recorded-migration and real CLI seam. Three
+cases in serial and Lane modes preserve oldest-first order and explicit
+Priority, prepare the next candidate before speculative selectors, and bound
+those selectors at one or two. Running Agents stay open until speculation is in
+flight, then the next Pickup advances without waiting for unrelated assessments.
+Cancelled selectors retain their SDK-observed Run-only Consumption and explicit
+unavailable records before Run end; pending issues remain open, unleased and
+unpublished with unchanged labels. Actual settings, canonical Pickup, individual
+CLI Pickup lines, Dashboard readback and final publication agree. This is
+additional shared coverage of existing behavior, not a routing implementation
+or final-default change.
+
 Non-local activation, the remaining composed acceptance and Wrapper/Conformance activation
 obligations still precede final default
 activation. Dynamic routing remains opt-in; shell/PowerShell activation is

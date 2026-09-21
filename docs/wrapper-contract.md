@@ -2048,6 +2048,20 @@ reservation, rather than inventing a Pickup skip. This is Python-local composed
 Conformance, not final Dynamic-default activation. Shell/PowerShell activation is
 deferred; no non-local, Subagent or Integration routing is claimed.
 
+The companion `pool_priority` matrix carries recorded migration through three
+eligible pending candidates. It preserves oldest-first order and explicit
+**Priority**, prepares the next candidate before speculative selectors start,
+and exercises selector concurrency of one and two. Running Agents remain open
+until speculative selectors are in flight; the next actual serial Pickup or
+Lane refill advances without waiting for those unrelated assessments.
+Interrupted selectors retain their SDK-observed Run-only Consumption and an
+explicit unavailable preparation record before Run end. Pending issues keep
+their labels and receive no Lease, final route or tracker publication. Actual
+settings, canonical Pickup, separate CLI Pickup lines, Dashboard and final
+publication agree, without Config edits or changes to the existing ordering
+and Lease rules. These are additional Python-local obligations at the same
+staged activation seam, not a change to the member or placement deferrals above.
+
 ## 15. Release and compatibility identity (MUST)
 
 The **Release version** is product identity, not a compatibility shortcut. `--version` and
