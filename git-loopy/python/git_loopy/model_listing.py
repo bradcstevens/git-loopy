@@ -25,8 +25,8 @@ __all__ = ["ClientFactory", "ModelFetcher", "fetch_live_models", "LiveModelListi
 
 #: Builds the short-lived SDK client used only to list models. Injected so tests
 #: can supply a fake async-context-manager client without spawning the CLI
-#: server. The default constructs a bare :class:`copilot.CopilotClient` (the run
-#: loop owns its own, separate, telemetry-configured client).
+#: server. The default uses the same runtime identity and telemetry configuration
+#: as work sessions, but the Run owns its own separate, long-lived client.
 ClientFactory = Callable[[], Any]
 
 #: Async ``() -> list[ModelInfo]`` model fetch, injected so every consumer's
@@ -40,11 +40,13 @@ async def fetch_live_models(*, client_factory: ClientFactory | None = None) -> S
     The client is entered as an async context manager so ``start()`` and
     ``stop()`` bracket the single ``list_models()`` call — the run loop later
     builds and owns its *own* client, so this one is discarded immediately.
+    Both use the shared runtime construction, including the resolved Copilot
+    data root; a fresh connection must not mean a different runtime identity.
     """
     if client_factory is None:
-        from copilot import CopilotClient
+        from .copilot_client import make_copilot_client
 
-        client_factory = CopilotClient
+        client_factory = make_copilot_client
     client = client_factory()
     async with client:
         return await client.list_models()
