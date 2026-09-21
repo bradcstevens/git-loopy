@@ -125,6 +125,18 @@ class TestDistributionModeAuthority:
 class TestDistributionModeFailClosed:
     """Unknown or inconsistent distribution modes fail closed before any publication step."""
 
+    def test_non_utf8_policy_raises_a_distribution_mode_refusal(
+        self, tmp_path: Path
+    ) -> None:
+        policy_path = tmp_path / "git-loopy/conformance/release-trust.json"
+        policy_path.parent.mkdir(parents=True)
+        policy_path.write_bytes(b"\xff")
+
+        with pytest.raises(DistributionModeError, match="cannot read trust policy") as refusal:
+            resolve_distribution_mode(tmp_path)
+
+        assert str(policy_path) in str(refusal.value)
+
     def test_missing_policy_file_fails_closed(self, tmp_path: Path) -> None:
         """AC 5: Missing policy file fails closed rather than silently falling back."""
         empty_root = tmp_path / "empty"

@@ -38,7 +38,7 @@ def read_trust_policy(policy_path: Path) -> dict[str, Any]:
         raise DistributionModeError(f"Missing release trust policy: {policy_path} is absent")
     try:
         data = json.loads(policy_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise DistributionModeError(f"cannot read trust policy at {policy_path}: {exc}") from exc
 
     if not isinstance(data, dict):
