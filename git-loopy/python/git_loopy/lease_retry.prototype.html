@@ -1,0 +1,112 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PROTOTYPE: Lease write retries</title>
+<style>
+body { max-width: 900px; margin: 3rem auto; padding: 1rem; font: 17px system-ui; color: #243440; }
+button { margin: .3rem; padding: .65rem; cursor: pointer; }
+section { background: #f0f5f8; padding: 1rem; margin: 1rem 0; }
+dt { font-weight: bold; } dd { margin-bottom: .65rem; }
+.active { outline: 2px solid #187a90; }
+</style>
+<h1>PROTOTYPE: Retry the write, not the Pickup</h1>
+<p>Assumption: this is a Lease transport decision, not a new Pickup policy.
+Can a Run recover from a network failure without overwriting a rival's Lease?
+The pending record and expected previous record stay fixed. A rejected swap is
+terminal. A lost acknowledgement may leave our record on the remote, but does
+not authorize a new claim. The next fence still reads the remote.</p>
+<section id="state"></section>
+<h2>Free play</h2>
+<div id="actions"></div>
+<h2>Guided walkthroughs</h2>
+<div id="tabs"></div><p id="description"></p><div id="steps"></div>
+<script>
+const initial = () => ({
+  remote: "absent", expected: "absent", desired: "our-record",
+  attempts: 0, elapsed: 0, status: "ready", delay: 0, note: "No write yet"
+});
+const advance = (before, action) => {
+  if (action === "reset") return initial();
+  const s = {...before};
+  if (action === "rival") {
+    s.remote = "rival-record"; s.note = "A rival took the Lease"; return s;
+  }
+  if (s.status === "done" || s.status === "stopped") return s;
+  if (action === "wait") {
+    s.elapsed += s.delay; s.delay = 0; s.status = "ready";
+    s.note = "Waited without changing the expected record"; return s;
+  }
+  if (s.status === "waiting") return s;
+  if (s.attempts >= 4 || s.elapsed >= 15) {
+    s.status = "stopped"; s.note = "Retry budget exhausted"; return s;
+  }
+  s.attempts++;
+  if (action === "permanent") {
+    s.status = "stopped"; s.note = "Authentication / policy failure: no retry"; return s;
+  }
+  if (action === "transient" || action === "lost") {
+    if (action === "lost" && s.remote === s.expected) s.remote = s.desired;
+    s.delay = Math.min(2 ** (s.attempts - 1), 4);
+    s.status = s.attempts < 4 && s.elapsed + s.delay < 15 ? "waiting" : "stopped";
+    s.note = "Transient failure; production adds jitter and a per-command timeout";
+    return s;
+  }
+  // Git may report an identical desired SHA as up to date. Otherwise a
+  // mismatch is terminal, even if an earlier acknowledgement was lost.
+  s.status = s.remote === s.expected || s.remote === s.desired ? "done" : "stopped";
+  s.note = s.status === "done" ? "Write succeeded" : "CAS rejected: do not retry";
+  if (s.status === "done") s.remote = s.desired;
+  return s;
+};
+</script>
+<script>
+let state = initial();
+const labels = {
+  write: "Deliver write", transient: "Network unavailable", lost: "Write lands, reply lost",
+  permanent: "Authentication denied", rival: "Rival takes Lease", wait: "Advance clock", reset: "Reset"
+};
+const scenarios = [
+  ["Recovery", "A transport failure can retry exactly the same write.", ["transient", "wait", "write"]],
+  ["Rival wins", "A rival taking the Lease during backoff must survive.", ["transient", "rival", "wait", "write"]],
+  ["Reply lost", "Replaying the same SHA is safe; never change the expectation.", ["lost", "wait", "write"]],
+  ["Bounded", "Repeated failures stop after four attempts without spinning.", ["transient", "wait", "transient", "wait", "transient", "wait", "transient"]],
+  ["Permanent", "Credentials and policy errors cannot be repaired by waiting.", ["permanent"]]
+];
+function render() {
+  const panel = document.querySelector("#state");
+  panel.replaceChildren();
+  const dl = document.createElement("dl");
+  for (const [key, value] of Object.entries(state)) {
+    const dt = document.createElement("dt"); dt.textContent = key;
+    const dd = document.createElement("dd"); dd.textContent = String(value);
+    dl.append(dt, dd);
+  }
+  panel.append(dl);
+}
+function button(action) {
+  const b = document.createElement("button"); b.textContent = labels[action];
+  b.onclick = () => { state = advance(state, action); render(); };
+  return b;
+}
+for (const action of Object.keys(labels)) document.querySelector("#actions").append(button(action));
+for (const [name, description, actions] of scenarios) {
+  const tab = document.createElement("button"); tab.textContent = name;
+  tab.onclick = () => {
+    state = initial(); render();
+    document.querySelectorAll("#tabs button").forEach(b => b.classList.remove("active"));
+    tab.classList.add("active");
+    document.querySelector("#description").textContent = description;
+    const steps = document.querySelector("#steps"); steps.replaceChildren();
+    actions.forEach((action, index) => {
+      const b = button(action); b.textContent = `${index + 1}. ${labels[action]}`;
+      b.disabled = index !== 0;
+      b.onclick = () => {
+        state = advance(state, action); render(); b.disabled = true;
+        if (b.nextElementSibling) b.nextElementSibling.disabled = false;
+      };
+      steps.append(b);
+    });
+  };
+  document.querySelector("#tabs").append(tab);
+}
+document.querySelector("#tabs button").click();
+</script>
