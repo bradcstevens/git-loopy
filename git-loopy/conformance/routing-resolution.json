@@ -2,7 +2,7 @@
   "schema_version": 1,
   "contract_version": "2.9",
   "publication_recovery": {
-    "note": "Recorded Dynamic authorization, fresh cross-Run reuse and bounded tracker delivery through actual serial/Lane sessions. Uses migration_recovery's saved_config, harness, evidence and selector_choice. Each case starts with explicit migrate through init or update over authored unselected Config; later Runs use only the saved policy. Counts are cumulative external tracker writes, including refused calls. Delivery lists are the current Run's canonical statuses, not guessed from tracker state. A Run may retry pending delivery at startup and publish at Pickup, but those paths share the same finite bound per assignment. withdraw_models removes named configurations only for that Run's fresh routing reads; selector_choice scripts a new answer and route declares its independently expected work settings. Neither a new Run nor repaired tracker access renews an exhausted assignment's budget; a changed final assignment gets its own delivery. remove_before_failure models a tracker accepting owned-label removal but refusing the replacement add. On non-published steps, owned_label is absent by default or previous for a stale association; the canonical failure remains authoritative.",
+    "note": "Recorded Dynamic authorization, fresh cross-Run reuse and bounded tracker delivery through actual serial/Lane sessions. Uses migration_recovery's saved_config, harness, evidence and selector_choice. Each case starts with explicit migrate through init or update over authored unselected Config; later Runs use only the saved policy. Counts are cumulative external tracker writes, including refused calls. Delivery lists are the current Run's canonical statuses, not guessed from tracker state. A Run may retry pending delivery at startup and publish at Pickup, but those paths share the same finite bound per assignment. withdraw_models removes named configurations only for that Run's fresh routing reads; selector_choice scripts a new answer and route declares its independently expected work settings. Neither a new Run nor repaired tracker access renews an assignment's exhausted retries; a changed final assignment gets its own delivery. remove_before_failure models a tracker accepting owned-label removal but refusing the replacement add. On non-published steps, owned_label is absent by default or previous when the previous owned association remains; the canonical failure remains authoritative.",
     "modes": ["serial", "lane"],
     "entrypoints": ["init", "update"],
     "route": {
@@ -11,7 +11,7 @@
     },
     "cases": [
       {
-        "id": "exhausted-replacement-leaves-a-visible-stale-association",
+        "id": "exhausted-replacement-leaves-the-previous-owned-association",
         "operation": "label", "fault": "HTTP 403",
         "runs": [
           {"tracker_unavailable": false, "reuse": "elected", "selector_calls": 1, "delivery": ["published"], "attempts": {"comment": 1, "label": 1}, "comments": 1},

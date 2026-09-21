@@ -1919,7 +1919,7 @@ resolution.
   overwrite a newer Route label. Startup retries and subsequent Pickups of the
   same assignment MUST share that bound: an exhausted assignment remains visibly
   failed without further tracker I/O, even after restart or restored access.
-  A materially changed final assignment has its own delivery budget; publication
+  A materially changed final assignment has its own finite retry bound; publication
   exhaustion MUST NOT prevent its delivery or block locally recorded work.
   A failed replacement can leave the previous owned association in place, or no
   association if removal succeeded before the add failed. Neither is a current
@@ -1934,7 +1934,7 @@ The `publication_recovery` matrix in `routing-resolution.json` exercises recorde
 Python-local init/update authorization through repeated real CLI Runs and actual
 serial/Lane sessions. It pins fresh reuse and its original provenance, permission,
 rate-limit and transient failures, idempotent partial recovery, exhausted delivery
-across Pickups (including stale or missing associations), and a changed assignment
+across Pickups (including a previous or missing owned association), and a changed assignment
 after capability withdrawal. Actual work
 settings, canonical Pickup and Dashboard route readback must agree while Config
 and unrelated labels remain unchanged. This is a Python activation obligation;

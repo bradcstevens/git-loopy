@@ -74,8 +74,8 @@ and original reuse provenance alongside cumulative tracker operations.
 Permission, rate-limit and transient failures stay non-blocking; partial delivery
 does not repeat an accepted comment. Exhausted retries remain exhausted across
 Pickups and restored access, while capability withdrawal requires a new final
-assignment with its own delivery budget. Replacement failures cover both a
-stale owned association and removal accepted before the new association fails;
+assignment with its own finite retry bound. Replacement failures cover both the
+previous owned association remaining and removal accepted before the new association fails;
 both remain visibly failed rather than claiming tracker agreement. The Python adapter is
 `test_recorded_routing_reuse_preserves_publication_recovery_bounds` in the same
 suite. These are recorded-authorization cases, not another first-wizard claim.
