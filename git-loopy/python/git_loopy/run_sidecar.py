@@ -91,6 +91,7 @@ def _config_to_payload(config: RunConfig) -> dict[str, Any]:
             for key, (model, effort) in sorted(config.routing.items())
         },
         "context_tier": config.context_tier,
+        "context_tier_override": config.context_tier_override,
         "route_policy": config.route_policy.value,
         # A Decimal is not a JSON scalar, and float() would round an allowance
         # the operator wrote exactly. The string round-trips both.
@@ -145,6 +146,7 @@ def _config_from_payload(payload: dict[str, Any]) -> RunConfig:
         send_timeout_seconds=float(payload.get("send_timeout_seconds", 7200.0)),
         routing=routing,
         context_tier=str(payload.get("context_tier", "default")),
+        context_tier_override=bool(payload.get("context_tier_override", False)),
         route_policy=RoutePolicy.parse(payload.get("route_policy")),
         routing_deadline_seconds=(
             None

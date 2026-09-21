@@ -229,8 +229,17 @@ idempotent tracker effects. Startup readback now distinguishes uncovered Dynamic
 work and permitted reselection from a Static default or fixed escalation rung.
 Retained Static routes and explicit escalation are echoed without legacy roster
 downgrades under either selected policy; historical readbacks are preserved.
+The saved-choice matrix now also covers run-wide model/effort authority without
+leaderboard access and context-only controls in both modes. Composition exposed
+that the work-tier override was missing from routing requests and candidate
+selection. It now survives detached startup, filters only work candidates while
+preserving the strongest selector's independent input-fit tier, and participates
+in fresh proposal/Pickup validation and cross-Run reuse. Doctor uses the same
+work-candidate readiness rule. Withdrawal of the requested tier refuses new work;
+changed evidence or eligibility requires reassessment within existing limits.
 Bare init and auto-setup retain their existing behavior.
 Automatic upgrade/Run migration enforcement, the remaining
-composed acceptance and Wrapper/Conformance obligations still precede final default
+composed acceptance (including saved-setup Consumption guarantees) and
+Wrapper/Conformance activation obligations still precede final default
 activation. Dynamic routing remains opt-in; shell/PowerShell activation is deferred,
 and no Subagent or Integration routing support is implied.

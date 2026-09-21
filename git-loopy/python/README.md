@@ -1196,7 +1196,13 @@ An explicit run-wide `--model` or `--reasoning-effort` override (or its
 it needs no leaderboard access, routing limits, association table, or Route
 selector. Its model, effort, and tier are still verified against the live
 harness and either honoured exactly or refused, never silently corrected.
-A context-only override does not suppress Dynamic routing.
+A context-only `--context-tier` / `GIT_LOOPY_CONTEXT_TIER` override fixes the work
+tier without suppressing Dynamic model/effort selection. Only verified candidates
+supporting that exact tier may be offered; no fitting candidate means no assessment
+or Dynamic work, not a tier downgrade. The strongest Route selector is still elected
+independently and uses the smallest tier fitting its own input, even when it cannot
+serve as the work model at the requested tier. Persisted `context_tier` remains the
+inherited tier for Static pairs; it is not a context-only Run override.
 
 `git-loopy doctor` and a Run share routing **preflight**:
 missing authorization or limits, non-finite bounds, selector concurrency outside
@@ -1204,7 +1210,8 @@ missing authorization or limits, non-finite bounds, selector concurrency outside
 same refusal. Doctor spends no routing credits and rewrites no routes, including
 under `--apply`. Doctor evaluates Config and environment, not flags on a
 separate future Run; to check a run-wide override, supply its
-`GIT_LOOPY_MODEL` / `GIT_LOOPY_REASONING_EFFORT` equivalent to doctor.
+`GIT_LOOPY_MODEL` / `GIT_LOOPY_REASONING_EFFORT` equivalent to doctor, or
+`GIT_LOOPY_CONTEXT_TIER` for a context-only override.
 They also read current Artificial Analysis evidence and authenticated Copilot
 capabilities through the same live-readiness module used by proposal and Pickup.
 Unavailable sources, an empty verified candidate intersection, or exhausted
@@ -1226,8 +1233,13 @@ session settings and canonical records, including fresh outages after setup.
 They also carry saved choices through outcome-aware retries, attempt/allowance
 exhaustion, fresh cross-Run reuse, and pending issue-publication recovery without
 rewriting Config or duplicating tracker comments.
+Saved-setup coverage also exercises model/effort overrides without leaderboard
+access and context-only controls in both modes. Work-tier authority survives
+detached startup, fresh proposal/Pickup capability checks, and cross-Run reuse;
+changed evidence or eligibility cannot carry an obsolete proposal into work.
 Automatic upgrade/Run migration enforcement, the remaining
-composed activation matrix, and Wrapper/Conformance obligations still need to
+composed activation matrix (including saved-setup Consumption guarantees), and
+Wrapper/Conformance activation obligations still need to
 land before the final default changes. Existing Config is not migrated implicitly.
 Python issue-owning serial and
 Lane sessions are the implementation scope; shell/PowerShell activation remains

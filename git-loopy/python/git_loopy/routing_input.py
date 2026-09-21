@@ -94,6 +94,7 @@ def build_routing_request(
     prior_attempts: Sequence[PriorAttempt] = (),
     feedback_loops: Sequence[FeedbackLoop] = (),
     measured: MeasuredRouting | None = None,
+    work_context_tier: str | None = None,
 ) -> RoutingRequest:
     """Assemble one issue's complete assessment input.
 
@@ -128,6 +129,8 @@ def build_routing_request(
             force that was *never* measured and an ``incomplete`` one is a
             search that stopped, so quoting either to the selector as a local
             measurement would be the invented reliability estimate AC7 forbids.
+        work_context_tier: An explicit Run-wide context-only override. Constrains
+            work candidates, never the independently elected selector's tier.
 
     Returns:
         The request, with its own bounded input estimate.
@@ -181,6 +184,7 @@ def build_routing_request(
         prior_attempts=history,
         prior_attempts_omitted=len(prior_attempts) - len(history),
         source_input_identity=source_input_identity,
+        work_context_tier=work_context_tier,
     )
 
 

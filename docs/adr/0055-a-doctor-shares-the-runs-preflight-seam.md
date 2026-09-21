@@ -109,6 +109,9 @@ same verdict after collecting operator-owned authorization and before any scope
 write. It shares missing-bound and verified-association collection with update,
 not a separate readiness implementation. Composed first-setup serial and Lane
 cases observe actual session settings and fresh refusals after setup.
+The shared live read also checks that a context-only environment override has
+verified work candidates supporting the requested tier. This does not constrain
+the strongest selector's own tier, buy an assessment, or promise issue fit.
 Automatic upgrade/Run migration enforcement and the remaining composed
 activation matrix are still outstanding. Existing unselected-policy behavior
 is unchanged.

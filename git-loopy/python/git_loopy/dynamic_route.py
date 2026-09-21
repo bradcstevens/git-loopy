@@ -16,7 +16,7 @@ import json
 import math
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
@@ -915,7 +915,12 @@ class RoutingRequest:
     source_input_identity: str | None = None
     """Digest of relevant source inputs before bounding the selector's prompt."""
 
+    work_context_tier: str | None = None
+    """Explicit work-tier authority, separate from the selector's input-fit tier."""
+
     def __post_init__(self) -> None:
+        if self.work_context_tier not in (None, BASE_CONTEXT_TIER, LONG_CONTEXT_TIER):
+            raise ValueError("work context tier must be default or long_context")
         if self.source_input_identity is not None and (
             not isinstance(self.source_input_identity, str)
             or len(self.source_input_identity) != 64
@@ -1550,6 +1555,7 @@ class RoutingLiveRead:
 
     async def read(
         self, bounded_input_tokens: int = 0, *, require_assessment: bool = False,
+        work_context_tier: str | None = None,
     ) -> RoutingReady | RoutingUnavailable:
         """Check current sources and candidates; zero tokens asserts no issue fit."""
         if unavailable := self._limit_refusal(require_assessment):
@@ -1597,6 +1603,10 @@ class RoutingLiveRead:
             tier_capacities=capabilities.tier_capacities,
         )
         if election.selector is None or not election.candidates:
+            return self._unavailable(RoutingUnavailableReason.NO_RUNNABLE_CANDIDATE)
+        if not _work_candidates(
+            election, capabilities, bounded_input_tokens, work_context_tier
+        ):
             return self._unavailable(RoutingUnavailableReason.NO_RUNNABLE_CANDIDATE)
         if len(election.candidates) > 64:
             return self._unavailable(RoutingUnavailableReason.BOUNDED_INPUT_EXCEEDED)
@@ -1666,7 +1676,8 @@ class DynamicRouter:
         """Prepare a nonbinding proposal from fresh inputs."""
         self._discard_expired_proposals()
         inputs = await self._live.read(
-            request.bounded_input_tokens, require_assessment=True
+            request.bounded_input_tokens, require_assessment=True,
+            work_context_tier=request.work_context_tier,
         )
         if isinstance(inputs, RoutingUnavailable):
             return inputs
@@ -1683,7 +1694,9 @@ class DynamicRouter:
             self._proposals.pop(proposal.proposal_id, None)
             return self._unavailable(RoutingUnavailableReason.STALE_PROPOSAL)
         self._proposals.pop(proposal.proposal_id, None)
-        inputs = await self._live.read(request.bounded_input_tokens)
+        inputs = await self._live.read(
+            request.bounded_input_tokens, work_context_tier=request.work_context_tier
+        )
         if isinstance(inputs, RoutingUnavailable):
             return inputs
         evidence, capabilities = inputs.evidence, inputs.capabilities
@@ -1752,7 +1765,9 @@ class DynamicRouter:
             request: This Pickup's freshly built assessment input.
         """
         self._discard_expired_proposals()
-        inputs = await self._live.read(request.bounded_input_tokens)
+        inputs = await self._live.read(
+            request.bounded_input_tokens, work_context_tier=request.work_context_tier
+        )
         if isinstance(inputs, RoutingUnavailable):
             return inputs
         evidence, capabilities = inputs.evidence, inputs.capabilities
@@ -1885,8 +1900,8 @@ class DynamicRouter:
             inputs.evidence, inputs.capabilities, inputs.election
         )
         assert election.selector is not None
-        candidates = tuple(
-            _assessment_candidate(candidate) for candidate in election.candidates
+        candidates = _work_candidates(
+            election, capabilities, request.bounded_input_tokens, request.work_context_tier
         )
         assessment_request = AssessmentRequest(
             issue=request.issue,
@@ -1989,8 +2004,9 @@ def _verified_reuse(
         selector.context_tier,
     ) != reusable.selector_triple:
         return None
-    for candidate in election.candidates:
-        assessed = _assessment_candidate(candidate)
+    for assessed in _work_candidates(
+        election, capabilities, request.bounded_input_tokens, request.work_context_tier
+    ):
         if (
             assessed.model,
             assessed.reasoning_effort,
@@ -2037,6 +2053,33 @@ def _valid_fresh_capabilities(value: object) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _work_candidates(
+    election: ElectionResult,
+    capabilities: FreshHarnessCapabilities,
+    bounded_input_tokens: int,
+    work_context_tier: str | None,
+) -> tuple[AssessmentCandidate, ...]:
+    """Apply work-tier authority without weakening the strongest-selector election."""
+    candidates: list[AssessmentCandidate] = []
+    for candidate in election.candidates:
+        if work_context_tier is not None:
+            model = capabilities.capabilities.get(candidate.selector.model)
+            capacity = capabilities.tier_capacities.get(
+                (candidate.selector.model, work_context_tier)
+            )
+            if (
+                model is None or work_context_tier not in model.context_tiers
+                or capacity is None or capacity < bounded_input_tokens
+            ):
+                continue
+            candidate = replace(
+                candidate,
+                selector=replace(candidate.selector, context_tier=work_context_tier),
+            )
+        candidates.append(_assessment_candidate(candidate))
+    return tuple(candidates)
 
 
 def _assessment_candidate(candidate: DynamicCandidate) -> AssessmentCandidate:

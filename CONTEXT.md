@@ -917,6 +917,12 @@ lifecycle** admits elects **again** rather than inheriting a fixed **Escalation 
 election is handed the issue's **Attempt evidence** beside the freshly-read sources; the record
 keeps the attempt's lifecycle position separate from the configuration it elected, so a reassessed
 retry stays tellable from a first election that happened to agree (ADR-0057).
+A context-only Run flag or environment override fixes the work tier without
+fixing its model/effort. The candidate must support that tier at proposal and
+Pickup; the selector's own tier remains independently elected for input fit.
+This authority survives detached startup and participates in the relevant inputs
+used for cross-Run reuse. Persisted run-level context still supplies Static
+pairs' inherited tier rather than becoming a Dynamic Run override.
 _Avoid_: auto-routing, smart routing, model recommendation.
 
 **Route selector**:

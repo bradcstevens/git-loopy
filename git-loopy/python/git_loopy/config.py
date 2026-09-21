@@ -705,6 +705,9 @@ class RunConfig:
             depends on that model. ``--context-tier`` / ``GIT_LOOPY_CONTEXT_TIER``
             / Config resolve it through the ordinary precedence chain, but it is
             not a model/effort override and therefore never suppresses routing.
+        context_tier_override: Whether a context-tier flag or environment override
+            fixes Dynamic work to ``context_tier``. It does not constrain the
+            Route selector's own tier or suppress model/effort selection.
         route_policy: Which **Route policy** the operator selected (#560, #561,
             ADR-0057). :attr:`~git_loopy.static_route.RoutePolicy.UNSELECTED` —
             the default — is the *absence* of a decision and keeps every legacy
@@ -799,6 +802,7 @@ class RunConfig:
     send_timeout_seconds: float = DEFAULT_SEND_TIMEOUT_SECONDS
     routing: Mapping[str, tuple[str, str | None]] = field(default_factory=dict)
     context_tier: str = DEFAULT_CONTEXT_TIER
+    context_tier_override: bool = False
     route_policy: RoutePolicy = RoutePolicy.UNSELECTED
     routing_deadline_seconds: float | None = None
     routing_credit_allowance: Decimal | None = None

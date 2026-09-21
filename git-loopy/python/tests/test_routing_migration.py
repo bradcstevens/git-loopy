@@ -59,6 +59,8 @@ def _saved_routing_config(
     max_iterations=1,
     max_nmt_strikes=3,
     routing_credit_allowance="2.5",
+    run_args=(),
+    run_env=None,
 ):
     """Resolve a Run from real saved authorization, not a constructed RunConfig."""
     from git_loopy import cli
@@ -88,8 +90,8 @@ def _saved_routing_config(
     assert "routing" not in settings.load_config_table(path)
     tables = settings.load_configs(tmp_path, os.environ)
     return cli.resolve_config(
-        cli.build_parser().parse_args([str(max_iterations)]),
-        {"GIT_LOOPY_MAX_NMT_STRIKES": str(max_nmt_strikes)},
+        cli.build_parser().parse_args([str(max_iterations), *run_args]),
+        {"GIT_LOOPY_MAX_NMT_STRIKES": str(max_nmt_strikes), **(run_env or {})},
         project=tables.project,
         global_=tables.global_,
         measured=tables.measured,

@@ -2454,6 +2454,9 @@ class _Loop:
             prior_attempts=self._attempt_evidence.prior_attempts(item.ref),
             feedback_loops=_declared_feedback_loops(self._git.root),
             measured=_declared_measured_routing(self._git.root),
+            work_context_tier=(
+                self._config.context_tier if self._config.context_tier_override else None
+            ),
         )
 
     def _start_preparation_pass(

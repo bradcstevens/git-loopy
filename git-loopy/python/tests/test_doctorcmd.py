@@ -306,6 +306,41 @@ def test_doctor_checks_the_live_verified_candidate_intersection(
         assert any("authenticated harness transport unavailable" in line for line in output)
 
 
+@pytest.mark.parametrize("supported", [True, False])
+def test_doctor_checks_the_environment_work_tier_without_assessing(
+    tmp_path, monkeypatch, supported
+) -> None:
+    from tests.test_routing_migration import _authorized_values, _evidence, _listing
+
+    evidence = _evidence(monkeypatch)
+    _listing(monkeypatch)
+    fetch = model_listing.fetch_live_models
+
+    async def listing():
+        models = await fetch()
+        if not supported:
+            models[0].billing.token_prices.long_context = None
+        return models
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", listing)
+    env = _pinned_scope(tmp_path, **{
+        ARTIFICIAL_ANALYSIS_API_KEY_ENV: "operator-secret",
+        "GIT_LOOPY_CONTEXT_TIER": "long_context",
+    })
+    config = cli_module.resolve_config(
+        cli_module.build_parser().parse_args([]), env,
+        project={**_authorized_values(), "route_policy": "dynamic"}, global_={},
+    ).run
+
+    code, output = _run(tmp_path, config=config, catalog=_catalog(), env=env)
+
+    assert code == (0 if supported else 1)
+    assert evidence == ["evidence"]
+    if not supported:
+        assert any("no_runnable_candidate" in line for line in output)
+        assert any("GIT_LOOPY_CONTEXT_TIER" in line for line in output)
+
+
 def test_doctor_refuses_exhausted_routing_allowance_before_live_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

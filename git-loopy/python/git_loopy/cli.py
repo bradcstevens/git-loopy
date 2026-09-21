@@ -2768,6 +2768,10 @@ def resolve_config(
         send_timeout_seconds=_resolve_send_timeout_seconds(env, project, global_),
         routing=routing,
         context_tier=context_tier,
+        context_tier_override=(
+            getattr(args, "context_tier", None) is not None
+            or bool(env.get("GIT_LOOPY_CONTEXT_TIER", "").strip())
+        ),
         route_policy=route_policy,
         routing_deadline_seconds=_resolve_dynamic_bound(
             args,

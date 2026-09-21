@@ -103,6 +103,28 @@ def test_a_detached_run_carries_the_selected_route_policy() -> None:
     assert decoded.config.route_policy is RoutePolicy.STATIC
 
 
+@pytest.mark.parametrize("tier", ["default", "long_context"])
+def test_a_detached_run_preserves_explicit_work_tier_authority(tier) -> None:
+    from git_loopy import cli, run_sidecar
+
+    config = cli.resolve_config(
+        cli.build_parser().parse_args(["--context-tier", tier]),
+        {},
+        project={"route_policy": "dynamic"},
+        global_={},
+    ).run
+    spec = run_sidecar.DetachedRunSpec(
+        config=config, run_id="01K3CQ7VJ1GWQ9H8Q6SE2V1D5A",
+        started_at_epoch_ms=1_780_000_123_456,
+    )
+
+    decoded = run_sidecar.decode_detached_run_spec(run_sidecar.encode_detached_run_spec(spec))
+
+    assert decoded.config.context_tier == tier
+    assert decoded.config.context_tier_override is True
+    assert decoded.config.routing_suppressed is False
+
+
 def test_a_detached_dynamic_run_carries_its_bounds_exactly() -> None:
     """A routing allowance is spent by the child, so it has to arrive exact (#561).
 

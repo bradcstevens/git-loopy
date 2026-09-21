@@ -1687,6 +1687,14 @@ election an answer an operator can audit rather than a plausible-looking guess.
   entry, an explicit flag or environment pin, a configured **Escalation rung** — are instructions,
   and an Orchestrator MUST NOT spend a selector call to contradict one. A missing **Task type** is
   classified *before* applicability is resolved, and an existing classification is respected.
+- **A context-only Run override constrains work, not the selector.** An explicit context-tier
+  flag or environment override MUST fix the work tier without suppressing Dynamic model/effort
+  selection. Work candidates MUST support that exact tier on freshly read capabilities; an empty
+  set MUST refuse assessment and work rather than downgrade the tier. The strongest Route
+  selector and its smallest input-fitting tier remain independently elected, even if that model
+  cannot run work at the requested tier. The override MUST survive detached startup and take part
+  in relevant-input identity for proposal validation and cross-Run reuse. Persisted run-level
+  context remains the inherited tier for Static pairs, not a context-only Run override.
 - **The assessment is read-only and bounded.** It receives the issue, its acceptance criteria, the
   settled Task type, bounded relevant repository context, and admitted local measurements. It MUST
   NOT implement the work, run Trials, or audit the whole repository, and untrusted issue prose MUST

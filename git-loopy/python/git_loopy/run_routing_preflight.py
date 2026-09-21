@@ -144,7 +144,10 @@ async def resolve_run_routing_preflight(
         evidence_fetch=source.fetch,
         capabilities_fetch=readiness_capabilities,
         admission_ledger=ledger,
-    ).read(require_assessment=True)
+    ).read(
+        require_assessment=True,
+        work_context_tier=config.context_tier if config.context_tier_override else None,
+    )
     return RunRoutingPreflight(
         prerequisites=prerequisites,
         admission_ledger=ledger,
@@ -167,7 +170,8 @@ def _dynamic_readiness_refusal(reason: RoutingUnavailableReason) -> str:
         ),
         RoutingUnavailableReason.NO_RUNNABLE_CANDIDATE: (
             "Check [route_associations] against current Artificial Analysis "
-            "scores and authenticated Copilot eligibility, efforts and capacities."
+            "scores and authenticated Copilot eligibility, efforts and capacities, "
+            "including any --context-tier/GIT_LOOPY_CONTEXT_TIER work override."
         ),
         RoutingUnavailableReason.BOUNDED_INPUT_EXCEEDED: (
             "Narrow [route_associations] to at most 64 verified candidates."

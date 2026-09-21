@@ -7941,7 +7941,8 @@ def _script_harness(monkeypatch, *models) -> None:
 
 
 def _dynamic_lane_ports(
-    monkeypatch, *, answer, capabilities_available=lambda: True
+    monkeypatch, *, answer, capabilities_available=lambda: True,
+    long_context_models=(),
 ) -> dict[str, list[Any]]:
     """Substitute only the two ports a **Dynamic route** takes to the network.
 
@@ -7984,6 +7985,9 @@ def _dynamic_lane_ports(
 
     async def _capabilities(*, warn=None):
         spied["capabilities"].append("listing")
+        wide_models = (
+            long_context_models() if callable(long_context_models) else long_context_models
+        )
         if not capabilities_available():
             return dynamic_route.FreshHarnessCapabilities(
                 retrieved_at=datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc),
@@ -8001,7 +8005,11 @@ def _dynamic_lane_ports(
                         billing=SimpleNamespace(
                             multiplier=1.0,
                             token_prices=SimpleNamespace(
-                                max_prompt_tokens=400_000, long_context=None
+                                max_prompt_tokens=400_000,
+                                long_context=(
+                                    SimpleNamespace(max_prompt_tokens=800_000)
+                                    if identifier in wide_models else None
+                                ),
                             ),
                         ),
                         supported_reasoning_efforts=["high"],
@@ -8011,8 +8019,13 @@ def _dynamic_lane_ports(
                 ]
             ),
             tier_capacities={
-                (identifier, "default"): 400_000
+                (identifier, tier): capacity
                 for identifier in ("claude-opus-5", "gpt-5.6-terra")
+                for tier, capacity in (
+                    ("default", 400_000),
+                    ("long_context", 800_000 if identifier in wide_models else 0),
+                )
+                if capacity
             },
         )
 
@@ -8048,9 +8061,11 @@ def _dynamic_lane_ports(
     return spied
 
 
-def _elects_lane_model(model: str):
+def _elects_lane_model(model: str, tier: str = "default"):
     def _answer(request) -> str:
-        (chosen,) = [c for c in request.candidates if c.model == model]
+        (chosen,) = [
+            c for c in request.candidates if c.model == model and c.context_tier == tier
+        ]
         answer = {
             "candidate_identity": chosen.stable_identity,
             "summary": "strongest verified index for this Lane's work",
@@ -8742,7 +8757,9 @@ def _rolling_dynamic_run(
     spied = _dynamic_lane_ports(
         monkeypatch,
         answer=overrides.pop("answer", _elects_lane_model("claude-opus-5")),
+        long_context_models=overrides.pop("long_context_models", ()),
     )
+    before_run = overrides.pop("before_run", None)
     if setup_entrypoint is None:
         config = _dynamic_parallel_config(**overrides)
     else:
@@ -8756,10 +8773,137 @@ def _rolling_dynamic_run(
         assert fake_client.create_calls == [] and spied["assessments"] == []
         path = settings.project_config_path(tmp_path)
         saved = path.read_bytes()
+    if before_run is not None:
+        before_run()
     exit_code = asyncio.run(loop_module.run(config))
     if setup_entrypoint is not None:
         assert path.read_bytes() == saved
     return fake_client, spied, exit_code
+
+
+@pytest.mark.parametrize("entrypoint", ["init", "update"])
+@pytest.mark.parametrize(
+    ("run_args", "run_env", "expected"),
+    [
+        (["--model", "gpt-5-mini"], {}, ("gpt-5-mini", "high", "long_context")),
+        (["--reasoning-effort", "low"], {}, ("gpt-5.6-terra", "low", "long_context")),
+        (
+            [],
+            {"GIT_LOOPY_MODEL": "gpt-5-mini", "GIT_LOOPY_REASONING_EFFORT": "max"},
+            ("gpt-5-mini", "max", "long_context"),
+        ),
+    ],
+)
+def test_saved_dynamic_authorization_preserves_lane_override_authority(
+    tmp_path, monkeypatch, entrypoint, run_args, run_env, expected
+) -> None:
+    async def forbidden_evidence(*_args):
+        pytest.fail("a saved-policy override must need no leaderboard access")
+
+    def without_access():
+        monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV)
+        monkeypatch.setattr(dynamic_route, "_stdlib_fetch", forbidden_evidence)
+
+    client, spied, code = _rolling_dynamic_run(
+        tmp_path, monkeypatch, setup_entrypoint=entrypoint,
+        run_args=[*run_args, "--context-tier", "long_context"], run_env=run_env,
+        before_run=without_access,
+        harness=(
+            ("gpt-5-mini", ["high", "max"], True),
+            ("gpt-5.6-terra", ["low", "high"], True),
+        ),
+    )
+
+    assert code == 0
+    assert len(client.create_calls) == 2
+    assert {Path(call["working_directory"]).name for call in client.create_calls} == {
+        "issue-42", "issue-43",
+    }
+    assert {
+        (call["model"], call["reasoning_effort"], call["context_tier"])
+        for call in client.create_calls
+    } == {expected}
+    bound = [e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pickup.bound"]
+    assert len(bound) == 2
+    assert {(e["model"], e["effort"], e["context_tier"]) for e in bound} == {expected}
+    assert {e["routing_source"] for e in bound} == {"defaulted_explicit_override"}
+    assert spied["assessments"] == [] and _lane_routing_records(tmp_path) == []
+
+
+@pytest.mark.parametrize("entrypoint", ["init", "update"])
+@pytest.mark.parametrize("supported", [True, False])
+def test_saved_dynamic_policy_applies_context_only_control_to_lane_work(
+    tmp_path, monkeypatch, entrypoint, supported
+) -> None:
+    client, spied, code = _rolling_dynamic_run(
+        tmp_path, monkeypatch, setup_entrypoint=entrypoint,
+        run_env={"GIT_LOOPY_CONTEXT_TIER": "long_context"},
+        long_context_models=("gpt-5.6-terra",) if supported else (),
+        answer=_elects_lane_model("gpt-5.6-terra", "long_context"),
+    )
+
+    if not supported:
+        assert code != 0
+        assert client.create_calls == [] and spied["assessments"] == []
+        assert _lane_routing_records(tmp_path) == []
+        assert not any(e["type"] == "wrapper.pickup.bound" for e in _logged_events(tmp_path))
+        return
+    assert code == 0
+    assert len(client.create_calls) == 2
+    assert {Path(call["working_directory"]).name for call in client.create_calls} == {
+        "issue-42", "issue-43",
+    }
+    assert {
+        (call["model"], call["reasoning_effort"], call["context_tier"])
+        for call in client.create_calls
+    } == {("gpt-5.6-terra", "high", "long_context")}
+    assert len(spied["assessments"]) == 2
+    for selector, request in spied["assessments"]:
+        assert (selector.model, selector.reasoning_effort, selector.context_tier) == (
+            "claude-opus-5", "high", "default",
+        )
+        assert {(c.model, c.context_tier) for c in request.candidates} == {
+            ("gpt-5.6-terra", "long_context"),
+        }
+    bound = [e for e in _logged_events(tmp_path) if e["type"] == "wrapper.pickup.bound"]
+    assert len(bound) == 2
+    for record in [*bound, *_lane_routing_records(tmp_path)]:
+        assert (record["model"], record["effort"], record["context_tier"]) == (
+            "gpt-5.6-terra", "high", "long_context",
+        )
+
+
+@pytest.mark.parametrize("entrypoint", ["init", "update"])
+def test_saved_context_control_refuses_a_lane_when_its_proposed_tier_is_withdrawn(
+    tmp_path, monkeypatch, entrypoint
+) -> None:
+    assessed = False
+
+    def answer(request):
+        nonlocal assessed
+        assessed = True
+        return _elects_lane_model("claude-opus-5", "long_context")(request)
+
+    client, spied, code = _rolling_dynamic_run(
+        tmp_path, monkeypatch, setup_entrypoint=entrypoint,
+        run_args=["--context-tier", "long_context"],
+        long_context_models=lambda: () if assessed else ("claude-opus-5",),
+        answer=answer,
+    )
+
+    assert code != 0
+    assert client.create_calls == [] and _lane_routing_records(tmp_path) == []
+    assert len(spied["assessments"]) == 2
+    assert all(
+        {c.context_tier for c in request.candidates} == {"long_context"}
+        for _, request in spied["assessments"]
+    )
+    events = _logged_events(tmp_path)
+    assert not any(e["type"] == "wrapper.pickup.bound" for e in events)
+    assert any(
+        e["type"] == "wrapper.pickup.skipped" and "no_runnable_candidate" in e["reason"]
+        for e in events
+    )
 
 
 def _lane_routing_records(tmp_path) -> list[dict[str, Any]]:

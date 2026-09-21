@@ -5490,6 +5490,59 @@ def test_a_dynamic_policy_run_wide_override_needs_no_routing_authorization(
     assert _bound_pickups(tmp_path)[0]["routing_source"] == "defaulted_explicit_override"
 
 
+@pytest.mark.parametrize("entrypoint", ["init", "update"])
+@pytest.mark.parametrize(
+    ("run_args", "run_env", "expected"),
+    [
+        (["--model", "gpt-5-mini"], {}, ("gpt-5-mini", "high", "long_context")),
+        (["--reasoning-effort", "low"], {}, ("gpt-5.6-terra", "low", "long_context")),
+        (
+            [],
+            {"GIT_LOOPY_MODEL": "gpt-5-mini", "GIT_LOOPY_REASONING_EFFORT": "max"},
+            ("gpt-5-mini", "max", "long_context"),
+        ),
+    ],
+)
+def test_saved_dynamic_authorization_preserves_serial_override_authority(
+    tmp_path, monkeypatch, entrypoint, run_args, run_env, expected
+) -> None:
+    from tests.test_routing_migration import _evidence, _saved_routing_config
+
+    client, _ = _wire_single_issue_github(
+        tmp_path, monkeypatch, labels=["ready-for-agent", "task-type:implementation"]
+    )
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "setup-only-key")
+    _evidence(monkeypatch)
+    config = _saved_routing_config(
+        tmp_path, monkeypatch, entrypoint=entrypoint,
+        run_args=[*run_args, "--context-tier", "long_context"], run_env=run_env,
+    )
+    assert client.create_calls == []
+    path = settings.project_config_path(tmp_path)
+    saved = path.read_bytes()
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV)
+    _harness(
+        monkeypatch,
+        ("gpt-5-mini", ["high", "max"], True),
+        ("gpt-5.6-terra", ["low", "high"], True),
+    )
+
+    async def forbidden_evidence(*_args):
+        pytest.fail("a saved-policy override must need no leaderboard access")
+
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", forbidden_evidence)
+
+    assert asyncio.run(loop_module.run(config)) == 0
+
+    assert path.read_bytes() == saved
+    (call,) = client.create_calls
+    assert (call["model"], call["reasoning_effort"], call["context_tier"]) == expected
+    (bound,) = _bound_pickups(tmp_path)
+    assert (bound["model"], bound["effort"], bound["context_tier"]) == expected
+    assert bound["routing_source"] == "defaulted_explicit_override"
+    assert _routing_records(tmp_path) == []
+
+
 @pytest.mark.parametrize("live_efforts", [["max"], ["high"]])
 def test_a_dynamic_policy_pin_is_honoured_or_refused_never_rescued(
     tmp_path, monkeypatch, live_efforts
@@ -5540,7 +5593,7 @@ def _wire_dynamic_ports(
     *,
     rows: tuple[dict[str, Any], ...] | Callable[[], tuple[dict[str, Any], ...]],
     answer: Callable[[Any], Any] | None,
-    listing: tuple[SimpleNamespace, ...],
+    listing: tuple[SimpleNamespace, ...] | Callable[[], tuple[SimpleNamespace, ...]],
     evidence_delay: float = 0.0,
 ) -> dict[str, list[Any]]:
     """Substitute the two ports that reach the network, and nothing else.
@@ -5561,11 +5614,18 @@ def _wire_dynamic_ports(
         return _aa_payload(*(rows() if callable(rows) else rows))
 
     async def _capabilities(*, warn=None) -> Any:
+        models = listing() if callable(listing) else listing
         return dynamic_route.FreshHarnessCapabilities(
             retrieved_at=datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc),
-            capabilities=static_route.HarnessCapabilities.from_listing(listing),
+            capabilities=static_route.HarnessCapabilities.from_listing(models),
             tier_capacities={
-                (model.id, "default"): 400_000 for model in listing
+                (model.id, tier): capacity
+                for model in models
+                for tier, capacity in (
+                    ("default", 400_000),
+                    ("long_context", 800_000 if model.billing.token_prices.long_context else 0),
+                )
+                if capacity
             },
         )
 
@@ -5601,7 +5661,7 @@ def _wire_dynamic_ports(
     return spied
 
 
-def _elects(model: str) -> Callable[[Any], str]:
+def _elects(model: str, tier: str = "default") -> Callable[[Any], str]:
     """Answer as a selector that picked ``model`` off the list it was handed.
 
     The candidate identity is a digest the router mints, so a scripted answer
@@ -5620,7 +5680,7 @@ def _elects(model: str) -> Callable[[Any], str]:
         (chosen,) = [
             candidate
             for candidate in request.candidates
-            if candidate.model == model
+            if candidate.model == model and candidate.context_tier == tier
         ]
         answer = {
             "candidate_identity": chosen.stable_identity,
@@ -5640,7 +5700,9 @@ def _elects(model: str) -> Callable[[Any], str]:
     return _answer
 
 
-def _listed_model(identifier: str, efforts: list[str] | None) -> SimpleNamespace:
+def _listed_model(
+    identifier: str, efforts: list[str] | None, *, long_context: bool = False
+) -> SimpleNamespace:
     return SimpleNamespace(
         id=identifier,
         name=identifier,
@@ -5648,7 +5710,8 @@ def _listed_model(identifier: str, efforts: list[str] | None) -> SimpleNamespace
         billing=SimpleNamespace(
             multiplier=1.0,
             token_prices=SimpleNamespace(
-                max_prompt_tokens=400_000, long_context=None
+                max_prompt_tokens=400_000,
+                long_context=SimpleNamespace(max_prompt_tokens=800_000) if long_context else None,
             ),
         ),
         supported_reasoning_efforts=efforts,
@@ -6386,6 +6449,140 @@ def test_a_dynamic_route_reaches_the_serial_work_sessions_own_arguments(
     assert call["model"] == "claude-opus-5"
     assert call["reasoning_effort"] == "high"
     assert spied["assessments"], "the Route selector was never asked"
+
+
+@pytest.mark.parametrize("entrypoint", ["init", "update"])
+@pytest.mark.parametrize("supported", [True, False])
+def test_saved_dynamic_policy_applies_context_only_control_to_serial_work(
+    tmp_path, monkeypatch, entrypoint, supported
+) -> None:
+    client, spied, code = _dynamic_run(
+        tmp_path, monkeypatch, setup_entrypoint=entrypoint,
+        run_args=["--context-tier", "long_context"],
+        answer=_elects("claude-opus-5", "long_context"),
+        listing=(
+            _listed_model("claude-opus-5", ["high"], long_context=supported),
+            _listed_model("gpt-5.6-terra", ["high"]),
+        ),
+    )
+
+    if not supported:
+        assert code != 0
+        assert client.create_calls == [] and spied["assessments"] == []
+        assert _bound_pickups(tmp_path) == [] and _routing_records(tmp_path) == []
+        return
+    assert code == 0
+    (call,) = client.create_calls
+    assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+        "claude-opus-5", "high", "long_context",
+    )
+    (selector, request), = spied["assessments"]
+    assert (selector.model, selector.reasoning_effort, selector.context_tier) == (
+        "claude-opus-5", "high", "default",
+    )
+    assert {candidate.context_tier for candidate in request.candidates} == {"long_context"}
+    (bound,) = _bound_pickups(tmp_path)
+    assert (bound["model"], bound["effort"], bound["context_tier"]) == (
+        "claude-opus-5", "high", "long_context",
+    )
+    assert bound["routing_source"] == "dynamic"
+    (record,) = _routing_records(tmp_path)
+    assert (record["model"], record["effort"], record["context_tier"]) == (
+        "claude-opus-5", "high", "long_context",
+    )
+
+
+@pytest.mark.parametrize("entrypoint", ["init", "update"])
+@pytest.mark.parametrize("changed", ["evidence", "eligibility", "tier"])
+def test_saved_context_control_revalidates_serial_proposal_before_work(
+    tmp_path, monkeypatch, entrypoint, changed
+) -> None:
+    assessed = False
+
+    def rows():
+        return (
+            _aa_row("aa-opus", 10 if assessed and changed == "evidence" else 70, 90),
+            _aa_row("aa-terra", 40, 200),
+        )
+
+    def listing():
+        models = ("claude-opus-5", "gpt-5.6-terra")
+        if assessed and changed == "eligibility":
+            models = ("gpt-5.6-terra",)
+        return tuple(
+            _listed_model(name, ["high"], long_context=not (assessed and changed == "tier"))
+            for name in models
+        )
+
+    def answer(request):
+        nonlocal assessed
+        model = "gpt-5.6-terra" if assessed else "claude-opus-5"
+        assessed = True
+        return _elects(model, "long_context")(request)
+
+    client, spied, code = _dynamic_run(
+        tmp_path, monkeypatch, setup_entrypoint=entrypoint,
+        run_args=["--context-tier", "long_context"],
+        rows=rows, listing=listing, answer=answer,
+    )
+
+    if changed == "tier":
+        assert code != 0
+        assert client.create_calls == [] and _bound_pickups(tmp_path) == []
+        assert _routing_records(tmp_path) == []
+        assert len(spied["assessments"]) == 1
+        assert any(
+            e["type"] == "wrapper.pickup.skipped" and "no_runnable_candidate" in e["reason"]
+            for e in _pickup_events(tmp_path)
+        )
+        return
+    assert code == 0
+    assert [selector.model for selector, _ in spied["assessments"]] == [
+        "claude-opus-5", "gpt-5.6-terra",
+    ]
+    (call,) = client.create_calls
+    assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+        "gpt-5.6-terra", "high", "long_context",
+    )
+    (record,) = _routing_records(tmp_path)
+    assert record["reassessed"] is True and record["superseded_proposal_id"]
+    assert record["model"] == _bound_pickups(tmp_path)[0]["model"] == "gpt-5.6-terra"
+    assert record["context_tier"] == "long_context"
+    assert record["selector_attempts"] == 2 and record["routing_credits"] == "0.50"
+
+
+@pytest.mark.parametrize("entrypoint", ["init", "update"])
+def test_saved_dynamic_reuse_keeps_context_authority_in_the_relevant_inputs(
+    tmp_path, monkeypatch, entrypoint
+) -> None:
+    original_proposals = {}
+    for index, (tier, reassess) in enumerate([
+        ("default", True), ("long_context", True),
+        ("long_context", False), ("default", False),
+    ]):
+        client, spied, code = _dynamic_run(
+            tmp_path, monkeypatch,
+            setup_entrypoint=entrypoint if index == 0 else "recorded",
+            run_args=["--context-tier", tier],
+            answer=_elects("claude-opus-5", tier),
+            listing=(_listed_model("claude-opus-5", ["high"], long_context=True),),
+        )
+
+        assert code == 0
+        assert len(spied["assessments"]) == int(reassess)
+        assert spied["evidence"] >= 1
+        (call,) = client.create_calls
+        assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+            "claude-opus-5", "high", tier,
+        )
+        record = _routing_records(tmp_path)[-1]
+        assert record["context_tier"] == tier
+        if reassess:
+            original_proposals[tier] = record["proposal_id"]
+        if not reassess:
+            assert record["routing_reuse"] == "revalidated"
+            assert record["reused_proposal_id"] == original_proposals[tier]
+            assert record["selector_attempts"] == 0 and record["routing_credits"] == "0"
 
 
 @pytest.mark.parametrize("entrypoint", ["update", "init"])
