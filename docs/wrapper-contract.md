@@ -1611,7 +1611,10 @@ the default, and the absence of a decision — `static` (this section), and `dyn
   catalogue, or another CLI installation, and MUST NOT satisfy the read from a listing memoised
   earlier in the Run: the **Rate card**'s listing is memoised precisely so it cannot reprice
   mid-Run (ADR-0026), which is the opposite of the freshness this check needs. Reading capabilities
-  MUST NOT rewrite billing provenance the Run has already recorded.
+  MUST NOT rewrite billing provenance the Run has already recorded. Configured routes are checked
+  at Run preflight, and the selected triple MUST be checked afresh at every Pickup, including
+  retained Static routes under Dynamic policy, run-wide overrides and permitted Static retries.
+  A successful setup or preflight verdict does not authorize a later Pickup.
 - **A remote placement's harness is another installation.** Where an **Execution host** (§20) opens
   its work sessions on a machine that authenticates as *itself*, the orchestrator's own listing
   describes a different installation under a different identity, and reporting it as that
@@ -1632,7 +1635,11 @@ the default, and the absence of a decision — `static` (this section), and `dyn
   at all each end the Run under `preflight_failed` (exit `1`) **before any work**, naming the
   setting and where it was configured. Dropping an effort, downgrading a tier, or substituting a
   backend default is not a successful route: it is a different route than the one selected,
-  reported as success.
+  reported as success. If capabilities change after preflight, the affected Pickup is refused
+  with the actual Static diagnostic, before binding or final Route publication. It consumes no
+  task attempt or Strike and releases any Lease acquired during admission. Already-bound Agents
+  retain their settings and may finish; other eligible work remains usable. A non-empty Pool
+  with no admissible work ends as `all_skipped`, not `empty_pool`.
 - **No effort dial is not the effort `none`.** Where the harness states a model has no
   reasoning-effort dial, an Orchestrator MUST send **no effort argument at all** for it. That is a
   distinct fact from a model whose dial offers the *value* `none`, which MUST be sent as a value.
@@ -1652,6 +1659,12 @@ The policy is pinned by [`routing-resolution.json`](../git-loopy/conformance/rou
 `static_route_cases` (one harness listing plus one route → `accepted` or a closed-vocabulary
 refusal, with the no-dial / effort-`none` and unreadable / empty distinctions exercised explicitly)
 and its `static_route_notes`.
+The `static_pickup_revalidation` matrix carries recorded keep/migrate authority through the real
+Python CLI into serial and Lane Pickups after capabilities change. Retained rows and explicit
+model/effort overrides are honored exactly or refused without leaderboard access. Accepted actual
+session settings agree with canonical Pickup, CLI/Dashboard readback and final tracker publication;
+refusals preserve Config and leave no final assignment or Strike. Companion continuity cases keep
+an Agent open during a Lane refusal and then admit work on a still-supported Static route.
 
 **The Static route is Python-only today**, on the same terms as routing itself and for the same
 reason: the shell and PowerShell Orchestrators implement no per-issue routing and read no harness

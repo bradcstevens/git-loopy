@@ -234,7 +234,10 @@ from git_loopy.run_environment_preflight import resolve_run_environment_prefligh
 from git_loopy.static_route import (
     HarnessCapabilities,
     RoutePolicy,
+    StaticRoute,
+    StaticRouteError,
     refresh_harness_capabilities,
+    validate_static_route,
 )
 from git_loopy.skill_install import (
     SkillInstallError,
@@ -2443,9 +2446,9 @@ class _Loop:
         type the operator routed, an explicit flag or environment pin, and a
         configured **Escalation rung** — :func:`static_route_applies` is where
         that list lives, so the rule reads the same here as it does on the
-        record. Those are the routes ``resolve_run_routing_preflight`` already
-        verified against the harness, so the two halves cover the Run between
-        them with no gap and no overlap.
+        record. Preflight verified those configured routes, but its listing is
+        not Pickup authority: verify this selected triple afresh before binding,
+        without changing settings or consulting leaderboard evidence.
 
         **Prepare then bind, both here.** The router's own two phases are what
         AC8's "current evidence/eligibility checks at preparation and Pickup"
@@ -2484,6 +2487,18 @@ class _Loop:
         router = self._dynamic_router
         self._require_route_selector(resolution)
         if router is None or static_route_applies(resolution):
+            if self._config.route_policy is not RoutePolicy.UNSELECTED:
+                capabilities = await _refresh_harness_capabilities(
+                    warn=self._diag.warning,
+                )
+                validate_static_route(
+                    StaticRoute(
+                        resolution.model,
+                        resolution.reasoning_effort,
+                        resolution.context_tier,
+                    ),
+                    capabilities,
+                )
             return resolution
         request = self._routing_request(item, resolution)
         decision = await self._bound_dynamic_decision(item, request, router)
@@ -2967,10 +2982,14 @@ class _Loop:
                 bound, resolution = await self._classify_at_pickup(
                     pickup.item, routed=self._routes[pickup.item.ref]
                 )
-            except DynamicRouteUnavailable as exc:
+            except (DynamicRouteUnavailable, StaticRouteError) as exc:
                 # Refuse this candidate once, not the useful Static work
                 # behind it. The ordered walk remains the only dispatcher.
-                routing_refusals[pickup.item.ref] = f"dynamic route unavailable: {exc}"
+                kind = (
+                    "Static route refused" if isinstance(exc, StaticRouteError)
+                    else "dynamic route unavailable"
+                )
+                routing_refusals[pickup.item.ref] = f"{kind}: {exc}"
                 self._routes.pop(pickup.item.ref, None)
                 # The Lease `admit` took for this candidate must go back, or
                 # the walk would leave a Lease on an issue no Run is working
@@ -5161,7 +5180,7 @@ class _ParallelLoop:
             item, resolution = await self._serial._classify_at_pickup(
                 item, routed=resolution, parallel_required=True
             )
-        except DynamicRouteUnavailable as exc:
+        except (DynamicRouteUnavailable, StaticRouteError) as exc:
             # The Lane half of AC11's explicit unavailable decision, and it
             # takes the candidate out of this Run's rolling pool exactly as the
             # routing refusal above does. Leaving it eligible looks kinder and
@@ -5180,8 +5199,12 @@ class _ParallelLoop:
             # this Lane now holds goes back through
             # :meth:`_run_lane_lifecycle`'s ``finally``, which covers every
             # exit before a contribution exists.
-            self._diag.warning("lane #%s dynamic route unavailable: %s", ref, exc)
-            passed_over(f"dynamic route unavailable: {exc}")
+            kind = (
+                "Static route refused" if isinstance(exc, StaticRouteError)
+                else "dynamic route unavailable"
+            )
+            self._diag.warning("lane #%s %s: %s", ref, kind, exc)
+            passed_over(f"{kind}: {exc}")
             self._rolling_refused.add(ref)
             scheduler.release(reservation)
             return

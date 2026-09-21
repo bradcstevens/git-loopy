@@ -1328,6 +1328,17 @@ ledger into routing; neither completed validation nor missing leaderboard access
 grants a new assessment budget. Expiration still permits already-classified
 Static work on freshly validated settings.
 
+Static settings are checked again at each Pickup, not only during setup and
+Run preflight. This includes retained rows under Dynamic policy, model/effort
+overrides and explicitly authorized escalation. If a model, effort or tier is
+withdrawn, or the authenticated listing becomes unavailable, that issue is
+refused without substituting a different route, publishing a final assignment
+or charging an attempt/Strike. Its admission Lease is released; already-running
+Agents keep their settings and other supported Static work may proceed.
+The shared `static_pickup_revalidation` cases cover recorded keep/migrate,
+retained rows and flag/environment authority through real serial/Lane sessions,
+with no leaderboard access and unchanged Config.
+
 **Activation status (#567): incomplete.** `init --routing`, `update --routing`,
 and the update chained by `upgrade` offer explicit keep-or-migrate authorization and this shared readiness
 verdict. Composed first-setup and saved-migration serial/Lane cases observe actual

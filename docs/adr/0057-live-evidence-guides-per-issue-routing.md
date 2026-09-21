@@ -202,6 +202,19 @@ their separate questions.
 
 ## Partial activation status (#567)
 
+Static Pickup now freshly verifies the selected triple against the authenticated
+local harness, rather than inheriting successful setup/Run-preflight validation.
+The shared serial/Lane path covers retained Static rows under Dynamic policy,
+run-wide pins and permitted Static retries. A late capability refusal leaves no
+binding or final Route publication, releases the admission Lease and charges no
+attempt or Strike; running Agents keep their settings and other supported work
+may proceed. The `static_pickup_revalidation` Conformance matrix carries
+recorded keep/migrate and retained-row/flag/environment authority through actual
+CLI work or refusal after a changed listing, with exact session/readback/tracker
+agreement and unchanged Config. Companion cases observe a refused Lane Pickup
+while an Agent using the withdrawn model remains open and completes. This closes
+a freshness gap, not executing-host capability authority or final activation.
+
 Python's opt-in `update --routing` now collects or reuses an explicit keep-or-migrate
 choice, retains every authored Static row, requires operator-owned Dynamic access
 outside Config and explicit finite limits, and uses the shared Run/doctor readiness

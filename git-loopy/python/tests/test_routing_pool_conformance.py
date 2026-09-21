@@ -39,6 +39,256 @@ from tests.test_ui_smoke import _make_renderer
 
 
 _POOL = _ROUTING_CONFORMANCE["pool_revalidation"]
+_STATIC_PICKUP = _ROUTING_CONFORMANCE["static_pickup_revalidation"]
+
+
+@pytest.mark.parametrize("mode", _STATIC_PICKUP["modes"])
+@pytest.mark.parametrize("choice", _STATIC_PICKUP["choices"])
+@pytest.mark.parametrize("authority", _STATIC_PICKUP["authorities"])
+@pytest.mark.parametrize("case", _STATIC_PICKUP["cases"], ids=lambda case: case["id"])
+def test_saved_static_authority_rechecks_capabilities_at_pickup(
+    tmp_path, monkeypatch, capsys, mode, choice, authority, case,
+):
+    _, git = _wire_single_issue_github(tmp_path, monkeypatch)
+    git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    labels = [
+        "ready-for-agent", "task-type:implementation", "semver:none",
+        *(["parallel-safe"] if mode == "lane" else []),
+    ]
+    tracker = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=list(labels))],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: tracker)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    client = _ParallelFakeClient(fake_git=git, scripted_events=[], serial_closes=True)
+    transport = _BilledRoutingClient(client)
+    monkeypatch.setattr(loop_module, "_make_client", lambda: transport)
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("recorded authority prompted"),
+    )
+    for name in (
+        "GIT_LOOPY_ROUTE_POLICY", "GIT_LOOPY_MODEL", "GIT_LOOPY_REASONING_EFFORT",
+        "GIT_LOOPY_CONTEXT_TIER",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, "setup-only-key")
+    reads = []
+
+    def listing():
+        change = case["change"] if tracker.issue_list_calls else "none"
+        reads.append(change)
+        if change == "unreadable":
+            raise OSError("fixture: capability listing unavailable at Pickup")
+        if change == "empty":
+            return []
+        target = _listed_model(
+            "synthetic-static",
+            None if change == "dial" else ["low"] if change == "effort" else ["high"],
+            long_context=change != "tier",
+        )
+        if change == "disabled":
+            target.policy.state = "disabled"
+        return [
+            *([] if change == "unlisted" else [target]),
+            _listed_model("synthetic-other", ["high"], long_context=True),
+        ]
+
+    async def fetch_listing():
+        return listing()
+
+    async def forbidden_evidence(*_args):
+        pytest.fail("Static Pickup must not read the leaderboard")
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", fetch_listing)
+    _wire_dynamic_ports(
+        monkeypatch, rows=(_aa_row("aa-static", 70, 90),),
+        listing=listing, answer=None, session_selector=True,
+    )
+    path = settings.project_config_path(tmp_path)
+    settings.write_config_atomic(path, _STATIC_PICKUP["saved_config"])
+    assert _update(tmp_path, routing_choice=choice) == 0
+    saved = path.read_bytes()
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV)
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", forbidden_evidence)
+    args = ["1"]
+    if authority == "model_flag":
+        args += ["--model", "synthetic-static", "--reasoning-effort", "high"]
+    elif authority == "effort_environment":
+        monkeypatch.setenv("GIT_LOOPY_REASONING_EFFORT", "high")
+    before_run = len(reads)
+    capsys.readouterr()
+
+    code = cli.main(args)
+
+    assert path.read_bytes() == saved
+    assert len(reads) > before_run + 1
+    assert reads[-1] == case["change"]
+    events = _read_events(tmp_path)
+    assert not any(event["type"] == "wrapper.strike" for event in events)
+    assert all(role == "work" for role, _ in transport.calls)
+    assert not git.remote_refs
+    output = capsys.readouterr()
+    if case["refusal"] is None:
+        assert code == 0
+        (call,) = client.create_calls
+        (pickup,) = [event for event in events if event["type"] == "wrapper.pickup.bound"]
+        expected = _STATIC_PICKUP["expected_route"]
+        assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+            expected["model"], expected["effort"], expected["context_tier"],
+        )
+        assert (pickup["model"], pickup["effort"], pickup["context_tier"]) == (
+            expected["model"], expected["effort"], expected["context_tier"],
+        )
+        assert pickup["routing_source"] == _STATIC_PICKUP["authorities"][authority]
+        if mode == "lane":
+            assert Path(call["working_directory"]).name == "issue-42"
+        else:
+            assert call["working_directory"] is None
+        ((ref, comment),) = tracker.route_comment_calls
+        assert ref == 42
+        assert all(value in comment for value in expected.values())
+        assert "▸ pickup #42" in output.out
+        renderer, summary, _ = _make_renderer()
+        state = LiveRunState()
+        for event in events:
+            renderer.render(event)
+            state.render(event)
+        view = project_run_view(state, summary, issue=42)
+        row = next(row for row in view["dashboard"]["queue"]["rows"] if row["issue"] == 42)
+        assert (row["route"]["model"], row["route"]["effort"], row["route"]["context_tier"]) == (
+            expected["model"], expected["effort"], expected["context_tier"],
+        )
+        return
+    assert client.create_calls == [], "Pickup used capabilities from before Pool collection"
+    assert code == 1 and events[-1]["outcome"] == "all_skipped"
+    assert any(
+        event["type"] == "wrapper.pickup.skipped" and event["issue"] == 42
+        and "Static route refused" in event["reason"]
+        and case["refusal"] in event["reason"]
+        for event in events
+    )
+    assert not any(
+        event["type"] in {"wrapper.pickup.bound", "wrapper.routing.delivery"}
+        for event in events
+    )
+    assert tracker.route_comment_calls == [] and tracker.route_label_calls == []
+    assert tracker.issue_view(42).state == "OPEN"
+    assert set(tracker.issue_labels(42)) == set(labels)
+
+
+@pytest.mark.parametrize("mode", _STATIC_PICKUP["modes"])
+def test_static_capability_withdrawal_preserves_running_and_other_eligible_work(
+    tmp_path, monkeypatch, mode,
+):
+    _, git = _wire_single_issue_github(tmp_path, monkeypatch)
+    git.remote_urls = {"origin": "git@github.com:x/y.git"}
+    base_labels = [
+        "ready-for-agent", "semver:none", *(["parallel-safe"] if mode == "lane" else []),
+    ]
+    tracker = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=[*base_labels, "task-type:implementation"]),
+            _make_issue(43, labels=[*base_labels, "task-type:implementation"]),
+            _make_issue(44, labels=[*base_labels, "task-type:docs"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: tracker)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(
+        loop_module.execution_host_module, "local_execution_host_capacity", lambda: 2,
+    )
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+    for name in (
+        "GIT_LOOPY_ROUTE_POLICY", "GIT_LOOPY_MODEL", "GIT_LOOPY_REASONING_EFFORT",
+        "GIT_LOOPY_CONTEXT_TIER", dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
+    withdrawn = False
+    pickup_reads = 0
+    first_started = asyncio.Event()
+
+    async def listing():
+        nonlocal pickup_reads
+        if tracker.issue_list_calls:
+            pickup_reads += 1
+            if pickup_reads > 1:
+                await asyncio.wait_for(first_started.wait(), timeout=5)
+        return [
+            *([] if withdrawn else [_listed_model("synthetic-static", ["high"], long_context=True)]),
+            _listed_model("synthetic-other", ["high"], long_context=True),
+        ]
+
+    async def forbidden_evidence(*_args):
+        pytest.fail("Static continuity must not read the leaderboard")
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", listing)
+    monkeypatch.setattr(dynamic_route, "_stdlib_fetch", forbidden_evidence)
+    started = {}
+    finished = []
+
+    async def refused():
+        while not any(
+            event["type"] == "wrapper.pickup.skipped" and event["issue"] == 43
+            for event in _read_events(tmp_path)
+        ):
+            await asyncio.sleep(0)
+
+    async def work(prompt, kwargs):
+        nonlocal withdrawn
+        (ref,) = [int(value) for value in re.findall(r"=== Issue #(\d+):", prompt)]
+        started[ref] = kwargs
+        if ref == 42:
+            withdrawn = True
+            first_started.set()
+            if mode == "lane":
+                await asyncio.wait_for(refused(), timeout=5)
+                assert finished == []
+        else:
+            assert ref == 44
+        finished.append(ref)
+
+    client = _ParallelFakeClient(fake_git=git, scripted_events=[], serial_closes=True)
+    transport = _BilledRoutingClient(client, on_work=work)
+    monkeypatch.setattr(loop_module, "_make_client", lambda: transport)
+    path = settings.project_config_path(tmp_path)
+    settings.write_config_atomic(path, {
+        **_STATIC_PICKUP["saved_config"], "model": "synthetic-other",
+    })
+    assert _update(tmp_path, routing_choice="keep") == 0
+    saved = path.read_bytes()
+
+    assert cli.main(["2"]) == 0
+
+    assert path.read_bytes() == saved
+    assert set(started) == {42, 44} and set(finished) == {42, 44}
+    assert all(role == "work" for role, _ in transport.calls)
+    for ref, model in [(42, "synthetic-static"), (44, "synthetic-other")]:
+        call = started[ref]
+        assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+            model, "high", "long_context",
+        )
+        if mode == "lane":
+            assert Path(call["working_directory"]).name == f"issue-{ref}"
+        else:
+            assert call["working_directory"] is None
+        assert tracker.issue_view(ref).state == "CLOSED"
+    events = _read_events(tmp_path)
+    assert [e["issue"] for e in events if e["type"] == "wrapper.pickup.bound"] == [42, 44]
+    assert any(
+        e["type"] == "wrapper.pickup.skipped" and e["issue"] == 43
+        and "Static route refused" in e["reason"] for e in events
+    )
+    assert not any(e["type"] == "wrapper.strike" for e in events)
+    assert {ref for ref, _ in tracker.route_comment_calls} == {42, 44}
+    assert tracker.issue_view(43).state == "OPEN"
+    assert set(tracker.issue_labels(43)) == {*base_labels, "task-type:implementation"}
+    assert not git.remote_refs
 
 
 @pytest.mark.parametrize("mode", _POOL["modes"])

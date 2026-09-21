@@ -49,6 +49,20 @@ Pickup. Shell/PowerShell activation is explicitly deferred; the Rust Dashboard
 does not execute migration or create work sessions. Historical fixtures and
 streams retain their interpretation, and Dynamic defaults remain off.
 
+The `static_pickup_revalidation` matrix covers a later capability change after
+recorded keep/migrate and successful Run preflight: eight cases, three retained
+row/flag/environment authorities, and serial/Lane execution. The adapter in
+`python/tests/test_routing_pool_conformance.py` changes the external listing at
+Pool collection, then observes exact actual session settings and canonical
+Pickup/CLI/Dashboard/tracker agreement, or a named refusal with no work, final
+assignment or Strike. Missing models, disabled policy, withdrawn effort/dial/tier,
+empty listings and unreadable listings are not repaired or inherited from
+preflight. Config is unchanged, acquired Leases are released, and no leaderboard
+access is needed. Companion serial/Lane cases withdraw a running Agent's model,
+refuse the next issue using it and leave other supported Static work usable;
+the Lane case observes the refusal while that Agent is still open. These are
+Python-local obligations; native-member and non-local activation remain deferred.
+
 The sibling `first_setup` matrix starts without either Config scope and crosses
 the real `init --routing` CLI and headless Textual keyboard walk, with terminal
 authorization answers and external transports scripted, into a subsequent
