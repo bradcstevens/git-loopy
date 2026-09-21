@@ -120,7 +120,7 @@
     "skill-consultation.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py compares fixture Skill-consultation expectations with production summaries."},
       "shell": {"kind": "claimed", "reason": "shell/tests/test-event-conformance.sh drives skill-consultation.json's cases through the production rollup builder and asserts the declared-false skill_consultation capability stays honestly null for every case."},
-      "powershell": {"kind": "waived_owed", "reason": "The PowerShell Orchestrator performs per-Iteration Skill consultation but its suite does not exercise this fixture.", "issue": 556},
+      "powershell": {"kind": "claimed", "reason": "powershell/tests/test-event-conformance.ps1 drives skill-consultation.json's cases through the production rollup builder and asserts the declared-false skill_consultation capability stays honestly null for every case."},
       "rust": {"kind": "waived_out_of_scope", "reason": "Skill consultation is an Orchestrator action; the Dashboard only renders facts that an Orchestrator emits."}
     },
     "skill-policy.json": {
