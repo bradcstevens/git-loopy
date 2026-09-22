@@ -1458,6 +1458,7 @@ class TestModuleStructure:
             "in_selection_order",
             "is_lane_candidate",
             "is_afk_ready",
+            "is_planning_document",
             "is_pr_afk_ready",
             "readiness_unresolved",
             "unbound_pool_outcome",

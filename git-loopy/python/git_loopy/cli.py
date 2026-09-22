@@ -889,18 +889,21 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "priority, and the seven task-type labels. `init` only ever creates "
             "what is absent at the moment it runs, so a label added to the "
             "vocabulary afterwards never lands and a drifted colour or "
-            "description stays drifted. Reports by default and changes nothing; "
-            "labels the tracker carries outside the vocabulary are never touched "
-            "and never deleted."
+            "description stays drifted. Also reports every open planning "
+            "document (a title beginning PRD: or Spec:) that carries the "
+            "configured ready-for-agent role. Reports by default and changes "
+            "nothing; labels the tracker carries outside the vocabulary are "
+            "never touched and never deleted."
         ),
     )
     labels_cmd.add_argument(
         "--apply",
         action="store_true",
         help=(
-            "Write the difference back: create the labels the tracker is missing "
-            "and correct the colour / description of the ones that drifted. "
-            "Never renames and never deletes."
+            "Write the difference back: create the labels the tracker is missing, "
+            "correct the colour / description of the ones that drifted, and "
+            "remove the ready-for-agent role from open planning documents. "
+            "Never renames, never closes an issue, and never deletes a label."
         ),
     )
 

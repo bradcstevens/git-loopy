@@ -103,6 +103,7 @@ __all__ = [
     "in_selection_order",
     "is_lane_candidate",
     "is_afk_ready",
+    "is_planning_document",
     "is_pr_afk_ready",
     "readiness_unresolved",
     "unbound_pool_outcome",
@@ -158,6 +159,17 @@ _RE_AGENT_BRIEF: re.Pattern[str] = re.compile(r"^## Agent Brief", re.MULTILINE)
 _RE_PRDS_NAME: re.Pattern[str] = re.compile(r"^\d+-.*\.md$")
 
 
+def is_planning_document(title: str) -> bool:
+    """Return whether ``title`` names a planning document.
+
+    The one rule Pickup and ``git-loopy labels`` share: a title that begins
+    with ``PRD:`` or ``Spec:``, compared case-insensitively, is a planning
+    document and not executable work. A second copy of this test would let the
+    command and the Pool disagree about what to repair.
+    """
+    return title.lower().startswith(("prd:", "spec:"))
+
+
 def is_afk_ready(body: str, *, title: str = "") -> bool:
     """Return ``True`` iff the title and body satisfy the AFK-ready discriminator.
 
@@ -199,7 +211,7 @@ def afk_ready_exclusion(body: str, *, title: str = "") -> str | None:
         slice that lost one heading — a distinction the operator acts on
         differently.
     """
-    if title.lower().startswith(("prd:", "spec:")):
+    if is_planning_document(title):
         return EXCLUSION_PLANNING_DOCUMENT
     has_what = bool(_RE_WHAT_TO_BUILD.search(body))
     has_ac = bool(_RE_AC.search(body))

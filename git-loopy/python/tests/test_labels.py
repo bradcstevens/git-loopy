@@ -1197,7 +1197,74 @@ def test_subprocess_label_client_updates_a_label_without_renaming_it(
 def test_subprocess_label_client_satisfies_the_reconcile_seam() -> None:
     from git_loopy import gh
 
-    assert isinstance(gh.SubprocessLabelClient(), labels_module.LabelReconcileClient)
+    client = gh.SubprocessLabelClient()
+    assert isinstance(client, labels_module.LabelReconcileClient)
+    assert isinstance(client, labels_module.LabelPlacementClient)
+
+
+def test_subprocess_label_client_lists_open_issues_for_placement(monkeypatch) -> None:
+    """Placement is judged from a complete open-issue read, not a label catalog."""
+    from git_loopy import gh
+
+    seen: dict[str, object] = {}
+
+    def _fake_issue_list(self, label: str, state: str = "open") -> gh.IssueListPage:
+        seen["label"] = label
+        seen["state"] = state
+        return gh.IssueListPage(
+            issues=(
+                gh.Issue(
+                    number=42,
+                    title="Spec: the design",
+                    body="",
+                    labels=["ready-for-agent", "bug"],
+                    state="OPEN",
+                    url="https://example.test/42",
+                ),
+            ),
+            complete=True,
+        )
+
+    monkeypatch.setattr(gh.SubprocessGitHubClient, "issue_list", _fake_issue_list)
+
+    issues = gh.SubprocessLabelClient().open_issues()
+
+    assert seen == {"label": "", "state": "open"}
+    assert [(issue.number, issue.title, issue.labels, issue.state) for issue in issues] == [
+        (42, "Spec: the design", ("ready-for-agent", "bug"), "OPEN")
+    ]
+
+
+def test_subprocess_label_client_refuses_an_incomplete_issue_listing(monkeypatch) -> None:
+    """A truncated read must not be reported as a clean placement."""
+    from git_loopy import gh
+
+    def _incomplete(self, label: str, state: str = "open") -> gh.IssueListPage:
+        return gh.IssueListPage(issues=(), complete=False)
+
+    monkeypatch.setattr(gh.SubprocessGitHubClient, "issue_list", _incomplete)
+
+    with pytest.raises(labels_module.IncompleteIssueListing, match="incomplete"):
+        gh.SubprocessLabelClient().open_issues()
+
+
+def test_subprocess_label_client_removes_one_label_without_closing(
+    monkeypatch,
+) -> None:
+    """The repair is ``issue edit --remove-label``, never a close or a rename."""
+    from git_loopy import gh
+
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(gh.subprocess, "run", _fake_run)
+
+    gh.SubprocessLabelClient().remove_issue_label(42, "agent-ready")
+
+    assert calls == [["gh", "issue", "edit", "42", "--remove-label", "agent-ready"]]
 
 
 def test_reconcile_reports_exactly_what_landed_when_a_write_fails_mid_pass(
