@@ -19,7 +19,14 @@ import pytest
 
 from git_loopy import roster_cache
 from git_loopy.config import MODEL_REASONING_EFFORTS
-from git_loopy.static_route import HarnessCapabilities, refresh_harness_capabilities
+from git_loopy.static_route import (
+    HarnessCapabilities,
+    StaticRoute,
+    StaticRouteError,
+    StaticRouteRefusal,
+    refresh_harness_capabilities,
+    validate_static_route,
+)
 
 
 #: A model the committed fixture deliberately does not carry. ADR-0019's SDK
@@ -180,6 +187,64 @@ def test_recording_never_raises_when_the_cache_cannot_be_written(
     )
 
     assert roster_cache.observed_models() == frozenset()
+
+
+def test_a_host_with_no_resolvable_home_still_completes_the_capability_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolving the cache path can raise past OSError, and must not escape.
+
+    With neither ``XDG_CONFIG_HOME`` nor ``HOME`` set, ``Path.home()`` raises
+    ``RuntimeError`` — reachable on a Windows host carrying none of the
+    variables it consults. ``refresh_harness_capabilities`` promises that every
+    failure answers ``None``; an advisory cache must not be able to turn a
+    *successful* listing into a preflight traceback.
+    """
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.delenv("USERPROFILE", raising=False)
+    monkeypatch.setattr(
+        Path,
+        "home",
+        classmethod(lambda _cls: (_ for _ in ()).throw(RuntimeError("no home"))),
+    )
+
+    async def fetch() -> list[_Model]:
+        return [_Model(OFF_FIXTURE_MODEL)]
+
+    capabilities = asyncio.run(refresh_harness_capabilities(fetch=fetch))
+
+    assert capabilities is not None
+    assert capabilities.get(OFF_FIXTURE_MODEL) is not None
+    assert roster_cache.observed_models() == frozenset()
+
+
+def test_a_remembered_model_is_still_refused_by_the_fresh_listing(
+    config_home: Path,
+) -> None:
+    """The cache is advisory; eligibility is decided live (ADR-0057).
+
+    This is the rule the whole amendment rests on. A model in the cache is
+    "known" for the purpose of not calling it a typo, and nothing more — a route
+    naming it is still refused when the listing read at that moment does not
+    offer it.
+    """
+    roster_cache.record_observed_roster(
+        HarnessCapabilities.from_listing([_Model(OFF_FIXTURE_MODEL)])
+    )
+    assert OFF_FIXTURE_MODEL in roster_cache.supported_models()
+
+    fresh = HarnessCapabilities.from_listing([_Model("claude-opus-5")])
+    route = StaticRoute(
+        model=OFF_FIXTURE_MODEL,
+        reasoning_effort=None,
+        context_tier="default",
+    )
+
+    with pytest.raises(StaticRouteError) as refusal:
+        validate_static_route(route, fresh)
+
+    assert refusal.value.refusal is StaticRouteRefusal.UNLISTED_MODEL
 
 
 def test_a_partial_write_is_never_observed(config_home: Path) -> None:

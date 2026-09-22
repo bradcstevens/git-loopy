@@ -343,10 +343,33 @@ def _tracked_project_config() -> dict[str, object]:
     pytest.skip("tracked project Config not found (installed-wheel run)")
 
 
-def test_the_tracked_project_config_preserves_its_default_override() -> None:
+def _pin_built_in_roster(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Judge the tracked Config against the built-in roster alone.
+
+    The supported set is the built-in roster unioned with whatever this machine's
+    harness was last observed to offer (ADR-0019 amendment). A developer whose
+    harness serves the tracked model would therefore see no warning while CI,
+    which has no harness and no cache, would see one. Pinning the built-in roster
+    keeps this a statement about the shipped file rather than about the machine
+    the suite happens to run on.
+    """
+    from git_loopy import cli
+    from git_loopy.config import MODEL_REASONING_EFFORTS
+
+    monkeypatch.setattr(
+        cli,
+        "supported_models",
+        lambda *_args, **_kwargs: frozenset(MODEL_REASONING_EFFORTS),
+    )
+
+
+def test_the_tracked_project_config_preserves_its_default_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Project choices override, rather than redefine, the kit's defaults."""
     from git_loopy import cli
 
+    _pin_built_in_roster(monkeypatch)
     warnings: list[str] = []
     run = cli.resolve_config(
         cli.build_parser().parse_args([]),
@@ -358,13 +381,16 @@ def test_the_tracked_project_config_preserves_its_default_override() -> None:
 
     assert (run.model, run.reasoning_effort) == ("gpt-6-astra", "high")
     assert len(warnings) == 1
-    assert "['gemini-3.8-flash']" in warnings[0]
+    assert "['grok-4.7']" in warnings[0]
 
 
-def test_the_tracked_project_config_preserves_all_task_type_routes() -> None:
-    """Routes survive resolution, with a warning for the unverified Gemini model."""
+def test_the_tracked_project_config_preserves_all_task_type_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Routes survive resolution, with a warning for the model the fixture lacks."""
     from git_loopy import cli
 
+    _pin_built_in_roster(monkeypatch)
     warnings: list[str] = []
     run = cli.resolve_config(
         cli.build_parser().parse_args([]),
@@ -377,11 +403,11 @@ def test_the_tracked_project_config_preserves_all_task_type_routes() -> None:
     assert dict(run.routing) == {
         "planning": ("gpt-6-astra", "max"),
         "review": ("claude-opus-5", "max"),
-        "implementation": ("gemini-3.8-flash", "high"),
+        "implementation": ("grok-4.7", "high"),
         "test": ("claude-sonnet-5", "high"),
         "docs": ("gpt-5.6-luna", "low"),
         "chore": ("gpt-5.6-luna", "low"),
         "bugfix": ("claude-opus-5", "xhigh"),
     }
     assert len(warnings) == 1
-    assert "['gemini-3.8-flash']" in warnings[0]
+    assert "['grok-4.7']" in warnings[0]
