@@ -50,21 +50,44 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+def _declared_mode() -> str:
+    """The distribution mode this repository currently commits to."""
+    return release_trust.load_trust_policy(REPOSITORY_ROOT).distribution_mode
+
+
+def _opposing_mode() -> str:
+    """The supported mode this repository is *not* currently declaring."""
+    declared = _declared_mode()
+    return (
+        DISTRIBUTION_MODE_SOURCE_ONLY
+        if declared == DISTRIBUTION_MODE_ARTIFACT_BEARING
+        else DISTRIBUTION_MODE_ARTIFACT_BEARING
+    )
+
+
 class TestDistributionModeAuthority:
     """The repository/release declaration is the single authority."""
 
-    def test_trust_fixture_declares_source_only_as_default(self) -> None:
+    def test_trust_fixture_declares_the_artifact_bearing_promise(self) -> None:
+        """The committed promise is pinned, so a mode flip is a conscious edit.
+
+        This repository publishes a downloadable helper baseline (#592), so the
+        declaration is ``artifact-bearing``. The surrounding authority cases
+        deliberately read the declaration instead of restating it: their subject
+        is that nothing *else* can move the mode, which must stay true whichever
+        mode is declared.
+        """
         policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
-        assert policy.distribution_mode == DISTRIBUTION_MODE_SOURCE_ONLY
+        assert policy.distribution_mode == DISTRIBUTION_MODE_ARTIFACT_BEARING
         assert policy.distribution_modes == (
             DISTRIBUTION_MODE_SOURCE_ONLY,
             DISTRIBUTION_MODE_ARTIFACT_BEARING,
         )
 
-    def test_secret_presence_does_not_alter_source_only_mode(
+    def test_secret_presence_does_not_alter_the_declared_mode(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Secret presence must never switch source-only mode to artifact-bearing."""
+        """Secret presence must never choose the mode."""
         # Arm with all possible signing secrets
         signing_secrets = {
             "CODESIGN_CERTIFICATE": "dummy-cert",
@@ -82,12 +105,12 @@ class TestDistributionModeAuthority:
             monkeypatch.setenv(k, v)
 
         mode = resolve_distribution_mode(REPOSITORY_ROOT)
-        assert mode == DISTRIBUTION_MODE_SOURCE_ONLY
+        assert mode == _declared_mode()
 
-    def test_secret_absence_preserves_source_only_mode(
+    def test_secret_absence_preserves_the_declared_mode(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Secret absence does not alter source-only mode."""
+        """A missing prerequisite never silently downgrades the declared mode."""
         for k in (
             "CODESIGN_CERTIFICATE",
             "CODESIGN_CERTIFICATE_PASSWORD",
@@ -101,21 +124,21 @@ class TestDistributionModeAuthority:
             monkeypatch.delenv(k, raising=False)
 
         mode = resolve_distribution_mode(REPOSITORY_ROOT)
-        assert mode == DISTRIBUTION_MODE_SOURCE_ONLY
+        assert mode == _declared_mode()
 
     def test_explicit_requested_mode_matching_policy_succeeds(self) -> None:
         mode = resolve_distribution_mode(
             REPOSITORY_ROOT,
-            explicit_mode=DISTRIBUTION_MODE_SOURCE_ONLY,
+            explicit_mode=_declared_mode(),
         )
-        assert mode == DISTRIBUTION_MODE_SOURCE_ONLY
+        assert mode == _declared_mode()
 
     def test_explicit_mode_inconsistent_with_policy_fails_closed(self) -> None:
         """AC 5: Explicit mode inconsistent with repo policy is refused explicitly."""
         with pytest.raises(DistributionModeError) as exc_info:
             resolve_distribution_mode(
                 REPOSITORY_ROOT,
-                explicit_mode=DISTRIBUTION_MODE_ARTIFACT_BEARING,
+                explicit_mode=_opposing_mode(),
             )
         assert "Inconsistent distribution mode" in str(exc_info.value)
         assert "artifact-bearing" in str(exc_info.value)
@@ -220,7 +243,7 @@ class TestWorkflowJobGatingInSourceOnlyMode:
     def test_release_promotion_operates_under_repository_distribution_mode(self) -> None:
         """AC 7: Both promotion triggers operate under repository distribution mode."""
         policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
-        assert policy.distribution_mode == DISTRIBUTION_MODE_SOURCE_ONLY
+        assert policy.distribution_mode in policy.distribution_modes
         workflow = _load_yaml(PROMOTION_WORKFLOW_PATH)
         assert "environment" not in workflow["jobs"]["promote"]
 

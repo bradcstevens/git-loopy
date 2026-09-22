@@ -53,7 +53,6 @@ from git_loopy.config import (
     REASONING_EFFORT_ORDER,
     REASONING_EFFORTS,
     CONTEXT_TIERS,
-    SUPPORTED_MODELS,
     TASK_TYPE_KEYS,
     TASK_TYPE_LABEL_PREFIX,
     TaskTypeError,
@@ -67,6 +66,7 @@ from git_loopy.interactive.models import (
     format_multiplier,
     format_reasoning,
 )
+from git_loopy.roster_cache import supported_models
 from git_loopy.static_route import RoutePolicy, RoutePolicyError
 
 if TYPE_CHECKING:
@@ -518,7 +518,7 @@ def _routing_key(raw: str, *, closed: bool = True) -> str:
 
 def _validated_route(model: str, effort: str) -> tuple[str, str]:
     normalized_effort = effort.strip().lower()
-    if model not in SUPPORTED_MODELS:
+    if model not in supported_models():
         raise ConfigCommandError(
             f"routing model {model!r} is not in the supported model roster"
         )

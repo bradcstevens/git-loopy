@@ -382,11 +382,22 @@ async def refresh_harness_capabilities(
         listing = await fetch()
         if listing is None:
             return None
-        return HarnessCapabilities.from_listing(listing)
+        capabilities = HarnessCapabilities.from_listing(listing)
     except Exception as exc:
         if warn is not None:
             warn(f"{type(exc).__name__}: {exc}")
         return None
+    # Observing the harness is also how the kit learns which models exist on
+    # *this* operator's CLI (ADR-0019). Recording it here rather than at the
+    # call sites keeps one choke point: a Run preflight and `git-loopy doctor`
+    # both arrive through this function, and a second place to remember would be
+    # a second place to forget. The cache is advisory and best-effort — it can
+    # never fail this read, and the eligibility decision above is still made
+    # from the fresh listing, never from what was remembered.
+    from git_loopy.roster_cache import record_observed_roster
+
+    record_observed_roster(capabilities)
+    return capabilities
 
 
 def default_capability_fetch() -> Any:
