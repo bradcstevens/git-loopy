@@ -1465,6 +1465,51 @@ class SubprocessLabelClient:
             ]
         )
 
+    def open_issues(self) -> list:
+        """Return every open issue, refusing a read that cannot be proven complete.
+
+        Placement is a question about issues, not about the label catalog.
+        ``issue_list`` with no label filter is the same shallow reader the Pool
+        uses, so pagination and completeness are not a second implementation.
+        An incomplete page is a failure rather than an empty placement: a
+        planning document past the ceiling would otherwise look correctly
+        labelled.
+
+        Raises:
+            GhError: If the listing fails.
+            IncompleteIssueListing: If the listing is not provably exhaustive.
+                That is a reached tracker, not an unreachable one.
+        """
+        from git_loopy.labels import IncompleteIssueListing, TrackedIssue
+
+        page = SubprocessGitHubClient().issue_list("", state="open")
+        if not page.complete:
+            raise IncompleteIssueListing(
+                "open-issue listing is incomplete; refusing to judge placement"
+            )
+        return [
+            TrackedIssue(
+                number=issue.number,
+                title=issue.title,
+                labels=tuple(issue.labels),
+                state=issue.state,
+            )
+            for issue in page.issues
+        ]
+
+    def remove_issue_label(self, number: int, label: str) -> None:
+        """Remove ``label`` from issue ``number`` and leave the issue open.
+
+        ``gh issue edit --remove-label`` detaches that one label. It does not
+        close the issue and does not touch any other label the issue carries,
+        including labels outside the vocabulary.
+
+        Raises:
+            GhError: If the edit fails — including when the credential lacks
+                permission. The caller decides whether that is fatal.
+        """
+        _run(["issue", "edit", str(number), "--remove-label", label])
+
 
 class SubprocessTaskTypeLabelClient:
     """Stateless adapter for the one write the **Task-type classifier** makes.

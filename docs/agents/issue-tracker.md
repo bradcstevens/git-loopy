@@ -12,6 +12,8 @@ Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all op
 - **Planning documents**: Titles beginning with `PRD:` or `Spec:` (case-insensitive)
   are reference documents, not work for git-loopy. Never label them `ready-for-agent`;
   remove that label if present, without closing the document or changing other labels.
+  `git-loopy labels` reports an open document that still carries the role, and
+  `git-loopy labels --apply` performs that removal.
 - **Close**: `gh issue close <number> --comment "..."`
 
 Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
