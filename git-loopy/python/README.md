@@ -805,6 +805,12 @@ missing priority
   [`docs/agents/triage-labels.md`](../../docs/agents/triage-labels.md), so a
   **renamed role is neither missing nor drift**. `parallel-safe`, `priority`, and
   the `task-type:` labels compare on their literal strings.
+- **Placement, not only presence.** An open issue whose title begins `PRD:` or
+  `Spec:` (the Runner's planning-document discriminator) and carries the
+  configured `ready-for-agent` role is reported as `misplaced`, identifying the
+  issue. A planning document without the role, and ordinary work with it, are
+  `correct`. `--apply` removes only that role: the document stays open and its
+  other labels are untouched.
 - **Additive only.** Labels the tracker carries outside the vocabulary are never
   reported, never edited, and never deleted, and nothing is ever renamed —
   a rename would detach every issue already carrying the label.

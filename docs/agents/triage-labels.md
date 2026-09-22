@@ -92,7 +92,8 @@ tracker set up before it, and a colour or description that drifts stays drifted.
 
 ```bash
 git-loopy labels            # report only — reads the tracker, changes nothing
-git-loopy labels --apply    # create what is missing, correct what drifted
+git-loopy labels --apply    # create what is missing, correct what drifted,
+                            # and remove ready-for-agent from planning documents
 ```
 
 It reports every label in the vocabulary as `missing`, `drifted` (naming the
@@ -103,6 +104,32 @@ compared on their literal strings.
 Labels the tracker carries outside the vocabulary are never reported, never
 edited, and never deleted; nothing is ever renamed. An unreachable or
 unauthorised tracker warns and exits non-zero.
+
+It also reports whether that role is correctly *placed*. Every open issue
+whose title begins `PRD:` or `Spec:` (case-insensitive — the Runner's
+planning-document discriminator, the same one Pickup uses) and carries the
+configured `ready-for-agent` role is a report line, identifying the issue:
+
+```text
+misplaced #42 Spec: the design
+```
+
+A planning document that does not carry the role, and an ordinary issue that
+does, are reported `correct`. The role is resolved through the table above, so
+a repository that renamed it is checked under its own string. A difference is
+a finding, not a failure, and exits `0` — the same report-and-exit semantics a
+missing or drifted label gets. Re-run with `--apply` to repair it:
+
+```text
+removed   #42 Spec: the design
+```
+
+`--apply` removes only that role from the reported issues. Each document stays
+open, its other labels are untouched, and the label itself is not deleted from
+the tracker. A closed planning document is not reported. An open-issue listing
+that cannot be proven complete is reported `unjudged` and is not treated as a
+clean placement; the vocabulary report is still emitted, and `--apply` does not
+remove the role from a partial list.
 
 ## Task-type labels
 

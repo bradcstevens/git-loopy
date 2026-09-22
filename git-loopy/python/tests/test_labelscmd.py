@@ -11,6 +11,7 @@ write the difference back.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -27,16 +28,34 @@ class _FakeClient:
         self,
         *present: labels_module.TrackerLabel,
         fail: Exception | None = None,
+        issues: tuple[object, ...] = (),
+        fail_issues: Exception | None = None,
     ) -> None:
         self.present = list(present)
         self.created: list[labels_module.LabelSpec] = []
         self.updated: list[tuple[str, labels_module.LabelSpec]] = []
+        self.issues = list(issues)
+        self.removed: list[tuple[int, str]] = []
         self._fail = fail
+        self._fail_issues = fail_issues
 
     def label_catalog(self) -> list[labels_module.TrackerLabel]:
         if self._fail is not None:
             raise self._fail
         return list(self.present)
+
+    def open_issues(self) -> list[object]:
+        if self._fail_issues is not None:
+            raise self._fail_issues
+        return list(self.issues)
+
+    def remove_issue_label(self, number: int, label: str) -> None:
+        self.removed.append((number, label))
+        for issue in self.issues:
+            if issue.number == number:
+                issue.labels = tuple(
+                    name for name in issue.labels if name != label
+                )
 
     def label_create(self, spec: labels_module.LabelSpec) -> None:
         self.created.append(spec)
@@ -289,7 +308,171 @@ def test_an_unreachable_tracker_warns_and_exits_non_zero(
 
     assert rc == 1
     assert client.created == [] and client.updated == []
-    assert any("HTTP 401" in message for message in err)
+    assert err == [
+        "could not read the tracker's labels (gh: HTTP 401 Bad credentials); "
+        "nothing was written."
+    ]
+
+
+def test_a_failed_vocabulary_write_does_not_claim_the_role_was_removed(
+    tmp_path: Path, sinks: tuple[list[str], list[str]]
+) -> None:
+    """A label-write failure stops before the placement repair and does not lie."""
+    out, err = sinks
+
+    class _FailingWrite(_FakeClient):
+        def label_create(self, spec: labels_module.LabelSpec) -> None:
+            raise RuntimeError("gh: HTTP 403 Resource not accessible by integration")
+
+    client = _FailingWrite(
+        *(
+            labels_module.TrackerLabel(spec.name, spec.color, spec.description)
+            for spec in labels_module.read_tracker_vocabulary(tmp_path)
+            if spec.name != LABEL_PRIORITY
+        )
+    )
+    issue = _issue(42, "Spec: the design", (LABEL_READY_FOR_AGENT, "bug"))
+    client.issues = [issue]
+
+    rc = labelscmd.run_labels(
+        repo_root=tmp_path,
+        apply=True,
+        client=client,
+        output_fn=out.append,
+        warn=err.append,
+    )
+
+    assert rc == 1
+    assert client.removed == []
+    assert issue.labels == (LABEL_READY_FOR_AGENT, "bug")
+    assert "misplaced #42 Spec: the design" in out
+    assert not any("Removed" in line for line in out)
+    assert any("could not write the tracker's labels" in message for message in err)
+
+
+def test_an_incomplete_issue_listing_still_reports_the_vocabulary(
+    tmp_path: Path, sinks: tuple[list[str], list[str]]
+) -> None:
+    """A large backlog is not an unreachable tracker, and is not a clean placement."""
+    out, err = sinks
+
+    class _Incomplete(_FakeClient):
+        def open_issues(self) -> list[object]:
+            raise labels_module.IncompleteIssueListing(
+                "open-issue listing is incomplete; refusing to judge placement"
+            )
+
+    client = _Incomplete(
+        *(
+            labels_module.TrackerLabel(spec.name, spec.color, spec.description)
+            for spec in labels_module.read_tracker_vocabulary(tmp_path)
+            if spec.name != LABEL_PRIORITY
+        )
+    )
+
+    rc = labelscmd.run_labels(
+        repo_root=tmp_path,
+        apply=True,
+        client=client,
+        output_fn=out.append,
+        warn=err.append,
+    )
+
+    assert rc == 0
+    assert any(line.startswith("created") and LABEL_PRIORITY in line for line in out)
+    assert [spec.name for spec in client.created] == [LABEL_PRIORITY]
+    assert client.removed == []
+    assert any(line.startswith("unjudged") and "incomplete" in line for line in out)
+    assert not any(line.startswith("misplaced") for line in out)
+    assert err == []
+
+
+def test_an_unreadable_issue_list_warns_and_writes_nothing(
+    tmp_path: Path, sinks: tuple[list[str], list[str]]
+) -> None:
+    """A placement read that fails is the same failure as an unreadable catalog."""
+    out, err = sinks
+    client = _tracker_matching(tmp_path, without=LABEL_PRIORITY)
+    client._fail_issues = RuntimeError("gh: HTTP 401 Bad credentials")
+
+    rc = labelscmd.run_labels(
+        repo_root=tmp_path,
+        apply=True,
+        client=client,
+        output_fn=out.append,
+        warn=err.append,
+    )
+
+    assert rc == 1
+    assert client.created == [] and client.updated == [] and client.removed == []
+    assert err == [
+        "could not read the tracker's open issues (gh: HTTP 401 Bad credentials); "
+        "nothing was written."
+    ]
+
+
+def test_a_refused_removal_exits_non_zero_and_accounts_for_what_landed(
+    tmp_path: Path, sinks: tuple[list[str], list[str]]
+) -> None:
+    """An unauthorised repair stops, and a re-run can finish the rest."""
+    out, err = sinks
+
+    class _RefusesSecond(_FakeClient):
+        def remove_issue_label(self, number: int, label: str) -> None:
+            if number == 9:
+                raise RuntimeError("gh: HTTP 403 Resource not accessible by integration")
+            super().remove_issue_label(number, label)
+
+    client = _RefusesSecond(
+        *(
+            labels_module.TrackerLabel(spec.name, spec.color, spec.description)
+            for spec in labels_module.read_tracker_vocabulary(tmp_path)
+        )
+    )
+    client.issues = [
+        _issue(8, "PRD: first", (LABEL_READY_FOR_AGENT,)),
+        _issue(9, "Spec: second", (LABEL_READY_FOR_AGENT, "bug")),
+    ]
+
+    rc = labelscmd.run_labels(
+        repo_root=tmp_path,
+        apply=True,
+        client=client,
+        output_fn=out.append,
+        warn=err.append,
+    )
+
+    assert rc == 1
+    assert client.removed == [(8, LABEL_READY_FOR_AGENT)]
+    assert client.issues[1].labels == (LABEL_READY_FOR_AGENT, "bug")
+    assert "removed   #8 PRD: first" in out
+    assert "misplaced #9 Spec: second" in out
+    assert err == [
+        "could not remove ready-for-agent from planning documents "
+        "(gh: HTTP 403 Resource not accessible by integration); "
+        "1 of 2 were repaired. "
+        "Re-run `git-loopy labels --apply` once the tracker accepts writes."
+    ]
+
+
+def test_a_closed_planning_document_is_not_reported(
+    tmp_path: Path, sinks: tuple[list[str], list[str]]
+) -> None:
+    """Only an open document is a thing the operator can still repair."""
+    out, err = sinks
+    client = _tracker_matching(tmp_path)
+    client.issues = [
+        _issue(11, "Spec: already closed", (LABEL_READY_FOR_AGENT,), state="CLOSED"),
+    ]
+
+    rc = labelscmd.run_labels(
+        repo_root=tmp_path, client=client, output_fn=out.append, warn=err.append
+    )
+
+    assert rc == 0
+    assert not any("#11" in line for line in out)
+    assert not any("--apply" in line for line in out)
+    assert err == []
 
 
 def test_outside_a_repository_there_is_no_tracker_to_reconcile(
@@ -303,6 +486,169 @@ def test_outside_a_repository_there_is_no_tracker_to_reconcile(
 
     assert rc == 1
     assert err and "repository" in err[0]
+
+
+def _issue(
+    number: int,
+    title: str,
+    labels: tuple[str, ...] = (),
+    *,
+    state: str = "OPEN",
+) -> SimpleNamespace:
+    """One open issue as the placement read returns it."""
+    return SimpleNamespace(number=number, title=title, labels=labels, state=state)
+
+
+def test_report_identifies_an_open_planning_document_carrying_ready_for_agent(
+    tmp_path: Path, sinks: tuple[list[str], list[str]]
+) -> None:
+    """A Spec: issue a human labelled ready-for-agent is a thing to repair."""
+    out, err = sinks
+    client = _tracker_matching(tmp_path)
+    client.issues = [
+        _issue(42, "Spec: the design", (LABEL_READY_FOR_AGENT, "priority"))
+    ]
+
+    rc = labelscmd.run_labels(
+        repo_root=tmp_path, client=client, output_fn=out.append, warn=err.append
+    )
+
+    assert rc == 0
+    assert "misplaced #42 Spec: the design" in out
+    assert any("--apply" in line for line in out)
+    assert client.removed == []
+    assert err == []
+
+
+def test_a_planning_document_without_the_role_and_ordinary_work_are_correct(
+    tmp_path: Path, sinks: tuple[list[str], list[str]]
+) -> None:
+    """Neither a bare planning document nor ordinary agent work is a mislabel."""
+    out, err = sinks
+    client = _tracker_matching(tmp_path)
+    client.issues = [
+        _issue(7, "PRD: the plan", ("priority",)),
+        _issue(8, "Fix the parser", (LABEL_READY_FOR_AGENT, "bug")),
+        _issue(42, "Spec: the design", (LABEL_READY_FOR_AGENT,)),
+    ]
+
+    rc = labelscmd.run_labels(
+        repo_root=tmp_path, client=client, output_fn=out.append, warn=err.append
+    )
+
+    assert rc == 0
+    assert "correct   #7 PRD: the plan" in out
+    assert "correct   #8 Fix the parser" in out
+    assert "misplaced #42 Spec: the design" in out
+    assert not any(line.startswith("misplaced") and "#7" in line for line in out)
+    assert not any(line.startswith("misplaced") and "#8" in line for line in out)
+    assert err == []
+
+
+def test_apply_removes_only_the_role_and_leaves_the_document_open(
+    tmp_path: Path, sinks: tuple[list[str], list[str]]
+) -> None:
+    """The repair is the one docs/agents/issue-tracker.md already prescribes."""
+    out, err = sinks
+    client = _tracker_matching(tmp_path)
+    client.present.append(labels_module.TrackerLabel("bug", "d73a4a", "Broken"))
+    misplaced = _issue(
+        42, "Spec: the design", (LABEL_READY_FOR_AGENT, "priority", "bug")
+    )
+    untouched = _issue(7, "PRD: the plan", ("priority", "bug"))
+    client.issues = [misplaced, untouched]
+
+    rc = labelscmd.run_labels(
+        repo_root=tmp_path,
+        apply=True,
+        client=client,
+        output_fn=out.append,
+        warn=err.append,
+    )
+
+    assert rc == 0
+    assert client.removed == [(42, LABEL_READY_FOR_AGENT)]
+    assert misplaced.labels == ("priority", "bug")
+    assert misplaced.state == "OPEN"
+    assert untouched.labels == ("priority", "bug")
+    assert labels_module.TrackerLabel("bug", "d73a4a", "Broken") in client.present
+    assert any(label.name == LABEL_READY_FOR_AGENT for label in client.present)
+    assert client.created == [] and client.updated == []
+    assert "removed   #42 Spec: the design" in out
+    assert err == []
+
+    client.removed.clear()
+    out.clear()
+    again = labelscmd.run_labels(
+        repo_root=tmp_path,
+        apply=True,
+        client=client,
+        output_fn=out.append,
+        warn=err.append,
+    )
+
+    assert again == 0
+    assert client.removed == []
+    assert "misplaced" not in "\n".join(out)
+    assert err == []
+
+
+def test_a_renamed_role_is_checked_and_removed_under_the_repository_string(
+    tmp_path: Path, sinks: tuple[list[str], list[str]]
+) -> None:
+    """The mapping table names the role; the canonical string is not assumed."""
+    out, err = sinks
+    doc = tmp_path / "docs" / "agents"
+    doc.mkdir(parents=True)
+    (doc / "triage-labels.md").write_text(
+        "| `ready-for-agent` | `agent-ready` | Ready for autonomous execution |\n",
+        encoding="utf-8",
+    )
+    client = _tracker_matching(tmp_path)
+    renamed = _issue(3, "Spec: renamed", ("agent-ready", "priority"))
+    canonical = _issue(4, "Spec: still canonical", (LABEL_READY_FOR_AGENT,))
+    client.issues = [renamed, canonical]
+
+    rc = labelscmd.run_labels(
+        repo_root=tmp_path,
+        apply=True,
+        client=client,
+        output_fn=out.append,
+        warn=err.append,
+    )
+
+    assert rc == 0
+    assert "removed   #3 Spec: renamed" in out
+    assert "correct   #4 Spec: still canonical" in out
+    assert client.removed == [(3, "agent-ready")]
+    assert canonical.labels == (LABEL_READY_FOR_AGENT,)
+    assert "ready-for-agent" not in " ".join(out)
+    assert err == []
+
+
+@pytest.mark.parametrize(
+    "title",
+    ["prd: lower", "SPEC: upper", "sPeC: Mixed"],
+)
+def test_planning_document_titles_match_the_pickup_discriminator_ignoring_case(
+    tmp_path: Path, sinks: tuple[list[str], list[str]], title: str
+) -> None:
+    """The command and Pickup share one case-insensitive title rule."""
+    out, err = sinks
+    client = _tracker_matching(tmp_path)
+    client.issues = [
+        _issue(9, title, (LABEL_READY_FOR_AGENT,)),
+        _issue(10, "Specification notes", (LABEL_READY_FOR_AGENT,)),
+    ]
+
+    rc = labelscmd.run_labels(
+        repo_root=tmp_path, client=client, output_fn=out.append, warn=err.append
+    )
+
+    assert rc == 0
+    assert f"misplaced #9 {title}" in out
+    assert "correct   #10 Specification notes" in out
+    assert err == []
 
 
 def test_a_label_outside_the_vocabulary_is_never_reported_or_deleted(

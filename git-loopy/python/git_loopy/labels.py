@@ -80,7 +80,9 @@ __all__ = [
     "LabelBootstrapClient",
     "LabelDifference",
     "LabelReconcileClient",
+    "LabelPlacementClient",
     "LabelReconciliation",
+    "TrackedIssue",
     "TrackerLabel",
     "TRIAGE_ROLES",
     "SEMVER_LABELS",
@@ -89,7 +91,9 @@ __all__ = [
     "WAYFINDER_LABEL_COLOR",
     "MAPPING_DOC_RELPATH",
     "MAX_DESCRIPTION_LENGTH",
+    "IncompleteIssueListing",
     "bootstrap_labels",
+    "failure_reason",
     "read_tracker_vocabulary",
     "read_run_required_vocabulary",
     "reconcile_labels",
@@ -462,7 +466,7 @@ def bootstrap_labels(
             name.casefold(): name for name in client.label_list()
         }
     except Exception as exc:  # noqa: BLE001 - any backend failure is "unavailable"
-        return LabelBootstrap(unavailable=_reason(exc))
+        return LabelBootstrap(unavailable=failure_reason(exc))
 
     # Classify the whole vocabulary against the one listing *before* creating
     # anything, so a create that fails part-way cannot make a label the tracker
@@ -496,7 +500,7 @@ def bootstrap_labels(
             return LabelBootstrap(
                 created=tuple(created),
                 existing=tuple(existing),
-                unavailable=_reason(exc),
+                unavailable=failure_reason(exc),
                 noncanonical_semver=tuple(noncanonical_semver),
             )
         created.append(spec.name)
@@ -509,7 +513,7 @@ def bootstrap_labels(
     return LabelBootstrap(created=tuple(created), existing=tuple(existing))
 
 
-def _reason(exc: BaseException) -> str:
+def failure_reason(exc: BaseException) -> str:
     """Render why the tracker was unavailable, without a traceback."""
     text = str(exc).strip()
     return text or type(exc).__name__
@@ -604,6 +608,56 @@ class LabelReconciliation:
         return tuple(d for d in self.differences if d.status != "matched")
 
 
+class IncompleteIssueListing(Exception):
+    """The tracker was reached, but the open-issue read is not exhaustive.
+
+    A planning document past the ceiling must not be reported as correctly
+    labelled, and it must not be treated as an unreachable tracker: the
+    vocabulary report is still readable.
+    """
+
+
+@dataclass(frozen=True)
+class TrackedIssue:
+    """One issue the placement read needs, and nothing the vocabulary read does.
+
+    Attributes:
+        number: Issue number, so the report can identify it.
+        title: Issue title, the planning-document discriminator's input.
+        labels: Label names the issue carries, in tracker order.
+        state: ``OPEN`` or ``CLOSED``, as the tracker spells it. A closed issue
+            is not a placement finding even if a read returned it.
+    """
+
+    number: int
+    title: str
+    labels: tuple[str, ...] = ()
+    state: str = "OPEN"
+
+
+@runtime_checkable
+class LabelPlacementClient(Protocol):
+    """The tracker operations that judge where a triage role was applied.
+
+    Separate from :class:`LabelReconcileClient`: reconciling asks whether the
+    vocabulary *exists*, and this asks whether ``ready-for-agent`` was placed
+    on a planning document. A client that only ensures labels does not have to
+    list issues.
+    """
+
+    def open_issues(self) -> Sequence[TrackedIssue]:
+        """Return every open issue, or raise if the read cannot be proven complete."""
+        ...
+
+    def remove_issue_label(self, number: int, label: str) -> None:
+        """Remove ``label`` from issue ``number``.
+
+        Does not close the issue, does not edit its other labels, and does not
+        delete the label from the tracker.
+        """
+        ...
+
+
 @runtime_checkable
 class LabelReconcileClient(Protocol):
     """The tracker operations reconciling needs.
@@ -670,7 +724,7 @@ def reconcile_labels(
     try:
         catalog = {label.name.casefold(): label for label in client.label_catalog()}
     except Exception as exc:  # noqa: BLE001 - any backend failure is "unavailable"
-        return LabelReconciliation(unavailable=_reason(exc))
+        return LabelReconciliation(unavailable=failure_reason(exc))
 
     differences: list[LabelDifference] = []
     seen: set[str] = set()
@@ -697,7 +751,7 @@ def reconcile_labels(
             return LabelReconciliation(
                 differences=report.differences,
                 applied=tuple(applied),
-                unavailable=_reason(exc),
+                unavailable=failure_reason(exc),
             )
         applied.append(difference.spec.name)
     return LabelReconciliation(differences=report.differences, applied=tuple(applied))
