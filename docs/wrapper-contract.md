@@ -2040,12 +2040,21 @@ resolution.
   provenance references. A proposal and unchanged revalidation get no comment.
   The projection MUST omit credentials, raw prompts, private repository
   excerpts, and hidden reasoning.
-- **Own one association, not a repository label.** A projection MAY attach one
-  deterministic compact Route label that encodes the selected triple and is
-  collision-resistant within tracker limits. Exact values remain in the local
-  record and comment. Rerouting MUST replace only that issue's owned Route-label
-  association, preserving Task-type and unrelated labels; it MUST NOT rename a
-  shared repository label.
+- **Own dimensional associations, not a repository label.** A projection
+  attaches the exact representable dimensions `model_id:`, `model_context:`,
+  and `model_effort:` (ADR-0060). Model and effort keep their exact spelling,
+  including dots. Context is verified full capacity in exact decimal K/M units,
+  not the tier name, usage, or a rounded window. An inapplicable effort is
+  omitted and is not an error; the supported value `none` is `model_effort:none`.
+  A null model omits `model_id`. A value that cannot be verified, or that is
+  unsafe or longer than GitHub's 50-character label limit, is omitted and named,
+  never truncated, hashed, or rewritten. The issue's dimensional set is one
+  association: rerouting removes every owned Route label on that issue, including
+  a legacy `git-loopy-route:` association, then adds the current dimensions, and
+  preserves Task-type and unrelated labels. It MUST NOT rename a shared
+  repository label. The comment identity marker stays `git-loopy-route:v1:` so
+  historical comments remain recognizable. No identity suffix appears in a new
+  label name.
 - **Do not read your own output back.** A Runner that renders an issue for an
   **Agent** or for a **Route selector** MUST exclude its own Route projection
   from that rendering — both the owned Route label and the projection comment,
@@ -2078,9 +2087,24 @@ rate-limit and transient failures, idempotent partial recovery, exhausted delive
 across Pickups (including a previous or missing owned association), and a changed assignment
 after capability withdrawal. Actual work
 settings, canonical Pickup and Dashboard route readback must agree while Config
-and unrelated labels remain unchanged. This is a Python activation obligation;
+and unrelated labels remain unchanged. Published dimensions agree with
+`wrapper.routing.delivery`: `label` is the space-joined set actually written,
+and additive `labels` names that set. This is a Python activation obligation;
 shell/PowerShell implementation remains deferred, and historical streams,
 Subagent and Integration settings are unchanged.
+
+**Python exact-dimension publication (contract 2.9, #567, ADR-0060).** Python
+serial and Lane publication write those dimensions through the existing
+publisher and the real CLI. Verified listing capacity is recorded when the
+Pickup already holds it. A missing capacity is an incomplete projection, not
+zero. A Dynamic session uses the listing that just authorized that issue. A
+Static Lane reads the executing host's report when that placement is not local;
+a serial Static session reads this machine's listing. Historical
+delivery events that omit `labels` and `incomplete` stay valid, and
+`event_schema_version` stays 1.2. The migration command, unused legacy
+label-definition deletion, and a later capacity-only label refresh are not
+implemented. Shell and PowerShell routing remain deferred. This does not imply
+Subagent or Integration routing, and it is not final Dynamic-default activation.
 
 The `local_durability` matrix composes the mandatory local-write boundary with
 recorded init/update authority in both Python-local modes. A refused provenance

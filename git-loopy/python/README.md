@@ -1637,9 +1637,16 @@ candidate does not prevent eligible Static work behind it from proceeding.
 After a final static or Dynamic Routing resolution is durably recorded,
 git-loopy projects a materially changed assignment onto its GitHub issue. The
 append-only comment carries an idempotency identity, exact model/effort/context
-values, a concise safe rationale, and a provenance reference. The issue also
-carries one `git-loopy-route:` label for the same triple; it is compact and
-collision-resistant, while the comment and local event retain the exact values.
+values, verified capacity when known, a concise safe rationale, and a provenance
+reference. The issue carries exact dimension labels — `model_id:`,
+`model_context:`, and `model_effort:` — rather than one truncated combined
+label. Dots stay dots. Context is the verified full window (`200K`, `1.048576M`),
+not the tier name. An effort the model cannot configure is omitted; `none` is
+written when that is the selected value. A value that cannot be verified, or
+that will not fit a GitHub label, is omitted and named on the delivery, never
+truncated or rewritten. A legacy `git-loopy-route:` association on that issue
+is removed when the new dimensions are written. The comment marker stays
+`git-loopy-route:v1:` so an older comment is still recognizable.
 
 These tracker writes are observational. They never become Routing input, never
 change a Task type, and never override Config. A failed comment or label write

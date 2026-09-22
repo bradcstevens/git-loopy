@@ -94,6 +94,11 @@ class HostCapabilityReport:
                 "effort_configurable": model.effort_configurable,
                 "efforts": sorted(model.efforts),
                 "context_tiers": sorted(model.context_tiers),
+                **(
+                    {"tier_capacities": dict(sorted(model.tier_capacities.items()))}
+                    if model.tier_capacities
+                    else {}
+                ),
             }
             for model in sorted(
                 self.capabilities.models.values(), key=lambda item: item.model
@@ -154,12 +159,23 @@ def _model_from_json(item: Any) -> HarnessModel:
         raise ValueError(f"{model!r} has no dial and cannot advertise efforts")
     if "default" not in tiers:
         raise ValueError(f"{model!r} must offer the default context tier")
+    raw_capacities = item.get("tier_capacities", {})
+    if not isinstance(raw_capacities, Mapping):
+        raise ValueError(f"{model!r} tier capacities must be an object")
+    capacities: dict[str, int] = {}
+    for tier, capacity in raw_capacities.items():
+        if not isinstance(tier, str) or not tier:
+            raise ValueError(f"{model!r} tier capacity keys must be non-empty strings")
+        if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 0:
+            raise ValueError(f"{model!r} tier capacity must be a non-negative integer")
+        capacities[tier] = capacity
     return HarnessModel(
         model=model,
         eligible=eligible,
         effort_configurable=configurable,
         efforts=frozenset(efforts),
         context_tiers=frozenset(tiers),
+        tier_capacities=capacities,
     )
 
 

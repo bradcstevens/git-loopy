@@ -9108,7 +9108,12 @@ def test_each_lanes_final_dynamic_route_is_published_to_its_own_issue(
     assert sorted(number for number, _body in fake_gh.route_comment_calls) == [42, 43]
     for number in (42, 43):
         labels = fake_gh.issue_labels(number)
-        assert len([x for x in labels if x.startswith("git-loopy-route:")]) == 1
+        owned = [
+            label for label in labels
+            if label.startswith(("model_id:", "model_context:", "model_effort:"))
+        ]
+        assert owned
+        assert not any(label.startswith("git-loopy-route:") for label in labels)
         assert {"ready-for-agent", "parallel-safe"} <= set(labels)
     deliveries = [
         event
@@ -9522,10 +9527,14 @@ def test_saved_dynamic_policy_replays_each_lane_and_recovers_only_pending_public
             and record["routing_credits"] == "0"
             for record in replayed
         )
-        assert len([
+        owned = [
             label for label in tracker.issue_labels(ref)
-            if label.startswith("git-loopy-route:")
-        ]) == 1
+            if label.startswith(("model_id:", "model_context:", "model_effort:"))
+        ]
+        assert owned
+        assert not any(
+            label.startswith("git-loopy-route:") for label in tracker.issue_labels(ref)
+        )
         assert {"ready-for-agent", "parallel-safe", "task-type:implementation"} <= set(
             tracker.issue_labels(ref)
         )

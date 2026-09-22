@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -39,13 +38,13 @@ class _Tracker:
         self.known_labels.add(label)
 
     def replace_route_label(
-        self, issue: int, *, remove: tuple[str, ...], add: str
+        self, issue: int, *, remove: tuple[str, ...], add: tuple[str, ...]
     ) -> None:
         if self.label_error is not None:
             raise RouteDeliveryError(self.label_error)
         labels = self.labels.setdefault(issue, set())
         labels.difference_update(remove)
-        labels.add(add)
+        labels.update(add)
 
     def post_issue_comment(self, issue: int, body: str) -> None:
         if self.comment_error is not None:
@@ -89,8 +88,77 @@ def _resolution() -> RoutingResolution:
     )
 
 
+def test_publication_spells_exact_dimensions_and_drops_the_combined_label(
+    tmp_path: Path,
+) -> None:
+    """A final route is projected as exact dimensions, never a truncated identity.
+
+    ADR-0060: model spelling keeps its dots, effort ``none`` is a value, verified
+    capacity is exact K/M, and a legacy combined label on that issue is removed.
+    An unsafe model id is omitted, not sanitized into a substitute label.
+    """
+    tracker = _Tracker(
+        labels={
+            42: {
+                "ready-for-agent",
+                "task-type:implementation",
+                "git-loopy-route:gpt-5-6-terra-high-d-0d3d445fe66d",
+            }
+        }
+    )
+    publisher = RoutePublisher(
+        store=RoutePublicationStore(tmp_path / "routing-delivery.json"),
+        tracker=tracker,
+    )
+
+    result = publisher.publish(
+        issue=42,
+        resolution=replace(
+            _resolution(),
+            model="gpt-5.6-terra",
+            reasoning_effort="none",
+            effort_configurable=True,
+        ),
+        context_capacity=1_048_576,
+    )
+
+    assert result.published is True
+    assert result.incomplete == ()
+    assert tracker.labels[42] == {
+        "ready-for-agent",
+        "task-type:implementation",
+        "model_id:gpt-5.6-terra",
+        "model_effort:none",
+        "model_context:1.048576M",
+    }
+    assert result.labels == (
+        "model_id:gpt-5.6-terra",
+        "model_context:1.048576M",
+        "model_effort:none",
+    )
+    assert result.label == " ".join(result.labels)
+    assert not any(label.startswith("git-loopy-route:") for label in tracker.labels[42])
+    assert "<!-- git-loopy-route:v1:" in tracker.comments[42][0]
+    assert "`\"gpt-5.6-terra\"`" in tracker.comments[42][0]
+
+    unsafe = publisher.publish(
+        issue=43,
+        resolution=replace(
+            _resolution(),
+            model="gpt-5.6-terra --remove-label ready-for-agent",
+            reasoning_effort="high",
+        ),
+        context_capacity=200_000,
+    )
+    assert unsafe.published is True
+    assert "model_id_unrepresentable" in unsafe.incomplete
+    assert "model_context:200K" in tracker.labels[43]
+    assert not any("--remove-label" in label for label in tracker.labels[43])
+    assert not any(len(label) > 50 for label in tracker.labels[43])
+
+
 def test_publisher_projects_a_final_static_route_once(tmp_path: Path) -> None:
-    """A final route gets one safe comment and the one owned combined label."""
+    """A final route gets one safe comment and its exact dimensional labels."""
     tracker = _Tracker(labels={42: {"ready-for-agent", "task-type:implementation"}})
     publisher = RoutePublisher(
         store=RoutePublicationStore(tmp_path / "routing-delivery.json"),
@@ -110,8 +178,10 @@ def test_publisher_projects_a_final_static_route_once(tmp_path: Path) -> None:
     assert tracker.labels[42] == {
         "ready-for-agent",
         "task-type:implementation",
-        first.label,
+        *first.labels,
     }
+    assert "model_id:gpt-5.6-terra" in first.labels
+    assert "model_context_unverified" in first.incomplete
 
 
 def test_dynamic_source_change_refreshes_provenance_without_changing_route_label(
@@ -239,9 +309,10 @@ def test_reroute_preserves_unrelated_labels_and_resumes_partial_delivery(
         "ready-for-agent",
         "task-type:implementation",
         "priority",
-        rerouted.label,
+        *rerouted.labels,
     }
-    assert partial.label in tracker.known_labels
+    assert "model_id:gpt-5.6-terra" not in tracker.labels[42]
+    assert all(label in tracker.known_labels for label in partial.labels)
 
 
 def test_compact_route_labels_remain_unambiguous_for_similar_long_values() -> None:
@@ -289,8 +360,8 @@ def test_a_delayed_retry_cannot_overwrite_a_newer_final_label(tmp_path: Path) ->
     assert obsolete.status is RouteDeliveryStatus.PARTIAL
     assert current.published is True
     assert resumed == ()
-    assert tracker.labels[42] == {"ready-for-agent", current.label}
-    assert obsolete.label not in tracker.labels[42]
+    assert tracker.labels[42] == {"ready-for-agent", *current.labels}
+    assert "model_id:gpt-5.6-terra" not in tracker.labels[42]
 
 
 def test_untrusted_route_values_cannot_shape_a_tracker_operation(
@@ -318,8 +389,10 @@ def test_untrusted_route_values_cannot_shape_a_tracker_operation(
     )
 
     assert result.published is True
-    assert re.fullmatch(r"git-loopy-route:[a-z0-9-]+", result.label)
-    assert tracker.labels[42] == {"ready-for-agent", result.label}
+    assert "model_id_unrepresentable" in result.incomplete
+    assert not any("git-loopy-route:" in label or "--" in label for label in tracker.labels[42])
+    assert tracker.labels[42] >= {"ready-for-agent"}
+    assert all(len(label) <= 50 for label in tracker.labels[42])
     body = tracker.comments[42][0]
     assert "<img" not in body
     assert body.count("\n- Model: ") == 1

@@ -7506,10 +7506,20 @@ def test_first_setup_readiness_recovers_into_the_actual_routed_session(
         assert f'`{json.dumps(expected[key])}`' in comment
     (label_issue, removed, added), = tracker.route_label_calls
     assert label_issue == 42 and removed == ()
-    assert added.startswith("git-loopy-route:")
-    assert added in tracker.issue_labels(42)
+    assert added
+    assert "model_context:400K" in added
+    assert all(
+        label.startswith(("model_id:", "model_context:", "model_effort:"))
+        for label in added
+    )
+    assert all(label in tracker.issue_labels(42) for label in added)
+    assert not any(
+        label.startswith("git-loopy-route:") for label in tracker.issue_labels(42)
+    )
     (delivery,) = _delivery_events(tmp_path)
-    assert delivery["label"] == added and delivery["status"] == "published"
+    assert delivery["status"] == "published"
+    assert set(delivery["labels"]) == set(added)
+    assert delivery["label"] == " ".join(delivery["labels"])
     assert f'<!-- git-loopy-route:v1:{delivery["identity"]} -->' in comment
     if policy == "static":
         assert spied["evidence"] == 0
@@ -8643,11 +8653,12 @@ def _delivery_events(tmp_path: Path) -> list[dict[str, Any]]:
 def test_a_pickup_projects_its_final_route_onto_the_issue(
     tmp_path, monkeypatch
 ) -> None:
-    """The Pickup's own resolution reaches the tracker as one comment and label.
+    """The Pickup's own resolution reaches the tracker as a comment and dimensions.
 
     The projection is an *output adapter* of a record that already exists: the
-    comment names the exact triple, and the single owned Route label sits
-    beside the issue's own labels rather than replacing any of them.
+    comment names the exact triple. Representable dimensions sit beside the
+    issue's own labels. A historical unselected route with nothing exact to
+    spell writes no truncated stand-in.
     """
     _wire_single_issue_github(tmp_path, monkeypatch)
     fake_gh = loop_module._make_github_client()
@@ -8663,9 +8674,11 @@ def test_a_pickup_projects_its_final_route_onto_the_issue(
     route_labels = [
         label
         for label in fake_gh.issue_labels(42)
-        if label.startswith("git-loopy-route:")
+        if label.startswith(("model_id:", "model_context:", "model_effort:"))
     ]
-    assert len(route_labels) == 1
+    (delivery,) = _delivery_events(tmp_path)
+    assert set(route_labels) == set(delivery.get("labels", ()))
+    assert not any(label.startswith("git-loopy-route:") for label in fake_gh.issue_labels(42))
     assert "ready-for-agent" in fake_gh.issue_labels(42)
     assert [event["status"] for event in _delivery_events(tmp_path)] == ["published"]
 
@@ -8874,9 +8887,12 @@ def test_saved_dynamic_policy_replays_while_pending_publication_recovers(
     assert len(tracker.route_comment_calls) == 1
     _, comment = tracker.route_comment_calls[0]
     assert all(value in comment for value in ("claude-opus-5", "high", "default"))
-    assert len([
-        label for label in tracker.issue_labels(42) if label.startswith("git-loopy-route:")
-    ]) == 1
+    assert any(
+        label.startswith("model_id:") for label in tracker.issue_labels(42)
+    )
+    assert not any(
+        label.startswith("git-loopy-route:") for label in tracker.issue_labels(42)
+    )
     assert {"ready-for-agent", "task-type:implementation"} <= set(tracker.issue_labels(42))
     recovered = _delivery_events(tmp_path)[1:]
     assert recovered and all(event["status"] == "published" for event in recovered)
@@ -8973,7 +8989,7 @@ def test_recorded_routing_reuse_preserves_publication_recovery_bounds(
     saved = path.read_bytes()
     assert not client.create_calls and not tracker.route_comment_calls
     original_decision = None
-    last_published_label = None
+    last_published_labels: tuple[str, ...] | None = None
     for step in case["runs"]:
         fault = case["fault"] if step["tracker_unavailable"] else None
         tracker.seed_issue(dataclass_replace(tracker.issue_view(42), state="OPEN"))
@@ -9029,18 +9045,24 @@ def test_recorded_routing_reuse_preserves_publication_recovery_bounds(
         assert attempts == step["attempts"]
         assert len(tracker.route_comment_calls) == step["comments"]
         assert len({body for _, body in tracker.route_comment_calls}) == step["comments"]
-        owned = [label for label in tracker.issue_labels(42) if label.startswith("git-loopy-route:")]
+        owned = [
+            label
+            for label in tracker.issue_labels(42)
+            if label.startswith(("model_id:", "model_context:", "model_effort:"))
+        ]
         if step["delivery"][-1] == "published":
-            assert owned == [deliveries[-1]["label"]]
-            last_published_label = deliveries[-1]["label"]
+            assert set(owned) == set(deliveries[-1]["labels"])
+            assert "model_context:400K" in owned
+            assert deliveries[-1]["label"] == " ".join(deliveries[-1]["labels"])
+            last_published_labels = tuple(sorted(owned))
             _, comment = tracker.route_comment_calls[-1]
             assert f'<!-- git-loopy-route:v1:{deliveries[-1]["identity"]} -->' in comment
             for key in ("model", "effort", "context_tier"):
                 assert f'`{json.dumps(expected[key])}`' in comment
         elif step.get("owned_label", "absent") == "previous":
-            assert last_published_label is not None
-            assert owned == [last_published_label]
-            assert owned != [deliveries[-1]["label"]]
+            assert last_published_labels is not None
+            assert tuple(sorted(owned)) == last_published_labels
+            assert set(owned) != set(deliveries[-1].get("labels", ()))
         else:
             assert step.get("owned_label", "absent") == "absent"
             assert owned == []
@@ -9057,7 +9079,11 @@ def test_recorded_routing_reuse_preserves_publication_recovery_bounds(
         assert ("wrapper.contribution.start" in types) == (mode == "lane")
         assert ("wrapper.iteration.start" in types) == (mode == "serial")
         assert set(labels) <= set(tracker.issue_labels(42))
-        assert all(added in tracker.route_labels for _, _, added in tracker.route_label_calls)
+        assert all(
+            label in tracker.route_labels
+            for _, _, added in tracker.route_label_calls
+            for label in added
+        )
         assert path.read_bytes() == saved
         captured = capsys.readouterr()
         if step["delivery"][-1] == "failed":

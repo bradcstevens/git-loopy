@@ -225,9 +225,13 @@ def test_saved_authority_requires_durable_provenance_and_pickup(
             assert delivery["status"] == "published"
             owned = [
                 label for label in tracker.issue_labels(42)
-                if label.startswith("git-loopy-route:")
+                if label.startswith(("model_id:", "model_context:", "model_effort:"))
             ]
-            assert owned == [delivery["label"]]
+            assert owned == list(delivery["labels"])
+            assert delivery["label"] == " ".join(owned)
+            assert not any(
+                label.startswith("git-loopy-route:") for label in tracker.issue_labels(42)
+            )
             _, comment = tracker.route_comment_calls[0]
             assert f'<!-- git-loopy-route:v1:{delivery["identity"]} -->' in comment
             assert all(f'`{json.dumps(route[key])}`' in comment for key in (

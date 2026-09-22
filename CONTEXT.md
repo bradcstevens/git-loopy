@@ -1573,8 +1573,11 @@ _Avoid_: Routing resolution (binding), Lease (authority), assignment.
 
 **Route label**:
 An observational tracker label describing one dimension of an issue's final
-**Routing resolution**: model identity, verified full context capacity for its selected tier,
-or applicable reasoning effort; unavailable dimensions are absent.
+**Routing resolution**. Python publication spells `model_id:`, `model_context:`,
+and `model_effort:` with the exact value. Context is verified full capacity for
+the selected tier, not the tier name. Unavailable or unrepresentable dimensions
+are absent, never truncated. A legacy `git-loopy-route:` association is removed
+when that issue is republished.
 It may still represent a previous resolution or be absent after failed replacement
 and exhausted delivery retries, so the canonical local resolution and delivery status
 describe the current assignment, never the label as authority to choose, override, or pin a route.

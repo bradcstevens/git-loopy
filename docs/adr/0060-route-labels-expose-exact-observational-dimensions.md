@@ -1,6 +1,6 @@
 # Route labels expose exact observational dimensions
 
-**Status:** accepted design; runtime delivery and historical migration are not yet complete.
+**Status:** accepted. Python serial and Lane publication now write exact `model_id:`, `model_context:`, and `model_effort:` labels and remove a legacy combined association on the issue they touch. The migration command, unused legacy label-definition deletion, and a later capacity-only refresh are not implemented. Shell and PowerShell routing remain deferred under ADR-0057. This is not final Dynamic-default activation.
 
 A human-led `/grill-with-docs` session chose separate, readable Route labels instead
 of the truncated combined label and identity suffix. This supersedes only the

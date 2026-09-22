@@ -202,6 +202,7 @@ from git_loopy.run_routing_preflight import (
     routing_choice_refusal,
 )
 from git_loopy.route_publication import (
+    RouteDeliveryResult,
     RouteDeliveryStatus,
     RoutePublicationStore,
     RoutePublisher,
@@ -983,6 +984,21 @@ _ITERATION_RUN_REASONS: dict[str, str] = {
 }
 
 
+def _routing_delivery_payload(delivery: RouteDeliveryResult) -> dict[str, Any]:
+    """The delivery event. ``labels`` is additive; historical events omit it."""
+    payload: dict[str, Any] = {
+        "issue": delivery.issue,
+        "identity": delivery.identity,
+        "label": delivery.label,
+        "status": delivery.status.value,
+    }
+    if delivery.labels:
+        payload["labels"] = list(delivery.labels)
+    if delivery.incomplete:
+        payload["incomplete"] = list(delivery.incomplete)
+    return payload
+
+
 def _run_reason_for(iteration_outcome: str) -> str:
     """Return the Run reason one Iteration outcome ends the Run under."""
     return _ITERATION_RUN_REASONS.get(iteration_outcome, iteration_outcome)
@@ -1612,10 +1628,7 @@ class _Loop:
             self._emit(
                 events_module.WRAPPER_ROUTING_DELIVERY,
                 iter_num=None,
-                issue=delivery.issue,
-                identity=delivery.identity,
-                label=delivery.label,
-                status=delivery.status.value,
+                **_routing_delivery_payload(delivery),
             )
             if delivery.status is not RouteDeliveryStatus.PUBLISHED:
                 self._diag.warning(
@@ -1655,6 +1668,7 @@ class _Loop:
         position: int,
         considered: int,
         resolution: RoutingResolution | None = None,
+        on_execution_host: bool = False,
     ) -> None:
         """Record which issue a **Pickup** bound, why, and out of what (#397).
 
@@ -1694,16 +1708,25 @@ class _Loop:
             and resolution is not None
         ):
             delivery = self._route_publisher.publish(
-                issue=issue, resolution=resolution
+                issue=issue,
+                resolution=resolution,
+                context_capacity=self._verified_context_capacity(
+                    resolution,
+                    issue=issue,
+                    on_execution_host=on_execution_host,
+                ),
             )
             self._emit(
                 events_module.WRAPPER_ROUTING_DELIVERY,
                 iter_num=iter_num,
-                issue=issue,
-                identity=delivery.identity,
-                label=delivery.label,
-                status=delivery.status.value,
+                **_routing_delivery_payload(delivery),
             )
+            if delivery.incomplete:
+                self._diag.warning(
+                    "route publication for issue #%s omitted %s",
+                    issue,
+                    ", ".join(delivery.incomplete),
+                )
             if delivery.status is not RouteDeliveryStatus.PUBLISHED:
                 self._diag.warning(
                     "route publication for issue #%s is %s: %s",
@@ -2535,6 +2558,47 @@ class _Loop:
         return dataclass_replace(
             resolution, effort_configurable=capability.effort_configurable
         )
+
+    def _verified_context_capacity(
+        self,
+        resolution: RoutingResolution,
+        *,
+        issue: int | str,
+        on_execution_host: bool,
+    ) -> int | None:
+        """Full prompt capacity for this model and tier, or unverified absence.
+
+        A Dynamic session uses the listing that just authorized that issue.
+        A Static Lane reads the executing host's report; a serial Static
+        session still runs here. A tier name is not a capacity, and a missing
+        listing is not zero.
+        """
+        if resolution.model is None:
+            return None
+        if resolution.source is RoutingSource.DYNAMIC:
+            router = self._dynamic_router
+            if router is None:
+                return None
+            return router.verified_context_capacity(
+                issue, resolution.model, resolution.context_tier
+            )
+        capabilities = self._static_capabilities
+        if (
+            on_execution_host
+            and self._host_capabilities is not None
+            and self._config.execution_host
+            != execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT
+        ):
+            capabilities = self._host_capabilities
+        if capabilities is None:
+            return None
+        capability = capabilities.get(resolution.model)
+        if capability is None:
+            return None
+        capacity = capability.tier_capacities.get(resolution.context_tier)
+        if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 0:
+            return None
+        return capacity
 
     async def _propose_task_type(
         self, pair: ClassifierPair, item: AfkReadyItem
@@ -5440,6 +5504,7 @@ class _ParallelLoop:
             position=reservation.position,
             considered=reservation.considered,
             resolution=resolution,
+            on_execution_host=True,
         )
         lane_binding.bind(ref, source="lane_pickup", at=datetime.now(timezone.utc))
 

@@ -409,21 +409,27 @@ def test_reported_in_flight_billing_closes_admission_before_session_completion(
         assert f'`{json.dumps(call["model"])}`' in comment
         assert '`"high"`' in comment and '`"default"`' in comment
         owned = [
-            label for label in tracker.issue_labels(ref) if label.startswith("git-loopy-route:")
+            label for label in tracker.issue_labels(ref)
+            if label.startswith(("model_id:", "model_context:", "model_effort:"))
         ]
-        assert len(owned) == 1
+        assert owned
+        assert not any(
+            label.startswith("git-loopy-route:") for label in tracker.issue_labels(ref)
+        )
         assert {"ready-for-agent", "semver:none", "task-type:implementation"} <= set(
             tracker.issue_labels(ref)
         )
         (delivery,) = [
             e for e in events if e["type"] == "wrapper.routing.delivery" and e["issue"] == ref
         ]
-        assert delivery["status"] == "published" and delivery["label"] == owned[0]
+        assert delivery["status"] == "published" and delivery["labels"] == owned
+        assert delivery["label"] == " ".join(owned)
         assert f'<!-- git-loopy-route:v1:{delivery["identity"]} -->' in comment
     for ref in set(inputs["issues"]) - set(started):
         assert tracker.issue_view(ref).state == "OPEN"
         assert not any(
-            label.startswith("git-loopy-route:") for label in tracker.issue_labels(ref)
+            label.startswith(("git-loopy-route:", "model_id:", "model_context:", "model_effort:"))
+            for label in tracker.issue_labels(ref)
         )
         assert not any(call[0] == ref for call in tracker.route_label_calls)
         assert not any(

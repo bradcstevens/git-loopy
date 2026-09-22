@@ -908,9 +908,9 @@ class GitHubClient(Protocol):
         ...
 
     def replace_route_label(
-        self, number: int, *, remove: Sequence[str], add: str
+        self, number: int, *, remove: Sequence[str], add: Sequence[str]
     ) -> None:
-        """Change only this issue's Route-label association."""
+        """Change only this issue's Route-label associations."""
         ...
 
     def pr_list(self, label: str, state: str = "open") -> list[PullRequest]:
@@ -1232,13 +1232,14 @@ class SubprocessGitHubClient:
             raise RouteDeliveryError(str(create_error)) from create_error
 
     def replace_route_label(
-        self, number: int, *, remove: Sequence[str], add: str
+        self, number: int, *, remove: Sequence[str], add: Sequence[str]
     ) -> None:
         """Replace only the owned Route label associations on one issue."""
         try:
             for label in remove:
                 self._checked(["issue", "edit", str(number), "--remove-label", label])
-            self._checked(["issue", "edit", str(number), "--add-label", add])
+            for label in add:
+                self._checked(["issue", "edit", str(number), "--add-label", label])
         except GhError as exc:
             raise RouteDeliveryError(str(exc)) from exc
 

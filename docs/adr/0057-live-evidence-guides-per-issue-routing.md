@@ -580,5 +580,13 @@ static and dynamic policies use their existing verdicts. Unselected non-local
 Runs retain the legacy path. The shared `no_config_dynamic_refusal` matrix
 drives the refusal through the real CLI into serial and Lane sessions.
 `event_schema_version` stays 1.2. Wrapper contract 2.9 is unchanged; §14.3
-names this obligation. This is not final activation: shell/PowerShell,
-Subagent/Integration routing, and ADR-0060 implementation remain unclaimed.
+names this obligation. This is not final activation: shell/PowerShell and
+Subagent/Integration routing remain unclaimed.
+
+Python publication now spells exact dimensional Route labels (ADR-0060) through
+the existing publisher and real CLI, including verified listing capacity when
+the Pickup already holds it. A legacy combined association on that issue is
+removed. The migration command, unused label-definition deletion, and a later
+capacity-only refresh are not done. `event_schema_version` stays 1.2. Wrapper
+contract 2.9 is unchanged; §14.5 names this obligation. Shell/PowerShell,
+Subagent, and Integration routing remain deferred. This is not final activation.

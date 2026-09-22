@@ -714,7 +714,13 @@ class Renderer:
         # silent at default verbosity: it repeats a Pickup the operator already
         # saw, and printing it would bury the states that need a remedy.
         status = event.get("status")
-        if not isinstance(status, str) or status == "published":
+        incomplete = event.get("incomplete")
+        omitted = (
+            [item for item in incomplete if isinstance(item, str) and item]
+            if isinstance(incomplete, list)
+            else []
+        )
+        if not isinstance(status, str) or (status == "published" and not omitted):
             return
         ref = event.get("issue")
         label = event.get("label")
@@ -732,6 +738,8 @@ class Renderer:
         )
         if isinstance(label, str) and label:
             text.append(f"  {label}", style=STYLES["meta"])
+        if omitted:
+            text.append(f"  omitted {', '.join(omitted)}", style=STYLES["warning"])
         self.console.print(text)
 
     def _on_checkpoint_recorded(self, event: dict[str, Any]) -> None:        # A runner-authored Checkpoint (ADR-0004). Rendered DISTINCTLY from an

@@ -288,13 +288,18 @@ def test_recorded_dynamic_authority_governs_permitted_retries(
             assert f'`{json.dumps(pickup[key])}`' in comment
         labels = tracker.issue_labels(issue)
         assert "ready-for-agent" in labels and "semver:none" in labels
-        owned = [label for label in labels if label.startswith("git-loopy-route:")]
-        assert len(owned) == 1
+        owned = [
+            label for label in labels
+            if label.startswith(("model_id:", "model_context:", "model_effort:"))
+        ]
+        assert owned
+        assert not any(label.startswith("git-loopy-route:") for label in labels)
         deliveries = [
             event for event in events
             if event["type"] == "wrapper.routing.delivery" and event["issue"] == issue
         ]
         assert deliveries[-1]["status"] == "published"
-        assert deliveries[-1]["label"] == owned[0]
+        assert set(deliveries[-1]["labels"]) == set(owned)
+        assert deliveries[-1]["label"] == " ".join(deliveries[-1]["labels"])
         assert f'<!-- git-loopy-route:v1:{deliveries[-1]["identity"]} -->' in comment
     assert "fixture-owned-key" not in json.dumps(events) + repr(tracker.route_comment_calls)

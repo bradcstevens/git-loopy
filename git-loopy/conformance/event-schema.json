@@ -310,6 +310,8 @@
     "wrapper.routing.delivery": {
       "required_when_present": ["issue", "identity", "label", "status"],
       "status_values": ["published", "pending", "partial", "failed", "stale"],
+      "optional_projection_fields": ["labels", "incomplete"],
+      "projection_note": "label remains the space-joined dimensions actually written, so a consumer that only reads label stays valid. labels, when present, is that same set in projection order. incomplete names omitted dimensions. Both are omitted when empty, so historical deliveries stay identical. Absence is not a claim that every dimension was written.",
       "emitted": "After a final wrapper.pickup.bound has been durably recorded, once for each attempted observational tracker projection and retry. Delivery never selects, validates, or pins a Routed pair.",
       "scope": "Run-scoped. A delivery is attributed to the final Pickup it projects and is not contribution-scoped because it precedes the Agent session."
     },

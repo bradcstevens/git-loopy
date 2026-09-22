@@ -356,16 +356,18 @@ def test_the_capability_record_carries_capability_and_never_a_price() -> None:
     """ADR-0057: a fresh eligibility read must not rewrite recorded billing.
 
     Structural rather than behavioural on purpose. The listing this read parses
-    *does* carry billing blocks — that is where the long-context tier evidence
-    lives — so the guarantee worth pinning is that none of it survives the
-    parse: what leaves this module is five capability facts, and a record with
-    no price on it cannot put one back into the **Rate card** by accident.
+    *does* carry billing blocks — that is where verified prompt capacity and
+    the long-context tier evidence live — so the guarantee worth pinning is
+    that the price does not survive the parse. What leaves this module is six
+    capability facts, including full prompt capacity, and a record with no
+    price on it cannot put one back into the **Rate card** by accident.
     """
     capabilities = static_route.HarnessCapabilities.from_listing(
         [_model("gpt-5.6-terra", efforts=["high"], long_context=True)]
     )
+    record = capabilities.get("gpt-5.6-terra")
 
-    fields = set(vars(capabilities.get("gpt-5.6-terra")))
+    fields = set(vars(record))
 
     assert fields == {
         "model",
@@ -373,4 +375,7 @@ def test_the_capability_record_carries_capability_and_never_a_price() -> None:
         "effort_configurable",
         "efforts",
         "context_tiers",
+        "tier_capacities",
     }
+    assert record.tier_capacities == {static_route.LONG_CONTEXT_TIER: 400_000}
+    assert not any("price" in name or name in {"billing", "multiplier"} for name in fields)
