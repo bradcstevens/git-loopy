@@ -83,7 +83,9 @@ than an assumption.
 The seven account-unlisted compatibility entries and every saved model choice
 remain unchanged, and `gemini-3.8-flash` remains off-roster on the same
 warning-and-pass-through terms. The SDK 1.0.13 and 1.0.14 records above remain
-historical evidence, not the current pin.
+historical evidence, not the current pin. `python -m git_loopy.sdk_feed`
+reports when the corporate feed later carries a newer release (#639). It does
+not change this pin, and it is not an Integration feedback loop.
 
 ## Amendment: the roster follows the harness you are running
 
