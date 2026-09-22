@@ -9,6 +9,11 @@
 
 **Supersedes the redistribution half of** [ADR-0023](0023-pinned-external-skill-catalog.md).
 
+> **Note ([ADR-0064](0064-a-paired-skill-change-is-published-proved-then-pinned.md)):**
+> A Skill prompt is authored in the external catalog, not in the installed
+> catalog this ADR tells a Run to repair. A paired change is published, proved,
+> then pinned — the pin last.
+
 ADR-0023 named `bradcstevens/git-loopy-skills` the source of record and pinned it
 to an immutable revision, then kept a *vendored copy* of that catalog inside the
 wheel so a Run could resolve Skills from disk. That copy is the problem this ADR

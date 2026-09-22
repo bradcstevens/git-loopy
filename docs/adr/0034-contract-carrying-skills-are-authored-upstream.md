@@ -2,6 +2,12 @@
 
 **Status:** superseded by [ADR-0046](0046-continuation-is-decommissioned.md)
 
+> **Note ([ADR-0064](0064-a-paired-skill-change-is-published-proved-then-pinned.md)):**
+> ADR-0046 removed this decision's subject — Continuation, and the mirror that
+> tested it. It did not open a second authoring surface. A Skill prompt is
+> still authored upstream and, after the mirror left, mirrored nowhere. The
+> term Contract-carrying Skill stays retired.
+
 **Completes** [ADR-0025](0025-installed-skill-catalog.md), whose last consequence —
 *"Skills that git-loopy itself depends on must exist upstream"* — was stated as a
 requirement and left without a rule or a guard.
