@@ -253,8 +253,10 @@ def _route(route: ResolvedRoute | None) -> dict[str, Any] | None:
     """One **Routing resolution**, or ``None`` when nothing resolved one.
 
     A ``null`` half is a *value*, not an absent route. Dynamic null effort
-    records no configurable dial; other sources retain backend-choice semantics.
-    The absence that means "no route" is the absence of the whole record.
+    records no configurable dial; other sources retain backend-choice semantics
+    unless the Pickup recorded ``effort_configurable`` false. The absence that
+    means "no route" is the absence of the whole record. An unobserved dial
+    fact is omitted rather than invented.
     """
     if route is None:
         return None
@@ -267,6 +269,8 @@ def _route(route: ResolvedRoute | None) -> dict[str, Any] | None:
         projected["context_tier"] = route.context_tier
     if route.lifecycle_position is not None:
         projected["lifecycle_position"] = route.lifecycle_position
+    if route.effort_configurable is not None:
+        projected["effort_configurable"] = route.effort_configurable
     return projected
 
 

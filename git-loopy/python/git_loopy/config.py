@@ -577,6 +577,12 @@ class RoutingResolution:
             here rather than discarded, which is why per-issue routing had no
             gate diagnostic in any stream.
         lifecycle_position: The attempt's position, independent of ``source``.
+        effort_configurable: Whether the harness listing reported an effort
+            dial for ``model``. ``None`` means the caller did not observe one:
+            a null effort then stays the historical backend placeholder, and
+            is not a no-dial claim. ``False`` is that observation — the model
+            has no dial — and is distinct from deliberate omission (``True``
+            with a null effort). Never inferred from the model name.
     """
 
     model: str | None
@@ -586,6 +592,7 @@ class RoutingResolution:
     task_type_keys: tuple[str, ...]
     gate_warnings: tuple[GateWarning, ...]
     lifecycle_position: RoutingLifecyclePosition
+    effort_configurable: bool | None = None
 
     def as_pickup_payload(self) -> dict[str, Any]:
         """This record as the routing half of a ``wrapper.pickup.bound`` payload.
@@ -606,9 +613,12 @@ class RoutingResolution:
         Every value is a JSON scalar or a list of them, and ``None`` is
         **kept** rather than dropped: a null ``effort`` is the gate having left
         the choice to the backend, which is a fact about the Pickup and not an
-        absent field.
+        absent field. ``effort_configurable`` is the exception: it is omitted
+        unless the caller observed a listing, so an unobserved resolution stays
+        wire-identical to a historical Pickup and absence supplies no no-dial
+        claim.
         """
-        return {
+        payload = {
             "model": self.model,
             "effort": self.reasoning_effort,
             "context_tier": self.context_tier,
@@ -617,6 +627,9 @@ class RoutingResolution:
             "gate_warnings": [warning.value for warning in self.gate_warnings],
             "lifecycle_position": self.lifecycle_position.value,
         }
+        if self.effort_configurable is not None:
+            payload["effort_configurable"] = self.effort_configurable
+        return payload
 
 
 @dataclass(frozen=True)
@@ -968,6 +981,7 @@ def resolve_iteration_model(
     lifecycle_position: RoutingLifecyclePosition = RoutingLifecyclePosition.FRESH,
     escalated_pair: tuple[str | None, str | None] | None = None,
     dynamic_route: tuple[str, str | None, str] | None = None,
+    effort_configurable: bool | None = None,
 ) -> RoutingResolution:
     """Resolve the **Routing resolution** for one Iteration attempt (issue #147).
 
@@ -1036,6 +1050,11 @@ def resolve_iteration_model(
             tier too. It wins over every label-derived source, which is the
             whole of what "the selector decided this one" means, and it is
             never roster-gated: it was elected from the live harness listing.
+        effort_configurable: Whether the caller observed an effort dial on the
+            model this resolution will name, or ``None`` when it observed
+            nothing. Recorded as supplied. This resolver does not read a
+            listing and does not infer the fact from a null effort or a model
+            name.
 
     Returns:
         The :class:`RoutingResolution` for this attempt.
@@ -1076,6 +1095,7 @@ def resolve_iteration_model(
             task_type_keys=tuple(raw_keys),
             gate_warnings=(),
             lifecycle_position=lifecycle_position,
+            effort_configurable=effort_configurable,
         )
     if escalated_pair is not None:
         pair = escalated_pair
@@ -1120,4 +1140,5 @@ def resolve_iteration_model(
         task_type_keys=tuple(raw_keys),
         gate_warnings=gate_warnings,
         lifecycle_position=lifecycle_position,
+        effort_configurable=effort_configurable,
     )

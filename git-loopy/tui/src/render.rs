@@ -1142,7 +1142,10 @@ fn route_effort(route: &RouteView) -> &str {
         .as_ref()
         .and_then(|value| value.as_deref())
         .unwrap_or(
-            if route.source.as_deref() == Some("dynamic") && route.effort == Some(None) {
+            if route.effort == Some(None)
+                && (route.source.as_deref() == Some("dynamic")
+                    || route.effort_configurable == Some(false))
+            {
                 "(not configurable)"
             } else {
                 "(backend)"

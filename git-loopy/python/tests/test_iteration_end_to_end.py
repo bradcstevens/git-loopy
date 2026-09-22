@@ -4914,6 +4914,9 @@ def test_a_static_route_reaches_the_serial_work_sessions_own_arguments(
     assert call["model"] == "gpt-5.6-terra"
     assert call["reasoning_effort"] == "high"
     assert call["context_tier"] == "long_context"
+    (pickup,) = _bound_pickups(tmp_path)
+    assert pickup["effort_configurable"] is True
+    assert pickup["effort"] == "high"
 
 
 def test_an_effort_not_configurable_model_is_sent_no_effort_argument(
@@ -4938,6 +4941,10 @@ def test_an_effort_not_configurable_model_is_sent_no_effort_argument(
 
     assert exit_code == 0, f"expected exit 0, got {exit_code}"
     assert fake_client.create_calls[0]["reasoning_effort"] is None
+    (pickup,) = _bound_pickups(tmp_path)
+    assert pickup["effort"] is None
+    assert pickup["effort_configurable"] is False
+    assert pickup["model"] == "no-dial"
 
 
 def test_the_effort_value_none_is_sent_as_a_value(tmp_path, monkeypatch) -> None:
@@ -7527,6 +7534,7 @@ def test_the_dashboard_reads_the_dynamic_route_from_the_pickup_it_bound(
     assert bound["model"] == "claude-opus-5"
     assert bound["effort"] == "high"
     assert bound["routing_source"] == "dynamic"
+    assert "effort_configurable" not in bound
 
 
 def test_the_decisions_provenance_is_persisted_before_the_work_starts(

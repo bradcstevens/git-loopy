@@ -265,7 +265,9 @@ pub struct QueueRow {
 /// One issue's **Routing resolution** and the **Routing source** that chose it.
 ///
 /// A reported null Dynamic effort means no dial; Static and historical nulls
-/// retain the backend placeholder without declaring dial support. Unreported effort serializes as
+/// retain the backend placeholder without declaring dial support. An explicit
+/// `effort_configurable: false` is the recorded fact that distinguishes a
+/// Static no-dial model from deliberate omission. Unreported effort serializes as
 /// null for compatibility, but rendering must not infer a dial from its absence.
 #[derive(Clone, Debug, Serialize)]
 pub struct RouteView {
@@ -276,6 +278,8 @@ pub struct RouteView {
     pub context_tier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lifecycle_position: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort_configurable: Option<bool>,
 }
 
 impl RouteView {
@@ -286,6 +290,7 @@ impl RouteView {
             source: route.source.clone(),
             context_tier: route.context_tier.clone(),
             lifecycle_position: route.lifecycle_position.clone(),
+            effort_configurable: route.effort_configurable,
         }
     }
 }

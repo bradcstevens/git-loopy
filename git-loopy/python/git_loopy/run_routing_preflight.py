@@ -2,7 +2,8 @@
 
 This verdict authorizes no Pickup. Dynamic evidence and capabilities are read
 here and freshly again for every proposal and binding. Static routes are
-verified again at Pickup. Saved Config needs explicit migration authority.
+verified here; Pickup records dial presence from that listing and does not
+fetch it again. Saved Config needs explicit migration authority.
 """
 
 from __future__ import annotations
@@ -92,6 +93,10 @@ class RunRoutingPreflight:
     refusal: str | None = None
     dynamic_refusal: str | None = None
     admission_ledger: RoutingAdmissionLedger | None = field(default=None, repr=False)
+    #: The listing this preflight already verified Static routes against, or
+    #: ``None`` when it read none. Pickup records dial presence from it; it
+    #: does not fetch again and does not invent a fact the listing lacks.
+    capabilities: HarnessCapabilities | None = None
 
     @property
     def passed(self) -> bool:
@@ -155,6 +160,7 @@ async def resolve_run_routing_preflight(
 
     routes = _configured_static_routes(config)
     static_listing: FreshHarnessCapabilities | None = None
+    capabilities: HarnessCapabilities | None = None
     if routes:
         if prerequisites is not None:
             static_listing = await live_capabilities()
@@ -176,7 +182,9 @@ async def resolve_run_routing_preflight(
                 )
     if prerequisites is None:
         return RunRoutingPreflight(
-            dynamic_refusal=dynamic_refusal, admission_ledger=ledger,
+            dynamic_refusal=dynamic_refusal,
+            admission_ledger=ledger,
+            capabilities=capabilities,
         )
     assert ledger is not None
     source = ArtificialAnalysisSource(
@@ -203,6 +211,7 @@ async def resolve_run_routing_preflight(
             if isinstance(inputs, RoutingUnavailable)
             else None
         ),
+        capabilities=capabilities,
     )
 
 

@@ -769,6 +769,10 @@ def test_pickup_carries_the_routing_resolution_and_mints_no_second_event() -> No
         "gate_warnings",
         "lifecycle_position",
     ]
+    # Observed, never part of the unobserved payload: a missing fact is not a
+    # claim, so historical Pickups stay identical when the key is absent.
+    assert contract["routing_observed"] == ["effort_configurable"]
+    assert not set(contract["routing_observed"]) & set(contract["routing_optional"])
     assert contract["routing_source_values"] == [
         source.value for source in RoutingSource
     ]

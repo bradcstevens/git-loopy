@@ -287,6 +287,48 @@ def test_a_routed_pickup_projects_its_explicit_context_tier() -> None:
     }
 
 
+def test_an_observed_static_no_dial_projects_last_and_absence_stays_absent() -> None:
+    """The dial fact is optional and last; a missing fact is not a false claim."""
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
+
+    observed = LiveRunState()
+    observed.render(
+        {
+            "type": "wrapper.pickup.bound",
+            "iter": 1,
+            "issue": 42,
+            "reason": "order",
+            "model": "plain",
+            "effort": None,
+            "routing_source": "routed",
+            "effort_configurable": False,
+        }
+    )
+    route = project_run_view(observed, None, issue=42)["dashboard"]["queue"]["rows"][0][
+        "route"
+    ]
+    assert list(route)[-1] == "effort_configurable"
+    assert route["effort_configurable"] is False
+
+    historical = LiveRunState()
+    historical.render(
+        {
+            "type": "wrapper.pickup.bound",
+            "iter": 1,
+            "issue": 42,
+            "reason": "order",
+            "model": "plain",
+            "effort": None,
+            "routing_source": "routed",
+        }
+    )
+    historical_route = project_run_view(historical, None, issue=42)["dashboard"][
+        "queue"
+    ]["rows"][0]["route"]
+    assert "effort_configurable" not in historical_route
+
+
 def test_activity_window_projects_the_agent_facts_bound_at_pickup() -> None:
     """The Event-to-view seam keeps a serial Agent's Pickup facts together."""
     from datetime import datetime, timezone

@@ -1425,9 +1425,12 @@ Deliberately omitted effort in an operator-selected Static route is unchanged.
 The Dashboard's raw projection and Rust Route cells/preparation text preserve
 null versus `none`; explicit Dynamic null effort reads as "not configurable".
 The shared Dashboard `effort_readback` matrix covers Rust Event replay and
-rendering separately from the actual-work-session routing matrix. Static
-Pickups do not record dial presence, so their historical backend placeholder
-cannot distinguish a no-dial model from deliberate omission.
+rendering separately from the actual-work-session routing matrix. A Static
+Pickup records dial presence from the listing preflight already fetched, for
+the model it named, and omits the fact when that listing was not observed.
+Historical Pickups therefore keep their backend placeholder; the recorded
+false distinguishes a no-dial model from deliberate omission without a second
+listing read.
 Non-local activation, the remaining composed activation matrix and the remaining
 Wrapper/Conformance activation obligations still precede the final default
 change. Existing Config is not migrated implicitly.

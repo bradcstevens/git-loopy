@@ -154,6 +154,7 @@ from git_loopy.attempt_evidence import AttemptEvidenceLedger
 from git_loopy.attempt_lifecycle import AttemptLedger, AttemptState
 from git_loopy.config import (
     RoutingResolution,
+    RoutingSource,
     RunConfig,
     TaskTypeError,
     resolve_iteration_model,
@@ -1221,6 +1222,7 @@ class _Loop:
         route_tracker: gh_module.GitHubClient | None = None,
         dynamic_routing: "_DynamicRoutingSetup | None" = None,
         lease: LeaseLifecycle | None = None,
+        static_capabilities: HarnessCapabilities | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -1243,6 +1245,9 @@ class _Loop:
         #: resolvable GitHub repository cannot address a Lease ref. ``None``
         #: restores exactly the pre-ADR-0033 behaviour: one Run, unguarded.
         self._lease = lease
+        #: The listing preflight verified selected Static routes against.
+        #: ``None`` on the unselected path, which never reads a harness.
+        self._static_capabilities = static_capabilities
         self._include_prs = include_prs
         self._rollup = IterationRollupAccumulator(denomination=denomination)
         # An extra, Run-scoped Consumption observer (#309). The rollup owns one
@@ -2458,8 +2463,38 @@ class _Loop:
         attempt to have evidence about (AC4).
         """
         resolved = await self._routed_dynamically(item, resolution)
+        resolved = self._record_static_dial(resolved)
         self._attempt_evidence.bound(item.ref, resolved)
         return resolved
+
+    def _record_static_dial(self, resolution: RoutingResolution) -> RoutingResolution:
+        """Record the dial fact the preflight listing already observed.
+
+        The resolver stays pure: this caller did the I/O, at preflight, and
+        only attaches the fact for the model the Pickup actually named. An
+        unselected policy has no listing. A Dynamic election already encodes
+        no dial as a null effort under its own source, so it is left alone.
+        A default pair is still a Static route: ``static_route_applies``
+        answers a different question (whether Dynamic may spend a selector),
+        and excluding it would leave the common unlabelled Pickup unobserved.
+        A model the listing does not name gets no fact — absence is not a
+        no-dial claim, and a model name is not one either.
+        """
+        if self._config.route_policy is RoutePolicy.UNSELECTED:
+            return resolution
+        if resolution.source is RoutingSource.DYNAMIC:
+            return resolution
+        capabilities = self._static_capabilities
+        if capabilities is None or resolution.model is None:
+            return resolution
+        capability = capabilities.get(resolution.model)
+        if capability is None:
+            return resolution
+        if resolution.effort_configurable is capability.effort_configurable:
+            return resolution
+        return dataclass_replace(
+            resolution, effort_configurable=capability.effort_configurable
+        )
 
     async def _propose_task_type(
         self, pair: ClassifierPair, item: AfkReadyItem
@@ -3905,6 +3940,7 @@ class _ParallelLoop:
         execution_host: execution_host_module.ExecutionHost | None = None,
         dynamic_routing: "_DynamicRoutingSetup | None" = None,
         lease: LeaseLifecycle | None = None,
+        static_capabilities: HarnessCapabilities | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -4109,6 +4145,7 @@ class _ParallelLoop:
             route_tracker=route_tracker,
             dynamic_routing=dynamic_routing,
             lease=lease,
+            static_capabilities=static_capabilities,
         )
 
     def request_stop_drain(self) -> None:
@@ -7538,6 +7575,7 @@ async def run(
             execution_host=selected_execution_host,
             dynamic_routing=dynamic_routing,
             lease=lease,
+            static_capabilities=routing_preflight.capabilities,
         )
     except git_module.GitError as exc:
         # Rolling dispatch resolves where its **Lane workspaces** live up front

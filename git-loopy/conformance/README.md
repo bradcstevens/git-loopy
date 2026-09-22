@@ -669,21 +669,23 @@ producible rather than that today's native Run loop reaches every input the seam
 accepts.
 
 The route projection's required inventory is `model`, `effort`, and `source`.
-`context_tier` and `lifecycle_position` are additive fields declared in
-`optional_projection_fields.route`: Queue and Iteration-breakdown rows preserve
-them when the Pickup recorded them, and omit them for older records rather than
-inventing a tier or a first-attempt claim. A reassessed Dynamic retry may keep
+`context_tier`, `lifecycle_position` and `effort_configurable` are additive
+fields declared in `optional_projection_fields.route`: Queue and
+Iteration-breakdown rows preserve them when the Pickup recorded them, and omit
+them for older records rather than inventing a tier, a first-attempt claim or a
+dial observation. A reassessed Dynamic retry may keep
 the same configuration; its lifecycle position must still distinguish it from
 the earlier contribution.
 
 The additive `effort_readback` matrix is a **Rust display-adapter** obligation:
-six Pickup cases run through both serial and Lane-stamped contribution replay
+eight Pickup cases run through both serial and Lane-stamped contribution replay
 and nine preparation cases run through projection and actual rendered Queue and
 drill-in screens. Explicit Dynamic null effort reads as **not configurable**;
-the advertised value `none`, deliberate Static omission and historical sparse
-records keep their respective readbacks. The Static backend placeholder does
-not distinguish a Static no-dial model from deliberate omission: the Pickup has
-no dial-presence fact to support that inference. Preparation retains explicit nulls without inventing
+the advertised value `none`, an observed deliberate Static omission and historical
+sparse records keep their respective readbacks. An observed Static no-dial
+(`effort_configurable` false beside a present null effort) reads as not
+configurable; an unobserved Static null keeps the backend placeholder because
+absence of the field is not a capability observation. Preparation retains explicit nulls without inventing
 missing fields or becoming a final Route, and its full work/selector wording
 survives in the issue Log. Nulls in Static, reusable and unavailable preparation
 mean no proposal, not no dial, and retain their historical omitted projection.

@@ -363,7 +363,8 @@
     "optional_projection_fields": {
       "route": [
         "context_tier",
-        "lifecycle_position"
+        "lifecycle_position",
+        "effort_configurable"
       ],
       "queue_row": [
         "preparation"
@@ -460,7 +461,7 @@
     }
   },
   "effort_readback": {
-    "note": "Rust Event-replay/display obligations. These cases do not claim work-session routing or native Orchestrator activation. Explicit Dynamic null effort is not configurable, the value none is distinct, and Static and historical missing-field wording is preserved. The Static backend placeholder is not a dial-capability claim: Static Pickups do not distinguish no dial from deliberate omission. Preparation stays nonbinding; ordinary Route-column clipping still applies.",
+    "note": "Rust Event-replay/display obligations. These cases do not claim work-session routing or native Orchestrator activation. Explicit Dynamic null effort is not configurable, the value none is distinct, and historical missing-field wording is preserved. effort_configurable false with a present null effort means not configurable for any Routing source; true with a null effort is deliberate omission. Absence of the field is not a capability observation, so an unobserved Static null keeps its backend placeholder. Preparation stays nonbinding; ordinary Route-column clipping still applies.",
     "routes": [
       {
         "id": "dynamic-no-dial",
@@ -496,6 +497,18 @@
         "id": "historical-unreported-dynamic-effort",
         "pickup": {"model": "plain", "routing_source": "dynamic"},
         "expected": {"model": "plain", "effort": null, "source": "dynamic"},
+        "text": "plain @ (backend)"
+      },
+      {
+        "id": "static-observed-no-dial",
+        "pickup": {"model": "plain", "effort": null, "routing_source": "routed", "effort_configurable": false},
+        "expected": {"model": "plain", "effort": null, "source": "routed", "effort_configurable": false},
+        "text": "plain @ (not configurable)"
+      },
+      {
+        "id": "static-observed-deliberate-omission",
+        "pickup": {"model": "plain", "effort": null, "routing_source": "routed", "effort_configurable": true},
+        "expected": {"model": "plain", "effort": null, "source": "routed", "effort_configurable": true},
         "text": "plain @ (backend)"
       }
     ],

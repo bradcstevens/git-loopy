@@ -1105,6 +1105,10 @@ def _routed_pair_phrase(event: dict[str, Any]) -> str:
     gate warning beside the null is the entire difference, and saying so here
     is the only place per-issue routing has a gate diagnostic on stdout.
     Dynamic null effort instead records a verified absence of the dial.
+    A Static null does the same only when the Pickup recorded
+    ``effort_configurable`` false — an observation, not an inference from the
+    model name or from the null itself. Absence of that fact keeps the
+    historical backend placeholder.
 
     Returns the empty string when the record carries no routing at all — a
     Runner that does not implement §14 emits the binding without it, and the
@@ -1120,9 +1124,11 @@ def _routed_pair_phrase(event: dict[str, Any]) -> str:
         return f"{rendered} @ {effort}"
     if _EFFORT_DROPPED_WARNINGS & set(warnings):
         return f"{rendered} @ (backend default, effort dropped)"
+    observed_no_dial = event.get("effort_configurable") is False
     if (
-        event.get("routing_source") == "dynamic"
-        and "effort" in event and effort is None
+        "effort" in event
+        and effort is None
+        and (event.get("routing_source") == "dynamic" or observed_no_dial)
     ):
         return f"{rendered} @ {_dynamic_effort_phrase(event, 'effort')}"
     return f"{rendered} @ (backend default)"

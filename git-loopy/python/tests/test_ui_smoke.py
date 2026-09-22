@@ -2635,6 +2635,46 @@ def test_an_effort_dropped_for_an_incapable_model_reads_as_dropped_too() -> None
     assert "dropped" in buf.getvalue()
 
 
+def test_an_observed_static_no_dial_reads_as_not_configurable() -> None:
+    """A recorded capability fact, not a null effort, is what names no dial.
+
+    Historical Static omission keeps the backend placeholder. An observed dial
+    with a null effort is deliberate omission. Only an explicit false fact
+    changes the Static line, and a missing effort field still supplies no claim.
+    """
+    renderer, _, buf = _make_renderer()
+    renderer.render(
+        _pickup_event(
+            routing_source="routed",
+            effort=None,
+            gate_warnings=[],
+            effort_configurable=False,
+        )
+    )
+    assert "@ (not configurable)" in buf.getvalue()
+    assert "backend default" not in buf.getvalue()
+
+    renderer, _, buf = _make_renderer()
+    renderer.render(
+        _pickup_event(
+            routing_source="routed",
+            effort=None,
+            gate_warnings=[],
+            effort_configurable=True,
+        )
+    )
+    assert "@ (backend default)" in buf.getvalue()
+    assert "not configurable" not in buf.getvalue()
+
+    renderer, _, buf = _make_renderer()
+    event = _pickup_event(
+        routing_source="routed", effort_configurable=False, gate_warnings=[]
+    )
+    event.pop("effort")
+    renderer.render(event)
+    assert "@ (backend default)" in buf.getvalue()
+
+
 def test_dynamic_no_dial_readback_preserves_static_and_historical_omission() -> None:
     for source, expected in (
         ("dynamic", "(not configurable)"),

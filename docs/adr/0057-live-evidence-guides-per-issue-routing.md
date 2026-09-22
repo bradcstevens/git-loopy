@@ -531,7 +531,12 @@ The Event-schema declarations distinguish Dynamic/proposed null efforts from
 historical backend placeholders and from non-proposed preparation's nulls (no
 proposal). Static, reusable and unavailable preparations keep those null effort
 keys out of the Dashboard projection rather than acquiring a no-dial claim.
-Static no-dial-specific display remains indistinguishable from deliberate Static
-omission in the recorded Pickup; preserving its historical backend placeholder
-is not a claim that the model has a dial. A future display distinction needs a
-recorded capability fact, not a model-name inference.
+A Static Pickup now records `effort_configurable` from the listing preflight
+already fetched, for the model that Pickup named. `false` with a present null
+effort reads as not configurable; `true` with a null effort is deliberate
+omission. The field is omitted when unobserved, so historical streams stay
+identical and a model name is never the observation. Pickup does not fetch the
+listing again. This is readback, not final activation: executing-host capability
+authority and the remaining composed activation obligations still precede bare
+init, auto-setup and no-Config Dynamic defaults. Shell/PowerShell activation,
+Subagent/Integration routing and ADR-0060 implementation remain unclaimed.

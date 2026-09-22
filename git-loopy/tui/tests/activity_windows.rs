@@ -335,6 +335,25 @@ fn activity_effort_readback_preserves_dynamic_null_static_null_and_absence() {
             "collapsed {source}: {pair}"
         );
     }
+
+    let mut observed = session();
+    ingest(
+        &mut observed,
+        json!({
+            "type": "wrapper.pickup.bound", "issue": 605,
+            "task_type_keys": ["implementation"],
+            "model": "test-model", "effort": null,
+            "routing_source": "routed", "effort_configurable": false
+        }),
+    );
+    ingest(
+        &mut observed,
+        json!({"type": "wrapper.issue.activated", "issue": 605}),
+    );
+    let observed_pair = "test-model @ (not configurable)";
+    assert!(render(&observed).contains(observed_pair));
+    observed.handle_key(Key::ToggleActivity);
+    assert!(render(&observed).contains(observed_pair));
 }
 
 #[test]

@@ -744,8 +744,13 @@ no routing emits the binding exactly as before and stays conforming; `null` is a
 an absence. A null model leaves model choice to the backend. A Static or legacy null effort
 does not encode whether the model has a dial, so readers retain the historical backend
 placeholder without inferring capability. An explicitly null Dynamic effort means
-**not configurable** (§14.3). `event_schema_version` does not move: the seven are additive
-payload fields, which every schema-1 consumer already ignores when unknown.
+**not configurable** (§14.3). An additive optional `effort_configurable` records whether
+the harness listing reported an effort dial for the named model. It is omitted when
+unobserved. `false` with a present null effort means not configurable for any Routing
+source; `true` with a null effort is deliberate omission. Absence of the field is not a
+capability observation, so a historical Static null effort keeps its backend placeholder.
+`event_schema_version` does not move: these are additive payload fields, which every
+schema-1 consumer already ignores when unknown.
 
 Contract-1.24 addition within compatibility schema 1, and an extension of an existing record for
 the same reason: `wrapper.run.start` carries the **Run readback** (§14) as `model`, `effort`,
@@ -1405,12 +1410,16 @@ run-wide default:
   **optional-when-present**: a port that resolves nothing (see the Python-only note below) says
   nothing and stays conforming, and a consumer MUST treat their absence as "this Runner does not
   route" rather than as a route it failed to report. A `null` `model` or `effort` is *present*
-  rather than absent. A null model leaves model choice to the backend. Static/legacy null
-  effort does not distinguish a model with no dial from deliberately leaving its dial
-  unspecified; the historical backend placeholder is not a capability observation. For legacy
-  `effort`, the accompanying gate warning separates omission from an effort the gate dropped.
-  An explicitly null effort with Routing source `dynamic` instead means **not configurable**,
-  not the value `none`; a missing historical field supplies no such claim.
+  rather than absent. A null model leaves model choice to the backend. An unobserved
+  Static/legacy null effort does not distinguish a model with no dial from deliberately
+  leaving its dial unspecified; that historical backend placeholder is not a capability
+  observation. When the Pickup records `effort_configurable`, `false` with a present null
+  effort means not configurable for any Routing source, and `true` with a null effort is
+  deliberate omission. The field is omitted when no listing was observed, and a model name
+  is never that observation. For legacy `effort`, the accompanying gate warning separates
+  omission from an effort the gate dropped. An explicitly null effort with Routing source
+  `dynamic` means **not configurable**, not the value `none`; a missing historical field
+  supplies no such claim.
 - **Read back what it parsed (contract 1.24).** An Orchestrator that routes MUST print, at **Run
   start** and **unconditionally**, a labelled readback of the model settings it parsed: the
   run-wide **Default pair**'s model, effort and context tier; the **Escalation rung**; whether an
@@ -1672,12 +1681,13 @@ model listing, so they have no route to verify. They declare it unsupported in
 The Dashboard renders the verified triple off `wrapper.pickup.bound`; it does
 not elect or validate a route. An explicitly null effort with Routing source
 `dynamic` means **not configurable**, not a backend default or the value `none`.
-Rust preserves that distinction in Queue and contribution Route cells. Static
-nulls and historical missing effort fields retain their existing backend wording.
-That Static placeholder does not prove the model has a dial: these Pickups lack
-the capability fact needed to distinguish no dial from deliberate omission.
-Static no-dial-specific display therefore remains a readback gap, not an
-inference the Dashboard may make from a model name.
+The same wording applies to any source when the Pickup records
+`effort_configurable` false beside a present null effort. `true` beside a null
+effort is deliberate omission and keeps the backend placeholder. Rust preserves
+those distinctions in Queue, Activity and contribution Route cells. An unobserved
+Static null and a historical missing effort field retain their existing backend
+wording: absence of `effort_configurable` is not a capability observation, and
+the Dashboard MUST NOT infer one from the model name.
 For `wrapper.routing.prepared` in state `proposed`, explicit null work/selector efforts likewise mean
 not configurable and remain explicit nulls in the semantic projection; missing
 or historically empty fields retain their previous readback. In all other states,
@@ -1686,8 +1696,8 @@ not a claim about an effort dial. Preparation remains
 nonbinding, including when its Route cell is clipped; the issue Log retains its
 full work and selector wording. The shared `dashboard-insights.json`
 `effort_readback` matrix pins this Rust Event-replay/display boundary, not actual
-work-session creation or native-member routing. No Event fields or wire version
-are added.
+work-session creation or native-member routing. The additive optional
+`effort_configurable` field does not move `event_schema_version`.
 Python's CLI Pickup and preparation readback use the same no-dial distinction;
 the `routing-resolution.json` `effort_semantics` matrix observes that CLI beside
 actual serial/Lane work sessions. The Rust display matrix observes Event replay
@@ -1947,10 +1957,10 @@ the rendered Rust wording.
 Orchestrators implement no per-issue routing and read no harness listing, so they have no route to
 elect. They declare it unsupported in
 [`fixture-claims.json`](../git-loopy/conformance/fixture-claims.json) rather than by implication.
-The Dashboard reads the elected triple and Routing source from
-`wrapper.pickup.bound`, without electing or validating a route. It uses the
-source-aware null-effort readback defined in §14.3 rather than treating every
-null effort as a backend default.
+The Dashboard reads the elected triple, Routing source and any recorded
+`effort_configurable` fact from `wrapper.pickup.bound`, without electing or
+validating a route. It uses the source-aware null-effort readback defined in
+§14.3 rather than treating every null effort as a backend default.
 
 The **Run readback** MUST distinguish an absent Static table from retained Static
 routes. Under unsuppressed `dynamic`, `unconfigured_task_type_keys` names work awaiting
