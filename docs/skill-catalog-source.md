@@ -143,14 +143,61 @@ you were working in would otherwise discard your work.
 
 ---
 
+## Judging a candidate before the pin moves
+
+CI proves the *pinned* revision. A Skill edit authored in a clone of
+[`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills)
+is invisible to that proof until someone bumps the pin — and the pin bump is
+what every installation refreshes from on the next Run. Judge the candidate
+first, without publishing anything and without moving the pin:
+
+```bash
+uv run --project git-loopy/python python -m git_loopy.skill_candidate /path/to/git-loopy-skills
+```
+
+The path is a checkout of the Skills repository. A working clone is judged as
+it stands on disk, **uncommitted** edits included; nothing has to be committed,
+pushed, or published, and a clone that has never been pushed is fine. The check
+reads that directory. It reaches no network, and it does not edit the pin or
+any tracked file.
+
+A pass means the same three proofs CI runs against the pinned catalog pass
+against this checkout. It is not a promise about the pin. The pin still moves
+only as a reviewed edit to `skill_source.json`.
+
+| Proof | A failure names |
+| --- | --- |
+| **Required Skills** | the Required Skill the candidate does not carry (`Required Skill absent: tdd`) |
+| **Skill references** | the front-door reference that no longer resolves (`Skill reference does not resolve: grill-me`) |
+| **Label vocabulary** | the provisioned label the candidate's `setup-git-loopy-skills/triage-labels.md` stopped providing (`Label vocabulary stopped providing: ready-for-agent`) |
+
+A dropped triage-label row is a failure even when the canonical default would
+have filled that label back in. The template is what a consumer repository
+receives; the fallback is not the candidate providing the label.
+
+| Failure | Means |
+| --- | --- |
+| **path does not exist** | name a directory. Nothing is fetched to fill it in |
+| **not a Skills checkout** | the directory has no `skills/` catalog of Skill directories |
+
+This is not acquisition. `python -m git_loopy.skill_source` still proves that a
+checkout *is* the pinned revision, with its licence and layout. The candidate
+check does not, and must not: a candidate is allowed to be a different
+revision, and allowed to be dirty.
+
+---
+
 ## Refreshing the catalog
 
 1. **Change the Skills upstream**, in
    [`bradcstevens/git-loopy-skills`](https://github.com/bradcstevens/git-loopy-skills).
    That repository is the source of record; there is no catalog here to edit.
-2. **Review the revision you intend to adopt**: `uv run --project
-   git-loopy/python python -m git_loopy.skill_source --into /tmp/skill-review`
-   after setting `revision` to it.
+2. **Judge the candidate without moving the pin**: `uv run --project
+   git-loopy/python python -m git_loopy.skill_candidate <clone>`. That reads
+   the clone as it stands, including uncommitted edits, and is not a promise
+   about the pin. Acquiring with `python -m git_loopy.skill_source --into` is
+   the separate proof that a revision *is* the pin; do that only when you are
+   ready to stand behind that revision.
 3. **Reconcile the pin's consumers.** Update the offline revision and Skill-name
    snapshot in `tests/test_prompt.py`, the README's catalog table, and both
    `PROMPT.md` copies when a Skill is added, renamed, or retired. Decide explicitly
