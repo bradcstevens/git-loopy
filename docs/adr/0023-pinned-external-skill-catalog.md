@@ -125,3 +125,7 @@ immutable revision, and give that pin one command that turns it into evidence.
 - The upstream repository is load-bearing for maintenance, and — since ADR-0025
   — for a Run's Skills too, with an unreachable upstream degrading to a warning
   rather than a failure.
+- A candidate revision can be judged before the pin moves.
+  `python -m git_loopy.skill_candidate` reads a named checkout, including
+  uncommitted edits, reaches no network, and does not edit the pin. A pass is
+  evidence that the three cross-repo proofs hold, not a promise about the pin.
