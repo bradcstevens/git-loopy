@@ -32,8 +32,10 @@ Publication failures alone do not block otherwise valid work.
 
 Capacity verified later by the authenticated work harness updates the current
 assignment's label without rerouting or repeating the routing-decision comment.
-An observation belonging to an older assignment must not overwrite newer labels.
-Capacity belongs to that exact model/tier assignment, not a guessed model roster.
+An observation or delayed delivery belonging to an older assignment must not
+overwrite newer labels, including when the model id matches and the assignment
+or tier differs. Capacity belongs to that exact model/tier assignment, not a
+guessed model roster.
 
 ## Preserve the output boundary
 

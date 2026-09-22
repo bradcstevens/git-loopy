@@ -1149,6 +1149,118 @@ def test_a_lane_session_window_updates_that_issues_model_context(
     assert len(fake_gh.route_comment_calls) == 1
 
 
+def _capacity_window(limit: int, *, used: int) -> SessionEvent:
+    return SessionEvent(
+        data=SessionUsageInfoData(
+            current_tokens=used,
+            messages_length=2,
+            token_limit=limit,
+        ),
+        id=uuid4(),
+        timestamp=datetime(2026, 5, 16, tzinfo=timezone.utc),
+        type=SessionEventType.SESSION_USAGE_INFO,
+    )
+
+
+def test_lane_windows_correct_each_issue_without_crossing(
+    tmp_path, monkeypatch
+) -> None:
+    """Concurrent Lane windows stay on the assignment that session is running."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[
+            _make_issue(42, labels=["ready-for-agent", "parallel-safe"]),
+            _make_issue(43, labels=["ready-for-agent", "parallel-safe", "priority"]),
+        ],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+
+    class _PerIssueWindows(_ParallelFakeClient):
+        async def create_session(self, **kwargs: Any) -> _ParallelFakeSession:
+            worktree = str(kwargs.get("working_directory") or "")
+            if worktree.endswith("issue-42"):
+                self._scripted_events = [
+                    _capacity_window(128_000, used=9_000),
+                    _capacity_window(256_000, used=40_000),
+                ]
+            else:
+                self._scripted_events = [_capacity_window(512_000, used=3_000)]
+            return await super().create_session(**kwargs)
+
+    fake_client = _PerIssueWindows(fake_git=fake_git, scripted_events=[])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    assert asyncio.run(loop_module.run(RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    ))) == 0
+
+    assert "model_context:256K" in fake_gh.issue_labels(42)
+    assert "model_context:128K" not in fake_gh.issue_labels(42)
+    assert "model_context:9K" not in fake_gh.issue_labels(42)
+    assert "model_context:512K" in fake_gh.issue_labels(43)
+    assert "model_context:3K" not in fake_gh.issue_labels(43)
+    assert "model_context:256K" not in fake_gh.issue_labels(43)
+    assert "priority" in fake_gh.issue_labels(43)
+    assert len(fake_gh.route_comment_calls) == 2
+    for session in fake_client.created:
+        prompt, _timeout = session.send_and_wait_calls[0]
+        assert "model_context:" not in prompt
+        assert "git-loopy-route:v1:" not in prompt
+
+
+def test_a_failed_lane_window_is_retried_without_blocking_the_lane(
+    tmp_path, monkeypatch
+) -> None:
+    """A Lane capacity failure stays local; the next Run delivers it."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    original = fake_gh.replace_route_label
+
+    def fail_capacity(number, *, remove, add):
+        if any(label.startswith("model_context:") for label in add):
+            raise RouteDeliveryError("HTTP 503")
+        return original(number, remove=remove, add=add)
+
+    fake_gh.replace_route_label = fail_capacity
+    window = _capacity_window(256_000, used=9_000)
+    fake_client = _ParallelFakeClient(fake_git=fake_git, scripted_events=[window])
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    config = RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    )
+
+    assert asyncio.run(loop_module.run(config)) == 0
+    assert len(fake_client.created) == 1
+    assert "model_context:256K" not in fake_gh.issue_labels(42)
+    assert len(fake_gh.route_comment_calls) == 1
+
+    fake_gh.replace_route_label = original
+    fake_client._scripted_events = []
+    assert asyncio.run(loop_module.run(config)) == 0
+    assert "model_context:256K" in fake_gh.issue_labels(42)
+    assert "model_context:9K" not in fake_gh.issue_labels(42)
+    assert len(fake_gh.route_comment_calls) == 1
+
+
 def test_parallel_lane_refills_without_waiting_for_sibling(
     tmp_path, monkeypatch
 ) -> None:

@@ -8730,6 +8730,99 @@ def test_the_work_session_window_updates_model_context_without_rerouting(
     ]
     assert refreshed
     assert refreshed[-1]["status"] == "published"
+    prompt, _timeout = fake_client.created[0].send_and_wait_calls[0]
+    assert "model_context:" not in prompt
+    assert "git-loopy-route:v1:" not in prompt
+
+
+def test_a_later_session_window_corrects_model_context_without_rerouting(
+    tmp_path, monkeypatch
+) -> None:
+    """A second verified window corrects the label and does not reroute."""
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_client._scripted_events = [
+        _sdk_event(
+            SessionEventType.SESSION_USAGE_INFO,
+            SessionUsageInfoData(
+                current_tokens=12_000,
+                messages_length=4,
+                token_limit=128_000,
+            ),
+        ),
+        _sdk_event(
+            SessionEventType.SESSION_USAGE_INFO,
+            SessionUsageInfoData(
+                current_tokens=40_000,
+                messages_length=8,
+                token_limit=256_000,
+            ),
+        ),
+    ]
+    fake_gh = loop_module._make_github_client()
+
+    assert asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    ) == 0
+
+    assert "model_context:256K" in fake_gh.issue_labels(42)
+    assert "model_context:128K" not in fake_gh.issue_labels(42)
+    assert "model_context:12K" not in fake_gh.issue_labels(42)
+    assert "model_context:40K" not in fake_gh.issue_labels(42)
+    assert len(fake_gh.route_comment_calls) == 1
+    prompt, _timeout = fake_client.created[0].send_and_wait_calls[0]
+    assert "model_context:" not in prompt
+
+
+def test_a_failed_session_window_is_retried_by_the_next_run_without_rerouting(
+    tmp_path, monkeypatch
+) -> None:
+    """A capacity write failure does not block the Agent or renew the comment."""
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_client._scripted_events = [
+        _sdk_event(
+            SessionEventType.SESSION_USAGE_INFO,
+            SessionUsageInfoData(
+                current_tokens=12_000,
+                messages_length=4,
+                token_limit=128_000,
+            ),
+        ),
+    ]
+    fake_gh = loop_module._make_github_client()
+    original = fake_gh.replace_route_label
+    calls = {"n": 0}
+
+    def fail_the_capacity_replace(number, *, remove, add):
+        calls["n"] += 1
+        if any(label.startswith("model_context:") for label in add):
+            raise RouteDeliveryError("HTTP 503")
+        return original(number, remove=remove, add=add)
+
+    fake_gh.replace_route_label = fail_the_capacity_replace
+
+    assert asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    ) == 0
+    assert len(fake_client.created) == 1
+    assert "model_context:128K" not in fake_gh.issue_labels(42)
+    assert len(fake_gh.route_comment_calls) == 1
+    assert any(
+        event["status"] in {"partial", "failed", "pending"}
+        for event in _delivery_events(tmp_path)
+    )
+
+    fake_gh.replace_route_label = original
+    fake_client._scripted_events = []
+    assert asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    ) == 0
+
+    assert "model_context:128K" in fake_gh.issue_labels(42)
+    assert "model_context:12K" not in fake_gh.issue_labels(42)
+    assert len(fake_gh.route_comment_calls) == 1
+    prompt, _timeout = fake_client.created[-1].send_and_wait_calls[0]
+    assert "model_context:" not in prompt
+    assert "git-loopy-route:v1:" not in prompt
 
 
 def test_an_unchanged_route_is_not_published_a_second_time(

@@ -914,9 +914,11 @@ class _ChainedObserver:
 class _HarnessCapacityObserver:
     """Apply one work session's verified window to that assignment's label.
 
-    The number is the harness ``token_limit`` for the session that is running
-    this model and tier. Usage, the compaction ceiling, and a later roster are
-    not capacity. A tracker failure must not escape into session dispatch.
+    The number is the harness ``token_limit`` for the assignment this session
+    started under. Usage, remaining tokens, the compaction ceiling, and a
+    later roster are not capacity. A superseded assignment is not updated,
+    even when the model id matches. A tracker failure must not escape into
+    session dispatch.
     """
 
     def __init__(
@@ -927,6 +929,7 @@ class _HarnessCapacityObserver:
         model: str | None,
         effort: str | None,
         context_tier: str,
+        assignment_identity: str,
         on_result: Callable[[RouteDeliveryResult], None],
         warn: Callable[[str], None],
     ) -> None:
@@ -935,6 +938,7 @@ class _HarnessCapacityObserver:
         self._model = model
         self._effort = effort
         self._context_tier = context_tier
+        self._assignment_identity = assignment_identity
         self._on_result = on_result
         self._warn = warn
         self._applied: int | None = None
@@ -954,6 +958,7 @@ class _HarnessCapacityObserver:
                 effort=self._effort,
                 context_tier=self._context_tier,
                 context_capacity=limit,
+                assignment_identity=self._assignment_identity,
             )
         except Exception as exc:
             self._warn(
@@ -1700,6 +1705,14 @@ class _Loop:
             or context_tier is None
         ):
             return None
+        assignment_identity = self._route_publisher.bound_assignment_identity(
+            issue,
+            model=model,
+            effort=effort,
+            context_tier=context_tier,
+        )
+        if assignment_identity is None:
+            return None
 
         def on_result(result: RouteDeliveryResult) -> None:
             self._emit(
@@ -1721,6 +1734,7 @@ class _Loop:
             model=model,
             effort=effort,
             context_tier=context_tier,
+            assignment_identity=assignment_identity,
             on_result=on_result,
             warn=lambda message: self._diag.warning("%s", message),
         )

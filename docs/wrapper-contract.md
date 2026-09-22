@@ -2141,11 +2141,16 @@ tracker write. Reporting is the default and writes nothing; `--apply` is the
 write and does not prompt. The command cannot certify that other machines
 have stopped publishing legacy labels. A later capacity-only refresh is
 the authenticated work session's `token_limit`, not a roster lookup and not
-a second routing comment. It updates `model_context` on the assignment that
-session is running. An observation for an older model, effort, or tier
-writes nothing. Usage and the compaction ceiling are not capacity. A failed
-capacity write is retried finitely without renewing the routing comment's
-bound. Shell and PowerShell routing remain deferred. This does
+a second routing comment. It fills or corrects `model_context` on the
+assignment that session started under — that issue, selected model, Context
+tier, and assignment identity — in serial and Lane operation. A late
+observation or delivery from a superseded assignment writes nothing, including
+when the model id matches and the assignment or tier differs. Usage, remaining
+tokens, and the compaction ceiling are not capacity, and another model or
+tier's maximum is not inferred. An unrepresentable window is omitted and
+named. A failed capacity write is retried finitely without renewing the
+routing comment's bound or an exhausted capacity delivery's own budget.
+Shell and PowerShell routing remain deferred. This does
 not imply Subagent or Integration routing. Python-local Dynamic default
 activation is §14.3; this section does not extend it.
 

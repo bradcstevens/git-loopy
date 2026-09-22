@@ -598,8 +598,9 @@ the existing publisher and real CLI, including verified listing capacity when
 the Pickup already holds it. A legacy combined association on that issue is
 removed. `git-loopy route-labels migrate` reconstructs dimensions and deletes
 an unused legacy definition only after issue and pull-request checks. A later
-work-session window updates only the current assignment's `model_context`
-label, without a new routing comment or a roster lookup. `event_schema_version`
+work-session window fills or corrects only the assignment that session
+started under, including when a newer assignment reuses the model id,
+without a new routing comment or a roster lookup. `event_schema_version`
 stays 1.2. Wrapper contract 2.9 is unchanged; §14.5 names this obligation.
 Shell and PowerShell routing remain deferred. This does not imply Subagent
 or Integration routing. Python-local Dynamic default activation is declared

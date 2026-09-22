@@ -492,6 +492,31 @@ class RoutePublisher:
             entry = self._store.record(assignment)
             return self._deliver(assignment, entry)
 
+    def bound_assignment_identity(
+        self,
+        issue: int,
+        *,
+        model: str | None,
+        effort: str | None,
+        context_tier: str,
+    ) -> str | None:
+        """Identity of the assignment a work session is about to run, or none.
+
+        Captured at session start. A later window from that session names this
+        identity, so a newer assignment is not updated by the older one.
+        """
+        with self._store.locked():
+            current = self._store.trusted(issue)
+            if current is None or not _capacity_observation_matches(
+                current,
+                model=model,
+                effort=effort,
+                context_tier=context_tier,
+                assignment_identity=None,
+            ):
+                return None
+            return current.identity
+
     def refresh_context_capacity(
         self,
         *,
@@ -500,13 +525,15 @@ class RoutePublisher:
         effort: str | None,
         context_tier: str,
         context_capacity: int,
+        assignment_identity: str | None = None,
     ) -> RouteDeliveryResult:
         """Update ``model_context`` from a harness window, without rerouting.
 
-        The capacity belongs to the assignment named by ``model``, ``effort``,
-        and ``context_tier``. It is not looked up from a roster. A mismatch
-        with the current assignment writes nothing. The routing comment is
-        not repeated.
+        The capacity belongs to one assignment: the issue, model, Context
+        tier, and assignment identity the work session was started under.
+        It is not looked up from a roster. A mismatch, including the same
+        model id on a newer assignment, writes nothing. The routing comment
+        is not repeated.
         """
         if (
             isinstance(context_capacity, bool)
@@ -516,10 +543,12 @@ class RoutePublisher:
             raise ValueError("verified context capacity must be a positive integer")
         with self._store.locked():
             current = self._store.trusted(issue)
-            if current is None or (
-                current.model != model
-                or current.effort != effort
-                or current.context_tier != context_tier
+            if current is None or not _capacity_observation_matches(
+                current,
+                model=model,
+                effort=effort,
+                context_tier=context_tier,
+                assignment_identity=assignment_identity,
             ):
                 observed = current or _RouteAssignment(
                     issue=issue,
@@ -530,6 +559,13 @@ class RoutePublisher:
                 )
                 return _delivery_result(
                     observed, RouteDeliveryStatus.STALE, detail="stale capacity observation"
+                )
+            entry = self._store.current(issue)
+            if isinstance(entry, dict) and entry.get("capacity_terminal") is True:
+                return _delivery_result(
+                    current,
+                    RouteDeliveryStatus.FAILED,
+                    detail=str(entry.get("last_error")),
                 )
             assignment = self._store.note_context_capacity(
                 issue,
@@ -545,12 +581,6 @@ class RoutePublisher:
             entry = self._store.current(issue)
             if not isinstance(entry, dict) or entry.get("label_delivery") != "published":
                 return _delivery_result(assignment, RouteDeliveryStatus.PENDING)
-            if entry.get("capacity_terminal") is True:
-                return _delivery_result(
-                    assignment,
-                    RouteDeliveryStatus.FAILED,
-                    detail=str(entry.get("last_error")),
-                )
             return self._deliver_context_capacity(assignment)
 
     def retry_pending(self) -> tuple[RouteDeliveryResult, ...]:
@@ -757,6 +787,29 @@ def _display_value(value: str | None) -> str:
         .replace("<", "\\u003c")
         .replace(">", "\\u003e")
     )
+
+
+def _capacity_observation_matches(
+    current: _RouteAssignment,
+    *,
+    model: str | None,
+    effort: str | None,
+    context_tier: str,
+    assignment_identity: str | None,
+) -> bool:
+    """Whether this window still belongs to the assignment that is current.
+
+    Model id alone is not enough: a newer assignment can reuse it. An
+    omitted identity keeps the historical triple check for a caller that
+    has not yet named the assignment; a named identity must still be current.
+    """
+    if (
+        current.model != model
+        or current.effort != effort
+        or current.context_tier != context_tier
+    ):
+        return False
+    return assignment_identity is None or current.identity == assignment_identity
 
 
 def _assignment_from_record(record: dict[str, object]) -> _RouteAssignment:
