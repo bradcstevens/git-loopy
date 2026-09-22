@@ -9,11 +9,13 @@ Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all op
 - **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
-- **Planning documents**: Titles beginning with `PRD:` or `Spec:` (case-insensitive)
-  are reference documents, not work for git-loopy. Never label them `ready-for-agent`;
-  remove that label if present, without closing the document or changing other labels.
-  `git-loopy labels` reports an open document that still carries the role, and
-  `git-loopy labels --apply` performs that removal.
+- **Planning documents**: Titles beginning with `PRD:` or `Spec:` (case-insensitive),
+  and issues labelled `wayfinder:map`, are reference documents, not work for
+  git-loopy. Never label them `ready-for-agent`; remove that label if present,
+  without closing the document or changing other labels. `git-loopy labels`
+  reports an open document that still carries the role, and `git-loopy labels
+  --apply` performs that removal. Pickup refuses the same documents, including
+  an explicit `--issue` pin.
 - **Close**: `gh issue close <number> --comment "..."`
 
 Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
@@ -28,7 +30,9 @@ dependencies enabled, so both use the canonical representation — never a body 
   Destination / Notes / Decisions-so-far / Not-yet-specified / Out-of-scope body.
   `gh issue create --label wayfinder:map --title "Wayfinder: ..." --body-file <file>`.
   A map is a planning document, not work: label it `ready-for-human`, never
-  `ready-for-agent`.
+  `ready-for-agent`. Pickup refuses a `wayfinder:map` issue — by that label,
+  not by a `Wayfinder:` title — and an explicit `--issue` pin is refused as a
+  planning document.
 - **Child ticket**: an issue linked to the map as a GitHub **sub-issue**, labelled
   `wayfinder:<type>` (`research`, `prototype`, `grilling`, or `task`). Create the issue,
   then attach it by its numeric **database id**:

@@ -4370,12 +4370,19 @@ Start-Sleep -Seconds $Sleep
     Write-PinView -Number 48 -State "OPEN" -Labels @("ready-for-agent") `
         -Body $PinAfkBody -ViewDir $PinViews -Title "Spec: Planning document"
     Assert-PinRefused -Number 48 -Label "spec" -Needle "is a planning document"
+    Write-PinView -Number 49 -State "OPEN" `
+        -Labels @("ready-for-agent", "wayfinder:map") `
+        -Body $PinAfkBody -ViewDir $PinViews -Title "Architecture decision record"
+    Assert-PinRefused -Number 49 -Label "map" -Needle "is a planning document"
 
-    # Check both the cheap list title and a title changed at enrichment.
+    # Check both the cheap list title and a title changed at enrichment. A
+    # retitled map is excluded by its label, not a title convention.
     $PlanningRows = @(
         Get-Content -LiteralPath (Join-Path $PinViews "47.json") -Raw |
             ConvertFrom-Json -AsHashtable -DateKind String
         Get-Content -LiteralPath (Join-Path $PinViews "48.json") -Raw |
+            ConvertFrom-Json -AsHashtable -DateKind String
+        Get-Content -LiteralPath (Join-Path $PinViews "49.json") -Raw |
             ConvertFrom-Json -AsHashtable -DateKind String
     )
     $PlanningRows[1]["title"] = "Executable ticket"
@@ -4386,7 +4393,7 @@ Start-Sleep -Seconds $Sleep
         ForEach-Object { $_ | ConvertFrom-Json -AsHashtable })
     $PlanningExclusions = @($PlanningEvents |
         Where-Object { $_["type"] -ceq "wrapper.pool.excluded" })
-    Assert-Equal "47,48" (
+    Assert-Equal "47,48,49" (
         [string]::Join(",", @($PlanningExclusions | ForEach-Object { $_["issue"] }))
     ) "both title reads exclude planning documents"
     foreach ($Excluded in $PlanningExclusions) {
@@ -4399,6 +4406,9 @@ Start-Sleep -Seconds $Sleep
     $PlanningLog = [IO.File]::ReadAllText($env:FAKE_GH_LOG)
     Assert-True (-not ($PlanningLog -match "(?m)^issue view 47 ")) (
         "listed planning document was not enriched"
+    )
+    Assert-True (-not ($PlanningLog -match "(?m)^issue view 49 ")) (
+        "listed Wayfinder map was not enriched"
     )
     Assert-True ($PlanningLog -match "(?m)^issue view 48 ") (
         "authoritative title exclusion was exercised"

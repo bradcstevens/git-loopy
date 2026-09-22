@@ -177,7 +177,7 @@ class PinRefusal:
         if self.detail == "planning_document":
             return (
                 f"--issue {self.issue}: {ref} is a planning document "
-                "(PRD: or Spec:), not executable work"
+                "(PRD:, Spec:, or wayfinder:map), not executable work"
             )
         sections = _MISSING_SECTIONS.get(self.detail or "", _BOTH_SECTIONS)
         return (

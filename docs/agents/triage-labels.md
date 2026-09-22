@@ -13,11 +13,12 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 When a skill mentions a role (for example, "apply the `ready-for-agent` triage label"), use the corresponding label string from this table.
 
 **Planning documents are never agent-ready.** Issues whose titles begin with
-`PRD:` or `Spec:` (case-insensitive) must not receive `ready-for-agent`, even if
-their bodies contain task headings. Remove that label when found; preserve the
-document and its other labels. Triage and execute the implementation tickets
-derived from the document instead. All runners exclude these titles even when
-mislabelled, prioritized, marked `parallel-safe`, or explicitly pinned.
+`PRD:` or `Spec:` (case-insensitive), and maps labelled `wayfinder:map`, must not
+receive `ready-for-agent`, even if their bodies contain task headings. Remove that
+label when found; preserve the document and its other labels. Triage and execute
+the implementation tickets derived from the document instead. Pickup refuses these
+documents even when mislabelled, prioritized, marked `parallel-safe`, or explicitly
+pinned; a map is recognised by the `wayfinder:map` label, not by a `Wayfinder:` title.
 
 Edit the right-hand column to match whatever vocabulary you actually use. `git-loopy init`
 reads this table when it ensures the labels exist in the tracker, so a renamed role is
@@ -71,10 +72,12 @@ failed on a label that did not exist. They are **not renameable** — the Skill 
 upstream ([ADR-0034](../adr/0034-contract-carrying-skills-are-authored-upstream.md)), so
 the strings it writes cannot follow this repository's mapping table.
 
-What makes them unlike every other row here is that **a Run never reads one**. They are
-provisioned for a planning Skill a human drives, so an absent `wayfinder:` label costs a
-`/wayfinder` session and never an **Iteration** — `git-loopy doctor` and Run preflight
-judge only the labels a Run actually reads, and neither fails on these. See
+What makes them unlike every other row here is that a Run reads only `wayfinder:map`,
+and only to refuse the map at Pickup. The four decision-ticket labels do not affect
+eligibility. They are provisioned for a planning Skill a human drives, so an absent
+`wayfinder:` label costs a `/wayfinder` session; `git-loopy doctor` and Run preflight
+do not require one to exist — an absent `wayfinder:map` simply means no map to refuse.
+See
 [issue-tracker.md](./issue-tracker.md#wayfinding-operations) for how the map, its children,
 and the blocking edges are expressed on this tracker.
 
@@ -106,9 +109,10 @@ edited, and never deleted; nothing is ever renamed. An unreachable or
 unauthorised tracker warns and exits non-zero.
 
 It also reports whether that role is correctly *placed*. Every open issue
-whose title begins `PRD:` or `Spec:` (case-insensitive — the Runner's
-planning-document discriminator, the same one Pickup uses) and carries the
-configured `ready-for-agent` role is a report line, identifying the issue:
+that the Runner's planning-document discriminator — the same one Pickup
+uses — accepts, and that carries the configured `ready-for-agent` role, is a
+report line, identifying the issue. That is a `PRD:` or `Spec:` title
+(case-insensitive) or the exact `wayfinder:map` label:
 
 ```text
 misplaced #42 Spec: the design

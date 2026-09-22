@@ -252,4 +252,5 @@ class TestTheDuplicatedLiteralsAreHeldToOneDeclaration:
         )
         refusal = issue_pin.PinRefusal(390, "not_afk_ready", "planning_document")
         assert "planning document" in refusal.message
+        assert "wayfinder:map" in refusal.message
         assert "missing" not in refusal.message

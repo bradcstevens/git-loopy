@@ -620,10 +620,13 @@ function Test-GitLoopyAfkReady {
         [AllowEmptyString()]
         [string]$Body,
         [AllowEmptyString()]
-        [string]$Title = ""
+        [string]$Title = "",
+        [string[]]$Labels = @()
     )
 
-    return $null -eq (Get-GitLoopyAfkReadyExclusion -Body $Body -Title $Title)
+    return $null -eq (
+        Get-GitLoopyAfkReadyExclusion -Body $Body -Title $Title -Labels $Labels
+    )
 }
 
 # The deep discriminator: names *why* a `ready-for-agent` candidate is not
@@ -635,11 +638,18 @@ function Get-GitLoopyAfkReadyExclusion {
         [AllowEmptyString()]
         [string]$Body,
         [AllowEmptyString()]
-        [string]$Title = ""
+        [string]$Title = "",
+        [string[]]$Labels = @()
     )
 
     if ($Title -match "^(PRD|Spec):") {
         return "planning_document"
+    }
+    # Exact and case-sensitive. Decision tickets and near-miss labels stay eligible.
+    foreach ($Label in @($Labels)) {
+        if ([string]$Label -ceq $Script:GitLoopyMapLabel) {
+            return "planning_document"
+        }
     }
     $HasWhat = $Body -cmatch "(?m)^## What to build"
     $HasCriteria = $Body -cmatch "(?m)^## Acceptance criteria"
@@ -718,12 +728,7 @@ function Assert-GitLoopyPinEligible {
         return $false
     }
 
-    $Labels = @(
-        foreach ($Label in @($Issue["labels"])) {
-            if ($Label -is [Collections.IDictionary]) { [string]$Label["name"] }
-            else { [string]$Label }
-        }
-    )
+    $Labels = Get-GitLoopyLabelNames -Labels $Issue["labels"]
     if ($Script:GitLoopyReadyLabel -cnotin $Labels) {
         [Console]::Error.WriteLine(
             "git-loopy: --issue ${Number}: #${Number} does not carry the " +
@@ -733,11 +738,14 @@ function Assert-GitLoopyPinEligible {
     }
 
     $Body = [string]$Issue["body"]
-    $Exclusion = Get-GitLoopyAfkReadyExclusion -Body $Body -Title ([string]$Issue["title"])
+    $Exclusion = Get-GitLoopyAfkReadyExclusion `
+        -Body $Body `
+        -Title ([string]$Issue["title"]) `
+        -Labels $Labels
     if ($Exclusion -eq "planning_document") {
         [Console]::Error.WriteLine(
             "git-loopy: --issue ${Number}: #${Number} is a planning document " +
-            "(PRD: or Spec:), not executable work."
+            "(PRD:, Spec:, or wayfinder:map), not executable work."
         )
         return $false
     }
@@ -825,6 +833,9 @@ $Script:GitLoopyMinGhVersionForReadiness = [version]::new(2, 94, 0)
 # The label the Pool query filters on, named once so the pin's eligibility check
 # (`Assert-GitLoopyPinEligible`) cannot drift from the query it must agree with.
 $Script:GitLoopyReadyLabel = "ready-for-agent"
+# The Wayfinder map artifact. Read only to keep a map out of the Pool; an
+# absent label satisfies that vacuously, so preflight does not require it.
+$Script:GitLoopyMapLabel = "wayfinder:map"
 
 # The accepted `created_at` year range. The floor keeps every division below on a
 # non-negative operand, which is what lets three languages agree.
@@ -1441,6 +1452,31 @@ function Get-GitLoopyIssueInstant {
             $OffsetSeconds
         nanoseconds = $Nanoseconds
     }
+}
+
+# Label names from a `gh` issue record. Objects contribute `.name`; strings
+# pass through. An absent field is an empty list, which is what the
+# local-markdown backend also presents to the discriminator.
+function Get-GitLoopyLabelNames {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        $Labels
+    )
+
+    return @(
+        foreach ($Label in @($Labels)) {
+            if ($null -eq $Label) {
+                continue
+            }
+            if ($Label -is [Collections.IDictionary]) {
+                [string]$Label["name"]
+            }
+            else {
+                [string]$Label
+            }
+        }
+    )
 }
 
 # `0` when these labels carry **Priority**, `1` otherwise. Matching is exact:
@@ -2554,7 +2590,10 @@ function Get-GitLoopyGitHubPool {
         # Wrapper contract §3.1: a rejected candidate is reported, not dropped
         # silently. The reason comes from the same body the membership decision
         # was made on, and no extra round-trip is paid for it.
-        $Reason = Get-GitLoopyAfkReadyExclusion -Body $Body -Title ([string]$Candidate["title"])
+        $Reason = Get-GitLoopyAfkReadyExclusion `
+            -Body $Body `
+            -Title ([string]$Candidate["title"]) `
+            -Labels (Get-GitLoopyLabelNames -Labels $Candidate["labels"])
         if ($null -ne $Reason) {
             Add-GitLoopyPoolExclusion `
                 -Ref $Number `
@@ -2599,7 +2638,10 @@ function Get-GitLoopyGitHubPool {
         else {
             [string]$Full["body"]
         }
-        $Reason = Get-GitLoopyAfkReadyExclusion -Body $FullBody -Title ([string]$Full["title"])
+        $Reason = Get-GitLoopyAfkReadyExclusion `
+            -Body $FullBody `
+            -Title ([string]$Full["title"]) `
+            -Labels (Get-GitLoopyLabelNames -Labels $Full["labels"])
         if ($null -ne $Reason) {
             Add-GitLoopyPoolExclusion `
                 -Ref $Number `

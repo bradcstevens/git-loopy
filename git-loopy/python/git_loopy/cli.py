@@ -890,9 +890,10 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "what is absent at the moment it runs, so a label added to the "
             "vocabulary afterwards never lands and a drifted colour or "
             "description stays drifted. Also reports every open planning "
-            "document (a title beginning PRD: or Spec:) that carries the "
-            "configured ready-for-agent role. Reports by default and changes "
-            "nothing; labels the tracker carries outside the vocabulary are "
+            "document (a title beginning PRD: or Spec:, or the wayfinder:map "
+            "label) that carries the configured ready-for-agent role. Reports "
+            "by default and changes nothing; labels the tracker carries outside "
+            "the vocabulary are "
             "never touched and never deleted."
         ),
     )

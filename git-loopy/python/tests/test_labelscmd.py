@@ -499,6 +499,31 @@ def _issue(
     return SimpleNamespace(number=number, title=title, labels=labels, state=state)
 
 
+def test_report_identifies_a_wayfinder_map_carrying_ready_for_agent(
+    tmp_path: Path, sinks: tuple[list[str], list[str]]
+) -> None:
+    """A retitled map is the same misplacement as a Spec:, by label not title."""
+    out, err = sinks
+    client = _tracker_matching(tmp_path)
+    client.issues = [
+        _issue(
+            42,
+            "Architecture decision record",
+            (LABEL_READY_FOR_AGENT, "wayfinder:map"),
+        ),
+        _issue(43, "Research the seam", (LABEL_READY_FOR_AGENT, "wayfinder:research")),
+    ]
+
+    rc = labelscmd.run_labels(
+        repo_root=tmp_path, client=client, output_fn=out.append, warn=err.append
+    )
+
+    assert rc == 0
+    assert "misplaced #42 Architecture decision record" in out
+    assert "correct   #43 Research the seam" in out
+    assert err == []
+
+
 def test_report_identifies_an_open_planning_document_carrying_ready_for_agent(
     tmp_path: Path, sinks: tuple[list[str], list[str]]
 ) -> None:

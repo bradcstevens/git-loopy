@@ -34,8 +34,9 @@ Design:
 * **Placement is the same report.** An open planning document carrying the
   configured ``ready-for-agent`` role is a finding, identified by number and
   title, with the same exit as a missing label. ``--apply`` removes only that
-  role. The title test is :func:`git_loopy.sources.is_planning_document`, the
-  rule Pickup already uses, and the role string comes from the documented
+  role. The test is :func:`git_loopy.sources.is_planning_document`, the
+  rule Pickup already uses — a ``PRD:`` or ``Spec:`` title, or the exact
+  ``wayfinder:map`` label — and the role string comes from the documented
   mapping rather than the canonical constant.
 """
 
@@ -228,7 +229,7 @@ def _placements(
     for issue in opened:
         if not _is_open(issue):
             continue
-        planning = is_planning_document(issue.title)
+        planning = is_planning_document(issue.title, issue.labels)
         carries = role in issue.labels
         if not planning and not carries:
             continue

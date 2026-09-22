@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.9 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.10 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -138,10 +138,14 @@ The Pool MUST be filtered to issues whose body contains **both** literal section
 - `## Acceptance criteria`
 
 A `## Parent` section is optional. Issues missing either required heading (bare PRDs) MUST be
-skipped. GitHub issues whose titles begin with `PRD:` or `Spec:` (case-insensitive)
-MUST also be excluded, even with both headings, `ready-for-agent`, `priority`,
-`parallel-safe`, or an explicit `--issue` pin. They are planning documents, not
-executable tickets. Check the title on both list and authoritative reads.
+skipped. GitHub issues whose titles begin with `PRD:` or `Spec:` (case-insensitive),
+or whose labels include the exact `wayfinder:map` label, MUST also be excluded, even
+with both headings, `ready-for-agent`, `priority`, `parallel-safe`, or an explicit
+`--issue` pin. They are planning documents, not executable tickets. Check the title
+and labels on both list and authoritative reads. A `Wayfinder:` title is not this
+test — upstream does not mandate it — and `wayfinder:research`, `wayfinder:prototype`,
+`wayfinder:grilling`, and `wayfinder:task` remain eligible. The local-markdown backend
+has no labels and applies the title test alone.
 In PR mode a PR is kept only if it carries an `## Agent Brief` (in its body or any
 comment) — the PR analogue of the discriminator.
 
@@ -158,7 +162,7 @@ closed vocabulary:
 | `missing_what_to_build` | `## Acceptance criteria` present, `## What to build` absent |
 | `missing_acceptance_criteria` | `## What to build` present, `## Acceptance criteria` absent |
 | `missing_both_sections` | Neither required heading present |
-| `planning_document` | Issue title begins with `PRD:` or `Spec:`; takes precedence over missing headings |
+| `planning_document` | Issue title begins with `PRD:` or `Spec:`, or labels include exact `wayfinder:map` (contract 2.10); takes precedence over missing headings |
 
 The reason MUST be derived from the same discriminator pass that decides membership, so the
 reported reason and the membership decision cannot disagree. `discriminator.json` pins the

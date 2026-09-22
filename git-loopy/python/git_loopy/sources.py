@@ -88,6 +88,7 @@ __all__ = [
     "RollingIssueSource",
     "LABEL_PARALLEL_SAFE",
     "LABEL_READY_FOR_AGENT",
+    "LABEL_WAYFINDER_MAP",
     "PICKUP_STALE",
     "PICKUP_UNAVAILABLE",
     "PICKUP_VALIDATED",
@@ -113,6 +114,11 @@ __all__ = [
 # neither is ever inferred (ADR-0008, CONTEXT.md "Parallel-safe").
 LABEL_READY_FOR_AGENT: str = "ready-for-agent"
 LABEL_PARALLEL_SAFE: str = "parallel-safe"
+# The Wayfinder map artifact. A planning document by the same argument as a
+# PRD or Spec: its executable work lives in child decision tickets, never in
+# the map. Exact and case-sensitive — ``Wayfinder:Map`` and
+# ``wayfinder:map-renderer`` are different labels.
+LABEL_WAYFINDER_MAP: str = "wayfinder:map"
 
 # Pickup outcomes (#219 §2.10-2.11).
 PICKUP_VALIDATED: str = "validated"
@@ -159,31 +165,41 @@ _RE_AGENT_BRIEF: re.Pattern[str] = re.compile(r"^## Agent Brief", re.MULTILINE)
 _RE_PRDS_NAME: re.Pattern[str] = re.compile(r"^\d+-.*\.md$")
 
 
-def is_planning_document(title: str) -> bool:
-    """Return whether ``title`` names a planning document.
+def is_planning_document(title: str, labels: Sequence[str] = ()) -> bool:
+    """Return whether ``title`` or ``labels`` name a planning document.
 
-    The one rule Pickup and ``git-loopy labels`` share: a title that begins
+    The one rule Pickup and ``git-loopy labels`` share. A title that begins
     with ``PRD:`` or ``Spec:``, compared case-insensitively, is a planning
-    document and not executable work. A second copy of this test would let the
-    command and the Pool disagree about what to repair.
+    document. So is an issue carrying the exact ``wayfinder:map`` label,
+    whatever its title: a map holds a Destination and fog, and its executable
+    work lives in child decision tickets. Other ``wayfinder:`` labels are
+    those tickets and are not documents. A second copy of this test would let
+    the command and the Pool disagree about what to repair.
+
+    The local-markdown backend has no labels. Callers that omit them keep the
+    title test alone, which is the whole of what that backend can see.
     """
-    return title.lower().startswith(("prd:", "spec:"))
+    return title.lower().startswith(("prd:", "spec:")) or LABEL_WAYFINDER_MAP in labels
 
 
-def is_afk_ready(body: str, *, title: str = "") -> bool:
-    """Return ``True`` iff the title and body satisfy the AFK-ready discriminator.
+def is_afk_ready(
+    body: str, *, title: str = "", labels: Sequence[str] = ()
+) -> bool:
+    """Return ``True`` iff the title, labels, and body satisfy the discriminator.
 
     Args:
         body: Raw markdown body of an issue or local-markdown file.
         title: Issue title; PRD: and Spec: prefixes exclude planning documents.
+        labels: Issue labels; the exact ``wayfinder:map`` label excludes a map.
+            Omitted for the local-markdown backend, which has none.
 
     Returns:
-        ``True`` if the title is not prefixed with PRD: or Spec: and BOTH
-        ``^## What to build`` and ``^## Acceptance
-        criteria`` appear as line-anchored section headers in the body.
-        ``## Parent`` is optional (a slice without a parent issue omits it
-        per the to-issues template) and is intentionally not required, so
-        validly-authored parent-less slices are still picked up. Both
+        ``True`` if the issue is not a planning document (``PRD:`` or ``Spec:``
+        title, or a ``wayfinder:map`` label) and BOTH ``^## What to build`` and
+        ``^## Acceptance criteria`` appear as line-anchored section headers in
+        the body. ``## Parent`` is optional (a slice without a parent issue
+        omits it per the to-issues template) and is intentionally not required,
+        so validly-authored parent-less slices are still picked up. Both
         backends apply this identical check so a body that wouldn't be
         picked up via GitHub also won't be picked up via PRDs.
 
@@ -192,15 +208,21 @@ def is_afk_ready(body: str, *, title: str = "") -> bool:
     cannot drift apart — a candidate is out of the **Pool** exactly when there
     is a reason to report for it.
     """
-    return afk_ready_exclusion(body, title=title) is None
+    return afk_ready_exclusion(body, title=title, labels=labels) is None
 
 
-def afk_ready_exclusion(body: str, *, title: str = "") -> str | None:
-    """Return why the title or body fails the AFK-ready discriminator, or ``None``.
+def afk_ready_exclusion(
+    body: str, *, title: str = "", labels: Sequence[str] = ()
+) -> str | None:
+    """Return why the title, labels, or body fails the discriminator, or ``None``.
 
     Args:
         body: Raw markdown body of an issue or local-markdown file.
-        title: Issue title; prefixes are checked case-insensitively.
+        title: Issue title; planning-document prefixes are checked
+            case-insensitively.
+        labels: Issue labels; the exact ``wayfinder:map`` label marks a planning
+            document regardless of title. Omitted for the local-markdown
+            backend, which has none.
 
     Returns:
         ``None`` when the issue is AFK-ready, else one of
@@ -209,9 +231,9 @@ def afk_ready_exclusion(body: str, *, title: str = "") -> str | None:
         collapsed into either single-section reason, because an issue with
         neither section is usually a specification document rather than a
         slice that lost one heading — a distinction the operator acts on
-        differently.
+        differently. A planning document takes precedence over missing headings.
     """
-    if is_planning_document(title):
+    if is_planning_document(title, labels):
         return EXCLUSION_PLANNING_DOCUMENT
     has_what = bool(_RE_WHAT_TO_BUILD.search(body))
     has_ac = bool(_RE_AC.search(body))
@@ -977,7 +999,9 @@ class GitHubIssueSource:
             afk_exclusion=(
                 None
                 if issue is None
-                else afk_ready_exclusion(issue.body or "", title=issue.title)
+                else afk_ready_exclusion(
+                    issue.body or "", title=issue.title, labels=issue.labels
+                )
             ),
             number=self._pin,
             require_parallel_safe=self._pin_requires_parallel_safe,
@@ -1027,7 +1051,9 @@ class GitHubIssueSource:
         exclusions: list[PoolExclusion] = []
         ready_candidates = []
         for issue in candidates:
-            reason = afk_ready_exclusion(issue.body or "", title=issue.title)
+            reason = afk_ready_exclusion(
+                issue.body or "", title=issue.title, labels=issue.labels
+            )
             if reason is None:
                 ready_candidates.append(issue)
             else:
@@ -1066,7 +1092,9 @@ class GitHubIssueSource:
             # Re-verify against the authoritative body — and report *its*
             # reason, not the cheaper list body's, since this is the read the
             # decision was actually made on.
-            reason = afk_ready_exclusion(full.body or "", title=full.title)
+            reason = afk_ready_exclusion(
+                full.body or "", title=full.title, labels=full.labels
+            )
             if reason is not None:
                 exclusions.append(
                     PoolExclusion(ref=full.number, title=full.title, reason=reason)
@@ -1125,7 +1153,9 @@ class GitHubIssueSource:
         ordered, undated = in_selection_order(
             [
                 issue for issue in page.issues
-                if is_afk_ready(issue.body or "", title=issue.title)
+                if is_afk_ready(
+                    issue.body or "", title=issue.title, labels=issue.labels
+                )
             ],
             pin=self._pin,
         )
@@ -1199,7 +1229,9 @@ class GitHubIssueSource:
         if (
             full.state.upper() != "OPEN"
             or LABEL_READY_FOR_AGENT not in labels
-            or not is_afk_ready(full.body or "", title=full.title)
+            or not is_afk_ready(
+                full.body or "", title=full.title, labels=labels
+            )
             or not readiness.admissible
         ):
             return Pickup(outcome=PICKUP_STALE)
@@ -1283,7 +1315,9 @@ class GitHubIssueSource:
             full.state.upper() != "OPEN"
             or LABEL_READY_FOR_AGENT not in labels
             or LABEL_PARALLEL_SAFE not in labels
-            or not is_afk_ready(full.body or "", title=full.title)
+            or not is_afk_ready(
+                full.body or "", title=full.title, labels=labels
+            )
             or not decide_readiness(full.blocked_by).admissible
         ):
             return Pickup(outcome=PICKUP_STALE)

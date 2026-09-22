@@ -176,7 +176,8 @@ def _label_vocabulary_check(
     :func:`~git_loopy.labels.read_run_required_vocabulary` rather than the whole
     vocabulary — that function's docstring carries the reasons, which are not
     one reason: the ``task-type:`` and ``semver:`` taxonomies are created on the
-    way in, while the ``wayfinder:`` labels are never read by a Run at all. And
+    way in, while no Run needs a ``wayfinder:`` label to pre-exist — the one it
+    reads, ``wayfinder:map``, only excludes a map from the **Pool**. And
     it fails on absence alone: a Run reads and writes Labels
     by name, so a drifted colour or description cannot stop one, and drift stays
     `git-loopy labels`' business.
