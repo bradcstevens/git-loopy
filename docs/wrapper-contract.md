@@ -7,7 +7,7 @@
 > [ADR-0013](adr/0013-multi-language-runner-family.md) for why the family exists and how it stays
 > in lockstep.
 
-**Contract version:** 2.9 (tracks the Python reference implementation in `git-loopy/python/`).
+**Contract version:** 2.10 (tracks the Python reference implementation in `git-loopy/python/`).
 
 Terminology in **bold** (Run, Iteration, Pool, Strike, Checkpoint, Active issue, ...) is defined
 in [`CONTEXT.md`](../CONTEXT.md). Where this spec and the Python code disagree, the code is the
@@ -146,7 +146,7 @@ on both list and authoritative reads; other `wayfinder:` labels remain eligible.
 In PR mode a PR is kept only if it carries an `## Agent Brief` (in its body or any
 comment) — the PR analogue of the discriminator.
 
-### 3.1 Pool exclusions (contract 1.6, MUST)
+### 3.1 Pool exclusions (contract 1.5, MUST)
 
 A skipped candidate MUST be reported, not dropped silently. `ready-for-agent` is a *human*
 assertion — somebody deliberately triaged that issue — so an Orchestrator that declines it owes
@@ -159,7 +159,7 @@ closed vocabulary:
 | `missing_what_to_build` | `## Acceptance criteria` present, `## What to build` absent |
 | `missing_acceptance_criteria` | `## What to build` present, `## Acceptance criteria` absent |
 | `missing_both_sections` | Neither required heading present |
-| `planning_document` | Issue title begins with `PRD:` or `Spec:`, or labels include `wayfinder:map`; takes precedence over missing headings |
+| `planning_document` | Issue title begins with `PRD:` or `Spec:`, or labels include `wayfinder:map` (contract 2.10); takes precedence over missing headings |
 
 The reason MUST be derived from the same discriminator pass that decides membership, so the
 reported reason and the membership decision cannot disagree. `discriminator.json` pins the

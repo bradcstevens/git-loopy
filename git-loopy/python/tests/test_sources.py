@@ -184,11 +184,13 @@ class TestAfkReadyExclusion:
 
         assert (
             sources_module.afk_ready_exclusion(
-                body, labels=["wayfinder:map"]
+                body, labels=[sources_module.LABEL_WAYFINDER_MAP]
             )
             == sources_module.EXCLUSION_PLANNING_DOCUMENT
         )
-        assert is_afk_ready(body, labels=["wayfinder:map"]) is False
+        assert is_afk_ready(
+            body, labels=[sources_module.LABEL_WAYFINDER_MAP]
+        ) is False
 
     def test_names_the_missing_what_to_build_section(self) -> None:
         body = "## Parent\n#1\n\n## Acceptance criteria\n- foo"
@@ -1454,6 +1456,7 @@ class TestModuleStructure:
             "RollingIssueSource",
             "LABEL_PARALLEL_SAFE",
             "LABEL_READY_FOR_AGENT",
+            "LABEL_WAYFINDER_MAP",
             "PICKUP_STALE",
             "PICKUP_UNAVAILABLE",
             "PICKUP_VALIDATED",

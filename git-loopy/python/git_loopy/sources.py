@@ -88,6 +88,7 @@ __all__ = [
     "RollingIssueSource",
     "LABEL_PARALLEL_SAFE",
     "LABEL_READY_FOR_AGENT",
+    "LABEL_WAYFINDER_MAP",
     "PICKUP_STALE",
     "PICKUP_UNAVAILABLE",
     "PICKUP_VALIDATED",
@@ -112,7 +113,7 @@ __all__ = [
 # neither is ever inferred (ADR-0008, CONTEXT.md "Parallel-safe").
 LABEL_READY_FOR_AGENT: str = "ready-for-agent"
 LABEL_PARALLEL_SAFE: str = "parallel-safe"
-_LABEL_WAYFINDER_MAP: str = "wayfinder:map"
+LABEL_WAYFINDER_MAP: str = "wayfinder:map"
 
 # Pickup outcomes (#219 §2.10-2.11).
 PICKUP_VALIDATED: str = "validated"
@@ -208,7 +209,7 @@ def afk_ready_exclusion(
         slice that lost one heading — a distinction the operator acts on
         differently.
     """
-    if title.lower().startswith(("prd:", "spec:")) or _LABEL_WAYFINDER_MAP in labels:
+    if title.lower().startswith(("prd:", "spec:")) or LABEL_WAYFINDER_MAP in labels:
         return EXCLUSION_PLANNING_DOCUMENT
     has_what = bool(_RE_WHAT_TO_BUILD.search(body))
     has_ac = bool(_RE_AC.search(body))

@@ -566,6 +566,11 @@ git_loopy_is_afk_ready() {
   [[ -z "$(git_loopy_afk_ready_exclusion "$1" "${2:-}" "${3:-}")" ]]
 }
 
+_git_loopy_label_names() {
+  jq -r '.labels[]? | if type == "object" then (.name // "") else tostring end' \
+    <<<"$1"
+}
+
 # Wrapper contract §3.1 — name *why* a candidate leaves the Pool. Prints one
 # reason from the closed exclusion vocabulary, or nothing when the body is
 # AFK-ready. `git_loopy_is_afk_ready` projects this same decision to a boolean.
@@ -576,7 +581,7 @@ git_loopy_afk_ready_exclusion() {
   esac
   local label
   while IFS= read -r label; do
-    if [[ "$label" == "wayfinder:map" ]]; then
+    if [[ "$label" == "$GIT_LOOPY_MAP_LABEL" ]]; then
       printf 'planning_document\n'
       return 0
     fi
@@ -1415,6 +1420,7 @@ GIT_LOOPY_MIN_GH_VERSION_FOR_READINESS="2.94.0"
 # The label the Pool query filters on, named once so the pin's eligibility check
 # (`_git_loopy_preflight_pin`) cannot drift from the query it must agree with.
 GIT_LOOPY_READY_LABEL="ready-for-agent"
+GIT_LOOPY_MAP_LABEL="wayfinder:map"
 
 # Fetches every `ready-for-agent` candidate into `GIT_LOOPY_ISSUE_LIST_JSON` and
 # reports completeness in `GIT_LOOPY_POOL_COMPLETE` (1 = provably exhaustive,
@@ -1637,8 +1643,7 @@ git_loopy_collect_github_pool() {
     body="$(jq -r '.body // ""' <<<"$candidate")"
     number="$(jq -r '.number' <<<"$candidate")"
     title="$(jq -r '.title // ""' <<<"$candidate")"
-    labels="$(jq -r '.labels[]? | if type == "object" then .name else . end' \
-      <<<"$candidate")" || return 1
+    labels="$(_git_loopy_label_names "$candidate")" || return 1
     [[ "$number" =~ ^[1-9][0-9]*$ ]] || {
       printf 'git-loopy: skipping issue with malformed number %s.\n' \
         "$number" >&2
@@ -1674,8 +1679,7 @@ git_loopy_collect_github_pool() {
       continue
     }
     title="$(jq -r '.title // ""' <<<"$full")" || return 1
-    labels="$(jq -r '.labels[]? | if type == "object" then .name else . end' \
-      <<<"$full")" || return 1
+    labels="$(_git_loopy_label_names "$full")" || return 1
     reason="$(git_loopy_afk_ready_exclusion "$body" "$title" "$labels")"
     if [[ -n "$reason" ]]; then
       exclusion_items+=("$(

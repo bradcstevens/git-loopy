@@ -347,10 +347,12 @@ def read_run_required_vocabulary(repo_root: Path | None) -> tuple[LabelSpec, ...
     ``task-type:`` or ``semver:`` label to pre-exist, and a preflight that
     refused one would be judging something the Run does not (ADR-0055).
 
-    The ``wayfinder:`` labels are excluded because a Run never touches them at
-    all: they belong to a planning Skill a human drives, so an absent one costs
-    a ``/wayfinder`` session and not an **Iteration**. Failing preflight on one
-    would stop a loop over a label the loop does not read.
+    The ``wayfinder:`` labels are excluded because a Run never needs one to
+    exist: they belong to a planning Skill a human drives, so an absent one
+    costs a ``/wayfinder`` session and not an **Iteration**. A Run reads
+    ``wayfinder:map`` only to keep a map out of the **Pool** (#635), which an
+    absent label satisfies vacuously. Failing preflight on one would stop a
+    loop over a label the loop does not require.
 
     What is left is what a Run only ever *reads*: the triage roles, the
     ``parallel-safe`` and ``priority`` assertions, and — load-bearingly —

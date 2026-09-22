@@ -621,7 +621,7 @@ function Test-GitLoopyAfkReady {
         [string]$Body,
         [AllowEmptyString()]
         [string]$Title = "",
-        [object[]]$Labels = @()
+        [string[]]$Labels = @()
     )
 
     return $null -eq (
@@ -639,20 +639,14 @@ function Get-GitLoopyAfkReadyExclusion {
         [string]$Body,
         [AllowEmptyString()]
         [string]$Title = "",
-        [object[]]$Labels = @()
+        [string[]]$Labels = @()
     )
 
     if ($Title -match "^(PRD|Spec):") {
         return "planning_document"
     }
     foreach ($Label in $Labels) {
-        $LabelName = if ($Label -is [Collections.IDictionary]) {
-            [string]$Label["name"]
-        }
-        else {
-            [string]$Label
-        }
-        if ($LabelName -ceq "wayfinder:map") {
+        if ([string]$Label -ceq $Script:GitLoopyMapLabel) {
             return "planning_document"
         }
     }
@@ -733,12 +727,7 @@ function Assert-GitLoopyPinEligible {
         return $false
     }
 
-    $Labels = @(
-        foreach ($Label in @($Issue["labels"])) {
-            if ($Label -is [Collections.IDictionary]) { [string]$Label["name"] }
-            else { [string]$Label }
-        }
-    )
+    $Labels = Get-GitLoopyLabelNames -Labels $Issue["labels"]
     if ($Script:GitLoopyReadyLabel -cnotin $Labels) {
         [Console]::Error.WriteLine(
             "git-loopy: --issue ${Number}: #${Number} does not carry the " +
@@ -843,6 +832,7 @@ $Script:GitLoopyMinGhVersionForReadiness = [version]::new(2, 94, 0)
 # The label the Pool query filters on, named once so the pin's eligibility check
 # (`Assert-GitLoopyPinEligible`) cannot drift from the query it must agree with.
 $Script:GitLoopyReadyLabel = "ready-for-agent"
+$Script:GitLoopyMapLabel = "wayfinder:map"
 
 # The accepted `created_at` year range. The floor keeps every division below on a
 # non-negative operand, which is what lets three languages agree.
@@ -1463,6 +1453,25 @@ function Get-GitLoopyIssueInstant {
 
 # `0` when these labels carry **Priority**, `1` otherwise. Matching is exact:
 # `priority:high` is a different label and a vocabulary nobody decided.
+function Get-GitLoopyLabelNames {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object[]]$Labels
+    )
+
+    return @(
+        foreach ($Label in @($Labels)) {
+            if ($Label -is [Collections.IDictionary]) {
+                [string]$Label["name"]
+            }
+            else {
+                [string]$Label
+            }
+        }
+    )
+}
+
 function Get-GitLoopyPriorityRank {
     [CmdletBinding()]
     param(
@@ -2575,7 +2584,7 @@ function Get-GitLoopyGitHubPool {
         $Reason = Get-GitLoopyAfkReadyExclusion `
             -Body $Body `
             -Title ([string]$Candidate["title"]) `
-            -Labels @($Candidate["labels"])
+            -Labels (Get-GitLoopyLabelNames -Labels $Candidate["labels"])
         if ($null -ne $Reason) {
             Add-GitLoopyPoolExclusion `
                 -Ref $Number `
@@ -2623,7 +2632,7 @@ function Get-GitLoopyGitHubPool {
         $Reason = Get-GitLoopyAfkReadyExclusion `
             -Body $FullBody `
             -Title ([string]$Full["title"]) `
-            -Labels @($Full["labels"])
+            -Labels (Get-GitLoopyLabelNames -Labels $Full["labels"])
         if ($null -ne $Reason) {
             Add-GitLoopyPoolExclusion `
                 -Ref $Number `
