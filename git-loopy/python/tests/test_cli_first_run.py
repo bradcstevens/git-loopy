@@ -5,7 +5,8 @@ persisted Config resolving in either scope — sets itself up by auto-running th
 ``init`` wizard, then continues into the loop. A run with no TTY never prompts:
 it falls back to the built-in defaults so CI never hangs on the wizard.
 Cancelling the auto-run wizard aborts the whole command (starts no worker, saves
-no operator choice, non-zero exit).
+no operator choice, non-zero exit). A local non-TTY with no named Route policy
+refuses before the loop; naming ``unselected`` keeps the legacy path.
 
 This slice is the **dispatch wiring in** :func:`git_loopy.cli.main` plus the
 terminal decision (:func:`git_loopy.cli._should_auto_init`, over the predicate
@@ -25,6 +26,7 @@ import pytest
 from git_loopy import cli as cli_module
 from git_loopy import settings
 from git_loopy.config import RunConfig
+from git_loopy.static_route import RoutePolicy
 
 
 # ---------------------------------------------------------------------------
@@ -230,11 +232,12 @@ def test_bare_first_run_on_tty_runs_wizard_then_detaches(
     assert sidecar_calls[0].model == "gpt-5.4"
 
 
-def test_bare_first_run_without_tty_uses_defaults_and_never_prompts(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_bare_first_run_without_tty_refuses_and_never_prompts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """No TTY: fall back to built-in defaults and never run the wizard (CI safe)."""
+    """No TTY and no Config: refuse. Do not prompt or keep the legacy path."""
     _clear_run_env(monkeypatch)
+    monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
     _fake_terminal(monkeypatch, stdin=False, stdout=False)
@@ -248,10 +251,33 @@ def test_bare_first_run_without_tty_uses_defaults_and_never_prompts(
 
     rc = cli_module.main([])
 
+    assert rc == 1
+    assert called == []
+    assert captured == []
+    assert "No Config" in capsys.readouterr().err
+    assert not (tmp_path / "git-loopy" / "config.toml").exists()
+
+
+def test_explicit_unselected_on_no_config_keeps_the_legacy_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Naming unselected is the legacy path. Absence is the refusal."""
+    _clear_run_env(monkeypatch)
+    monkeypatch.setenv("GIT_LOOPY_ROUTE_POLICY", "unselected")
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
+    _fake_terminal(monkeypatch, stdin=False, stdout=False)
+    captured: list[tuple[RunConfig, Any]] = []
+    _install_fake_loop_run(monkeypatch, captured)
+
+    rc = cli_module.main([])
+
     assert rc == 0
-    assert called == []  # the wizard never ran
-    cfg, _driver = captured[0]
-    assert cfg.model == cli_module._DEFAULT_MODEL
+    assert len(captured) == 1
+    assert captured[0][0].route_policy is RoutePolicy.UNSELECTED
+    assert captured[0][0].route_policy_supplied is True
+    assert "No Config" not in capsys.readouterr().err
+    assert not (tmp_path / "git-loopy" / "config.toml").exists()
 
 
 def test_auto_setup_without_a_routing_choice_saves_then_refuses_work(
@@ -284,18 +310,17 @@ def test_auto_setup_without_a_routing_choice_saves_then_refuses_work(
 
 
 def test_bare_first_run_with_a_redirected_stdout_never_opens_the_wizard(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A half-automated first invocation gains no prompt it cannot draw (#583).
 
     ``git-loopy > run.log`` from a terminal keeps an interactive stdin while the
-    fullscreen wizard has nowhere to render: Textual runs anyway, the operator
-    reads none of it, and answers would be confirmed unseen. Explicit
-    ``git-loopy init`` has always refused this shape; ADR-0058 requires the bare
-    first Run to hold the same boundary, which means the built-in defaults and
-    the loop, exactly as with no terminal at all.
+    fullscreen wizard has nowhere to render. Explicit ``git-loopy init`` has
+    always refused this shape; the bare first Run holds the same boundary, then
+    the no-Config refusal, exactly as with no terminal at all.
     """
     _clear_run_env(monkeypatch)
+    monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
     _fake_terminal(monkeypatch, stdin=True, stdout=False)
@@ -309,11 +334,11 @@ def test_bare_first_run_with_a_redirected_stdout_never_opens_the_wizard(
 
     rc = cli_module.main([])
 
-    assert rc == 0
+    assert rc == 1
     assert called == []
+    assert captured == []
+    assert "No Config" in capsys.readouterr().err
     assert not (tmp_path / "git-loopy" / "config.toml").exists()
-    cfg, _driver = captured[0]
-    assert cfg.model == cli_module._DEFAULT_MODEL
 
 
 def test_bare_first_run_cancel_aborts_nonzero_and_never_runs_loop(

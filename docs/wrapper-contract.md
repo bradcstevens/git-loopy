@@ -1718,7 +1718,9 @@ without prompting or rewriting Config. A model/effort override alone is not this
 CLI startup checks before Skill migration, listing or detachment, rechecks after a Config reload,
 and carries saved-Config presence through detached startup. Doctor and Run preflight use the
 same authority verdict; live readiness and Pickup validation still apply after authority exists.
-Historical records retain their interpretation. Empty Config scopes and unselected non-local
+Historical records retain their interpretation. A Python-local Run with no Config and no named
+policy is the sibling refusal below, not this legacy path. Explicit `unselected` retains the
+legacy path for one Run. Unselected non-local
 Runs retain the legacy path during staged activation; a selected policy still MUST NOT validate
 a remote placement using local eligibility. A host capability report is that host's listing,
 not a substitute for the local one, and does not authorize Dynamic election. Shell and PowerShell migration enforcement is
@@ -1763,10 +1765,21 @@ or publication; operator-supplied repair of those bounds elects into the actual
 session. Interactive fresh setup, including auto-setup, defaults to migrate,
 still accepts keep, and collects explicit bounds before saving. Cancellation
 writes nothing. Existing nonempty Config is not inferred, and an inherited
-policy, including explicit `unselected`, is not shadowed. A no-Config Run with
-no TTY stays on the legacy path. `routing-resolution.json`'s
+policy, including explicit `unselected`, is not shadowed. `routing-resolution.json`'s
 `new_setup_default` matrix is this obligation. It does not activate
 shell/PowerShell, Subagent, or Integration routing.
+
+**Python-local no-Config refusal (contract 2.9, #567).** A local Python Run
+that finds no project or global Config, and no named Route policy, MUST refuse
+before a work session, Lease, Strike, or publication. Doctor prints the same
+verdict. The Run does not prompt, fetch a listing, call a Route selector, or
+write Config. A model or effort override is not the missing choice. Naming
+`--route-policy unselected` (or `GIT_LOOPY_ROUTE_POLICY=unselected`) retains
+the legacy path for that Run and writes nothing. Explicit `static` and
+`dynamic` use their existing verdicts. Unselected non-local Runs retain the
+legacy path. `routing-resolution.json`'s `no_config_dynamic_refusal` matrix is
+this obligation. Shell/PowerShell, Subagent, and Integration activation remain
+deferred. This is not final Dynamic-default activation.
 
 ### 14.4 The Dynamic route (contract 2.8)
 
@@ -1780,8 +1793,10 @@ Route publication (§14.5) and Routing preparation (§14.6). The affected
 `routing-resolution.json`, `event-schema.json` and `dashboard-insights.json`
 fixtures declare that provenance at 2.9; Event wire compatibility remains 1.2.
 This declaration correction adds no Event fields and leaves historical streams'
-interpretation unchanged. §14.3's fresh-setup default is the one Dynamic
-default this contract activates; a no-Config Run stays on the legacy path.
+interpretation unchanged. §14.3's fresh-setup default and the Python-local
+no-Config refusal are the Dynamic-default obligations this contract activates;
+naming `unselected` still retains the legacy path for one Run. Non-local
+absence, and shell/PowerShell, stay on the deferred legacy path.
 
 - **Opt-in, with its own prerequisites, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run

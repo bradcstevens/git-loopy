@@ -726,11 +726,12 @@ class RunConfig:
             ADR-0057). :attr:`~git_loopy.static_route.RoutePolicy.UNSELECTED` —
             the default — is the *absence* of a decision. Local saved Config without
             that decision is refused before work. Non-local activation remains
-            deferred. A genuinely unconfigured Run
-            retains legacy behaviour until final default activation: the
-            roster gates rescue an unsupported setting, the
-            built-in **Escalation rung** applies, and no harness capability read
-            happens at all. ``STATIC`` selects ADR-0057's Static route, under
+            deferred. A genuinely unconfigured local Run is not that legacy
+            path: resolution marks :attr:`config_absent`, and shared preflight
+            refuses before work. A hand-built config leaves the mark unset, so
+            historical unselected callers keep the roster gates and the
+            built-in **Escalation rung**. Non-local absence stays on that
+            legacy path. ``STATIC`` selects ADR-0057's Static route, under
             which the selected model/effort/tier travel verbatim and are
             verified against the authenticated harness instead. ``DYNAMIC``
             selects **Dynamic routing**, under which an issue with no Static
@@ -741,6 +742,15 @@ class RunConfig:
             loaded. Run-local startup state, not a Config key: an unselected
             policy on local saved Config requires explicit keep-or-migrate authority.
             Kept through detached startup so the worker uses the same verdict.
+        config_absent: Whether resolution found no nonempty project or global
+            Config. Also run-local, and not a Config key. Local absence with no
+            named policy refuses before work. Defaults false so a hand-built
+            config is not inferred as that absence. Kept through detached
+            startup beside :attr:`saved_config_present`.
+        route_policy_supplied: Whether a flag, environment variable, or saved
+            table named the policy, including an explicit ``unselected``.
+            Naming ``unselected`` keeps the legacy path for one Run. Leaving
+            the name off a local no-Config Run is the refusal, not that path.
         routing_deadline_seconds: The finite wall-clock budget one Run may spend
             on routing work (#561, ADR-0057), or ``None`` for "not supplied".
             ``None`` is not a default of "unbounded": ADR-0057 requires an
@@ -830,6 +840,8 @@ class RunConfig:
     context_tier_override: bool = False
     route_policy: RoutePolicy = RoutePolicy.UNSELECTED
     saved_config_present: bool = False
+    config_absent: bool = False
+    route_policy_supplied: bool = False
     routing_deadline_seconds: float | None = None
     routing_credit_allowance: Decimal | None = None
     selector_concurrency: int | None = None

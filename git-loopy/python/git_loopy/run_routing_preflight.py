@@ -50,6 +50,25 @@ def routing_choice_refusal(
     is never that report.
     """
     if (
+        config.config_absent
+        and config.route_policy is RoutePolicy.UNSELECTED
+        and not config.route_policy_supplied
+        and config.execution_host == LOCAL_EXECUTION_HOST_PLACEMENT
+    ):
+        return (
+            "No Config is recorded in either scope. Unpinned local work "
+            "defaults to Dynamic routing and cannot start until that policy "
+            "is recorded with operator-owned access and explicit finite "
+            "limits. Run `git-loopy init` to record the choice; this "
+            "unattended Run does not prompt and writes nothing. For this Run "
+            "only, supply --route-policy static, --route-policy dynamic, or "
+            "--route-policy unselected (GIT_LOOPY_ROUTE_POLICY for doctor or "
+            "unattended use). A static path needs no leaderboard credential "
+            "or Route selector call. Naming unselected retains the legacy "
+            "path for this Run and writes nothing. A model or effort override "
+            "does not supply the choice. Config unchanged."
+        )
+    if (
         config.saved_config_present
         and config.route_policy is RoutePolicy.UNSELECTED
         and config.execution_host == LOCAL_EXECUTION_HOST_PLACEMENT

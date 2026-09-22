@@ -550,6 +550,7 @@ def test_main_bare_positional_runs_loop(
 ) -> None:
     monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
+    monkeypatch.setenv("GIT_LOOPY_ROUTE_POLICY", "unselected")
     captured: list[tuple[RunConfig, Any]] = []
     _install_fake_loop_run(monkeypatch, captured)
 

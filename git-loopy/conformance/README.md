@@ -821,13 +821,16 @@ readiness refusal and recovery into the same actual-session/readback seam.
 Their input answers are collected, not seeded Config; readiness must pass
 before any operator choice or tracker label is saved. The sibling
 `new_setup_default` cases drive fresh `init --yes` and interactive auto-setup
-through the same actual-session/readback seam; a no-Config Run stays legacy.
+through the same actual-session/readback seam. The sibling
+`no_config_dynamic_refusal` cases refuse a local Run that finds no Config and
+no named policy before a session; naming `unselected` is outside that refusal.
 `routing-resolution.json`'s `preflight_deadline`
 cases use the same synthetic inputs to consume the routing deadline during
 retained Static validation. No classifier or selector starts afterwards, while
 already-classified Static work still runs on its retained settings; Config and
-Strike accounting remain unchanged. Fresh setup records Dynamic; a no-Config
-Run stays legacy, and this is not final activation. Shell/PowerShell migration enforcement
+Strike accounting remain unchanged. Fresh setup records Dynamic. A local
+no-Config Run that names no policy refuses before work; naming `unselected`
+keeps the legacy path for that Run. This is not final activation. Shell/PowerShell migration enforcement
 remains explicitly deferred; historical cases and Event streams keep their
 original interpretation.
 `attempt-lifecycle.json` joins them, driven through the production

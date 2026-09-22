@@ -379,6 +379,7 @@ def test_git_loopy_prds_empty_pool_exits_zero(
     PRDs mode is now implemented (issue #11). Without a ``prds/``
     directory, :meth:`PrdsIssueSource.collect_afk_ready` returns ``[]``
     which the loop treats as the empty-pool fast path → exit 0.
+    Naming ``unselected`` keeps that legacy path; a nameless local Run refuses.
     """
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     (tmp_path / "AGENTS.md").write_text(
@@ -392,6 +393,7 @@ def test_git_loopy_prds_empty_pool_exits_zero(
     (tmp_path / "git-loopy").mkdir()
     (tmp_path / "git-loopy" / "prompt.md").write_text("be the agent", encoding="utf-8")
     monkeypatch.setenv("GIT_LOOPY_ISSUE_SOURCE", "prds")
+    monkeypatch.setenv("GIT_LOOPY_ROUTE_POLICY", "unselected")
     result = subprocess.run(
         _git_loopy_command(),
         cwd=tmp_path,
@@ -448,7 +450,8 @@ def test_git_loopy_no_git_loopy_folder_runs_off_packaged_prompt(
     run in an unrelated repo no longer aborts on a missing prompt file. Driven
     with ``ISSUE_SOURCE=prds`` (no ``prds/`` dir -> empty pool) so the run
     reaches the clean empty-pool exit 0 deterministically, proving prompt
-    resolution succeeded off the packaged default with zero setup.
+    resolution succeeded off the packaged default with zero setup. Naming
+    ``unselected`` keeps that legacy path; a nameless local Run refuses.
     """
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     (tmp_path / "AGENTS.md").write_text(
@@ -460,6 +463,7 @@ def test_git_loopy_no_git_loopy_folder_runs_off_packaged_prompt(
     )
     # Deliberately no git-loopy/ directory: force the packaged-default fallback.
     monkeypatch.setenv("GIT_LOOPY_ISSUE_SOURCE", "prds")
+    monkeypatch.setenv("GIT_LOOPY_ROUTE_POLICY", "unselected")
     result = subprocess.run(
         _git_loopy_command(),
         cwd=tmp_path,

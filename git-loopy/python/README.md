@@ -470,7 +470,7 @@ substituted. `dynamic` on that placement is still refused: a snapshot is not a
 fresh election. `--execution-host local`, or `--route-policy unselected`
 (`GIT_LOOPY_ROUTE_POLICY=unselected` for doctor), keeps the legacy remote path
 without rewriting Config. That is not completed migration. This is not bare
-init, auto-setup or no-Config Dynamic default activation.
+init or auto-setup. The local no-Config refusal is the later obligation below.
 
 ---
 
@@ -696,8 +696,9 @@ Dynamic without seeding Static rows. `init --yes` writes that policy and no
 limits, associations, or leaderboard key; the next Run refuses until
 `init --routing migrate` collects them. Interactive setup, including
 auto-setup, defaults to migrate, still accepts keep, and asks for the bounds
-before saving. Existing Config is not inferred. A no-Config Run with no TTY
-keeps the legacy path.
+before saving. Existing Config is not inferred. A local Run with no Config and
+no named policy refuses before work and writes nothing. Naming `unselected`
+keeps the legacy path for that Run. Non-local absence stays legacy.
 
 Choose `migrate` for Dynamic uncovered work or `keep` for strict Static policy.
 Omit the argument (or use `ask`) to inherit a recorded choice or decide at the
@@ -1003,7 +1004,7 @@ reclaims nothing, and never reaches your issue tracker. It needs only `git`.
 | `GIT_LOOPY_MODEL`                           | `claude-opus-5`                | Copilot CLI model id (the `--model` flag overrides this). Use a **bare base id** — model id and reasoning effort are separate axes (a suffixed id like `claude-opus-4.7-xhigh` is rejected as "not available"). A recognised trailing `-<effort>` segment is peeled off into `GIT_LOOPY_REASONING_EFFORT` for backward compatibility. With ModelSelectionMode enabled (`--select-model` or `GIT_LOOPY_MODEL_SELECT=1`) this value is the startup picker's pre-selected cursor and the model the run uses is whatever you confirm there; on a default run (picker off) it is the model the run uses directly. |
 | `GIT_LOOPY_REASONING_EFFORT`                | `max` (built-in default model only) | One of `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, case-insensitive (the `--reasoning-effort` flag overrides this). Explicit `none` requests no reasoning; an omitted value lets the backend choose when no configured/default effort applies. Precedence: this env var (validated; an invalid value aborts exit `1`) → a `-<effort>` suffix on `GIT_LOOPY_MODEL` → the built-in default (`max`, applied only when `GIT_LOOPY_MODEL` is unset) → unset. A model without configurable reasoning (`auto`, `claude-sonnet-4.5`, `claude-haiku-4.5`) forces this to **unset** (the CLI hard-rejects `session.create` otherwise); an unknown model warns and passes the value through to the CLI. On an interactive run **with ModelSelectionMode enabled** (`--select-model` / `GIT_LOOPY_MODEL_SELECT`) this is the startup picker's **pre-selected effort** (the picker's stage 2 is auto-skipped for a reasoning-incapable model) and the effort the run uses is whatever you confirm there; on a default run (picker off) it is the effort the run uses directly. |
 | `GIT_LOOPY_CONTEXT_TIER`                    | `default`                       | Root-session tier: `default` or `long_context`. `--context-tier` wins, then this value, project Config, global Config, and the default. It constrains every **Routing resolution**, including a legacy `[routing]` model/effort pair, but does **not** suppress per-task-type routing. |
-| `GIT_LOOPY_ROUTE_POLICY`                    | unset (`unselected`)            | Which **Route policy** this Run uses. `unselected` is absence of consent: local saved Config requires an explicit Static/Dynamic choice before work. Staged no-Config and unselected non-local paths retain legacy behavior. A selected Static route on GitHub Actions proceeds only when that host reports its own listing and both listings accept it. `static` selects the **Static route** (ADR-0057): your `model` / `reasoning_effort` / `context_tier` are verified against the **authenticated harness this Run spawns** and then honoured exactly, rather than being passed through the built-in model roster's capability gate. `--route-policy` wins, then this value, project Config, global Config. A settings combination the harness does not support **fails before any work** instead of being quietly downgraded. `dynamic` selects the **Dynamic route** (ADR-0057): each issue's pair is elected from live Artificial Analysis evidence by a bounded **Route selector**, and needs `GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY` plus a deadline, a credit allowance, a selector concurrency and a verified `[route_associations]` table. An explicit run-wide model or effort override bypasses those dynamic prerequisites, but its Static settings must still pass live harness validation. |
+| `GIT_LOOPY_ROUTE_POLICY`                    | unset (`unselected`)            | Which **Route policy** this Run uses. `unselected` is a named legacy choice for one Run. Leaving it unset on a local Run with no Config refuses before work. Local saved Config still requires an explicit Static/Dynamic choice before work. Unselected non-local Runs retain legacy behavior. A selected Static route on GitHub Actions proceeds only when that host reports its own listing and both listings accept it. `static` selects the **Static route** (ADR-0057): your `model` / `reasoning_effort` / `context_tier` are verified against the **authenticated harness this Run spawns** and then honoured exactly, rather than being passed through the built-in model roster's capability gate. `--route-policy` wins, then this value, project Config, global Config. A settings combination the harness does not support **fails before any work** instead of being quietly downgraded. `dynamic` selects the **Dynamic route** (ADR-0057): each issue's pair is elected from live Artificial Analysis evidence by a bounded **Route selector**, and needs `GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY` plus a deadline, a credit allowance, a selector concurrency and a verified `[route_associations]` table. An explicit run-wide model or effort override bypasses those dynamic prerequisites, but its Static settings must still pass live harness validation. |
 | `GIT_LOOPY_CLASSIFIER_MODEL`                | unset (cheapest live pair)     | The model the **Task-type** and **Bump-class classifiers** run on. Each reads an unlabelled issue's own content and writes a closed `task-type:` or `semver:` label back at **Pickup** (ADR-0029, ADR-0052). Deliberately **not** `GIT_LOOPY_MODEL`: borrowing the run-wide default would let it decide every issue's task type, and so every **Routed pair**, as an unmeasured prior that appears nowhere as a routing input. Unset does not fall back to `GIT_LOOPY_MODEL` — it falls back to the **cheapest pair on the live roster**, so the prior is named and overridable rather than inherited. Classification spends **AI Credits**, folded into the run's cost; it never ticks a **Strike** and is never counted as an **Iteration**. |
 | `GIT_LOOPY_CLASSIFIER_REASONING_EFFORT`     | unset (cheapest live pair)     | The reasoning effort both classifiers run at, resolved alongside `GIT_LOOPY_CLASSIFIER_MODEL` and held to the same effort vocabulary. Same precedence chain (env → project → global), same independence from `GIT_LOOPY_REASONING_EFFORT`. |
 | `GIT_LOOPY_ISSUE_SOURCE`                    | `github`                       | `github` or `prds`. `prds` walks `prds/<feature>/NNN-*.md` files.                                                                                                                                                |
@@ -1222,7 +1223,7 @@ how this Run decides what each issue runs on:
 
 - **`unselected`** — absence of a decision, not consent. Local saved Config with this
   effective policy refuses before work and names the keep-or-migrate remedy.
-  Staged no-Config/non-local paths and historical records retain the built-in **model roster**'s
+  Naming `unselected`, non-local absence, and historical records retain the built-in **model roster**'s
   capability gate, an effort the roster says the model cannot take is dropped to
   "let the backend pick", a context tier the roster does not list for that model
   is downgraded to `default`, and the run keeps going.
@@ -1397,7 +1398,8 @@ not the fresh-setup default. The sibling `new_setup_default` matrix is that
 proof: unattended `init --yes` records Dynamic without limits or Static rows,
 doctor and the following Run refuse before a session, and operator-supplied
 repair elects; interactive fresh setup collects the migrate default into the
-same session. Existing Config is not inferred. No-Config Runs stay legacy.
+same session. Existing Config is not inferred. A local no-Config Run that
+names no policy refuses before work.
 That walk exposed and fixed Skill discovery trying to nest an event loop inside
 the fullscreen wizard; discovery now completes on its own joined worker before
 the wizard can save, with validation failures still propagated without writes.
@@ -1447,8 +1449,8 @@ listing read.
 A present GitHub Actions capability report is now proved through unattended CLI
 and doctor, not only through a direct Run. The Lane records that host's dial;
 either listing can still refuse. Fresh setup now records the Dynamic default
-above; no-Config Runs stay legacy, and existing Config is not migrated
-implicitly.
+above. A local no-Config Run that names no policy refuses before work, and
+existing Config is not migrated implicitly.
 Python issue-owning serial and
 Lane sessions are the implementation scope; shell/PowerShell activation remains
 deferred, and this does not add Subagent or Integration routing.

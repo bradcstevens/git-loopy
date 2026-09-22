@@ -527,7 +527,10 @@ def build_parser() -> argparse.ArgumentParser:
             "GIT_LOOPY_ARTIFICIAL_ANALYSIS_API_KEY plus the three bounds below. "
             "Local Runs with saved Config require an explicit static/dynamic choice, here, "
             "in GIT_LOOPY_ROUTE_POLICY, or recorded with update --routing "
-            "keep/migrate. Both choices preserve authored Static rows and "
+            "keep/migrate. A local Run with no Config refuses until `git-loopy "
+            "init` records that choice, or this flag selects static, dynamic, "
+            "or unselected for one Run. Naming unselected keeps the legacy "
+            "path and writes nothing. Both selected choices preserve authored Static rows and "
             "require explicit [escalation] for Static retries."
         ),
     )
@@ -2574,6 +2577,26 @@ def _resolve_route_policy(
     return RoutePolicy.UNSELECTED
 
 
+def _route_policy_was_named(
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+    project: Mapping[str, object],
+    global_: Mapping[str, object],
+) -> bool:
+    """Whether any tier named a policy, including explicit ``unselected``.
+
+    A blank or missing name is absence. ``unselected`` is a name: it keeps
+    the legacy path for one Run and is not the no-Config refusal.
+    """
+    sources = (
+        getattr(args, "route_policy", None),
+        env.get("GIT_LOOPY_ROUTE_POLICY"),
+        settings.table_str(project, "route_policy", scope="project"),
+        settings.table_str(global_, "route_policy", scope="global"),
+    )
+    return any(raw is not None and str(raw).strip() for raw in sources)
+
+
 def _resolve_dynamic_bound(
     args: argparse.Namespace,
     env: Mapping[str, str],
@@ -2814,6 +2837,7 @@ def resolve_config(
     if effort_flag is not None:
         effort_raw = effort_flag
     route_policy = _resolve_route_policy(args, env, project, global_)
+    route_policy_supplied = _route_policy_was_named(args, env, project, global_)
     model, reasoning_effort = _resolve_model_and_effort(
         model_raw, effort_raw, warn=warn, route_policy=route_policy
     )
@@ -2872,6 +2896,8 @@ def resolve_config(
         ),
         route_policy=route_policy,
         saved_config_present=bool(project or global_),
+        config_absent=not bool(project or global_),
+        route_policy_supplied=route_policy_supplied,
         routing_deadline_seconds=_resolve_dynamic_bound(
             args,
             env,
@@ -3189,8 +3215,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # First-run setup (#55, ADR-0006/0007): with NO Config resolving in either
     # scope, a TTY auto-runs the `init` wizard first, then continues into the
-    # loop on the just-written Config. A non-TTY (CI) keeps the built-in defaults
-    # and never prompts, so automated runs never hang on the wizard.
+    # loop on the just-written Config. A non-TTY never prompts. A local
+    # non-TTY with no selected policy then refuses rather than keeping the
+    # legacy path (#567); a non-local absence still uses that path.
     # Cancelling the wizard aborts the whole command — it writes nothing, runs
     # nothing, and exits non-zero (an aborted setup never starts an unconfirmed
     # loop). The wizard module is imported lazily so a configured bare run (the

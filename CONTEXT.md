@@ -763,7 +763,8 @@ authored Static routes. A fresh scope, with no saved table and no inherited
 policy, defaults to Dynamic: unattended `init --yes` records the policy
 without limits or Static rows, and interactive setup, including auto-setup,
 collects migrate unless the operator keeps. Existing Config is not inferred.
-A no-Config Run still uses the legacy path.
+A local no-Config Run with no named policy refuses before work; naming
+`unselected` keeps the legacy path for that Run. Non-local absence stays legacy.
 _Avoid_: setup, bootstrap; install (install is the separate act of putting the `git-loopy` command
 on PATH).
 
@@ -909,7 +910,9 @@ before work; flag/environment authority may supply it temporarily, while
 `update --routing` records it in Config. The same no-write verdict is used by
 CLI startup, doctor and Run preflight, including detached startup. A model/effort
 override alone does not answer the migration question. Historical streams and
-staged no-Config/non-local paths retain their legacy semantics. Non-local
+unselected non-local Runs retain their legacy semantics. A local Run with no
+Config and no named policy refuses before work; naming `unselected` keeps the
+legacy path for that Run. Non-local
 activation awaits the executing host's actual capabilities; a local model
 listing cannot authorize its selected routes. *Static* selects the **Static route**;
 *dynamic* selects the **Dynamic route**.

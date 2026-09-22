@@ -7539,9 +7539,9 @@ def test_a_remote_contributions_duration_is_never_rendered_as_near_zero(
     assert [end["summary"]["agent_seconds"] for end in ends] == [6 * 60 * 60.0] * 2
 
 
-@pytest.mark.parametrize("saved_config", [None, "legacy", "selected"])
+@pytest.mark.parametrize("saved_config", [None, "legacy", "selected", "cli-absent"])
 def test_the_run_builds_the_github_actions_host_the_operator_named(
-    tmp_path, monkeypatch, saved_config
+    tmp_path, monkeypatch, capsys, saved_config
 ) -> None:
     """A declared placement is *constructed*, never merely tolerated at preflight."""
     built: list[tuple[str, int]] = []
@@ -7585,6 +7585,16 @@ def test_the_run_builds_the_github_actions_host_the_operator_named(
         if saved_config == "selected":
             args += ["--route-policy", "unselected"]
         code = cli.main(args)
+    elif saved_config == "cli-absent":
+        from git_loopy import cli
+
+        monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
+        monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+        monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+        code = cli.main(["2", "--execution-host", "github-actions"])
+        assert "No Config is recorded" not in capsys.readouterr().err
     else:
         code = asyncio.run(loop_module.run(cfg))
     assert code == 0

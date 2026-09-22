@@ -227,7 +227,8 @@ run-wide model/effort pins, context-only controls, and required access/evidence
 lost after migration. They assert actual sessions, canonical Pickup and Dashboard
 readback, or no work, final publication or Strike on refusal. The Wrapper declares
 the same staged local guard and member deferrals; this is not final activation.
-This remains staged activation: empty Config scopes keep the no-Config path.
+This remains staged activation. A later slice refuses a local no-Config Run
+that names no policy; this paragraph does not claim that refusal.
 Bare setup may save an unselected policy, but the following Run then refuses
 until authority is supplied; `init --routing` authorizes before saving.
 Non-local activation is explicitly deferred: applying this guard to the shipped
@@ -300,7 +301,8 @@ Dashboard and final tracker comments agree. The Run preserves Config, Static
 setup requires no leaderboard access or Dynamic limits, and no Static rows are
 seeded. Wrapper 14.3 declares this opt-in first-setup obligation and explicitly
 defers native-member activation. Fresh `init --yes` and interactive auto-setup
-now record the Dynamic default described below; no-Config Runs stay legacy.
+now record the Dynamic default described below. A later slice refuses a local
+no-Config Run that names no policy.
 This composed walk exposed a setup blocker hidden by prebuilt wizard answers:
 Skill discovery tried to run its async lifecycle on Textual's already-running
 event loop. The synchronous discovery/rebuild callback now uses a dedicated,
@@ -551,7 +553,7 @@ run here. The remote listing is not recorded as this machine's roster. The share
 `execution_host_report` matrix now drives a present report through unattended
 CLI and doctor: the Lane records the host dial, neither listing may overrule
 the other, and doctor prints the same verdict. Config stays unchanged. This
-does not by itself activate bare init, auto-setup or no-Config Dynamic defaults.
+does not by itself activate bare init, auto-setup, or the no-Config refusal.
 Shell/PowerShell activation, Subagent/Integration routing and ADR-0060
 implementation remain unclaimed.
 
@@ -565,8 +567,18 @@ does not rewrite Config. Interactive fresh setup, including auto-setup,
 defaults to migrate, still accepts keep, and collects explicit bounds before
 saving. Cancellation writes nothing. Existing nonempty Config is not inferred
 as migrate, and an inherited policy, including explicit `unselected`, is not
-shadowed. A no-Config Run with no TTY stays on the legacy path. The shared
+shadowed. The shared
 `new_setup_default` matrix drives both paths through the real CLI into serial
-and Lane sessions, canonical Pickup, and Dashboard readback. This is not final
-activation: shell/PowerShell, Subagent/Integration routing, no-Config Dynamic
-refusal, and ADR-0060 implementation remain unclaimed.
+and Lane sessions, canonical Pickup, and Dashboard readback.
+
+A local Run that finds no Config and no named Route policy now refuses before
+a work session, Lease, Strike, or publication. Doctor prints the same verdict.
+The Run does not prompt, fetch a listing, call a Route selector, or write
+Config. A model or effort override is not the missing choice. Naming
+`unselected` retains the legacy path for that Run and writes nothing. Explicit
+static and dynamic policies use their existing verdicts. Unselected non-local
+Runs retain the legacy path. The shared `no_config_dynamic_refusal` matrix
+drives the refusal through the real CLI into serial and Lane sessions.
+`event_schema_version` stays 1.2. Wrapper contract 2.9 is unchanged; §14.3
+names this obligation. This is not final activation: shell/PowerShell,
+Subagent/Integration routing, and ADR-0060 implementation remain unclaimed.

@@ -113,6 +113,7 @@ _ROUTING_CONFORMANCE = json.loads(
 _MIGRATION_RECOVERY = _ROUTING_CONFORMANCE["migration_recovery"]
 _FIRST_SETUP = _ROUTING_CONFORMANCE["first_setup"]
 _NEW_SETUP_DEFAULT = _ROUTING_CONFORMANCE["new_setup_default"]
+_NO_CONFIG_DYNAMIC_REFUSAL = _ROUTING_CONFORMANCE["no_config_dynamic_refusal"]
 _PREFLIGHT_DEADLINE = _ROUTING_CONFORMANCE["preflight_deadline"]
 _PUBLICATION_RECOVERY = _ROUTING_CONFORMANCE["publication_recovery"]
 
@@ -7718,6 +7719,171 @@ def test_fresh_setup_records_dynamic_and_the_run_uses_that_session(
     assert issue == 42 and f'`{json.dumps(expected["model"])}`' in comment
     captured = capsys.readouterr()
     assert secret not in captured.err + captured.out + config_path.read_text()
+
+
+@pytest.mark.parametrize("mode", _NO_CONFIG_DYNAMIC_REFUSAL["modes"])
+@pytest.mark.parametrize(
+    "override",
+    _NO_CONFIG_DYNAMIC_REFUSAL["overrides"],
+    ids=lambda item: item["id"],
+)
+def test_no_config_local_run_refuses_before_a_legacy_session(
+    tmp_path, monkeypatch, capsys, mode, override
+) -> None:
+    """No Config is not the legacy path. Doctor and the Run share the refusal."""
+    from git_loopy import model_listing, skillscmd
+    from tests.fakes import FakeGateRunner
+    from tests.test_init import _FakeCopilotClient
+    from tests.test_loop_parallel import _ParallelFakeClient
+
+    client, _git = _wire_single_issue_github(
+        tmp_path, monkeypatch, labels=[
+            "ready-for-agent", "task-type:implementation", "semver:none",
+            *(["parallel-safe"] if mode == "lane" else []),
+        ],
+    )
+    tracker = loop_module._make_github_client()
+    if mode == "lane":
+        client = _ParallelFakeClient(fake_git=_git, scripted_events=[])
+        monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+    for name in (
+        "ROUTE_POLICY", "MODEL", "REASONING_EFFORT", "CONTEXT_TIER", "EXECUTION_HOST",
+        "ROUTING_DEADLINE_SECONDS", "ROUTING_CREDIT_ALLOWANCE", "SELECTOR_CONCURRENCY",
+    ):
+        monkeypatch.delenv(f"GIT_LOOPY_{name}", raising=False)
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("a no-Config Run prompted")
+    )
+    listing_calls: list[str] = []
+
+    async def fetch_listing():
+        listing_calls.append("listing")
+        pytest.fail("no-Config refusal must not fetch a listing")
+
+    async def forbidden_evidence(*_args, **_kwargs):
+        pytest.fail("no-Config refusal must not call a Route selector")
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", fetch_listing)
+    monkeypatch.setattr(
+        dynamic_route.ArtificialAnalysisSource, "fetch", forbidden_evidence
+    )
+
+    async def discover(_request):
+        return SimpleNamespace(skills=[], errors=[])
+
+    class CatalogClient(_FakeCopilotClient):
+        rpc = SimpleNamespace(skills=SimpleNamespace(discover=discover))
+
+    monkeypatch.setattr(
+        skillscmd, "make_copilot_client", lambda **_kwargs: CatalogClient()
+    )
+    monkeypatch.setattr(
+        "git_loopy.doctorcmd.make_copilot_client", lambda **_kwargs: CatalogClient()
+    )
+    project_path = settings.project_config_path(tmp_path)
+    global_path = settings.global_config_path(os.environ)
+    phrases = _NO_CONFIG_DYNAMIC_REFUSAL["expect_diagnostics"]
+
+    assert cli.main(["doctor"]) == 1
+    doctor = capsys.readouterr()
+    doctor_text = doctor.out + doctor.err
+    for phrase in phrases:
+        assert phrase in doctor_text
+    assert not project_path.exists() and not global_path.exists()
+
+    assert cli.main(["1", *override["args"]]) == 1
+    refusal = capsys.readouterr()
+    refusal_text = refusal.out + refusal.err
+    for phrase in phrases:
+        assert phrase in refusal_text
+    assert client.create_calls == []
+    assert tracker.route_comment_calls == []
+    assert listing_calls == []
+    assert not project_path.exists() and not global_path.exists()
+    logs = list((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+    assert logs == []
+
+
+@pytest.mark.parametrize("mode", ["serial", "lane"])
+def test_explicit_static_on_no_config_needs_no_leaderboard(
+    tmp_path, monkeypatch, capsys, mode
+) -> None:
+    """A selected Static path still runs, and needs no leaderboard credential."""
+    from git_loopy import run_routing_preflight
+    from tests.fakes import FakeGateRunner
+    from tests.test_loop_parallel import _ParallelFakeClient
+
+    client, git = _wire_single_issue_github(
+        tmp_path, monkeypatch, labels=[
+            "ready-for-agent", "task-type:implementation", "semver:none",
+            *(["parallel-safe"] if mode == "lane" else []),
+        ],
+    )
+    if mode == "lane":
+        client = _ParallelFakeClient(fake_git=git, scripted_events=[])
+        monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    _harness(monkeypatch, ("gpt-5.6-terra", ["high"], False))
+
+    async def capabilities(**_kwargs):
+        return static_route.HarnessCapabilities.from_listing((
+            _listed_model("gpt-5.6-terra", ["high"]),
+        ))
+
+    monkeypatch.setattr(
+        run_routing_preflight, "refresh_harness_capabilities", capabilities
+    )
+
+    async def forbidden_evidence(*_args, **_kwargs):
+        pytest.fail("Static execution must not call a Route selector")
+
+    monkeypatch.setattr(
+        dynamic_route.ArtificialAnalysisSource, "fetch", forbidden_evidence
+    )
+    project_path = settings.project_config_path(tmp_path)
+
+    assert cli.main([
+        "1", "--route-policy", "static",
+        "--model", "gpt-5.6-terra", "--reasoning-effort", "high",
+    ]) == 0
+    captured = capsys.readouterr()
+    assert "No Config is recorded" not in captured.out + captured.err
+    (call,) = client.create_calls
+    assert (call["model"], call["reasoning_effort"]) == ("gpt-5.6-terra", "high")
+    assert not project_path.exists()
+
+
+def test_explicit_dynamic_on_no_config_uses_the_readiness_verdict(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Selecting Dynamic is the readiness verdict, not the no-Config refusal."""
+    client, _git = _wire_single_issue_github(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    monkeypatch.delenv("GIT_LOOPY_ROUTE_POLICY", raising=False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+
+    assert cli.main(["1", "--route-policy", "dynamic"]) == 1
+    captured = capsys.readouterr()
+    text = captured.err + captured.out
+    assert dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV in text
+    assert "No Config is recorded" not in text
+    assert client.create_calls == []
+    assert not settings.project_config_path(tmp_path).exists()
 
 
 def test_the_dashboard_reads_the_dynamic_route_from_the_pickup_it_bound(
