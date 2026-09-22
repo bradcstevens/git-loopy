@@ -1,5 +1,5 @@
 {
-  "fixture_schema_version": "1.5",
+  "fixture_schema_version": "1.6",
   "wrapper_contract_version": "2.9",
   "event_schema_version": "1.2",
   "semantic_contract": {
@@ -230,7 +230,9 @@
         "cost",
         "rate_card",
         "routing",
-        "parallel"
+        "parallel",
+        "execution_host",
+        "wind_down"
       ],
       "context_fill": [
         "availability",
@@ -253,6 +255,18 @@
         "serial_fallback_reason",
         "serial_required",
         "refill_stopped"
+      ],
+      "execution_host": [
+        "placement",
+        "isolation_grade",
+        "capacity",
+        "starting_lane_limit"
+      ],
+      "wind_down": [
+        "availability",
+        "cause",
+        "stage",
+        "draining"
       ],
       "queue_row": [
         "issue",
@@ -739,6 +753,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -884,6 +910,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -1258,6 +1296,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -1417,6 +1467,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -1882,6 +1944,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -2070,6 +2144,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -2727,6 +2813,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -2913,6 +3011,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -3143,6 +3253,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -3431,6 +3553,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -3956,6 +4090,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -4117,6 +4263,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -4507,6 +4665,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -4683,6 +4853,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -5046,6 +5228,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -5191,6 +5385,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -5545,6 +5751,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -5723,6 +5941,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -6147,6 +6377,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -6319,6 +6561,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -6529,6 +6783,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -6749,6 +7015,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -7195,6 +7473,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -7395,6 +7685,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -7696,6 +7998,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -7791,6 +8105,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -9470,6 +9796,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": null,
                   "refill_stopped": false
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {
@@ -9677,6 +10015,18 @@
                   "serial_fallback_reason": null,
                   "serial_required": 2,
                   "refill_stopped": true
+                },
+                "execution_host": {
+                  "placement": "unknown",
+                  "isolation_grade": "unknown",
+                  "capacity": null,
+                  "starting_lane_limit": null
+                },
+                "wind_down": {
+                  "availability": "not_declared",
+                  "cause": null,
+                  "stage": null,
+                  "draining": null
                 }
               },
               "queue": {

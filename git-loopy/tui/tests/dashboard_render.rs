@@ -9,8 +9,9 @@
 
 use git_loopy_tui::{
     draw_frame, drive_dashboard, project_run_view, DashboardFrame, DashboardSession,
-    DashboardState, DashboardSurface, Event, Input, IssueRef, ParallelDeclaration, RunInputs,
-    RunView, Screen, TerminalCapabilities, Timestamp, ViewContext, Zone,
+    DashboardState, DashboardSurface, Event, ExecutionHostView, Input, IssueRef,
+    ParallelDeclaration, RunInputs, RunView, Screen, TerminalCapabilities, Timestamp, ViewContext,
+    WindDownDeclaration, Zone,
 };
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -191,7 +192,7 @@ fn the_header_band_states_the_run_at_a_glance() {
             "run 01HXR0000000000000000000DD  •  default gpt-5.6-sol (high)  \
              •  start 6:00:00 PM  elapsed 0:00:05",
             "active —  •  context —  •  running  •  strikes 0/3  \
-             •  routes per issue",
+             •  routes per issue  •  host —",
         ],
         "the Header carries Run identity, the *default* pair the Run resolves \
          a per-issue Route against, local start, live elapsed, the Active \
@@ -712,7 +713,7 @@ fn the_header_shows_context_fill_with_its_smart_zone_cues_when_measured() {
         band(&lines, "git-loopy")[1],
         "active #42 0:00:02  •  context 12,000/32,000 38% [███░░░░░░░] \
          target 20,000 ceiling 28,000  •  running  •  strikes 0/3  \
-         •  routes per issue",
+         •  routes per issue  •  host —",
         "the Context-fill slot shows count/count, percentage, a compact bar, \
          and the Smart-Zone target and ceiling cues"
     );
@@ -733,7 +734,7 @@ fn an_ascii_only_terminal_gets_ascii_glyphs_and_the_same_facts() {
         band(&lines, "git-loopy")[1],
         "active #42 0:00:02  |  context 12,000/32,000 38% [###-------] \
          target 20,000 ceiling 28,000  |  running  |  strikes 0/3  \
-         |  routes per issue",
+         |  routes per issue  |  host -",
         "capabilities change glyphs only — never a value, a label, or an order"
     );
     assert!(
@@ -750,7 +751,7 @@ fn an_unmeasurable_context_window_still_shows_its_slot() {
     assert_eq!(
         band(&lines, "git-loopy")[1],
         "active #7 0:00:01  •  context —  •  running  •  strikes 0/3  \
-         •  routes n/a  •  rate card unavailable",
+         •  routes n/a  •  rate card unavailable  •  host —",
         "an Orchestrator that cannot measure Context fill keeps the slot \
          visible with the unknown placeholder, and one that routes nothing \
          and resolved no Rate card says both beside it"
@@ -1175,5 +1176,136 @@ fn parallel_posture_snapshots_pin_its_responsive_priority() {
     assert_snapshot(
         "parallel-posture-degraded-narrow",
         frame_text(&degraded_view, 100, 16, TerminalCapabilities::default()),
+    );
+}
+
+#[test]
+fn the_header_announces_the_execution_host_and_its_isolation_grade() {
+    let mut view = fixture_view("baseline-closed-iteration");
+    view.dashboard.header.execution_host = ExecutionHostView {
+        placement: "github-actions".to_string(),
+        isolation_grade: "machine boundary".to_string(),
+        capacity: Some(20),
+        starting_lane_limit: Some(4),
+    };
+
+    let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
+    assert!(
+        band(&lines, "git-loopy")[1].contains("host github-actions (machine boundary)"),
+        "the Header discloses where the work ran and behind what boundary, in:\n{}",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn a_trace_that_declared_no_host_renders_unknown_rather_than_local() {
+    // The fixture's own baseline case predates the declaration, so this is the
+    // legacy silence rather than a constructed one.
+    let view = fixture_view("baseline-closed-iteration");
+    assert_eq!(view.dashboard.header.execution_host.placement, "unknown");
+
+    let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
+    let progress = band(&lines, "git-loopy")[1].clone();
+    assert!(
+        progress.contains("host \u{2014}"),
+        "an undeclared host is unknown, in:\n{}",
+        lines.join("\n")
+    );
+    assert!(
+        !progress.contains("host local"),
+        "and is never inferred as local, in:\n{}",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn the_header_announces_a_latched_wind_down_with_its_cause_stage_and_in_flight_count() {
+    let mut view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    view.dashboard.header.status = "draining".to_string();
+    view.dashboard.header.wind_down = WindDownDeclaration {
+        availability: "available",
+        cause: Some("strike_limit".to_string()),
+        stage: Some("drain".to_string()),
+        draining: Some(2),
+    };
+
+    let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
+    let progress = band(&lines, "git-loopy")[1].clone();
+    assert!(
+        progress.contains("draining"),
+        "the Run reads as draining, in:\n{}",
+        lines.join("\n")
+    );
+    assert!(
+        progress.contains("winding down: strike_limit (drain, 2 in flight)"),
+        "with its cause, stage and in-flight count, in:\n{}",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn a_lifted_drain_returns_the_header_to_a_healthy_display() {
+    let mut view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    // What a lift leaves behind: the Run said something about winding down,
+    // and nothing is latched any more.
+    view.dashboard.header.wind_down = WindDownDeclaration {
+        availability: "available",
+        cause: None,
+        stage: None,
+        draining: None,
+    };
+
+    let lines = render_lines(&view, 200, 36, TerminalCapabilities::default());
+    assert!(
+        !band(&lines, "git-loopy")[1].contains("winding down"),
+        "a lifted drain leaves no Wind-down on screen, in:\n{}",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn a_trace_that_never_mentioned_a_wind_down_shows_none() {
+    let lines = render_lines(
+        &fixture_view("baseline-closed-iteration"),
+        200,
+        36,
+        TerminalCapabilities::default(),
+    );
+    assert!(
+        !band(&lines, "git-loopy")[1].contains("winding down"),
+        "silence is not a Stop, in:\n{}",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn wind_down_and_host_snapshots_pin_their_responsive_priority() {
+    let mut view = fixture_view("parallel-lanes-and-non-closure-outcomes");
+    view.dashboard.header.status = "stopping".to_string();
+    view.dashboard.header.execution_host = ExecutionHostView {
+        placement: "github-actions".to_string(),
+        isolation_grade: "machine boundary".to_string(),
+        capacity: Some(20),
+        starting_lane_limit: Some(4),
+    };
+    view.dashboard.header.wind_down = WindDownDeclaration {
+        availability: "available",
+        cause: Some("operator_stop".to_string()),
+        stage: Some("cancel".to_string()),
+        draining: Some(1),
+    };
+
+    // Wide enough to carry both, so the pin is what the operator sees when
+    // the Header is not rationing width at all.
+    assert_snapshot(
+        "wind-down-and-host-wide",
+        frame_text(&view, 200, 16, TerminalCapabilities::default()),
+    );
+    // Narrow enough that it is: the host yields first, because where the work
+    // ran is context an operator asks once, while the Run being taken away is
+    // the most consequential thing on the band.
+    assert_snapshot(
+        "wind-down-and-host-narrow",
+        frame_text(&view, 96, 16, TerminalCapabilities::default()),
     );
 }

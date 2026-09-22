@@ -129,6 +129,41 @@ pub struct Header {
     pub rate_card: Declaration,
     pub routing: Declaration,
     pub parallel: ParallelDeclaration,
+    pub execution_host: ExecutionHostView,
+    pub wind_down: WindDownDeclaration,
+}
+
+/// The **Execution host** this Run announced at its start (Spec #445 §K).
+///
+/// Run-scoped rather than per-contribution, because a Run selects exactly one
+/// host: the per-contribution stamp exists so a trace is self-describing, not
+/// so two contributions can disagree. `placement` and `isolation_grade` are
+/// strings rather than nullable, because the wire declares `unknown` as the
+/// value a legacy trace means — the reader is never asked to tell a missing
+/// key from a host called nothing.
+#[derive(Clone, Debug, Serialize)]
+pub struct ExecutionHostView {
+    pub placement: String,
+    pub isolation_grade: String,
+    pub capacity: Option<i64>,
+    pub starting_lane_limit: Option<i64>,
+}
+
+/// The Header's `wind_down` declaration: the two Run-scoped Events
+/// `wrapper.stop.requested` and `wrapper.stop.lifted`, folded into the one
+/// place an operator learns that a Run has stopped taking new work.
+///
+/// Gated like [`ParallelDeclaration`] and for the same reason, but the three
+/// states it separates are sharper: `not_declared` is a trace that never
+/// mentioned a Wind-down, and `available` with a null `cause` is a drain this
+/// Run announced *and then lifted*. Collapsing them would let an interrupted
+/// legacy outcome read as a Stop, which Spec #445 §K forbids outright.
+#[derive(Clone, Debug, Serialize)]
+pub struct WindDownDeclaration {
+    pub availability: &'static str,
+    pub cause: Option<String>,
+    pub stage: Option<String>,
+    pub draining: Option<i64>,
 }
 
 /// One Run-scoped **Insight capability**, projected as its own declaration.
@@ -578,6 +613,39 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
         rate_card: Declaration::from_capability(state.capabilities.rate_card),
         routing: Declaration::from_capability(state.capabilities.routing),
         parallel: parallel_declaration(state),
+        execution_host: execution_host_view(state),
+        wind_down: wind_down_declaration(state),
+    }
+}
+
+/// Where this Run's work ran, exactly as the Run-start record declared it.
+///
+/// Nothing is inferred: a trace written before the declaration existed keeps
+/// the `unknown` placement `event-schema.json` names as its `legacy_value`,
+/// because every Run to date having been local is a fact about history rather
+/// than about the record in front of the reader (Spec #445 §K).
+fn execution_host_view(state: &DashboardState) -> ExecutionHostView {
+    let host = state.execution_host();
+    ExecutionHostView {
+        placement: host.placement.clone(),
+        isolation_grade: host.isolation_grade.clone(),
+        capacity: host.capacity,
+        starting_lane_limit: host.starting_lane_limit,
+    }
+}
+
+/// Whether this Run is winding down, why, and how much is still draining.
+fn wind_down_declaration(state: &DashboardState) -> WindDownDeclaration {
+    let latched = state.wind_down();
+    WindDownDeclaration {
+        availability: if state.wind_down_observed() {
+            "available"
+        } else {
+            "not_declared"
+        },
+        cause: latched.map(|(cause, _, _)| cause.to_string()),
+        stage: latched.map(|(_, stage, _)| stage.to_string()),
+        draining: latched.map(|(_, _, draining)| draining),
     }
 }
 

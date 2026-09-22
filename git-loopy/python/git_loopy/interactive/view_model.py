@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from git_loopy.interactive.state import (
     ContextWindowSnapshot,
+    ExecutionHostSnapshot,
     LiveRunState,
     IssueContribution,
     LogLine,
@@ -164,6 +165,42 @@ def _header(state: LiveRunState) -> dict[str, Any]:
         # Lane ceilings, the pressure narrowing them, and whether the Run
         # degraded to serial.
         "parallel": _undeclared_parallel(),
+        # Where this Run's work ran, and behind what boundary (Spec #445 §K).
+        # Never inferred: a trace written before the declaration existed keeps
+        # the wire's own `unknown`, because every Run to date having been local
+        # is a fact about history rather than about this record.
+        "execution_host": _execution_host(state.execution_host),
+        # Whether this Run has stopped taking new work, why, and how much is
+        # still in flight. `availability` separates the two silences a single
+        # nullable `cause` would collapse: a trace that never mentioned a
+        # Wind-down, and a drain this Run announced and then lifted.
+        "wind_down": _wind_down(state),
+    }
+
+
+def _execution_host(host: ExecutionHostSnapshot) -> dict[str, Any]:
+    """The Run's **Execution host**, exactly as `wrapper.run.start` declared it."""
+    return {
+        "placement": host.placement,
+        "isolation_grade": host.isolation_grade,
+        "capacity": host.capacity,
+        "starting_lane_limit": host.starting_lane_limit,
+    }
+
+
+def _wind_down(state: LiveRunState) -> dict[str, Any]:
+    """The Run-scoped **Wind-down** this trace latched, or the absence of one.
+
+    An absent Wind-down Event says nothing about whether a Run was stopped, so
+    a legacy trace reads `not_declared` rather than borrowing the interrupted
+    outcome it also carries -- the upgrade Spec #445 §K forbids outright.
+    """
+    latched = state.wind_down
+    return {
+        "availability": "available" if state.wind_down_observed else "not_declared",
+        "cause": latched.cause if latched is not None else None,
+        "stage": latched.stage if latched is not None else None,
+        "draining": latched.draining if latched is not None else None,
     }
 
 
