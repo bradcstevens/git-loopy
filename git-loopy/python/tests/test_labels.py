@@ -762,7 +762,7 @@ def test_the_template_setup_writes_into_a_consumer_repo_parses(tmp_path: Path) -
     backticked cells rather than the header — otherwise every consumer repo would
     silently fall back to the canonical defaults.
     """
-    template = _pinned_skill_file("setup-agent-skills", "triage-labels.md")
+    template = _pinned_skill_file("setup-git-loopy-skills", "triage-labels.md")
     doc = tmp_path / "docs" / "agents"
     doc.mkdir(parents=True)
     (doc / "triage-labels.md").write_text(
