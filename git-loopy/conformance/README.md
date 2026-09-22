@@ -84,11 +84,16 @@ model listing, Skill migration, detachment and remote green-base dispatch.
 Static routes and model/effort pins may construct the host to observe; that
 observation is not green-base. Dynamic election does not construct the host.
 Config stays unchanged and no work, Lease, Strike or Route publication starts.
-A present report is a separate authority, proved by the host-capability session
-tests: a Lane uses the host dial even when the local listing disagrees, and a
-rejecting report starts no contribution. The existing unselected remote
-execution cases protect the staged compatibility path. This matrix does not
-activate Dynamic defaults or remove native member deferrals.
+A present report is a separate authority. The `execution_host_report` matrix
+drives that report through unattended CLI and doctor in
+`python/tests/test_loop_parallel.py`. Three cases share one verdict: a Lane
+contribution and canonical Pickup record the host dial when the local listing
+reports the opposite; a rejecting host listing refuses before green-base even
+though the local listing would accept; a rejecting local listing refuses after
+the host has accepted. Config stays unchanged. Doctor prints the same pass or
+refusal. This is not another `loop.run` helper. It does not activate Dynamic
+defaults or remove native member deferrals. The existing unselected remote
+execution cases protect the staged compatibility path.
 
 The `publication_recovery` matrix carries an explicit migrate choice through
 init/update over authored unselected Config, then repeats real CLI Runs in serial

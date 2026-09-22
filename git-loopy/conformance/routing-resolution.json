@@ -683,6 +683,62 @@
       {"id": "static-flag-overrides-inherited-dynamic", "global": {"route_policy": "dynamic"}, "args": ["--route-policy", "static", "--execution-host", "github-actions"]}
     ]
   },
+  "execution_host_report": {
+    "note": "A present executing-host report is authority for selected Static execution on GitHub Actions, not a substitute for the local listing and not a licence for Dynamic election. The host reports its own listing. Both that listing and the local listing must accept the route. Lane Pickup and the contribution request record the host dial; the local listing's opposite dial is not substituted. A rejecting host listing refuses before green-base, work, Lease, Strike or publication even when the local listing would accept. A rejecting local listing refuses after the host has accepted. Doctor prints the same verdict. Config is unchanged. This does not activate bare init, auto-setup or no-Config Dynamic defaults. Shell/PowerShell, Subagent and Integration routing remain deferred.",
+    "model": "synthetic-work",
+    "resolved_effort": null,
+    "saved_config": {
+      "route_policy": "static",
+      "model": "synthetic-work"
+    },
+    "environment": {
+      "GIT_LOOPY_EXECUTION_HOST": "github-actions"
+    },
+    "cases": [
+      {
+        "id": "host-dial-authorizes-lane-and-doctor",
+        "host_lists_model": true,
+        "local_lists_model": true,
+        "host_effort_configurable": false,
+        "local_effort_configurable": true,
+        "expect_exit": 0,
+        "expect_doctor_exit": 0,
+        "expect_lane_effort": null,
+        "expect_effort_configurable": false,
+        "expect_doctor_contains": "Routing readiness | passed | configured Static routes verified; Pickup checks them again.",
+        "forbid_diagnostics": [
+          "this machine's model listing is not the listing",
+          "executing host's model listing"
+        ]
+      },
+      {
+        "id": "rejecting-host-refuses-before-substitution",
+        "host_lists_model": false,
+        "local_lists_model": true,
+        "host_effort_configurable": false,
+        "local_effort_configurable": true,
+        "expect_exit": 1,
+        "expect_doctor_exit": 1,
+        "expect_diagnostics": [
+          "the selected Static route was refused by the executing host's model listing"
+        ],
+        "expect_doctor_contains": "Routing | failed | the selected Static route was refused by the executing host's model listing"
+      },
+      {
+        "id": "rejecting-local-listing-refuses-after-host-acceptance",
+        "host_lists_model": true,
+        "local_lists_model": false,
+        "host_effort_configurable": false,
+        "local_effort_configurable": true,
+        "expect_exit": 1,
+        "expect_doctor_exit": 1,
+        "expect_diagnostics": [
+          "the selected Static route was refused by this machine's model listing"
+        ],
+        "expect_doctor_contains": "Routing | failed | the selected Static route was refused by this machine's model listing"
+      }
+    ]
+  },
   "migration_recovery": {
     "note": "Every case starts with an unattended local Python Run refusing the saved Config unchanged, before listing, assessment or work. Supply the declared authority, then drive a real Run and compare actual issue-owning session settings, canonical Pickup and Dashboard readback with expected, or assert the declared refusal with no work, final route, publication or Strike. Static policy recovery has no leaderboard credential or evidence request. Temporary authority must expire on the next invocation; recorded authority must remain effective without flags or environment. No historical case or Event stream is reinterpreted. Shell/PowerShell activation is deferred; this is not remote, Subagent or Integration routing support or final default activation.",
     "inputs": "Case saved_config entries overlay the shared saved_config at top level. A case harness replaces the shared listing; each model's long_context defaults to false and must feed every Static and Dynamic capability read. run_overrides are temporary CLI settings, not saved authority. run_access and run_evidence_available default to true and change only after the authorization step; false respectively removes the operator-owned key or makes the evidence transport fail. proposed_context_tier defaults to default and scripts the selector's work proposal, never the selector's own settings. A missing expected.exit_code means 0 and one work session; a refusal case declares its nonzero exit, named Static/Dynamic refusal and Run outcome (null for refusal before a Run event stream exists). The adapter checks its CLI's diagnostic for that refusal. run_evidence_requests counts only the Run after authorization. The Dashboard retains its historical implicit-default-tier projection.",

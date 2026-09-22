@@ -181,11 +181,13 @@ EXPECTED_RELEASE_VERSION = json.loads(
     ).read_text(encoding="utf-8")
 )["expected_release_version"]
 
-_EXECUTION_HOST_REFUSAL = json.loads(
+_ROUTING_RESOLUTION = json.loads(
     (Path(__file__).parents[2] / "conformance" / "routing-resolution.json").read_text(
         encoding="utf-8"
     )
-)["execution_host_refusal"]
+)
+_EXECUTION_HOST_REFUSAL = _ROUTING_RESOLUTION["execution_host_refusal"]
+_EXECUTION_HOST_REPORT = _ROUTING_RESOLUTION["execution_host_report"]
 
 
 # ---------------------------------------------------------------------------
@@ -7840,6 +7842,185 @@ def test_a_rejecting_host_report_starts_no_contribution_when_local_would_accept(
     assert "executing host's model listing" in error
     assert "preflight" not in calls and "contribution" not in calls
     assert fake_client.create_calls == []
+
+
+def _listed_model_info(identifier: str, *, configurable: bool):
+    """A duck-typed listing row. ``configurable=False`` omits the effort dial."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        id=identifier,
+        policy=SimpleNamespace(state="enabled"),
+        supported_reasoning_efforts=["high"] if configurable else None,
+        billing=SimpleNamespace(token_prices=SimpleNamespace(long_context=None)),
+    )
+
+
+@pytest.mark.parametrize(
+    "case", _EXECUTION_HOST_REPORT["cases"], ids=lambda case: case["id"],
+)
+def test_present_host_report_authorizes_static_actions_through_cli_and_doctor(
+    tmp_path, monkeypatch, capsys, case,
+) -> None:
+    """CLI and doctor share the host report. The local listing is not a substitute.
+
+    The Lane contribution and canonical Pickup record the host dial. A
+    rejecting report, from either listing, stops before green-base work.
+    """
+    import os
+
+    from git_loopy import model_listing, settings, skillscmd
+    from git_loopy.host_capability import HostCapabilityReport
+    from git_loopy.static_route import RoutePolicy
+    from tests.test_doctorcmd import _catalog, _run as run_doctor
+
+    fixture = _EXECUTION_HOST_REPORT
+    model = fixture["model"]
+    fake_git, fake_gh, fake_client, _cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    # An absent frontmatter inherits the packaged Required Skills. This proof
+    # is about host authority, so the temporary repo declares none.
+    (tmp_path / "git-loopy" / "prompt.md").write_text(
+        "---\nrequired-skills: []\n---\nYou are the agent.\n",
+        encoding="utf-8",
+    )
+    host_models = [
+        _listed_model_info(
+            model if case["host_lists_model"] else "other-host-model",
+            configurable=case["host_effort_configurable"],
+        )
+    ]
+    local_models = [
+        _listed_model_info(
+            model if case["local_lists_model"] else "other-local-model",
+            configurable=case["local_effort_configurable"],
+        )
+    ]
+    report = HostCapabilityReport.from_listing("github-actions", host_models)
+    requests: list[ContributionRequest] = []
+    preflights: list[str] = []
+
+    class _ReportingHost(_RemoteBranchExecutionHost):
+        async def observe_capabilities(self, *, observation_id: str):
+            del observation_id
+            return report
+
+        async def run_preflight(self, *, run_id: str, base_revision: str):
+            preflights.append("preflight")
+            return await super().run_preflight(
+                run_id=run_id, base_revision=base_revision
+            )
+
+        async def run_contribution(self, request: ContributionRequest):
+            requests.append(request)
+            return await super().run_contribution(request)
+
+    monkeypatch.setattr(
+        loop_module, "_make_execution_host", lambda *_args, **_kwargs: _ReportingHost(fake_git)
+    )
+
+    async def local_listing():
+        return local_models
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", local_listing)
+
+    async def forbidden_assessment(*_args, **_kwargs):
+        pytest.fail("Static host authority must not request Dynamic evidence")
+
+    monkeypatch.setattr(
+        dynamic_route.ArtificialAnalysisSource, "fetch", forbidden_assessment
+    )
+    monkeypatch.setattr(
+        skillscmd,
+        "run_skill_policy_migration",
+        lambda **_kwargs: pytest.fail(
+            "host-report verdict must precede Skill migration"
+        ),
+    )
+
+    async def forbidden_detachment(*_args, **_kwargs):
+        pytest.fail("host-report verdict must precede interactive detachment")
+
+    monkeypatch.setattr(cli_module, "_drive_interactive", forbidden_detachment)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    for name in (
+        "GIT_LOOPY_ROUTE_POLICY",
+        "GIT_LOOPY_MODEL",
+        "GIT_LOOPY_REASONING_EFFORT",
+        "GIT_LOOPY_CONTEXT_TIER",
+        "GIT_LOOPY_ISSUE_SOURCE",
+        "GIT_LOOPY_MODEL_SELECT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in fixture["environment"].items():
+        monkeypatch.setenv(name, value)
+    path = settings.project_config_path(tmp_path)
+    settings.write_config_atomic(path, dict(fixture["saved_config"]))
+    saved = path.read_bytes()
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli_module, "_should_run_interactive", lambda: False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("unattended host report prompted")
+    )
+    args = ["2"]
+    tables = settings.load_configs(tmp_path, os.environ)
+    resolved = cli_module.resolve_config(
+        cli_module.build_parser().parse_args(args),
+        os.environ,
+        project=tables.project,
+        global_=tables.global_,
+    ).run
+    assert resolved.model == model
+    assert resolved.reasoning_effort == fixture["resolved_effort"]
+    assert resolved.route_policy is RoutePolicy.STATIC
+    assert resolved.execution_host == "github-actions"
+
+    code = cli_module.main(args)
+    error = capsys.readouterr().err
+
+    assert code == case["expect_exit"], error
+    for diagnostic in case.get("expect_diagnostics", []):
+        assert diagnostic in error
+    for diagnostic in case.get("forbid_diagnostics", []):
+        assert diagnostic not in error
+    if case["expect_exit"] != 0:
+        assert requests == [] and preflights == []
+        assert fake_client.create_calls == []
+        assert fake_gh.issue_close_calls == [] and fake_gh.issue_comment_calls == []
+        assert fake_gh.route_comment_calls == [] and fake_gh.route_label_calls == []
+        assert list((tmp_path / ".git-loopy" / "logs").glob("*.jsonl")) == []
+    else:
+        assert requests
+        assert {request.model for request in requests} == {model}
+        assert {request.reasoning_effort for request in requests} == {
+            case["expect_lane_effort"]
+        }
+        assert preflights
+        pickups = [
+            event
+            for event in _logged_events(tmp_path)
+            if event["type"] == "wrapper.pickup.bound"
+        ]
+        assert pickups
+        assert {event["model"] for event in pickups} == {model}
+        assert {event["effort"] for event in pickups} == {case["expect_lane_effort"]}
+        assert {event["effort_configurable"] for event in pickups} == {
+            case["expect_effort_configurable"]
+        }
+        assert not any(
+            event["type"] == "wrapper.strike" for event in _logged_events(tmp_path)
+        )
+
+    doctor_code, doctor_output = run_doctor(
+        tmp_path, config=resolved, catalog=_catalog()
+    )
+    assert doctor_code == case["expect_doctor_exit"]
+    assert any(case["expect_doctor_contains"] in line for line in doctor_output)
+    assert path.read_bytes() == saved
+    assert not settings.global_config_path(os.environ).exists()
 
 
 def test_a_failed_remote_green_base_preflight_starts_no_lane_or_strike(

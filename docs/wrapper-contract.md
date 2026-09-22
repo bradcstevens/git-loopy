@@ -1648,7 +1648,10 @@ the default, and the absence of a decision — `static` (this section), and `dyn
   not a contribution, and an unselected remote Run MUST NOT require it. Dynamic election on a
   remote host MUST still be refused, report or not: a preflight snapshot is not a fresh
   proposal or Pickup read. Python shares that verdict across CLI startup, doctor and Run
-  preflight. The `execution_host_refusal` cases cover the no-report path. This does not
+  preflight. The `execution_host_refusal` cases cover the no-report path. The
+  `execution_host_report` cases cover a present report through CLI and doctor: the Lane
+  records the host dial, a rejecting host listing is not overruled by the local listing,
+  and a rejecting local listing still refuses after the host has accepted. This does not
   activate final Dynamic defaults, authorize Dynamic election on a remote host, or change
   shell/PowerShell, Subagent, or Integration routing deferrals.
 - **Refuse, never rescue.** §14's *gate and fall back* rule does not apply to a Static route and

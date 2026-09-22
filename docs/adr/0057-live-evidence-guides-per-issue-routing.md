@@ -546,7 +546,10 @@ listing; the no-report path still refuses before listing, Skill migration,
 detachment and green-base. Dynamic election does not construct the host and is
 not authorized by a report. Lane Pickup records dial presence from the host
 report; serial Pickup keeps the local listing, because serial sessions still
-run here. The remote listing is not recorded as this machine's roster. This
+run here. The remote listing is not recorded as this machine's roster. The shared
+`execution_host_report` matrix now drives a present report through unattended
+CLI and doctor: the Lane records the host dial, neither listing may overrule
+the other, and doctor prints the same verdict. Config stays unchanged. This
 does not activate bare init, auto-setup or no-Config Dynamic defaults.
 Shell/PowerShell activation, Subagent/Integration routing and ADR-0060
 implementation remain unclaimed.
