@@ -19,7 +19,7 @@ model = "claude-opus-5"
 effort = "max"
 
 [routing.implementation]
-model = "gemini-3.8-flash"
+model = "grok-4.7"
 effort = "high"
 
 [routing.test]
