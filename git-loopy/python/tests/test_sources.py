@@ -179,6 +179,17 @@ class TestAfkReadyExclusion:
         body = "## What to build\nthing\n\n## Acceptance criteria\n- foo"
         assert sources_module.afk_ready_exclusion(body) is None
 
+    def test_map_label_names_a_planning_document(self) -> None:
+        body = "## What to build\nthing\n\n## Acceptance criteria\n- foo"
+
+        assert (
+            sources_module.afk_ready_exclusion(
+                body, labels=["wayfinder:map"]
+            )
+            == sources_module.EXCLUSION_PLANNING_DOCUMENT
+        )
+        assert is_afk_ready(body, labels=["wayfinder:map"]) is False
+
     def test_names_the_missing_what_to_build_section(self) -> None:
         body = "## Parent\n#1\n\n## Acceptance criteria\n- foo"
         assert (
@@ -2627,11 +2638,30 @@ class TestRateLimitReporting:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("title", ["PRD: One issue, one run", "Spec: A design", "sPeC: Mixed"])
+@pytest.mark.parametrize(
+    ("title", "document_labels"),
+    [
+        ("PRD: One issue, one run", []),
+        ("Spec: A design", []),
+        ("sPeC: Mixed", []),
+        ("Architecture decision record", ["wayfinder:map"]),
+    ],
+)
 class TestPlanningDocumentsAreNotWork:
-    def test_list_and_rolling_membership_exclude_planning_documents(self, title: str) -> None:
+    def test_list_and_rolling_membership_exclude_planning_documents(
+        self, title: str, document_labels: list[str]
+    ) -> None:
         gh = FakeGitHubClient(issues=[
-            _make_issue(390, title=title, labels=["ready-for-agent", "priority", "parallel-safe"]),
+            _make_issue(
+                390,
+                title=title,
+                labels=[
+                    "ready-for-agent",
+                    "priority",
+                    "parallel-safe",
+                    *document_labels,
+                ],
+            ),
             _make_issue(391),
         ])
         source = GitHubIssueSource(_silent_logger(), gh=gh, pin=390)
@@ -2643,16 +2673,26 @@ class TestPlanningDocumentsAreNotWork:
         assert gh.issue_view_calls == [391]
         assert [item.ref for item in source.shallow_membership().candidates] == [391]
 
-    def test_authoritative_title_is_checked_again(self, title: str) -> None:
+    def test_authoritative_record_is_checked_again(
+        self, title: str, document_labels: list[str]
+    ) -> None:
         gh = FakeGitHubClient(
             issues=[_make_issue(390)],
-            issue_views={390: _make_issue(390, title=title)},
+            issue_views={
+                390: _make_issue(
+                    390,
+                    title=title,
+                    labels=["ready-for-agent", *document_labels],
+                )
+            },
         )
         pool = GitHubIssueSource(_silent_logger(), gh=gh).collect_pool()
         assert pool.items == ()
         assert pool.exclusions[0].reason == "planning_document"
 
-    def test_refresh_and_parallel_pickup_reject_renamed_documents(self, title: str) -> None:
+    def test_refresh_and_parallel_pickup_reject_documents(
+        self, title: str, document_labels: list[str]
+    ) -> None:
         gh = FakeGitHubClient(issues=[
             _make_issue(390, labels=["ready-for-agent", "parallel-safe"])
         ])
@@ -2661,14 +2701,26 @@ class TestPlanningDocumentsAreNotWork:
         source = GitHubIssueSource(
             _silent_logger(),
             gh=FakeGitHubClient(issues=[
-                _make_issue(390, title=title, labels=["ready-for-agent", "parallel-safe"])
+                _make_issue(
+                    390,
+                    title=title,
+                    labels=[
+                        "ready-for-agent",
+                        "parallel-safe",
+                        *document_labels,
+                    ],
+                )
             ]),
         )
         assert source.refresh_for_preparation(item).outcome == sources_module.PICKUP_STALE
         assert source.pickup(390).outcome == sources_module.PICKUP_STALE
 
-    def test_pin_refuses_planning_document(self, title: str) -> None:
-        gh = FakeGitHubClient(issues=[_make_issue(390, title=title)])
+    def test_pin_refuses_planning_document(
+        self, title: str, document_labels: list[str]
+    ) -> None:
+        gh = FakeGitHubClient(issues=[
+            _make_issue(390, title=title, labels=["ready-for-agent", *document_labels])
+        ])
         logger = _silent_logger()
         source = GitHubIssueSource(logger, gh=gh, pin=390)
         with _capture(logger) as records:

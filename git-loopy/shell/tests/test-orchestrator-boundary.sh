@@ -3338,17 +3338,22 @@ write_pin_view 47 "OPEN" '["ready-for-agent"]' "$pin_afk_body" "PRD: Planning do
 assert_pin_refused 47 prd "is a planning document"
 write_pin_view 48 "OPEN" '["ready-for-agent"]' "$pin_afk_body" "Spec: Planning document"
 assert_pin_refused 48 spec "is a planning document"
+write_pin_view 49 "OPEN" '["ready-for-agent","wayfinder:map"]' "$pin_afk_body" \
+  "Architecture decision record"
+assert_pin_refused 49 map "is a planning document"
 
 # A listed document is never enriched; a ticket renamed during enrichment is
-# excluded from the authoritative title instead.
+# excluded from the authoritative title instead. A retitled map is excluded
+# from its label, not from a title convention.
 jq -s '.[0].title = "PRD: Planning document" | .[1].title = "Executable ticket"' \
-  "$FAKE_GH_VIEW_DIR/47.json" "$FAKE_GH_VIEW_DIR/48.json" >"$FAKE_GH_LIST_JSON"
+  "$FAKE_GH_VIEW_DIR/47.json" "$FAKE_GH_VIEW_DIR/48.json" \
+  "$FAKE_GH_VIEW_DIR/49.json" >"$FAKE_GH_LIST_JSON"
 : >"$FAKE_GH_LOG"
 run_entrypoint "$pin_repo" "$pin_bin" "$temp_dir/planning.stdout" \
   "$temp_dir/planning.stderr" 1 ||
   fail "planning-only Pool did not exit cleanly"
 jq -se '
-  ([.[] | select(.type == "wrapper.pool.excluded") | .issue] == [47, 48])
+  ([.[] | select(.type == "wrapper.pool.excluded") | .issue] == [47, 48, 49])
   and ([.[] | select(.type == "wrapper.pool.excluded") | .reason]
     | all(. == "planning_document"))
   and ([.[] | select(.type == "wrapper.afk_ready.collected") | .issues]
@@ -3357,6 +3362,9 @@ jq -se '
   fail "planning documents reached the executable Pool"
 if grep -q '^issue view 47 ' "$FAKE_GH_LOG"; then
   fail "listed planning document was enriched"
+fi
+if grep -q '^issue view 49 ' "$FAKE_GH_LOG"; then
+  fail "listed Wayfinder map was enriched"
 fi
 grep -q '^issue view 48 ' "$FAKE_GH_LOG" ||
   fail "authoritative title exclusion was not exercised"

@@ -620,10 +620,13 @@ function Test-GitLoopyAfkReady {
         [AllowEmptyString()]
         [string]$Body,
         [AllowEmptyString()]
-        [string]$Title = ""
+        [string]$Title = "",
+        [object[]]$Labels = @()
     )
 
-    return $null -eq (Get-GitLoopyAfkReadyExclusion -Body $Body -Title $Title)
+    return $null -eq (
+        Get-GitLoopyAfkReadyExclusion -Body $Body -Title $Title -Labels $Labels
+    )
 }
 
 # The deep discriminator: names *why* a `ready-for-agent` candidate is not
@@ -635,11 +638,23 @@ function Get-GitLoopyAfkReadyExclusion {
         [AllowEmptyString()]
         [string]$Body,
         [AllowEmptyString()]
-        [string]$Title = ""
+        [string]$Title = "",
+        [object[]]$Labels = @()
     )
 
     if ($Title -match "^(PRD|Spec):") {
         return "planning_document"
+    }
+    foreach ($Label in $Labels) {
+        $LabelName = if ($Label -is [Collections.IDictionary]) {
+            [string]$Label["name"]
+        }
+        else {
+            [string]$Label
+        }
+        if ($LabelName -ceq "wayfinder:map") {
+            return "planning_document"
+        }
     }
     $HasWhat = $Body -cmatch "(?m)^## What to build"
     $HasCriteria = $Body -cmatch "(?m)^## Acceptance criteria"
@@ -733,11 +748,14 @@ function Assert-GitLoopyPinEligible {
     }
 
     $Body = [string]$Issue["body"]
-    $Exclusion = Get-GitLoopyAfkReadyExclusion -Body $Body -Title ([string]$Issue["title"])
+    $Exclusion = Get-GitLoopyAfkReadyExclusion `
+        -Body $Body `
+        -Title ([string]$Issue["title"]) `
+        -Labels $Labels
     if ($Exclusion -eq "planning_document") {
         [Console]::Error.WriteLine(
             "git-loopy: --issue ${Number}: #${Number} is a planning document " +
-            "(PRD: or Spec:), not executable work."
+            "(PRD:, Spec:, or wayfinder:map), not executable work."
         )
         return $false
     }
@@ -2554,7 +2572,10 @@ function Get-GitLoopyGitHubPool {
         # Wrapper contract §3.1: a rejected candidate is reported, not dropped
         # silently. The reason comes from the same body the membership decision
         # was made on, and no extra round-trip is paid for it.
-        $Reason = Get-GitLoopyAfkReadyExclusion -Body $Body -Title ([string]$Candidate["title"])
+        $Reason = Get-GitLoopyAfkReadyExclusion `
+            -Body $Body `
+            -Title ([string]$Candidate["title"]) `
+            -Labels @($Candidate["labels"])
         if ($null -ne $Reason) {
             Add-GitLoopyPoolExclusion `
                 -Ref $Number `
@@ -2599,7 +2620,10 @@ function Get-GitLoopyGitHubPool {
         else {
             [string]$Full["body"]
         }
-        $Reason = Get-GitLoopyAfkReadyExclusion -Body $FullBody -Title ([string]$Full["title"])
+        $Reason = Get-GitLoopyAfkReadyExclusion `
+            -Body $FullBody `
+            -Title ([string]$Full["title"]) `
+            -Labels @($Full["labels"])
         if ($null -ne $Reason) {
             Add-GitLoopyPoolExclusion `
                 -Ref $Number `

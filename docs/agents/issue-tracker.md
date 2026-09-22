@@ -26,7 +26,9 @@ dependencies enabled, so both use the canonical representation — never a body 
   Destination / Notes / Decisions-so-far / Not-yet-specified / Out-of-scope body.
   `gh issue create --label wayfinder:map --title "Wayfinder: ..." --body-file <file>`.
   A map is a planning document, not work: label it `ready-for-human`, never
-  `ready-for-agent`.
+  `ready-for-agent`. A runner excludes the `wayfinder:map` label from its Pool
+  regardless of title and refuses an explicit `--issue` Pickup as a planning
+  document if it is mislabelled.
 - **Child ticket**: an issue linked to the map as a GitHub **sub-issue**, labelled
   `wayfinder:<type>` (`research`, `prototype`, `grilling`, or `task`). Create the issue,
   then attach it by its numeric **database id**:

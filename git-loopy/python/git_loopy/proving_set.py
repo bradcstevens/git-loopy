@@ -349,7 +349,9 @@ def _resolve_replay(
     issue. Each rule is *necessary* and none is sufficient (see the module note):
     admission (#380) is the only thing that can establish what these approximate.
     """
-    body_defect = afk_ready_exclusion(issue.body, title=issue.title)
+    body_defect = afk_ready_exclusion(
+        issue.body, title=issue.title, labels=issue.labels
+    )
     if body_defect is not None:
         return ProvingExclusion(issue=issue.number, reason=_BODY_REASONS[body_defect])
     shas = closers.get(issue.number, ())

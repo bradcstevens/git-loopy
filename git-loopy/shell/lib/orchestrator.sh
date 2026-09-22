@@ -563,17 +563,24 @@ git_loopy_resolve_config() {
 }
 
 git_loopy_is_afk_ready() {
-  [[ -z "$(git_loopy_afk_ready_exclusion "$1" "${2:-}")" ]]
+  [[ -z "$(git_loopy_afk_ready_exclusion "$1" "${2:-}" "${3:-}")" ]]
 }
 
 # Wrapper contract §3.1 — name *why* a candidate leaves the Pool. Prints one
 # reason from the closed exclusion vocabulary, or nothing when the body is
 # AFK-ready. `git_loopy_is_afk_ready` projects this same decision to a boolean.
 git_loopy_afk_ready_exclusion() {
-  local body="$1" title="${2:-}"
+  local body="$1" title="${2:-}" labels="${3:-}"
   case "${title,,}" in
     prd:*|spec:*) printf 'planning_document\n'; return 0 ;;
   esac
+  local label
+  while IFS= read -r label; do
+    if [[ "$label" == "wayfinder:map" ]]; then
+      printf 'planning_document\n'
+      return 0
+    fi
+  done <<<"$labels"
   local has_what=0 has_ac=0
   [[ "$body" =~ (^|$'\n')##\ What\ to\ build ]] && has_what=1
   [[ "$body" =~ (^|$'\n')##\ Acceptance\ criteria ]] && has_ac=1
@@ -1252,7 +1259,7 @@ _git_loopy_version_lt() {
 _git_loopy_preflight_pin() {
   [[ -n "$GIT_LOOPY_ISSUE_PIN" ]] || return 0
 
-  local raw normalized state body title exclusion
+  local raw normalized state body title labels exclusion
   raw="$(gh issue view "$GIT_LOOPY_ISSUE_PIN" \
     --json "$GIT_LOOPY_SHALLOW_ISSUE_FIELDS,comments" 2>/dev/null)" || {
     printf '%s\n' \
@@ -1284,10 +1291,11 @@ _git_loopy_preflight_pin() {
 
   body="$(jq -r '.body' <<<"$normalized")" || return 1
   title="$(jq -r '.title' <<<"$normalized")" || return 1
-  exclusion="$(git_loopy_afk_ready_exclusion "$body" "$title")"
+  labels="$(jq -r '.labels[]?' <<<"$normalized")" || return 1
+  exclusion="$(git_loopy_afk_ready_exclusion "$body" "$title" "$labels")"
   if [[ "$exclusion" == "planning_document" ]]; then
     printf '%s\n' \
-      "git-loopy: --issue $GIT_LOOPY_ISSUE_PIN: #$GIT_LOOPY_ISSUE_PIN is a planning document (PRD: or Spec:), not executable work." >&2
+      "git-loopy: --issue $GIT_LOOPY_ISSUE_PIN: #$GIT_LOOPY_ISSUE_PIN is a planning document (PRD:, Spec:, or wayfinder:map), not executable work." >&2
     return 1
   fi
   if [[ -n "$exclusion" ]]; then
@@ -1625,10 +1633,12 @@ git_loopy_collect_github_pool() {
   local -a exclusion_items=()
   local candidate
   while IFS= read -r candidate; do
-    local body number title reason
+    local body number title labels reason
     body="$(jq -r '.body // ""' <<<"$candidate")"
     number="$(jq -r '.number' <<<"$candidate")"
     title="$(jq -r '.title // ""' <<<"$candidate")"
+    labels="$(jq -r '.labels[]? | if type == "object" then .name else . end' \
+      <<<"$candidate")" || return 1
     [[ "$number" =~ ^[1-9][0-9]*$ ]] || {
       printf 'git-loopy: skipping issue with malformed number %s.\n' \
         "$number" >&2
@@ -1637,7 +1647,7 @@ git_loopy_collect_github_pool() {
     # Wrapper contract §3.1: a rejected candidate is reported, not dropped
     # silently. The reason comes from the same body the membership decision
     # was made on, and no extra round-trip is paid for it.
-    reason="$(git_loopy_afk_ready_exclusion "$body" "$title")"
+    reason="$(git_loopy_afk_ready_exclusion "$body" "$title" "$labels")"
     if [[ -n "$reason" ]]; then
       exclusion_items+=("$(
         jq -cn \
@@ -1664,7 +1674,9 @@ git_loopy_collect_github_pool() {
       continue
     }
     title="$(jq -r '.title // ""' <<<"$full")" || return 1
-    reason="$(git_loopy_afk_ready_exclusion "$body" "$title")"
+    labels="$(jq -r '.labels[]? | if type == "object" then .name else . end' \
+      <<<"$full")" || return 1
+    reason="$(git_loopy_afk_ready_exclusion "$body" "$title" "$labels")"
     if [[ -n "$reason" ]]; then
       exclusion_items+=("$(
         jq -cn \

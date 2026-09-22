@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "1.5",
+  "contract_version": "1.6",
   "exclusion_reasons": [
     "missing_what_to_build",
     "missing_acceptance_criteria",
@@ -11,6 +11,7 @@
     {
       "id": "prd-title-with-task-headings",
       "title": "PRD: One issue, one run",
+      "labels": [],
       "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
       "eligible": false,
       "exclusion_reason": "planning_document"
@@ -18,6 +19,7 @@
     {
       "id": "spec-title-with-task-headings",
       "title": "Spec: Implementation plan",
+      "labels": [],
       "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
       "eligible": false,
       "exclusion_reason": "planning_document"
@@ -25,6 +27,7 @@
     {
       "id": "planning-title-case-insensitive",
       "title": "sPeC: Implementation plan",
+      "labels": [],
       "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
       "eligible": false,
       "exclusion_reason": "planning_document"
@@ -32,6 +35,7 @@
     {
       "id": "planning-title-precedes-missing-headings",
       "title": "prd: Planning only",
+      "labels": [],
       "body": "Planning document.",
       "eligible": false,
       "exclusion_reason": "planning_document"
@@ -39,6 +43,7 @@
     {
       "id": "planning-reference-in-ticket-title",
       "title": "Implement Spec: title exclusion from PRD: requirements",
+      "labels": [],
       "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
       "eligible": true,
       "exclusion_reason": null
@@ -46,69 +51,134 @@
     {
       "id": "prefix-requires-colon",
       "title": "Specification parser",
+      "labels": [],
       "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
       "eligible": true,
       "exclusion_reason": null
     },
     {
       "id": "required-headings-without-parent",
+      "labels": [],
       "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
       "eligible": true,
       "exclusion_reason": null
     },
     {
       "id": "required-headings-with-parent",
+      "labels": [],
       "body": "## Parent\n\n- #78\n\n## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
       "eligible": true,
       "exclusion_reason": null
     },
     {
       "id": "required-headings-in-reverse-order",
+      "labels": [],
       "body": "## Acceptance criteria\n- It works.\n\n## What to build\nImplement the slice.",
       "eligible": true,
       "exclusion_reason": null
     },
     {
       "id": "heading-suffix-is-accepted",
+      "labels": [],
       "body": "## What to build (phase 1)\nImplement the slice.\n\n## Acceptance criteria - required\n- It works.",
       "eligible": true,
       "exclusion_reason": null
     },
     {
       "id": "missing-what-to-build",
+      "labels": [],
       "body": "## Parent\n\n- #78\n\n## Acceptance criteria\n- It works.",
       "eligible": false,
       "exclusion_reason": "missing_what_to_build"
     },
     {
       "id": "missing-acceptance-criteria",
+      "labels": [],
       "body": "## What to build\nImplement the slice.",
       "eligible": false,
       "exclusion_reason": "missing_acceptance_criteria"
     },
     {
       "id": "no-required-headings",
+      "labels": [],
       "body": "A bare planning document with no task sections.",
       "eligible": false,
       "exclusion_reason": "missing_both_sections"
     },
     {
       "id": "headings-must-start-a-line",
+      "labels": [],
       "body": "Intro ## What to build\nImplement it.\nIntro ## Acceptance criteria\n- It works.",
       "eligible": false,
       "exclusion_reason": "missing_both_sections"
     },
     {
       "id": "headings-must-not-be-indented",
+      "labels": [],
       "body": "  ## What to build\nImplement it.\n\n  ## Acceptance criteria\n- It works.",
       "eligible": false,
       "exclusion_reason": "missing_both_sections"
     },
     {
       "id": "headings-are-literal-and-case-sensitive",
+      "labels": [],
       "body": "## what to build\nImplement it.\n\n## acceptance criteria\n- It works.",
       "eligible": false,
       "exclusion_reason": "missing_both_sections"
+    },
+    {
+      "id": "wayfinder-map-label-with-task-headings",
+      "title": "Architecture decision record",
+      "labels": [
+        "wayfinder:map"
+      ],
+      "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": false,
+      "exclusion_reason": "planning_document"
+    },
+    {
+      "id": "wayfinder-map-reference-in-ticket-title",
+      "title": "Implement the Wayfinder map renderer",
+      "labels": [],
+      "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": true,
+      "exclusion_reason": null
+    },
+    {
+      "id": "wayfinder-research-ticket-remains-eligible",
+      "labels": [
+        "wayfinder:research"
+      ],
+      "body": "## What to build\nResearch the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": true,
+      "exclusion_reason": null
+    },
+    {
+      "id": "wayfinder-prototype-ticket-remains-eligible",
+      "labels": [
+        "wayfinder:prototype"
+      ],
+      "body": "## What to build\nPrototype the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": true,
+      "exclusion_reason": null
+    },
+    {
+      "id": "wayfinder-grilling-ticket-remains-eligible",
+      "labels": [
+        "wayfinder:grilling"
+      ],
+      "body": "## What to build\nGrill the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": true,
+      "exclusion_reason": null
+    },
+    {
+      "id": "wayfinder-task-ticket-remains-eligible",
+      "labels": [
+        "wayfinder:task"
+      ],
+      "body": "## What to build\nImplement the slice.\n\n## Acceptance criteria\n- It works.",
+      "eligible": true,
+      "exclusion_reason": null
     }
   ]
 }

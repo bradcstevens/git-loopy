@@ -41,9 +41,10 @@ while IFS= read -r case_json; do
   case_id="$(jq -r '.id' <<<"$case_json")"
   body="$(jq -r '.body' <<<"$case_json")"
   title="$(jq -r '.title // ""' <<<"$case_json")"
+  labels="$(jq -r '.labels[]?' <<<"$case_json")"
   expected="$(jq -r '.eligible' <<<"$case_json")"
   actual="false"
-  if git_loopy_is_afk_ready "$body" "$title"; then
+  if git_loopy_is_afk_ready "$body" "$title" "$labels"; then
     actual="true"
   fi
   assert_equal "$expected" "$actual" "discriminator fixture: $case_id"
@@ -51,7 +52,7 @@ while IFS= read -r case_json; do
   # Wrapper contract §3.1 — the same pass that decides membership also names
   # why a rejected candidate left the Pool.
   expected_reason="$(jq -r '.exclusion_reason // ""' <<<"$case_json")"
-  actual_reason="$(git_loopy_afk_ready_exclusion "$body" "$title")"
+  actual_reason="$(git_loopy_afk_ready_exclusion "$body" "$title" "$labels")"
   assert_equal "$expected_reason" "$actual_reason" \
     "discriminator exclusion reason: $case_id"
 done < <(jq -c '.cases[]' "$conformance_dir/discriminator.json")

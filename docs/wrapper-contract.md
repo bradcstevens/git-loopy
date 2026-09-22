@@ -138,14 +138,15 @@ The Pool MUST be filtered to issues whose body contains **both** literal section
 - `## Acceptance criteria`
 
 A `## Parent` section is optional. Issues missing either required heading (bare PRDs) MUST be
-skipped. GitHub issues whose titles begin with `PRD:` or `Spec:` (case-insensitive)
-MUST also be excluded, even with both headings, `ready-for-agent`, `priority`,
-`parallel-safe`, or an explicit `--issue` pin. They are planning documents, not
-executable tickets. Check the title on both list and authoritative reads.
+skipped. GitHub issues whose titles begin with `PRD:` or `Spec:` (case-insensitive),
+or whose labels include `wayfinder:map`, MUST also be excluded, even with both
+headings, `ready-for-agent`, `priority`, `parallel-safe`, or an explicit `--issue`
+pin. They are planning documents, not executable tickets. Check the title and labels
+on both list and authoritative reads; other `wayfinder:` labels remain eligible.
 In PR mode a PR is kept only if it carries an `## Agent Brief` (in its body or any
 comment) — the PR analogue of the discriminator.
 
-### 3.1 Pool exclusions (contract 1.5, MUST)
+### 3.1 Pool exclusions (contract 1.6, MUST)
 
 A skipped candidate MUST be reported, not dropped silently. `ready-for-agent` is a *human*
 assertion — somebody deliberately triaged that issue — so an Orchestrator that declines it owes
@@ -158,7 +159,7 @@ closed vocabulary:
 | `missing_what_to_build` | `## Acceptance criteria` present, `## What to build` absent |
 | `missing_acceptance_criteria` | `## What to build` present, `## Acceptance criteria` absent |
 | `missing_both_sections` | Neither required heading present |
-| `planning_document` | Issue title begins with `PRD:` or `Spec:`; takes precedence over missing headings |
+| `planning_document` | Issue title begins with `PRD:` or `Spec:`, or labels include `wayfinder:map`; takes precedence over missing headings |
 
 The reason MUST be derived from the same discriminator pass that decides membership, so the
 reported reason and the membership decision cannot disagree. `discriminator.json` pins the
