@@ -178,7 +178,7 @@ def test_packaged_prompt_makes_genuine_issue_blockers_native_dependencies() -> N
 #: The external Skill catalog revision the name set below was read at. Asserted
 #: against ``git_loopy/skill_source.json`` so that moving the pin has to walk
 #: *through* this list rather than around it.
-_PINNED_CATALOG_REVISION = "20fcf612eee4d2bee2ef88fdee4cba7ae51b4392"
+_PINNED_CATALOG_REVISION = "75e01c4f62d002bd0a0773b3c253b61ca065f87a"
 
 #: Every canonical Skill name in the **installed catalog** at that revision.
 #:

@@ -2153,9 +2153,9 @@ def test_every_pinned_run_start_satisfies_the_run_start_contract() -> None:
 
 
 def test_dashboard_fixture_pins_renderer_neutral_semantic_seam() -> None:
-    # 1.5 carries the Parallel posture and per-Agent Activity windows alongside
-    # the existing Routing resolution and additive route fields.
-    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.5"
+    # 1.6 adds the Execution host and the Wind-down to the Header, so a
+    # consumer pinned to 1.5 projects a Header this fixture no longer matches.
+    assert _DASHBOARD_INSIGHTS["fixture_schema_version"] == "1.6"
     assert (
         _DASHBOARD_INSIGHTS["wrapper_contract_version"]
         == _EVENT_SCHEMA["contract_version"]
@@ -2479,6 +2479,12 @@ def _sweep_snapshot_inventory(
     # facts hang off that gate, so it declares an inventory of its own
     # rather than borrowing `declaration`'s single field.
     assert list(header["parallel"]) == fields["parallel"], where
+    # The same device, for the two facts Spec #445 §K adds to the Header. The
+    # Execution host needs no gate because the wire declares `unknown` as what
+    # a legacy trace means; the Wind-down needs one because a lifted drain and
+    # a trace that never mentioned one are both a null `cause`.
+    assert list(header["execution_host"]) == fields["execution_host"], where
+    assert list(header["wind_down"]) == fields["wind_down"], where
     assert list(expected["dashboard"]["activity"]) == fields["activity"], where
     for window in expected["dashboard"]["activity"]["windows"]:
         assert list(window) == fields["activity_window"], where
@@ -3054,7 +3060,7 @@ def test_the_roster_preserves_compatibility_efforts_alongside_pinned_models() ->
     """A pinned-harness refresh does not erase saved Config's compatibility rows.
 
     ADR-0019 recorded that CLI ``1.0.67`` lacked the later Gemini capabilities.
-    CLI ``1.0.83`` verified Astra's ceiling. The upgrade account did not list
+    CLI ``1.0.84-5`` verified Astra's ceiling. The upgrade account did not list
     Gemini, so those rows are retained compatibility data, not a live capture.
     """
     roster = _MODEL_ROSTER["roster"]

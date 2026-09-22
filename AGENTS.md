@@ -62,6 +62,19 @@ blocking gate:
   refresh itself over a `file://` remote — is covered by
   `tests/test_skill_install.py` and `tests/test_doctorcmd.py` inside the Python
   suite row.
+- **The cross-repo Skills proof** in `cross-repo-skills-proof.yml` (#632) acquires
+  that same pinned catalog and then runs the three Python-suite checks that read
+  it — that the Run instructions require no Skill the pin lacks, that Skill
+  reference routing resolves, and that the Skill-authored label vocabulary
+  matches what this repository provisions — each of which otherwise skips rather
+  than fails when the catalog is not acquired. It inherits the same network
+  exclusion as `python -m git_loopy.skill_source` above for the same reason: an
+  unreachable `bradcstevens/git-loopy-skills` would make Integration red for a
+  reason no change here caused. CI supplies this as a required job precisely
+  because Integration cannot, the same way it supplies the native Windows
+  timezone proof above; the three checks stay offline-safe skips everywhere
+  else, and the job's own shape is covered by
+  `tests/test_cross_repo_skills_proof_workflow.py` inside the Python suite row.
 - **`python -m git_loopy.release_rehearsal`** (prove a promoted stable snapshot
   before any public tag exists, ADR-0059) *runs this table* over its candidate,
   so declaring it as a row would make Integration gate itself recursively. It is

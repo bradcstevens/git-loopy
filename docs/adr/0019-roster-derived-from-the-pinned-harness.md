@@ -54,6 +54,37 @@ compatibility entries and saved model choices remain unchanged. Global Skill
 metadata is read through `ServerSkillsApi.discover`, without an agent session.
 The SDK 1.0.14 record above remains historical evidence, not the current pin.
 
+## Corporate-compatible upgrade record: SDK 1.0.14rc1
+
+The current pin is SDK 1.0.14rc1, whose CLI is 1.0.84-5. It is the newest
+`github-copilot-sdk` the Microsoft corporate feed offers: 1.0.14 final is
+published upstream but has not been ingested there. The pin is therefore a
+prerelease by necessity, not preference. It is still a published wheel carrying
+an injected `CLI_VERSION`, which is why it keeps the pinned-harness invariant
+this ADR depends on — a source or editable install ships the sentinel
+`CLI_VERSION = None`, disabling the runtime download and leaving
+`spawned_harness_version()` empty, so the readback could report no divergence at
+all. Installing from source to reach 1.0.14 was rejected for that reason as well
+as the corporate feed policy.
+
+The live listing captured through CLI 1.0.84-5 on 2026-09-21 returned **20**
+models. All 19 previously observed rows and their effort sets are unchanged, so
+the SDK bump itself alters no roster content. The twentieth is `grok-4.7`
+(`low`, `medium`, `high`), which is added to the observed rows.
+
+**Provenance of `grok-4.7`:** it is a backend catalogue addition, not an effect
+of the CLI bump. Re-running the same listing through the previously pinned CLI
+1.0.83 on the same date returned the same 20 models with an identical effort
+array for `grok-4.7`, so the committed roster was already one row stale
+independently of this upgrade. Its efforts are live-verified against two
+harnesses; unlike the Gemini 3.8 row rejected in #594, this is a capture rather
+than an assumption.
+
+The seven account-unlisted compatibility entries and every saved model choice
+remain unchanged, and `gemini-3.8-flash` remains off-roster on the same
+warning-and-pass-through terms. The SDK 1.0.13 and 1.0.14 records above remain
+historical evidence, not the current pin.
+
 ## Amendment: the roster follows the harness you are running
 
 The stamped fixture bounded more than it was meant to. `cli_version` records
@@ -103,6 +134,7 @@ The fixture keeps its job and its stamp: it remains the offline fallback, the
 cross-language contract, and the thing CI holds against
 `copilot._cli_version.CLI_VERSION` with no network and no credentials. What it
 stops being is the ceiling on which models an operator is allowed to name.
+
 
 ## The premise that was wrong
 
@@ -284,7 +316,7 @@ is indistinguishable from the defective one, which is how the last correction we
 - **At decision time, the pending SDK bump was a known roster change.** The pin was two
   releases behind, and the proposed CLI sat between a version where `gemini-3.6-flash`
   was absent and one where it was present. That motivated verifying the new harness
-  before every change; the corporate-compatible SDK 1.0.13 record above documents
+  before every change; the corporate-compatible SDK 1.0.14rc1 record above documents
   the current refresh.
 - The prose stating that the fixture's keys *are* the supported-model set becomes false for
   the Python Orchestrator, which reads the live set. The contract must say which

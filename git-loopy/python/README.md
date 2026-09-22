@@ -87,8 +87,8 @@ a fallback. The other prerequisites (`gh` signed in, `git`, `copilot`) are liste
 The bootstrap is per-clone; subsequent invocations of `git-loopy` use
 the cached environment under `git-loopy/python/.venv/`.
 
-The corporate-compatible Runner pins `github-copilot-sdk==1.0.13`, which runs
-Copilot CLI `1.0.83` by default. Updating the separate `copilot` command on `PATH`
+The corporate-compatible Runner pins `github-copilot-sdk==1.0.14rc1`, which runs
+Copilot CLI `1.0.84-5` by default. Updating the separate `copilot` command on `PATH`
 does not update that harness. The refreshed roster recognizes
 `gpt-6-astra` (including `max` reasoning). The pinned-harness listing did not
 offer Gemini 3.8 on the account used for this upgrade, so no unverified effort
@@ -1972,10 +1972,11 @@ reasoning; an omitted effort remains unset so the backend can choose.
 | `gpt-5.6-terra`               | `none` `low` `medium` `high` `xhigh` `max` |
 | `grok-4.5`                    | `low` `medium` `high`                    |
 | `grok-4.6`                    | `low` `medium` `high` `xhigh`            |
+| `grok-4.7`                    | `low` `medium` `high`                    |
 | `mai-code-1.1-flash`          | `low` `medium` `high`                    |
 | `mai-code-1-flash-picker`     | `low` `medium` `high`                    |
 
-This fallback covers all 19 models returned by the SDK-pinned CLI `1.0.83`
+This fallback covers all 20 models returned by the SDK-pinned CLI `1.0.84-5`
 on the upgrade account, plus seven retained compatibility entries:
 `claude-sonnet-4.6`, `claude-sonnet-4.5`, `claude-opus-4.6`, all three Gemini
 rows, and `mai-code-1-flash-picker`. Those seven were not offered by that

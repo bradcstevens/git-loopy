@@ -42,9 +42,9 @@ pub use timestamp::{
 };
 pub use view::{
     project_run_view, Activity, ActivityWindow, ConsumptionView, ContextFill, ContributionRow,
-    Dashboard, DeliveryView, DetailHeader, DrillIn, Header, IssueLog, IterationBreakdown,
-    LogLineView, ParallelDeclaration, PeakContext, Queue, QueueRow, RunView, Strikes, Summary,
-    SummaryRow, TerminalCapabilities, ViewContext,
+    Dashboard, DeliveryView, DetailHeader, DrillIn, ExecutionHostView, Header, IssueLog,
+    IterationBreakdown, LogLineView, ParallelDeclaration, PeakContext, Queue, QueueRow, RunView,
+    Strikes, Summary, SummaryRow, TerminalCapabilities, ViewContext, WindDownDeclaration,
 };
 pub use zoneinfo::{zone_from_posix_tz, zone_from_tz_data};
 

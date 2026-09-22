@@ -166,7 +166,7 @@ def test_run_config_routing_copies_input_not_aliased() -> None:
 
 
 def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -> None:
-    """Pin CLI 1.0.83's observed capabilities without dropping compatibility IDs."""
+    """Pin CLI 1.0.84-5's observed capabilities without dropping compatibility IDs."""
     from git_loopy.config import (
         MODEL_REASONING_EFFORTS,
         REASONING_EFFORTS,
@@ -206,6 +206,7 @@ def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -
         ),
         "grok-4.5": frozenset({"low", "medium", "high"}),
         "grok-4.6": frozenset({"low", "medium", "high", "xhigh"}),
+        "grok-4.7": frozenset({"low", "medium", "high"}),
         "mai-code-1.1-flash": frozenset({"low", "medium", "high"}),
         "mai-code-1-flash-picker": frozenset({"low", "medium", "high"}),
     }
@@ -379,15 +380,23 @@ def test_the_tracked_project_config_preserves_its_default_override(
         warn=warnings.append,
     ).run
 
-    assert (run.model, run.reasoning_effort) == ("gpt-6-astra", "high")
-    assert len(warnings) == 1
-    assert "['grok-4.7']" in warnings[0]
+    assert (run.model, run.reasoning_effort) == ("gpt-6-astra", "medium")
+    assert warnings == []
 
 
 def test_the_tracked_project_config_preserves_all_task_type_routes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Routes survive resolution, with a warning for the model the fixture lacks."""
+    """Every route survives resolution, and every pair is on the roster.
+
+    The tracked Config routes ``implementation`` to an on-roster model, so
+    resolution is silent. The off-roster warning-and-pass-through path this
+    file used to exercise incidentally is covered directly, against a synthetic
+    Config, in ``test_config_resolver.py``.
+
+    The built-in roster is still pinned, so the silence is a statement about the
+    shipped file rather than about the harness this machine last observed.
+    """
     from git_loopy import cli
 
     _pin_built_in_roster(monkeypatch)
@@ -401,13 +410,12 @@ def test_the_tracked_project_config_preserves_all_task_type_routes(
     ).run
 
     assert dict(run.routing) == {
-        "planning": ("gpt-6-astra", "max"),
-        "review": ("claude-opus-5", "max"),
+        "planning": ("gpt-6-astra", "xhigh"),
+        "review": ("claude-opus-5", "xhigh"),
         "implementation": ("grok-4.7", "high"),
-        "test": ("claude-sonnet-5", "high"),
-        "docs": ("gpt-5.6-luna", "low"),
-        "chore": ("gpt-5.6-luna", "low"),
+        "test": ("claude-opus-5", "high"),
+        "docs": ("gpt-5.6-luna", "medium"),
+        "chore": ("gpt-5.6-luna", "medium"),
         "bugfix": ("claude-opus-5", "xhigh"),
     }
-    assert len(warnings) == 1
-    assert "['grok-4.7']" in warnings[0]
+    assert warnings == []

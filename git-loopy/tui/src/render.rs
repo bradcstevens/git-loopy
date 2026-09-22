@@ -44,6 +44,14 @@ const UNKNOWN_ASCII: &str = "-";
 /// renders no box drawing.
 const UNAVAILABLE: &str = "n/a";
 
+/// The placement and isolation grade a trace that declared no **Execution
+/// host** carries, which `event-schema.json` names as the legacy value.
+///
+/// It is the wire's own word, not this renderer's: the projection carries the
+/// string a legacy trace means, and the renderer turns it into the ordinary
+/// unknown placeholder so it reads like every other unmeasured fact.
+const UNDECLARED_HOST: &str = "unknown";
+
 /// One drawn table column.
 ///
 /// `rank` is the order the column is *given up* in when the terminal is too
@@ -553,6 +561,8 @@ fn draw_header(
     segments.extend(routing_segment(header).map(|note| (5, note)));
     segments.extend(rate_card_segment(header).map(|note| (6, note)));
     segments.extend(parallel_segment(header));
+    segments.push(execution_host_segment(header, glyphs));
+    segments.extend(wind_down_segment(header));
     segments.extend(diagnostic_segment(diagnostics).map(|note| (0, note)));
     let progress = fitted_line(segments, area, glyphs);
 
@@ -810,6 +820,57 @@ fn parallel_segment(header: &Header) -> Option<(u8, String)> {
         }
         _ => None,
     }
+}
+
+/// Where this Run's work ran, and behind what boundary.
+///
+/// Always stated, and the first segment to yield: an operator asks *where*
+/// once, so it is context rather than a live reading, but §I of the Execution
+/// host spec obliges the Run to disclose it rather than leave it inferable.
+/// An undeclared host renders as the unknown placeholder and never as `local`
+/// — that every Run to date ran locally is a fact about history, not about the
+/// trace in front of the reader.
+fn execution_host_segment(header: &Header, glyphs: &Glyphs) -> (u8, String) {
+    let host = &header.execution_host;
+    let placement = if host.placement == UNDECLARED_HOST {
+        glyphs.unknown
+    } else {
+        host.placement.as_str()
+    };
+    let grade = if host.isolation_grade == UNDECLARED_HOST {
+        String::new()
+    } else {
+        format!(" ({})", host.isolation_grade)
+    };
+    (8, format!("host {placement}{grade}"))
+}
+
+/// The Run-scoped **Wind-down**, when one is latched.
+///
+/// `status` already says *draining* or *stopping*; this segment carries the
+/// three facts it cannot — which of the three causes entered the Wind-down,
+/// which stage of the ladder it reached, and how much work is still in flight.
+/// A `0` count is an observed none on a serial Run, so it is stated rather
+/// than suppressed.
+///
+/// Silent in both of the states that carry no latch: a trace that never
+/// mentioned a Wind-down, and one whose Strike drain a green publication
+/// lifted. The second is why the declaration is gated rather than nullable —
+/// the renderer only has to ask whether something is latched, because the
+/// projection has already separated *lifted* from *never said*.
+fn wind_down_segment(header: &Header) -> Option<(u8, String)> {
+    let wind_down = &header.wind_down;
+    let (Some(cause), Some(stage), Some(draining)) = (
+        wind_down.cause.as_deref(),
+        wind_down.stage.as_deref(),
+        wind_down.draining,
+    ) else {
+        return None;
+    };
+    Some((
+        2,
+        format!("winding down: {cause} ({stage}, {draining} in flight)"),
+    ))
 }
 
 /// A premium-request count, or the unknown placeholder.

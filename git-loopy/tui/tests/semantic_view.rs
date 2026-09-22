@@ -1822,3 +1822,101 @@ fn an_iteration_key_absent_or_unreadable_keeps_a_record_off_the_rolling_path() {
         );
     }
 }
+
+#[test]
+fn the_header_carries_the_wind_down_cause_stage_and_in_flight_count() {
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    let ctx = context("2026-05-16T00:00:01.000Z", 0);
+
+    // Silence is `not_declared`, and it is not a Stop: a Run that never spoke
+    // about winding down must not be rendered as one that did and cleared.
+    let quiet = view(&state, &ctx, IssueRef::number(42));
+    assert_eq!(
+        quiet["dashboard"]["header"]["wind_down"],
+        serde_json::json!({
+            "availability": "not_declared",
+            "cause": null,
+            "stage": null,
+            "draining": null,
+        })
+    );
+
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"type":"wrapper.stop.requested","cause":"operator_stop","stage":"drain","draining":2,"run_id":"run-1"}"#,
+        )
+        .expect("drain decodes"),
+    );
+    let draining = view(&state, &ctx, IssueRef::number(42));
+    assert_eq!(draining["dashboard"]["header"]["status"], "draining");
+    assert_eq!(
+        draining["dashboard"]["header"]["wind_down"],
+        serde_json::json!({
+            "availability": "available",
+            "cause": "operator_stop",
+            "stage": "drain",
+            "draining": 2,
+        })
+    );
+}
+
+#[test]
+fn a_lifted_drain_is_an_observed_wind_down_with_nothing_latched() {
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    let ctx = context("2026-05-16T00:00:01.000Z", 0);
+    for raw in [
+        r#"{"type":"wrapper.stop.requested","cause":"strike_limit","stage":"drain","draining":1,"run_id":"run-1"}"#,
+        r#"{"type":"wrapper.stop.lifted","cause":"strike_limit","draining":0,"run_id":"run-1"}"#,
+    ] {
+        state.apply(&Event::from_jsonl_line(raw).expect("wind-down event decodes"));
+    }
+    let lifted = view(&state, &ctx, IssueRef::number(42));
+    // The Run is healthy again, and the Header says so twice: a `status` back
+    // to running, and a declaration that stays `available` because this trace
+    // has spoken about winding down — which a legacy trace never has.
+    assert_eq!(lifted["dashboard"]["header"]["status"], "running");
+    assert_eq!(
+        lifted["dashboard"]["header"]["wind_down"],
+        serde_json::json!({
+            "availability": "available",
+            "cause": null,
+            "stage": null,
+            "draining": null,
+        })
+    );
+}
+
+#[test]
+fn the_header_carries_the_execution_host_and_its_isolation_grade() {
+    let mut state = DashboardState::new(RunInputs::new("gpt-5.6-sol", "high"));
+    let ctx = context("2026-05-16T00:00:01.000Z", 0);
+
+    // An absent declaration is an old trace's unknown, never an inferred local
+    // placement (`event-schema.json`'s `execution_host.legacy_value`).
+    let legacy = view(&state, &ctx, IssueRef::number(42));
+    assert_eq!(
+        legacy["dashboard"]["header"]["execution_host"],
+        serde_json::json!({
+            "placement": "unknown",
+            "isolation_grade": "unknown",
+            "capacity": null,
+            "starting_lane_limit": null,
+        })
+    );
+
+    state.apply(
+        &Event::from_jsonl_line(
+            r#"{"type":"wrapper.run.start","run_id":"run-1","execution_host":{"placement":"github-actions","isolation_grade":"machine boundary","capacity":20,"starting_lane_limit":4}}"#,
+        )
+        .expect("run start decodes"),
+    );
+    assert_eq!(
+        view(&state, &ctx, IssueRef::number(42))["dashboard"]["header"]["execution_host"],
+        serde_json::json!({
+            "placement": "github-actions",
+            "isolation_grade": "machine boundary",
+            "capacity": 20,
+            "starting_lane_limit": 4,
+        })
+    );
+}

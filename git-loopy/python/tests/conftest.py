@@ -38,6 +38,63 @@ from git_loopy.prompt import packaged_required_skills
 from git_loopy.skill_source import SkillSourceError, SkillSourcePin
 
 
+# The suite's fixtures build many real git repositories and subprocesses across
+# thousands of tests. A host whose default soft ``RLIMIT_NOFILE`` is low (256 is
+# the common macOS shell default) can start failing teardown with ``OSError:
+# [Errno 24] Too many open files`` partway through the run, for a reason that
+# has nothing to do with what any test asserts. Raising the soft limit toward
+# the hard limit once, at import time, removes that host-dependent ceiling so
+# the Python suite Feedback loop (AGENTS.md) behaves the same regardless of the
+# shell's ambient ulimit.
+_MINIMUM_OPEN_FILE_CEILING = 8192
+
+
+def _raised_open_file_ceiling(soft: int, hard: int, *, rlim_infinity: int) -> int | None:
+    """Return the soft ``RLIMIT_NOFILE`` to request, or ``None`` if none is needed.
+
+    An unbounded hard limit (``RLIM_INFINITY``) is capped to
+    :data:`_MINIMUM_OPEN_FILE_CEILING` rather than requested as-is, since a
+    literally unlimited soft limit is not a value most platforms accept.
+    """
+    target = _MINIMUM_OPEN_FILE_CEILING if hard == rlim_infinity else hard
+    if soft >= target:
+        return None
+    return target
+
+
+_UNRESOLVED = object()  # sentinel: "resolve the real `resource` module"
+
+
+def _raise_open_file_limit(*, resource_module: object = _UNRESOLVED) -> None:
+    """Raise this process's file-descriptor ceiling toward its hard limit.
+
+    Best-effort and silent: Windows has no ``resource`` module, and a host that
+    refuses the raise (a sandbox pinning the hard limit, say) is left exactly
+    as it was rather than failing every test that imports this module.
+    ``resource_module`` is an injection seam for tests; production always
+    resolves the real module.
+    """
+    resource = resource_module
+    if resource is _UNRESOLVED:
+        try:
+            import resource  # type: ignore[no-redef]
+        except ImportError:  # pragma: no cover - resource is POSIX-only
+            return
+    if resource is None:
+        return
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    target = _raised_open_file_ceiling(soft, hard, rlim_infinity=resource.RLIM_INFINITY)
+    if target is None:
+        return
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    except (ValueError, OSError):
+        pass
+
+
+_raise_open_file_limit()
+
+
 _RUN_TEST_MODULES = frozenset(
     {
         "test_conformance.py",
