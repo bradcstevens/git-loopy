@@ -442,8 +442,12 @@ def _definition_plan(
     for label in tracker.label_definitions():
         if not label.startswith(ROUTE_LABEL_PREFIX):
             continue
-        issues = tracker.issues_with_label(label)
-        pulls = tracker.pull_requests_with_label(label)
+        try:
+            issues = tracker.issues_with_label(label)
+            pulls = tracker.pull_requests_with_label(label)
+        except RouteLabelMigrationError:
+            kept.append((label, "unverified", ()))
+            continue
         if not issues.complete or not pulls.complete:
             kept.append((label, "unverified", ()))
             continue

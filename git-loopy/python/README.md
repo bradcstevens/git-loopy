@@ -1655,26 +1655,33 @@ again, and an exhausted attempt budget is not renewed. The comment marker
 stays `git-loopy-route:v1:` so an older comment is still recognizable.
 
 Historical issues that still carry the old combined label are not swept by a
-Run. Migrate them explicitly, and only after every publishing Runner for that
-repository has been stopped or upgraded. This command cannot prove that other
-machines have stopped; deleting a definition does not stop an older Runner
-from creating it again.
+Run, and this command does not scan other repositories you can access.
+
+Stop or upgrade every publishing Runner for this repository before you apply
+the migration. A Run still on the combined label can recreate a definition
+this command just deleted. The command refuses a pending local delivery, an
+unreadable local store, and an incomplete issue listing before it writes.
+It cannot prove that other machines have stopped.
 
 ```bash
-# Report only. Names the repository, the plan, and what would stay unknown.
+# Report only. Names this repository, the plan, and what would stay unknown.
 git-loopy route-labels migrate
 
-# Remove legacy associations, write exact dimensions, and delete a legacy
-# definition only when no issue and no pull request still carries it.
+# After the cutover: remove legacy associations, write exact dimensions, and
+# delete a legacy definition only when no issue and no pull request still
+# carries it. Re-running is safe. It does not post a second comment.
 git-loopy route-labels migrate --apply
 ```
 
-Reconstruction uses a trustworthy local Route record when this clone has one,
-otherwise the newest projection comment whose model, effort, and tier are
-exact. It never parses the truncated `git-loopy-route:` label, never reads a
-current model listing, and never buys a new selection. A missing dimension is
-named. Historical comments are not rewritten. A pending local delivery or an
-incomplete issue listing refuses before any tracker write. Shell and
+The listing pages every open and closed issue. A pull request is not
+relabeled. Reconstruction uses a trustworthy local Route record when this
+clone has one, otherwise the newest projection comment whose model, effort,
+and tier are exact. It never parses the truncated `git-loopy-route:` label,
+never reads a current model listing, and never buys a new selection. A
+missing dimension is named. Historical comments are not rewritten. A
+permission or pagination failure while checking whether a definition is
+still used keeps that definition and says so; it is not treated as unused.
+A partial write is not a successful cleanup: run the command again. Shell and
 PowerShell do not implement this command. A later capacity-only refresh is
 not this command: the work session's verified window fills or corrects
 `model_context` on the assignment that session started under, without a new

@@ -2129,19 +2129,25 @@ not replay the combined name. Historical
 delivery events that omit `labels` and `incomplete` stay valid, and
 `event_schema_version` stays 1.2. `git-loopy route-labels migrate` is the
 explicit, repeatable Python migration for one repository the operator is in.
-It covers open and closed issues. It reconstructs dimensions only from a
-trustworthy local Route record or a matching historical projection comment,
-never from truncated `git-loopy-route:` label text, a current model listing,
-or a new selection. It removes the legacy association even when a dimension
-stays unknown, does not rewrite historical comments, and deletes a legacy
-label definition only after a complete issue listing and a complete
-pull-request listing both show it unused. A pending local delivery, an
-incomplete issue listing, or an unreadable local store refuses before any
-tracker write. Reporting is the default and writes nothing; `--apply` is the
-write and does not prompt. The command cannot certify that other machines
-have stopped publishing legacy labels. A later capacity-only refresh is
-the authenticated work session's `token_limit`, not a roster lookup and not
-a second routing comment. It fills or corrects `model_context` on the
+It does not run as part of a Run, and it does not scan other repositories.
+It pages every open and closed issue, not the Pool's capped issue list. A
+pull request in that listing is not relabeled. It reconstructs dimensions
+only from a trustworthy local Route record or a matching historical
+projection comment, never from truncated `git-loopy-route:` label text, a
+current model listing, or a new selection. It removes the legacy association
+even when a dimension stays unknown, does not rewrite historical comments,
+and deletes a legacy label definition only after a complete issue listing
+and a complete pull-request listing both show it unused. A permission or
+pagination failure on that usage check keeps the definition and names it
+unverified; it is not treated as unused. Operators must stop or upgrade
+every publishing Runner for that repository before `--apply`. A pending
+local delivery, an incomplete issue listing, or an unreadable local store
+refuses before any tracker write. Reporting is the default and writes
+nothing; `--apply` is the write and does not prompt. The command cannot
+certify that other machines have stopped publishing legacy labels. A later
+capacity-only refresh is the authenticated work session's `token_limit`,
+not a roster lookup and not a second routing comment. It fills or corrects
+`model_context` on the
 assignment that session started under — that issue, selected model, Context
 tier, and assignment identity — in serial and Lane operation. A late
 observation or delivery from a superseded assignment writes nothing, including

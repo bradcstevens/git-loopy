@@ -926,9 +926,11 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         "route-labels",
         description=(
             "Migrate this repository's legacy combined Route labels to exact "
-            "model_id, model_context, and model_effort dimensions. Reporting "
-            "is the default and writes nothing. The migration does not prompt, "
-            "fetch a model listing, call a Route selector, rewrite historical "
+            "model_id, model_context, and model_effort dimensions. Stop or "
+            "upgrade every publishing Runner for this repository before "
+            "--apply. Reporting is the default and writes nothing. The "
+            "migration does not prompt, scan other repositories, fetch a "
+            "model listing, call a Route selector, rewrite historical "
             "comments, or write Config. Shell and PowerShell do not implement "
             "it. A later capacity-only refresh is the work session's verified "
             "window for that assignment, not this command."
@@ -941,12 +943,15 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         "migrate",
         help="Report or apply the legacy Route-label migration.",
         description=(
-            "Reconstruct exact dimensions from a trustworthy local Route record "
-            "or a matching historical projection comment. Never from truncated "
-            "git-loopy-route label text. --apply removes those associations and "
-            "deletes a legacy definition only when issues and pull requests both "
-            "prove it unused. This command cannot certify that other machines "
-            "have stopped publishing the old label."
+            "Page every open and closed issue in this repository. Reconstruct "
+            "exact dimensions from a trustworthy local Route record or a "
+            "matching historical projection comment, never from truncated "
+            "git-loopy-route label text. --apply removes those associations "
+            "and deletes a legacy definition only when a complete issue "
+            "listing and a complete pull-request listing both show it unused. "
+            "A failed usage check keeps the definition. Pull requests are not "
+            "relabeled. This command cannot certify that other machines have "
+            "stopped publishing the old label."
         ),
     )
     route_labels_migrate.add_argument(
