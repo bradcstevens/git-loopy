@@ -166,7 +166,7 @@ def test_run_config_routing_copies_input_not_aliased() -> None:
 
 
 def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -> None:
-    """Pin CLI 1.0.83's observed capabilities without dropping compatibility IDs."""
+    """Pin CLI 1.0.84-5's observed capabilities without dropping compatibility IDs."""
     from git_loopy.config import (
         MODEL_REASONING_EFFORTS,
         REASONING_EFFORTS,
@@ -206,6 +206,7 @@ def test_supported_models_matrix_covers_pinned_catalog_and_compatibility_ids() -
         ),
         "grok-4.5": frozenset({"low", "medium", "high"}),
         "grok-4.6": frozenset({"low", "medium", "high", "xhigh"}),
+        "grok-4.7": frozenset({"low", "medium", "high"}),
         "mai-code-1.1-flash": frozenset({"low", "medium", "high"}),
         "mai-code-1-flash-picker": frozenset({"low", "medium", "high"}),
     }

@@ -3054,7 +3054,7 @@ def test_the_roster_preserves_compatibility_efforts_alongside_pinned_models() ->
     """A pinned-harness refresh does not erase saved Config's compatibility rows.
 
     ADR-0019 recorded that CLI ``1.0.67`` lacked the later Gemini capabilities.
-    CLI ``1.0.83`` verified Astra's ceiling. The upgrade account did not list
+    CLI ``1.0.84-5`` verified Astra's ceiling. The upgrade account did not list
     Gemini, so those rows are retained compatibility data, not a live capture.
     """
     roster = _MODEL_ROSTER["roster"]
