@@ -368,6 +368,11 @@ class FakeExecutionHost:
         del run_id, base_revision
         return HostPreflight(passed=True)
 
+    async def observe_capabilities(self, *, observation_id: str) -> None:
+        """A fake is not an executing-host report."""
+        del observation_id
+        return None
+
 
 @pytest.mark.asyncio
 async def test_fake_host_returns_a_prepared_branch_with_no_network() -> None:

@@ -54,6 +54,35 @@ from .run_routing_preflight import resolve_run_routing_preflight
 from .static_route import RoutePolicy
 from . import settings
 
+async def _resolve_shared_routing_preflight(
+    config: RunConfig, environment: Mapping[str, str], output_fn: Callable[[str], None]
+):
+    """The same readiness verdict setup, doctor and Run preflight share.
+
+    A remote Static Run is judged against the executing host's report, then
+    the local listing. Doctor does not substitute one for the other. Dynamic
+    election on a remote host stays refused, and is not asked for a snapshot.
+    """
+    from .host_capability import (
+        observe_executing_host_capabilities,
+        remote_static_execution,
+    )
+
+    report = None
+    if remote_static_execution(config):
+        from .loop import _make_execution_host
+
+        report = await observe_executing_host_capabilities(
+            config, host_factory=_make_execution_host
+        )
+    return await resolve_run_routing_preflight(
+        config,
+        environment,
+        warn=lambda message: output_fn(f"Routing | {message}"),
+        host_capabilities=report,
+    )
+
+
 ClientFactory = Callable[[], Any]
 ConfigWriter = Callable[[Path, Mapping[str, object]], None]
 EnvironmentPreflightResolver = Callable[..., RunEnvironmentPreflight]
@@ -159,9 +188,7 @@ def run_doctor(
         )
 
     routing_preflight = asyncio.run(
-        resolve_run_routing_preflight(
-            config, environment, warn=lambda message: output_fn(f"Routing | {message}")
-        )
+        _resolve_shared_routing_preflight(config, environment, output_fn)
     )
     if not routing_preflight.passed:
         output_fn(

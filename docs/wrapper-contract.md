@@ -1637,16 +1637,20 @@ the default, and the absence of a decision — `static` (this section), and `dyn
   its work sessions on a machine that authenticates as *itself*, the orchestrator's own listing
   describes a different installation under a different identity, and reporting it as that
   placement's verdict is exactly the substitution the rule above forbids. An Orchestrator MUST
-  refuse the combination before work rather than verify the wrong harness. Only a placement whose
-  sessions run under the Run's own authenticated harness is verifiable today.
-  Python's no-I/O placement refusal precedes local model listing, Skill migration, interactive
-  detachment and remote host preparation, including the green-base preflight dispatch. It shares
-  the routing authority verdict used by setup, doctor and Run preflight; a run-wide model/effort
-  override does not waive it. The `execution_host_refusal` cases in `routing-resolution.json`
-  exercise recorded and temporary authority through CLI, interactive startup and direct Run,
-  preserving Config and starting no work, Lease, Strike or Route publication. An explicitly
-  unselected remote Run retains its staged legacy path, not strict routing support. This
-  refusal does not complete non-local activation or change shell/PowerShell's routing deferral.
+  NOT substitute the local listing for that host's. Selected Static execution, including a
+  run-wide model or effort pin that suppresses Dynamic election, MAY proceed only when that
+  host reports its own listing and both that listing and the local listing accept every
+  configured Static route. Serial sessions still run on the local harness, so their dial
+  presence comes from the local listing. Lane sessions run on the host, so their dial presence
+  comes from the host report. A missing, failed, or unreadable report is absence, not an empty
+  listing, and MUST refuse before local model listing, Skill migration, interactive detachment,
+  and remote green-base dispatch. Observation MAY construct the host; it is not green-base and
+  not a contribution, and an unselected remote Run MUST NOT require it. Dynamic election on a
+  remote host MUST still be refused, report or not: a preflight snapshot is not a fresh
+  proposal or Pickup read. Python shares that verdict across CLI startup, doctor and Run
+  preflight. The `execution_host_refusal` cases cover the no-report path. This does not
+  activate final Dynamic defaults, authorize Dynamic election on a remote host, or change
+  shell/PowerShell, Subagent, or Integration routing deferrals.
 - **Refuse, never rescue.** §14's *gate and fall back* rule does not apply to a Static route and
   MUST NOT be reached for: an effort the model does not accept, a tier it does not offer, a model
   this account may not use, a model the harness never listed, and a listing that could not be read
@@ -1713,7 +1717,8 @@ and carries saved-Config presence through detached startup. Doctor and Run prefl
 same authority verdict; live readiness and Pickup validation still apply after authority exists.
 Historical records retain their interpretation. Empty Config scopes and unselected non-local
 Runs retain the legacy path during staged activation; a selected policy still MUST NOT validate
-a remote placement using local eligibility. Shell and PowerShell migration enforcement is
+a remote placement using local eligibility. A host capability report is that host's listing,
+not a substitute for the local one, and does not authorize Dynamic election. Shell and PowerShell migration enforcement is
 explicitly deferred and their unchanged behavior remains conforming. This paragraph is the
 member deferral, not final Dynamic-default activation, remote capability support, or Subagent/
 Integration routing support.

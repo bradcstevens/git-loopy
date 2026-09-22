@@ -77,15 +77,18 @@ same suite. This does not cover bare init/auto-setup activation or grant other
 Runner members setup support.
 
 The `execution_host_refusal` matrix covers selected policies on the independently
-authenticated GitHub Actions host. Eight cases run through CLI, interactive
-startup and direct Run entry in `python/tests/test_loop_parallel.py`, proving
-refusal before local model listing, Skill migration, detachment, host construction
-or remote green-base dispatch. Saved and temporary authority, model/effort pins
-and context-only controls cannot authorize that placement. Config stays unchanged
-and no work, Lease, Strike or Route publication starts. The existing unselected
-remote execution cases protect the staged compatibility path; this matrix does
-not implement remote capabilities, activate Dynamic defaults or remove native
-member deferrals.
+authenticated GitHub Actions host when that host has not reported its listing.
+Eight cases run through CLI, interactive startup and direct Run entry in
+`python/tests/test_loop_parallel.py`. Without a report, they refuse before local
+model listing, Skill migration, detachment and remote green-base dispatch.
+Static routes and model/effort pins may construct the host to observe; that
+observation is not green-base. Dynamic election does not construct the host.
+Config stays unchanged and no work, Lease, Strike or Route publication starts.
+A present report is a separate authority, proved by the host-capability session
+tests: a Lane uses the host dial even when the local listing disagrees, and a
+rejecting report starts no contribution. The existing unselected remote
+execution cases protect the staged compatibility path. This matrix does not
+activate Dynamic defaults or remove native member deferrals.
 
 The `publication_recovery` matrix carries an explicit migrate choice through
 init/update over authored unselected Config, then repeats real CLI Runs in serial

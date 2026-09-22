@@ -345,6 +345,16 @@ class ExecutionHost(Protocol):
         """Check host readiness once before this Run dispatches any Lane."""
         ...
 
+    async def observe_capabilities(self, *, observation_id: str) -> object | None:
+        """Report this host's harness listing, or ``None`` when it cannot.
+
+        A remote host's report is the only listing that may authorize a
+        selected Static route for sessions that host opens. Local placement
+        returns ``None``: its listing is read where the session runs, not
+        transported. Absence is not an empty listing.
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class LocalRunResult:
@@ -446,6 +456,11 @@ class LocalExecutionHost:
         """Local Lanes need no remote-host preflight."""
         del run_id, base_revision
         return HostPreflight(passed=True)
+
+    async def observe_capabilities(self, *, observation_id: str) -> None:
+        """Local sessions are not authorized by a transported report."""
+        del observation_id
+        return None
 
     async def run_contribution(
         self, request: ContributionRequest

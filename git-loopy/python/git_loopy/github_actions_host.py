@@ -73,7 +73,9 @@ __all__ = [
     "CONTRIBUTION_ARTIFACT_RESULT",
     "CONTRIBUTION_JOB_TIMEOUT_SECONDS",
     "GITHUB_ACTIONS_ISOLATION_GRADE",
+    "CAPABILITY_OBSERVATION_TIMEOUT_SECONDS",
     "GITHUB_ACTIONS_PLACEMENT",
+    "HOST_CAPABILITIES_WORKFLOW",
     "LANE_CONTRIBUTION_WORKFLOW",
     "RUN_PREFLIGHT_WORKFLOW",
     "MONOTONIC_OBSERVATION_FIELD",
@@ -113,6 +115,13 @@ GITHUB_ACTIONS_ISOLATION_GRADE: IsolationGrade = "machine boundary"
 #: The workflow one contribution is dispatched into.
 LANE_CONTRIBUTION_WORKFLOW = "lane-contribution.yml"
 RUN_PREFLIGHT_WORKFLOW = "run-preflight.yml"
+#: Capability observation is not the green-base gate and not a contribution.
+#: It is required only when a selected Static route must be verified against
+#: this host; unselected Runs do not dispatch it.
+HOST_CAPABILITIES_WORKFLOW = "host-capabilities.yml"
+#: A listing that has not returned in ten minutes did not complete. Waiting
+#: the contribution cap would hide an unverifiable route behind a hung job.
+CAPABILITY_OBSERVATION_TIMEOUT_SECONDS = 10 * 60
 
 _T = TypeVar("_T")
 
@@ -717,6 +726,58 @@ class GitHubActionsExecutionHost:
         finally:
             self._preflight_handles.pop(token, None)
 
+    async def observe_capabilities(self, *, observation_id: str) -> object | None:
+        """List models on the runner that will open work sessions.
+
+        A failed dispatch, an unreadable artifact, or a job that did not
+        succeed answers ``None``. That is absence, not an empty listing, and
+        the caller must not substitute this machine's listing for it.
+        """
+        from git_loopy.host_capability import (
+            CAPABILITY_REPORT_FILENAME,
+            HostCapabilityReport,
+            capability_artifact_name,
+            capability_token,
+        )
+
+        if not observation_id:
+            return None
+        token = capability_token(observation_id)
+        artifact = capability_artifact_name(observation_id)
+        handles = {
+            token: DispatchHandle(
+                token=token,
+                workflow=HOST_CAPABILITIES_WORKFLOW,
+                ref=self._workflow_ref,
+            )
+        }
+        try:
+            await self._call(
+                self._client.dispatch,
+                HOST_CAPABILITIES_WORKFLOW,
+                self._workflow_ref,
+                {
+                    "capability_token": token,
+                    "observation_id": observation_id,
+                },
+            )
+            run = await self._await_completion(
+                token,
+                handles,
+                timeout_seconds=CAPABILITY_OBSERVATION_TIMEOUT_SECONDS,
+            )
+        except ActionsError:
+            return None
+        if run is None or run.status != "completed" or run.conclusion != "success":
+            return None
+        try:
+            uploaded = await self._call(
+                self._client.get_artifact, run.database_id, artifact
+            )
+            return _read_capability_report(uploaded, HostCapabilityReport, CAPABILITY_REPORT_FILENAME)
+        except (ActionsError, OSError, ValueError, zipfile.BadZipFile):
+            return None
+
     async def _supervise(
         self, request: ContributionRequest, token: str
     ) -> ContributionOutcome:
@@ -872,7 +933,11 @@ class GitHubActionsExecutionHost:
         return await asyncio.to_thread(call, *args)
 
     async def _await_completion(
-        self, token: str, handles: dict[str, DispatchHandle] | None = None
+        self,
+        token: str,
+        handles: dict[str, DispatchHandle] | None = None,
+        *,
+        timeout_seconds: float | None = None,
     ) -> ActionsRun | None:
         """Poll coarse job and step status until the run completes or time runs out.
 
@@ -884,6 +949,7 @@ class GitHubActionsExecutionHost:
         """
         handles = self._handles if handles is None else handles
         started = self._clock()
+        deadline = self._timeout_seconds if timeout_seconds is None else timeout_seconds
         while True:
             handle = handles[token]
             if handle.database_id is None:
@@ -900,7 +966,7 @@ class GitHubActionsExecutionHost:
                 handles[token] = handle
                 if observed.status == "completed":
                     return observed
-            if self._clock() - started >= self._timeout_seconds:
+            if self._clock() - started >= deadline:
                 return handle.liveness
             await self._sleep(self._poll_interval_seconds)
 
@@ -924,6 +990,23 @@ class RemoteCompletion:
     #: host failure and not a session one: the session can have ended perfectly
     #: well and still have its residue lost with the machine.
     checkpoint_failed: bool = False
+
+
+def _read_capability_report(
+    artifact: ActionsArtifact, report_type: Any, filename: str
+) -> Any:
+    """Read a capability report out of the observation artifact.
+
+    Raises:
+        ValueError: the archive has no report, or the report is malformed.
+            Malformed is not an empty listing.
+    """
+    with zipfile.ZipFile(io.BytesIO(artifact.archive)) as zipped:
+        members = {name.rsplit("/", 1)[-1]: name for name in zipped.namelist()}
+        if filename not in members:
+            raise ValueError(f"artifact is missing {filename}")
+        raw = zipped.read(members[filename]).decode("utf-8")
+    return report_type.from_json(raw)
 
 
 def read_partial_result(

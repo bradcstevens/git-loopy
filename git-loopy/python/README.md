@@ -1259,12 +1259,13 @@ Three details worth knowing:
   itself was never static. Write an explicit `[escalation]` block if you want
   one — it is verified like any other route.
 
-One combination is refused outright: `route_policy = "static"` with a
-non-`local` `execution_host`. A `github-actions` contribution opens its session
-on a GitHub-hosted runner that authenticates as *itself*, so this machine's
-model listing is not the listing that would run it — approving a route against
-the wrong installation is exactly what the policy exists to prevent. Run
-locally, or leave `route_policy` unset for that placement.
+A `github-actions` contribution opens its session on a runner that authenticates
+as *itself*, so this machine's model listing is not that runner's listing.
+`static`, and a model or effort pin that suppresses Dynamic election, may run
+there only when the host reports its own listing and both listings accept the
+route. A missing or unreadable report refuses before work; the local listing is
+not substituted. `dynamic` on that placement is still refused: a snapshot is
+not a fresh election. Leave `route_policy` unset to keep the legacy remote path.
 
 ### `route_policy = "dynamic"` — elect each issue's route from live evidence
 

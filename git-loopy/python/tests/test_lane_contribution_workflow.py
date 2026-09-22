@@ -463,16 +463,22 @@ def test_the_copilot_permission_scope_is_suppressed_narrowly_for_this_file_alone
     """`copilot-requests` is real; the linter's hard-coded roster is stale.
 
     Suppressing it repository-wide would mean a typo'd `content: write`
-    anywhere would stop being a lint error too. Scoping the suppression to one
-    file and one exact message keeps every other unknown scope failing the
-    gate, including another one in this same workflow.
+    anywhere would stop being a lint error too. Scoping the suppression to the
+    two workflows that authenticate a job to Copilot, and to one exact message,
+    keeps every other unknown scope failing the gate.
     """
     config = yaml.safe_load(
         (REPOSITORY_ROOT / ".github/actionlint.yaml").read_text(encoding="utf-8")
     )
 
-    assert set(config["paths"]) == {".github/workflows/lane-contribution.yml"}
+    assert set(config["paths"]) == {
+        ".github/workflows/lane-contribution.yml",
+        ".github/workflows/host-capabilities.yml",
+    }
     assert config["paths"][".github/workflows/lane-contribution.yml"]["ignore"] == [
+        'unknown permission scope "copilot-requests"'
+    ]
+    assert config["paths"][".github/workflows/host-capabilities.yml"]["ignore"] == [
         'unknown permission scope "copilot-requests"'
     ]
 

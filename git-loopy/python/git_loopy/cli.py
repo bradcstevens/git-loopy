@@ -3218,10 +3218,23 @@ def main(argv: list[str] | None = None) -> int:
 
     config = resolved.run
 
-    from git_loopy.run_routing_preflight import routing_choice_refusal
+    from git_loopy.host_capability import remote_static_execution
+    from git_loopy.run_routing_preflight import (
+        RunRoutingPreflight,
+        routing_choice_refusal,
+    )
 
-    if (refusal := routing_choice_refusal(config)) is not None:
+    host_report = None
+    startup_routing: RunRoutingPreflight | None = None
+    if remote_static_execution(config):
+        host_report, startup_routing = asyncio.run(
+            _observe_remote_static_startup(config)
+        )
+    if (refusal := routing_choice_refusal(config, host_capabilities=host_report)) is not None:
         print(f"git-loopy: {refusal}", file=sys.stderr)
+        return 1
+    if startup_routing is not None and startup_routing.refusal is not None:
+        print(f"git-loopy: {startup_routing.refusal}", file=sys.stderr)
         return 1
 
     # One-time Skill-policy migration (#230, ADR-0015): Config that predates
@@ -3264,7 +3277,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"git-loopy: error: {exc}", file=sys.stderr)
             return 1
         config = resolved.run
-        if (refusal := routing_choice_refusal(config)) is not None:
+        if (
+            refusal := routing_choice_refusal(config, host_capabilities=host_report)
+        ) is not None:
             print(f"git-loopy: {refusal}", file=sys.stderr)
             return 1
     elif startup_state is SkillPolicyStartupState.LEGACY:
@@ -3286,7 +3301,13 @@ def main(argv: list[str] | None = None) -> int:
     # and fall back to the configured model (issue #31).
     if select_model:
         _warn(_model_select_unavailable_message(config))
-    return asyncio.run(_drive_line_printer(config))
+    return asyncio.run(
+        _drive_line_printer(
+            config,
+            host_capabilities=host_report,
+            routing_preflight=startup_routing,
+        )
+    )
 
 
 def _make_model_listing() -> LiveModelListing:
@@ -3343,6 +3364,31 @@ async def _notify_roster_drift(
         )
 
 
+async def _observe_remote_static_startup(
+    config: RunConfig,
+) -> tuple[object | None, object | None]:
+    """Ask the executing host, then judge the report before Skill migration.
+
+    Absence is not an empty listing. A rejecting report is a refusal, so it
+    returns before migration, detachment, writers and green-base. The child
+    of an interactive detach does not receive the report: ``DetachedRunSpec``
+    does not carry one, and that child observes again.
+    """
+    from git_loopy.host_capability import observe_executing_host_capabilities
+    from git_loopy.loop import _make_execution_host
+    from git_loopy.run_routing_preflight import resolve_run_routing_preflight
+
+    report = await observe_executing_host_capabilities(
+        config, host_factory=_make_execution_host
+    )
+    if report is None:
+        return None, None
+    preflight = await resolve_run_routing_preflight(
+        config, os.environ, host_capabilities=report
+    )
+    return report, preflight
+
+
 async def _drive_line_printer(
     config: RunConfig,
     *,
@@ -3351,6 +3397,8 @@ async def _drive_line_printer(
     run_id: str | None = None,
     started_at: datetime | None = None,
     mirror_diagnostics_to_stderr: bool = True,
+    host_capabilities: object | None = None,
+    routing_preflight: object | None = None,
 ) -> int:
     """Resolve the **Rate card**, then drive the line-printer loop (#331).
 
@@ -3378,6 +3426,8 @@ async def _drive_line_printer(
         run_id=run_id,
         started_at=started_at,
         mirror_diagnostics_to_stderr=mirror_diagnostics_to_stderr,
+        host_capabilities=host_capabilities,
+        routing_preflight=routing_preflight,
     )
 
 

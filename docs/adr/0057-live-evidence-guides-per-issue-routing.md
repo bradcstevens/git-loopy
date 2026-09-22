@@ -237,18 +237,19 @@ retain their legacy path; selected policies still refuse rather than substitutin
 local eligibility. `--route-policy unselected` can explicitly retain that remote
 legacy path even when local Config records a policy, without rewriting Config.
 This compatibility boundary is not completed migration or remote routing support.
-The shared no-I/O authority verdict now rejects selected non-local placement at
-CLI startup and direct Run entry, before local model listing, Skill migration,
-interactive detachment or remote host construction and green-base dispatch.
-Previously only the later live routing preflight applied this refusal, so a
-known-unverifiable placement still dispatched a remote job first and an unrelated
-host-preparation failure could hide the actionable routing diagnostic. The shared
-`execution_host_refusal` matrix carries recorded, inherited and temporary choices,
-including run-wide pins and context-only controls, through those startup paths
-without Config edits, work, Lease, Strike or Route publication. The explicitly
-unselected remote compatibility path remains usable. This closes the premature
-dispatch defect; it does not supply the executing host's capabilities or settle
-the remaining non-local activation obligations.
+The shared no-I/O authority verdict rejects a selected non-local placement that
+has no executing-host report, at CLI startup and direct Run entry, before local
+model listing, Skill migration, interactive detachment or remote green-base
+dispatch. Previously only the later live routing preflight applied this refusal,
+so a known-unverifiable placement still dispatched a remote job first and an
+unrelated host-preparation failure could hide the actionable routing diagnostic.
+The shared `execution_host_refusal` matrix carries recorded, inherited and
+temporary choices, including run-wide pins and context-only controls, through
+those startup paths without Config edits, work, Lease, Strike or Route
+publication. Static and pin cases may construct the host to observe; Dynamic
+election does not. The explicitly unselected remote compatibility path remains
+usable. A later slice supplies the host report for Static execution only. It
+does not authorize Dynamic election on that host or settle final defaults.
 Wrapper contract 14.3 and the Conformance routing-resolution notes now state this
 Python-local guard and explicitly defer shell/PowerShell enforcement. Existing
 one-route cases and historical streams are unchanged. The fixture's
@@ -524,9 +525,9 @@ boundary, including serial and Lane-stamped contribution replay. It does not
 prove actual work-session settings or activate Dynamic defaults. It is integrated
 with Python's effort-matching, CLI no-dial readback and mandatory local durability;
 the routing and Dashboard matrices retain their separate behavioral seams.
-Executing-host capability authority and remaining composed activation
-obligations remain outstanding. Shell/PowerShell activation and
-Subagent/Integration routing remain deferred.
+At this Dashboard slice, executing-host capability authority and remaining
+composed activation obligations were still outstanding. Shell/PowerShell
+activation and Subagent/Integration routing remain deferred.
 The Event-schema declarations distinguish Dynamic/proposed null efforts from
 historical backend placeholders and from non-proposed preparation's nulls (no
 proposal). Static, reusable and unavailable preparations keep those null effort
@@ -536,7 +537,16 @@ already fetched, for the model that Pickup named. `false` with a present null
 effort reads as not configurable; `true` with a null effort is deliberate
 omission. The field is omitted when unobserved, so historical streams stay
 identical and a model name is never the observation. Pickup does not fetch the
-listing again. This is readback, not final activation: executing-host capability
-authority and the remaining composed activation obligations still precede bare
-init, auto-setup and no-Config Dynamic defaults. Shell/PowerShell activation,
-Subagent/Integration routing and ADR-0060 implementation remain unclaimed.
+listing again. This is readback, not final activation.
+Static execution on GitHub Actions may now proceed when that host reports its
+own listing and both that listing and the local listing accept the route.
+Observation is a separate workflow, not green-base and not a contribution. A
+missing or unreadable report stays absence and is not replaced by the local
+listing; the no-report path still refuses before listing, Skill migration,
+detachment and green-base. Dynamic election does not construct the host and is
+not authorized by a report. Lane Pickup records dial presence from the host
+report; serial Pickup keeps the local listing, because serial sessions still
+run here. The remote listing is not recorded as this machine's roster. This
+does not activate bare init, auto-setup or no-Config Dynamic defaults.
+Shell/PowerShell activation, Subagent/Integration routing and ADR-0060
+implementation remain unclaimed.

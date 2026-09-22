@@ -7686,7 +7686,21 @@ def test_selected_remote_routing_refuses_before_local_listing_or_host_dispatch(
     error = capsys.readouterr().err
     for diagnostic in fixture["expected"]["diagnostics"]:
         assert diagnostic in error
-    assert builds == [] and host.preflight_calls == []
+    from git_loopy.host_capability import remote_static_execution
+
+    tables = settings.load_configs(tmp_path, os.environ)
+    resolved = cli_module.resolve_config(
+        cli_module.build_parser().parse_args(args), os.environ,
+        project=tables.project, global_=tables.global_,
+    ).run
+    # Static and a model/effort pin may construct the host to observe its
+    # listing. That is not green-base. Dynamic election must not construct it.
+    # No case here returns a report, so none may list locally or dispatch work.
+    if remote_static_execution(resolved):
+        assert builds == ["github-actions"]
+    else:
+        assert builds == []
+    assert host.preflight_calls == []
     assert listings == []
     assert fake_client.create_calls == []
     assert fake_gh.issue_close_calls == [] and fake_gh.issue_comment_calls == []
@@ -7695,6 +7709,137 @@ def test_selected_remote_routing_refuses_before_local_listing_or_host_dispatch(
     assert list((tmp_path / ".git-loopy" / "logs").glob("*.jsonl")) == []
     for candidate, content in original.items():
         assert (candidate.read_bytes() if candidate.exists() else None) == content
+
+
+def _dial(configurable: bool):
+    from git_loopy.static_route import HarnessCapabilities, HarnessModel
+
+    model = HarnessModel(
+        model="claude-opus-4.8-max",
+        eligible=True,
+        effort_configurable=configurable,
+        efforts=frozenset({"high"}) if configurable else frozenset(),
+        context_tiers=frozenset({"default"}),
+    )
+    return HarnessCapabilities(models={model.model: model})
+
+
+def test_a_lane_session_uses_the_host_report_not_the_local_listing(
+    tmp_path, monkeypatch
+) -> None:
+    """The contribution request and the Lane Pickup record the host's dial.
+
+    The local listing accepts the same model and reports the opposite dial.
+    That disagreement must not become the Lane's fact, and it must not be
+    what the host is asked to run.
+    """
+    from git_loopy.host_capability import HostCapabilityReport
+
+    fake_git, _fake_gh, _fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    cfg = dataclass_replace(
+        cfg, execution_host="github-actions", route_policy=RoutePolicy.STATIC
+    )
+    remote = HostCapabilityReport(
+        placement="github-actions", capabilities=_dial(False)
+    )
+    order: list[str] = []
+    requests: list[ContributionRequest] = []
+
+    class _ReportingHost(_RemoteBranchExecutionHost):
+        async def observe_capabilities(self, *, observation_id: str):
+            del observation_id
+            order.append("observe")
+            return remote
+
+        async def run_preflight(self, *, run_id: str, base_revision: str):
+            order.append("preflight")
+            return await super().run_preflight(
+                run_id=run_id, base_revision=base_revision
+            )
+
+        async def run_contribution(self, request: ContributionRequest):
+            order.append("contribution")
+            requests.append(request)
+            return await super().run_contribution(request)
+
+    host = _ReportingHost(fake_git)
+
+    async def local_listing(**_kwargs):
+        order.append("local")
+        return _dial(True)
+
+    monkeypatch.setattr(loop_module, "_make_execution_host", lambda *_a, **_k: host)
+    monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", local_listing)
+
+    assert asyncio.run(loop_module.run(cfg)) == 0
+    assert order[0] == "observe"
+    assert "local" in order and order.index("local") < order.index("preflight")
+    assert order.index("preflight") < order.index("contribution")
+    assert requests
+    assert {request.model for request in requests} == {"claude-opus-4.8-max"}
+    assert {request.reasoning_effort for request in requests} == {None}
+    pickups = [
+        event
+        for event in _logged_events(tmp_path)
+        if event["type"] == "wrapper.pickup.bound"
+    ]
+    assert pickups
+    assert {event["effort_configurable"] for event in pickups} == {False}
+
+
+def test_a_rejecting_host_report_starts_no_contribution_when_local_would_accept(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Remote rejection is the verdict. The local listing cannot overrule it."""
+    from git_loopy.host_capability import HostCapabilityReport
+    from git_loopy.static_route import HarnessCapabilities
+
+    fake_git, _fake_gh, fake_client, cfg = _wire_two_lane_rolling(
+        tmp_path, monkeypatch
+    )
+    cfg = dataclass_replace(
+        cfg, execution_host="github-actions", route_policy=RoutePolicy.STATIC
+    )
+    remote = HostCapabilityReport(
+        placement="github-actions",
+        capabilities=HarnessCapabilities(models={}),
+    )
+    calls: list[str] = []
+
+    class _RejectingHost(_RemoteBranchExecutionHost):
+        async def observe_capabilities(self, *, observation_id: str):
+            del observation_id
+            calls.append("observe")
+            return remote
+
+        async def run_preflight(self, *, run_id: str, base_revision: str):
+            calls.append("preflight")
+            return await super().run_preflight(
+                run_id=run_id, base_revision=base_revision
+            )
+
+        async def run_contribution(self, request: ContributionRequest):
+            calls.append("contribution")
+            raise AssertionError(request.issue_ref)
+
+    async def local_listing(**_kwargs):
+        calls.append("local")
+        return _dial(True)
+
+    monkeypatch.setattr(
+        loop_module, "_make_execution_host", lambda *_a, **_k: _RejectingHost(fake_git)
+    )
+    monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", local_listing)
+
+    assert asyncio.run(loop_module.run(cfg)) == loop_module.exit_code_for(
+        "preflight_failed"
+    )
+    error = capsys.readouterr().err
+    assert "executing host's model listing" in error
+    assert "preflight" not in calls and "contribution" not in calls
+    assert fake_client.create_calls == []
 
 
 def test_a_failed_remote_green_base_preflight_starts_no_lane_or_strike(

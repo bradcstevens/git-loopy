@@ -191,7 +191,13 @@ from git_loopy.measured_routing import (
     measured_routing_path,
 )
 from git_loopy.routing_input import build_routing_request
+from git_loopy.host_capability import (
+    HostCapabilityReport,
+    observe_executing_host_capabilities,
+    remote_static_execution,
+)
 from git_loopy.run_routing_preflight import (
+    RunRoutingPreflight,
     resolve_run_routing_preflight,
     routing_choice_refusal,
 )
@@ -1223,6 +1229,7 @@ class _Loop:
         dynamic_routing: "_DynamicRoutingSetup | None" = None,
         lease: LeaseLifecycle | None = None,
         static_capabilities: HarnessCapabilities | None = None,
+        host_capabilities: HarnessCapabilities | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -1247,7 +1254,13 @@ class _Loop:
         self._lease = lease
         #: The listing preflight verified selected Static routes against.
         #: ``None`` on the unselected path, which never reads a harness.
+        #: Serial sessions run on this machine, so this is the local listing
+        #: even when a remote host authorized the Lane half.
         self._static_capabilities = static_capabilities
+        #: The executing host's listing, when a report authorized that
+        #: placement. Lane dial presence is read from it. Never a copy of
+        #: the local listing.
+        self._host_capabilities = host_capabilities
         self._include_prs = include_prs
         self._rollup = IterationRollupAccumulator(denomination=denomination)
         # An extra, Run-scoped Consumption observer (#309). The rollup owns one
@@ -2346,13 +2359,19 @@ class _Loop:
                     routed = self._resolve_route(item, warn=self._diag.warning)
                 except TaskTypeError as exc:
                     raise DynamicRouteUnavailable(f"current Task type refused: {exc}") from exc
-            return await self._classify_pickup(item, routed=routed)
+            return await self._classify_pickup(
+                item, routed=routed, on_execution_host=parallel_required
+            )
         finally:
             if self._preparation is not None:
                 await self._preparation.finish_pickup(item.ref)
 
     async def _classify_pickup(
-        self, item: AfkReadyItem, *, routed: RoutingResolution
+        self,
+        item: AfkReadyItem,
+        *,
+        routed: RoutingResolution,
+        on_execution_host: bool = False,
     ) -> tuple[AfkReadyItem, RoutingResolution]:
         """Read ``item``'s **Task type** off its own content, then re-route on it.
 
@@ -2432,7 +2451,9 @@ class _Loop:
                 )
         self._require_route_selector(resolution)
         labelled = await self._bump_classifier.labelled(task_type_labelled)
-        return labelled, await self._bound_route(labelled, resolution)
+        return labelled, await self._bound_route(
+            labelled, resolution, on_execution_host=on_execution_host
+        )
 
     def _require_route_selector(self, resolution: RoutingResolution) -> None:
         """Uncovered Dynamic work needs a selector, never a placeholder default."""
@@ -2447,7 +2468,11 @@ class _Loop:
             )
 
     async def _bound_route(
-        self, item: AfkReadyItem, resolution: RoutingResolution
+        self,
+        item: AfkReadyItem,
+        resolution: RoutingResolution,
+        *,
+        on_execution_host: bool = False,
     ) -> RoutingResolution:
         """Settle this **Pickup**'s route and remember it as the attempt's own.
 
@@ -2463,12 +2488,16 @@ class _Loop:
         attempt to have evidence about (AC4).
         """
         resolved = await self._routed_dynamically(item, resolution)
-        resolved = self._record_static_dial(resolved)
+        resolved = self._record_static_dial(
+            resolved, on_execution_host=on_execution_host
+        )
         self._attempt_evidence.bound(item.ref, resolved)
         return resolved
 
-    def _record_static_dial(self, resolution: RoutingResolution) -> RoutingResolution:
-        """Record the dial fact the preflight listing already observed.
+    def _record_static_dial(
+        self, resolution: RoutingResolution, *, on_execution_host: bool = False
+    ) -> RoutingResolution:
+        """Record the dial fact the harness that will execute already observed.
 
         The resolver stays pure: this caller did the I/O, at preflight, and
         only attaches the fact for the model the Pickup actually named. An
@@ -2479,12 +2508,23 @@ class _Loop:
         and excluding it would leave the common unlabelled Pickup unobserved.
         A model the listing does not name gets no fact — absence is not a
         no-dial claim, and a model name is not one either.
+
+        A Lane session runs on the executing host, so its fact comes from
+        that host's report. A serial session still runs here, so it keeps
+        the local listing even when the two disagree.
         """
         if self._config.route_policy is RoutePolicy.UNSELECTED:
             return resolution
         if resolution.source is RoutingSource.DYNAMIC:
             return resolution
         capabilities = self._static_capabilities
+        if (
+            on_execution_host
+            and self._host_capabilities is not None
+            and self._config.execution_host
+            != execution_host_module.LOCAL_EXECUTION_HOST_PLACEMENT
+        ):
+            capabilities = self._host_capabilities
         if capabilities is None or resolution.model is None:
             return resolution
         capability = capabilities.get(resolution.model)
@@ -3941,6 +3981,7 @@ class _ParallelLoop:
         dynamic_routing: "_DynamicRoutingSetup | None" = None,
         lease: LeaseLifecycle | None = None,
         static_capabilities: HarnessCapabilities | None = None,
+        host_capabilities: HarnessCapabilities | None = None,
     ) -> None:
         self._config = config
         self._release_version = release_version
@@ -4146,6 +4187,7 @@ class _ParallelLoop:
             dynamic_routing=dynamic_routing,
             lease=lease,
             static_capabilities=static_capabilities,
+            host_capabilities=host_capabilities,
         )
 
     def request_stop_drain(self) -> None:
@@ -7078,6 +7120,8 @@ async def run(
     run_id: str | None = None,
     started_at: datetime | None = None,
     mirror_diagnostics_to_stderr: bool = True,
+    host_capabilities: HostCapabilityReport | None = None,
+    routing_preflight: RunRoutingPreflight | None = None,
 ) -> int:
     """Drive one ``git-loopy`` invocation to completion.
 
@@ -7134,9 +7178,59 @@ async def run(
         print(f"git-loopy: Release version error: {exc}", file=sys.stderr)
         return 1
 
-    if (refusal := routing_choice_refusal(config)) is not None:
+    # A selected Static route on a remote host is unverifiable until that
+    # host reports its own listing. Observation is not green-base and not a
+    # contribution. Dynamic election is not asked: a snapshot is not a fresh
+    # proposal or Pickup read, and this machine's listing is never substituted.
+    observed_host = None
+    report = host_capabilities
+    if report is None and remote_static_execution(config):
+        try:
+            observed_host = _make_execution_host(
+                config.execution_host,
+                send_timeout_seconds=config.send_timeout_seconds,
+            )
+        except (ValueError, actions_host_module.ActionsError) as exc:
+            print(
+                f"git-loopy: Execution host {config.execution_host!r} could not "
+                f"be prepared: {exc}",
+                file=sys.stderr,
+            )
+            return exit_code_for("preflight_failed")
+        report = await observe_executing_host_capabilities(
+            config, host_factory=_make_execution_host, host=observed_host
+        )
+    if (refusal := routing_choice_refusal(config, host_capabilities=report)) is not None:
         print(f"git-loopy: {refusal}", file=sys.stderr)
         return exit_code_for("preflight_failed")
+    # A present report is judged before writers and before green-base, so a
+    # rejecting host listing does not dispatch the gate. The result is reused
+    # below: the local listing is not fetched twice, and the remote listing
+    # is not recorded as this machine's roster.
+    if (
+        routing_preflight is None
+        and report is not None
+        and remote_static_execution(config)
+    ):
+        routing_preflight = await resolve_run_routing_preflight(
+            config,
+            os.environ,
+            capabilities_fetch=lambda: _refresh_harness_capabilities(
+                warn=lambda message: print(
+                    f"git-loopy: harness capability read failed: {message}",
+                    file=sys.stderr,
+                )
+            ),
+            harness_evidence_fetch=lambda: _fetch_harness_evidence(
+                warn=lambda message: print(
+                    f"git-loopy: {message}", file=sys.stderr
+                )
+            ),
+            host_capabilities=report,
+        )
+        if routing_preflight.refusal is not None:
+            print(f"git-loopy: {routing_preflight.refusal}", file=sys.stderr)
+            return exit_code_for("preflight_failed")
 
     # 1) Git seam (root-bound) + prompt file. The client resolves and binds the
     #    repository root once; ``.root`` feeds the writers / prompt / source setup.
@@ -7216,9 +7310,13 @@ async def run(
     # would strand Lanes that are already open and dress an environment failure
     # up as a contribution's.
     try:
-        selected_execution_host = _make_execution_host(
-            config.execution_host,
-            send_timeout_seconds=config.send_timeout_seconds,
+        selected_execution_host = (
+            observed_host
+            if observed_host is not None
+            else _make_execution_host(
+                config.execution_host,
+                send_timeout_seconds=config.send_timeout_seconds,
+            )
         )
     except (ValueError, actions_host_module.ActionsError) as exc:
         print(
@@ -7290,16 +7388,18 @@ async def run(
     # opened, so an unsupported or unverifiable selection costs no work at all
     # (#560, #561, ADR-0057). A Run that selected no policy never reaches the
     # network for it.
-    routing_preflight = await resolve_run_routing_preflight(
-        config,
-        os.environ,
-        capabilities_fetch=lambda: _refresh_harness_capabilities(
-            warn=lambda message: diag.warning(
-                "harness capability read failed: %s", message
-            )
-        ),
-        harness_evidence_fetch=lambda: _fetch_harness_evidence(warn=diag.warning),
-    )
+    if routing_preflight is None:
+        routing_preflight = await resolve_run_routing_preflight(
+            config,
+            os.environ,
+            capabilities_fetch=lambda: _refresh_harness_capabilities(
+                warn=lambda message: diag.warning(
+                    "harness capability read failed: %s", message
+                )
+            ),
+            harness_evidence_fetch=lambda: _fetch_harness_evidence(warn=diag.warning),
+            host_capabilities=report,
+        )
     if routing_preflight.refusal is not None:
         print(f"git-loopy: {routing_preflight.refusal}", file=sys.stderr)
         try:
@@ -7576,6 +7676,7 @@ async def run(
             dynamic_routing=dynamic_routing,
             lease=lease,
             static_capabilities=routing_preflight.capabilities,
+            host_capabilities=routing_preflight.host_capabilities,
         )
     except git_module.GitError as exc:
         # Rolling dispatch resolves where its **Lane workspaces** live up front
