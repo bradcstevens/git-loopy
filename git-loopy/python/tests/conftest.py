@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pytest
 
-from git_loopy import model_listing, skill_install
+from git_loopy import model_listing, sdk_feed, skill_install
 from git_loopy.prompt import packaged_required_skills
 from git_loopy.skill_source import SkillSourceError, SkillSourcePin
 
@@ -136,6 +136,27 @@ def _refuse_remote_skill_acquisition(monkeypatch: pytest.MonkeyPatch) -> None:
         return real(pin, destination)  # type: ignore[arg-type]
 
     monkeypatch.setattr(skill_install, "acquire_skill_source", _guarded)
+
+
+@pytest.fixture(autouse=True)
+def _refuse_live_sdk_feed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail loudly if a test asks the corporate feed without an injected fetch.
+
+    The SDK-feed report reaches the network, which is why it is not a feedback
+    loop. The suite proves the verdict offline; a forgotten injection must not
+    become a live request.
+    """
+    real = sdk_feed.fetch_simple_index
+
+    def _guarded(url: str, *, opener: object = None) -> str:
+        if opener is None:
+            raise sdk_feed.SdkFeedError(
+                f"a test tried to read {url}; the suite never reaches the "
+                "network. Inject fetch= or an opener."
+            )
+        return real(url, opener=opener)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sdk_feed, "fetch_simple_index", _guarded)
 
 
 @pytest.fixture(autouse=True)

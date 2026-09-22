@@ -89,7 +89,10 @@ the cached environment under `git-loopy/python/.venv/`.
 
 The corporate-compatible Runner pins `github-copilot-sdk==1.0.14rc1`, which runs
 Copilot CLI `1.0.84-5` by default. Updating the separate `copilot` command on `PATH`
-does not update that harness. The refreshed roster recognizes
+does not update that harness. `python -m git_loopy.sdk_feed` reports when the
+corporate feed has ingested a newer release; it does not change the pin, and it
+is not an Integration feedback loop because an unreachable feed must not redden
+a Lane merge. The refreshed roster recognizes
 `gpt-6-astra` (including `max` reasoning). The pinned-harness listing did not
 offer Gemini 3.8 on the account used for this upgrade, so no unverified effort
 set is added for it: configured `gemini-3.8-flash` selections and efforts stay

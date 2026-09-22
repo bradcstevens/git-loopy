@@ -62,6 +62,16 @@ blocking gate:
   refresh itself over a `file://` remote — is covered by
   `tests/test_skill_install.py` and `tests/test_doctorcmd.py` inside the Python
   suite row.
+- **`python -m git_loopy.sdk_feed`** reports when the corporate Python feed
+  carries a `github-copilot-sdk` release newer than the pin in the Runner
+  manifest (#639). It reaches the network, so it can never be a gate: an
+  unreachable feed would make Integration red for a reason no change here
+  caused. Its offline half — the pin read from the manifest, and the
+  comparison that reports a newer release, distinguishes a prerelease from a
+  stable upgrade, and refuses to treat a feed error as no upgrade — is covered
+  by `tests/test_sdk_feed.py` inside the Python suite row. Run it when working
+  in this repository and surface any finding; a finding does not change the
+  pin, and a feed error is never "no upgrade available".
 - **The cross-repo Skills proof** in `cross-repo-skills-proof.yml` (#632) acquires
   that same pinned catalog and then runs the three Python-suite checks that read
   it — that the Run instructions require no Skill the pin lacks, that Skill
