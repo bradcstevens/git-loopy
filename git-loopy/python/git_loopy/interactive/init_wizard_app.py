@@ -202,6 +202,7 @@ class _Review:
     skills: SkillSelectionModel
     routing_choice: str | None = None
     routing_updates_only: bool = False
+    policy: str | None = None
 
 
 def _describe_routing(routing: Mapping[str, tuple[str, str]] | None) -> str:
@@ -228,6 +229,8 @@ class _ReviewScreen(Screen["tuple[str, str] | object"]):
         Binding("escape", "back", "Back", priority=True),
         Binding("ctrl+c", "cancel", "Cancel", priority=True, show=False),
         Binding("q", "cancel", "Cancel"),
+        Binding("k", "keep", "Keep", show=False),
+        Binding("m", "migrate", "Migrate", show=False),
     ]
 
     def __init__(self, review: _Review) -> None:
@@ -241,27 +244,45 @@ class _ReviewScreen(Screen["tuple[str, str] | object"]):
                 routing = f"new/updated Static routes: {routing}; other saved rows preserved"
         if review.routing_choice is not None:
             routing = f"{review.routing_choice}; {routing}; authorization follows"
+        self._policy = review.policy
         #: Each review line as ``(step, label, value)``. ``step`` is what a
         #: ``Back`` resolves to, so the wizard routes on the step the row was
         #: drawn *for* rather than on the text that happened to be rendered.
-        self._lines: tuple[tuple[str, str, str], ...] = (
+        lines = [
             ("scope", "scope", review.scope),
             ("scope", "config", str(review.config_path)),
             ("model", "model", review.model),
             ("model", "effort", review.effort or "none"),
             ("routing", "routing", routing),
+        ]
+        if review.policy == "migrate":
+            lines.append((
+                "routing",
+                "route policy",
+                "migrate; uncovered work becomes Dynamic; press k for keep; "
+                "authorization follows",
+            ))
+        elif review.policy == "keep":
+            lines.append((
+                "routing",
+                "route policy",
+                "keep; strict Static policy; no Dynamic access or limits; "
+                "press m for migrate",
+            ))
+        lines.extend((
             (
                 "scaffold",
                 "scaffold",
                 "PROMPT.md" if review.scaffold else "no prompt scaffold",
             ),
             ("skills", "skills", f"{len(review.skills.enabled)} enabled"),
-        )
+        ))
+        self._lines: tuple[tuple[str, str, str], ...] = tuple(lines)
 
     def compose(self) -> ComposeResult:
         yield Static(
             "Review setup — routing authorization follows; nothing is written yet"
-            if self._review.routing_choice is not None
+            if self._review.routing_choice is not None or self._policy == "migrate"
             else "Review setup — nothing is written until you save"
         )
         yield DataTable(id=_REVIEW, cursor_type="row", zebra_stripes=True)
@@ -286,7 +307,17 @@ class _ReviewScreen(Screen["tuple[str, str] | object"]):
                 f"Cannot save: {'; '.join(errors)}."
             )
             return
-        self.dismiss(("save", ""))
+        self.dismiss(("save", self._policy or ""))
+
+    def action_keep(self) -> None:
+        if self._policy is None:
+            return
+        self.dismiss(("policy", "keep"))
+
+    def action_migrate(self) -> None:
+        if self._policy is None:
+            return
+        self.dismiss(("policy", "migrate"))
 
     def action_back(self) -> None:
         table = self.query_one(f"#{_REVIEW}", DataTable)
@@ -334,6 +365,7 @@ class InitWizardApp(App["InitAnswers | None"]):
         scope_locked: bool = False,
         routing_choice: str | None = None,
         routing_choices: Mapping[str, str | None] | None = None,
+        fresh_scopes: frozenset[str] = frozenset(),
     ) -> None:
         super().__init__()
         self._scope_options = tuple(scope_options)
@@ -349,6 +381,8 @@ class InitWizardApp(App["InitAnswers | None"]):
             scope: routing_choice for scope in self._scope_options
         } if routing_choices is None else dict(routing_choices)
         self._routing_choice = self._routing_choices.get(self._scope)
+        self._fresh_scopes = frozenset(fresh_scopes)
+        self._fresh_policy: dict[str, str] = {}
         self._selection = self._initial_selection()
         self._routing: dict[str, tuple[str, str]] | None = None
         # Wizard-created defaults only; saved Config rows are never inferred.
@@ -410,6 +444,12 @@ class InitWizardApp(App["InitAnswers | None"]):
         if len(self.screen_stack) > 1:
             self.pop_screen()
         self._show_review()
+
+    def _policy_for_scope(self) -> str | None:
+        """Default a fresh unselected scope to migrate; never infer a saved one."""
+        if self._routing_choice is not None or self._scope not in self._fresh_scopes:
+            return None
+        return self._fresh_policy.get(self._scope, "migrate")
 
     def _show_scope_or_model(self) -> None:
         if self._scope_locked:
@@ -635,6 +675,7 @@ class InitWizardApp(App["InitAnswers | None"]):
                     skills=self._skills,
                     routing_choice=self._routing_choice,
                     routing_updates_only=self._routing_updates_only,
+                    policy=self._policy_for_scope(),
                 )
             ),
             self._on_review,
@@ -765,6 +806,10 @@ class InitWizardApp(App["InitAnswers | None"]):
         if not isinstance(result, tuple):
             return
         action, target = result
+        if action == "policy" and target in {"keep", "migrate"}:
+            self._fresh_policy[self._scope] = target
+            self._show_review()
+            return
         if action == "save":
             from git_loopy.init import InitAnswers
 
@@ -778,6 +823,7 @@ class InitWizardApp(App["InitAnswers | None"]):
                     scaffold=self._scaffold,
                     enabled_skills=self._skills.enabled,
                     routing_updates_only=self._routing_updates_only,
+                    policy_choice=target or None,
                 )
             )
             return
@@ -803,6 +849,7 @@ def run_textual_init_wizard(
     scope_locked: bool = False,
     routing_choice: str | None = None,
     routing_choices: Mapping[str, str | None] | None = None,
+    fresh_scopes: frozenset[str] = frozenset(),
 ) -> InitAnswers | None:
     """Run the fullscreen setup wizard and return its answer set."""
 
@@ -824,6 +871,7 @@ def run_textual_init_wizard(
         scope_locked=scope_locked,
         routing_choice=routing_choice,
         routing_choices=routing_choices,
+        fresh_scopes=fresh_scopes,
     )
     app.run()
     return app.outcome()

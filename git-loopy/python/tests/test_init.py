@@ -1014,6 +1014,7 @@ def test_run_init_yes_writes_defaults_without_fetch(tmp_path: Path) -> None:
         "model": "claude-opus-4.8",
         "reasoning_effort": "max",
         "enabled_skills": [],
+        "route_policy": "dynamic",
     }
     # --yes scaffolds the prompt override by default, and still no Skill.
     assert (tmp_path / "git-loopy" / "PROMPT.md").exists()
@@ -1045,6 +1046,7 @@ def test_run_init_yes_gates_effort_for_reasoning_incapable_default(
     assert tomllib.loads(cfg.read_text()) == {
         "model": "claude-sonnet-4.5",
         "enabled_skills": [],
+        "route_policy": "dynamic",
     }
 
 
@@ -1580,7 +1582,16 @@ def test_run_init_reports_created_and_pre_existing_labels(tmp_path: Path) -> Non
 
 
 def test_run_init_label_bootstrap_is_idempotent(tmp_path: Path) -> None:
-    """Re-running init creates nothing the second time."""
+    """Re-running init creates nothing the second time.
+
+    The scope is already a saved installation. A fresh ``--yes`` now records
+    Dynamic, and the next unattended reinit would be a readiness check rather
+    than this label proof.
+    """
+    settings.write_config_atomic(
+        settings.project_config_path(tmp_path),
+        {"model": "claude-opus-4.8"},
+    )
     client = _FakeLabelClient()
     out = _Output()
     kwargs: dict[str, Any] = dict(

@@ -691,8 +691,13 @@ authorization and live routing-readiness verdict as `update --routing`, doctor,
 and a Run. Bare init also uses that path when the chosen scope already records
 or inherits an explicit Static/Dynamic policy; omitting `--routing` does not
 bypass readiness or replace saved choices with unattended defaults.
-**This is not final default activation:** without a supplied or recorded choice,
-bare init and auto-setup retain their existing routing policy.
+A fresh scope — no saved table and no inherited Route policy — records
+Dynamic without seeding Static rows. `init --yes` writes that policy and no
+limits, associations, or leaderboard key; the next Run refuses until
+`init --routing migrate` collects them. Interactive setup, including
+auto-setup, defaults to migrate, still accepts keep, and asks for the bounds
+before saving. Existing Config is not inferred. A no-Config Run with no TTY
+keeps the legacy path.
 
 Choose `migrate` for Dynamic uncovered work or `keep` for strict Static policy.
 Omit the argument (or use `ask`) to inherit a recorded choice or decide at the
@@ -835,8 +840,11 @@ The **very first** bare `git-loopy` — when no `config.toml` resolves in *eithe
 scope — sets itself up:
 
 - On an **interactive TTY** it auto-runs the wizard above, then checks the Run's
-  preconditions on the Config it just wrote. A missing routing choice refuses
-  work with the `update --routing` or `--route-policy` remedy above. The terminal test is the same one
+  preconditions on the Config it just wrote. A fresh scope defaults to migrate
+  and collects explicit Dynamic bounds before that check; keep remains
+  available and needs no leaderboard access. An existing scope without a policy
+  still refuses work with the `update --routing` or `--route-policy` remedy
+  above. The terminal test is the same one
   explicit `git-loopy init` applies — stdin *and* stdout — so `git-loopy > log`
   on a fresh clone takes the no-TTY path below rather than opening a fullscreen
   wizard against a pipe.
@@ -1385,7 +1393,11 @@ no verified candidates and unavailable evidence/capabilities save no choices
 or tracker labels; Static setup needs no Dynamic access or limits. Canonical
 Pickup, Dashboard and final tracker comments agree with actual session settings,
 and subsequent Runs preserve the saved Config. These are opt-in setup obligations,
-not evidence that bare init or auto-setup activates Dynamic defaults.
+not the fresh-setup default. The sibling `new_setup_default` matrix is that
+proof: unattended `init --yes` records Dynamic without limits or Static rows,
+doctor and the following Run refuse before a session, and operator-supplied
+repair elects; interactive fresh setup collects the migrate default into the
+same session. Existing Config is not inferred. No-Config Runs stay legacy.
 That walk exposed and fixed Skill discovery trying to nest an event loop inside
 the fullscreen wizard; discovery now completes on its own joined worker before
 the wizard can save, with validation failures still propagated without writes.
@@ -1434,8 +1446,9 @@ false distinguishes a no-dial model from deliberate omission without a second
 listing read.
 A present GitHub Actions capability report is now proved through unattended CLI
 and doctor, not only through a direct Run. The Lane records that host's dial;
-either listing can still refuse. Bare init, auto-setup and no-Config Dynamic
-defaults remain unchanged. Existing Config is not migrated implicitly.
+either listing can still refuse. Fresh setup now records the Dynamic default
+above; no-Config Runs stay legacy, and existing Config is not migrated
+implicitly.
 Python issue-owning serial and
 Lane sessions are the implementation scope; shell/PowerShell activation remains
 deferred, and this does not add Subagent or Integration routing.

@@ -798,10 +798,14 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "scope unless --global is given, the built-in default model / "
             "effort, and scaffolds the prompt + skills. Persists the Minimal "
             "Skill policy (only the Required Skills) without contacting the "
-            "machine's Copilot Skill inventory. With --routing or a recorded "
+            "machine's Copilot Skill inventory. A fresh scope with no recorded "
+            "or inherited Route policy records route_policy = dynamic and "
+            "seeds no Static rows, limits, associations, or leaderboard key. "
+            "Existing Config is not inferred. With --routing or a recorded "
             "Static/Dynamic policy in the chosen scope, preserves "
             "saved/inherited model, effort, prompt and Skill policy, and requires routing "
-            "authorization; live readiness is still checked."
+            "authorization; live readiness is still checked. --yes is not "
+            "spend consent."
         ),
     )
     init.add_argument(
@@ -813,10 +817,12 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         help=(
             "Opt in to explicit routing setup before saving: keep selects "
             "strict Static policy; migrate makes uncovered work Dynamic. "
-            "Ask reuses a recorded choice or asks interactively. Dynamic "
-            "requires operator-owned access and explicit finite limits; "
-            "--yes supplies no routing consent or allowance. A recorded "
-            "Static/Dynamic choice is checked even without --routing."
+            "Ask reuses a recorded choice or asks interactively. A fresh "
+            "interactive setup with no recorded policy defaults to migrate "
+            "and still accepts keep. Dynamic requires operator-owned access "
+            "and explicit finite limits; --yes supplies no routing consent "
+            "or allowance. A recorded Static/Dynamic choice is checked even "
+            "without --routing. Existing Config is not inferred."
         ),
     )
 

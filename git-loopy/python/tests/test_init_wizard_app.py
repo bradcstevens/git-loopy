@@ -63,6 +63,7 @@ def _app(
     scope_locked: bool = False,
     routing_choice: str | None = None,
     routing_choices: dict[str, str | None] | None = None,
+    fresh_scopes: frozenset[str] = frozenset(),
 ) -> InitWizardApp:
     return InitWizardApp(
         scope_options=("project", "global"),
@@ -77,6 +78,7 @@ def _app(
         scope_locked=scope_locked,
         routing_choice=routing_choice,
         routing_choices=routing_choices,
+        fresh_scopes=fresh_scopes,
     )
 
 
@@ -102,6 +104,44 @@ async def test_cursor_space_and_enter_drive_prefilled_wizard() -> None:
     assert app.return_value is not None
     assert app.return_value.scope == "global"
     assert app.return_value.enabled_skills == ("codebase-design", "tdd")
+
+
+async def test_fresh_setup_defaults_to_migrate_and_still_accepts_keep() -> None:
+    app = _app(fresh_scopes=frozenset({"project"}))
+    async with app.run_test() as pilot:
+        await _reach_review(pilot)
+        table = app.screen.query_one("#wizard-review", DataTable)
+        rows = {
+            str(table.get_row_at(i)[0]): str(table.get_row_at(i)[1])
+            for i in range(table.row_count)
+        }
+        assert "migrate" in rows["route policy"]
+        assert "press k for keep" in rows["route policy"]
+        assert "no new Static routes" not in rows["routing"]
+        await pilot.press("k")
+        await pilot.pause()
+        table = app.screen.query_one("#wizard-review", DataTable)
+        rows = {
+            str(table.get_row_at(i)[0]): str(table.get_row_at(i)[1])
+            for i in range(table.row_count)
+        }
+        assert rows["route policy"].startswith("keep")
+        await pilot.press("enter")
+
+    assert app.return_value is not None
+    assert app.return_value.policy_choice == "keep"
+    assert app.return_value.routing is None
+
+
+async def test_fresh_setup_save_records_the_migrate_default() -> None:
+    app = _app(fresh_scopes=frozenset({"project"}))
+    async with app.run_test() as pilot:
+        await _reach_review(pilot)
+        await pilot.press("enter")
+
+    assert app.return_value is not None
+    assert app.return_value.policy_choice == "migrate"
+    assert not app.return_value.routing
 
 
 async def test_dynamic_setup_review_discloses_authorization_before_any_save() -> None:

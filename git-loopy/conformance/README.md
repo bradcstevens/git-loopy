@@ -73,8 +73,10 @@ The refusal vocabulary reuses the Dynamic reasons, distinguishing Config input
 coercion from live readiness; a closure assertion pins its declared reasons.
 The Python adapter is
 `test_first_setup_readiness_recovers_into_the_actual_routed_session` in that
-same suite. This does not cover bare init/auto-setup activation or grant other
-Runner members setup support.
+same suite. Fresh `init --yes` and interactive auto-setup defaults are the
+sibling `new_setup_default` matrix, not these `--routing` cases. Its Python
+adapter is `test_fresh_setup_records_dynamic_and_the_run_uses_that_session`.
+It does not grant other Runner members setup support.
 
 The `execution_host_refusal` matrix covers selected policies on the independently
 authenticated GitHub Actions host when that host has not reported its listing.
@@ -817,12 +819,15 @@ including Static recovery without leaderboard access. The sibling `first_setup`
 cases drive explicit guided setup from absent project/global Config through
 readiness refusal and recovery into the same actual-session/readback seam.
 Their input answers are collected, not seeded Config; readiness must pass
-before any operator choice or tracker label is saved. Its `preflight_deadline`
+before any operator choice or tracker label is saved. The sibling
+`new_setup_default` cases drive fresh `init --yes` and interactive auto-setup
+through the same actual-session/readback seam; a no-Config Run stays legacy.
+`routing-resolution.json`'s `preflight_deadline`
 cases use the same synthetic inputs to consume the routing deadline during
 retained Static validation. No classifier or selector starts afterwards, while
 already-classified Static work still runs on its retained settings; Config and
-Strike accounting remain unchanged. This is the staged Python-local guard,
-not final Dynamic-default activation. Shell/PowerShell migration enforcement
+Strike accounting remain unchanged. Fresh setup records Dynamic; a no-Config
+Run stays legacy, and this is not final activation. Shell/PowerShell migration enforcement
 remains explicitly deferred; historical cases and Event streams keep their
 original interpretation.
 `attempt-lifecycle.json` joins them, driven through the production

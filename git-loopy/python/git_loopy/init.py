@@ -39,9 +39,14 @@ Opt-in ``--routing``, or an already recorded Static/Dynamic choice in the chosen
 scope, collects routing authorization and checks the shared Run/doctor readiness
 verdict before any scope write. Its ``--yes`` path never
 prompts or invents authorization, but does read live model data when authorized.
-Routing's operator-owned credential stays outside Config. The fullscreen review
-discloses the subsequent terminal authorization questions; cancellation there
-abandons the entire candidate, not just its Route policy.
+A fresh scope with no recorded or inherited policy is different: unattended
+``--yes`` records ``route_policy = dynamic`` and seeds no Static rows, limits,
+associations, or key. Interactive setup on that same fresh scope defaults to
+migrate, still accepts keep, and collects explicit bounds before saving.
+Existing Config is not inferred. Routing's operator-owned credential stays
+outside Config. The fullscreen review discloses the subsequent terminal
+authorization questions; cancellation there abandons the entire candidate, not
+just its Route policy.
 
 The Skill policy is collected through :func:`git_loopy.skillscmd.collect_skill_policy`,
 the same seam ``git-loopy skills edit`` uses, so both commands share one Skill
@@ -143,6 +148,7 @@ class InitAnswers:
     scaffold: bool
     enabled_skills: tuple[str, ...]
     routing_updates_only: bool = False
+    policy_choice: str | None = None
 
 
 class SkillSelectionRebuilder(Protocol):
@@ -475,6 +481,30 @@ class _ScopeUnavailable(Exception):
     """Raised when the project scope is requested outside a git repository."""
 
 
+def _is_fresh_dynamic_default(
+    scope: str, repo_root: Path | None, env: Mapping[str, str]
+) -> bool:
+    """A scope with no saved table and no inherited policy is a new installation.
+
+    An existing table without ``route_policy`` is not fresh: that absence is the
+    staged keep-or-migrate decision, not consent to discard it. Any inherited
+    policy, including explicit ``unselected``, stays authoritative.
+    """
+    table = settings.load_config_table(
+        _resolve_targets(scope, repo_root, env).config_path
+    )
+    if table:
+        return False
+    if scope != "project":
+        return True
+    inherited = settings.table_str(
+        settings.load_config_table(settings.global_config_path(env)),
+        "route_policy",
+        scope="global",
+    )
+    return inherited is None or not inherited.strip()
+
+
 def _runner_context(
     wizard_runner: WizardRunner, offered: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -612,12 +642,15 @@ def run_init(
 
     routing_choices: dict[str, str | None] = {}
     routing_errors: dict[str, OSError | settings.SettingsError] = {}
+    fresh_scopes: set[str] = set()
     for option in ((resolved_scope,) if assume_yes else scope_options):
         try:
             recorded = (
                 recorded_routing_setup(option) if routing_choice in {None, "ask"} else None
             )
             routing_choices[option] = routing_choice or recorded
+            if _is_fresh_dynamic_default(option, repo_root, env):
+                fresh_scopes.add(option)
         except (OSError, settings.SettingsError) as exc:
             # An unavailable scope must not prevent choosing a different one.
             routing_choices[option] = None
@@ -769,6 +802,7 @@ def run_init(
                     "skill_selection_model": build_skill_selection_model,
                     "routing_choice": routing_choices[resolved_scope],
                     "routing_choices": routing_choices,
+                    "fresh_scopes": frozenset(fresh_scopes),
                 },
             )
             answers = wizard_runner(
@@ -794,6 +828,8 @@ def run_init(
                 return 1
             if routing_choice is None:
                 routing_choice = routing_choices[resolved_scope]
+            if routing_choice is None and answers.policy_choice in {"keep", "migrate"}:
+                routing_choice = answers.policy_choice
             model = answers.model
             effort = answers.effort
             routing = answers.routing
@@ -858,10 +894,10 @@ def run_init(
         )
         originals.update(initial_scope_configs)
         values: dict[str, object] = dict(settings.load_config_table(targets.config_path))
+        loaded_table = dict(values)
         inherited = (
             settings.load_config_table(settings.global_config_path(env))
-            if routing_choice is not None and resolved_scope == "project"
-            else {}
+            if resolved_scope == "project" else {}
         )
     except (OSError, settings.SettingsError) as exc:
         warn(abandoned(str(exc)))
@@ -904,6 +940,19 @@ def run_init(
         and ("enabled_skills" in values or "enabled_skills" in inherited)
     ):
         values["enabled_skills"] = list(enabled_skills)
+    if (
+        assume_yes
+        and routing_choice is None
+        and resolved_scope in fresh_scopes
+        and not loaded_table
+    ):
+        values["route_policy"] = "dynamic"
+        output_fn(
+            "Recorded route_policy = dynamic for new setup. No Static "
+            "routes, limits, associations, or leaderboard key were written. "
+            "Uncovered Dynamic work refuses until `git-loopy init --routing "
+            "migrate` collects operator-owned access and explicit bounds."
+        )
 
     try:
         if routing_choice is not None:

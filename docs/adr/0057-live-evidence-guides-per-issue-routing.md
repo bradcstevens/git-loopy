@@ -299,7 +299,8 @@ labels unwritten; after repair, actual work settings, canonical Pickup,
 Dashboard and final tracker comments agree. The Run preserves Config, Static
 setup requires no leaderboard access or Dynamic limits, and no Static rows are
 seeded. Wrapper 14.3 declares this opt-in first-setup obligation and explicitly
-defers native-member activation; bare init and auto-setup routing defaults remain unchanged.
+defers native-member activation. Fresh `init --yes` and interactive auto-setup
+now record the Dynamic default described below; no-Config Runs stay legacy.
 This composed walk exposed a setup blocker hidden by prebuilt wizard answers:
 Skill discovery tried to run its async lifecycle on Textual's already-running
 event loop. The synchronous discovery/rebuild callback now uses a dedicated,
@@ -550,6 +551,22 @@ run here. The remote listing is not recorded as this machine's roster. The share
 `execution_host_report` matrix now drives a present report through unattended
 CLI and doctor: the Lane records the host dial, neither listing may overrule
 the other, and doctor prints the same verdict. Config stays unchanged. This
-does not activate bare init, auto-setup or no-Config Dynamic defaults.
+does not by itself activate bare init, auto-setup or no-Config Dynamic defaults.
 Shell/PowerShell activation, Subagent/Integration routing and ADR-0060
 implementation remain unclaimed.
+
+Fresh Python-local setup now records Dynamic without seeding Static rows.
+Unattended `init --yes` on a scope with no saved table and no inherited policy
+writes `route_policy = dynamic` and no limits, associations, or key. It does
+not prompt or fetch a listing. Doctor and the following Run share the existing
+readiness verdict and refuse before a work session, Lease, Strike, or
+publication. Operator-supplied repair of those bounds then elects; the Run
+does not rewrite Config. Interactive fresh setup, including auto-setup,
+defaults to migrate, still accepts keep, and collects explicit bounds before
+saving. Cancellation writes nothing. Existing nonempty Config is not inferred
+as migrate, and an inherited policy, including explicit `unselected`, is not
+shadowed. A no-Config Run with no TTY stays on the legacy path. The shared
+`new_setup_default` matrix drives both paths through the real CLI into serial
+and Lane sessions, canonical Pickup, and Dashboard readback. This is not final
+activation: shell/PowerShell, Subagent/Integration routing, no-Config Dynamic
+refusal, and ADR-0060 implementation remain unclaimed.

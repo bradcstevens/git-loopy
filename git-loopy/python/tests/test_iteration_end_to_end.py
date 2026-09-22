@@ -112,6 +112,7 @@ _ROUTING_CONFORMANCE = json.loads(
 )
 _MIGRATION_RECOVERY = _ROUTING_CONFORMANCE["migration_recovery"]
 _FIRST_SETUP = _ROUTING_CONFORMANCE["first_setup"]
+_NEW_SETUP_DEFAULT = _ROUTING_CONFORMANCE["new_setup_default"]
 _PREFLIGHT_DEADLINE = _ROUTING_CONFORMANCE["preflight_deadline"]
 _PUBLICATION_RECOVERY = _ROUTING_CONFORMANCE["publication_recovery"]
 
@@ -7515,6 +7516,208 @@ def test_first_setup_readiness_recovers_into_the_actual_routed_session(
     assert secret not in (
         json.dumps(events) + repr(tracker.route_comment_calls) + captured.err + captured.out
     )
+
+
+@pytest.mark.parametrize("mode", _NEW_SETUP_DEFAULT["modes"])
+@pytest.mark.parametrize("scope", _NEW_SETUP_DEFAULT["scopes"])
+@pytest.mark.parametrize("path", _NEW_SETUP_DEFAULT["paths"])
+def test_fresh_setup_records_dynamic_and_the_run_uses_that_session(
+    tmp_path, monkeypatch, capsys, mode, scope, path
+) -> None:
+    """Fresh setup records Dynamic; the session is the proof, not the file."""
+    from textual.widgets import DataTable
+
+    from git_loopy import model_listing, skillscmd
+    from git_loopy.interactive import init_wizard_app, picker
+    from git_loopy.interactive.state import LiveRunState
+    from git_loopy.interactive.view_model import project_run_view
+    from tests.fakes import FakeGateRunner
+    from tests.test_init import _FakeCopilotClient, _FakeLabelClient
+    from tests.test_loop_parallel import _ParallelFakeClient
+
+    client, git = _wire_single_issue_github(
+        tmp_path, monkeypatch, labels=[
+            "ready-for-agent", "task-type:implementation", "semver:none",
+            *(["parallel-safe"] if mode == "lane" else []),
+        ],
+    )
+    (tmp_path / "git-loopy" / "prompt.md").unlink()
+    tracker = loop_module._make_github_client()
+    if mode == "lane":
+        client = _ParallelFakeClient(fake_git=git, scripted_events=[])
+        monkeypatch.setattr(loop_module, "_make_client", lambda: client)
+        monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+    monkeypatch.setattr(cli, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_should_run_interactive", lambda: False)
+    monkeypatch.setattr(cli, "_make_label_client", lambda: _FakeLabelClient())
+    for name in (
+        "ROUTE_POLICY", "MODEL", "REASONING_EFFORT", "CONTEXT_TIER", "EXECUTION_HOST",
+        "ROUTING_DEADLINE_SECONDS", "ROUTING_CREDIT_ALLOWANCE", "SELECTOR_CONCURRENCY",
+    ):
+        monkeypatch.delenv(f"GIT_LOOPY_{name}", raising=False)
+    monkeypatch.delenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, raising=False)
+    values = _MIGRATION_RECOVERY["saved_config"]
+    models = tuple(
+        _listed_model(row["model"], row["efforts"])
+        for row in _MIGRATION_RECOVERY["harness"]
+    )
+    listing_calls: list[str] = []
+
+    def listing():
+        listing_calls.append("listing")
+        return models
+
+    async def fetch_listing():
+        listing_calls.append("listing")
+        return list(models)
+
+    async def static_capabilities(**_kwargs):
+        return static_route.HarnessCapabilities.from_listing(listing())
+
+    monkeypatch.setattr(model_listing, "fetch_live_models", fetch_listing)
+    monkeypatch.setattr(picker, "fetch_live_models", fetch_listing)
+    monkeypatch.setattr(loop_module, "_refresh_harness_capabilities", static_capabilities)
+    spied = _wire_dynamic_ports(
+        monkeypatch,
+        rows=lambda: tuple(
+            _aa_row(row["id"], row["intelligence_index"], row["output_tokens_per_second"])
+            for row in _MIGRATION_RECOVERY["evidence"]
+        ),
+        answer=_elects(_MIGRATION_RECOVERY["selector_choice"]),
+        listing=listing,
+    )
+
+    async def discover(_request):
+        return SimpleNamespace(skills=[], errors=[])
+
+    class CatalogClient(_FakeCopilotClient):
+        rpc = SimpleNamespace(skills=SimpleNamespace(discover=discover))
+
+    monkeypatch.setattr(
+        skillscmd, "make_copilot_client", lambda **_kwargs: CatalogClient()
+    )
+    monkeypatch.setattr(
+        "git_loopy.doctorcmd.make_copilot_client", lambda **_kwargs: CatalogClient()
+    )
+    secret = "fixture-private-aa-key"
+    project_path = settings.project_config_path(tmp_path)
+    global_path = settings.global_config_path(os.environ)
+    config_path = project_path if scope == "project" else global_path
+
+    def walk(app):
+        async def collect():
+            async with app.run_test() as pilot:
+                table = app.screen.query_one("#picker-models", DataTable)
+                table.move_cursor(row=table.get_row_index(values["model"]))
+                await pilot.press("enter", "enter")
+                await pilot.press("enter")
+                await pilot.press("enter", "enter", "enter")
+
+        asyncio.run(collect())
+
+    if path == "interactive":
+        monkeypatch.setattr(init_wizard_app.InitWizardApp, "run", walk)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+        monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, secret)
+        answers = iter([
+            str(values["routing_deadline_seconds"]),
+            str(values["routing_credit_allowance"]),
+            str(values["selector_concurrency"]),
+            "{" + ", ".join(
+                f"{json.dumps(key)} = {json.dumps(value)}"
+                for key, value in values["route_associations"].items()
+            ) + "}",
+        ])
+        monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+        assert cli.main(["init", f"--{scope}"]) == 0
+        saved = settings.load_config_table(config_path)
+        assert saved["route_policy"] == "dynamic"
+        assert "routing" not in saved and "escalation" not in saved
+        assert saved["route_associations"] == values["route_associations"]
+        assert secret not in config_path.read_text()
+    else:
+        assert cli.main(["init", "--yes", f"--{scope}"]) == 0
+        assert listing_calls == [] and spied["evidence"] == 0
+        saved = settings.load_config_table(config_path)
+        assert saved["route_policy"] == "dynamic"
+        assert "routing" not in saved and "escalation" not in saved
+        for key in (
+            "routing_deadline_seconds",
+            "routing_credit_allowance",
+            "selector_concurrency",
+            "route_associations",
+        ):
+            assert key not in saved
+        assert secret not in config_path.read_text()
+        before = config_path.read_bytes()
+        assert cli.main(["doctor"]) == 1
+        assert config_path.read_bytes() == before
+        refusal = capsys.readouterr()
+        assert dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV in refusal.out + refusal.err
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+        monkeypatch.setattr(
+            "builtins.input", lambda _prompt: pytest.fail("a refused Run prompted")
+        )
+        assert cli.main(["1"]) == 1
+        assert client.create_calls == []
+        assert _bound_pickups(tmp_path) == []
+        assert tracker.route_comment_calls == []
+        assert config_path.read_bytes() == before
+        for log in (tmp_path / ".git-loopy" / "logs").glob("*.jsonl"):
+            log.unlink()
+        repaired = dict(saved)
+        for key in (
+            "routing_deadline_seconds",
+            "routing_credit_allowance",
+            "selector_concurrency",
+            "route_associations",
+        ):
+            repaired[key] = values[key]
+        settings.write_config_atomic(config_path, repaired)
+        monkeypatch.setenv(dynamic_route.ARTIFICIAL_ANALYSIS_API_KEY_ENV, secret)
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    monkeypatch.setattr(
+        "builtins.input", lambda _prompt: pytest.fail("a saved-choice Run prompted")
+    )
+    preserved = config_path.read_bytes()
+    evidence_before_run = spied["evidence"]
+    assert cli.main(["1"]) == 0
+    assert config_path.read_bytes() == preserved
+    expected = _NEW_SETUP_DEFAULT["expected"]
+    (call,) = client.create_calls
+    (pickup,) = _bound_pickups(tmp_path)
+    assert (call["model"], call["reasoning_effort"], call["context_tier"]) == (
+        expected["model"], expected["effort"], expected["context_tier"],
+    )
+    assert {key: pickup[key] for key in (
+        "model", "effort", "context_tier", "routing_source",
+    )} == {key: expected[key] for key in (
+        "model", "effort", "context_tier", "routing_source",
+    )}
+    logs = sorted((tmp_path / ".git-loopy" / "logs").glob("*.jsonl"))
+    events = [
+        json.loads(line)
+        for line in logs[-1].read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    dashboard = LiveRunState()
+    for event in events:
+        dashboard.render(event)
+    view = project_run_view(dashboard, RunSummary(), issue=42)
+    (row,) = view["dashboard"]["queue"]["rows"]
+    assert (row["route"]["model"], row["route"]["effort"], row["route"]["source"]) == (
+        expected["model"], expected["effort"], expected["routing_source"],
+    )
+    assert len(spied["assessments"]) == expected["selector_calls"]
+    assert spied["evidence"] > evidence_before_run
+    (issue, comment), = tracker.route_comment_calls
+    assert issue == 42 and f'`{json.dumps(expected["model"])}`' in comment
+    captured = capsys.readouterr()
+    assert secret not in captured.err + captured.out + config_path.read_text()
 
 
 def test_the_dashboard_reads_the_dynamic_route_from_the_pickup_it_bound(

@@ -1749,10 +1749,24 @@ input and retrying setup MUST allow a later, independently validated Run to use 
 recorded policy without temporary overrides. Keep MUST need neither leaderboard
 access nor Dynamic limits. The actual session, canonical Pickup, Dashboard and
 final tracker comment MUST agree, and the Run MUST preserve both Config scopes.
-This is an executable obligation for Python's explicit opt-in setup, not a change
-to bare init or auto-setup. Shell/PowerShell first-setup activation is deferred;
+This is an executable obligation for Python's explicit opt-in setup.
+Shell/PowerShell first-setup activation is deferred;
 historical streams and the non-local, Subagent and Integration boundaries above
 are unchanged.
+
+**Fresh Python-local Dynamic default (contract 2.9, #567).** A fresh scope —
+no saved table, and no inherited Route policy — records `dynamic` without
+seeding Static rows. Unattended `init --yes` writes that policy and no limits,
+associations, or leaderboard key, and does not prompt or fetch a listing.
+Doctor and the following Run then refuse before a work session, Lease, Strike,
+or publication; operator-supplied repair of those bounds elects into the actual
+session. Interactive fresh setup, including auto-setup, defaults to migrate,
+still accepts keep, and collects explicit bounds before saving. Cancellation
+writes nothing. Existing nonempty Config is not inferred, and an inherited
+policy, including explicit `unselected`, is not shadowed. A no-Config Run with
+no TTY stays on the legacy path. `routing-resolution.json`'s
+`new_setup_default` matrix is this obligation. It does not activate
+shell/PowerShell, Subagent, or Integration routing.
 
 ### 14.4 The Dynamic route (contract 2.8)
 
@@ -1765,8 +1779,9 @@ the affected-work refusal and shared preflight-deadline obligations below,
 Route publication (§14.5) and Routing preparation (§14.6). The affected
 `routing-resolution.json`, `event-schema.json` and `dashboard-insights.json`
 fixtures declare that provenance at 2.9; Event wire compatibility remains 1.2.
-This declaration correction adds no Event fields, activates no Dynamic defaults,
-and leaves fixture cases and historical streams' interpretation unchanged.
+This declaration correction adds no Event fields and leaves historical streams'
+interpretation unchanged. §14.3's fresh-setup default is the one Dynamic
+default this contract activates; a no-Config Run stays on the legacy path.
 
 - **Opt-in, with its own prerequisites, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run

@@ -759,7 +759,11 @@ operator choice. A recorded Static/Dynamic policy in the chosen scope (including
 inherited global authority) also enters this path on bare init: omitting
 `--routing` cannot bypass readiness or overwrite unattended saved choices.
 The wizard follows scope changes without promoting unvisited defaults to
-authored Static routes. Unselected init does not yet activate Dynamic defaults.
+authored Static routes. A fresh scope, with no saved table and no inherited
+policy, defaults to Dynamic: unattended `init --yes` records the policy
+without limits or Static rows, and interactive setup, including auto-setup,
+collects migrate unless the operator keeps. Existing Config is not inferred.
+A no-Config Run still uses the legacy path.
 _Avoid_: setup, bootstrap; install (install is the separate act of putting the `git-loopy` command
 on PATH).
 
