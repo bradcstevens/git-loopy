@@ -197,6 +197,12 @@ Rendered Rust Dashboard cells/preparation use the same no-dial distinction,
 covered separately by `dashboard-insights.json`'s `effort_readback` matrix.
 This Python matrix observes raw Dashboard projection, not Rust rendering;
 neither matrix alone proves completed activation.
+The Python adapter now retains production model discovery and client construction,
+injecting the SDK transport instead. Recorded migration, fresh capability reads,
+selector and actual work sessions share the configured local Copilot data root;
+discovery clients close after one listing and remain separate from work clients.
+This strengthens the same fourteen cases without changing shared fixture values
+or claiming non-local capability authority.
 
 `event-schema.json` pins the complete exported Event-type vocabulary for every
 Orchestrator. Retired literals such as `wrapper.dashboard.fault` must be absent

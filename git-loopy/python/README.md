@@ -1428,6 +1428,12 @@ The shared Dashboard `effort_readback` matrix covers Rust Event replay and
 rendering separately from the actual-work-session routing matrix. Static
 Pickups do not record dial presence, so their historical backend placeholder
 cannot distinguish a no-dial model from deliberate omission.
+Local model discovery now uses the same shared client construction as work
+sessions, including the resolved `COPILOT_HOME` (or `$HOME/.copilot`), working
+directory and telemetry configuration. Capability refreshes still open a new
+connect-list-stop client; they never reuse the Run's memoized Rate card listing
+or reprice its recorded Consumption. This construction alignment does not
+authorize selected routing on a non-local Execution host.
 Non-local activation, the remaining composed activation matrix and the remaining
 Wrapper/Conformance activation obligations still precede the final default
 change. Existing Config is not migrated implicitly.
