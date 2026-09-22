@@ -116,7 +116,7 @@ It fetches the pinned commit SHA itself â€” not a ref that points at it today â€
 unless it proves out. On success:
 
 ```
-acquired bradcstevens/git-loopy-skills @ 20fcf612eee4d2bee2ef88fdee4cba7ae51b4392 into .git-loopy/skill-source
+acquired bradcstevens/git-loopy-skills @ 75e01c4f62d002bd0a0773b3c253b61ca065f87a into .git-loopy/skill-source
 43 Skills, licence MIT (LICENSE), provenance README.md
 ```
 
