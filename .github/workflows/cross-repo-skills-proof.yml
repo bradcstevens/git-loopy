@@ -1,0 +1,66 @@
+name: Cross-repo Skills proof
+
+# The cross-repo contract with `bradcstevens/git-loopy-skills` (ADR-0025), proven
+# for real (#632).
+#
+# Three Python-suite checks are the only place that dependency is ever tested:
+# that the Run instructions require no Skill the pinned revision lacks
+# (`test_prompt_metadata.py::test_every_required_skill_exists_at_the_pinned_revision`),
+# that Skill reference routing resolves against the same pin
+# (`test_skill_reference_routing.py::test_every_documented_skill_exists_in_the_pinned_catalog`),
+# and that the Skill-authored label vocabulary this repository provisions still
+# matches the upstream template
+# (`test_labels.py::test_the_template_setup_writes_into_a_consumer_repo_parses`).
+# Each calls `pytest.skip` when the pinned catalog has not been acquired on disk.
+# The acquisition directory is gitignored, no other CI workflow acquires it, and
+# `runner-family-gate.yml` -- Integration's own input, AGENTS.md, ADR-0009 --
+# deliberately never reaches the network, so until this job existed all three
+# reported success by not running: a Skill removed, renamed, or re-worded
+# upstream was invisible to automation in both repositories.
+#
+# This job is the other half. It acquires the exact pinned revision once, over
+# the real network, and then runs the same three checks against it. Acquiring
+# the catalog reaches an upstream this repository does not control, which is
+# exactly why AGENTS.md's Feedback-loops table excludes
+# `python -m git_loopy.skill_source` from the gate every Lane merge re-runs
+# (a Lane can do nothing about an unreachable upstream) -- so this is CI-supplied
+# evidence of the same kind the native Windows timezone proof already supplies,
+# not a new gate row. An operator running the suite offline still sees a skip;
+# here, where acquisition is expected to succeed, an absent or unacquired
+# catalog fails the job and names what was missing.
+#
+# The shape of this file is pinned by
+# git-loopy/python/tests/test_cross_repo_skills_proof_workflow.py.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  cross-repo-skills-proof:
+    name: Cross-repo Skills proof
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Acquire the pinned Skill catalog
+        run: >-
+          uv run --project git-loopy/python
+          python -m git_loopy.skill_source
+
+      - name: Run the cross-repo Skill proof
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run --project git-loopy/python --all-extras python -m pytest -q \
+            "git-loopy/python/tests/test_prompt_metadata.py::test_every_required_skill_exists_at_the_pinned_revision" \
+            "git-loopy/python/tests/test_skill_reference_routing.py::test_every_documented_skill_exists_in_the_pinned_catalog" \
+            "git-loopy/python/tests/test_labels.py::test_the_template_setup_writes_into_a_consumer_repo_parses" \
+            2>&1 | tee pytest.log
+          .github/scripts/assert-no-cross-repo-skill-skips.sh pytest.log
