@@ -357,13 +357,18 @@ def test_the_tracked_project_config_preserves_its_default_override() -> None:
         warn=warnings.append,
     ).run
 
-    assert (run.model, run.reasoning_effort) == ("gpt-6-astra", "high")
-    assert len(warnings) == 1
-    assert "['gemini-3.8-flash']" in warnings[0]
+    assert (run.model, run.reasoning_effort) == ("gpt-6-astra", "medium")
+    assert warnings == []
 
 
 def test_the_tracked_project_config_preserves_all_task_type_routes() -> None:
-    """Routes survive resolution, with a warning for the unverified Gemini model."""
+    """Every route survives resolution, and every pair is on the roster.
+
+    The tracked Config routes ``implementation`` to an on-roster model, so
+    resolution is silent. The off-roster warning-and-pass-through path this
+    file used to exercise incidentally is covered directly, against a synthetic
+    Config, in ``test_config_resolver.py``.
+    """
     from git_loopy import cli
 
     warnings: list[str] = []
@@ -376,13 +381,12 @@ def test_the_tracked_project_config_preserves_all_task_type_routes() -> None:
     ).run
 
     assert dict(run.routing) == {
-        "planning": ("gpt-6-astra", "max"),
-        "review": ("claude-opus-5", "max"),
-        "implementation": ("gemini-3.8-flash", "high"),
-        "test": ("claude-sonnet-5", "high"),
-        "docs": ("gpt-5.6-luna", "low"),
-        "chore": ("gpt-5.6-luna", "low"),
+        "planning": ("gpt-6-astra", "xhigh"),
+        "review": ("claude-opus-5", "xhigh"),
+        "implementation": ("grok-4.7", "high"),
+        "test": ("claude-opus-5", "high"),
+        "docs": ("gpt-5.6-luna", "medium"),
+        "chore": ("gpt-5.6-luna", "medium"),
         "bugfix": ("claude-opus-5", "xhigh"),
     }
-    assert len(warnings) == 1
-    assert "['gemini-3.8-flash']" in warnings[0]
+    assert warnings == []
