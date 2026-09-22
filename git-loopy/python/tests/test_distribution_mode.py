@@ -243,7 +243,7 @@ class TestWorkflowJobGatingInSourceOnlyMode:
     def test_release_promotion_operates_under_repository_distribution_mode(self) -> None:
         """AC 7: Both promotion triggers operate under repository distribution mode."""
         policy = release_trust.load_trust_policy(REPOSITORY_ROOT)
-        assert policy.distribution_mode in policy.distribution_modes
+        assert policy.distribution_mode == _declared_mode()
         workflow = _load_yaml(PROMOTION_WORKFLOW_PATH)
         assert "environment" not in workflow["jobs"]["promote"]
 

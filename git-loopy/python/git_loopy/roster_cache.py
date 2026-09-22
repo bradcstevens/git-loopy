@@ -73,10 +73,10 @@ def record_observed_roster(
     read-only home, or a listing shaped differently than expected all leave the
     previous answer in place and are silently tolerated.
     """
-    models = getattr(capabilities, "models", None)
-    if not models:
-        return
     try:
+        models = getattr(capabilities, "models", None)
+        if not models:
+            return
         document: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "models": sorted(str(model) for model in models),
@@ -91,7 +91,14 @@ def record_observed_roster(
         scratch = path.with_name(f".{path.name}.tmp")
         scratch.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
         os.replace(scratch, path)
-    except (OSError, TypeError, ValueError):
+    except Exception:
+        # Deliberately total. The caller is a capability read whose contract is
+        # that every failure answers ``None`` rather than raising, because it
+        # runs at Run preflight before a single Event exists — a traceback there
+        # is not a refusal an operator can read. Resolving the path alone can
+        # raise beyond the obvious OSError: with neither XDG_CONFIG_HOME nor
+        # HOME set, `Path.home()` raises RuntimeError, which is reachable on a
+        # Windows host carrying none of the variables it consults.
         return
 
 
@@ -104,7 +111,11 @@ def observed_models(env: Mapping[str, str] | None = None) -> frozenset[str]:
     """
     try:
         document = json.loads(roster_cache_path(env).read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, ValueError):
+    except Exception:
+        # Total for the same reason the write is: resolving the path can raise
+        # beyond OSError (RuntimeError from `Path.home()` with no HOME), and an
+        # unreadable advisory cache must degrade to the built-in roster rather
+        # than take down whatever asked whether a model was known.
         return frozenset()
     if not isinstance(document, dict):
         return frozenset()
