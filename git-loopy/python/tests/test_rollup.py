@@ -276,8 +276,15 @@ def test_rollup_carries_each_session_ending_on_its_own_issue(
     assert issue["ending"] == ending.value
 
 
-def test_rollup_omits_an_ending_when_an_issue_advanced() -> None:
-    """Progress has no Session outcome and must not fabricate one."""
+@pytest.mark.parametrize(
+    "ending", [None, SessionOutcome.TIMEOUT, SessionOutcome.CRASH]
+)
+@pytest.mark.parametrize("closed", [False, True])
+def test_rollup_reports_a_lost_session_beside_progress_and_omits_a_normal_advance(
+    ending: SessionOutcome | None,
+    closed: bool,
+) -> None:
+    """A commit refutes a work claim, not a session the Orchestrator lost."""
     rollup = IterationRollupAccumulator(
         denomination=BilledCreditsDenomination(), monotonic=_Clock()
     )
@@ -291,12 +298,22 @@ def test_rollup_omits_an_ending_when_an_issue_advanced() -> None:
         }
     )
     rollup.observe({"type": "wrapper.commit.recorded"})
+    if closed:
+        rollup.observe({
+            "type": "wrapper.auto_close",
+            "issue": 42,
+            "ts": "2026-05-16T00:00:01.000Z",
+        })
 
-    rollup.record_ending(42, None)
+    rollup.record_ending(42, ending)
 
     issue = rollup.finish(iter_num=1, strikes=0)["issues"][0]
-    assert issue["status"] == "advanced"
-    assert "ending" not in issue
+    assert issue["status"] == ("closed" if closed else "advanced")
+    if ending is None:
+        assert "ending" not in issue
+    else:
+        assert issue["ending"] == ending.value
+    assert issue.get("commits") == (None if closed else 1)
 
 
 @pytest.mark.parametrize("rolling", [False, True])

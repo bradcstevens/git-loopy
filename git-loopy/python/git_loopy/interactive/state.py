@@ -421,6 +421,8 @@ class IssueContribution:
     outcome: str | None
     duration_seconds: float | None
     status: str
+    ending: str | None
+    commits: int | None
     active_seconds: float
     #: The pair *this* contribution's own Pickup resolved, never a later one:
     #: an escalated issue reads as a change between two rows, which a row that
@@ -2134,6 +2136,7 @@ class LiveRunState:
                 else key in self._iter_lane_refs
             )
             route = self._iter_routes.get(key)
+            ending = payload.get("ending")
             contribution = IssueContribution(
                 kind="lane" if is_lane else "iteration",
                 iteration=None if is_lane else iter_num,
@@ -2141,6 +2144,8 @@ class LiveRunState:
                 outcome=outcome,
                 duration_seconds=duration_seconds,
                 status=str(payload.get("status") or STATUS_NO_PROGRESS),
+                ending=ending if isinstance(ending, str) else None,
+                commits=_optional_nonnegative_int(payload.get("commits")),
                 active_seconds=max(
                     0.0, _coerce_float(payload.get("active_seconds"), 0.0)
                 ),
@@ -2156,9 +2161,8 @@ class LiveRunState:
                 item.usage_observed for item in entry.contributions
             )
             entry.status = contribution.status
-            ending = payload.get("ending")
-            entry.ending = ending if isinstance(ending, str) else None
-            entry.commits = _optional_nonnegative_int(payload.get("commits"))
+            entry.ending = contribution.ending
+            entry.commits = contribution.commits
             entry.active_duration = max(
                 0.0,
                 _coerce_float(

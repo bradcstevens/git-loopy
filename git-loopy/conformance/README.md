@@ -623,6 +623,12 @@ Its Rolling-dispatch ending case finalizes one issue while a sibling remains
 active, pinning the whole Dashboard and drill-in projection in both Python and
 Rust. The contribution's Summary remains a Lane row rather than a synthetic
 serial Iteration, and its ending shares the existing Status cell.
+The two-attempt case keeps a crash and a later no-progress ending in their own
+Iteration breakdown rows while the Queue shows only the latest ending. A commit
+that is then lost to a timeout keeps both facts in the same Status cell:
+`advanced` says what progressed, and `timeout` says the session was lost.
+Both consumers compare the complete projected objects, including honest nulls for
+members that do not report endings or commit counts.
 Python drives the whole case: it replays the normalized Event prefix through the
 production reducer and projection and compares the toolkit-neutral view models.
 The shell and PowerShell Event-schema adapters drive the *producer* half. Each

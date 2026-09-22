@@ -994,12 +994,17 @@ Contract-2.10 addition within compatibility schema 1: an issue contribution may 
 one of the five **Session outcome** spellings, beside its unchanged `status`. This is the observed
 ending of that issue's attempt, not its enclosing Iteration's outcome; the same issue rows travel
 on `wrapper.contribution.end` for a Lane contribution. A normally completed session that advanced
-its issue has no ending. A timeout or crash remains an observed session failure even if it first
-committed, as the existing Session outcome and Attempt lifecycle require. An Orchestrator that
-cannot observe an ending omits it; a consumer never defaults that absence to an ending.
+its issue has no ending and reports none, rather than an empty or defaulted one. A timeout or crash
+remains an observed session failure even if it first committed, and travels beside `advanced` or
+`closed`, because progress does not launder a lost session. That reporting does not change the
+Attempt lifecycle, Escalation rung, Attempt evidence, or Strike accounting.
+An Orchestrator that cannot observe an ending omits it; a consumer never defaults that absence
+to an ending.
 An advanced contribution may carry its positive `commits` count, so a Queue can say what advanced
 without turning a zero or unavailable count into a claim. The Queue displays these facts inline
 in Status, without adding a column or changing the six Status values.
+The Iteration breakdown retains each attempt's own ending and commit count in its Status cell,
+rather than copying the latest Queue ending over earlier attempts.
 
 Cost is the harness's reported billing — optional `credits`, `premium_requests`, `cache_read` and
 `cache_write`, added additively (ADR-0026). They are optional rather than required precisely so an

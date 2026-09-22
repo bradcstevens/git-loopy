@@ -318,6 +318,8 @@ def _contribution_row(
         "outcome": contribution.outcome,
         "duration_seconds": contribution.duration_seconds,
         "status": contribution.status,
+        "ending": contribution.ending,
+        "commits": contribution.commits,
         "active_seconds": contribution.active_seconds,
         "route": _route(contribution.route),
         "consumption": {

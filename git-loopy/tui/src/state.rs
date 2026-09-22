@@ -311,6 +311,8 @@ pub(crate) struct IssueContribution {
     pub(crate) outcome: Option<String>,
     pub(crate) duration_seconds: Option<f64>,
     pub(crate) status: String,
+    pub(crate) ending: Option<String>,
+    pub(crate) commits: Option<i64>,
     pub(crate) active_seconds: f64,
     /// The pair this contribution's own Pickup resolved, never a later one:
     /// an escalated issue is a *change between rows*, so a row that inherited
@@ -1549,6 +1551,8 @@ fn contribution_from(
             .status
             .clone()
             .unwrap_or_else(|| STATUS_NO_PROGRESS.to_string()),
+        ending: row.ending.clone(),
+        commits: row.commits.filter(|count| *count >= 0),
         active_seconds: row.active_seconds.unwrap_or(0.0).max(0.0),
         route,
         model: usage_observed

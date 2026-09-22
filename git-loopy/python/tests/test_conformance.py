@@ -2438,7 +2438,6 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
     """
     contract = _DASHBOARD_INSIGHTS["semantic_contract"]
     fields = contract["projection_fields"]
-    optional_fields = contract["optional_projection_fields"]
 
     checked_queue_rows = 0
     checked_breakdown_rows = 0
@@ -2492,11 +2491,7 @@ def test_every_dashboard_projection_matches_the_declared_field_inventory() -> No
             ):
                 route = row["route"]
                 if route is not None:
-                    assert list(route) == fields["route"] + [
-                        field
-                        for field in optional_fields["route"]
-                        if field in route
-                    ], where
+                    _assert_route_fields(route, fields, where)
                     checked_routes += 1
             for line in (
                 expected["dashboard"]["activity"]["lines"]
@@ -2924,6 +2919,28 @@ def test_event_fixture_pins_additive_session_endings_per_issue() -> None:
         issue for issue in python_case["issues"] if issue["status"] == "advanced"
     )
     assert advanced == {"issue": 310, "status": "advanced", "commits": 1}
+    retained = next(
+        issue
+        for case in _EVENT_SCHEMA["serialization_cases"]
+        if case["id"] == "issue-endings-are-additive-with-unchanged-statuses"
+        for issue in case["event"]["issues"]
+        if issue["issue"] == 318
+    )
+    assert retained == {
+        "issue": 318,
+        "status": "advanced",
+        "ending": "timeout",
+        "commits": 1,
+    }
+    closed = next(
+        issue
+        for case in _EVENT_SCHEMA["serialization_cases"]
+        if case["id"] == "issue-endings-are-additive-with-unchanged-statuses"
+        for issue in case["event"]["issues"]
+        if issue["issue"] == 319
+    )
+    assert closed == {"issue": 319, "status": "closed"}
+    assert "ending" not in closed
 
     native_case = next(
         case
@@ -2946,6 +2963,31 @@ def test_event_fixture_pins_additive_session_endings_per_issue() -> None:
             "gone",
         ],
     }
+
+
+def test_dashboard_fixture_keeps_a_timeout_beside_advanced_work() -> None:
+    case = _dashboard_case("advanced-timeout-keeps-its-ending")
+    row = case["snapshots"][-1]["expected"]["dashboard"]["queue"]["rows"][0]
+    breakdown = case["snapshots"][-1]["expected"]["drill_in"]["iteration_breakdown"]["rows"][0]
+    assert row["status"] == "advanced"
+    assert row["ending"] == "timeout"
+    assert row["commits"] == 1
+    assert (breakdown["status"], breakdown["ending"], breakdown["commits"]) == (
+        "advanced",
+        "timeout",
+        1,
+    )
+
+
+def test_dashboard_fixture_retains_distinct_endings_for_two_attempts() -> None:
+    case = _dashboard_case("two-attempts-retain-distinct-endings")
+    first, latest = case["snapshots"]
+    assert first["expected"]["dashboard"]["queue"]["rows"][0]["ending"] == "crash"
+    assert latest["expected"]["dashboard"]["queue"]["rows"][0]["ending"] == "no_progress"
+    assert [
+        (row["iteration"], row["status"], row["ending"])
+        for row in latest["expected"]["drill_in"]["iteration_breakdown"]["rows"]
+    ] == [(1, "no-progress", "crash"), (2, "no-progress", "no_progress")]
 
 
 _RELEASE_VERSION = _load_fixture("release-version.json")

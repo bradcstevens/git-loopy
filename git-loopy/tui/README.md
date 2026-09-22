@@ -101,7 +101,10 @@ did name rather than reporting nothing.
 
 The Status cell keeps the six Status values and shows an observed Session outcome
 inline, such as `no-progress - timed out` on an ASCII terminal. An advanced row
-can show its positive commit count; an absent ending stays absent. Both serial
+can show its positive commit count beside a retained timeout or crash; an absent
+ending stays absent. The Iteration
+breakdown retains each attempt's own ending and commit count in its Status cell,
+even after another attempt replaces the Queue's latest ending. Both serial
 `wrapper.iteration.end` rows and Rolling-dispatch `wrapper.contribution.end` rows
 use the same issue-accounting reduction. A contribution finalizes only its own
 issue and Summary row, without stopping a sibling's Active timer or a refilled

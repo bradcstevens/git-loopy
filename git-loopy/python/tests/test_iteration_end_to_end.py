@@ -1486,16 +1486,17 @@ def test_loop_aborts_after_max_nmt_strikes(tmp_path, monkeypatch) -> None:
     ("failure", "ending", "strikes"),
     [(RuntimeError, "crash", 0), (asyncio.TimeoutError, "timeout", 1)],
 )
-@pytest.mark.parametrize("progressed", [False, True])
+@pytest.mark.parametrize("status", ["no-progress", "advanced", "closed"])
 def test_loop_send_and_wait_failure_carries_its_ending(
     tmp_path, monkeypatch, failure: type[Exception], ending: str, strikes: int,
-    progressed: bool,
+    status: str,
 ) -> None:
     """A lost session keeps its ending even when a commit landed first.
 
     The post-iteration accounting (commits_between, auto-close backstop,
-    strike tick, iteration.end emit, counters persist) still runs — the
-    SDK failure is contained to "no progress" semantics.
+    strike tick, iteration.end emit, counters persist) still runs. Progress
+    does not launder a timeout or crash, and it does not invent an ending
+    when the session reached none.
 
     Since contract 1.27 a **Strike** is charged per issue the Run gives up
     on, not per unproductive Iteration, so a first crash spends the issue's
@@ -1515,9 +1516,11 @@ def test_loop_send_and_wait_failure_carries_its_ending(
 
     class RaisingSession(FakeCopilotSession):
         async def send_and_wait(self, prompt: str, *, timeout: float = 60.0, **_: Any) -> SessionEvent | None:
-            if progressed:
+            if status != "no-progress":
                 fake_git.simulate_agent_commit(
-                    sha="a" * 40, subject="feat: partial work", body="Refs #42"
+                    sha="a" * 40,
+                    subject="feat: work",
+                    body="Closes #42" if status == "closed" else "Refs #42",
                 )
             raise failure("simulated SDK failure")
 
@@ -1550,12 +1553,13 @@ def test_loop_send_and_wait_failure_carries_its_ending(
     assert sum(e["type"] == "wrapper.strike" for e in events) == strikes
     iteration_end = next(e for e in events if e["type"] == "wrapper.iteration.end")
     assert iteration_end["summary"]["strikes"] == strikes
-    assert iteration_end["issues"][0]["status"] == (
-        "advanced" if progressed else "no-progress"
-    )
+    assert iteration_end["issues"][0]["status"] == status
     assert iteration_end["issues"][0]["ending"] == ending
-    if progressed:
-        assert iteration_end["issues"][0]["commits"] == 1
+    if status != "no-progress":
+        assert iteration_end["summary"]["commits"] == 1
+        assert iteration_end["summary"]["auto_closures"] == int(status == "closed")
+        if status == "advanced":
+            assert iteration_end["issues"][0]["commits"] == 1
 
 
 def test_loop_auto_close_failure_does_not_abort_iteration(tmp_path, monkeypatch) -> None:
@@ -4291,9 +4295,9 @@ def test_advanced_status_resets_the_guard_without_erasing_a_timeout_strike(
         issue for event in events if event["type"] == "wrapper.iteration.end"
         for issue in event["issues"]
     ]
-    assert [(row["status"], row["ending"]) for row in rows] == [
-        ("advanced", "timeout"), ("advanced", "timeout"), ("advanced", "timeout"),
-    ]
+    assert [(row["status"], row["ending"], row["commits"]) for row in rows] == [
+        ("advanced", "timeout", 1),
+    ] * 3
     assert [e["outcome"] for e in events if e["type"] == "wrapper.run.end"] == ["iteration_cap"]
 
 

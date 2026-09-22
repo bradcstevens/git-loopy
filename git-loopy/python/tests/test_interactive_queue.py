@@ -384,6 +384,8 @@ def test_normalized_iteration_end_projects_closed_issue_contribution() -> None:
             outcome="closed",
             duration_seconds=4.0,
             status="closed",
+            ending=None,
+            commits=None,
             active_seconds=4.0,
             route=None,
             usage=UsageTally(model="claude-opus-4.8", tokens_in=100, tokens_out=50),

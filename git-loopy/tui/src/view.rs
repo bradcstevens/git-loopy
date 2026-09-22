@@ -433,6 +433,8 @@ pub struct ContributionRow {
     pub outcome: Option<String>,
     pub duration_seconds: Option<f64>,
     pub status: String,
+    pub ending: Option<String>,
+    pub commits: Option<i64>,
     pub active_seconds: f64,
     pub route: Option<RouteView>,
     pub consumption: ConsumptionView,
@@ -733,6 +735,8 @@ fn contribution_row(contribution: &IssueContribution) -> ContributionRow {
         outcome: contribution.outcome.clone(),
         duration_seconds: contribution.duration_seconds,
         status: contribution.status.clone(),
+        ending: contribution.ending.clone(),
+        commits: contribution.commits,
         active_seconds: contribution.active_seconds,
         route: contribution.route.as_ref().map(RouteView::project),
         consumption: ConsumptionView {

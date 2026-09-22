@@ -577,21 +577,12 @@ fn draw_queue(
     glyphs: &Glyphs,
 ) {
     let mut columns = QUEUE_COLUMNS;
-    columns[1].width = rows
-        .iter()
-        .map(|row| {
-            status_cell(&row.status, row.ending.as_deref(), row.commits, glyphs)
-                .chars()
-                .count() as u16
-                + 2
-        })
-        .max()
-        .unwrap_or(12)
-        .max(12)
-        .min(
-            area.width
-                .saturating_sub(2 + columns[0].width + COLUMN_SPACING),
-        );
+    columns[1].width = status_column_width(
+        rows.iter()
+            .map(|row| status_cell(&row.status, row.ending.as_deref(), row.commits, glyphs)),
+        area.width
+            .saturating_sub(2 + columns[0].width + COLUMN_SPACING),
+    );
     draw_table(
         frame,
         area,
@@ -619,6 +610,15 @@ fn draw_queue(
         " Queue ",
         glyphs,
     );
+}
+
+fn status_column_width(cells: impl Iterator<Item = String>, available: u16) -> u16 {
+    cells
+        .map(|cell| cell.chars().count() as u16 + 2)
+        .max()
+        .unwrap_or(12)
+        .max(12)
+        .min(available)
 }
 
 fn status_cell(
@@ -1343,17 +1343,24 @@ fn draw_breakdown(
     routing: &str,
     glyphs: &Glyphs,
 ) {
+    let mut columns = BREAKDOWN_COLUMNS;
+    columns[3].width = status_column_width(
+        rows.iter()
+            .map(|row| status_cell(&row.status, row.ending.as_deref(), row.commits, glyphs)),
+        area.width
+            .saturating_sub(2 + columns[0].width + COLUMN_SPACING),
+    );
     draw_table(
         frame,
         area,
-        &BREAKDOWN_COLUMNS,
+        &columns,
         rows.iter().map(|row| {
             vec![
                 contribution_label(row, glyphs),
                 row.outcome.clone().unwrap_or_else(|| glyphs.unknown.into()),
                 row.duration_seconds
                     .map_or_else(|| glyphs.unknown.to_string(), duration),
-                row.status.clone(),
+                status_cell(&row.status, row.ending.as_deref(), row.commits, glyphs),
                 duration(row.active_seconds),
                 route(row.route.as_ref(), None, None, routing),
                 tokens(row.consumption.tokens_in, glyphs),

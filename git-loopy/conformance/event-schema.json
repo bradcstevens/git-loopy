@@ -2437,10 +2437,11 @@
           {"issue": 316, "status": "no-progress", "ending": "content_filtered"},
           {"issue": 310, "status": "advanced", "commits": 1},
           {"issue": 318, "status": "advanced", "ending": "timeout", "commits": 1},
+          {"issue": 319, "status": "closed"},
           {"issue": 7, "status": "no-progress"}
         ]
       },
-      "jsonl": "{\"ts\": \"2026-05-16T00:00:25.000Z\", \"run_id\": \"01HXR0000000000000000000EE\", \"iter\": 1, \"type\": \"wrapper.iteration.end\", \"issues\": [{\"issue\": 311, \"status\": \"no-progress\", \"ending\": \"no_progress\"}, {\"issue\": 312, \"status\": \"no-progress\", \"ending\": \"timeout\"}, {\"issue\": 317, \"status\": \"no-progress\", \"ending\": \"crash\"}, {\"issue\": 315, \"status\": \"no-progress\", \"ending\": \"no_more_tasks\"}, {\"issue\": 316, \"status\": \"no-progress\", \"ending\": \"content_filtered\"}, {\"issue\": 310, \"status\": \"advanced\", \"commits\": 1}, {\"issue\": 318, \"status\": \"advanced\", \"ending\": \"timeout\", \"commits\": 1}, {\"issue\": 7, \"status\": \"no-progress\"}]}\n"
+      "jsonl": "{\"ts\": \"2026-05-16T00:00:25.000Z\", \"run_id\": \"01HXR0000000000000000000EE\", \"iter\": 1, \"type\": \"wrapper.iteration.end\", \"issues\": [{\"issue\": 311, \"status\": \"no-progress\", \"ending\": \"no_progress\"}, {\"issue\": 312, \"status\": \"no-progress\", \"ending\": \"timeout\"}, {\"issue\": 317, \"status\": \"no-progress\", \"ending\": \"crash\"}, {\"issue\": 315, \"status\": \"no-progress\", \"ending\": \"no_more_tasks\"}, {\"issue\": 316, \"status\": \"no-progress\", \"ending\": \"content_filtered\"}, {\"issue\": 310, \"status\": \"advanced\", \"commits\": 1}, {\"issue\": 318, \"status\": \"advanced\", \"ending\": \"timeout\", \"commits\": 1}, {\"issue\": 319, \"status\": \"closed\"}, {\"issue\": 7, \"status\": \"no-progress\"}]}\n"
     },
     {
       "id": "parallel-degraded-to-serial-for-the-whole-run",
