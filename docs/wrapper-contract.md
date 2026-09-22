@@ -2101,10 +2101,22 @@ zero. A Dynamic session uses the listing that just authorized that issue. A
 Static Lane reads the executing host's report when that placement is not local;
 a serial Static session reads this machine's listing. Historical
 delivery events that omit `labels` and `incomplete` stay valid, and
-`event_schema_version` stays 1.2. The migration command, unused legacy
-label-definition deletion, and a later capacity-only label refresh are not
-implemented. Shell and PowerShell routing remain deferred. This does not imply
-Subagent or Integration routing, and it is not final Dynamic-default activation.
+`event_schema_version` stays 1.2. `git-loopy route-labels migrate` is the
+explicit, repeatable Python migration for one repository the operator is in.
+It covers open and closed issues. It reconstructs dimensions only from a
+trustworthy local Route record or a matching historical projection comment,
+never from truncated `git-loopy-route:` label text, a current model listing,
+or a new selection. It removes the legacy association even when a dimension
+stays unknown, does not rewrite historical comments, and deletes a legacy
+label definition only after a complete issue listing and a complete
+pull-request listing both show it unused. A pending local delivery, an
+incomplete issue listing, or an unreadable local store refuses before any
+tracker write. Reporting is the default and writes nothing; `--apply` is the
+write and does not prompt. The command cannot certify that other machines
+have stopped publishing legacy labels. A later capacity-only label refresh
+is not implemented. Shell and PowerShell routing remain deferred. This does
+not imply Subagent or Integration routing, and it is not final
+Dynamic-default activation.
 
 The `local_durability` matrix composes the mandatory local-write boundary with
 recorded init/update authority in both Python-local modes. A refused provenance

@@ -1648,6 +1648,30 @@ truncated or rewritten. A legacy `git-loopy-route:` association on that issue
 is removed when the new dimensions are written. The comment marker stays
 `git-loopy-route:v1:` so an older comment is still recognizable.
 
+Historical issues that still carry the old combined label are not swept by a
+Run. Migrate them explicitly, and only after every publishing Runner for that
+repository has been stopped or upgraded. This command cannot prove that other
+machines have stopped; deleting a definition does not stop an older Runner
+from creating it again.
+
+```bash
+# Report only. Names the repository, the plan, and what would stay unknown.
+git-loopy route-labels migrate
+
+# Remove legacy associations, write exact dimensions, and delete a legacy
+# definition only when no issue and no pull request still carries it.
+git-loopy route-labels migrate --apply
+```
+
+Reconstruction uses a trustworthy local Route record when this clone has one,
+otherwise the newest projection comment whose model, effort, and tier are
+exact. It never parses the truncated `git-loopy-route:` label, never reads a
+current model listing, and never buys a new selection. A missing dimension is
+named. Historical comments are not rewritten. A pending local delivery or an
+incomplete issue listing refuses before any tracker write. Shell and
+PowerShell do not implement this command. A later capacity-only refresh is
+not this command.
+
 These tracker writes are observational. They never become Routing input, never
 change a Task type, and never override Config. A failed comment or label write
 does not stop the already-recorded work: its local delivery state remains

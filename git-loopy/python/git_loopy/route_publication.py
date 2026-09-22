@@ -263,6 +263,17 @@ class RoutePublicationStore:
         entry = self._read()["assignments"].get(str(issue))
         return entry if isinstance(entry, dict) else None
 
+    def trusted(self, issue: int) -> _RouteAssignment | None:
+        """Return the assignment only when its stored identity still matches.
+
+        A record whose identity does not match its Route is not a reconstruction
+        source. Absence is ``None``, not an invented assignment.
+        """
+        entry = self.current(issue)
+        if entry is None:
+            return None
+        return _assignment_from_record(entry)
+
     def pending(self) -> tuple[dict[str, object], ...]:
         """Return deliveries that remain incomplete after a prior tracker failure."""
         return tuple(

@@ -214,6 +214,11 @@ _COMMAND_SPECS = (
         "Report or reconcile the tracker Label vocabulary.",
     ),
     _CommandSpec(
+        "route-labels",
+        "Repository maintenance",
+        "Migrate legacy Route labels to exact dimensions.",
+    ),
+    _CommandSpec(
         "doctor",
         "Repository maintenance",
         "Report Run-preflight blockers without starting a Run.",
@@ -916,6 +921,43 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    route_labels = _add_command(
+        sub,
+        "route-labels",
+        description=(
+            "Migrate this repository's legacy combined Route labels to exact "
+            "model_id, model_context, and model_effort dimensions. Reporting "
+            "is the default and writes nothing. The migration does not prompt, "
+            "fetch a model listing, call a Route selector, rewrite historical "
+            "comments, or write Config. Shell and PowerShell do not implement "
+            "it. A later capacity-only refresh is a different command and is "
+            "not implemented."
+        ),
+    )
+    route_labels_sub = route_labels.add_subparsers(
+        dest="route_labels_command", required=True
+    )
+    route_labels_migrate = route_labels_sub.add_parser(
+        "migrate",
+        help="Report or apply the legacy Route-label migration.",
+        description=(
+            "Reconstruct exact dimensions from a trustworthy local Route record "
+            "or a matching historical projection comment. Never from truncated "
+            "git-loopy-route label text. --apply removes those associations and "
+            "deletes a legacy definition only when issues and pull requests both "
+            "prove it unused. This command cannot certify that other machines "
+            "have stopped publishing the old label."
+        ),
+    )
+    route_labels_migrate.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "Write the migration. Without this flag the command only reports "
+            "the plan. It does not prompt."
+        ),
+    )
+
     info = _add_command(
         sub,
         "info",
@@ -1316,6 +1358,35 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             f"undeclared parsers {sorted(registered - declared)!r}"
         )
     return parser
+
+
+def _make_route_label_migration_tracker():
+    """Build the real ``gh`` adapter for ``route-labels migrate``.
+
+    Named so tests can replace it. The handler never constructs a live backend.
+    """
+    from git_loopy.gh import SubprocessRouteLabelMigrationTracker
+
+    return SubprocessRouteLabelMigrationTracker()
+
+
+def _run_route_labels(args: argparse.Namespace) -> int:
+    """Dispatch ``git-loopy route-labels migrate``."""
+    from git_loopy import route_label_migrationcmd
+
+    if args.route_labels_command != "migrate":
+        raise AssertionError(
+            f"undispatched route-labels command {args.route_labels_command!r}"
+        )
+    try:
+        repo_root: Path | None = resolve_repo_root()
+    except RuntimeError:
+        repo_root = None
+    return route_label_migrationcmd.run_route_labels(
+        repo_root=repo_root,
+        tracker=_make_route_label_migration_tracker(),
+        apply=bool(args.apply),
+    )
 
 
 def _make_label_client() -> LabelBootstrapClient:
@@ -3129,6 +3200,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_skills(sub_args)
         if sub_args.command == "labels":
             return _run_labels(sub_args)
+        if sub_args.command == "route-labels":
+            return _run_route_labels(sub_args)
         if sub_args.command == "calibrate":
             return _run_calibrate(sub_args)
         if sub_args.command == "info":

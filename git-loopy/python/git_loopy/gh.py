@@ -1512,6 +1512,157 @@ class SubprocessLabelClient:
         _run(["issue", "edit", str(number), "--remove-label", label])
 
 
+class SubprocessRouteLabelMigrationTracker:
+    """Tracker mechanics for ``git-loopy route-labels migrate``.
+
+    Composes the existing issue and label adapters. Pull-request usage is
+    listed here because a label definition is shared, and the existing
+    ``pr_list`` cap is not a proof that a label is unused.
+    """
+
+    def repository(self) -> str:
+        from git_loopy.route_label_migration import RouteLabelMigrationError
+
+        try:
+            return SubprocessGitHubClient().repo_view().nwo
+        except GhError as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+
+    def list_issues(self):
+        from git_loopy.route_label_migration import (
+            MigrationIssue,
+            MigrationPage,
+            RouteLabelMigrationError,
+        )
+
+        try:
+            page = SubprocessGitHubClient().issue_list("", state="all")
+        except GhError as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+        return MigrationPage(
+            items=tuple(
+                MigrationIssue(
+                    number=issue.number,
+                    state=issue.state,
+                    labels=tuple(issue.labels),
+                )
+                for issue in page.issues
+            ),
+            complete=page.complete,
+        )
+
+    def issue_comments(self, number: int) -> tuple[str, ...]:
+        from git_loopy.route_label_migration import RouteLabelMigrationError
+
+        try:
+            return tuple(SubprocessGitHubClient().issue_comments(number))
+        except (GhError, RouteDeliveryError) as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+
+    def ensure_label(self, label: str) -> None:
+        from git_loopy.route_label_migration import RouteLabelMigrationError
+
+        try:
+            SubprocessGitHubClient().ensure_label(label)
+        except (GhError, RouteDeliveryError) as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+
+    def replace_route_label(
+        self, number: int, *, remove: Sequence[str], add: Sequence[str]
+    ) -> None:
+        from git_loopy.route_label_migration import RouteLabelMigrationError
+
+        try:
+            SubprocessGitHubClient().replace_route_label(
+                number, remove=remove, add=add
+            )
+        except (GhError, RouteDeliveryError) as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+
+    def label_definitions(self) -> tuple[str, ...]:
+        from git_loopy.route_label_migration import RouteLabelMigrationError
+
+        try:
+            return tuple(SubprocessLabelClient().label_list())
+        except GhError as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+
+    def issues_with_label(self, label: str):
+        from git_loopy.route_label_migration import (
+            MigrationIssue,
+            MigrationPage,
+            RouteLabelMigrationError,
+        )
+
+        try:
+            page = SubprocessGitHubClient().issue_list(label, state="all")
+        except GhError as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+        return MigrationPage(
+            items=tuple(
+                MigrationIssue(
+                    number=issue.number,
+                    state=issue.state,
+                    labels=tuple(issue.labels),
+                )
+                for issue in page.issues
+            ),
+            complete=page.complete,
+        )
+
+    def pull_requests_with_label(self, label: str):
+        from git_loopy.route_label_migration import (
+            PullUsagePage,
+            RouteLabelMigrationError,
+        )
+
+        limit = LIST_PAGE_LIMIT
+        try:
+            while True:
+                cmd = [
+                    "pr",
+                    "list",
+                    "--state",
+                    "all",
+                    "--label",
+                    label,
+                    "--limit",
+                    str(limit),
+                    "--json",
+                    "number",
+                ]
+                raw = _run(cmd)
+                parsed = _parse_json(raw, [_GH_BIN, *cmd])
+                if not isinstance(parsed, list):
+                    raise GhError(
+                        [_GH_BIN, *cmd],
+                        0,
+                        "expected JSON array from gh pr list, got "
+                        f"{type(parsed).__name__}",
+                    )
+                numbers = tuple(
+                    int(item["number"])
+                    for item in parsed
+                    if isinstance(item, dict) and isinstance(item.get("number"), int)
+                )
+                step = next_read_step(limit=limit, rows=len(parsed))
+                if step.next_limit is None:
+                    return PullUsagePage(
+                        numbers=numbers, complete=step.authoritative
+                    )
+                limit = step.next_limit
+        except GhError as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+
+    def delete_label_definition(self, label: str) -> None:
+        from git_loopy.route_label_migration import RouteLabelMigrationError
+
+        try:
+            _run(["label", "delete", label, "--yes"])
+        except GhError as exc:
+            raise RouteLabelMigrationError(str(exc)) from exc
+
+
 class SubprocessTaskTypeLabelClient:
     """Stateless adapter for the one write the **Task-type classifier** makes.
 

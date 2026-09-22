@@ -1,6 +1,6 @@
 # Route labels expose exact observational dimensions
 
-**Status:** accepted. Python serial and Lane publication now write exact `model_id:`, `model_context:`, and `model_effort:` labels and remove a legacy combined association on the issue they touch. The migration command, unused legacy label-definition deletion, and a later capacity-only refresh are not implemented. Shell and PowerShell routing remain deferred under ADR-0057. This is not final Dynamic-default activation.
+**Status:** accepted. Python serial and Lane publication write exact `model_id:`, `model_context:`, and `model_effort:` labels and remove a legacy combined association on the issue they touch. `git-loopy route-labels migrate` reconstructs those dimensions from a trustworthy local record or a matching historical projection, removes leftover legacy associations, and deletes an unused legacy definition only after issue and pull-request checks. A later capacity-only refresh is not implemented. Shell and PowerShell routing remain deferred under ADR-0057. This is not final Dynamic-default activation.
 
 A human-led `/grill-with-docs` session chose separate, readable Route labels instead
 of the truncated combined label and identity suffix. This supersedes only the
