@@ -43,3 +43,13 @@ Unlike the per-Agent insight facts of [ADR-0022](0022-per-agent-insight-facts.md
 something the two Orchestrators without a **Pickup** would have to fabricate: both already enforce
 an agent-turn timeout and both can observe a crash. A shell Run's status is exactly as opaque to its
 operator as a Python one, so the fact that explains it is owed family-wide.
+
+The shell and PowerShell Orchestrators emit the two endings they can observe from the turn they
+already wait on. Exit 124, the send-timeout watchdog, is `timeout`. A status of 128 or above, the
+agent process dying by signal, is `crash`. Both travel on `wrapper.iteration.end` beside the
+unchanged Status, including beside `advanced` or `closed` when the turn first committed or closed.
+`no_progress`, `no_more_tasks`, and `content_filtered` stay omitted: these members do not read the
+harness stream that would distinguish a silent stall, a declared empty Pool, or a content filter
+from an ordinary returned status. A launch failure is not a session and reports no ending. Strike
+accounting stays consecutive unproductive Iterations. Neither member gains a Pickup or an Attempt
+lifecycle.

@@ -1702,6 +1702,9 @@ exit 97
     Assert-Equal "advanced" $CommitContribution["status"] (
         "commit contribution status"
     )
+    Assert-True (
+        -not $CommitContribution.Contains("ending")
+    ) "a completed turn that advanced reports no ending"
     Assert-Equal (
         $SingleMemberBindings[0]["activated_at"]
     ) $CommitContribution["first_started_at"] (
@@ -1769,6 +1772,75 @@ exit 97
     Assert-Equal "iteration_cap" (
         $NonZeroEvents[-1]["outcome"]
     ) "non-zero agent turn stayed on warn-and-continue"
+    $NonZeroIterationEnd = @(
+        $NonZeroEvents |
+            Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )[0]
+    Assert-Equal "no-progress" $NonZeroIterationEnd["issues"][0]["status"] (
+        "a returned non-zero status stays no-progress"
+    )
+    Assert-True (
+        -not $NonZeroIterationEnd["issues"][0].Contains("ending")
+    ) "a returned status below 128 is not an ending"
+
+    # A crash is the agent process dying by signal, not a returned status.
+    # Exit 134 is what a SIGABRT death reports, and this Orchestrator can
+    # observe that from the turn it already waits on. Strike accounting stays
+    # the consecutive-Iteration counter: one warn, no issue name, and the Run
+    # still finishes.
+    $CrashRepo = Join-Path $TempDir "agent-crash"
+    $CrashBin = Join-Path $TempDir "agent-crash-bin"
+    New-RealTestRepo -Root $CrashRepo
+    Write-TurnTools -BinDir $CrashBin
+    $CrashList = Join-Path $TempDir "agent-crash-list.json"
+    [IO.File]::Copy($CapList, $CrashList, $true)
+    $env:FAKE_GH_LOG = Join-Path $TempDir "agent-crash-gh.log"
+    $env:FAKE_GH_LIST_COUNT = Join-Path $TempDir "agent-crash-list.count"
+    $env:FAKE_GH_LIST_JSON = $CrashList
+    $env:FAKE_GH_VIEW_DIR = $CapViews
+    Set-CopilotEnv -Prefix "agent-crash"
+    $env:FAKE_COPILOT_COMMITS = "0"
+    $env:FAKE_COPILOT_EXIT = "134"
+    $CrashStdout = Join-Path $TempDir "agent-crash.stdout"
+    $CrashStderr = Join-Path $TempDir "agent-crash.stderr"
+    $Status = Invoke-Entrypoint `
+        -Repo $CrashRepo `
+        -FakeBin $CrashBin `
+        -StdoutPath $CrashStdout `
+        -StderrPath $CrashStderr `
+        -Arguments @("1")
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_COMMITS", $null)
+    [Environment]::SetEnvironmentVariable("FAKE_COPILOT_EXIT", $null)
+    Assert-Equal 0 $Status "a crashed agent turn must not fail the Run"
+    Assert-Contains (
+        [IO.File]::ReadAllText($CrashStderr)
+    ) "copilot turn exited with status 134" (
+        "a crashed turn reports the signal status it actually returned"
+    )
+    $CrashEvents = Read-Events -Path $CrashStdout
+    Assert-Equal 0 (
+        @($CrashEvents | Where-Object { $_["type"] -ceq "wrapper.commit.recorded" }).Count
+    ) "a crashed turn lands no agent commit"
+    $CrashStrikes = @(
+        $CrashEvents | Where-Object { $_["type"] -ceq "wrapper.strike" }
+    )
+    Assert-Equal 1 $CrashStrikes.Count "a crashed turn with no commits makes no progress"
+    Assert-Equal "warn" $CrashStrikes[0]["outcome"] "the crash Strike still warns"
+    Assert-True (
+        -not $CrashStrikes[0].Contains("issue")
+    ) "a native Strike still names no issue"
+    $CrashIterationEnd = @(
+        $CrashEvents | Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )[0]
+    Assert-Equal "no-progress" $CrashIterationEnd["issues"][0]["status"] (
+        "a crash does not change Status"
+    )
+    Assert-Equal "crash" $CrashIterationEnd["issues"][0]["ending"] (
+        "a signal death is the crash ending"
+    )
+    Assert-Equal "wrapper.run.end" $CrashEvents[-1]["type"] "crash Run ends with run.end"
+    Assert-Equal "iteration_cap" $CrashEvents[-1]["outcome"] "crash Run outcome"
+    Assert-Equal 1 $CrashEvents[-1]["iterations_run"] "crash Run ran one Iteration"
 
     # The turn feeds EXACTLY the last five commits (contract §4), newest-first,
     # and truncates older history. Every other turn scenario runs against a
@@ -2845,6 +2917,18 @@ Start-Sleep -Seconds $Sleep
     )
     Assert-Equal 1 $SendTimeoutStrikes.Count "a bounded slow turn makes no progress"
     Assert-Equal "warn" $SendTimeoutStrikes[0]["outcome"] "the no-progress Strike warns"
+    Assert-True (
+        -not $SendTimeoutStrikes[0].Contains("issue")
+    ) "a native Strike still names no issue"
+    $SendTimeoutIterationEnd = @(
+        $SendTimeoutEvents | Where-Object { $_["type"] -ceq "wrapper.iteration.end" }
+    )[0]
+    Assert-Equal "no-progress" $SendTimeoutIterationEnd["issues"][0]["status"] (
+        "a timed-out turn stays no-progress"
+    )
+    Assert-Equal "timeout" $SendTimeoutIterationEnd["issues"][0]["ending"] (
+        "the send bound is the timeout ending"
+    )
     Assert-Equal "wrapper.run.end" $SendTimeoutEvents[-1]["type"] "send-timeout Run ends with run.end"
     Assert-Equal "iteration_cap" $SendTimeoutEvents[-1]["outcome"] "send-timeout Run outcome"
     Assert-Equal 1 $SendTimeoutEvents[-1]["iterations_run"] "send-timeout ran one Iteration"

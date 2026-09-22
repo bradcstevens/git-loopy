@@ -462,6 +462,83 @@ done < <(
 ((native_run_starts > 0)) ||
   fail "no native Dashboard case pins a shell Run start"
 
+# Session endings this Orchestrator can observe, pinned by the shared fixture
+# rather than by a second spelling of timeout and crash. Each turn is driven
+# through the production rollup, including the classifier the Run loop uses.
+observed_endings="$(
+  jq -r '
+    .session_ending_cases[]
+    | select(.id == "native-members-emit-observed-session-endings")
+    | .observed
+    | join(",")
+  ' "$fixture"
+)"
+assert_equal "timeout,crash" "$observed_endings" \
+  "shell observes only timeout and crash"
+unavailable_endings="$(
+  jq -r '
+    .session_ending_cases[]
+    | select(.id == "native-members-emit-observed-session-endings")
+    | .unavailable
+    | join(",")
+  ' "$fixture"
+)"
+assert_equal "no_progress,no_more_tasks,content_filtered" \
+  "$unavailable_endings" \
+  "shell declares the endings it cannot observe"
+TEST_MONOTONIC_NOW=20
+git_loopy_monotonic_seconds() {
+  printf '%s\n' "$TEST_MONOTONIC_NOW"
+}
+native_ending_turns=0
+while IFS= read -r turn_json; do
+  turn_id="$(jq -r '.id' <<<"$turn_json")"
+  turn_status="$(jq -r '.turn_status' <<<"$turn_json")"
+  turn_commits="$(jq -r '.commits' <<<"$turn_json")"
+  turn_issue="$(jq -r '.issue' <<<"$turn_json")"
+  turn_expected_status="$(jq -r '.status' <<<"$turn_json")"
+  turn_expected_ending="$(jq -r '.ending // empty' <<<"$turn_json")"
+  _GIT_LOOPY_ITERATION_STARTED_MONOTONIC=10
+  _GIT_LOOPY_ACTIVE_REF="$turn_issue"
+  _GIT_LOOPY_ACTIVE_STARTED_AT="2026-05-16T00:00:10.000Z"
+  _GIT_LOOPY_ACTIVE_STARTED_MONOTONIC=10
+  _GIT_LOOPY_ACTIVE_CLOSED_AT=""
+  _GIT_LOOPY_ACTIVE_CLOSED_MONOTONIC=0
+  _GIT_LOOPY_ISSUE_FIRST_STARTED_AT=()
+  _GIT_LOOPY_ISSUE_FIRST_STARTED_MONOTONIC=()
+  _GIT_LOOPY_ISSUE_CUMULATIVE_ACTIVE=()
+  _GIT_LOOPY_ISSUE_FIRST_STARTED_AT["$turn_issue"]="2026-05-16T00:00:10.000Z"
+  _GIT_LOOPY_ISSUE_FIRST_STARTED_MONOTONIC["$turn_issue"]=10
+  _GIT_LOOPY_ISSUE_CUMULATIVE_ACTIVE["$turn_issue"]=0
+  session_ending="$(git_loopy_session_ending_for_turn_status "$turn_status")"
+  git_loopy_build_iteration_rollup \
+    "$turn_commits" 0 0 0 "" "$session_ending"
+  actual_status="$(
+    jq -r '.issues[0].status' <<<"$GIT_LOOPY_ITERATION_ROLLUP_JSON"
+  )"
+  actual_ending="$(
+    jq -r '.issues[0].ending // empty' <<<"$GIT_LOOPY_ITERATION_ROLLUP_JSON"
+  )"
+  assert_equal "$turn_expected_status" "$actual_status" \
+    "session ending status: $turn_id"
+  assert_equal "$turn_expected_ending" "$actual_ending" \
+    "session ending: $turn_id"
+  if [[ -z "$turn_expected_ending" ]]; then
+    jq -e '.issues[0] | has("ending") | not' \
+      <<<"$GIT_LOOPY_ITERATION_ROLLUP_JSON" >/dev/null ||
+      fail "unavailable ending must be omitted: $turn_id"
+  fi
+  native_ending_turns=$((native_ending_turns + 1))
+done < <(
+  jq -c '
+    .session_ending_cases[]
+    | select(.id == "native-members-emit-observed-session-endings")
+    | .turns[]
+  ' "$fixture"
+)
+((native_ending_turns > 0)) ||
+  fail "no native session-ending turns in the fixture"
+
 set +e
 invalid_output="$(git_loopy_to_jsonl_line '{}' 2>/dev/null)"
 invalid_status=$?

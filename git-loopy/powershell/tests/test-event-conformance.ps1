@@ -795,6 +795,52 @@ Assert-True (
     $SkillConsultationCases -gt 0
 ) "no skill-consultation fixture case exercised the PowerShell rollup"
 
+# Session endings this Orchestrator can observe, pinned by the shared fixture
+# rather than by a second spelling of timeout and crash. Each turn is driven
+# through the production rollup, including the classifier the Run loop uses.
+$NativeEndingCase = @(
+    $Fixture["session_ending_cases"] |
+        Where-Object { $_["id"] -ceq "native-members-emit-observed-session-endings" }
+)[0]
+Assert-Equal "timeout,crash" (
+    [string]::Join(",", @($NativeEndingCase["observed"]))
+) "PowerShell observes only timeout and crash"
+Assert-Equal "no_progress,no_more_tasks,content_filtered" (
+    [string]::Join(",", @($NativeEndingCase["unavailable"]))
+) "PowerShell declares the endings it cannot observe"
+$NativeEndingTurns = 0
+foreach ($Turn in @($NativeEndingCase["turns"])) {
+    $Rollup = Get-GitLoopyIterationRollup `
+        -IterationStartedMonotonic 10 `
+        -FinishedMonotonic 20 `
+        -ActiveIssue $Turn["issue"] `
+        -ActiveStartedAt "2026-05-16T00:00:10.000Z" `
+        -ActiveStartedMonotonic 10 `
+        -FirstStartedAt "2026-05-16T00:00:10.000Z" `
+        -FirstStartedMonotonic 10 `
+        -PreviousCumulativeActiveSeconds 0 `
+        -Commits $Turn["commits"] `
+        -TurnStatus $Turn["turn_status"]
+    $Issue = $Rollup["issues"][0]
+    Assert-Equal $Turn["status"] $Issue["status"] (
+        "session ending status: $($Turn["id"])"
+    )
+    if ($Turn.Contains("ending")) {
+        Assert-Equal $Turn["ending"] $Issue["ending"] (
+            "session ending: $($Turn["id"])"
+        )
+    }
+    else {
+        Assert-True (
+            -not $Issue.Contains("ending")
+        ) "unavailable ending must be omitted: $($Turn["id"])"
+    }
+    $NativeEndingTurns++
+}
+Assert-True ($NativeEndingTurns -gt 0) (
+    "no native session-ending turns in the fixture"
+)
+
 $GeneratedRunId = New-GitLoopyRunId
 Assert-True (
     $GeneratedRunId -cmatch "^[0-9A-HJKMNP-TV-Z]{26}$"

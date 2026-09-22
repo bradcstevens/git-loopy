@@ -2472,9 +2472,23 @@
       ]
     },
     {
-      "id": "native-members-omit-an-unavailable-ending",
+      "id": "native-members-emit-observed-session-endings",
       "distributions": ["shell", "powershell"],
-      "issues": [{"issue": 7, "status": "no-progress"}]
+      "note": "Shell and PowerShell observe timeout (exit 124, the send bound) and crash (status 128 or above, the agent process dying by signal) from the turn they already wait on. no_progress, no_more_tasks, and content_filtered stay omitted: those require the harness stream these members do not read. A returned status below 128, including a launch failure, is not an ending. Progress does not erase an observed ending, and a completed turn that advanced reports none.",
+      "observed": ["timeout", "crash"],
+      "unavailable": ["no_progress", "no_more_tasks", "content_filtered"],
+      "turns": [
+        {"id": "timeout-without-progress", "issue": 7, "turn_status": 124, "commits": 0, "status": "no-progress", "ending": "timeout"},
+        {"id": "crash-without-progress", "issue": 7, "turn_status": 134, "commits": 0, "status": "no-progress", "ending": "crash"},
+        {"id": "signal-floor-is-crash", "issue": 7, "turn_status": 128, "commits": 0, "status": "no-progress", "ending": "crash"},
+        {"id": "status-just-below-signal-is-not-a-crash", "issue": 7, "turn_status": 127, "commits": 0, "status": "no-progress"},
+        {"id": "timeout-after-a-commit", "issue": 7, "turn_status": 124, "commits": 1, "status": "advanced", "ending": "timeout"},
+        {"id": "crash-after-a-commit", "issue": 7, "turn_status": 139, "commits": 1, "status": "advanced", "ending": "crash"},
+        {"id": "completed-turn-that-advanced", "issue": 7, "turn_status": 0, "commits": 1, "status": "advanced"},
+        {"id": "completed-turn-with-no-progress", "issue": 7, "turn_status": 0, "commits": 0, "status": "no-progress"},
+        {"id": "returned-nonzero-below-signal", "issue": 7, "turn_status": 7, "commits": 0, "status": "no-progress"},
+        {"id": "launch-failure-is-not-a-session", "issue": 7, "turn_status": 126, "commits": 0, "status": "no-progress"}
+      ]
     }
   ],
   "future_consumer": {

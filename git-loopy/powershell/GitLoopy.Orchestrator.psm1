@@ -1742,6 +1742,29 @@ function Test-GitLoopyIterationProgress {
     return ($Commits -gt 0) -or ($AutoClosures -gt 0) -or ($PrAdvances -gt 0)
 }
 
+function Get-GitLoopySessionEnding {
+    # The two endings this Orchestrator can observe from the turn it already
+    # waits on. Exit 124 is the send bound. Status 128 or above is the agent
+    # process dying by signal. A returned status — including a non-zero one
+    # below 128 — is not a crash, and silent no-progress, no-more-tasks, and
+    # content-filtered require the harness stream this port does not read.
+    # $null means unavailable: the caller omits the field rather than inventing
+    # an ending. A launch failure (126) is not a session.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [int]$TurnStatus
+    )
+
+    if ($TurnStatus -eq 124) {
+        return "timeout"
+    }
+    if ($TurnStatus -ge 128) {
+        return "crash"
+    }
+    return $null
+}
+
 function Get-GitLoopyIterationRollup {
     [CmdletBinding()]
     param(
@@ -1766,12 +1789,18 @@ function Get-GitLoopyIterationRollup {
         [int]$AutoClosures = 0,
         [int]$PrAdvances = 0,
         [int]$Strikes = 0,
-        [string]$TerminalOutcome
+        [string]$TerminalOutcome,
+        [AllowNull()]
+        [object]$TurnStatus = $null
     )
 
     $Duration = $FinishedMonotonic - $IterationStartedMonotonic
     if ($Duration -lt 0) {
         $Duration = 0
+    }
+    $Ending = $null
+    if ($null -ne $TurnStatus) {
+        $Ending = Get-GitLoopySessionEnding -TurnStatus ([int]$TurnStatus)
     }
 
     $Outcome = "no_progress"
@@ -1808,24 +1837,26 @@ function Get-GitLoopyIterationRollup {
                 $IssueElapsedSeconds = 0
             }
         }
-        $Issues = [object[]]@(
-            [ordered]@{
-                issue = $ActiveIssue
-                status = $Status
-                first_started_at = $FirstStartedAt
-                closed_at = $ClosedAt
-                issue_elapsed_seconds = $IssueElapsedSeconds
-                active_seconds = $ActiveSeconds
-                cumulative_active_seconds = $CumulativeActiveSeconds
-                consumption = [ordered]@{
-                    model = $null
-                    tokens_in = $null
-                    tokens_out = $null
-                }
-                cost_usd = $null
-                peak_context_window = $null
-            }
-        )
+        $IssueRow = [ordered]@{
+            issue = $ActiveIssue
+            status = $Status
+        }
+        if ($null -ne $Ending) {
+            $IssueRow["ending"] = $Ending
+        }
+        $IssueRow["first_started_at"] = $FirstStartedAt
+        $IssueRow["closed_at"] = $ClosedAt
+        $IssueRow["issue_elapsed_seconds"] = $IssueElapsedSeconds
+        $IssueRow["active_seconds"] = $ActiveSeconds
+        $IssueRow["cumulative_active_seconds"] = $CumulativeActiveSeconds
+        $IssueRow["consumption"] = [ordered]@{
+            model = $null
+            tokens_in = $null
+            tokens_out = $null
+        }
+        $IssueRow["cost_usd"] = $null
+        $IssueRow["peak_context_window"] = $null
+        $Issues = [object[]]@($IssueRow)
         $Outcome = if ($Status -ceq "no-progress") {
             "no_progress"
         }
@@ -3340,7 +3371,9 @@ function Get-GitLoopyCurrentIterationRollup {
         [int]$AutoClosures = 0,
         [int]$PrAdvances = 0,
         [int]$Strikes = 0,
-        [string]$TerminalOutcome
+        [string]$TerminalOutcome,
+        [AllowNull()]
+        [object]$TurnStatus = $null
     )
 
     $Arguments = @{
@@ -3379,6 +3412,9 @@ function Get-GitLoopyCurrentIterationRollup {
         }
         $Arguments["ActiveClosedAt"] = $script:GitLoopyActiveClosedAt
         $Arguments["ActiveClosedMonotonic"] = $script:GitLoopyActiveClosedMonotonic
+    }
+    if ($null -ne $TurnStatus) {
+        $Arguments["TurnStatus"] = $TurnStatus
     }
 
     $Rollup = Get-GitLoopyIterationRollup @Arguments
@@ -4830,7 +4866,8 @@ function Invoke-GitLoopyDiscoveryLoop {
             -AutoClosures $AutoClosures `
             -PrAdvances 0 `
             -Strikes $Strikes `
-            -TerminalOutcome $TerminalOutcome
+            -TerminalOutcome $TerminalOutcome `
+            -TurnStatus $AgentStatus
         Write-GitLoopyEvent `
             -Context $Context `
             -Type $EventTypes["WRAPPER_ITERATION_END"] `

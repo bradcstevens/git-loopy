@@ -1206,6 +1206,7 @@ jq -se '
       and (.issues | length == 1)
       and .issues[0].issue == 41
       and .issues[0].status == "advanced"
+      and (.issues[0] | has("ending") | not)
       and .issues[0].first_started_at == $activation.activated_at
       and .issues[0].closed_at == null
       and .issues[0].issue_elapsed_seconds == null
@@ -1248,8 +1249,52 @@ assert_contains "$(<"$temp_dir/agent-nonzero.stderr")" \
 jq -se '
   ([.[] | select(.type == "wrapper.commit.recorded")] | length == 0)
   and .[-1].outcome == "iteration_cap"
+  and ([.[] | select(.type == "wrapper.iteration.end")][0]
+    | .issues[0].status == "no-progress"
+    and (.issues[0] | has("ending") | not))
 ' "$temp_dir/agent-nonzero.stdout" >/dev/null ||
   fail "non-zero agent turn drifted from warn-and-continue"
+
+# A crash is the agent process dying by signal, not a returned status. Exit
+# 134 is what `wait` reports for SIGABRT, and this Orchestrator can observe
+# that from the turn it already waits on. Strike accounting stays the
+# consecutive-Iteration counter: one warn, no issue name, and the Run still
+# finishes.
+repo="$temp_dir/agent-crash"
+fake_bin="$temp_dir/agent-crash-bin"
+make_real_repo "$repo"
+write_turn_tools "$fake_bin"
+cp "$temp_dir/github-list.json" "$temp_dir/agent-crash-list.json"
+export FAKE_GH_LOG="$temp_dir/agent-crash-gh.log"
+export FAKE_GH_LIST_COUNT="$temp_dir/agent-crash-list.count"
+export FAKE_GH_LIST_JSON="$temp_dir/agent-crash-list.json"
+export FAKE_GH_VIEW_DIR="$temp_dir/github-views"
+setup_copilot_env "agent-crash"
+export FAKE_COPILOT_COMMITS=0
+export FAKE_COPILOT_EXIT=134
+if ! run_turn_entrypoint \
+  "$repo" "$fake_bin" "$temp_dir/agent-crash.stdout" \
+  "$temp_dir/agent-crash.stderr" 1; then
+  fail "a crashed agent turn must not fail the Run: \
+$(<"$temp_dir/agent-crash.stderr")"
+fi
+unset FAKE_COPILOT_COMMITS FAKE_COPILOT_EXIT
+assert_contains "$(<"$temp_dir/agent-crash.stderr")" \
+  "copilot turn exited with status 134" \
+  "a crashed turn reports the signal status it actually returned"
+jq -se '
+  ([.[] | select(.type == "wrapper.commit.recorded")] | length == 0)
+  and ([.[] | select(.type == "wrapper.strike")] | length == 1)
+  and ([.[] | select(.type == "wrapper.strike") | .outcome] == ["warn"])
+  and ([.[] | select(.type == "wrapper.strike")] | all(has("issue") | not))
+  and ([.[] | select(.type == "wrapper.iteration.end")][0]
+    | .issues[0].status == "no-progress"
+    and .issues[0].ending == "crash")
+  and (.[-1].type == "wrapper.run.end")
+  and (.[-1].outcome == "iteration_cap")
+  and (.[-1].iterations_run == 1)
+' "$temp_dir/agent-crash.stdout" >/dev/null ||
+  fail "a crashed turn was not reported as crash beside an unchanged Strike"
 
 # The agent process gets a DEFAULT SIGPIPE disposition, and that is a property of
 # the boundary rather than of how the operator happened to launch the Run. An
@@ -2298,6 +2343,10 @@ jq -se '
   ([.[] | select(.type == "wrapper.commit.recorded")] | length == 0)
   and ([.[] | select(.type == "wrapper.strike")] | length == 1)
   and ([.[] | select(.type == "wrapper.strike") | .outcome] == ["warn"])
+  and ([.[] | select(.type == "wrapper.strike")] | all(has("issue") | not))
+  and ([.[] | select(.type == "wrapper.iteration.end")][0]
+    | .issues[0].status == "no-progress"
+    and .issues[0].ending == "timeout")
   and (.[-1].type == "wrapper.run.end")
   and (.[-1].outcome == "iteration_cap")
   and (.[-1].iterations_run == 1)

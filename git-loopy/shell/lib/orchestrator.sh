@@ -2628,12 +2628,33 @@ _git_loopy_record_active_binding() {
   _git_loopy_remember_issue_start
 }
 
+git_loopy_session_ending_for_turn_status() {
+  # The two endings this Orchestrator can observe from the turn it already
+  # waits on. Exit 124 is the send bound. Status 128 or above is the agent
+  # process dying by signal. A returned status — including a non-zero one
+  # below 128 — is not a crash, and silent no-progress, no-more-tasks, and
+  # content-filtered require the harness stream this port does not read.
+  # Empty means unavailable: the caller omits the field rather than inventing
+  # an ending. A launch failure (126) is not a session.
+  local status="${1:-}"
+  if [[ "$status" == "124" ]]; then
+    printf 'timeout\n'
+    return 0
+  fi
+  if [[ "$status" =~ ^[0-9]+$ ]] && ((10#$status >= 128)); then
+    printf 'crash\n'
+    return 0
+  fi
+  printf '\n'
+}
+
 git_loopy_build_iteration_rollup() {
   local commits="$1"
   local auto_closures="$2"
   local pr_advances="$3"
   local strikes="$4"
   local terminal_outcome="${5:-}"
+  local session_ending="${6:-}"
   local finished_monotonic duration issues outcome="no_progress"
   finished_monotonic="$(git_loopy_monotonic_seconds)" || return 1
   duration=$((finished_monotonic - _GIT_LOOPY_ITERATION_STARTED_MONOTONIC))
@@ -2683,6 +2704,7 @@ git_loopy_build_iteration_rollup() {
       jq -cn \
         --argjson issue "$issue_arg" \
         --arg status "$status" \
+        --arg ending "$session_ending" \
         --arg first_started_at \
         "${_GIT_LOOPY_ISSUE_FIRST_STARTED_AT[$_GIT_LOOPY_ACTIVE_REF]}" \
         --argjson closed_at "$closed_at" \
@@ -2691,7 +2713,8 @@ git_loopy_build_iteration_rollup() {
         --argjson cumulative_active_seconds "$cumulative_active" \
         '[{
           issue: $issue,
-          status: $status,
+          status: $status
+        } + (if $ending == "" then {} else {ending: $ending} end) + {
           first_started_at: $first_started_at,
           closed_at: $closed_at,
           issue_elapsed_seconds: $issue_elapsed_seconds,
@@ -3414,9 +3437,12 @@ git_loopy_run_discovery() {
 
     local iteration_end_payload
     local terminal_outcome=""
+    local session_ending=""
     [[ "$strike_outcome" == "aborted" ]] && terminal_outcome="aborted"
+    session_ending="$(git_loopy_session_ending_for_turn_status "$agent_status")"
     git_loopy_build_iteration_rollup \
-      "$agent_commits" "$auto_closures" 0 "$strikes" "$terminal_outcome" ||
+      "$agent_commits" "$auto_closures" 0 "$strikes" "$terminal_outcome" \
+      "$session_ending" ||
       return 1
     iteration_end_payload="$GIT_LOOPY_ITERATION_ROLLUP_JSON"
     git_loopy_emit_event \

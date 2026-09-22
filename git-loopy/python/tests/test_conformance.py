@@ -2945,10 +2945,32 @@ def test_event_fixture_pins_additive_session_endings_per_issue() -> None:
     native_case = next(
         case
         for case in cases
-        if case["id"] == "native-members-omit-an-unavailable-ending"
+        if case["id"] == "native-members-emit-observed-session-endings"
     )
     assert native_case["distributions"] == ["shell", "powershell"]
-    assert native_case["issues"] == [{"issue": 7, "status": "no-progress"}]
+    assert native_case["observed"] == ["timeout", "crash"]
+    assert native_case["unavailable"] == [
+        "no_progress",
+        "no_more_tasks",
+        "content_filtered",
+    ]
+    observed_turns = [turn for turn in native_case["turns"] if "ending" in turn]
+    assert {turn["ending"] for turn in observed_turns} == set(native_case["observed"])
+    assert all(turn["ending"] in native_case["observed"] for turn in observed_turns)
+    assert any(
+        turn["ending"] == "timeout" and turn["status"] == "advanced"
+        for turn in observed_turns
+    )
+    assert any(
+        turn["ending"] == "crash" and turn["status"] == "advanced"
+        for turn in observed_turns
+    )
+    omitted = [turn for turn in native_case["turns"] if "ending" not in turn]
+    assert any(
+        turn["status"] == "advanced" and turn["commits"] > 0 for turn in omitted
+    )
+    assert {turn["turn_status"] for turn in omitted} >= {0, 7, 126, 127}
+    assert all(turn["turn_status"] not in {124} and turn["turn_status"] < 128 for turn in omitted)
     assert _EVENT_SCHEMA["payload_contracts"]["wrapper.iteration.end"][
         "issue_optional"
     ] == ["ending", "commits"]

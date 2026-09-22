@@ -999,7 +999,11 @@ remains an observed session failure even if it first committed, and travels besi
 `closed`, because progress does not launder a lost session. That reporting does not change the
 Attempt lifecycle, Escalation rung, Attempt evidence, or Strike accounting.
 An Orchestrator that cannot observe an ending omits it; a consumer never defaults that absence
-to an ending.
+to an ending. The shell and PowerShell Orchestrators observe `timeout` (exit 124, the send
+bound) and `crash` (status 128 or above, the agent process dying by signal) from the turn they
+already wait on, and omit `no_progress`, `no_more_tasks`, and `content_filtered`, which require
+the harness stream they do not read. A returned status below 128, including a launch failure,
+is not one of those endings. That observation does not change their Strike accounting.
 An advanced contribution may carry its positive `commits` count, so a Queue can say what advanced
 without turning a zero or unavailable count into a claim. The Queue displays these facts inline
 in Status, without adding a column or changing the six Status values.
