@@ -376,8 +376,13 @@ class RoutePublicationStore:
         comment: str | None = None,
         label_delivery: str | None = None,
         last_error: str | None = None,
+        projection: _RouteAssignment | None = None,
     ) -> dict[str, object] | None:
-        """Update delivery state only if this remains the latest assignment."""
+        """Update delivery state only if this remains the latest assignment.
+
+        ``projection`` replaces a stored label spelling. It does not touch the
+        attempt count: converting a pending combined label is not a new budget.
+        """
         state = self._read()
         entry = state["assignments"].get(str(issue))
         if not isinstance(entry, dict) or entry.get("identity") != identity:
@@ -386,6 +391,11 @@ class RoutePublicationStore:
             entry["comment"] = comment
         if label_delivery is not None:
             entry["label_delivery"] = label_delivery
+        if projection is not None:
+            spelled = projection.projection
+            entry["label"] = spelled.label
+            entry["labels"] = list(spelled.labels)
+            entry["incomplete"] = list(spelled.incomplete)
         entry["last_error"] = last_error
         self._write(state)
         return entry
@@ -698,6 +708,7 @@ class RoutePublisher:
                 assignment.issue,
                 assignment.identity,
                 label_delivery="published",
+                projection=assignment,
             )
             if updated is None:
                 return _delivery_result(assignment, RouteDeliveryStatus.STALE)

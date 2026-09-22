@@ -2121,7 +2121,11 @@ publisher and the real CLI. Verified listing capacity is recorded when the
 Pickup already holds it. A missing capacity is an incomplete projection, not
 zero. A Dynamic session uses the listing that just authorized that issue. A
 Static Lane reads the executing host's report when that placement is not local;
-a serial Static session reads this machine's listing. Historical
+a serial Static session reads this machine's listing. A pending delivery
+recorded under the combined `git-loopy-route:` spelling is converted to those
+dimensions on retry. Conversion does not reset an exhausted attempt budget,
+does not duplicate a decision comment the tracker already accepted, and does
+not replay the combined name. Historical
 delivery events that omit `labels` and `incomplete` stay valid, and
 `event_schema_version` stays 1.2. `git-loopy route-labels migrate` is the
 explicit, repeatable Python migration for one repository the operator is in.

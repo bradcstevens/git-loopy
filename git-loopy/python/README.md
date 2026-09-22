@@ -1648,8 +1648,11 @@ not the tier name. An effort the model cannot configure is omitted; `none` is
 written when that is the selected value. A value that cannot be verified, or
 that will not fit a GitHub label, is omitted and named on the delivery, never
 truncated or rewritten. A legacy `git-loopy-route:` association on that issue
-is removed when the new dimensions are written. The comment marker stays
-`git-loopy-route:v1:` so an older comment is still recognizable.
+is removed when the new dimensions are written. A pending local delivery
+that still names the combined label is converted on the next retry: the
+tracker receives the exact dimensions, the decision comment is not posted
+again, and an exhausted attempt budget is not renewed. The comment marker
+stays `git-loopy-route:v1:` so an older comment is still recognizable.
 
 Historical issues that still carry the old combined label are not swept by a
 Run. Migrate them explicitly, and only after every publishing Runner for that

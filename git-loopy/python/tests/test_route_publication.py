@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -255,6 +256,141 @@ def test_publisher_retries_a_durable_pending_delivery_after_restart(
     assert first.status is RouteDeliveryStatus.PENDING
     assert [result.status for result in resumed] == [RouteDeliveryStatus.PUBLISHED]
     assert len(resumed_tracker.comments[42]) == 1
+
+
+def test_restart_converts_a_pending_legacy_delivery_instead_of_replaying_it(
+    tmp_path: Path,
+) -> None:
+    """An upgraded Runner must not republish a pending combined hashed label.
+
+    ADR-0060: the durable assignment stays authoritative. Restart converts its
+    pending projection to exact dimensions, keeps the attempt count, and does
+    not post a second decision comment. Capacity the old record never stored
+    stays omitted rather than invented.
+    """
+    store_path = tmp_path / "routing-delivery.json"
+    tracker = _Tracker(labels={42: {"ready-for-agent", "priority"}})
+    tracker.label_error = "HTTP 429"
+    pending = RoutePublisher(
+        store=RoutePublicationStore(store_path),
+        tracker=tracker,
+    ).publish(issue=42, resolution=_resolution(), context_capacity=200_000)
+    assert pending.status is RouteDeliveryStatus.PARTIAL
+    assert len(tracker.comments[42]) == 1
+
+    legacy = "git-loopy-route:gpt-5-6-terra-high-d-0d3d445fe66d"
+    raw = json.loads(store_path.read_text(encoding="utf-8"))
+    entry = raw["assignments"]["42"]
+    attempts = entry["delivery_attempts"]
+    entry["label"] = legacy
+    entry.pop("labels", None)
+    entry.pop("incomplete", None)
+    entry.pop("context_capacity", None)
+    entry.pop("effort_configurable", None)
+    store_path.write_text(json.dumps(raw), encoding="utf-8")
+    tracker.labels[42].add(legacy)
+    tracker.label_error = None
+    tracker.known_labels.clear()
+
+    (resumed,) = RoutePublisher(
+        store=RoutePublicationStore(store_path),
+        tracker=tracker,
+    ).retry_pending()
+
+    assert resumed.published is True
+    assert resumed.labels == ("model_id:gpt-5.6-terra", "model_effort:high")
+    assert "model_context_unverified" in resumed.incomplete
+    assert tracker.labels[42] == {
+        "ready-for-agent",
+        "priority",
+        "model_id:gpt-5.6-terra",
+        "model_effort:high",
+    }
+    assert legacy not in tracker.known_labels
+    assert len(tracker.comments[42]) == 1
+    converted = json.loads(store_path.read_text(encoding="utf-8"))["assignments"]["42"]
+    assert converted["delivery_attempts"] == attempts
+    assert converted["label"] == "model_id:gpt-5.6-terra model_effort:high"
+    assert converted["labels"] == ["model_id:gpt-5.6-terra", "model_effort:high"]
+    assert not str(converted["label"]).startswith("git-loopy-route:")
+
+
+def test_an_exhausted_legacy_delivery_does_not_regain_a_budget(
+    tmp_path: Path,
+) -> None:
+    """Conversion must not spend a fresh retry budget on a failed combined label."""
+    store_path = tmp_path / "routing-delivery.json"
+    tracker = _Tracker(comment_error="HTTP 403")
+    failed = RoutePublisher(
+        store=RoutePublicationStore(store_path),
+        tracker=tracker,
+        max_attempts=1,
+    ).publish(issue=42, resolution=_resolution())
+    assert failed.status is RouteDeliveryStatus.FAILED
+
+    legacy = "git-loopy-route:gpt-5-6-terra-high-d-0d3d445fe66d"
+    raw = json.loads(store_path.read_text(encoding="utf-8"))
+    entry = raw["assignments"]["42"]
+    entry["label"] = legacy
+    entry.pop("labels", None)
+    store_path.write_text(json.dumps(raw), encoding="utf-8")
+    tracker.comment_error = None
+    tracker.known_labels.clear()
+
+    restarted = RoutePublisher(
+        store=RoutePublicationStore(store_path),
+        tracker=tracker,
+    )
+    assert restarted.retry_pending() == ()
+    again = restarted.publish(issue=42, resolution=_resolution())
+
+    assert again.status is RouteDeliveryStatus.FAILED
+    assert tracker.comments.get(42, []) == []
+    assert legacy not in tracker.known_labels
+    assert legacy not in tracker.labels.get(42, set())
+    stored = json.loads(store_path.read_text(encoding="utf-8"))["assignments"]["42"]
+    assert stored["delivery_attempts"] == 1
+    assert stored["terminal"] is True
+
+
+def test_a_value_past_githubs_label_limit_is_omitted_not_aliased(
+    tmp_path: Path,
+) -> None:
+    """GitHub's 50-character limit omits the exact value; it never truncates it."""
+    fitting = "m" + "1" * 40
+    over = fitting + "2"
+    tracker = _Tracker(labels={42: {"ready-for-agent"}, 43: {"priority"}})
+    publisher = RoutePublisher(
+        store=RoutePublicationStore(tmp_path / "routing-delivery.json"),
+        tracker=tracker,
+    )
+
+    omitted = publisher.publish(
+        issue=42,
+        resolution=replace(_resolution(), model=over, effort_configurable=False),
+        context_capacity=1_000_000,
+    )
+    exact = publisher.publish(
+        issue=43,
+        resolution=replace(_resolution(), model=fitting, reasoning_effort="none"),
+        context_capacity=1_000,
+    )
+
+    assert omitted.published is True
+    assert "model_id_unrepresentable" in omitted.incomplete
+    assert "model_effort_unverified" not in omitted.incomplete
+    assert omitted.detail is not None and "incomplete projection" in omitted.detail
+    assert tracker.labels[42] == {"ready-for-agent", "model_context:1M"}
+    assert exact.published is True
+    assert f"model_id:{fitting}" in tracker.labels[43]
+    assert len(f"model_id:{fitting}") == 50
+    assert "model_effort:none" in tracker.labels[43]
+    assert "model_context:1K" in tracker.labels[43]
+    assert "priority" in tracker.labels[43]
+    written = " ".join(tracker.labels[42] | tracker.labels[43])
+    assert over not in written
+    assert "git-loopy-route:" not in written
+    assert all(len(label) <= 50 for label in tracker.labels[42] | tracker.labels[43])
 
 
 def test_publisher_stops_retrying_after_its_bounded_delivery_attempts(
