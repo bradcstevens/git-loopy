@@ -56,7 +56,8 @@ temporary overrides and post-migration access/evidence loss. This is deliberatel
 not another pure routing resolver: setup readiness cannot authorize a future
 Pickup. Shell/PowerShell activation is explicitly deferred; the Rust Dashboard
 does not execute migration or create work sessions. Historical fixtures and
-streams retain their interpretation, and Dynamic defaults remain off.
+streams retain their interpretation. Python-local Dynamic is the activated
+default for unpinned new work; shell and PowerShell routing remain deferred.
 
 The sibling `first_setup` matrix starts without either Config scope and crosses
 the real `init --routing` CLI and headless Textual keyboard walk, with terminal
@@ -158,7 +159,7 @@ and explicit unavailable preparation records. The adapter compares actual
 sessions, canonical Pickup, CLI/Dashboard readback and tracker publication,
 while pending candidates remain open, unleased and unpublished with unchanged
 labels. Saved Config and the existing ordering/Lease rules remain unchanged.
-This extends section 14.6 Conformance, not final-default activation.
+This extends section 14.6 Conformance. It is not itself the activation declaration.
 
 The `in_flight_consumption` matrix is adapted by
 `python/tests/test_saved_routing_consumption.py`. Eight classifier/selector
@@ -830,9 +831,10 @@ retained Static validation. No classifier or selector starts afterwards, while
 already-classified Static work still runs on its retained settings; Config and
 Strike accounting remain unchanged. Fresh setup records Dynamic. A local
 no-Config Run that names no policy refuses before work; naming `unselected`
-keeps the legacy path for that Run. This is not final activation. Shell/PowerShell migration enforcement
-remains explicitly deferred; historical cases and Event streams keep their
-original interpretation.
+keeps the legacy path for that Run. Python-local Dynamic default activation
+is declared by `dynamic_default_activation`. Shell and PowerShell routing
+remain deferred. This does not imply Subagent or Integration routing.
+Historical cases and Event streams keep their original interpretation.
 `attempt-lifecycle.json` joins them, driven through the production
 `AttemptLedger` and `EscalationLedger` together: one row of its table asks both
 ledgers about one ending, so the dial that decides whether the pair changes and

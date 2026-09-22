@@ -1652,8 +1652,8 @@ the default, and the absence of a decision — `static` (this section), and `dyn
   `execution_host_report` cases cover a present report through CLI and doctor: the Lane
   records the host dial, a rejecting host listing is not overruled by the local listing,
   and a rejecting local listing still refuses after the host has accepted. This does not
-  activate final Dynamic defaults, authorize Dynamic election on a remote host, or change
-  shell/PowerShell, Subagent, or Integration routing deferrals.
+  authorize Dynamic election on a remote host, or change shell/PowerShell, Subagent, or
+  Integration routing deferrals. Python-local Dynamic default activation is declared below.
 - **Refuse, never rescue.** §14's *gate and fall back* rule does not apply to a Static route and
   MUST NOT be reached for: an effort the model does not accept, a tier it does not offer, a model
   this account may not use, a model the harness never listed, and a listing that could not be read
@@ -1725,8 +1725,8 @@ Runs retain the legacy path during staged activation; a selected policy still MU
 a remote placement using local eligibility. A host capability report is that host's listing,
 not a substitute for the local one, and does not authorize Dynamic election. Shell and PowerShell migration enforcement is
 explicitly deferred and their unchanged behavior remains conforming. This paragraph is the
-member deferral, not final Dynamic-default activation, remote capability support, or Subagent/
-Integration routing support.
+member deferral. Python-local Dynamic default activation is declared below. It is not
+remote capability support, and it does not imply Subagent or Integration routing.
 
 `routing-resolution.json`'s `migration_recovery` exercises this guard through the real
 CLI-to-Run-to-work-session seam, in serial and Lane modes. Its cases MUST first refuse
@@ -1778,14 +1778,36 @@ write Config. A model or effort override is not the missing choice. Naming
 the legacy path for that Run and writes nothing. Explicit `static` and
 `dynamic` use their existing verdicts. Unselected non-local Runs retain the
 legacy path. `routing-resolution.json`'s `no_config_dynamic_refusal` matrix is
-this obligation. Shell/PowerShell, Subagent, and Integration activation remain
-deferred. This is not final Dynamic-default activation.
+this obligation. Shell and PowerShell routing remain deferred. This does
+not imply Subagent or Integration routing.
+
+**Activated Python-local Dynamic default (contract 2.9, #567).** Dynamic
+routing is the default for unpinned Python-local work. Fresh setup records
+`dynamic` and seeds no Static rows. A local Run with no Config and no named
+policy refuses before a work session, Lease, Strike, or publication, and
+writes nothing; doctor prints that verdict. Saved Config without an explicit
+`static` or `dynamic` choice still requires keep-or-migrate and is not
+inferred. Explicit `unselected` retains the legacy path for one Run.
+Unselected non-local Runs retain the legacy path. A host capability report
+does not authorize Dynamic election. Shell and PowerShell routing remain
+deferred. This does not imply Subagent or Integration routing.
+`event_schema_version` stays 1.2. An absent or `unselected` policy on a
+historical record is not reread as Dynamic. `routing-resolution.json`'s
+`dynamic_default_activation` declares this status. The composed proof is the
+`new_setup_default`, `no_config_dynamic_refusal`, `migration_recovery`,
+`first_setup`, `publication_recovery`, `retry_lifecycle`,
+`pool_revalidation`, `pool_priority`, `in_flight_consumption`,
+`local_durability`, `effort_semantics`, and `preflight_deadline` matrices,
+each driven through the real CLI into actual serial or Lane sessions where
+the case admits work.
 
 ### 14.4 The Dynamic route (contract 2.8)
 
 Under `dynamic` the route for one issue is **elected from live public benchmark evidence** rather
-than written down in advance (ADR-0057). It is opt-in, and the rules below are what make the
-election an answer an operator can audit rather than a plausible-looking guess.
+than written down in advance (ADR-0057). On Python-local unpinned work it is
+the activated default (§14.3); it still does not start unless the prerequisites
+below are present. The rules below are what make the election an answer an
+operator can audit rather than a plausible-looking guess.
 
 Contract 2.9 includes §14.3's staged migration guard and opt-in first setup,
 the affected-work refusal and shared preflight-deadline obligations below,
@@ -1798,7 +1820,7 @@ no-Config refusal are the Dynamic-default obligations this contract activates;
 naming `unselected` still retains the legacy path for one Run. Non-local
 absence, and shell/PowerShell, stay on the deferred legacy path.
 
-- **Opt-in, with its own prerequisites, or no dynamic work at all.** The policy requires the
+- **Prerequisite-complete, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run
   routing-credit allowance, a bounded selector concurrency, and the verified associations between
   benchmark identities and harness configurations. Incomplete Dynamic prerequisites MUST refuse
@@ -2120,8 +2142,8 @@ session is running. An observation for an older model, effort, or tier
 writes nothing. Usage and the compaction ceiling are not capacity. A failed
 capacity write is retried finitely without renewing the routing comment's
 bound. Shell and PowerShell routing remain deferred. This does
-not imply Subagent or Integration routing, and it is not final
-Dynamic-default activation.
+not imply Subagent or Integration routing. Python-local Dynamic default
+activation is §14.3; this section does not extend it.
 
 The `local_durability` matrix composes the mandatory local-write boundary with
 recorded init/update authority in both Python-local modes. A refused provenance
@@ -2218,8 +2240,8 @@ Running Agents finish on their frozen settings, while a refused Dynamic candidat
 leaves retained Static work usable without a Strike for unstarted work.
 Rolling may filter newly ineligible candidates on its fresh Pool read before
 reservation, rather than inventing a Pickup skip. This is Python-local composed
-Conformance, not final Dynamic-default activation. Shell/PowerShell activation is
-deferred; no non-local, Subagent or Integration routing is claimed.
+Conformance under the activated default in §14.3. Shell and PowerShell routing
+remain deferred. This does not imply Subagent or Integration routing.
 
 The companion `pool_priority` matrix carries recorded migration through four
 eligible pending candidates. It preserves oldest-first order and explicit

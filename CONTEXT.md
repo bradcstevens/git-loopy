@@ -938,7 +938,8 @@ _Avoid_: pinned model, fixed pair, hardcoded route.
 
 **Dynamic route**:
 A route **elected for one issue from live public benchmark evidence** instead of written down in
-advance, under the *dynamic* **Route policy**. Opt-in and prerequisite-complete or it does not
+advance, under the *dynamic* **Route policy**. It is the Python-local default
+for unpinned new work, and prerequisite-complete or it does not
 start: the operator's own authorized access to the evidence source, a finite assessment deadline, a
 per-**Run** routing-credit allowance, a bounded **Route selector** concurrency, and the verified
 associations between benchmark identities and harness configurations. The key is read from the

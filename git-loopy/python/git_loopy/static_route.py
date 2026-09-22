@@ -89,8 +89,9 @@ class RoutePolicy(Enum):
     unselected records keep their legacy interpretation. Local no-Config Runs
     refuse rather than taking that path; non-local absence remains staged.
 
-    ``DYNAMIC`` is the opt-in policy :mod:`git_loopy.dynamic_route` implements
-    (#561). It lives here beside ``STATIC`` because the two are one closed
+    ``DYNAMIC`` is the Python-local default for unpinned new work, implemented
+    by :mod:`git_loopy.dynamic_route` (#561, #567). It lives here beside
+    ``STATIC`` because the two are one closed
     vocabulary an operator picks from, not because this module runs it — and
     naming it is not the same as being able to run it: a Run that selects it
     without the Artificial Analysis access, deadline, routing-credit allowance

@@ -200,7 +200,17 @@ The map remains open for [#293](https://github.com/bradcstevens/git-loopy/issues
 (intra-session Subagent routing). Excluding them from this delivery does not answer
 their separate questions.
 
-## Partial activation status (#567)
+## Activation status (#567)
+
+**Python-local Dynamic default is activated (contract 2.9).** Fresh setup
+records `dynamic` without Static rows. A local Run with no Config and no named
+policy refuses before a legacy session and writes nothing. Existing saved
+Config is not inferred. Naming `unselected` keeps the legacy path. Non-local
+absence stays staged. Shell and PowerShell routing remain deferred. This does
+not imply Subagent or Integration routing, and remote Dynamic election stays
+unauthorized. `event_schema_version` stays 1.2. The paragraphs below record
+the slices that reached this status; they are not a claim that those slices
+were themselves the activation.
 
 Python's opt-in `update --routing` now collects or reuses an explicit keep-or-migrate
 choice, retains every authored Static row, requires operator-owned Dynamic access
@@ -580,8 +590,8 @@ static and dynamic policies use their existing verdicts. Unselected non-local
 Runs retain the legacy path. The shared `no_config_dynamic_refusal` matrix
 drives the refusal through the real CLI into serial and Lane sessions.
 `event_schema_version` stays 1.2. Wrapper contract 2.9 is unchanged; §14.3
-names this obligation. This is not final activation: shell/PowerShell and
-Subagent/Integration routing remain unclaimed.
+names this obligation. Shell and PowerShell routing remain deferred. This
+does not imply Subagent or Integration routing.
 
 Python publication now spells exact dimensional Route labels (ADR-0060) through
 the existing publisher and real CLI, including verified listing capacity when
@@ -591,5 +601,6 @@ an unused legacy definition only after issue and pull-request checks. A later
 work-session window updates only the current assignment's `model_context`
 label, without a new routing comment or a roster lookup. `event_schema_version`
 stays 1.2. Wrapper contract 2.9 is unchanged; §14.5 names this obligation.
-Shell/PowerShell, Subagent, and Integration routing remain deferred. This is
-not final activation.
+Shell and PowerShell routing remain deferred. This does not imply Subagent
+or Integration routing. Python-local Dynamic default activation is declared
+above.

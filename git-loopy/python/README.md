@@ -454,10 +454,12 @@ or unattended use) for this invocation only. Temporary authority does not settle
 the next Run's decision. A selected Static path requires live Copilot eligibility,
 not leaderboard access or a Route selector.
 
-This is partial #567 work, not final default activation: a genuinely unconfigured
-Run (both Config tables empty) retains its previous path. Bare init can still save
-Config without a routing choice, but the subsequent Run will refuse until that
-choice is supplied. Prefer `init --routing` to authorize setup before saving.
+Python-local Dynamic routing is the activated default for unpinned new work.
+A genuinely unconfigured local Run (both Config tables empty, and no named
+policy) refuses before a legacy session and writes nothing. Fresh `init --yes`
+records `dynamic` without limits; the following Run refuses until
+`init --routing migrate` collects them. Existing nonempty Config is not
+inferred. Naming `unselected` keeps the legacy path for that Run.
 
 **A selected remote Run needs the executing host's own listing.** Unselected
 remote Runs retain their legacy path. `static`, and a model or effort pin that
@@ -684,7 +686,7 @@ The wizard:
   machine-wide and remains at ~/.config/git-loopy/skills (revision 4f1c2a9e8b03).
   ```
 
-### Explicit routing setup (opt-in)
+### Explicit routing setup
 
 `git-loopy init --routing [keep|migrate|ask]` composes first setup with the same
 authorization and live routing-readiness verdict as `update --routing`, doctor,
@@ -1279,8 +1281,9 @@ unset to keep the legacy remote path.
 ### `route_policy = "dynamic"` — elect each issue's route from live evidence
 
 `dynamic` routes **one issue at a time** from current public benchmark
-evidence instead of from a pair you wrote down. It is opt-in, off by default,
-and starts no dynamic work unless every prerequisite is present:
+evidence instead of from a pair you wrote down. Fresh Python-local setup
+records it as the default for unpinned work. It starts no dynamic work unless
+every prerequisite is present:
 
 ```toml
 route_policy = "dynamic"

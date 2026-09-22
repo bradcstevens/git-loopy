@@ -36,6 +36,7 @@ from git_loopy import loop as loop_module
 from git_loopy import version as version_module
 from git_loopy import wrapper as wrapper_module
 from git_loopy.release_version import read_runtime_release_version
+from git_loopy.run_routing_preflight import routing_choice_refusal
 from git_loopy.config import (
     CONTEXT_TIERS,
     MODEL_CONTEXT_TIERS,
@@ -4145,6 +4146,47 @@ def test_routing_and_calibration_fixtures_pin_the_contracts_that_changed_them(
     assert declared[fixture] == expected, (
         f"{fixture} declares contract {declared[fixture]}, not {expected}"
     )
+
+
+def test_python_local_dynamic_default_activation_is_declared() -> None:
+    """#567 activates the Python-local Dynamic default, not the other members.
+
+    The declaration is not a substitute for the session matrices. It must
+    agree with the shared no-Config refusal: absence is not a legacy session.
+    """
+    activation = _ROUTING_RESOLUTION["dynamic_default_activation"]
+    assert activation == {
+        "status": "python_local_activated",
+        "shell": "deferred",
+        "powershell": "deferred",
+        "subagent": "not_supported",
+        "integration": "not_supported",
+        "remote_dynamic_election": "not_authorized",
+        "event_schema_version": "1.2",
+    }
+
+    section = _written_contract_text().split("### 14.3", 1)[1].split("### 14.4", 1)[0]
+    assert "Activated Python-local Dynamic default" in section
+    assert "Shell and PowerShell routing remain deferred" in section
+    assert "does not imply Subagent or Integration routing" in section
+    assert "This is not final Dynamic-default activation." not in section
+
+    refusal = routing_choice_refusal(
+        RunConfig(
+            config_absent=True,
+            route_policy=RoutePolicy.UNSELECTED,
+            route_policy_supplied=False,
+        )
+    )
+    assert refusal is not None
+    assert "defaults to Dynamic routing" in refusal
+    assert "writes nothing" in refusal
+
+    readme = Path(__file__).resolve().parents[1] / "README.md"
+    if readme.is_file():
+        text = readme.read_text(encoding="utf-8")
+        assert "retains its previous path" not in text
+        assert "It is opt-in, off by default" not in text
 
 
 _TASK_TYPE_TAXONOMY = _ROUTING_RESOLUTION["task_type_taxonomy"]
