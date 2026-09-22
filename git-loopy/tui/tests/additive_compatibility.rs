@@ -5,8 +5,8 @@
 //! identity, and an unrecognized field is ignored rather than rejected.
 
 use git_loopy_tui::{
-    project_run_view, DashboardState, Event, IssueRef, RunInputs, TerminalCapabilities, Timestamp,
-    ViewContext, Zone,
+    project_run_view, DashboardSession, DashboardState, Event, IssueRef, RunInputs,
+    TerminalCapabilities, Timestamp, ViewContext, Zone,
 };
 use serde_json::{json, Value};
 
@@ -309,5 +309,201 @@ fn calibration_records_do_not_disturb_a_runs_projection() {
         reduce(&mixed, &case),
         expected,
         "a Calibration's records must not reach a Run's totals"
+    );
+}
+
+/// The Events a remotely executed **Lane contribution** reaches the
+/// orchestrator's trace as.
+///
+/// Deliberately carrying **no** `observed_monotonic`: Spec #445 §K's ingest
+/// rule has the orchestrator strip that field from a remote contribution's
+/// Events and never re-stamp it, because a remote machine's monotonic clock
+/// has no relationship to the orchestrator's. Everything this contribution
+/// cost is therefore stated by the record rather than measured off an axis.
+fn remote_contribution_stream() -> Vec<Value> {
+    vec![
+        json!({
+            "ts": "2026-05-16T00:00:00.000Z",
+            "run_id": "remote-run",
+            "iter": null,
+            "type": "wrapper.run.start",
+            "execution_host": {
+                "placement": "github-actions",
+                "isolation_grade": "machine boundary",
+                "capacity": 20,
+                "starting_lane_limit": 4
+            }
+        }),
+        json!({
+            "ts": "2026-05-16T00:00:01.000Z",
+            "run_id": "remote-run",
+            "iter": null,
+            "type": "wrapper.contribution.start",
+            "contribution_id": "c-0001",
+            "issue": 42,
+            "lane_id": "lane-1",
+            "host": "github-actions"
+        }),
+        json!({
+            "ts": "2026-05-16T00:01:35.250Z",
+            "run_id": "remote-run",
+            "iter": null,
+            "type": "wrapper.contribution.end",
+            "contribution_id": "c-0001",
+            "issue": 42,
+            "lane_id": "lane-1",
+            "reason": "completed",
+            "summary": {
+                "closure_outcome": "closed",
+                "agent_seconds": 61.5,
+                "lifecycle_seconds": 94.25,
+                "tokens_in": 1200,
+                "tokens_out": 340,
+                "commits": 2
+            }
+        }),
+    ]
+}
+
+#[test]
+fn a_remotely_hosted_contribution_is_attributed_and_keeps_its_recorded_duration() {
+    let events = remote_contribution_stream();
+    let mut state = DashboardState::new(RunInputs::default());
+    for event in &events {
+        state.apply(&Event::from_json(event).expect("a remote contribution Event decodes"));
+    }
+
+    assert_eq!(state.execution_host().placement, "github-actions");
+    assert_eq!(state.contribution_host("c-0001"), "github-actions");
+
+    let context = ViewContext {
+        now: Timestamp::parse_rfc3339("2026-05-16T00:01:36.000Z").expect("instant parses"),
+        now_monotonic: None,
+        zone: Zone::from_offset_minutes(0),
+        capabilities: TerminalCapabilities::default(),
+    };
+    let view = serde_json::to_value(project_run_view(&state, &context, &IssueRef::number(42)))
+        .expect("the view serializes");
+
+    // Attribution: the contribution triple names its own issue, so the work
+    // lands on #42's Queue row rather than in the pre-marker buffers.
+    let queue = view["dashboard"]["queue"]["rows"]
+        .as_array()
+        .expect("queue rows is a list");
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0]["issue"], 42);
+    assert_eq!(queue[0]["status"], "closed");
+    assert_eq!(queue[0]["tokens_in"], 1200);
+
+    // Duration: stated by the record, so stripping the monotonic reading costs
+    // it nothing. A core that derived it from the axis instead would render
+    // this contribution as having taken no time at all.
+    let contribution = &view["drill_in"]["iteration_breakdown"]["rows"][0];
+    assert_eq!(contribution["duration_seconds"], 94.25);
+    assert_eq!(contribution["active_seconds"], 61.5);
+    assert_eq!(
+        view["dashboard"]["summary"]["rows"][0]["duration_seconds"],
+        94.25
+    );
+
+    // The Queue row's `active_seconds` is the one figure on this screen that
+    // is measured rather than stated -- it accrues off the orchestrator's own
+    // wall clock between the two lifecycle records. That axis survives the
+    // strip because it never belonged to the remote machine, so a remotely
+    // hosted contribution reads as the minute and a half it took and not as
+    // the instant a monotonic-derived reading would have collapsed it to.
+    let measured = queue[0]["active_seconds"]
+        .as_f64()
+        .expect("a settled Queue row states its active seconds");
+    assert!(
+        measured > 90.0,
+        "a remote contribution's measured activity collapsed to {measured}s"
+    );
+}
+
+#[test]
+fn a_wind_down_and_host_trace_folds_clean_and_still_ignores_an_unmodelled_type() {
+    let mut events = remote_contribution_stream();
+    events.push(json!({
+        "ts": "2026-05-16T00:00:03.000Z",
+        "run_id": "remote-run",
+        "iter": null,
+        "type": "wrapper.stop.requested",
+        "cause": "operator_stop",
+        "stage": "drain",
+        "draining": 1
+    }));
+    // An Event type this core does not model, between two it does: it must
+    // contribute nothing rather than stop the fold.
+    events.push(json!({
+        "ts": "2026-05-16T00:00:04.000Z",
+        "run_id": "remote-run",
+        "iter": null,
+        "type": "wrapper.invented.by.a.newer.orchestrator",
+        "payload": {"anything": true}
+    }));
+    events.push(json!({
+        "ts": "2026-05-16T00:00:05.000Z",
+        "run_id": "remote-run",
+        "iter": null,
+        "type": "wrapper.stop.lifted",
+        "cause": "strike_limit",
+        "draining": 0
+    }));
+
+    let mut state = DashboardState::new(RunInputs::default());
+    for event in &events {
+        state.apply(&Event::from_json(event).expect("every line in the stream decodes"));
+    }
+
+    // The drain stays latched: a lift is legal only for the cause it names,
+    // and an operator Stop is the one cause that is never revocable.
+    assert_eq!(state.wind_down(), Some(("operator_stop", "drain", 1)));
+
+    let context = ViewContext {
+        now: Timestamp::parse_rfc3339("2026-05-16T00:00:06.000Z").expect("instant parses"),
+        now_monotonic: None,
+        zone: Zone::from_offset_minutes(0),
+        capabilities: TerminalCapabilities::default(),
+    };
+    let view = serde_json::to_value(project_run_view(&state, &context, &IssueRef::number(42)))
+        .expect("the view serializes");
+    assert_eq!(view["dashboard"]["header"]["status"], "draining");
+    assert_eq!(
+        view["dashboard"]["header"]["wind_down"],
+        json!({
+            "availability": "available",
+            "cause": "operator_stop",
+            "stage": "drain",
+            "draining": 1,
+        })
+    );
+    assert_eq!(
+        view["dashboard"]["header"]["execution_host"],
+        json!({
+            "placement": "github-actions",
+            "isolation_grade": "machine boundary",
+            "capacity": 20,
+            "starting_lane_limit": 4,
+        })
+    );
+
+    // The same stream through the live ingest boundary, where an undecodable
+    // line is counted rather than thrown: a new type must leave that counter
+    // at zero, because "ignored" and "unreadable" are not the same answer.
+    let mut session = DashboardSession::new(
+        RunInputs::default(),
+        Zone::from_offset_minutes(0),
+        IssueRef::number(42),
+    );
+    for event in &events {
+        session.ingest(&serde_json::to_string(event).expect("an Event serializes"));
+    }
+    let diagnostics = session.diagnostics();
+    assert!(
+        diagnostics.is_empty(),
+        "the fold left {} unreadable line(s), most recently {:?}",
+        diagnostics.unreadable_lines,
+        diagnostics.latest
     );
 }

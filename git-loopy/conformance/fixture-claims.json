@@ -31,7 +31,7 @@
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py projects fixture Event streams through the production live-run view model."},
       "shell": {"kind": "claimed", "reason": "shell/tests/test-event-conformance.sh projects fixture producer rollups through production event seams."},
       "powershell": {"kind": "claimed", "reason": "powershell/tests/test-event-conformance.ps1 projects fixture producer rollups through production event seams."},
-      "rust": {"kind": "claimed", "reason": "tui/tests/dashboard_conformance.rs projects fixture Event streams through the production Dashboard view model. tui/tests/dashboard_render.rs drives effort_readback through Event replay, Queue and contribution projections, and rendered Queue/drill-in screens; this is display coverage, not work-session routing or native-member activation."}
+      "rust": {"kind": "claimed", "reason": "tui/tests/dashboard_conformance.rs projects fixture Event streams through the production Dashboard view model. tui/tests/dashboard_render.rs drives effort_readback through Event replay, Queue and contribution projections, and rendered Queue/drill-in screens, and renders the Header's Execution host and Wind-down declarations including their undeclared forms; this is display coverage, not work-session routing or native-member activation."}
     },
     "discriminator.json": {
       "python": {"kind": "claimed", "reason": "python/tests/test_conformance.py supplies fixture issue bodies to the production readiness discriminator."},
