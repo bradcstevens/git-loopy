@@ -133,10 +133,7 @@ def _header(state: LiveRunState) -> dict[str, Any]:
         "started_at": _timestamp(state.started_wall),
         "elapsed_seconds": state.elapsed_seconds(),
         "status": state.status,
-        "strikes": {
-            "current": state.strikes,
-            "limit": state.max_strikes,
-        },
+        "strikes": _strikes(state),
         "active_issue": active_ref,
         "active_seconds": state.active_seconds() if active_ref is not None else None,
         "context_fill": _context_fill(
@@ -160,6 +157,21 @@ def _header(state: LiveRunState) -> dict[str, Any]:
         # one that does not, and only the Run-start manifest tells them apart.
         "routing": _declaration(state.routing_available),
     }
+
+
+def _strikes(state: LiveRunState) -> dict[str, Any]:
+    """The Strike count, and the issues behind it when any were named.
+
+    An empty list is omitted so a trace that named nobody stays the count it
+    always was. Absence is not filled from the active issue.
+    """
+    strikes: dict[str, Any] = {
+        "current": state.strikes,
+        "limit": state.max_strikes,
+    }
+    if state.abandoned:
+        strikes["abandoned"] = list(state.abandoned)
+    return strikes
 
 
 def _declaration(declared: bool | None) -> dict[str, Any]:

@@ -206,7 +206,7 @@ fn abandonment_guard_drains_and_lifts_without_a_strike_ceiling() {
     let snapshot = view(&state, &ctx, IssueRef::number(42));
     assert_eq!(
         snapshot["dashboard"]["header"]["strikes"],
-        serde_json::json!({"current":8,"limit":null})
+        serde_json::json!({"current":8,"limit":null,"abandoned":[42]})
     );
     assert_eq!(state.wind_down(), Some(("abandonment_guard", "drain", 2)));
     state.apply(&Event::from_jsonl_line(

@@ -223,7 +223,8 @@ the lifecycle it counts is monotonic: an issue an advance rescued was never give
 that was is not un-given-up-on by another issue's advance. A **Runner** with no **Pickup** has no
 lifecycle to charge from and keeps the original accounting — a Strike per no-progress Iteration,
 consecutive, reset by progress — which is the line `conformance/progress-strikes.json` forks
-along.
+along. A Dashboard names each charged issue beside the count. A Strike that names none
+still counts, and the active issue is not a substitute.
 _Avoid_: failure, miss, no-progress count, strike limit (that is the **Abandonment guard**).
 
 **Abandonment guard**:

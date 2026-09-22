@@ -201,6 +201,17 @@ fn the_header_band_states_the_run_at_a_glance() {
 }
 
 #[test]
+fn the_header_names_the_issues_a_run_abandoned() {
+    let view = fixture_view("the-drill-in-accounts-for-every-attempt");
+    let lines = render_lines(&view, 220, 40, TerminalCapabilities::default());
+    let header = band(&lines, "git-loopy").join(" ");
+    assert!(
+        header.contains("strikes 3/3 · #51, #52"),
+        "a Strike count names the issues behind it: {header}"
+    );
+}
+
+#[test]
 fn the_queue_band_lists_every_issue_in_the_locked_columns() {
     let view = fixture_view("baseline-closed-iteration");
     let lines = render_lines(&view, 160, 40, TerminalCapabilities::default());

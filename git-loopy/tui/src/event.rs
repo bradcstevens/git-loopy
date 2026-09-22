@@ -741,6 +741,12 @@ pub struct Strike {
     /// The configured Strike limit.
     #[serde(default, deserialize_with = "lenient_i64")]
     pub max_strikes: Option<i64>,
+    /// The issue this Strike gave up on, when the producer named one.
+    ///
+    /// Optional within event schema 1.2. A member that charges per Iteration
+    /// omits it; a consumer must not invent the active issue in its place.
+    #[serde(default, deserialize_with = "lenient_issue")]
+    pub issue: Option<IssueRef>,
 }
 
 /// The Run-end payload.
@@ -911,6 +917,21 @@ where
 ///
 /// Mirrors the Python core's `_coerce_int` tolerance: a counter that arrives as
 /// a float (or as anything unusable) must not discard the rest of the payload.
+/// The issue a Strike named, or none when the field named nobody.
+///
+/// A blank path and a non-identity are not names. They do not fail the Event:
+/// the count still reduces, and the missing name stays missing.
+fn lenient_issue<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<IssueRef>, D::Error> {
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value
+        .as_ref()
+        .and_then(IssueRef::from_value)
+        .filter(|issue| match issue {
+            IssueRef::Path(path) => !path.trim().is_empty(),
+            IssueRef::Number(_) => true,
+        }))
+}
+
 fn lenient_i64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<i64>, D::Error> {
     let value = Option::<Value>::deserialize(deserializer)?;
     Ok(value

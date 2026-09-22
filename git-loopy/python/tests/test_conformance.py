@@ -2990,6 +2990,36 @@ def test_dashboard_fixture_retains_distinct_endings_for_two_attempts() -> None:
     ] == [(1, "no-progress", "crash"), (2, "no-progress", "no_progress")]
 
 
+def test_dashboard_fixture_accounts_for_every_attempt_and_names_abandonments() -> None:
+    case = _dashboard_case("the-drill-in-accounts-for-every-attempt")
+    working, finished = case["snapshots"]
+    assert working["expected"]["dashboard"]["queue"]["rows"][0]["status"] == "active"
+    assert working["expected"]["dashboard"]["queue"]["rows"][0]["ending"] is None
+    assert "abandoned" not in working["expected"]["dashboard"]["header"]["strikes"]
+    assert [
+        row["iteration"]
+        for row in working["expected"]["drill_in"]["iteration_breakdown"]["rows"]
+    ] == [1]
+    assert [
+        (
+            row["iteration"],
+            row["route"]["model"],
+            row["route"]["effort"],
+            row["ending"],
+            row["commits"],
+        )
+        for row in finished["expected"]["drill_in"]["iteration_breakdown"]["rows"]
+    ] == [
+        (1, "gpt-5.4-mini", "low", None, 1),
+        (2, "claude-opus-5", "high", "no_progress", None),
+        (3, "gpt-5.6-sol", "medium", None, None),
+    ]
+    assert finished["expected"]["dashboard"]["header"]["strikes"]["abandoned"] == [
+        51,
+        52,
+    ]
+
+
 _RELEASE_VERSION = _load_fixture("release-version.json")
 
 

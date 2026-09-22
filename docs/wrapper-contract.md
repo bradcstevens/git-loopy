@@ -1004,7 +1004,15 @@ An advanced contribution may carry its positive `commits` count, so a Queue can 
 without turning a zero or unavailable count into a claim. The Queue displays these facts inline
 in Status, without adding a column or changing the six Status values.
 The Iteration breakdown retains each attempt's own ending and commit count in its Status cell,
-rather than copying the latest Queue ending over earlier attempts.
+rather than copying the latest Queue ending over earlier attempts. It accounts for every attempt
+this Run made on the issue, oldest first: the **Routed pair** recorded for that attempt, that
+attempt's own ending, and the commits it left behind. An attempt still open is not a row, so a
+later activation shows the attempts so far without implying the issue has ended. An omitted
+ending stays omitted; a consumer MUST NOT default it to `no_progress`.
+A `wrapper.strike` may carry `issue`, the issue that charge gave up on. The header names those
+issues oldest first and once each. A strike that omits `issue` still counts and adds no name; a
+consumer MUST NOT fill that absence from the active issue. Shell and PowerShell strikes remain
+per Iteration and omit `issue`.
 
 Cost is the harness's reported billing — optional `credits`, `premium_requests`, `cache_read` and
 `cache_write`, added additively (ADR-0026). They are optional rather than required precisely so an

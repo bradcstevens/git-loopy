@@ -831,6 +831,11 @@ class Renderer:
             text.append(f"{current_strikes}/{max_strikes}", style=STYLES["warning"])
         else:
             text.append(str(current_strikes), style=STYLES["warning"])
+        named = event.get("issue")
+        if isinstance(named, int) and not isinstance(named, bool):
+            text.append(f" #{named}", style=STYLES["warning"])
+        elif isinstance(named, str) and named.strip():
+            text.append(f" {named.strip()}", style=STYLES["warning"])
         self.console.print(text)
 
     def _on_ask_user_attempted(self, event: dict[str, Any]) -> None:

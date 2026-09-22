@@ -552,6 +552,9 @@ class LiveRunState:
         self.iteration = 0
         self.status = _STATUS_STARTING
         self.strikes = 0
+        #: Issues this Run gave up on, oldest first and once each. A Strike
+        #: that names none adds nothing: the active issue is not a substitute.
+        self.abandoned: list[int | str] = []
         self.ended = False
         self.context_window_available: bool | None = None
         self.subagents_available: bool | None = None
@@ -864,6 +867,7 @@ class LiveRunState:
             self.strikes = _coerce_int(event.get("strikes"), self.strikes)
             if self.max_strikes is not None:
                 self.max_strikes = _coerce_int(event.get("max_strikes"), self.max_strikes)
+            self._record_abandoned(event.get("issue"))
             self._iter_strike = True
         elif etype == _ITERATION_END:
             self._finalize_iteration(now)
@@ -2182,6 +2186,12 @@ class LiveRunState:
             for item in entry.contributions:
                 entry.usage.merge(item.usage)
 
+    def _record_abandoned(self, issue: Any) -> None:
+        """Name an abandoned issue once, and never invent one."""
+        named = _abandoned_issue(issue)
+        if named is not None and named not in self.abandoned:
+            self.abandoned.append(named)
+
     def _normalize_ref(self, ref: Any) -> int | str:
         """Resolve a ref to its existing ledger key, tolerating int/str skew.
 
@@ -2201,6 +2211,29 @@ class LiveRunState:
         if as_str in self.ledger:
             return as_str
         return as_int if as_int is not None else ref
+
+
+def _abandoned_issue(value: Any) -> int | str | None:
+    """The issue a Strike named, or none when the record named nobody.
+
+    A numeric string is the same issue as its number. A blank, a null, or a
+    non-identity is not a name, and is never replaced by the active issue.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return None
+    if isinstance(value, int):
+        return value
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return text
+
+
+def _issue_label(ref: int | str) -> str:
+    return f"#{ref}" if isinstance(ref, int) else str(ref)
 
 
 def _context_window_snapshot(
@@ -2600,6 +2633,12 @@ def format_header(state: LiveRunState, *, now: float | None = None) -> str:
         else:
             active = " ".join(f"#{entry.ref}" for entry in actives)
 
+    strikes = f"strikes {state.strikes}"
+    if state.max_strikes is not None:
+        strikes += f"/{state.max_strikes}"
+    if state.abandoned:
+        strikes += " · " + ", ".join(_issue_label(ref) for ref in state.abandoned)
+
     return (
         f"git-loopy  run {run_id}"
         f"  •  default {model}"
@@ -2608,8 +2647,7 @@ def format_header(state: LiveRunState, *, now: float | None = None) -> str:
         f"  •  active {active}"
         f"  •  context {context_fill}"
         f"  •  {state.status}"
-        f"  •  strikes {state.strikes}"
-        + (f"/{state.max_strikes}" if state.max_strikes is not None else "")
+        f"  •  {strikes}"
     )
 
 

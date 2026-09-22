@@ -610,3 +610,128 @@ def test_legacy_route_without_lifecycle_position_remains_unchanged() -> None:
         "effort": "medium",
         "source": "routed",
     }
+
+
+def _attempt(iteration: int, *, model: str, effort: str, lifecycle: str) -> list[dict]:
+    return [
+        {"type": "wrapper.iteration.start", "iter": iteration},
+        {
+            "type": "wrapper.pickup.bound",
+            "iter": iteration,
+            "issue": 51,
+            "model": model,
+            "effort": effort,
+            "routing_source": "routed",
+            "lifecycle_position": lifecycle,
+        },
+        {
+            "type": "wrapper.issue.activated",
+            "iter": iteration,
+            "issue": 51,
+            "binding_source": "serial_pickup",
+        },
+    ]
+
+
+def test_the_drill_in_accounts_for_every_attempt_and_names_what_was_abandoned() -> None:
+    """Every attempt stays, and a Strike count names the issues behind it."""
+    from git_loopy.interactive.state import LiveRunState, format_header
+    from git_loopy.interactive.view_model import project_run_view
+
+    state = LiveRunState(max_strikes=3)
+    state.render({"type": "wrapper.run.start", "run_id": "account", "max_nmt_strikes": 3})
+    for event in _attempt(1, model="gpt-5.4-mini", effort="low", lifecycle="fresh"):
+        state.render(event)
+    state.render(
+        {
+            "type": "wrapper.commit.recorded",
+            "iter": 1,
+            "sha": "abc123def4567890",
+            "subject": "name the account",
+        }
+    )
+    state.render(
+        {
+            "type": "wrapper.iteration.end",
+            "iter": 1,
+            "outcome": "advanced",
+            "duration_seconds": 2.0,
+            "issues": [
+                {
+                    "issue": 51,
+                    "status": "advanced",
+                    "commits": 1,
+                    "active_seconds": 1.5,
+                }
+            ],
+        }
+    )
+    for event in _attempt(2, model="claude-opus-5", effort="high", lifecycle="retrying"):
+        state.render(event)
+
+    working = project_run_view(state, None, issue=51)
+    assert working["dashboard"]["header"]["status"] == "running"
+    assert working["dashboard"]["queue"]["rows"][0]["status"] == "active"
+    assert working["dashboard"]["queue"]["rows"][0]["ending"] is None
+    assert [
+        row["iteration"]
+        for row in working["drill_in"]["iteration_breakdown"]["rows"]
+    ] == [1]
+    assert "abandoned" not in working["dashboard"]["header"]["strikes"]
+
+    state.render(
+        {
+            "type": "wrapper.iteration.end",
+            "iter": 2,
+            "outcome": "no_progress",
+            "duration_seconds": 3.0,
+            "issues": [
+                {
+                    "issue": 51,
+                    "status": "no-progress",
+                    "ending": "no_progress",
+                    "active_seconds": 2.5,
+                }
+            ],
+        }
+    )
+    for event in _attempt(3, model="gpt-5.6-sol", effort="medium", lifecycle="retrying"):
+        state.render(event)
+    state.render(
+        {
+            "type": "wrapper.iteration.end",
+            "iter": 3,
+            "outcome": "no_progress",
+            "duration_seconds": 1.0,
+            "issues": [
+                {
+                    "issue": 51,
+                    "status": "no-progress",
+                    "active_seconds": 1.0,
+                }
+            ],
+        }
+    )
+    state.render({"type": "wrapper.strike", "strikes": 1, "max_strikes": 3, "issue": 51})
+    state.render({"type": "wrapper.strike", "strikes": 2, "max_strikes": 3, "issue": "52"})
+    state.render({"type": "wrapper.strike", "strikes": 3, "max_strikes": 3, "issue": 51})
+    state.render({"type": "wrapper.strike", "strikes": 3, "max_strikes": 3})
+    state.render({"type": "wrapper.strike", "strikes": 3, "max_strikes": 3, "issue": None})
+
+    view = project_run_view(state, None, issue=51)
+    rows = view["drill_in"]["iteration_breakdown"]["rows"]
+    assert [
+        (row["iteration"], row["route"]["model"], row["route"]["effort"], row["ending"], row["commits"])
+        for row in rows
+    ] == [
+        (1, "gpt-5.4-mini", "low", None, 1),
+        (2, "claude-opus-5", "high", "no_progress", None),
+        (3, "gpt-5.6-sol", "medium", None, None),
+    ]
+    assert view["dashboard"]["queue"]["rows"][0]["ending"] is None
+    assert view["dashboard"]["header"]["strikes"] == {
+        "current": 3,
+        "limit": 3,
+        "abandoned": [51, 52],
+    }
+    assert "strikes 3/3 · #51, #52" in format_header(state)

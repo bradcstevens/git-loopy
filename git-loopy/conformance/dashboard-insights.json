@@ -8871,6 +8871,864 @@
       ],
       "purpose": "A commit does not launder a timeout: the Queue shows advanced work and the lost-session ending together."
     }
+,
+    {
+      "id": "the-drill-in-accounts-for-every-attempt",
+      "inputs": {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high",
+        "max_strikes": 3,
+        "local_utc_offset_minutes": -360,
+        "drill_in_issue": 51
+      },
+      "events": [
+        {
+          "ts": "2026-05-22T00:00:00.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": null,
+          "type": "wrapper.run.start",
+          "release_version": "1.2.3",
+          "schema_version": 1,
+          "insight_capabilities": {
+            "agent_output": true,
+            "structured_agent_events": true,
+            "token_usage": true,
+            "context_window": true,
+            "skill_consultation": true,
+            "cost": true,
+            "routing": true
+          },
+          "parallel_capabilities": {
+            "parallel_mode": true,
+            "rolling_dispatch": true,
+            "integration_backlog": true,
+            "adaptive_lane_limit": true,
+            "contribution_events": true,
+            "execution_hosts": [
+              "local"
+            ]
+          },
+          "max_nmt_strikes": 3
+        },
+        {
+          "ts": "2026-05-22T00:00:01.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 1,
+          "type": "wrapper.iteration.start"
+        },
+        {
+          "ts": "2026-05-22T00:00:02.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 1,
+          "type": "wrapper.pickup.bound",
+          "issue": 51,
+          "reason": "order",
+          "position": 1,
+          "considered": 1,
+          "model": "gpt-5.4-mini",
+          "effort": "low",
+          "context_tier": "default",
+          "routing_source": "routed",
+          "task_type_keys": [
+            "implementation"
+          ],
+          "gate_warnings": [],
+          "lifecycle_position": "fresh"
+        },
+        {
+          "ts": "2026-05-22T00:00:03.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 1,
+          "type": "wrapper.issue.activated",
+          "issue": 51,
+          "activated_at": "2026-05-22T00:00:03.000Z",
+          "binding_source": "serial_pickup"
+        },
+        {
+          "ts": "2026-05-22T00:00:04.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 1,
+          "type": "wrapper.commit.recorded",
+          "sha": "abc123def456",
+          "subject": "account for the attempt"
+        },
+        {
+          "ts": "2026-05-22T00:00:05.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 1,
+          "type": "wrapper.iteration.end",
+          "outcome": "advanced",
+          "duration_seconds": 2.0,
+          "summary": {
+            "model": "gpt-5.4-mini",
+            "tokens_in": 100,
+            "tokens_out": 20,
+            "observed_tokens": 120,
+            "tool_count": 0,
+            "skill_call_count": 0,
+            "skills_consulted": [],
+            "commits": 1,
+            "auto_closures": 0,
+            "pr_advances": 0,
+            "strikes": 0,
+            "peak_context_window": null
+          },
+          "issues": [
+            {
+              "issue": 51,
+              "status": "advanced",
+              "first_started_at": "2026-05-22T00:00:03.000Z",
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 2.0,
+              "cumulative_active_seconds": 2.0,
+              "consumption": {
+                "model": "gpt-5.4-mini",
+                "tokens_in": 100,
+                "tokens_out": 20
+              },
+              "peak_context_window": null,
+              "commits": 1
+            }
+          ]
+        },
+        {
+          "ts": "2026-05-22T00:00:06.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 2,
+          "type": "wrapper.iteration.start"
+        },
+        {
+          "ts": "2026-05-22T00:00:07.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 2,
+          "type": "wrapper.pickup.bound",
+          "issue": 51,
+          "reason": "order",
+          "position": 1,
+          "considered": 1,
+          "model": "claude-opus-5",
+          "effort": "high",
+          "context_tier": "default",
+          "routing_source": "routed",
+          "task_type_keys": [
+            "implementation"
+          ],
+          "gate_warnings": [],
+          "lifecycle_position": "retrying"
+        },
+        {
+          "ts": "2026-05-22T00:00:08.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 2,
+          "type": "wrapper.issue.activated",
+          "issue": 51,
+          "activated_at": "2026-05-22T00:00:08.000Z",
+          "binding_source": "serial_pickup"
+        },
+        {
+          "ts": "2026-05-22T00:00:09.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 2,
+          "type": "wrapper.iteration.end",
+          "outcome": "no_progress",
+          "duration_seconds": 3.0,
+          "summary": {
+            "model": "gpt-5.4-mini",
+            "tokens_in": 100,
+            "tokens_out": 20,
+            "observed_tokens": 120,
+            "tool_count": 0,
+            "skill_call_count": 0,
+            "skills_consulted": [],
+            "commits": 0,
+            "auto_closures": 0,
+            "pr_advances": 0,
+            "strikes": 0,
+            "peak_context_window": null
+          },
+          "issues": [
+            {
+              "issue": 51,
+              "status": "no-progress",
+              "first_started_at": "2026-05-22T00:00:03.000Z",
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 3.0,
+              "cumulative_active_seconds": 5.0,
+              "consumption": {
+                "model": "gpt-5.4-mini",
+                "tokens_in": 100,
+                "tokens_out": 20
+              },
+              "peak_context_window": null,
+              "ending": "no_progress"
+            }
+          ]
+        },
+        {
+          "ts": "2026-05-22T00:00:10.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 3,
+          "type": "wrapper.iteration.start"
+        },
+        {
+          "ts": "2026-05-22T00:00:11.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 3,
+          "type": "wrapper.pickup.bound",
+          "issue": 51,
+          "reason": "order",
+          "position": 1,
+          "considered": 1,
+          "model": "gpt-5.6-sol",
+          "effort": "medium",
+          "context_tier": "default",
+          "routing_source": "routed",
+          "task_type_keys": [
+            "implementation"
+          ],
+          "gate_warnings": [],
+          "lifecycle_position": "retrying"
+        },
+        {
+          "ts": "2026-05-22T00:00:12.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 3,
+          "type": "wrapper.issue.activated",
+          "issue": 51,
+          "activated_at": "2026-05-22T00:00:12.000Z",
+          "binding_source": "serial_pickup"
+        },
+        {
+          "ts": "2026-05-22T00:00:13.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 3,
+          "type": "wrapper.iteration.end",
+          "outcome": "no_progress",
+          "duration_seconds": 1.0,
+          "summary": {
+            "model": "gpt-5.4-mini",
+            "tokens_in": 100,
+            "tokens_out": 20,
+            "observed_tokens": 120,
+            "tool_count": 0,
+            "skill_call_count": 0,
+            "skills_consulted": [],
+            "commits": 0,
+            "auto_closures": 0,
+            "pr_advances": 0,
+            "strikes": 0,
+            "peak_context_window": null
+          },
+          "issues": [
+            {
+              "issue": 51,
+              "status": "no-progress",
+              "first_started_at": "2026-05-22T00:00:03.000Z",
+              "closed_at": null,
+              "issue_elapsed_seconds": null,
+              "active_seconds": 1.0,
+              "cumulative_active_seconds": 6.0,
+              "consumption": {
+                "model": "gpt-5.4-mini",
+                "tokens_in": 100,
+                "tokens_out": 20
+              },
+              "peak_context_window": null
+            }
+          ]
+        },
+        {
+          "ts": "2026-05-22T00:00:14.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 3,
+          "type": "wrapper.strike",
+          "strikes": 1,
+          "max_strikes": 3,
+          "issue": 51
+        },
+        {
+          "ts": "2026-05-22T00:00:15.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 3,
+          "type": "wrapper.strike",
+          "strikes": 2,
+          "max_strikes": 3,
+          "issue": 52
+        },
+        {
+          "ts": "2026-05-22T00:00:16.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 3,
+          "type": "wrapper.strike",
+          "strikes": 2,
+          "max_strikes": 3,
+          "issue": 51
+        },
+        {
+          "ts": "2026-05-22T00:00:17.000Z",
+          "run_id": "01HXR0000000000000000ACCT",
+          "iter": 3,
+          "type": "wrapper.strike",
+          "strikes": 3,
+          "max_strikes": 3
+        }
+      ],
+      "snapshots": [
+        {
+          "after_event_count": 9,
+          "render_at_utc": "2026-05-22T00:00:08.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000ACCT",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-21T18:00:00-06:00",
+                "elapsed_seconds": 8.0,
+                "status": "running",
+                "strikes": {
+                  "current": 0,
+                  "limit": 3
+                },
+                "active_issue": 51,
+                "active_seconds": 2.0,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 51,
+                    "status": "active",
+                    "ending": null,
+                    "commits": null,
+                    "started_at": "2026-05-21T18:00:03-06:00",
+                    "active_seconds": 2.0,
+                    "closed_at": null,
+                    "iteration_count": 1,
+                    "route": {
+                      "model": "claude-opus-5",
+                      "effort": "high",
+                      "source": "routed",
+                      "lifecycle_position": "retrying"
+                    },
+                    "tokens_in": 100,
+                    "tokens_out": 20,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": 51,
+                "lines": [
+                  {
+                    "at": "2026-05-21T18:00:02-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #51 (order, position 1 of 1)"
+                  },
+                  {
+                    "at": "2026-05-21T18:00:04-06:00",
+                    "kind": "event",
+                    "text": "\u2713 commit abc123def4  account for the attempt"
+                  },
+                  {
+                    "at": "2026-05-21T18:00:07-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #51 (order, position 1 of 1)"
+                  }
+                ],
+                "windows": [
+                  {
+                    "kind": "serial",
+                    "lane": null,
+                    "issue": 51,
+                    "task_type": [
+                      "implementation"
+                    ],
+                    "route": {
+                      "model": "claude-opus-5",
+                      "effort": "high",
+                      "source": "routed",
+                      "lifecycle_position": "retrying"
+                    },
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": null,
+                    "live": true,
+                    "lines": [
+                      {
+                        "at": "2026-05-21T18:00:02-06:00",
+                        "kind": "event",
+                        "text": "Pickup: bound #51 (order, position 1 of 1)"
+                      },
+                      {
+                        "at": "2026-05-21T18:00:04-06:00",
+                        "kind": "event",
+                        "text": "\u2713 commit abc123def4  account for the attempt"
+                      },
+                      {
+                        "at": "2026-05-21T18:00:07-06:00",
+                        "kind": "event",
+                        "text": "Pickup: bound #51 (order, position 1 of 1)"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "advanced",
+                    "duration_seconds": 2.0,
+                    "model": "gpt-5.4-mini",
+                    "tokens_in": 100,
+                    "tokens_out": 20,
+                    "observed_tokens": 120,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 0,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 51,
+                "status": "active",
+                "started_at": "2026-05-21T18:00:03-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 2.0,
+                "iteration_count": 1
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "advanced",
+                    "duration_seconds": 2.0,
+                    "status": "advanced",
+                    "ending": null,
+                    "commits": 1,
+                    "active_seconds": 2.0,
+                    "route": {
+                      "model": "gpt-5.4-mini",
+                      "effort": "low",
+                      "source": "routed",
+                      "lifecycle_position": "fresh"
+                    },
+                    "consumption": {
+                      "model": "gpt-5.4-mini",
+                      "tokens_in": 100,
+                      "tokens_out": 20,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 51,
+                "lines": [
+                  {
+                    "at": "2026-05-21T18:00:02-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #51 (order, position 1 of 1)"
+                  },
+                  {
+                    "at": "2026-05-21T18:00:04-06:00",
+                    "kind": "event",
+                    "text": "\u2713 commit abc123def4  account for the attempt"
+                  },
+                  {
+                    "at": "2026-05-21T18:00:07-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #51 (order, position 1 of 1)"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "after_event_count": 18,
+          "render_at_utc": "2026-05-22T00:00:17.000Z",
+          "expected": {
+            "dashboard": {
+              "header": {
+                "run_id": "01HXR0000000000000000ACCT",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "started_at": "2026-05-21T18:00:00-06:00",
+                "elapsed_seconds": 17.0,
+                "status": "running",
+                "strikes": {
+                  "current": 3,
+                  "limit": 3,
+                  "abandoned": [
+                    51,
+                    52
+                  ]
+                },
+                "active_issue": null,
+                "active_seconds": null,
+                "context_fill": {
+                  "availability": "not_observed",
+                  "current_tokens": null,
+                  "token_limit": null,
+                  "percentage": null,
+                  "effective_target_tokens": null,
+                  "effective_ceiling_tokens": null
+                },
+                "release_target": null,
+                "release_version": null,
+                "cost": {
+                  "availability": "available"
+                },
+                "rate_card": {
+                  "availability": "not_declared"
+                },
+                "routing": {
+                  "availability": "available"
+                }
+              },
+              "queue": {
+                "columns": [
+                  "issue",
+                  "status",
+                  "started_at",
+                  "active_seconds",
+                  "closed_at",
+                  "iteration_count",
+                  "route",
+                  "tokens_in",
+                  "tokens_out",
+                  "credits",
+                  "premium_requests"
+                ],
+                "rows": [
+                  {
+                    "issue": 51,
+                    "status": "no-progress",
+                    "ending": null,
+                    "commits": null,
+                    "started_at": "2026-05-21T18:00:03-06:00",
+                    "active_seconds": 6.0,
+                    "closed_at": null,
+                    "iteration_count": 3,
+                    "route": {
+                      "model": "gpt-5.6-sol",
+                      "effort": "medium",
+                      "source": "routed",
+                      "lifecycle_position": "retrying"
+                    },
+                    "tokens_in": 300,
+                    "tokens_out": 60,
+                    "credits": null,
+                    "premium_requests": null
+                  }
+                ]
+              },
+              "activity": {
+                "issue": null,
+                "lines": [],
+                "windows": [
+                  {
+                    "kind": "serial",
+                    "lane": null,
+                    "issue": 51,
+                    "task_type": [
+                      "implementation"
+                    ],
+                    "route": {
+                      "model": "gpt-5.6-sol",
+                      "effort": "medium",
+                      "source": "routed",
+                      "lifecycle_position": "retrying"
+                    },
+                    "context_fill": {
+                      "availability": "not_observed",
+                      "current_tokens": null,
+                      "token_limit": null,
+                      "percentage": null,
+                      "effective_target_tokens": null,
+                      "effective_ceiling_tokens": null
+                    },
+                    "subagents": null,
+                    "live": false,
+                    "lines": [
+                      {
+                        "at": "2026-05-21T18:00:02-06:00",
+                        "kind": "event",
+                        "text": "Pickup: bound #51 (order, position 1 of 1)"
+                      },
+                      {
+                        "at": "2026-05-21T18:00:04-06:00",
+                        "kind": "event",
+                        "text": "\u2713 commit abc123def4  account for the attempt"
+                      },
+                      {
+                        "at": "2026-05-21T18:00:07-06:00",
+                        "kind": "event",
+                        "text": "Pickup: bound #51 (order, position 1 of 1)"
+                      },
+                      {
+                        "at": "2026-05-21T18:00:11-06:00",
+                        "kind": "event",
+                        "text": "Pickup: bound #51 (order, position 1 of 1)"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "summary": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "advanced",
+                    "duration_seconds": 2.0,
+                    "model": "gpt-5.4-mini",
+                    "tokens_in": 100,
+                    "tokens_out": 20,
+                    "observed_tokens": 120,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 0,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 1,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "iteration",
+                    "iteration": 2,
+                    "lane": null,
+                    "outcome": "no_progress",
+                    "duration_seconds": 3.0,
+                    "model": "gpt-5.4-mini",
+                    "tokens_in": 100,
+                    "tokens_out": 20,
+                    "observed_tokens": 120,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 0,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "iteration",
+                    "iteration": 3,
+                    "lane": null,
+                    "outcome": "no_progress",
+                    "duration_seconds": 1.0,
+                    "model": "gpt-5.4-mini",
+                    "tokens_in": 100,
+                    "tokens_out": 20,
+                    "observed_tokens": 120,
+                    "credits": null,
+                    "premium_requests": null,
+                    "tool_count": 0,
+                    "skill_call_count": 0,
+                    "skills_consulted": [],
+                    "commits": 0,
+                    "auto_closures": 0,
+                    "pr_advances": 0,
+                    "strikes": 0,
+                    "peak_context_window": null
+                  }
+                ]
+              }
+            },
+            "drill_in": {
+              "detail_header": {
+                "issue": 51,
+                "status": "no-progress",
+                "started_at": "2026-05-21T18:00:03-06:00",
+                "closed_at": null,
+                "issue_elapsed_seconds": null,
+                "active_seconds": 6.0,
+                "iteration_count": 3
+              },
+              "iteration_breakdown": {
+                "rows": [
+                  {
+                    "kind": "iteration",
+                    "iteration": 1,
+                    "lane": null,
+                    "outcome": "advanced",
+                    "duration_seconds": 2.0,
+                    "status": "advanced",
+                    "ending": null,
+                    "commits": 1,
+                    "active_seconds": 2.0,
+                    "route": {
+                      "model": "gpt-5.4-mini",
+                      "effort": "low",
+                      "source": "routed",
+                      "lifecycle_position": "fresh"
+                    },
+                    "consumption": {
+                      "model": "gpt-5.4-mini",
+                      "tokens_in": 100,
+                      "tokens_out": 20,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "iteration",
+                    "iteration": 2,
+                    "lane": null,
+                    "outcome": "no_progress",
+                    "duration_seconds": 3.0,
+                    "status": "no-progress",
+                    "ending": "no_progress",
+                    "commits": null,
+                    "active_seconds": 3.0,
+                    "route": {
+                      "model": "claude-opus-5",
+                      "effort": "high",
+                      "source": "routed",
+                      "lifecycle_position": "retrying"
+                    },
+                    "consumption": {
+                      "model": "gpt-5.4-mini",
+                      "tokens_in": 100,
+                      "tokens_out": 20,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  },
+                  {
+                    "kind": "iteration",
+                    "iteration": 3,
+                    "lane": null,
+                    "outcome": "no_progress",
+                    "duration_seconds": 1.0,
+                    "status": "no-progress",
+                    "ending": null,
+                    "commits": null,
+                    "active_seconds": 1.0,
+                    "route": {
+                      "model": "gpt-5.6-sol",
+                      "effort": "medium",
+                      "source": "routed",
+                      "lifecycle_position": "retrying"
+                    },
+                    "consumption": {
+                      "model": "gpt-5.4-mini",
+                      "tokens_in": 100,
+                      "tokens_out": 20,
+                      "cache_read": null,
+                      "cache_write": null
+                    },
+                    "credits": null,
+                    "premium_requests": null,
+                    "peak_context_window": null
+                  }
+                ]
+              },
+              "log": {
+                "issue": 51,
+                "lines": [
+                  {
+                    "at": "2026-05-21T18:00:02-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #51 (order, position 1 of 1)"
+                  },
+                  {
+                    "at": "2026-05-21T18:00:04-06:00",
+                    "kind": "event",
+                    "text": "\u2713 commit abc123def4  account for the attempt"
+                  },
+                  {
+                    "at": "2026-05-21T18:00:07-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #51 (order, position 1 of 1)"
+                  },
+                  {
+                    "at": "2026-05-21T18:00:11-06:00",
+                    "kind": "event",
+                    "text": "Pickup: bound #51 (order, position 1 of 1)"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "purpose": "The drill-in lists every attempt, oldest first, each naming the Routed pair it ran on, how it ended, and what it left behind. An advance reaches no ending. A later omitted ending stays absent rather than becoming no_progress. A second activation is still being worked. Named Strikes identify the abandoned issues once each; an unnamed Strike counts and invents no name."
+    }
   ],
   "future_consumer": {
     "issue": 143,

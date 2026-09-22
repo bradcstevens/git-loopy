@@ -544,13 +544,7 @@ fn draw_header(
             format!("context {}", context_fill(&header.context_fill, glyphs)),
         ),
         (1, header.status.clone()),
-        (
-            3,
-            match header.strikes.limit {
-                Some(limit) => format!("strikes {}/{limit}", header.strikes.current),
-                None => format!("strikes {}", header.strikes.current),
-            },
-        ),
+        (3, strikes_segment(header, glyphs)),
     ];
     segments.extend(routing_segment(header).map(|note| (5, note)));
     segments.extend(rate_card_segment(header).map(|note| (6, note)));
@@ -619,6 +613,24 @@ fn status_column_width(cells: impl Iterator<Item = String>, available: u16) -> u
         .unwrap_or(12)
         .max(12)
         .min(available)
+}
+
+fn strikes_segment(header: &Header, glyphs: &Glyphs) -> String {
+    let mut text = match header.strikes.limit {
+        Some(limit) => format!("strikes {}/{limit}", header.strikes.current),
+        None => format!("strikes {}", header.strikes.current),
+    };
+    if !header.strikes.abandoned.is_empty() {
+        let names = header
+            .strikes
+            .abandoned
+            .iter()
+            .map(issue_label)
+            .collect::<Vec<_>>()
+            .join(", ");
+        text.push_str(&format!(" {}{names}", glyphs.attribution));
+    }
+    text
 }
 
 fn status_cell(

@@ -160,10 +160,14 @@ impl Declaration {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Strikes {
     pub current: i64,
     pub limit: Option<i64>,
+    /// Issues this Run gave up on. Omitted when none were named, so a count
+    /// without names stays the object it always was.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub abandoned: Vec<IssueRef>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -521,6 +525,7 @@ fn header(state: &DashboardState, context: &ViewContext) -> Header {
         strikes: Strikes {
             current: state.strikes,
             limit: state.max_strikes,
+            abandoned: state.abandoned.clone(),
         },
         active_seconds: active.as_ref().map(|issue| {
             state

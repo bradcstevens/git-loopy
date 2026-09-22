@@ -266,6 +266,40 @@ fn the_breakdown_retains_each_attempts_ending_in_its_status_cell() {
 }
 
 #[test]
+fn the_breakdown_accounts_for_every_attempt_without_inventing_an_ending() {
+    for ascii in [false, true] {
+        let mut frame = drill_in_frame("the-drill-in-accounts-for-every-attempt", "51");
+        frame.capabilities = TerminalCapabilities {
+            unicode: !ascii,
+            ..frame.capabilities
+        };
+        let lines = render_lines(&frame, 220, 40);
+        let breakdown = band(&lines, "Iteration breakdown");
+        let separator = if ascii { "-" } else { "·" };
+        assert!(
+            breakdown[1].contains(&format!("advanced {separator} 1 commit")),
+            "{}",
+            lines.join("\n")
+        );
+        assert!(
+            !breakdown[1].contains("left nothing"),
+            "an advance reaches no ending: {}",
+            lines.join("\n")
+        );
+        assert!(
+            breakdown[2].contains(&format!("no-progress {separator} left nothing")),
+            "{}",
+            lines.join("\n")
+        );
+        assert!(
+            breakdown[3].contains("no-progress") && !breakdown[3].contains("left nothing"),
+            "an omitted ending is not a defaulted one: {}",
+            lines.join("\n")
+        );
+    }
+}
+
+#[test]
 fn the_breakdown_separates_cache_reads_from_cache_writes() {
     let frame = drill_in_frame("parallel-lanes-and-non-closure-outcomes", "310");
     let lines = render_lines(&frame, 220, 40);

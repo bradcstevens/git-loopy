@@ -413,6 +413,8 @@ pub struct DashboardState {
     pub(crate) status: String,
     pub(crate) strikes: i64,
     pub(crate) max_strikes: Option<i64>,
+    /// Issues this Run gave up on, oldest first and once each.
+    pub(crate) abandoned: Vec<IssueRef>,
     pub(crate) started_at: Option<Timestamp>,
     pub(crate) ended_at: Option<Timestamp>,
     /// The Run's start on the monotonic axis, paired with [`Self::started_at`].
@@ -476,6 +478,7 @@ impl DashboardState {
             status: RUN_STARTING.to_string(),
             strikes: 0,
             max_strikes: Some(0),
+            abandoned: Vec::new(),
             started_at: None,
             ended_at: None,
             started_monotonic: None,
@@ -694,6 +697,7 @@ impl DashboardState {
                 if let (Some(_), Some(limit)) = (self.max_strikes, strike.max_strikes) {
                     self.max_strikes = Some(limit);
                 }
+                self.record_abandoned(strike.issue.as_ref());
             }
             EventPayload::IterationEnd(rollup) => {
                 self.finalize_iteration(now_monotonic);
@@ -1007,6 +1011,11 @@ impl DashboardState {
             entry.active_since = since;
         }
         entry.status = STATUS_ACTIVE.to_string();
+        // A new attempt has not ended. The prior attempt stays in the
+        // breakdown; the Queue must not keep its ending or commits as if this
+        // attempt had already finished.
+        entry.ending = None;
+        entry.commits = None;
         for line in pending {
             push_bounded(&mut entry.log, line);
         }
@@ -1059,6 +1068,20 @@ impl DashboardState {
         self.pending_usage_observed = true;
         self.pending_credits.add(usage.credits);
         self.pending_premium_requests.add(usage.premium_requests);
+    }
+
+    fn record_abandoned(&mut self, issue: Option<&IssueRef>) {
+        let Some(issue) = issue.cloned() else {
+            return;
+        };
+        if let IssueRef::Path(path) = &issue {
+            if path.trim().is_empty() {
+                return;
+            }
+        }
+        if !self.abandoned.contains(&issue) {
+            self.abandoned.push(issue);
+        }
     }
 
     fn finalize_iteration(&mut self, now_monotonic: Option<f64>) {

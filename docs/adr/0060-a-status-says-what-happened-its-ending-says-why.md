@@ -6,9 +6,9 @@ Five different endings — a session that ran and left nothing, a timeout, a cra
 declaring no work remains, and a content-filtered turn — all reach an operator as the single
 **Status** `no-progress`. The **Session outcome** vocabulary already names all five precisely, but
 the endings feed the **Attempt lifecycle** and are then discarded: no Event carries them, so no
-**Dashboard** in the **Runner family** can tell them apart. `wrapper.strike` carries no issue
-reference either, which is why [ADR-0041](0041-the-strike-counts-issues-given-up-on.md) closed
-observing that the Strike count is still "a number without the names behind it".
+**Dashboard** in the **Runner family** can tell them apart. `wrapper.strike` likewise carried no
+issue a Dashboard rendered, which is why [ADR-0041](0041-the-strike-counts-issues-given-up-on.md)
+closed observing that the Strike count is still "a number without the names behind it".
 
 ## The status keeps its vocabulary; the ending travels beside it
 
@@ -30,7 +30,12 @@ The **Queue** carries the ending inline in the Status cell rather than in a colu
 because a new column would be the first thing a narrow terminal surrenders — which is precisely how
 the **Routed pair** became invisible. The per-issue drill-in carries the full account: each attempt,
 the pair it ran on, how it ended, and what it left behind. A Run can finally name the issues it
-abandoned instead of reporting a bare count.
+abandoned instead of reporting a bare count. That account is reconstructed from the replay log.
+An omitted ending is not rewritten as `no_progress`, and an open attempt is not a finished row.
+`wrapper.strike` may name the issue that charge abandoned; the header lists those names beside
+the count, oldest first and once each. A strike that names none still counts, and the active
+issue is not a substitute. Shell and PowerShell still omit the name — their Strike is per
+Iteration, not per issue.
 
 ## Every member emits the endings
 
