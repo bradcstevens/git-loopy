@@ -284,8 +284,89 @@ class RoutePublicationStore:
             and (
                 entry.get("comment") != "published"
                 or entry.get("label_delivery") != "published"
+                or (
+                    entry.get("capacity_delivery") in {"pending", "failed"}
+                    and entry.get("capacity_terminal") is not True
+                )
             )
         )
+
+    def note_context_capacity(
+        self,
+        issue: int,
+        *,
+        model: str | None,
+        effort: str | None,
+        context_tier: str,
+        context_capacity: int,
+    ) -> _RouteAssignment | None:
+        """Record verified capacity on the current assignment, or refuse it.
+
+        ``None`` means this issue has no assignment. A triple that does not
+        match the current assignment is not recorded: an older observation
+        must not become the newer label. Capacity is not a new route, so
+        identity, comments, and delivery attempts stay as they were.
+        """
+        state = self._read()
+        entry = state["assignments"].get(str(issue))
+        if not isinstance(entry, dict):
+            return None
+        current = _assignment_from_record(entry)
+        if (
+            current.model != model
+            or current.effort != effort
+            or current.context_tier != context_tier
+        ):
+            return None
+        if current.context_capacity == context_capacity:
+            return current
+        updated = _RouteAssignment(
+            issue=current.issue,
+            model=current.model,
+            effort=current.effort,
+            context_tier=current.context_tier,
+            source=current.source,
+            effort_configurable=current.effort_configurable,
+            context_capacity=context_capacity,
+        )
+        entry.update(updated.as_dict())
+        self._write(state)
+        return updated
+
+    def record_capacity_delivery(
+        self,
+        issue: int,
+        identity: str,
+        *,
+        status: str,
+        last_error: str | None,
+        failed: bool,
+        max_attempts: int,
+    ) -> tuple[dict[str, object] | None, bool]:
+        """Record a capacity-label attempt without touching route delivery.
+
+        A failed window update must not consume the routing comment's retry
+        bound, and a published route must not be replayed to repair it.
+        """
+        state = self._read()
+        entry = state["assignments"].get(str(issue))
+        if not isinstance(entry, dict) or entry.get("identity") != identity:
+            return None, False
+        terminal = False
+        if failed:
+            attempts = entry.get("capacity_attempts", 0)
+            if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
+                raise ValueError("invalid Route capacity attempt count")
+            attempts += 1
+            terminal = attempts >= max_attempts
+            entry["capacity_attempts"] = attempts
+            entry["capacity_terminal"] = terminal
+        else:
+            entry["capacity_terminal"] = False
+        entry["capacity_delivery"] = status
+        entry["last_error"] = last_error
+        self._write(state)
+        return entry, terminal
 
     def update(
         self,
@@ -401,14 +482,136 @@ class RoutePublisher:
             entry = self._store.record(assignment)
             return self._deliver(assignment, entry)
 
+    def refresh_context_capacity(
+        self,
+        *,
+        issue: int,
+        model: str | None,
+        effort: str | None,
+        context_tier: str,
+        context_capacity: int,
+    ) -> RouteDeliveryResult:
+        """Update ``model_context`` from a harness window, without rerouting.
+
+        The capacity belongs to the assignment named by ``model``, ``effort``,
+        and ``context_tier``. It is not looked up from a roster. A mismatch
+        with the current assignment writes nothing. The routing comment is
+        not repeated.
+        """
+        if (
+            isinstance(context_capacity, bool)
+            or not isinstance(context_capacity, int)
+            or context_capacity < 1
+        ):
+            raise ValueError("verified context capacity must be a positive integer")
+        with self._store.locked():
+            current = self._store.trusted(issue)
+            if current is None or (
+                current.model != model
+                or current.effort != effort
+                or current.context_tier != context_tier
+            ):
+                observed = current or _RouteAssignment(
+                    issue=issue,
+                    model=model,
+                    effort=effort,
+                    context_tier=context_tier,
+                    source="unselected",
+                )
+                return _delivery_result(
+                    observed, RouteDeliveryStatus.STALE, detail="stale capacity observation"
+                )
+            assignment = self._store.note_context_capacity(
+                issue,
+                model=model,
+                effort=effort,
+                context_tier=context_tier,
+                context_capacity=context_capacity,
+            )
+            if assignment is None:
+                return _delivery_result(
+                    current, RouteDeliveryStatus.STALE, detail="stale capacity observation"
+                )
+            entry = self._store.current(issue)
+            if not isinstance(entry, dict) or entry.get("label_delivery") != "published":
+                return _delivery_result(assignment, RouteDeliveryStatus.PENDING)
+            if entry.get("capacity_terminal") is True:
+                return _delivery_result(
+                    assignment,
+                    RouteDeliveryStatus.FAILED,
+                    detail=str(entry.get("last_error")),
+                )
+            return self._deliver_context_capacity(assignment)
+
     def retry_pending(self) -> tuple[RouteDeliveryResult, ...]:
         """Resume each durable pending delivery without re-deciding any Route."""
         with self._store.locked():
             results: list[RouteDeliveryResult] = []
             for entry in self._store.pending():
                 assignment = _assignment_from_record(entry)
-                results.append(self._deliver(assignment, entry))
+                if (
+                    entry.get("comment") == "published"
+                    and entry.get("label_delivery") == "published"
+                ):
+                    results.append(self._deliver_context_capacity(assignment))
+                else:
+                    results.append(self._deliver(assignment, entry))
             return tuple(results)
+
+    def _deliver_context_capacity(
+        self, assignment: _RouteAssignment
+    ) -> RouteDeliveryResult:
+        """Replace only ``model_context`` and never the routing comment."""
+        self._store.record_capacity_delivery(
+            assignment.issue,
+            assignment.identity,
+            status="pending",
+            last_error=None,
+            failed=False,
+            max_attempts=self._max_attempts,
+        )
+        try:
+            projected = tuple(
+                label
+                for label in assignment.projection.labels
+                if label.startswith("model_context:")
+            )
+            owned = tuple(
+                label
+                for label in self._tracker.issue_labels(assignment.issue)
+                if label.startswith("model_context:")
+            )
+            if owned != projected:
+                for label in projected:
+                    self._tracker.ensure_label(label)
+                self._tracker.replace_route_label(
+                    assignment.issue, remove=owned, add=projected
+                )
+        except RouteDeliveryError as exc:
+            _entry, terminal = self._store.record_capacity_delivery(
+                assignment.issue,
+                assignment.identity,
+                status="failed",
+                last_error=str(exc),
+                failed=True,
+                max_attempts=self._max_attempts,
+            )
+            return _delivery_result(
+                assignment,
+                RouteDeliveryStatus.FAILED if terminal else RouteDeliveryStatus.PARTIAL,
+                detail=str(exc),
+            )
+        updated = self._store.record_capacity_delivery(
+            assignment.issue,
+            assignment.identity,
+            status="published",
+            last_error=None,
+            failed=False,
+            max_attempts=self._max_attempts,
+        )
+        if updated[0] is None:
+            return _delivery_result(assignment, RouteDeliveryStatus.STALE)
+        return _delivery_result(assignment, RouteDeliveryStatus.PUBLISHED)
 
     def _deliver(
         self, assignment: _RouteAssignment, entry: dict[str, object]

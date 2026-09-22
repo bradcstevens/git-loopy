@@ -930,8 +930,8 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
             "is the default and writes nothing. The migration does not prompt, "
             "fetch a model listing, call a Route selector, rewrite historical "
             "comments, or write Config. Shell and PowerShell do not implement "
-            "it. A later capacity-only refresh is a different command and is "
-            "not implemented."
+            "it. A later capacity-only refresh is the work session's verified "
+            "window, not this command."
         ),
     )
     route_labels_sub = route_labels.add_subparsers(

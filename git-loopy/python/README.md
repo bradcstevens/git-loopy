@@ -1670,7 +1670,8 @@ current model listing, and never buys a new selection. A missing dimension is
 named. Historical comments are not rewritten. A pending local delivery or an
 incomplete issue listing refuses before any tracker write. Shell and
 PowerShell do not implement this command. A later capacity-only refresh is
-not this command.
+not this command: the work session's verified window updates `model_context`
+on the current assignment, without a new routing comment or a roster lookup.
 
 These tracker writes are observational. They never become Routing input, never
 change a Task type, and never override Config. A failed comment or label write

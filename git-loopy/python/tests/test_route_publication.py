@@ -335,6 +335,209 @@ def test_compact_route_labels_remain_unambiguous_for_similar_long_values() -> No
     assert len(second) <= 50
 
 
+def test_harness_capacity_updates_the_current_label_without_a_new_comment(
+    tmp_path: Path,
+) -> None:
+    """A later harness window fills model_context and does not reroute.
+
+    ADR-0060: capacity verified by the work harness updates the current
+    assignment's label. It is not a new route, so the routing comment is not
+    repeated and model_id / model_effort stay put. A roster is not consulted.
+    """
+    tracker = _Tracker(labels={42: {"ready-for-agent", "task-type:implementation"}})
+    publisher = RoutePublisher(
+        store=RoutePublicationStore(tmp_path / "routing-delivery.json"),
+        tracker=tracker,
+    )
+    published = publisher.publish(issue=42, resolution=_resolution())
+    assert "model_context_unverified" in published.incomplete
+    comments = len(tracker.comments[42])
+
+    refreshed = publisher.refresh_context_capacity(
+        issue=42,
+        model="gpt-5.6-terra",
+        effort="high",
+        context_tier="default",
+        context_capacity=200_000,
+    )
+
+    assert refreshed.published is True
+    assert refreshed.identity == published.identity
+    assert "model_context:200K" in tracker.labels[42]
+    assert "model_id:gpt-5.6-terra" in tracker.labels[42]
+    assert "model_effort:high" in tracker.labels[42]
+    assert {"ready-for-agent", "task-type:implementation"} <= tracker.labels[42]
+    assert len(tracker.comments[42]) == comments
+    assert "model_context_unverified" not in refreshed.incomplete
+
+
+def test_an_older_harness_window_does_not_overwrite_a_newer_label(
+    tmp_path: Path,
+) -> None:
+    """Capacity belongs to the assignment that is current, not an earlier one."""
+    tracker = _Tracker(labels={42: {"ready-for-agent"}})
+    publisher = RoutePublisher(
+        store=RoutePublicationStore(tmp_path / "routing-delivery.json"),
+        tracker=tracker,
+    )
+    publisher.publish(issue=42, resolution=_resolution())
+    current = publisher.publish(
+        issue=42,
+        resolution=replace(_resolution(), model="claude-opus-5"),
+        context_capacity=128_000,
+    )
+    comments = len(tracker.comments[42])
+    labels = set(tracker.labels[42])
+
+    stale = publisher.refresh_context_capacity(
+        issue=42,
+        model="gpt-5.6-terra",
+        effort="high",
+        context_tier="default",
+        context_capacity=1_000_000,
+    )
+
+    assert stale.status is RouteDeliveryStatus.STALE
+    assert tracker.labels[42] == labels
+    assert "model_context:1M" not in tracker.labels[42]
+    assert "model_context:128K" in tracker.labels[42]
+    assert "model_id:claude-opus-5" in tracker.labels[42]
+    assert len(tracker.comments[42]) == comments
+    assert stale.identity == current.identity
+
+
+def test_the_same_harness_window_does_not_write_the_tracker_again(
+    tmp_path: Path,
+) -> None:
+    """A repeated observation of the current window is not another publication."""
+    tracker = _Tracker(labels={42: {"ready-for-agent"}})
+    publisher = RoutePublisher(
+        store=RoutePublicationStore(tmp_path / "routing-delivery.json"),
+        tracker=tracker,
+    )
+    publisher.publish(issue=42, resolution=_resolution(), context_capacity=200_000)
+    writes = len(tracker.known_labels)
+
+    again = publisher.refresh_context_capacity(
+        issue=42,
+        model="gpt-5.6-terra",
+        effort="high",
+        context_tier="default",
+        context_capacity=200_000,
+    )
+
+    assert again.published is True
+    assert len(tracker.known_labels) == writes
+    assert len(tracker.comments[42]) == 1
+
+
+def test_a_pending_delivery_absorbs_capacity_without_a_tracker_write(
+    tmp_path: Path,
+) -> None:
+    """Capacity learned before the label lands is part of that delivery.
+
+    It must not post a second comment or contact the tracker while the
+    original projection is still pending.
+    """
+    tracker = _Tracker(labels={42: {"ready-for-agent"}}, label_error="HTTP 403")
+    publisher = RoutePublisher(
+        store=RoutePublicationStore(tmp_path / "routing-delivery.json"),
+        tracker=tracker,
+    )
+    pending = publisher.publish(issue=42, resolution=_resolution())
+    assert pending.status is RouteDeliveryStatus.PARTIAL
+
+    refreshed = publisher.refresh_context_capacity(
+        issue=42,
+        model="gpt-5.6-terra",
+        effort="high",
+        context_tier="default",
+        context_capacity=200_000,
+    )
+    assert refreshed.status is RouteDeliveryStatus.PENDING
+    assert tracker.labels[42] == {"ready-for-agent"}
+    assert len(tracker.comments[42]) == 1
+
+    tracker.label_error = None
+    (resumed,) = publisher.retry_pending()
+
+    assert resumed.published is True
+    assert "model_context:200K" in tracker.labels[42]
+    assert len(tracker.comments[42]) == 1
+
+
+def test_a_failed_capacity_label_is_retried_without_a_new_comment(
+    tmp_path: Path,
+) -> None:
+    """A capacity write failure stays visible and does not renew route retries."""
+    tracker = _Tracker(labels={42: {"ready-for-agent"}})
+    publisher = RoutePublisher(
+        store=RoutePublicationStore(tmp_path / "routing-delivery.json"),
+        tracker=tracker,
+        max_attempts=2,
+    )
+    publisher.publish(issue=42, resolution=_resolution(), context_capacity=400_000)
+    tracker.label_error = "HTTP 403"
+
+    failed = publisher.refresh_context_capacity(
+        issue=42,
+        model="gpt-5.6-terra",
+        effort="high",
+        context_tier="default",
+        context_capacity=128_000,
+    )
+    assert failed.status is RouteDeliveryStatus.PARTIAL
+    assert "model_context:400K" in tracker.labels[42]
+    assert len(tracker.comments[42]) == 1
+
+    tracker.label_error = None
+    (resumed,) = publisher.retry_pending()
+
+    assert resumed.published is True
+    assert "model_context:128K" in tracker.labels[42]
+    assert "model_context:400K" not in tracker.labels[42]
+    assert len(tracker.comments[42]) == 1
+    assert "model_id:gpt-5.6-terra" in tracker.labels[42]
+
+
+def test_an_exhausted_capacity_write_does_not_contact_the_tracker_again(
+    tmp_path: Path,
+) -> None:
+    """A failed window update does not acquire a fresh tracker budget."""
+    tracker = _Tracker(labels={42: {"ready-for-agent"}})
+    publisher = RoutePublisher(
+        store=RoutePublicationStore(tmp_path / "routing-delivery.json"),
+        tracker=tracker,
+        max_attempts=1,
+    )
+    publisher.publish(issue=42, resolution=_resolution(), context_capacity=400_000)
+    tracker.label_error = "HTTP 403"
+
+    failed = publisher.refresh_context_capacity(
+        issue=42,
+        model="gpt-5.6-terra",
+        effort="high",
+        context_tier="default",
+        context_capacity=128_000,
+    )
+    after_failure = len(tracker.known_labels)
+    again = publisher.refresh_context_capacity(
+        issue=42,
+        model="gpt-5.6-terra",
+        effort="high",
+        context_tier="default",
+        context_capacity=128_000,
+    )
+
+    assert failed.status is RouteDeliveryStatus.FAILED
+    assert again.status is RouteDeliveryStatus.FAILED
+    assert publisher.retry_pending() == ()
+    assert "model_context:400K" in tracker.labels[42]
+    assert "model_context:128K" not in tracker.labels[42]
+    assert len(tracker.known_labels) == after_failure
+    assert len(tracker.comments[42]) == 1
+
+
 def test_a_delayed_retry_cannot_overwrite_a_newer_final_label(tmp_path: Path) -> None:
     """An obsolete projection is dropped, not delivered late (AC7).
 

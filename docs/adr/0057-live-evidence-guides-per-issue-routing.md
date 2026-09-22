@@ -586,7 +586,10 @@ Subagent/Integration routing remain unclaimed.
 Python publication now spells exact dimensional Route labels (ADR-0060) through
 the existing publisher and real CLI, including verified listing capacity when
 the Pickup already holds it. A legacy combined association on that issue is
-removed. The migration command, unused label-definition deletion, and a later
-capacity-only refresh are not done. `event_schema_version` stays 1.2. Wrapper
-contract 2.9 is unchanged; §14.5 names this obligation. Shell/PowerShell,
-Subagent, and Integration routing remain deferred. This is not final activation.
+removed. `git-loopy route-labels migrate` reconstructs dimensions and deletes
+an unused legacy definition only after issue and pull-request checks. A later
+work-session window updates only the current assignment's `model_context`
+label, without a new routing comment or a roster lookup. `event_schema_version`
+stays 1.2. Wrapper contract 2.9 is unchanged; §14.5 names this obligation.
+Shell/PowerShell, Subagent, and Integration routing remain deferred. This is
+not final activation.

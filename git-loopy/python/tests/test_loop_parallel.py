@@ -114,6 +114,7 @@ from copilot.generated.session_events import (
     AssistantUsageData,
     SessionEvent,
     SessionEventType,
+    SessionUsageInfoData,
 )
 
 from git_loopy import gh as gh_module
@@ -1102,6 +1103,50 @@ def test_parallel_single_eligible_issue_starts_lane_immediately(
     events = _logged_events(tmp_path)
     run_end = next(e for e in events if e["type"] == "wrapper.run.end")
     assert run_end["outcome"] == "empty_pool"
+
+
+def test_a_lane_session_window_updates_that_issues_model_context(
+    tmp_path, monkeypatch
+) -> None:
+    """A Lane's harness window fills that issue's label and does not reroute."""
+    fake_git = _wire_repo(tmp_path)
+    monkeypatch.setattr(loop_module, "_make_git_client", lambda: fake_git)
+    fake_gh = FakeGitHubClient(
+        repo=gh_module.Repo(owner="x", name="y", default_branch="main"),
+        issues=[_make_issue(42, labels=["ready-for-agent", "parallel-safe"])],
+    )
+    monkeypatch.setattr(loop_module, "_make_github_client", lambda: fake_gh)
+    window = SessionEvent(
+        data=SessionUsageInfoData(
+            current_tokens=9_000,
+            messages_length=2,
+            token_limit=256_000,
+        ),
+        id=uuid4(),
+        timestamp=datetime(2026, 5, 16, tzinfo=timezone.utc),
+        type=SessionEventType.SESSION_USAGE_INFO,
+    )
+    fake_client = _ParallelFakeClient(
+        fake_git=fake_git,
+        scripted_events=[window],
+        serial_closes=True,
+    )
+    monkeypatch.setattr(loop_module, "_make_client", lambda: fake_client)
+    monkeypatch.setattr(loop_module, "_make_gate_runner", lambda: FakeGateRunner())
+
+    assert asyncio.run(loop_module.run(RunConfig(
+        model="claude-opus-4.8-max",
+        issue_source="github",
+        max_iterations=0,
+        max_nmt_strikes=3,
+        verbosity=0,
+        render_reasoning=False,
+    ))) == 0
+
+    assert any(call["working_directory"] is not None for call in fake_client.create_calls)
+    assert "model_context:256K" in fake_gh.issue_labels(42)
+    assert "model_context:9K" not in fake_gh.issue_labels(42)
+    assert len(fake_gh.route_comment_calls) == 1
 
 
 def test_parallel_lane_refills_without_waiting_for_sibling(

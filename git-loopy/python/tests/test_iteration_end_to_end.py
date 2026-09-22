@@ -8683,6 +8683,55 @@ def test_a_pickup_projects_its_final_route_onto_the_issue(
     assert [event["status"] for event in _delivery_events(tmp_path)] == ["published"]
 
 
+def test_the_work_session_window_updates_model_context_without_rerouting(
+    tmp_path, monkeypatch
+) -> None:
+    """The authenticated session's token limit fills the current label.
+
+    Pickup may not know the window. The harness reports it later. That
+    observation updates model_context and does not post another routing
+    comment, and usage or the compaction ceiling is not the capacity.
+    """
+    fake_client, _fake_git = _wire_single_issue_github(tmp_path, monkeypatch)
+    fake_client._scripted_events = [
+        _sdk_event(
+            SessionEventType.SESSION_USAGE_INFO,
+            SessionUsageInfoData(
+                current_tokens=12_000,
+                messages_length=4,
+                token_limit=128_000,
+            ),
+        ),
+        _sdk_event(
+            SessionEventType.SESSION_USAGE_INFO,
+            SessionUsageInfoData(
+                current_tokens=20_000,
+                messages_length=5,
+                token_limit=None,  # type: ignore[arg-type]
+            ),
+        ),
+    ]
+    fake_gh = loop_module._make_github_client()
+
+    assert asyncio.run(
+        loop_module.run(RunConfig(issue_source="github", max_iterations=1))
+    ) == 0
+
+    assert len(fake_client.created) == 1
+    assert "model_context:128K" in fake_gh.issue_labels(42)
+    assert "model_context:12K" not in fake_gh.issue_labels(42)
+    assert "model_context:96K" not in fake_gh.issue_labels(42)
+    assert len(fake_gh.route_comment_calls) == 1
+    _number, body = fake_gh.route_comment_calls[0]
+    assert "Context capacity" not in body
+    refreshed = [
+        event for event in _delivery_events(tmp_path)
+        if "model_context:128K" in event.get("labels", [])
+    ]
+    assert refreshed
+    assert refreshed[-1]["status"] == "published"
+
+
 def test_an_unchanged_route_is_not_published_a_second_time(
     tmp_path, monkeypatch
 ) -> None:

@@ -911,6 +911,68 @@ class _ChainedObserver:
             observer.observe(event)
 
 
+class _HarnessCapacityObserver:
+    """Apply one work session's verified window to that assignment's label.
+
+    The number is the harness ``token_limit`` for the session that is running
+    this model and tier. Usage, the compaction ceiling, and a later roster are
+    not capacity. A tracker failure must not escape into session dispatch.
+    """
+
+    def __init__(
+        self,
+        publisher: RoutePublisher,
+        *,
+        issue: int,
+        model: str | None,
+        effort: str | None,
+        context_tier: str,
+        on_result: Callable[[RouteDeliveryResult], None],
+        warn: Callable[[str], None],
+    ) -> None:
+        self._publisher = publisher
+        self._issue = issue
+        self._model = model
+        self._effort = effort
+        self._context_tier = context_tier
+        self._on_result = on_result
+        self._warn = warn
+        self._applied: int | None = None
+
+    def observe(self, event: Mapping[str, Any]) -> None:
+        if event.get("type") != events_module.USAGE_CONTEXT_WINDOW:
+            return
+        limit = event.get("token_limit")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            return
+        if limit == self._applied:
+            return
+        try:
+            result = self._publisher.refresh_context_capacity(
+                issue=self._issue,
+                model=self._model,
+                effort=self._effort,
+                context_tier=self._context_tier,
+                context_capacity=limit,
+            )
+        except Exception as exc:
+            self._warn(
+                f"route capacity refresh for issue #{self._issue} failed: {exc}"
+            )
+            return
+        if result.status is RouteDeliveryStatus.STALE:
+            return
+        if result.published:
+            self._applied = limit
+        try:
+            self._on_result(result)
+        except Exception as exc:
+            self._warn(
+                f"route capacity refresh for issue #{self._issue} "
+                f"could not be recorded: {exc}"
+            )
+
+
 #: ``wrapper.run.end`` outcome for a Run that left through a
 #: :class:`BaseException` — an operator's ``Ctrl+C``, the ``SIGHUP`` of a closed
 #: terminal, or an :class:`asyncio.CancelledError` from the Dashboard driver.
@@ -1619,6 +1681,50 @@ class _Loop:
             **payload,
         )
 
+    def _harness_capacity_observer(
+        self,
+        *,
+        issue: int | str,
+        model: str | None,
+        effort: str | None,
+        context_tier: str | None,
+        iter_num: int | None,
+    ) -> _HarnessCapacityObserver | None:
+        """Watch the session that is running this assignment, or nothing.
+
+        Absence is not a roster lookup. A non-issue ref has no tracker label.
+        """
+        if (
+            self._route_publisher is None
+            or not isinstance(issue, int)
+            or context_tier is None
+        ):
+            return None
+
+        def on_result(result: RouteDeliveryResult) -> None:
+            self._emit(
+                events_module.WRAPPER_ROUTING_DELIVERY,
+                iter_num=iter_num,
+                **_routing_delivery_payload(result),
+            )
+            if result.status is not RouteDeliveryStatus.PUBLISHED:
+                self._diag.warning(
+                    "route capacity refresh for issue #%s is %s: %s",
+                    issue,
+                    result.status.value,
+                    result.detail or "delivery remains pending",
+                )
+
+        return _HarnessCapacityObserver(
+            self._route_publisher,
+            issue=issue,
+            model=model,
+            effort=effort,
+            context_tier=context_tier,
+            on_result=on_result,
+            warn=lambda message: self._diag.warning("%s", message),
+        )
+
     def _retry_route_delivery(self) -> None:
         """Retry only durable pending Route projections; never re-decide a Route."""
         route_publisher = getattr(self, "_route_publisher", None)
@@ -2029,7 +2135,21 @@ class _Loop:
                         issue_binding=issue_binding,
                         skill_exposure=self._skill_exposure,
                         event_observer=_ChainedObserver(
-                            observers=(self._session_observer, session_watch)
+                            observers=tuple(
+                                observer
+                                for observer in (
+                                    self._session_observer,
+                                    session_watch,
+                                    self._harness_capacity_observer(
+                                        issue=active.ref,
+                                        model=model,
+                                        effort=reasoning_effort,
+                                        context_tier=context_tier,
+                                        iter_num=iter_num,
+                                    ),
+                                )
+                                if observer is not None
+                            )
                         ),
                     ) as sdk_session:
                         try:
@@ -6098,7 +6218,21 @@ class _ParallelLoop:
                 issue_ref=lane_work.item.ref,
                 skill_exposure=self._skill_exposure,
                 event_observer=_ChainedObserver(
-                    observers=(self._serial._session_observer, watch)
+                    observers=tuple(
+                        observer
+                        for observer in (
+                            self._serial._session_observer,
+                            watch,
+                            self._serial._harness_capacity_observer(
+                                issue=lane_work.item.ref,
+                                model=contribution.model,
+                                effort=contribution.reasoning_effort,
+                                context_tier=contribution.context_tier,
+                                iter_num=scope.iter_num if scope is not None else 0,
+                            ),
+                        )
+                        if observer is not None
+                    )
                 ),
             ) as sdk_session:
                 try:
@@ -7010,6 +7144,7 @@ class _ParallelLoop:
             contribution, lane_work, attempt, conflicted=conflicted
         )
         send_timeout = self._config.send_timeout_seconds
+        scope = self._contribution_iter.get(contribution.contribution_id)
         try:
             async with IterationSession(
                 self._client,
@@ -7024,6 +7159,13 @@ class _ParallelLoop:
                 working_directory=str(stage.git.root),
                 issue_ref=contribution.ref,
                 skill_exposure=self._skill_exposure,
+                event_observer=self._serial._harness_capacity_observer(
+                    issue=contribution.ref,
+                    model=contribution.model,
+                    effort=contribution.reasoning_effort,
+                    context_tier=contribution.context_tier,
+                    iter_num=None if scope is None else scope.iter_num,
+                ),
             ) as sdk_session:
                 try:
                     await self._await_agent(

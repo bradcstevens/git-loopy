@@ -2113,8 +2113,13 @@ pull-request listing both show it unused. A pending local delivery, an
 incomplete issue listing, or an unreadable local store refuses before any
 tracker write. Reporting is the default and writes nothing; `--apply` is the
 write and does not prompt. The command cannot certify that other machines
-have stopped publishing legacy labels. A later capacity-only label refresh
-is not implemented. Shell and PowerShell routing remain deferred. This does
+have stopped publishing legacy labels. A later capacity-only refresh is
+the authenticated work session's `token_limit`, not a roster lookup and not
+a second routing comment. It updates `model_context` on the assignment that
+session is running. An observation for an older model, effort, or tier
+writes nothing. Usage and the compaction ceiling are not capacity. A failed
+capacity write is retried finitely without renewing the routing comment's
+bound. Shell and PowerShell routing remain deferred. This does
 not imply Subagent or Integration routing, and it is not final
 Dynamic-default activation.
 
