@@ -3191,7 +3191,13 @@ def test_routing_precedence_fixture(case: dict[str, Any], monkeypatch) -> None:
         model: frozenset(efforts) for model, efforts in case["roster"].items()
     }
     monkeypatch.setattr(config_module, "MODEL_REASONING_EFFORTS", roster)
-    monkeypatch.setattr(cli_module, "SUPPORTED_MODELS", frozenset(roster))
+    # The case declares the roster it runs against, so the harness-aware
+    # supported set is pinned to it too (ADR-0019 amendment): neither a vendor
+    # catalogue change nor this machine's observed-roster cache may reach a
+    # precedence case.
+    monkeypatch.setattr(
+        cli_module, "supported_models", lambda *_args, **_kwargs: frozenset(roster)
+    )
 
     def _table(entries: Mapping[str, Any]) -> dict[str, Any]:
         return {"routing": dict(entries)} if entries else {}

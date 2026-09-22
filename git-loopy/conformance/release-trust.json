@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "distribution_mode": "source-only",
+  "distribution_mode": "artifact-bearing",
   "distribution_modes": [
     "source-only",
     "artifact-bearing"

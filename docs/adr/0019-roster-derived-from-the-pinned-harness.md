@@ -54,6 +54,56 @@ compatibility entries and saved model choices remain unchanged. Global Skill
 metadata is read through `ServerSkillsApi.discover`, without an agent session.
 The SDK 1.0.14 record above remains historical evidence, not the current pin.
 
+## Amendment: the roster follows the harness you are running
+
+The stamped fixture bounded more than it was meant to. `cli_version` records
+*which harness the effort capability was captured against*, but the keys of that
+same table were also being used as the answer to a different question — "is this
+model real?" — on three advisory surfaces: the routing typo-check, the
+unknown-model pass-through warning, and `git-loopy config routing set`, which
+refused outright. An operator whose Copilot CLI is newer than the stamp is
+offered models the fixture has never heard of, and the kit called every one of
+them a probable typo. Worse, the `config` path made it a hard refusal, so a
+perfectly valid model could not be written to Config at all.
+
+That is a pin the original decision never argued for. ADR-0019 already says the
+**live catalogue defines the supported-model set**; only the offline surfaces
+had no way to reach it.
+
+**Decision.** The capability refresh that already reads the authenticated
+harness — `static_route.refresh_harness_capabilities`, the one read both a Run's
+preflight and `git-loopy doctor` arrive through — now records the model ids it
+observed to `<config-home>/git-loopy/model-roster.json`. The advisory surfaces
+read the built-in roster **unioned** with that observation
+(`git_loopy.roster_cache.supported_models`). A newer CLI therefore stops
+producing false "not in the kit's supported set" warnings, and stops refusing
+valid Config, without a fixture edit and without an SDK pin bump.
+
+Four properties make this safe rather than a second source of truth:
+
+- **Union, never replacement.** The SDK 1.0.14 record above deliberately retains
+  seven account-unlisted compatibility rows so existing saved Config keeps
+  resolving. Replacing the roster with one account's listing would delete exactly
+  those. Union only ever *adds* a model somebody's harness actually offered.
+- **Models, not capability.** Only model *identity* is remembered. No effort set
+  and no context tier is inferred from an observation, so this introduces no
+  unverified capability gate — the hazard the SDK 1.0.14 record named when it
+  left Gemini 3.8 off-roster. An observed model with no measured effort row is
+  reported as exactly that, in different words from the typo case, because a
+  message listing the model it claims is missing is worse than no message.
+- **Advisory only.** `validate_static_route` still refuses an unlisted model from
+  the **fresh** listing read at that moment. An eligibility decision is never
+  made from a remembered answer, which is ADR-0057's requirement unchanged.
+- **Best-effort, and never load-bearing.** An unwritable config home, a malformed
+  document, a future schema, or an empty listing all degrade to the built-in
+  roster. The cache can never fail the capability read that produces it, and an
+  account that lists nothing is not evidence that nothing exists.
+
+The fixture keeps its job and its stamp: it remains the offline fallback, the
+cross-language contract, and the thing CI holds against
+`copilot._cli_version.CLI_VERSION` with no network and no credentials. What it
+stops being is the ceiling on which models an operator is allowed to name.
+
 ## The premise that was wrong
 
 Reasoning-effort capability is not vendor data reaching the kit through two paths. In the

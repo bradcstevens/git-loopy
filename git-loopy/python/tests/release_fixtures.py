@@ -114,8 +114,22 @@ def write_release_metadata(root: Path, version: str) -> None:
     )
 
 
-def trunk_repository(root: Path, version: str, *, agents_md: str = AGENTS_MD) -> Path:
-    """A real scratch clone carrying a complete source distribution and history."""
+def trunk_repository(
+    root: Path,
+    version: str,
+    *,
+    agents_md: str = AGENTS_MD,
+    distribution_mode: str = "source-only",
+) -> Path:
+    """A real scratch clone carrying a complete source distribution and history.
+
+    The scratch repository declares its **own** distribution mode rather than
+    inheriting this repository's. A scenario's promise is part of the scenario:
+    were it copied verbatim, every publication case here would silently change
+    meaning the day git-loopy itself flipped modes, and the case that proves a
+    source-only promise is refused an artifact-bearing input would fail for a
+    reason that has nothing to do with the behaviour it pins.
+    """
     (root / "git-loopy/python").mkdir(parents=True)
     (root / "git-loopy/tui").mkdir(parents=True)
     (root / "git-loopy/conformance").mkdir(parents=True)
@@ -133,9 +147,14 @@ def trunk_repository(root: Path, version: str, *, agents_md: str = AGENTS_MD) ->
     (root / "git-loopy/conformance/event-schema.json").write_text(
         '{"contract_version": "2.8"}\n', encoding="utf-8"
     )
-    shutil.copy2(
-        REPOSITORY_ROOT / "git-loopy/conformance/release-trust.json",
-        root / "git-loopy/conformance/release-trust.json",
+    policy = json.loads(
+        (REPOSITORY_ROOT / "git-loopy/conformance/release-trust.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    policy["distribution_mode"] = distribution_mode
+    (root / "git-loopy/conformance/release-trust.json").write_text(
+        json.dumps(policy, indent=2) + "\n", encoding="utf-8"
     )
     (root / "AGENTS.md").write_text(agents_md, encoding="utf-8")
 

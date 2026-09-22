@@ -27,6 +27,26 @@ RELEASE_FIXTURE: dict[str, Any] = json.loads(
 )
 
 
+def _write_trust_policy(
+    destination: Path, *, distribution_mode: str = "source-only"
+) -> None:
+    """Seed a scratch tree's trust policy with an explicitly declared mode.
+
+    A scratch scenario declares its own promise rather than inheriting this
+    repository's. Copying the live policy verbatim would make every case below
+    change meaning the day git-loopy flips modes, which is exactly how the
+    source-only cases here would start proving nothing.
+    """
+    policy = json.loads(
+        (REPOSITORY_ROOT / "git-loopy/conformance/release-trust.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    policy["distribution_mode"] = distribution_mode
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
+
+
 def _git(root: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args],
@@ -55,10 +75,7 @@ def _write_release_metadata(root: Path, version: str) -> None:
     )
     trust_dir = root / "git-loopy/conformance"
     trust_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(
-        REPOSITORY_ROOT / "git-loopy/conformance/release-trust.json",
-        trust_dir / "release-trust.json",
-    )
+    _write_trust_policy(trust_dir / "release-trust.json")
 
 
 def _tagged_repository(
@@ -172,10 +189,7 @@ def _copy_source_distribution(tmp_path: Path) -> Path:
     root = tmp_path / "source"
     (root / "git-loopy/python").mkdir(parents=True)
     (root / "git-loopy/conformance").mkdir(parents=True)
-    shutil.copy2(
-        REPOSITORY_ROOT / "git-loopy/conformance/release-trust.json",
-        root / "git-loopy/conformance/release-trust.json",
-    )
+    _write_trust_policy(root / "git-loopy/conformance/release-trust.json")
     shutil.copy2(REPOSITORY_ROOT / "VERSION", root / "VERSION")
     shutil.copy2(
         REPOSITORY_ROOT / "git-loopy/python/pyproject.toml",
@@ -332,10 +346,7 @@ def test_a_worktree_policy_cannot_supply_a_promise_missing_from_the_tag(
 ) -> None:
     root = _tagged_source_distribution(tmp_path, committed_policy=False)
     version = RELEASE_FIXTURE["expected_release_version"]
-    shutil.copy2(
-        REPOSITORY_ROOT / "git-loopy/conformance/release-trust.json",
-        root / "git-loopy/conformance/release-trust.json",
-    )
+    _write_trust_policy(root / "git-loopy/conformance/release-trust.json")
     archive = tmp_path / "source.tar"
 
     with pytest.raises(SourceReleaseError, match="trust policy must be committed"):

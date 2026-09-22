@@ -31,7 +31,7 @@ Releases operate under an explicit **distribution mode**,
 with the repository policy in [`release-trust.json`](../../git-loopy/conformance/release-trust.json)
 as the single authority:
 
-- **`source-only`** (default): The publication promise is complete with GitHub
+- **`source-only`**: The publication promise is complete with GitHub
   source archives and committed release notes. The release flow does not launch
   helper-build, signing, attachment, or channel jobs. It requires no signing secrets,
   binary signing identities, or channel credentials to complete.
@@ -41,6 +41,10 @@ as the single authority:
   update package channels (Homebrew, winget, Scoop); prereleases update none.
   It dispatches all helper builds; artifact trust gates refuse publication
   rather than silently downgrading to source-only.
+
+This repository currently declares **`artifact-bearing`**. Releases from
+`v0.11.0-dev.7` onward publish the helper baseline described below; every earlier
+tag was source-only and is left exactly as published.
 
 The contract is strictly enforced:
 - **Single authority**: Neither secret presence nor runner presence alters the contract.
@@ -57,6 +61,36 @@ a promise the tag never made. A source-only Rehearsal forwards its explicit mode
 to that verifier and refuses a committed artifact-bearing policy rather than
 returning a source-only Publication input for it. Unreadable policies, including
 invalid UTF-8, are publication refusals, not implicit defaults.
+
+### The downloadable helper baseline
+
+`v0.11.0-dev.7` is the first artifact-bearing Release, and therefore the first
+downloadable helper baseline. It publishes `git-loopy-tui` for all seven declared
+targets, each with its checksum and trust receipt:
+
+| Platform | Triple |
+| --- | --- |
+| macOS arm64 | `aarch64-apple-darwin` |
+| macOS x64 | `x86_64-apple-darwin` |
+| Windows x64 | `x86_64-pc-windows-msvc` |
+| Linux arm64 (glibc) | `aarch64-unknown-linux-gnu` |
+| Linux x64 (glibc) | `x86_64-unknown-linux-gnu` |
+| Linux arm64 (musl) | `aarch64-unknown-linux-musl` |
+| Linux x64 (musl) | `x86_64-unknown-linux-musl` |
+
+These are **prerelease**-channel artifacts: checksums and trust receipts are
+required and verified, while Developer ID signing, macOS notarization, Windows
+publisher evidence, and build attestation remain stable-only gates that this
+channel does not claim. A supported installation consumes the baseline through
+`git-loopy update` — including the `update` chained by `git-loopy upgrade` — with
+no Rust toolchain and no source checkout.
+
+**Known gap.** The Windows archive is built, verified, and published like every
+other target, but the helper does not yet implement the Runner's
+attachment/control protocol on Windows, so a Windows operator cannot yet attach
+the Dashboard to a Run. That is the outstanding obligation of
+[#459](https://github.com/bradcstevens/git-loopy/issues/459); no declared target
+was dropped to conceal it.
 
 ### Consuming an older helper from a source-only Runner Release
 
@@ -82,8 +116,10 @@ an incomplete index at that limit. Their `--no-tui` / `-NoTui` options skip that
 a Dashboard. The built-in **line-printer** remains a diagnostic/plain-output path,
 not a replacement for the Python Runner's required terminal interface (ADR-0053).
 
-Until a compatible helper is actually published, build from the matching source
-checkout rather than treating a source-only Release as a binary download:
+A Runner Release older than the baseline still has no exactly matching published
+helper. Such a Runner resolves the newest eligible *older* helper as described
+above; where none exists, build from the matching source checkout rather than
+treating a source-only Release as a binary download:
 
 ```sh
 cargo build --release --manifest-path git-loopy/tui/Cargo.toml

@@ -102,7 +102,6 @@ from git_loopy.config import (
     TASK_TYPE_KEYS,
     REASONING_EFFORT_ORDER,
     REASONING_EFFORTS,
-    SUPPORTED_MODELS,
     EffortGateWarning,
     RunConfig,
     SkillPolicyInput,
@@ -113,6 +112,7 @@ from git_loopy.config import (
     validate_task_type_key,
 )
 from git_loopy.model_listing import LiveModelListing
+from git_loopy.roster_cache import supported_models
 from git_loopy.routing_scope import routing_in_force
 from git_loopy.rate_card import resolve_rate_card
 from git_loopy.release_version import ReleaseVersionError, read_runtime_release_version
@@ -2292,17 +2292,32 @@ def _resolve_routing(
     )
     merged = {key: pair for key, (_tier, pair) in walked.items()}
     provenance = {key: tier for key, (tier, _pair) in walked.items()}
+    _warn_off_roster_routing_models(merged, warn)
+    return merged, provenance
+
+
+def _warn_off_roster_routing_models(
+    merged: dict[str, tuple[str, str | None]],
+    warn: Callable[[str], None],
+) -> None:
+    """Typo-catch authored routing models against the harness-aware roster.
+
+    The supported set is the built-in roster plus whatever this operator's own
+    harness was last observed to offer (ADR-0019), so a model that only a newer
+    Copilot CLI serves is no longer reported as a probable typo. This warns and
+    never refuses: the Copilot CLI remains the final authority.
+    """
+    known_models = supported_models()
     off_roster = sorted(
-        {model for model, _effort in merged.values() if model not in SUPPORTED_MODELS}
+        {model for model, _effort in merged.values() if model not in known_models}
     )
     if off_roster:
         warn(
             f"[routing] references model(s) not in the kit's supported set "
-            f"({sorted(SUPPORTED_MODELS)}): {off_roster}; leaving them as authored "
+            f"({sorted(known_models)}): {off_roster}; leaving them as authored "
             f"(the Copilot CLI is the final authority on model validity) — check "
             f"for a typo."
         )
-    return merged, provenance
 
 
 def _warn(message: str) -> None:
@@ -2337,6 +2352,31 @@ def _split_model_suffix(model: str | None) -> tuple[str | None, str | None]:
         if model.endswith(suffix) and len(model) > len(suffix):
             return model[: -len(suffix)], effort
     return model, None
+
+
+def _warn_unknown_model(base_model: str, warn: Callable[[str], None]) -> None:
+    """Report a model with no measured effort capability, accurately.
+
+    Two different facts reach this point. A model this operator's harness was
+    observed to offer (ADR-0019) is *known* — the kit simply holds no measured
+    reasoning-effort capability for it, because capability is captured per CLI
+    version and this one post-dates the stamp. A model nobody has seen at all is
+    the typo case. Naming them the same way would print a set that contains the
+    very model it claims is missing from it.
+    """
+    known = supported_models()
+    if base_model in known:
+        warn(
+            f"model {base_model!r} is offered by your Copilot harness but the "
+            f"kit has recorded no reasoning-effort capability for it; passing "
+            f"it through to the Copilot CLI unchanged."
+        )
+    else:
+        warn(
+            f"model {base_model!r} is not in the kit's supported model set "
+            f"({sorted(known)}); passing it through to the "
+            f"Copilot CLI unchanged."
+        )
 
 
 def _derive_reasoning_effort_from_model(model: str | None) -> str | None:
@@ -2430,11 +2470,7 @@ def _resolve_model_and_effort(
     gated = gate_reasoning_effort(base_model, effort)
     warning = gated.warning
     if warning is EffortGateWarning.UNKNOWN_MODEL:
-        warn(
-            f"model {base_model!r} is not in the kit's supported model set "
-            f"({sorted(SUPPORTED_MODELS)}); passing it through to the "
-            f"Copilot CLI unchanged."
-        )
+        _warn_unknown_model(base_model, warn)
     elif warning is EffortGateWarning.INCAPABLE_MODEL:
         # Only nag when the operator *explicitly* asked for an effort; a
         # defaulted effort drops to None silently for a reasoning-incapable model.
