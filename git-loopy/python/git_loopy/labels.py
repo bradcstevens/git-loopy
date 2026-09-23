@@ -72,7 +72,11 @@ from typing import Protocol, Sequence, runtime_checkable
 from git_loopy.config import TASK_TYPE_KEYS, TASK_TYPE_LABEL_PREFIX
 from git_loopy.issue_order import LABEL_PRIORITY
 from git_loopy.release_version import BUMP_CLASS_KEYS, BUMP_CLASS_LABEL_PREFIX
-from git_loopy.sources import LABEL_PARALLEL_SAFE, LABEL_READY_FOR_AGENT
+from git_loopy.sources import (
+    LABEL_PARALLEL_SAFE,
+    LABEL_READY_FOR_AGENT,
+    LABEL_WAYFINDER_MAP,
+)
 
 __all__ = [
     "LabelSpec",
@@ -257,21 +261,24 @@ WAYFINDER_LABEL_COLOR: str = "006b75"
 #: The five labels ``/wayfinder`` writes: one for the **map** issue and one per
 #: **ticket type**.
 #:
-#: Unlike every other closed taxonomy here these keys are declared rather than
-#: derived, because git-loopy has no module that reads them — the Skill does,
-#: and it is authored upstream (ADR-0034). Declaring them is therefore not a
-#: mirror of an in-repo constant that could drift from this one; it is the only
-#: in-repo statement of the strings, and the Skill's ``wayfinder:<type>``
-#: contract is what closes the set at ``research``/``prototype``/``grilling``/
-#: ``task``.
+#: The map key is derived, like the triage roles above: Pickup refuses a map as
+#: a planning document (#635), so :data:`git_loopy.sources.LABEL_WAYFINDER_MAP`
+#: is the one in-repo reader's statement of it, and a second literal here could
+#: be reconciled to an upstream rename while the Pool kept refusing the old name.
+#: The four ticket-type keys are declared rather than derived, because git-loopy
+#: has no module that reads them — the Skill does, and it is authored upstream
+#: (ADR-0034). Declaring them is therefore not a mirror of an in-repo constant
+#: that could drift from this one; it is the only in-repo statement of the
+#: strings, and the Skill's ``wayfinder:<type>`` contract is what closes the set
+#: at ``research``/``prototype``/``grilling``/``task``.
 #:
 #: Each description names whether the type is **HITL** or **AFK** and which
 #: Skill resolves it, because that is what a human reading the tracker's label
 #: list needs in order to pick a ticket off the frontier.
 WAYFINDER_LABELS: tuple[LabelSpec, ...] = (
     LabelSpec(
-        role=f"{WAYFINDER_LABEL_PREFIX}map",
-        name=f"{WAYFINDER_LABEL_PREFIX}map",
+        role=LABEL_WAYFINDER_MAP,
+        name=LABEL_WAYFINDER_MAP,
         color=WAYFINDER_LABEL_COLOR,
         description="Wayfinder map: index of an effort's decision tickets",
     ),

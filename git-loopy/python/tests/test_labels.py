@@ -27,7 +27,11 @@ from git_loopy.skill_source import (
     DEFAULT_CHECKOUT,
     read_skill_source_pin,
 )
-from git_loopy.sources import LABEL_PARALLEL_SAFE, LABEL_READY_FOR_AGENT
+from git_loopy.sources import (
+    LABEL_PARALLEL_SAFE,
+    LABEL_READY_FOR_AGENT,
+    is_planning_document,
+)
 
 
 def _write_mapping(repo_root: Path, rows: str) -> None:
@@ -1372,17 +1376,34 @@ def _assert_wayfinder_labels_match_skill(skill_text: str) -> None:
     )
 
 
+def _assert_the_pool_refuses_the_skill_map_label(skill_text: str) -> None:
+    """Pin the label Pickup refuses as a map to the map label the Skill writes."""
+    written = _wayfinder_labels_the_skill_writes(skill_text)[0]
+    assert is_planning_document("An effort's map", labels=(written,)), (
+        f"the `/wayfinder` Skill labels its map `{written}`, but the Pool does "
+        "not refuse that label as a planning document, so a map carrying "
+        "`ready-for-agent` would be handed to a Runner as executable work "
+        "(#635). The Skill is the authority, so the Skill is the side that moved: "
+        "reconcile `sources.LABEL_WAYFINDER_MAP`, which `WAYFINDER_LABELS` "
+        "derives its map entry from."
+    )
+
+
 def test_the_declared_wayfinder_taxonomy_matches_the_skill_that_writes_it() -> None:
-    """``WAYFINDER_LABELS`` is declared, so only this test keeps it honest.
+    """``WAYFINDER_LABELS`` follows the Skill, and only this test keeps it honest.
 
     Every other closed taxonomy here is pinned to its authority by construction
-    (``TASK_TYPE_KEYS``, ``BUMP_CLASS_KEYS``). This one cannot be: nothing in
-    git-loopy *reads* a ``wayfinder:`` label — the Skill does, upstream — so
-    deriving it would mean inventing a reader, which is the mirror ADR-0019
-    forbids. Without this test an upstream rename drifts in silence: `init`
-    keeps provisioning the old five, sessions apply a label it never created,
-    and `git-loopy labels` still reports `matched` because it compares the
-    tracker against the stale declaration rather than against the Skill.
+    (``TASK_TYPE_KEYS``, ``BUMP_CLASS_KEYS``). This one cannot be: the four
+    ticket types have no reader in git-loopy — the Skill reads them, upstream —
+    so deriving them would mean inventing a reader, which is the mirror
+    ADR-0019 forbids. The map key does have a reader, the Pool's
+    planning-document exclusion (#635); its entry derives from that reader's
+    constant, and the Pool itself is pinned to the Skill by
+    ``test_the_pool_refuses_the_map_label_the_skill_writes``. Without this test
+    an upstream rename drifts in silence: `init` keeps provisioning the old five,
+    sessions apply a label it never created, and `git-loopy labels` still
+    reports `matched` because it compares the tracker against the stale
+    declaration rather than against the Skill.
     """
     skill = _pinned_skill_file("wayfinder", "SKILL.md")
 
@@ -1438,3 +1459,32 @@ def test_a_skill_rewrite_that_loses_the_wording_fails_rather_than_matching() -> 
         _assert_wayfinder_labels_match_skill("Each ticket carries a label.\n")
 
     assert "the wording this parse anchors on is gone" in str(caught.value)
+
+
+def test_the_pool_refuses_the_map_label_the_skill_writes() -> None:
+    """The Pool's map exclusion follows the Skill, not a second copy of it.
+
+    The map key is the one ``wayfinder:`` label git-loopy *reads*: Pickup
+    refuses a map as a planning document (#635). Pinning only the provisioned
+    taxonomy to the Skill would let an upstream rename be reconciled there while
+    the Pool kept refusing the old name, and renamed maps would re-enter the
+    Pool as executable work (#630).
+    """
+    skill = _pinned_skill_file("wayfinder", "SKILL.md")
+
+    _assert_the_pool_refuses_the_skill_map_label(skill.read_text(encoding="utf-8"))
+
+
+def test_a_renamed_skill_map_label_fails_the_pool_check() -> None:
+    """A renamed map is caught at the Pool, where the silent failure would land."""
+    renamed = _synthetic_skill(_SKILL_TICKET_TYPE_SENTENCE).replace(
+        "`wayfinder:map`", "`wayfinder:atlas`"
+    )
+
+    with pytest.raises(AssertionError) as caught:
+        _assert_the_pool_refuses_the_skill_map_label(renamed)
+
+    message = str(caught.value)
+    assert "wayfinder:atlas" in message
+    assert "sources.LABEL_WAYFINDER_MAP" in message
+    assert "The Skill is the authority" in message

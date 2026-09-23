@@ -748,11 +748,12 @@ no routing emits the binding exactly as before and stays conforming; `null` is a
 an absence. A null model leaves model choice to the backend. A Static or legacy null effort
 does not encode whether the model has a dial, so readers retain the historical backend
 placeholder without inferring capability. An explicitly null Dynamic effort means
-**not configurable** (§14.3). An additive optional `effort_configurable` records whether
-the harness listing reported an effort dial for the named model. It is omitted when
-unobserved. `false` with a present null effort means not configurable for any Routing
-source; `true` with a null effort is deliberate omission. Absence of the field is not a
-capability observation, so a historical Static null effort keeps its backend placeholder.
+**not configurable** (§14.3). An additive optional `effort_configurable` (contract 2.10)
+records whether the harness listing reported an effort dial for the named model. It is
+omitted when unobserved. `false` with a present null effort means not configurable for any
+Routing source; `true` with a null effort is deliberate omission. Absence of the field is
+not a capability observation, so a historical Static null effort keeps its backend
+placeholder.
 `event_schema_version` does not move: these are additive payload fields, which every
 schema-1 consumer already ignores when unknown.
 
@@ -1641,12 +1642,13 @@ the default, and the absence of a decision — `static` (this section), and `dyn
   its work sessions on a machine that authenticates as *itself*, the orchestrator's own listing
   describes a different installation under a different identity, and reporting it as that
   placement's verdict is exactly the substitution the rule above forbids. An Orchestrator MUST
-  NOT substitute the local listing for that host's. Selected Static execution, including a
-  run-wide model or effort pin that suppresses Dynamic election, MAY proceed only when that
-  host reports its own listing and both that listing and the local listing accept every
-  configured Static route. Serial sessions still run on the local harness, so their dial
-  presence comes from the local listing. Lane sessions run on the host, so their dial presence
-  comes from the host report. A missing, failed, or unreadable report is absence, not an empty
+  NOT substitute the local listing for that host's. Since contract 2.10, selected Static
+  execution, including a run-wide model or effort pin that suppresses Dynamic election, MAY
+  proceed only when that host reports its own listing and both that listing and the local
+  listing accept every configured Static route. Serial sessions still run on the local
+  harness, so their dial presence comes from the local listing. Lane sessions run on the
+  host, so their dial presence comes from the host report. A missing, failed, or unreadable
+  report is absence, not an empty
   listing, and MUST refuse before local model listing, Skill migration, interactive detachment,
   and remote green-base dispatch. Observation MAY construct the host; it is not green-base and
   not a contribution, and an unselected remote Run MUST NOT require it. Dynamic election on a
@@ -1760,7 +1762,7 @@ Shell/PowerShell first-setup activation is deferred;
 historical streams and the non-local, Subagent and Integration boundaries above
 are unchanged.
 
-**Fresh Python-local Dynamic default (contract 2.9, #567).** A fresh scope —
+**Fresh Python-local Dynamic default (contract 2.10, #567).** A fresh scope —
 no saved table, and no inherited Route policy — records `dynamic` without
 seeding Static rows. Unattended `init --yes` writes that policy and no limits,
 associations, or leaderboard key, and does not prompt or fetch a listing.
@@ -1773,7 +1775,7 @@ policy, including explicit `unselected`, is not shadowed. `routing-resolution.js
 `new_setup_default` matrix is this obligation. It does not activate
 shell/PowerShell, Subagent, or Integration routing.
 
-**Python-local no-Config refusal (contract 2.9, #567).** A local Python Run
+**Python-local no-Config refusal (contract 2.10, #567).** A local Python Run
 that finds no project or global Config, and no named Route policy, MUST refuse
 before a work session, Lease, Strike, or publication. Doctor prints the same
 verdict. The Run does not prompt, fetch a listing, call a Route selector, or
@@ -1785,7 +1787,7 @@ legacy path. `routing-resolution.json`'s `no_config_dynamic_refusal` matrix is
 this obligation. Shell and PowerShell routing remain deferred. This does
 not imply Subagent or Integration routing.
 
-**Activated Python-local Dynamic default (contract 2.9, #567).** Dynamic
+**Activated Python-local Dynamic default (contract 2.10, #567).** Dynamic
 routing is the default for unpinned Python-local work. Fresh setup records
 `dynamic` and seeds no Static rows. A local Run with no Config and no named
 policy refuses before a work session, Lease, Strike, or publication, and
@@ -1815,14 +1817,20 @@ operator can audit rather than a plausible-looking guess.
 
 Contract 2.9 includes §14.3's staged migration guard and opt-in first setup,
 the affected-work refusal and shared preflight-deadline obligations below,
-Route publication (§14.5) and Routing preparation (§14.6). The affected
-`routing-resolution.json`, `event-schema.json` and `dashboard-insights.json`
-fixtures declare that provenance at 2.9; Event wire compatibility remains 1.2.
-This declaration correction adds no Event fields and leaves historical streams'
-interpretation unchanged. §14.3's fresh-setup default and the Python-local
-no-Config refusal are the Dynamic-default obligations this contract activates;
-naming `unselected` still retains the legacy path for one Run. Non-local
-absence, and shell/PowerShell, stay on the deferred legacy path.
+Route publication (§14.5) and Routing preparation (§14.6). That declaration
+correction added no Event fields, activated no Dynamic defaults, and left
+fixture cases and historical streams' interpretation unchanged.
+
+Contract 2.10 activates the Python-local Dynamic default: §14.3's fresh-setup
+default and the Python-local no-Config refusal. Naming `unselected` still
+retains the legacy path for one Run, and non-local absence and shell/PowerShell
+stay on the deferred legacy path. 2.10 also adds the optional
+`effort_configurable` Pickup fact, Static execution authorized by a remote
+host's own listing (§14.3), and exact-dimension Route publication with its
+migration and capacity refresh (§14.5). The affected `routing-resolution.json`,
+`event-schema.json` and `dashboard-insights.json` fixtures declare that
+provenance at 2.10. Event wire compatibility remains 1.2, and historical
+streams' interpretation is unchanged.
 
 - **Prerequisite-complete, or no dynamic work at all.** The policy requires the
   operator's own authorized access to the evidence source, a finite assessment deadline, a per-Run
@@ -2066,7 +2074,7 @@ resolution.
   provenance references. A proposal and unchanged revalidation get no comment.
   The projection MUST omit credentials, raw prompts, private repository
   excerpts, and hidden reasoning.
-- **Own dimensional associations, not a repository label.** A projection
+- **Own dimensional associations, not a repository label (contract 2.10).** A projection
   attaches the exact representable dimensions `model_id:`, `model_context:`,
   and `model_effort:` (ADR-0060). Model and effort keep their exact spelling,
   including dots. Context is verified full capacity in exact decimal K/M units,
@@ -2119,7 +2127,7 @@ and additive `labels` names that set. This is a Python activation obligation;
 shell/PowerShell implementation remains deferred, and historical streams,
 Subagent and Integration settings are unchanged.
 
-**Python exact-dimension publication (contract 2.9, #567, ADR-0060).** Python
+**Python exact-dimension publication (contract 2.10, #567, ADR-0060).** Python
 serial and Lane publication write those dimensions through the existing
 publisher and the real CLI. Verified listing capacity is recorded when the
 Pickup already holds it. A missing capacity is an incomplete projection, not

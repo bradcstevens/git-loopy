@@ -1092,10 +1092,14 @@ def test_event_schema_version_is_independent_of_wrapper_contract() -> None:
     2.9 adds Route publication and Routing preparation (§14.5/§14.6).
     Their Event vocabulary advances the fixture's provenance stamp, not its
     wire compatibility: unknown Event types remain additive extensions.
+
+    2.10 adds the optional ``effort_configurable`` Pickup fact and the
+    dimensional Route-label delivery (§14.3/§14.5). Both are additive payload
+    fields on known Events, so they too leave the wire axis at 1.2.
     """
     assert _EVENT_SCHEMA["schema_version"] == events_module.EVENT_SCHEMA_VERSION
     assert _EVENT_SCHEMA["event_schema_version"] == "1.2"
-    assert _EVENT_SCHEMA["contract_version"] == "2.9"
+    assert _EVENT_SCHEMA["contract_version"] == "2.10"
 
 
 def test_event_fixture_pins_the_calibration_record_contract() -> None:
@@ -4128,7 +4132,7 @@ def test_the_contract_states_a_task_type_labels_origin_is_unobservable() -> None
 
 
 @pytest.mark.parametrize(("fixture", "expected"), [
-    ("routing-resolution.json", "2.9"),
+    ("routing-resolution.json", "2.10"),
     ("calibration-search.json", "2.5"),
 ])
 def test_routing_and_calibration_fixtures_pin_the_contracts_that_changed_them(
@@ -4136,9 +4140,11 @@ def test_routing_and_calibration_fixtures_pin_the_contracts_that_changed_them(
 ) -> None:
     """Only an affected fixture advances with its decision (§18).
 
-    Both gained measured-tier obligations at 2.5. Routing now also owns 2.9's
-    staged migration and preflight deadlines; Calibration has not changed.
-    Pin each decision's revision, not whichever version the header later reaches.
+    Both gained measured-tier obligations at 2.5. Routing also owns 2.9's
+    staged migration and preflight deadlines, and 2.10's Python-local Dynamic
+    default, no-Config refusal and exact-dimension publication; Calibration has
+    not changed. Pin each decision's revision, not whichever version the header
+    later reaches.
     """
     written = _written_contract_version()
     declared = _declared_fixture_contract_versions()

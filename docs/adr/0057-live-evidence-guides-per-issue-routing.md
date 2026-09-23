@@ -202,7 +202,7 @@ their separate questions.
 
 ## Activation status (#567)
 
-**Python-local Dynamic default is activated (contract 2.9).** Fresh setup
+**Python-local Dynamic default is activated (contract 2.10).** Fresh setup
 records `dynamic` without Static rows. A local Run with no Config and no named
 policy refuses before a legacy session and writes nothing. Existing saved
 Config is not inferred. Naming `unselected` keeps the legacy path. Non-local
@@ -589,8 +589,8 @@ Config. A model or effort override is not the missing choice. Naming
 static and dynamic policies use their existing verdicts. Unselected non-local
 Runs retain the legacy path. The shared `no_config_dynamic_refusal` matrix
 drives the refusal through the real CLI into serial and Lane sessions.
-`event_schema_version` stays 1.2. Wrapper contract 2.9 is unchanged; §14.3
-names this obligation. Shell and PowerShell routing remain deferred. This
+`event_schema_version` stays 1.2. Wrapper contract 2.10 names this obligation
+in §14.3. Shell and PowerShell routing remain deferred. This
 does not imply Subagent or Integration routing.
 
 Python publication now spells exact dimensional Route labels (ADR-0060) through
@@ -601,7 +601,7 @@ an unused legacy definition only after issue and pull-request checks. A later
 work-session window fills or corrects only the assignment that session
 started under, including when a newer assignment reuses the model id,
 without a new routing comment or a roster lookup. `event_schema_version`
-stays 1.2. Wrapper contract 2.9 is unchanged; §14.5 names this obligation.
+stays 1.2. Wrapper contract 2.10 names this obligation in §14.5.
 Shell and PowerShell routing remain deferred. This does not imply Subagent
 or Integration routing. Python-local Dynamic default activation is declared
 above.
