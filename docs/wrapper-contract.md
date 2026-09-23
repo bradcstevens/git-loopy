@@ -1744,8 +1744,9 @@ access nor a selector, while a context-only override still uses the strongest se
 Migration readiness is not future Pickup authority: loss of required access or evidence MUST
 refuse uncovered Dynamic work without a fallback session, final publication or Strike, while
 eligible Static work remains usable. Runs MUST leave saved Config unchanged; temporary
-authority MUST expire on the next invocation. These executable cases do not claim the
-remaining activation obligations or change the default policy.
+authority MUST expire on the next invocation. These executable cases do not by themselves
+claim the remaining activation obligations or change the default policy; the 2.10
+paragraphs below declare the activation.
 
 The sibling `first_setup` matrix starts with **neither Config scope present** and
 drives explicit `init --routing` into the same serial/Lane work seam, for project
@@ -1998,8 +1999,9 @@ cover changed and repeated elections, required repeat justification, infrastruct
 failure, advancing work, attempt/allowance exhaustion and explicit Static
 escalation. A refused retry spends no task attempt or Strike, while later
 eligible Static work still runs. Saved Config remains unchanged. The existing
-one-Lane-per-issue rule is preserved; this matrix does not grant a second Lane,
-activate final defaults or extend routing to another Runner member or placement.
+one-Lane-per-issue rule is preserved; this matrix does not grant a second Lane, is not
+itself the Dynamic-default activation, and does not extend routing to another Runner
+member or placement.
 
 The `in_flight_consumption` matrix carries recorded init/update authorization
 through the real unattended CLI in serial and local Lane modes. Its eight cases,
@@ -2010,7 +2012,8 @@ actual frozen work settings, canonical records, separate CLI Pickup lines,
 Dashboard Run-only Consumption and final tracker publication. Pending candidates
 remain open without a final assignment or Route projection; no unstarted work
 charges a Strike and Config remains unchanged. These are shared obligations for
-the existing opt-in Python flow, not final-default or native-member activation.
+the explicitly authorized Python flow; they are not themselves the Dynamic-default
+activation or native-member activation.
 
 The `effort_semantics` matrix carries recorded migration through actual serial
 and local Lane sessions and subsequent Runs. It distinguishes no effort dial
@@ -2019,8 +2022,9 @@ records, CLI Pickup wording, raw Dashboard projection and idempotent publication
 permit freshly validated reuse without another selector bill. A changed dial
 that contradicts the association refuses new work even when an earlier local
 assignment and tracker projection exist, without altering Config, charging a
-Strike or buying an assessment. This pins exact Dynamic effort matching, not
-final-default, non-local, native-member or ADR-0060 activation.
+Strike or buying an assessment. This pins exact Dynamic effort matching; it is not
+itself the Dynamic-default activation, nor non-local, native-member or ADR-0060
+activation.
 Rendered Rust Dashboard Route cells and preparation text use the same no-dial
 distinction, covered separately by `dashboard-insights.json`'s `effort_readback`
 matrix (§14.3). This Python matrix observes the raw Dashboard projection, not
@@ -2185,7 +2189,7 @@ readback and idempotent tracker effects agree without Config changes. Selector
 Consumption survives a refused binding; missing billing remains unknown rather
 than zero. These cases inject one mandatory write failure, not a claim that an
 arbitrary storage outage leaves other records writable. They retain the same
-member and placement deferrals and do not activate Dynamic defaults.
+member and placement deferrals and are not themselves the Dynamic-default activation.
 
 ### 14.6 Routing preparation (contract 2.9)
 

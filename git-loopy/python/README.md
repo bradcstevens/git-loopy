@@ -473,7 +473,7 @@ substituted. `dynamic` on that placement is still refused: a snapshot is not a
 fresh election. `--execution-host local`, or `--route-policy unselected`
 (`GIT_LOOPY_ROUTE_POLICY=unselected` for doctor), keeps the legacy remote path
 without rewriting Config. That is not completed migration. This is not bare
-init or auto-setup. The local no-Config refusal is the later obligation below.
+init or auto-setup. The local no-Config refusal is stated above.
 
 ---
 
@@ -856,9 +856,10 @@ scope — sets itself up:
   worker, and exits non-zero — an aborted setup never starts an unconfirmed
   loop. See the cancellation guarantee above for what the prerequisite catalog
   install may legitimately leave behind.
-- With **no TTY** (CI, pipes) it **never prompts**: it falls back to the built-in
-  defaults and goes straight to the loop, so automated runs can't hang on the
-  wizard.
+- With **no TTY** (CI, pipes) it **never prompts**, so automated runs can't hang
+  on the wizard. A local Run then refuses before any work unless it names a Route
+  policy; `--route-policy unselected` keeps the legacy built-in defaults for that
+  Run. A non-local Run with no policy keeps that legacy path.
 - Once Config exists in either scope, a bare `git-loopy` skips the wizard entirely
   and checks the Run's preconditions, including routing authority.
 

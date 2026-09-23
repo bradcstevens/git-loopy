@@ -481,9 +481,11 @@ and explicitly authored associations after the fullscreen review; refusal or
 cancellation saves neither a Skill policy nor any other operator choice.
 They preserve Static route authority and require operator-owned Dynamic access
 and finite limits; doctor never makes that choice.
-This remains partial #567 work: automatic upgrade/Run migration
-enforcement, the remaining composed activation matrix, and final defaults are not
-delivered. Bare update and unselected-policy Runs retain their existing behavior.
+This completes #567 for Python-local work: `upgrade` and local Runs with saved
+Config require the keep-or-migrate choice, and Dynamic is the default for
+unpinned new work, with a local Run that has no Config and names no policy
+refusing before work. Bare update and Runs that name `unselected` retain their
+existing behavior; shell and PowerShell routing remain deferred.
 
 The Label row judges the presence of the names a Run reads and cannot create for
 itself — the triage roles, `parallel-safe`, `priority`, and `ready-for-agent`,

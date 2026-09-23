@@ -804,8 +804,8 @@ before writing Config; a same-Release target skips reinstallation, not consent.
 Retired routing keys refuse that update until an explicit bare **update**
 repairs them; the successful distribution install is not rolled back.
 Project Config remains outside this command's scope. Local Runs with saved Config now
-independently require a supplied or recorded routing choice before work; this
-does not activate Dynamic defaults.
+independently require a supplied or recorded routing choice before work; that
+guard is not itself the Dynamic default, which **Route policy** describes.
 _Avoid_: update, self-update, install.
 
 **uninstall (subcommand)**:

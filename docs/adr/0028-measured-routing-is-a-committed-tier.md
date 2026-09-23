@@ -18,8 +18,9 @@ and this decision's rationale are preserved below.
 from Static precedence under an explicitly selected Dynamic policy. The artifact
 is retained as supporting evidence; it cannot suppress a selector merely because
 no human-authored route covers a Task type. Unselected and Static policies retain
-the precedence chain described below. This is partial opt-in activation, not a
-change to the default policy or a claim of shell/PowerShell Dynamic support.
+the precedence chain described below. This landed as partial opt-in activation;
+ADR-0057 now records Dynamic as the Python-local default for unpinned new work
+(contract 2.10). It is not a claim of shell/PowerShell Dynamic support.
 
 Once **Calibration** ([ADR-0027](0027-routing-is-calibrated-by-measurement.md)) produces a
 better **Routed pair**, something has to own it. The proposal was that git-loopy write the

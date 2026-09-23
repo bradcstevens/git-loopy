@@ -94,8 +94,8 @@ contribution and canonical Pickup record the host dial when the local listing
 reports the opposite; a rejecting host listing refuses before green-base even
 though the local listing would accept; a rejecting local listing refuses after
 the host has accepted. Config stays unchanged. Doctor prints the same pass or
-refusal. This is not another `loop.run` helper. It does not activate Dynamic
-defaults or remove native member deferrals. The existing unselected remote
+refusal. This is not another `loop.run` helper. It is not itself the Dynamic-default
+activation and removes no native member deferral. The existing unselected remote
 execution cases protect the staged compatibility path.
 
 The `publication_recovery` matrix carries an explicit migrate choice through
@@ -112,8 +112,8 @@ both remain visibly failed rather than claiming tracker agreement. The Python ad
 `test_recorded_routing_reuse_preserves_publication_recovery_bounds` in
 `python/tests/test_iteration_end_to_end.py`. These are recorded-authorization
 cases, not another first-wizard claim.
-Shell/PowerShell activation remains deferred; no default, historical stream,
-Subagent or Integration behavior changes.
+Shell/PowerShell activation remains deferred; these cases change no historical
+stream, Subagent or Integration behavior.
 
 The `retry_lifecycle` matrix carries a recorded `update --routing migrate`
 choice through actual CLI work in
@@ -174,8 +174,9 @@ route readback and final tracker comments/labels agree. Pending candidates
 remain open without final publication, late classification writes no Task-type
 label, and cancellation cleanup retains additional billing exactly once. Config
 stays unchanged and no unstarted work incurs a Strike. Existing helper-level
-malformed-billing cases remain separate; this matrix does not claim them or
-activate final defaults, native members, non-local, Subagent or Integration routing.
+malformed-billing cases remain separate; this matrix does not claim them, is not
+itself the Dynamic-default activation, and activates no native member, non-local,
+Subagent or Integration routing.
 
 The `local_durability` matrix is adapted by
 `python/tests/test_routing_durability_conformance.py`. Four new-election/reuse

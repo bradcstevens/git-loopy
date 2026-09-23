@@ -2,11 +2,11 @@
 
 The very first ``git-loopy`` invocation on an interactive TTY — with **no**
 persisted Config resolving in either scope — sets itself up by auto-running the
-``init`` wizard, then continues into the loop. A run with no TTY never prompts:
-it falls back to the built-in defaults so CI never hangs on the wizard.
-Cancelling the auto-run wizard aborts the whole command (starts no worker, saves
-no operator choice, non-zero exit). A local non-TTY with no named Route policy
-refuses before the loop; naming ``unselected`` keeps the legacy path.
+``init`` wizard, then continues into the loop. A run with no TTY never prompts,
+so CI never hangs on the wizard. Cancelling the auto-run wizard aborts the whole
+command (starts no worker, saves no operator choice, non-zero exit). A local
+non-TTY with no named Route policy refuses before the loop; naming
+``unselected`` keeps the legacy built-in defaults for that Run.
 
 This slice is the **dispatch wiring in** :func:`git_loopy.cli.main` plus the
 terminal decision (:func:`git_loopy.cli._should_auto_init`, over the predicate
