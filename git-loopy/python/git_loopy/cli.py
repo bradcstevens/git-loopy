@@ -3055,12 +3055,15 @@ def _should_auto_init(
 
     * **No Config resolves anywhere** — both the project and global
       ``config.toml`` tables are empty. Once either scope has Config, a bare run
-      goes straight to the loop (this slice's "no wizard once configured" rule).
+      skips the wizard and checks the Run's preconditions, including routing
+      authority (this slice's "no wizard once configured" rule).
     * **The invocation owns a terminal** — :func:`_wizard_terminal_available`,
       the same test explicit ``init`` applies, so a non-TTY (CI, a pipe, a
-      redirected stdout) never prompts and the built-in defaults carry the run.
-      This is what keeps automated runs from ever hanging on the wizard
-      (ADR-0006 / ADR-0007 first-run / CI behavior).
+      redirected stdout) never prompts. A local non-TTY run with no Config and
+      no named Route policy then refuses before work (#567); naming
+      ``unselected`` keeps the legacy built-in defaults for that run, and a
+      non-local run keeps that path. This is what keeps automated runs from ever
+      hanging on the wizard (ADR-0006 / ADR-0007 first-run / CI behavior).
     """
     if tables.project or tables.global_:
         return False
