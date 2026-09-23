@@ -1356,7 +1356,9 @@ ledger into routing; neither completed validation nor missing leaderboard access
 grants a new assessment budget. Expiration still permits already-classified
 Static work on freshly validated settings.
 
-**Activation status (#567): incomplete.** `init --routing`, `update --routing`,
+**Activation status (#567): the Python-local Dynamic default is activated
+(contract 2.10).** Shell and PowerShell routing remain deferred, and none of it
+reaches Subagent or Integration routing. `init --routing`, `update --routing`,
 and the update chained by `upgrade` offer explicit keep-or-migrate authorization and this shared readiness
 verdict. Composed first-setup and saved-migration serial/Lane cases observe actual
 session settings and canonical records, including fresh outages after setup.
@@ -1382,7 +1384,8 @@ It observes refusal while the assessment is still open, the concurrency ceiling,
 unchanged strongest selector, actual frozen work settings, canonical Pickup,
 CLI/Dashboard Consumption and final tracker publication. Pending candidates
 remain open without final assignments; saved Config stays unchanged. This
-extends the shared proof of opt-in behavior, not the activation defaults.
+matrix is part of the composed proof behind the activated default (§14.3 of the
+Wrapper contract).
 Upgrade requires consent before handoff, including when the target is already
 installed. Its saved global choice reaches actual serial/Lane sessions, with
 retained Static routes and fresh post-setup outages covered.
